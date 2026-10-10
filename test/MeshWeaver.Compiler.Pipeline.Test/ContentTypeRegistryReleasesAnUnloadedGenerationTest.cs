@@ -175,6 +175,46 @@ public sealed class ContentTypeRegistryReleasesAnUnloadedGenerationTest
         return new WeakReference(type);
     }
 
+    /// <summary>
+    /// 🚨 A type that registers AFTER its context began unloading must not get a strong entry: the
+    /// <c>Unloading</c> event fires once, so nothing would ever evict it and the registry would be
+    /// the permanent root of a generation on its way out. It goes to the weak shadow — resolvable
+    /// while held, released with the generation.
+    /// <para><b>Should fail if</b> a late registration lands in the strong maps: the generation is
+    /// never collected.</para>
+    /// </summary>
+    [Fact]
+    public void ATypeRegisteredAfterItsContextBeganUnloading_IsResolvableWhileHeld_AndNeverRooted()
+    {
+        var registry = new MeshContentTypeRegistry();
+        var late = RegisterAfterTheUnloadBegan(registry);
+        for (var round = 0; round < 20 && late.IsAlive; round++)
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+        }
+
+        late.IsAlive.Should().BeFalse(
+            "a strong entry for a type whose context already fired Unloading is never evicted and pins the generation");
+        registry.TryResolveByNodeType("type/Late", out _).Should().BeFalse();
+        registry.TryResolveByDiscriminator("LateContentLate", out _).Should().BeFalse();
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static WeakReference RegisterAfterTheUnloadBegan(MeshContentTypeRegistry registry)
+    {
+        var first = Load("MeshWeaver.Test.LateContent", "LateContent", out var context);
+        registry.Register(first, "type/First");
+        context.Unload();
+
+        var late = first.Assembly.GetType("LateContentLate")!;
+        registry.Register(late, "type/Late");
+        registry.TryResolveByNodeType("type/Late", out var whileHeld).Should().BeTrue(
+            "CONTROL — the late type still answers while its generation is loaded");
+        whileHeld.Should().BeSameAs(late);
+        return new WeakReference(late);
+    }
+
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static WeakReference RegisterAndUnload(MeshContentTypeRegistry registry)
     {
@@ -188,7 +228,9 @@ public sealed class ContentTypeRegistryReleasesAnUnloadedGenerationTest
     private static Type Load(string assemblyName, string typeName, out AssemblyLoadContext context)
     {
         var compilation = CSharpCompilation.Create(assemblyName,
-            [CSharpSyntaxTree.ParseText($"public sealed record {typeName}(string Text);")],
+            // Two types per generation: the second one is what a LATE registration registers.
+            [CSharpSyntaxTree.ParseText(
+                $"public sealed record {typeName}(string Text); public sealed record {typeName}Late(string Text);")],
             PlatformReferences.Platform(), new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
         using var buffer = new MemoryStream();
         compilation.Emit(buffer).Success.Should().BeTrue();

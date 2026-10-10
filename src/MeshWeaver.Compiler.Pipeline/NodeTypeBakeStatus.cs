@@ -586,6 +586,35 @@ public static class NodeTypeBakeStatus
         ILogger? logger = null,
         Func<string, string?>? liveDependencyIdOf = null,
         string? liveToolchainId = null)
+        => ProbeThrough(null, definitions, store, liveFrameworkVersion, logger, liveDependencyIdOf, liveToolchainId);
+
+    /// <summary>
+    /// <see cref="Probe"/> with each type's store read run through <paramref name="pool"/>. A
+    /// different NAME on purpose: a second <c>Probe</c> overload would make every existing
+    /// <c>cref="…Probe"</c> ambiguous (CS0419), which is an error under warnings-as-errors.
+    ///
+    /// <para>🚨 The store read is blocking file I/O — a directory listing, an open, and (when the
+    /// record names an MVID) a PE-header read of the file the store answered with — against what is
+    /// a network share on a deployed portal. Subscribed inline it runs on whatever thread delivered
+    /// the enumeration, once per type. Every in-process caller that has a mesh passes its
+    /// <c>FileSystem</c> pool (the same pool the registration pass reads the same files through);
+    /// the public overload keeps the inline read for a caller with no pool to give.</para>
+    /// </summary>
+    /// <param name="pool">The I/O pool the per-type store read runs in, or null to read inline.</param>
+    /// <param name="definitions">Dynamic NodeTypes to probe, keyed by mesh path.</param>
+    /// <param name="store">The shared assembly store to interrogate.</param>
+    /// <param name="liveFrameworkVersion">Framework identity to compare against; defaults to the live one.</param>
+    /// <param name="logger">Optional logger for per-type probe outcomes.</param>
+    /// <param name="liveDependencyIdOf">Resolves a dependency's live surface id.</param>
+    /// <param name="liveToolchainId">The live toolchain id.</param>
+    internal static IObservable<NodeTypeBakeReport> ProbeThrough(
+        Mesh.Threading.IIoPool? pool,
+        IReadOnlyDictionary<string, NodeTypeDefinition?> definitions,
+        IAssemblyStore store,
+        string? liveFrameworkVersion = null,
+        ILogger? logger = null,
+        Func<string, string?>? liveDependencyIdOf = null,
+        string? liveToolchainId = null)
     {
         ArgumentNullException.ThrowIfNull(definitions);
         ArgumentNullException.ThrowIfNull(store);
@@ -596,7 +625,7 @@ public static class NodeTypeBakeStatus
             .Where(kvp => kvp.Value is not null && !string.IsNullOrEmpty(kvp.Key))
             .OrderBy(kvp => kvp.Key, StringComparer.OrdinalIgnoreCase)
             .Select(kvp => ProbeOne(
-                kvp.Key, kvp.Value!, store, framework, logger, liveDependencyIdOf, liveToolchainId))
+                kvp.Key, kvp.Value!, store, framework, logger, liveDependencyIdOf, liveToolchainId, pool))
             .ToList();
 
         return probes.Count == 0
@@ -617,7 +646,8 @@ public static class NodeTypeBakeStatus
         string framework,
         ILogger? logger,
         Func<string, string?>? liveDependencyIdOf,
-        string? liveToolchainId)
+        string? liveToolchainId,
+        Mesh.Threading.IIoPool? pool)
         => Observable.Defer(() =>
         {
             // Probe whenever there is a version to probe WITH — not only when the record already
@@ -662,19 +692,25 @@ public static class NodeTypeBakeStatus
             var namesLiveBuild =
                 string.Equals(definition.CompiledFrameworkVersion, framework, StringComparison.Ordinal)
                 && !string.IsNullOrEmpty(definition.LatestAssemblyMvid);
-            var lookup = namesLiveBuild
-                ? store.TryGetBuildPath(
-                    typePath, definition.LastCompiledVersion!.Value,
-                    definition.LatestAssemblyPath, definition.LatestAssemblyMvid)
-                : store.TryGetAssemblyPath(typePath, definition.LastCompiledVersion!.Value);
+            // The whole store read — the lookup (a store may list and open when CALLED, not only
+            // when subscribed) and the MVID read of what it answered — is one leaf, so it is one
+            // pool slot when a pool is given.
+            IObservable<(string? Path, string? Foreign)> ReadTheStore()
+                => (namesLiveBuild
+                        ? store.TryGetBuildPath(
+                            typePath, definition.LastCompiledVersion!.Value,
+                            definition.LatestAssemblyPath, definition.LatestAssemblyMvid)
+                        : store.TryGetAssemblyPath(typePath, definition.LastCompiledVersion!.Value))
+                    .Take(1)
+                    .Select(path => (path,
+                        namesLiveBuild && !string.IsNullOrEmpty(path)
+                            ? ForeignBuildAtTheRecordsKey(definition.LatestAssemblyMvid!, path)
+                            : null));
 
-            return lookup
-                .Take(1)
-                .Select(path =>
+            return (pool is null ? Observable.Defer(ReadTheStore) : pool.InvokeObservable(_ => ReadTheStore()))
+                .Select(read =>
                 {
-                    var foreign = namesLiveBuild && !string.IsNullOrEmpty(path)
-                        ? ForeignBuildAtTheRecordsKey(definition.LatestAssemblyMvid!, path)
-                        : null;
+                    var (path, foreign) = read;
                     var entry = Describe(
                         typePath, definition,
                         ClassifyDetailed(

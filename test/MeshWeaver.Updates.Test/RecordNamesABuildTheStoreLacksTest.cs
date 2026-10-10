@@ -1,5 +1,5 @@
 using System;
-using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Threading.Tasks;
@@ -41,7 +41,7 @@ public class RecordNamesABuildTheStoreLacksTest(ITestOutputHelper output) : Upda
     private async Task<NodeTypeBakeEntry> Probe(string typePath, NodeTypeDefinition definition)
     {
         var report = await NodeTypeBakeStatus
-            .Probe(new Dictionary<string, NodeTypeDefinition?> { [typePath] = definition }, Store)
+            .Probe(ImmutableDictionary<string, NodeTypeDefinition?>.Empty.Add(typePath, definition), Store)
             .Take(1)
             .Should().Within(Step).Emit("the bake probe always answers",
                 cancellationToken: TestContext.Current.CancellationToken);

@@ -389,6 +389,10 @@ kept on purpose:
   is about a live-framework build sitting under a record whose write-back lagged; that build is by
   construction not the one such a record names.
 - An MVID that **cannot be read** (a store that hands out no local file) is not a mismatch.
+- The per-type store read (the lookup and the MVID read) is blocking file I/O on a network share. The
+  in-process callers run it through the mesh's `FileSystem` I/O pool
+  (`NodeTypeBakeStatus.ProbeThrough`), the pool the registration pass reads the same files through.
+  The public `Probe` keeps its signature and reads inline.
 - Such an entry is **never a regression baseline** (`NodeTypeBakeEntry.RecordNamesABuildTheStoreLacks`,
   read by `IsRegressionBaselineFor`). The build the record names was available to no replica, so a
   rebuild that fails takes nothing away. It is reported and stamped like any failed compile, and it
@@ -400,7 +404,8 @@ The pass and the read route stay non-compiling and non-writing. Nothing was adde
 **Pinned by** `RecordNamesABuildTheStoreLacksTest` (MeshWeaver.Updates.Test). It compiles a type,
 stamps its record with an MVID no file carries, and asserts the pass's `StaleBytes` (the symptom),
 the probe's `BytesMissing`, the sweep's rebuild, the coherent record after it, and that the pass no
-longer answers `StaleBytes`. Its control is the same probe on the untouched record: `Baked`.
+longer answers `StaleBytes`. Its control is the same probe on the untouched record: `Baked`. The pooled
+read is pinned by `BakeProbeReadsTheStoreThroughThePoolTest`.
 
 **Acceptance on a portal:** on the first boot that carries this, one
 `DynamicTypePreWarmer: N NodeType(s) claim a usable build … Rebuilding:` Warning names the fifteen
@@ -436,15 +441,20 @@ generation's entries leave the strong maps and enter a weak shadow, the same sha
 has had since MeshWeaver#1169. A demoted type answers for as long as something else keeps its
 generation alive, roots nothing, never answers for a contested discriminator, and is displaced by
 the first successor registration. Once the generation is collected the entry is dead and the lookup
-says "unknown", as before. The demotion runs wherever the unload
-is initiated, which can be the finalizer thread, so it touches the two maps and nothing
-finalizable. A lookup that finds the type alive hands out a strong reference, so a demoted type
+says "unknown", as before. Registration and eviction share one short
+lock, so an unload cannot begin between a type's strong inserts and its `Unloading` subscription. A
+type that registers after its context began unloading goes to the shadow directly: the event fires
+once, so a strong entry would never be evicted. The eviction runs wherever the unload is initiated,
+which can be the finalizer thread after the registry itself became unreachable, so it reads nothing
+finalizable. The "already unloading" marker is a long weak reference in an immutable list, not a
+`ConditionalWeakTable`, whose container can be finalized first. A lookup that finds the type alive hands out a strong reference, so a demoted type
 that keeps being read stays loaded until a successor registers: at most one superseded generation
 per name.
 
 **Pinned by** `ContentTypeRegistryReleasesAnUnloadedGenerationTest` (MeshWeaver.Compiler.Pipeline.Test:
 a type whose context began unloading still resolves while an object of it is held; a successor
-displaces it; a collected generation is released, the pre-existing case) and
+displaces it; a late registration is never rooted; a context that is finalized instead of unloaded
+does not fault the finalizer; a collected generation is released, the pre-existing case) and
 `AReadAfterTheTypesHubLeftIsStillTypedTest` (MeshWeaver.Graph.Test: a baked type is registered
 through the read route, its contexts are unloaded the way a hub's disposal unloads them, and the
 next read is typed).

@@ -8,6 +8,7 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -505,7 +506,7 @@ public static class DynamicTypePreWarmer
 
                     var store = ResolveAssemblyStore(mesh);
                     IObservable<NodeTypeBakeReport> ProbeStore() => NodeTypeBakeStatus
-                        .Probe(classified, store, logger: logger,
+                        .ProbeThrough(StoreProbePool(mesh), classified, store, logger: logger,
                             liveDependencyIdOf: NodeTypeCompilationHelpers.DependencyIdResolverOf(mesh),
                             liveToolchainId: NodeTypeCompilationHelpers.ProcessToolchainId);
                     return ProbeStore()
@@ -539,6 +540,15 @@ public static class DynamicTypePreWarmer
                 // for it in Loki.
                 );
     }
+
+    /// <summary>
+    /// The I/O pool a bake probe's per-type store read runs in: the mesh's <c>FileSystem</c> pool,
+    /// the one the registration-only pass reads the same assembly files through. Null when the mesh
+    /// registered no pool registry — the probe then reads inline, as it always did.
+    /// </summary>
+    /// <param name="mesh">The mesh hub.</param>
+    internal static IIoPool? StoreProbePool(IMessageHub mesh) =>
+        mesh.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem);
 
     /// <summary>
     /// The DYNAMIC NodeTypes of an enumeration snapshot: the active nodes that carry compilable
@@ -660,7 +670,8 @@ public static class DynamicTypePreWarmer
                         change.Items, mesh.JsonSerializerOptions, logger);
                     var (nodes, definitions) = (dynamicTypes.Nodes, dynamicTypes.Definitions);
                     var overlay = OverlayThisProcessAdoptions(mesh, definitions, nodes, logger);
-                    return NodeTypeBakeStatus.Probe(
+                    return NodeTypeBakeStatus.ProbeThrough(
+                            StoreProbePool(mesh),
                             overlay.Definitions,
                             ResolveAssemblyStore(mesh),
                             logger: logger,
