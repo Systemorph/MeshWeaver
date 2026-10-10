@@ -53,6 +53,8 @@ public static class PersonApp
     public const int NotificationsOrder = 30;
     /// <summary>Slot of the API tokens tab.</summary>
     public const int ApiTokensOrder = 40;
+    /// <summary>Slot of the Security tab (approval step-up methods).</summary>
+    public const int SecurityOrder = 45;
     /// <summary>Slot of the Connected instances tab.</summary>
     public const int ConnectedInstancesOrder = 50;
     /// <summary>Slot of the Subscription tab.</summary>
