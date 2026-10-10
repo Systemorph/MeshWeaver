@@ -25,7 +25,7 @@ namespace MeshWeaver.Graph.Test;
 public class BakeProbeReadsTheStoreThroughThePoolTest
 {
     private const string Live = "03d6f01eb6654e199d31fc59668d7b62";
-    private static readonly TimeSpan Budget = TimeSpan.FromSeconds(30);
+    private static TimeSpan Budget => TestTimeouts.Convergence;
 
     private static ImmutableDictionary<string, NodeTypeDefinition?> OneBakedType => ImmutableDictionary<string, NodeTypeDefinition?>.Empty
         .Add("Store/Plugin", new NodeTypeDefinition

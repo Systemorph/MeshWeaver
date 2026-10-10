@@ -391,10 +391,14 @@ kept on purpose:
 - An MVID that **cannot be read** (a store that hands out no local file) is not a mismatch.
 - The per-type store read (the lookup and the MVID read) is blocking file I/O on a network share. The
   in-process callers run it through the mesh's `FileSystem` I/O pool
-  (`NodeTypeBakeStatus.ProbeThrough`), the pool the registration pass reads the same files through.
-  The public `Probe` keeps its signature and reads inline.
-- Such an entry is **never a regression baseline** (`NodeTypeBakeEntry.RecordNamesABuildTheStoreLacks`,
-  read by `IsRegressionBaselineFor`). The build the record names was available to no replica, so a
+  (`NodeTypeBakeStatus.ProbeThrough`), the pool the registration pass reads the same files through,
+  or `IoPool.Unbounded` on a mesh with no pool registry. The public `Probe` keeps its signature and
+  reads inline, for a caller with no mesh.
+- An entry whose foreign bytes sit **at the record's own content path** is **never a regression
+  baseline** (`NodeTypeBakeEntry.RecordNamesABuildTheStoreLacks`, read by `IsRegressionBaselineFor`).
+  That is the residue. A record whose own file is *gone*, with a sibling of the version answering
+  for it, named a working build and lost it: it is an ordinary store miss and keeps its baseline
+  (`AForeignSiblingIsNotAlwaysTheLegacyResidueTest`). The build the record names was available to no replica, so a
   rebuild that fails takes nothing away. It is reported and stamped like any failed compile, and it
   does not refuse the new replica's readiness. Without this, one long-incoherent record whose source
   no longer compiles would stall the first roll that looked at it.

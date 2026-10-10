@@ -87,7 +87,7 @@ public sealed class AForeignSiblingIsNotAlwaysTheLegacyResidueTest : IDisposable
         var entry = await Probe(Record(n, ServedBuildIdentity.OfBytes(BuildN1)!));
 
         entry.State.Should().Be(BakeState.BytesMissing);
-        entry.RecordNamesABuildTheStoreLacks.Should().BeTrue(entry.Detail);
+        entry.RecordNamesABuildTheStoreLacks.Should().BeTrue(entry.Detail ?? "(no detail)");
         entry.IsRegressionBaselineFor(LaterPlatformBuild).Should().BeFalse(
             "the build this record names never reached the store, so a failed rebuild takes nothing away");
     }
