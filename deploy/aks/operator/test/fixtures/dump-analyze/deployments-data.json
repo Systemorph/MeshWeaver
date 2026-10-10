@@ -1,0 +1,53 @@
+{
+  "items": [
+    {
+      "metadata": {
+        "name": "memex-portal-deployment"
+      },
+      "spec": {
+        "template": {
+          "spec": {
+            "containers": [
+              {
+                "name": "memex-portal",
+                "env": [
+                  {
+                    "name": "MEMEX_POD_NAME"
+                  },
+                  {
+                    "name": "MEMEX_CRASHDUMP_ROOT",
+                    "value": "/data/dumps"
+                  }
+                ],
+                "volumeMounts": [
+                  {
+                    "name": "memex-data",
+                    "mountPath": "/data"
+                  },
+                  {
+                    "name": "memex-users",
+                    "mountPath": "/data/users"
+                  }
+                ]
+              }
+            ],
+            "volumes": [
+              {
+                "name": "memex-data",
+                "persistentVolumeClaim": {
+                  "claimName": "memex-data"
+                }
+              },
+              {
+                "name": "memex-users",
+                "persistentVolumeClaim": {
+                  "claimName": "memex-users"
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  ]
+}
