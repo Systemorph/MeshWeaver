@@ -1489,7 +1489,8 @@ the core regression does not execute PostgreSQL.
 
 ## Audience — a policy field the fold does not read
 
-`PartitionAccessPolicy.Audience` (optional list of user, group or role ids) narrows a grant that
+`PartitionAccessPolicy.Audience` (optional list of user ids or group paths — the subjects an
+`AccessAssignment` can name; a role id matches nobody and is not supported) narrows a grant that
 the OWNER of a partition derives — the Store's plan coverage is the first: an app whose tier the
 instance's plan covers is open to every signed-in user, unless its root `_Policy` names an audience,
 in which case the Store writes one Viewer `AccessAssignment` per audience id instead. The fold never
