@@ -218,8 +218,9 @@ pluginCatalog:
   # CONSUMER: what this install installs by itself at startup, in the same Source/Package
   # notation as the grants. Runs on every boot, gated PER PACKAGE by Plugins/_DefaultInstallLedger:
   # a package the seed delivered once is never re-installed (an operator removed it); a package
-  # newly listed under a whole-source pattern is HELD for a governed package.provision activity;
-  # a commercial package is never installed unattended and is recorded under `skipped`. "Plugins/*" = the whole platform plugin repo (which carries the Store),
+  # newly listed under a whole-source pattern is HELD for a governed package.provision activity
+  # (no ledger entry); a commercial package that passes the hold is never installed unattended and
+  # is recorded under `skipped`. "Plugins/*" = the whole platform plugin repo (which carries the Store),
   # so a new deployment comes up usable instead of with an empty-but-authorized catalog. Deliberately
   # source-scoped: an install also granted paid course content must NOT auto-install it. Empty =
   # install nothing (the platform default; an admin installs by hand).

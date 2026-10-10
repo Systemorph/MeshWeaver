@@ -96,9 +96,10 @@ and they are independent:
   seed does not fight an operator. That is also what repairs a bad first config or a failed install
   on the next boot. A package **newly listed** in a source this instance already seeded from, and
   covered only by a whole-source pattern such as `Plugins/*`, is **held**: it lands through a
-  governed `package.provision` activity, or by being named exactly. A **commercial** package (a
-  price or a sales contact) is never installed by this unattended pass — it has no authorizing
-  principal — and is recorded under `skipped` on the ledger with its reason. Our deployments set
+  governed `package.provision` activity, or by being named exactly — and a held package gets **no**
+  ledger entry. A **commercial** package (a price or a sales contact) that passes the hold is never
+  installed by this unattended pass — it has no authorizing principal — and is recorded under
+  `skipped` on the ledger with its reason. Our deployments set
   `["Plugins/*"]`, so a new portal comes up with the platform plugins — the Store included — already
   present and (per `AutoUpdateByDefault`) tracking their repo. 🚨 Over a **local checkout** — a
   `PluginCatalog:Sources:N:RepoPath` that is a directory on the host, which is what a self-registry
@@ -653,7 +654,8 @@ the **action**, not on the screen that triggered it:
   authorize widens: the registry still serves only what the instance's plan tier covers, and the
   licence and parameter gates still run.
 - **Unattended paths carry no principal**, so a commercial package cannot ride in on the boot-time
-  default install — it fails closed, and the ledger records it under `skipped`.
+  default install — it fails closed: held if newly listed under a whole-source pattern (no ledger
+  entry), otherwise recorded on the ledger under `skipped`.
 - **A refusal is never silent**: it logs a speaking reason and, on the auto-update path, raises a
   notification on the install record. The manual Update button stays.
 

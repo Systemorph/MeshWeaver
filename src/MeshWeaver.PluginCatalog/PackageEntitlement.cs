@@ -214,8 +214,10 @@ public static class PackageEntitlement
     /// <summary>
     /// The governed half of <see cref="Authorize"/>: reads the activity authoritatively and admits
     /// on <see cref="WhyNotAuthorizingActivity"/> == null, logging which activity authorized the
-    /// package; refuses otherwise with that reason in the sentence. A read that faults or does not
-    /// answer within <see cref="ActivityReadWindow"/> is a refusal that keeps its cause.
+    /// package; refuses otherwise with that reason in the sentence. <see cref="MeshExtensions.ReadGovernedActivity"/>
+    /// reports an unreadable activity as null (it never faults), so a storage failure is refused as
+    /// "no readable governed activity"; a read that does not answer within
+    /// <see cref="ActivityReadWindow"/> is refused as unreadable. Both fail closed.
     /// </summary>
     private static IObservable<Unit> AuthorizeByActivity(
         IMessageHub hub, PackageManifest manifest, string activityPath, ILogger? logger) =>

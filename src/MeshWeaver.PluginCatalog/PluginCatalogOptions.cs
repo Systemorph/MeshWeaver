@@ -104,9 +104,10 @@ public sealed class PluginCatalogOptions
     /// an operator); a package it never delivered is installed — which is what repairs a bad first
     /// config or a failed install. A package newly listed in a source this installation already
     /// seeded from, and covered only by a whole-source pattern (<c>Plugins/*</c>), is HELD: it lands
-    /// through a governed <c>package.provision</c> activity or by being named here. A COMMERCIAL
-    /// package is never installed by this unattended pass — it has no authorizing principal — and
-    /// is recorded under <c>skipped</c> on the ledger with its reason.</para>
+    /// through a governed <c>package.provision</c> activity or by being named here; a held package
+    /// gets NO ledger entry. A COMMERCIAL package that passes the hold is never installed by this
+    /// unattended pass — it has no authorizing principal — and is recorded under <c>skipped</c> on
+    /// the ledger with its reason.</para>
     /// </summary>
     public List<string> InstallByDefault { get; set; } = [];
 

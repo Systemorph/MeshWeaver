@@ -103,7 +103,7 @@ install:
 |---|---|---|---|
 | `preInstalled` on the package manifest | the **package author** | **every boot** | the platform's own baseline (the Agents and Skills libraries, Essentials). Suppressed by `PluginCatalog:InstallPreInstalledPackages=false`. It is what heals an instance whose baseline partition was lost. |
 | **`Features:Flags:{name}:Packages`** | the **environment** | **every boot** | "this environment always has X". |
-| `PluginCatalog:InstallByDefault` | the operator | every boot, **once per package** (ledger-gated) | seeds what it has never delivered; a commercial package is recorded as `skipped`, never installed. |
+| `PluginCatalog:InstallByDefault` | the operator | every boot, **once per package** (ledger-gated) | seeds what it has never delivered, except a package newly listed under a whole-source pattern on an already-seeded instance, which is HELD for a governed `package.provision` (no ledger entry); a commercial package that passes the hold is recorded as `skipped`, never installed. |
 
 🚨 **`InstallByDefault` cannot express a per-environment policy, and that is by design, not an
 oversight.** It seeds — the ledger records what it has delivered and it never re-asserts — so an
