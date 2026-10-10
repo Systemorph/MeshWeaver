@@ -172,19 +172,23 @@ internal static class StepUpPages
             });
             const start = document.getElementById('totpStart');
             if (start) start.addEventListener('click', async () => {
-              const setup = await post('totp/enroll/start', { receipt: RECEIPT });
-              if (setup.error) { status.textContent = setup.error; return; }
-              document.getElementById('qr').innerHTML = setup.svg;
-              document.getElementById('secret').textContent = setup.secret;
-              document.getElementById('totpSetup').hidden = false;
+              try {
+                const setup = await post('totp/enroll/start', { receipt: RECEIPT });
+                if (setup.error) { status.textContent = setup.error; return; }
+                document.getElementById('qr').innerHTML = setup.svg;
+                document.getElementById('secret').textContent = setup.secret;
+                document.getElementById('totpSetup').hidden = false;
+              } catch (e) { status.textContent = T.failed; }
             });
             const confirm = document.getElementById('totpConfirm');
             if (confirm) confirm.addEventListener('click', async () => {
-              const answer = await post('totp/enroll/confirm', { receipt: RECEIPT, code: document.getElementById('totpCode').value });
-              if (answer.error) { status.textContent = answer.error; return; }
-              document.getElementById('totpSetup').hidden = true;
-              document.getElementById('codes').textContent = answer.recoveryCodes.join('\n');
-              document.getElementById('recovery').hidden = false;
+              try {
+                const answer = await post('totp/enroll/confirm', { receipt: RECEIPT, code: document.getElementById('totpCode').value });
+                if (answer.error) { status.textContent = answer.error; return; }
+                document.getElementById('totpSetup').hidden = true;
+                document.getElementById('codes').textContent = answer.recoveryCodes.join('\n');
+                document.getElementById('recovery').hidden = false;
+              } catch (e) { status.textContent = T.failed; }
             });
             """));
     }

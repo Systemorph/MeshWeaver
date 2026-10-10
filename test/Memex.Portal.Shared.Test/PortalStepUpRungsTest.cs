@@ -301,4 +301,20 @@ public class PortalStepUpRungsTest
         Assert.False(unknown.Ok);
         Assert.Equal("unknownCredential", unknown.Reason);
     }
+
+    /// <summary>
+    /// A sealed enrolment payload (registration options, a TOTP secret) is bound to the account that
+    /// requested it: the cookie survives a sign-out, so account B must not complete what account A
+    /// started. Before the fix the payload carried no account at all.
+    /// </summary>
+    [Fact]
+    public void ASealedEnrolmentPayload_IsReadOnlyByTheAccountItWasBoundTo()
+    {
+        var bound = StepUpController.BindToUser("alice", "{\"challenge\":\"x\"}");
+        Assert.Equal("{\"challenge\":\"x\"}", StepUpController.UnbindFromUser(bound, "alice"));
+        Assert.Null(StepUpController.UnbindFromUser(bound, "bob"));
+        Assert.Null(StepUpController.UnbindFromUser(bound, "alic"));
+        // Negative control: an unbound legacy payload (no account line) is refused, never read as anyone's.
+        Assert.Null(StepUpController.UnbindFromUser("{\"challenge\":\"x\"}", "alice"));
+    }
 }

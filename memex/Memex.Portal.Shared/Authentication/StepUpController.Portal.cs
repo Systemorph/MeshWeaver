@@ -305,7 +305,7 @@ public sealed partial class StepUpController
             {
                 if (!IsAllowed(authorization)) return Json(Error(t, ReasonFor(authorization)));
                 var options = rp.RegistrationOptions(userId, display, read.Factors?.Passkeys.Values ?? []);
-                Response.Cookies.Append(RegistrationCookie, protector.Protect(options.ToJson(), DateTimeOffset.UtcNow + PendingLifetime), SealedCookie());
+                Response.Cookies.Append(RegistrationCookie, protector.Protect(BindToUser(userId, options.ToJson()), DateTimeOffset.UtcNow + PendingLifetime), SealedCookie());
                 return (IActionResult)Content(options.ToJson(), "application/json");
             }));
         return Edge(flow, () => Json(Error(t, "unavailable")), "passkey register options", userId, ct);
@@ -323,7 +323,7 @@ public sealed partial class StepUpController
         if (string.IsNullOrEmpty(userId)) return Done(Unauthorized());
         var hub = Hub();
         if (hub is null) return Done(Json(Error(t, "mint")));
-        var optionsJson = ReadSealed(RegistrationCookie);
+        var optionsJson = ReadSealedFor(RegistrationCookie, userId);
         Response.Cookies.Delete(RegistrationCookie, new CookieOptions { Path = "/" + BasePath });
         if (optionsJson is null) return Done(Json(Error(t, "state")));
         var gate = EnrollGateFor(userId);
@@ -377,7 +377,7 @@ public sealed partial class StepUpController
             {
                 if (!IsAllowed(authorization)) return Json(Error(t, ReasonFor(authorization)));
                 var secret = Totp.NewSecret();
-                Response.Cookies.Append(TotpEnrollCookie, protector.Protect(Convert.ToBase64String(secret), DateTimeOffset.UtcNow + PendingLifetime), SealedCookie());
+                Response.Cookies.Append(TotpEnrollCookie, protector.Protect(BindToUser(userId, Convert.ToBase64String(secret)), DateTimeOffset.UtcNow + PendingLifetime), SealedCookie());
                 var uri = Totp.OtpAuthUri(host, account, secret);
                 return (IActionResult)Json(new { svg = QrCode.EncodeText(uri, QrCode.Ecc.Medium).ToSvgString(4), secret = Totp.Base32(secret) });
             });
@@ -397,7 +397,7 @@ public sealed partial class StepUpController
         if (string.IsNullOrEmpty(userId)) return Done(Unauthorized());
         var hub = Hub();
         if (hub is null) return Done(Json(Error(t, "mint")));
-        var secretText = ReadSealed(TotpEnrollCookie);
+        var secretText = ReadSealedFor(TotpEnrollCookie, userId);
         if (secretText is null) return Done(Json(Error(t, "state")));
         var gate = EnrollGateFor(userId);
         var options = StepUpOptions.From(configuration);
@@ -575,9 +575,40 @@ public sealed partial class StepUpController
     private PasskeyStepUp Passkeys(IMessageHub? hub = null)
     {
         var resolved = hub ?? Hub();
-        // The FIDO library's verification is a Task-returning edge; it runs through the mesh's pool.
-        var pool = resolved?.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Http) ?? IoPool.Unbounded;
+        // The FIDO library's verification is a Task-returning edge; it runs through the mesh's pool,
+        // and a hub without the pool registry FAILS (GetRequiredService) rather than verifying
+        // unbounded. Only the no-hub path, which builds options and never verifies, has no pool.
+        var pool = resolved is null
+            ? IoPool.Unbounded
+            : resolved.ServiceProvider.GetRequiredService<IoPoolRegistry>().Get(IoPoolNames.Http);
         return new(Request.Host.Host, $"{Request.Scheme}://{Request.Host}", Request.Host.Host, pool);
+    }
+
+    /// <summary>
+    /// Binds a sealed enrolment payload to the account that requested it. The cookie outlives a
+    /// sign-out (only the authentication cookie is removed), so without the binding a payload
+    /// started as account A could be confirmed after a fresh sign-in as account B and stored as B's
+    /// factor — A's WebAuthn user handle, or a TOTP secret A was shown.
+    /// </summary>
+    internal static string BindToUser(string userId, string payload) => userId + "\n" + payload;
+
+    /// <summary>The payload of a <see cref="BindToUser"/> text when it names <paramref name="userId"/>; otherwise null.</summary>
+    internal static string? UnbindFromUser(string boundText, string userId)
+    {
+        var cut = boundText.IndexOf('\n');
+        return cut > 0 && string.Equals(boundText[..cut], userId, StringComparison.Ordinal)
+            ? boundText[(cut + 1)..]
+            : null;
+    }
+
+    /// <summary>The sealed payload of <paramref name="cookie"/> when it was bound to <paramref name="userId"/>; otherwise null.</summary>
+    private string? ReadSealedFor(string cookie, string userId)
+    {
+        var sealedText = ReadSealed(cookie);
+        if (sealedText is null) return null;
+        if (UnbindFromUser(sealedText, userId) is { } payload) return payload;
+        logger.LogWarning("Step-up: cookie {Cookie} was sealed for another account; refused", cookie);
+        return null;
     }
 
     private string? ReadSealed(string cookie)
