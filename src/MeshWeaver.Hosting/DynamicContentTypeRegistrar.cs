@@ -93,7 +93,8 @@ public static class DynamicContentTypeRegistrar
     /// <summary>
     /// Enumerates the mesh's dynamic NodeTypes (as system — infrastructure, not a user read) and
     /// registers the content type of every one that has a usable build here and is not registered
-    /// yet. Emits one outcome per dynamic type, in path order, then completes. A fault of the
+    /// yet. Emits one outcome per dynamic type — the types a read on this replica already degraded
+    /// first, then the rest, each group in path order — then completes. A fault of the
     /// ENUMERATION propagates; a fault of one type is that type's <see cref="ContentTypeRegistrationStatus.Faulted"/>
     /// outcome and never stops the pass.
     /// </summary>
@@ -142,7 +143,15 @@ public static class DynamicContentTypeRegistrar
                    ?? IoPool.Unbounded;
         var guards = NodeTypeCompilationHelpers.GuardsOf(mesh);
 
-        var paths = types.Nodes.Keys.Order(StringComparer.OrdinalIgnoreCase).ToImmutableArray();
+        // 🚨 Plugins#2799 — the types a read on THIS replica already degraded go FIRST: their
+        // readers are waiting on exactly this registration (the late re-type completes when it
+        // lands), while every other type is registered for a read that may never come. Path order
+        // within each group, so the pass stays deterministic. Read once, when the pass is composed.
+        var degraded = mesh.ServiceProvider.GetService<ContentDegradationRegistry>()?.Snapshot()
+                           .Select(d => d.NodeType)
+                           .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase)
+                       ?? ImmutableHashSet<string>.Empty;
+        var paths = OrderForRegistration(types.Nodes.Keys, degraded);
         var worked = 0;
         return paths
             .Select(path => Observable.Defer(() =>
@@ -163,6 +172,17 @@ public static class DynamicContentTypeRegistrar
             }))
             .Concat();
     }
+
+    /// <summary>The pass's order: types a read here already degraded first, then the rest, each
+    /// group in path order (ordinal, case-insensitive). Pure.</summary>
+    /// <param name="typePaths">The dynamic NodeTypes to register.</param>
+    /// <param name="degradedHere">NodeTypes whose content a read on this replica could not type.</param>
+    internal static ImmutableArray<string> OrderForRegistration(
+        IEnumerable<string> typePaths, IReadOnlySet<string> degradedHere) =>
+        typePaths
+            .OrderBy(p => degradedHere.Contains(p) ? 0 : 1)
+            .ThenBy(p => p, StringComparer.OrdinalIgnoreCase)
+            .ToImmutableArray();
 
     private static IObservable<ContentTypeRegistrationOutcome> RegisterOne(
         IMessageHub mesh,
