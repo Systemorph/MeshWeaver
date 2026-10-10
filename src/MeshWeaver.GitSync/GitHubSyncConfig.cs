@@ -269,8 +269,10 @@ public record GitHubSyncConfig
     public ImmutableList<BundleHeldNodeType>? BundleHeldNodeTypes { get; init; }
 
     /// <summary>
-    /// 🚨 The <c>manifest.lock</c> content hash (<c>moduleVersion</c>) of every module this Space
-    /// holds, as of the last import that LANDED it — the key of the per-module sync decision (policy
+    /// 🚨 The module hash of every module this Space holds — the hash of the module's tree, which is
+    /// what a settled <c>manifest.lock</c> states as <c>moduleVersion</c>, recomputed from the tree
+    /// so an unsettled lock is never taken for it (<see cref="ModuleReading.EffectiveVersion"/>) —
+    /// as of the last import that LANDED it — the key of the per-module sync decision (policy
     /// <c>module-sync-per-manifest-hash</c>, <see cref="ModuleSyncDecision"/>). An incoming module
     /// whose hash equals its entry here is unchanged and nothing is written for it.
     ///

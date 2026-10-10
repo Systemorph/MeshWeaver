@@ -1064,7 +1064,7 @@ public sealed class GitHubSyncService
         // module and imports exactly as before.
         // 🚨 …and a floor nobody stamped for THESE sources is no floor on an instance that is
         // behind (ModuleSyncDecision.HoldUnverifiedFloors — memex.systemorph.com 2026-10-09).
-        var readings = ModuleSyncDecision.Read(snapshot.Files);
+        var readings = ModuleSyncDecision.Read(snapshot.Files, snapshot.ListingIsComplete);
         var running = PrebuiltAdoptionPolicy.RunningPlatformVersion;
         var modules = ModuleSyncDecision.HoldUnverifiedFloors(
             ModuleSyncDecision.DeclineUnmetRequirements(

@@ -344,8 +344,8 @@ roster and source map. The next assertion checks that both derived outputs are p
 | step | asserts | why there |
 |---|---|---|
 | `assert` | `AZURE_*`, `FLEET_READER_*` — **and nothing else** | login and repository-read credentials required to attempt derivation |
-| `derive` | — | emits non-empty roster and source outputs, or fails on an unreadable/conflicting declaration |
-| `roster` | derived roster and `SOURCES` | refuses an empty roster (an empty matrix skips `verify`, painted green) or a missing source output. There is no credential map to assert (#3848) |
+| `derive` | — | emits non-empty roster and source outputs plus the roster digest, or fails on an unreadable/conflicting declaration |
+| `roster` | derived roster, `SOURCES` and the digest | refuses an empty roster (an empty matrix skips `verify`, painted green), a missing source output or a missing digest, then hands over **slot numbers, the count and the digest — never the roster** (next section). There is no credential map to assert (#3848) |
 
 Nothing became conditional and nothing can skip: no `if:` asks whether a secret is set, no step
 carries `continue-on-error:`, and the roster is asserted unconditionally in the same `preflight`
@@ -366,6 +366,91 @@ Each `missing+=` and `absent+=` line names what to provision.
 The `verdict` job at `:283-350` separates *no candidate* from *the preflight failed* from
 *verification did not succeed*, so a red here reads as "verification never ran, provision X" rather
 than as "verification failed". **That half of the lane is not the defect.**
+
+### 🚨 The roster never crosses a job boundary — only slot numbers do
+
+The preflight used to publish the derived roster as the job output `instances`, and the `verify`
+matrix was `fromJSON(needs.preflight.outputs.instances)`. That stopped working the moment the fleet
+included an installation whose name is private.
+
+**What was measured (2026-10-10, the eight newest post-CD runs).** Each run listed exactly four jobs:
+preflight `success`, the verdict `failure`, the audience job, and the ledger job `skipped`. **Not one
+per-instance verify job existed in any of them.** The preflight's own log said why, as a *warning*
+inside a job that concluded success:
+
+```text
+6 live installation(s) and 7 registry source(s) derived from 38 repository(ies); 1 declared not-live.
+##[warning]Skip output 'instances' since it may contain secret.
+Set output 'count'
+##[warning]Skip output 'sources' since it may contain secret.
+```
+
+A client estate's roster lines live in the private roster, and the derivation registers every
+identifier in it as a log mask so a red run cannot print one. **The runner refuses to pass any job
+output that contains a masked value** — the whole output, not the masked part. `count` carried no
+name and passed; the matrix received an empty string, `fromJSON` could not expand it, and the job
+failed without creating a single child. The verdict printed `preflight=success verify=failure
+instances=6` and gave no reason, so the run read as "an instance refused the candidate" about a run
+that had contacted nobody. The same days' green runs were the *no candidate* branch (their triggering
+CD runs were cancelled), so nothing in the workflow's history was a verification.
+
+**The shape now.** Three values cross from `preflight` to `verify`, and none of them can contain a
+name:
+
+| output | value | why it is safe to hand over |
+|---|---|---|
+| `slots` | `[0,1,…,count-1]` | one opaque position per instance; the matrix is built from this |
+| `count` | the number of live installations | the denominator |
+| `digest` | HMAC-SHA256 over the roster and the source map, keyed with a secret both jobs hold and salted with the private roster, written as single digits joined by underscores (`4_0_7_…`) | lets a verify job prove it derived the *same* roster; without the key it cannot be recomputed, so the public value confirms no guessed name. The shape is the point: a hex string can spell a masked word and a plain decimal one can contain an all-digit id or a numeric secret, and an output containing either is dropped. A value can occur inside this one only if it itself alternates single digits with underscores |
+
+Each `verify` job then runs the **same** derivation the preflight ran
+(`derive-combo-instances.py --discover --slot N --expect-count … --expect-digest …`), takes the row at
+its slot, and writes the installation's name, base URL and source map to `$GITHUB_ENV` — inside one
+job, where a masked value is masked rather than dropped. The script refuses unless it derived the
+preflight's count **and** the preflight's digest, so a fleet that changed between the two jobs is a
+red naming the drift, never a verdict landed on a different installation than the one counted.
+
+Re-deriving was chosen over handing the roster across as an artifact for one reason: this
+repository's artifacts are public, and an artifact's name and the file names inside it are not
+masked. For the same reason the per-instance job is named by its slot
+(`Verify instance slot 3 against its roll target`) and so are its work-root artifact and the files in
+it. Naming by slot hides the *name* only — what the files contain is the next paragraph's subject.
+Which installation a public slot is can be read in that job's own log.
+
+**A private row's module list never leaves the run.** The slot step also says whether its row is
+private and writes that as `INSTANCE_PRIVATE`. *Public* is the thing that has to be shown: a row is
+public only when the repository declaring it is in the committed
+`.github/acr-retention/instances.json`, and the private roster does not name that installation by
+id or host. Everything else is private — including every client row when the private-roster secret
+is missing, so a lost secret cannot turn a client's rows public. The preflight counts a private row
+without naming it, masks its derived host and id, and removes private identifiers from blocker and
+exclusion lines, where an id too short to be a log mask would otherwise be printed. A registry
+source that only an uncommitted repository's records declare is treated the same way: masked, and
+shown as `<private>` in the log and the summary. For such a row the
+lander prints the verdict and counts only: no name, no host, no response body, no module id, and the
+verifier's own output goes to a file that is never uploaded. The failed-verification artifact
+(`combo.json`, an installation's module list) is uploaded only when `INSTANCE_PRIVATE` is literally
+`false`, so an unset or unexpected value uploads nothing. The verdict is still landed on the
+instance in full, which is where its owner reads it. This is the safe default for a public
+repository; what a client estate's diagnostics should look like beyond it is the estate owner's call.
+
+**And the verdict counts jobs.** `needs.verify.result` is one word for the whole matrix: it cannot
+tell "six jobs ran and one failed" from "the matrix never expanded", and it reads `success` over
+however many jobs the matrix happened to create. So the `verdict` job asks the run which
+per-instance jobs it holds — by the exact name the `verify` job declares — and fails unless the
+number created **and** the number that concluded success both equal the preflight's count. Zero
+created has its own message, naming the unexpanded matrix and where to look for the dropped output.
+
+`check-combo-verify.py` holds all of it on every platform pull request, because this workflow never
+runs on one. Structurally: the preflight publishes exactly those three outputs, the matrix is built
+from `slots`, nothing in `verify` reads a name out of the matrix or out of a preflight output, the
+slot is resolved before the lander with the count and digest passed, and the verdict counts jobs
+unconditionally. Behaviourally: it executes the roster step's real shell and applies the runner's
+own rule to every value written — a value *containing* any name, host or source of the roster is one
+the runner would drop — and it executes the verdict step's real shell over the job counts, including
+the measured case (instances derived, no job created). Its `--self-test` re-publishes the roster,
+names the job after the installation, removes the slot step and guts the verdict, and requires each
+to be refused. `derive-combo-instances.py --self-test` drives the slot resolution's refusals.
 
 ### What being UNVERIFIED costs today: nothing gates on it
 
@@ -451,7 +536,9 @@ live installations at all. It also drives the overlay extractor over two known f
 run, so "the extractor stopped matching" can never arrive wearing "the fleet declares no
 installations". Three independent layers refuse a zero — the script, the preflight's roster step,
 and the `verdict` job's `COUNT < 1` arm — and `check-combo-verify.py` plus
-`derive-combo-instances.py --self-test` drive all of them on every pull request.
+`derive-combo-instances.py --self-test` drive all of them on every pull request. A fourth refuses
+the zero that is not in the roster at all: a non-empty roster whose matrix created no job (see
+*The roster never crosses a job boundary* above).
 
 ### The verifier derives its module-source map from deployment records
 
