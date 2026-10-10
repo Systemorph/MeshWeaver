@@ -102,7 +102,7 @@ public class AReadThenHoldAcrossTheIdleReleaseSurvivesItsOwnerSiloBeingKilledTes
     public async Task EveryGap_KeepsTheHoldHeartBeating_AndEveryOwnerReActivatesOnTheSurvivor()
     {
         var ct = TestContext.Current.CancellationToken;
-        var gaps = Enumerable.Range(0, 16).Select(i => TimeSpan.FromMilliseconds(i * 50)).ToArray();
+        var gaps = Enumerable.Range(0, 16).Select(i => TimeSpan.FromMilliseconds(i * 50)).ToImmutableArray();
         var holds = ImmutableList<HeldRead>.Empty;
         try
         {

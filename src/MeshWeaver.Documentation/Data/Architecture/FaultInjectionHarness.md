@@ -231,9 +231,10 @@ through the cache's shared read, through `hub.GetMeshNodeStream(path)` (the resu
 for sixteen nodes, after a completed one-shot read at gaps of 0–750 ms (the read-then-hold race
 against the sweep's release of the first entry). With the sweep made to ignore live subscribers, the
 first case goes red with exactly the #6048 symptom: the owner never re-activates. That is the control
-the earlier probe lacked. Unmodified, all three are green on `main` (8/8, 6/6 and 3/3 runs, the last
-covering 48 gap-holds). The first two are also green on the core of 2026-09-29, the day the Plugins red
-was recorded (4/4 each). So the core hold, heartbeat and idle sweep keep a held read heart-beating in
+the earlier probe lacked. With production code unmodified — the change that added these tests touches
+only the test project and this page — all three are green (8/8, 6/6 and 3/3 runs, the last covering
+48 gap-holds). The first two, applied to the core of 2026-09-29 (the day the Plugins red was
+recorded), are green there too (4/4 each). So the core hold, heartbeat and idle sweep keep a held read heart-beating in
 every shape modelled. Whatever left the Plugins case without a heartbeat lies in what that case adds:
 the action NodeType's hub, the resumer's listing and precondition reads, or its seeding through
 `AddMeshNodes`. **Not established:** which of those it is. The Plugins case run against current core
