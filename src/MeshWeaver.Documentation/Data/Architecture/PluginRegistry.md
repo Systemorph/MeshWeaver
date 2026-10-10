@@ -626,8 +626,9 @@ the **action**, not on the screen that triggered it:
 - **The catalog click** captures the clicking user *before* the install's system impersonation and
   passes it as the authorizing principal (the install itself must run as System — it is provisioning).
 - **The install record remembers the authorizer** (`Package.authorizedBy`), and the
-  [update watcher](/Doc/Architecture/PluginUpdateOnGreenBuild) re-verifies that principal is *still* a
-  global admin before applying a commercial delta. Revoking the admin stops the syncing.
+  [update watcher](/Doc/Architecture/PluginUpdateOnGreenBuild) re-verifies that principal before
+  applying a commercial delta: a PERSON must *still* be a global admin, so revoking the admin stops the
+  syncing; a governed ACTIVITY must still verify for this package (below).
 - **A governed activity is an authorizing principal.** Installing a package on an instance goes
   through a governed `package.provision` activity signed by people, not through a person's standing
   rights, so the Store's provision control plane hands the activity (`Governance/Activities/{id}`)

@@ -271,23 +271,23 @@ public class AGovernedActivityAuthorizesACommercialInstallTest(ITestOutputHelper
         PackageEntitlement.WhyNotAuthorizingActivity(Facts(consumed: 1), path, manifest)
             .Should().BeNull("a sole maintainer signing alone is still one consumed signature");
 
-        var refusals = new Dictionary<string, GovernedActivityFacts?>
+        var refusals = ImmutableDictionary.CreateRange(new[]
         {
-            ["absent"] = null,
-            ["another path"] = Facts(path: "Governance/Activities/b"),
-            ["untyped"] = Facts(nodeType: null),
-            ["another type"] = Facts(nodeType: "Markdown"),
-            ["another standard"] = Facts(standard: "Governance/Standards/package.remove"),
-            ["proposed"] = Facts(state: "Proposed"),
-            ["gating"] = Facts(state: "Gating"),
-            ["ready"] = Facts(state: "Ready"),
-            ["rejected"] = Facts(state: "Rejected"),
-            ["refused"] = Facts(state: "Refused"),
-            ["no state"] = Facts(state: ""),
-            ["no consumed signature"] = Facts(consumed: 0),
-            ["another package"] = Facts(package: "other"),
-            ["case-folded package"] = Facts(package: "PKG"),
-        };
+            KeyValuePair.Create("absent", (GovernedActivityFacts?)null),
+            KeyValuePair.Create("another path", (GovernedActivityFacts?)Facts(path: "Governance/Activities/b")),
+            KeyValuePair.Create("untyped", (GovernedActivityFacts?)Facts(nodeType: null)),
+            KeyValuePair.Create("another type", (GovernedActivityFacts?)Facts(nodeType: "Markdown")),
+            KeyValuePair.Create("another standard", (GovernedActivityFacts?)Facts(standard: "Governance/Standards/package.remove")),
+            KeyValuePair.Create("proposed", (GovernedActivityFacts?)Facts(state: "Proposed")),
+            KeyValuePair.Create("gating", (GovernedActivityFacts?)Facts(state: "Gating")),
+            KeyValuePair.Create("ready", (GovernedActivityFacts?)Facts(state: "Ready")),
+            KeyValuePair.Create("rejected", (GovernedActivityFacts?)Facts(state: "Rejected")),
+            KeyValuePair.Create("refused", (GovernedActivityFacts?)Facts(state: "Refused")),
+            KeyValuePair.Create("no state", (GovernedActivityFacts?)Facts(state: "")),
+            KeyValuePair.Create("no consumed signature", (GovernedActivityFacts?)Facts(consumed: 0)),
+            KeyValuePair.Create("another package", (GovernedActivityFacts?)Facts(package: "other")),
+            KeyValuePair.Create("case-folded package", (GovernedActivityFacts?)Facts(package: "PKG")),
+        });
         foreach (var (name, facts) in refusals)
             PackageEntitlement.WhyNotAuthorizingActivity(facts, path, manifest)
                 .Should().NotBeNull($"{name} must not authorize the package");
