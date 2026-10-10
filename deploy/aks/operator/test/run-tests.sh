@@ -3770,6 +3770,173 @@ refuses_hard "inventory refuses an unknown argument" "unknown argument" hosting-
 unset _inv_out _inv_rc _inv_az _inv_log _inv_sql _inv_fact
 
 echo
+echo "── hosting-dump-analyze: a dump on the instance's dump volume, read IN the cluster, text only ──"
+# The AnalyzeDump action's one step (MeshWeaver.Plugins Hosting/InstanceAction, kind AnalyzeDump;
+# MeshWeaver#6432). Asserted here: where the dumps live is read off the portal Deployment (dedicated
+# claim or /data sub-path), the analysis Job mounts that claim READ-ONLY and carries no secret and no
+# token, the Job's log is condensed into ONE gzip+base64 fact that fits the lane's log tail (stacks
+# grouped, caps STATED), secrets are redacted, the Job is deleted, a selector naming a path outside
+# the dump volume is refused before anything reaches the cluster, and a refusal, a failed Job or a
+# partial log never reports an analysis.
+DA_STUBS="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/stubs/dump-analyze" && pwd)"
+DA_FIX="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/fixtures/dump-analyze" && pwd)"
+da() {  # da [env…] -- <args…>; sets $_da_out $_da_rc $_da_calls $_da_manifest $_da_json
+  local envs=() st
+  while [ "$1" != "--" ]; do envs+=("$1"); shift; done; shift
+  st="$(mktemp -d)"
+  _da_out="$(env HOSTING_DA_DEPLOYMENTS="$DA_FIX/deployments-data.json" HOSTING_DA_LOG="$DA_FIX/pod.txt" \
+    HOSTING_DUMP_INTERVAL=0 "${envs[@]}" PATH="$DA_STUBS:$PATH" HOSTING_DA_STATE="$st" hosting-dump-analyze "$@" 2>&1)"; _da_rc=$?
+  _da_calls="$(cat "$st/kubectl.log" 2>/dev/null || true)"
+  _da_manifest="$(cat "$st/manifest.json" 2>/dev/null || true)"
+  _da_json="$(printf '%s\n' "$_da_out" | sed -n 's/^::hosting:: dump_analysis=//p' | tail -1 | base64 -d 2>/dev/null | gzip -dc 2>/dev/null || true)"
+  rm -rf "$st"
+}
+_da_pod=memex-portal-deployment-85587f8869-5j9gx
+
+da -- --namespace memex-cloud --pod "$_da_pod"
+[ "$_da_rc" -eq 0 ] && ok "dump analysis reads the volume and reports" || bad "dump analysis happy path" "exited ${_da_rc}: ${_da_out}"
+case "$_da_out" in *"::hosting:: dump_listing=2"*"::hosting:: dump_file=${_da_pod}.1791621060/coredump.1.1791621003"*"::hosting:: dump_threads=3"*) ok "…the listing (the denominator), the file read and its thread count" ;; *) bad "summary facts" "said: ${_da_out}" ;; esac
+[ "$(printf '%s\n' "$_da_out" | tail -1 | cut -c1-28)" = "::hosting:: dump_analysis=H4" ] && ok "…and the gzip+base64 analysis is the LAST line, inside the lane's log tail" || bad "analysis is the last line" "last: $(printf '%s\n' "$_da_out" | tail -1 | cut -c1-80)"
+[ "$(printf '%s' "$_da_json" | jq -r '.stacks.threadCount, .stacks.groupCount, .stacks.groups[0].threads, .stacks.groups[0].frames[1]' | tr '\n' '|')" = "3|2|2|Orleans.Runtime.Catalog.GetOrCreateActivation(Orleans.Runtime.GrainId)|" ] \
+  && ok "clrstack -all is grouped by identical stack, largest group first, frames without SP/IP" || bad "stack grouping" "json: ${_da_json}"
+[ "$(printf '%s' "$_da_json" | jq -r '[.sections[].name] | join(",")')" = "eeversion,threadpool,syncblk,clrthreads,dumpasync" ] \
+  && ok "…with the fixed text sections beside it" || bad "sections" "json: ${_da_json}"
+case "$(printf '%s' "$_da_json" | jq -r '.sections[] | select(.name == "syncblk") | .text')" in *"2c  12"*"System.Object"*) ok "…the lock owner (syncblk) survives intact" ;; *) bad "syncblk text" "json: ${_da_json}" ;; esac
+case "$_da_json" in *hunter2*) bad "a key=value secret in the text is redacted" "json: ${_da_json}" ;; *"Password=<redacted>"*) ok "a key=value secret in the text is redacted" ;; *) bad "redaction marker" "json: ${_da_json}" ;; esac
+[ "$(printf '%s' "$_da_json" | jq -r '.listingCount, .dump.bytes, .dump.modifiedAt, .claim' | tr '\n' '|')" = "2|17179869184|2026-10-10T08:30:03Z|memex-data|" ] \
+  && ok "…naming the dump's size, write instant and the claim it was read from" || bad "dump provenance" "json: ${_da_json}"
+[ "$(printf '%s' "$_da_manifest" | jq -r '.spec.template.spec.volumes[0].persistentVolumeClaim | "\(.claimName) \(.readOnly)"')" = "memex-data true" ] \
+  && ok "the Job mounts the claim the portal writes dumps to, READ-ONLY" || bad "read-only claim" "manifest: ${_da_manifest}"
+[ "$(printf '%s' "$_da_manifest" | jq -r '.spec.template.spec.containers[0].volumeMounts[0] | "\(.mountPath) \(.readOnly) \(.subPath)"')" = "/dumps true dumps" ] \
+  && ok "…at the dump root's sub-path inside /data (crashDumps.root /data/dumps)" || bad "sub-path" "manifest: ${_da_manifest}"
+[ "$(printf '%s' "$_da_manifest" | jq -r '.spec.template.spec.automountServiceAccountToken, .spec.template.spec.securityContext.runAsNonRoot, .spec.backoffLimit, ([.spec.template.spec.containers[0].env[] | select(.valueFrom != null)] | length), ([.spec.template.spec.containers[0].envFrom // [] | length] | add)' | tr '\n' ' ')" = "false true 0 0 0 " ] \
+  && ok "…with no ServiceAccount token, non-root, one attempt, and no secret in its environment" || bad "job hygiene" "manifest: ${_da_manifest}"
+[ "$(printf '%s' "$_da_manifest" | jq -r '.spec.template.spec.containers[0].env[] | select(.name == "MW_POD") | .value')" = "$_da_pod" ] \
+  && ok "…selecting the pod's newest dump in the pod" || bad "selector reaches the pod" "manifest: ${_da_manifest}"
+case "$_da_calls" in *"delete job mw-dump-analyze-"*) ok "the analysis Job is deleted once its log is read" ;; *) bad "job deleted" "calls: ${_da_calls}" ;; esac
+
+da HOSTING_DA_DEPLOYMENTS="$DA_FIX/deployments-claim.json" -- --namespace memex-cloud
+[ "$_da_rc" -eq 0 ] && [ "$(printf '%s' "$_da_manifest" | jq -r '.spec.template.spec.volumes[0].persistentVolumeClaim.claimName, (.spec.template.spec.containers[0].volumeMounts[0].subPath // "none")' | tr '\n' ' ')" = "memex-dumps none " ] \
+  && ok "a dedicated dump claim (persistence.dumps) is mounted whole, at the root" || bad "dedicated claim" "rc ${_da_rc}; manifest: ${_da_manifest}; out: ${_da_out}"
+
+# Path traversal: refused BEFORE anything reaches the cluster.
+for _da_bad in '../etc/passwd' '/data/dumps/p/coredump.1.2' 'p/../../coredump.1.2' '../p/coredump.1.2' 'p/sub/coredump.1.2' 'p/notadump' '.p/coredump.1.2'; do
+  refuses_hard "dump analysis refuses --dump '${_da_bad}' (outside the dump volume)" "outside the dump volume" \
+    env PATH="$DA_STUBS:$PATH" HOSTING_DA_STATE=/nonexistent hosting-dump-analyze --namespace memex-cloud --dump "$_da_bad"
+done
+da -- --namespace memex-cloud --dump ../etc/passwd
+[ -z "$_da_calls" ] && ok "…and a refused selector never called kubectl at all" || bad "no cluster call on a refused selector" "calls: ${_da_calls}"
+refuses_hard "dump analysis refuses two selectors" "name the dump ONCE" hosting-dump-analyze --namespace n --pod p --around 2026-10-10T08:30Z
+refuses_hard "dump analysis refuses an --around that is not a UTC instant" "not a UTC instant" hosting-dump-analyze --namespace n --around '08:30'
+refuses_hard "dump analysis refuses a pod that is not a plain name" "not a plain name" hosting-dump-analyze --namespace n --pod 'p;id'
+refuses_hard "dump analysis refuses an unknown argument" "unknown argument" hosting-dump-analyze --namespace n --command dumpheap
+
+da HOSTING_DRY_RUN=true -- --namespace memex-cloud --pod "$_da_pod"
+[ "$_da_rc" -eq 0 ] && [ -z "$_da_calls" ] && case "$_da_out" in *"::hosting:: dump_analysis=dry-run"*) true ;; *) false ;; esac \
+  && ok "a dry run narrates and touches nothing" || bad "dry run" "rc ${_da_rc}; calls: ${_da_calls}; out: ${_da_out}"
+
+da HOSTING_DA_DEPLOYMENTS="$DA_FIX/deployments-emptydir.json" -- --namespace memex-cloud
+[ "$_da_rc" -ne 0 ] && [ -z "$_da_manifest" ] && case "$_da_out" in *"emptyDir dies with the pod"*) true ;; *) false ;; esac \
+  && ok "dumps on an emptyDir are refused by name — nothing outlived the crash" || bad "emptyDir refused" "rc ${_da_rc}; out: ${_da_out}"
+da HOSTING_DA_DEPLOYMENTS="$DA_FIX/deployments-noroot.json" -- --namespace memex-cloud
+[ "$_da_rc" -ne 0 ] && [ -z "$_da_manifest" ] && case "$_da_out" in *"MEMEX_CRASHDUMP_ROOT"*Reconcile*) true ;; *) false ;; esac \
+  && ok "a chart from before dumps outlived the pod is refused, naming the Reconcile" || bad "no dump root refused" "rc ${_da_rc}; out: ${_da_out}"
+da HOSTING_DA_FORBID=1 -- --namespace memex-cloud
+[ "$_da_rc" -ne 0 ] && case "$_da_out" in *"REFUSED, not absent"*) true ;; *) false ;; esac \
+  && ok "a Forbidden Deployments read is REFUSED, never 'no portal'" || bad "forbidden read" "rc ${_da_rc}; out: ${_da_out}"
+
+da HOSTING_DA_LOG="$DA_FIX/pod-refused.txt" -- --namespace memex-cloud --pod memex-portal-deployment-x
+[ "$_da_rc" -ne 0 ] && case "$_da_out" in *"left no dump on the volume"*) true ;; *) false ;; esac && case "$_da_out" in *"dump_analysis="*) false ;; *) true ;; esac \
+  && ok "the pod's own refusal is the verdict, and no analysis is reported" || bad "pod refusal" "rc ${_da_rc}; out: ${_da_out}"
+case "$_da_calls" in *"delete job"*) ok "…and the Job is still deleted" ;; *) bad "job deleted on refusal" "calls: ${_da_calls}" ;; esac
+da HOSTING_DA_JOB=failed -- --namespace memex-cloud
+[ "$_da_rc" -ne 0 ] && case "$_da_out" in *"FAILED"*) true ;; *) false ;; esac && case "$_da_out" in *"dump_analysis="*) false ;; *) true ;; esac \
+  && ok "a failed Job reports no analysis" || bad "failed job" "rc ${_da_rc}; out: ${_da_out}"
+da HOSTING_DA_LOG="$DA_FIX/pod-partial.txt" -- --namespace memex-cloud
+[ "$_da_rc" -ne 0 ] && case "$_da_out" in *"never reached the end"*) true ;; *) false ;; esac && case "$_da_out" in *"dump_analysis="*) false ;; *) true ;; esac \
+  && ok "a log that never reached the end reports no partial analysis" || bad "partial log" "rc ${_da_rc}; out: ${_da_out}"
+
+# A dump far too big for the lane's tail: the caps shrink until the fact fits, and SAY what was cut.
+_da_large="$(mktemp)"
+{
+  printf '@@MW-DUMP listing\n17179869184\t1791622450\tp/coredump.1.1791622450\n'
+  printf '@@MW-DUMP selected\tp/coredump.1.1791622450\t17179869184\t1791622450\n'
+  printf '@@MW-DUMP section\tclrstack\tclrstack -all\n'
+  # A deterministic LCG names every frame, so the text does not compress away and the caps MUST shrink.
+  _t=1 _x=12345
+  while [ "$_t" -le 400 ]; do
+    printf 'OS Thread Id: 0x%x (%d)\n        Child SP               IP Call Site\n' "$_t" "$_t"
+    _f=1
+    while [ "$_f" -le 40 ]; do
+      _x=$(( (_x * 1103515245 + 12345) % 2147483648 )); _y=$(( (_x * 1103515245 + 12345) % 2147483648 )); _x=$_y
+      printf '00007F12C%07x 00007F12D%07x Generated.N%08x.T%08x.M%08x(System.Object)\n' "$_f" "$_f" "$_x" "$((_x ^ 2863311530))" "$((_x * 7 % 2147483648))"
+      _f=$((_f+1))
+    done
+    _t=$((_t+1))
+  done
+  printf '@@MW-DUMP end\tclrstack\t0\t9999999\n@@MW-DUMP done\n'
+} > "$_da_large"
+da HOSTING_DA_LOG="$_da_large" -- --namespace memex-cloud
+_da_fact="$(printf '%s\n' "$_da_out" | sed -n 's/^::hosting:: dump_analysis=//p' | tail -1)"
+[ "$_da_rc" -eq 0 ] && [ "${#_da_fact}" -le 14000 ] && [ "${#_da_fact}" -gt 0 ] \
+  && ok "a 400-thread dump is condensed into a fact within the lane's budget (${#_da_fact} bytes)" || bad "budget" "rc ${_da_rc}; ${#_da_fact} bytes; out: $(printf '%s' "$_da_out" | head -5)"
+[ "$(printf '%s' "$_da_json" | jq -r '.stacks.threadCount, .stacks.groupCount, (.stacks.groupsShown < .stacks.groupCount), ((.stacks.groups | length) == .stacks.groupsShown), (.stacks.framesCap < 40)' | tr '\n' ' ')" = "400 400 true true true " ] \
+  && ok "…stating what it kept: every thread counted, groups shown < groups found, the frame cap shrunk to fit" || bad "caps stated" "json: $(printf '%s' "$_da_json" | jq -c '.stacks | del(.groups)')"
+rm -f "$_da_large"
+
+# ── the IN-POD half, run for real against a stub dotnet-dump ────────────────────────────────────
+# bin/_dump_analyze_pod.sh needs GNU find/stat/realpath/date/timeout — what the analyser image and
+# every CI runner of this suite carry. On a laptop without them it is not run; in CI it always is.
+if find /dev/null -maxdepth 0 -printf '' >/dev/null 2>&1 && realpath -e / >/dev/null 2>&1 && command -v timeout >/dev/null 2>&1; then
+  dap() {  # dap [env…]; runs the pod script over $_dap_root; sets $_dap_out $_dap_rc $_dap_analyzed
+    local st
+    st="$(mktemp -d)"
+    _dap_out="$(env "$@" PATH="$DA_STUBS:$PATH" HOSTING_DA_STATE="$st" MW_ROOT="$_dap_root" MW_TOOLS="$st/tools" \
+      MW_DOTNET_DUMP_VERSION=10.0.750501 MW_CMD_TIMEOUT=30 MW_SECTION_BYTES=100000 sh "$BIN/_dump_analyze_pod.sh" 2>&1)"; _dap_rc=$?
+    _dap_analyzed="$(cut -f1 "$st/analyze.log" 2>/dev/null | sort -u || true)"
+    rm -rf "$st"
+  }
+  _dap_root="$(mktemp -d)"; _dap_outside="$(mktemp -d)"
+  mkdir -p "$_dap_root/podA" "$_dap_root/podB.1791600000" "$_dap_outside/stolen"
+  printf 'dump A' > "$_dap_root/podA/coredump.10.1791621003"; touch -d @1791621003 "$_dap_root/podA/coredump.10.1791621003"
+  printf 'dump B' > "$_dap_root/podB.1791600000/coredump.7.1791600000"; touch -d @1791600000 "$_dap_root/podB.1791600000/coredump.7.1791600000"
+  printf 'secret' > "$_dap_outside/stolen/coredump.1.2"; printf 'secret' > "$_dap_outside/coredump.3.4"
+  ln -s "$_dap_outside/stolen" "$_dap_root/podC"
+  ln -s "$_dap_outside/coredump.3.4" "$_dap_root/podA/coredump.3.4"
+
+  dap MW_DUMP=podA/coredump.10.1791621003
+  [ "$_dap_rc" -eq 0 ] && [ "$_dap_analyzed" = "$(realpath -e "$_dap_root/podA/coredump.10.1791621003")" ] \
+    && ok "in the pod: the named dump is the ONE file dotnet-dump analyses" || bad "pod positive" "rc ${_dap_rc}; analysed: ${_dap_analyzed}; out: ${_dap_out}"
+  [ "$(printf '%s\n' "$_dap_out" | grep -c '^@@MW-DUMP section	')" = 6 ] && case "$_dap_out" in *"@@MW-DUMP done"*) true ;; *) false ;; esac \
+    && ok "…running the six fixed commands and reaching done" || bad "pod sections" "out: ${_dap_out}"
+  [ "$(printf '%s\n' "$_dap_out" | sed -n '/^@@MW-DUMP listing/,/^@@MW-DUMP selected/p' | grep -c 'coredump')" = 3 ] \
+    && ok "…listing every regular dump file (symlinks are not dumps) beside the selection" || bad "pod listing" "out: ${_dap_out}"
+  dap MW_POD=podB
+  case "$_dap_out" in *"@@MW-DUMP selected	podB.1791600000/coredump.7.1791600000	"*) ok "in the pod: --pod finds the pod's dump in its PARKED directory" ;; *) bad "pod by name" "out: ${_dap_out}" ;; esac
+  dap MW_AROUND=2026-10-10T08:25Z
+  case "$_dap_out" in *"@@MW-DUMP selected	podA/coredump.10.1791621003	"*) ok "in the pod: --around picks the dump whose epoch is nearest" ;; *) bad "pod around" "out: ${_dap_out}" ;; esac
+  dap
+  case "$_dap_out" in *"@@MW-DUMP selected	podA/coredump.10.1791621003	"*) ok "in the pod: no selector reads the newest dump" ;; *) bad "pod newest" "out: ${_dap_out}" ;; esac
+  dap MW_DUMP=podC/coredump.1.2
+  [ "$_dap_rc" -ne 0 ] && [ -z "$_dap_analyzed" ] && case "$_dap_out" in *"resolves outside the dump volume"*) true ;; *) false ;; esac \
+    && ok "in the pod: a directory symlink that walks OUT of the volume is refused, nothing analysed" || bad "pod dir symlink" "rc ${_dap_rc}; analysed: ${_dap_analyzed}; out: ${_dap_out}"
+  dap MW_DUMP=podA/coredump.3.4
+  [ "$_dap_rc" -ne 0 ] && [ -z "$_dap_analyzed" ] && case "$_dap_out" in *"is not a dump file on the dump volume"*) true ;; *) false ;; esac \
+    && ok "in the pod: a file symlink out of the volume is refused, nothing analysed" || bad "pod file symlink" "rc ${_dap_rc}; out: ${_dap_out}"
+  dap MW_POD=podZ
+  [ "$_dap_rc" -ne 0 ] && case "$_dap_out" in *"podZ left no dump"*) true ;; *) false ;; esac && ok "in the pod: a pod with no dump is refused by name" || bad "pod absent" "out: ${_dap_out}"
+  dap MW_DUMP=podA/coredump.10.1791621003 HOSTING_DA_INSTALL_FAIL=1
+  [ "$_dap_rc" -ne 0 ] && [ -z "$_dap_analyzed" ] && case "$_dap_out" in *"could not install dotnet-dump"*NU1301*) true ;; *) false ;; esac \
+    && ok "in the pod: no egress to nuget.org fails by name, never an empty analysis" || bad "pod install failure" "out: ${_dap_out}"
+  rm -rf "$_dap_root" "$_dap_outside"
+elif [ -n "${CI:-}" ]; then
+  bad "the in-pod dump analysis is tested" "this CI runner lacks GNU find -printf / realpath -e / timeout — the suite's runner must carry them"
+else
+  echo "  note  in-pod dump analysis not run here (needs GNU find/realpath/timeout); CI runs it"
+fi
+unset _da_out _da_rc _da_calls _da_manifest _da_json _da_fact _da_pod
+
+echo
 echo "─────────────────────────────────────────────────────────────────"
 echo "${pass} passed, ${fail} failed"
 [ "$fail" -eq 0 ] || exit 1

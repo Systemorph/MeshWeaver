@@ -1,0 +1,317 @@
+#!/usr/bin/env bash
+# hosting-dump-analyze --namespace <ns> [--dump <pod dir>/coredump.<pid>.<epoch> | --pod <pod> | --around <yyyy-mm-ddThh:mm[:ss]Z>]
+#
+# READ a crash or heap dump a portal pod left on its instance's dump volume, IN THE CLUSTER, and
+# report only the TEXTUAL analysis — thread stacks, lock owners, the thread pool — as ONE machine
+# line the control plane lands under `Ops/Dumps/<action>` (MeshWeaver.Plugins Hosting/InstanceAction,
+# kind `AnalyzeDump`; MeshWeaver#6432):
+#
+#   ::hosting:: dump_listing=<n>        how many dumps the volume holds (the denominator of "which dump")
+#   ::hosting:: dump_file=<relative>    the dump that was analysed, relative to the dump root
+#   ::hosting:: dump_threads=<n>        managed threads in its `clrstack -all`
+#   ::hosting:: dump_analysis=<base64 of gzip of the analysis JSON>   — always the LAST line, so it is
+#                                       inside the 120-line / 24 KB log tail the operations lane hands back
+#
+# 🚨 WHY THIS EXISTS. Silos that wedge kill themselves with a FailFast heap dump, and since the chart
+# moved dumps onto a volume that outlives the pod (Doc/Architecture/DebuggingNativeCrashes → "Where a
+# dump lands") the dumps are there — memex-cloud 2026-10-10: 5j9gx at 08:30:03Z, gvt4n at 08:54:10Z.
+# Reading one was a break-glass `kubectl exec` (OperatingFromThePortal). This is the governed read.
+#
+# HOW IT READS. The dump volume belongs to the INSTANCE's namespace; a Job here cannot mount another
+# namespace's claim. So the script creates ONE short-lived Job in the instance's namespace that
+# mounts the dump claim READ-ONLY, installs the pinned `dotnet-dump` into its own /tmp, runs a FIXED
+# set of commands against the one selected file, prints the text, and exits. This script reads that
+# Job's log, deletes the Job, condenses the text and reports it. Where the dumps live is read off the
+# portal Deployment itself — its MEMEX_CRASHDUMP_ROOT env and the volume mounted over it — so the
+# answer is where the pods actually WRITE, never a guess.
+#
+# 🚨 READ-ONLY, and what it never reports:
+#   • the claim is mounted `readOnly: true`; nothing on the volume is written, moved or deleted
+#     (retention stays the chart's crash-dump-retention.sh);
+#   • the raw dump never leaves the pod — only the text of the fixed commands below does;
+#   • the commands are FIXED here (eeversion, threadpool, syncblk, clrthreads, clrstack -all,
+#     dumpasync --coalesce). None prints object fields, strings or the environment (no dumpobj,
+#     dumpheap, !env), and the text is still passed through a redaction of key=value secrets;
+#   • the analysis Job carries no secret, mounts no ServiceAccount token, and runs as non-root.
+#
+# 🚨 THE SELECTOR IS A PATH INTO SOMEONE ELSE'S VOLUME, so it is validated twice: here, as the shape
+# `<pod dir>/coredump.<pid>[.<epoch>]` (no leading `/`, no `..` segment, plain characters), and again
+# in the pod, where the resolved real path must lie under the mount — a symlink cannot walk out.
+#
+# Selection, exactly one of:
+#   --dump <rel>      that file
+#   --pod <name>      the newest dump of that pod (its live directory and its parked `<pod>.<epoch>` ones)
+#   --around <UTC>    the dump whose file-name epoch is nearest that instant, within ±30 minutes
+#   (none)            the newest dump on the volume
+# The listing of every dump on the volume is reported whichever is used, so "which dump was read"
+# always comes with "out of which".
+#
+# DECLARED, NOT DERIVED: the analyser image and the dotnet-dump version are pinned below (overridable
+# for a test, never derived from the cluster). The Job pulls `dotnet-dump` from nuget.org, and the DAC
+# matching the dump from Microsoft's symbol server — an instance namespace whose egress forbids either
+# FAILS this read by name, it never reports an empty analysis.
+
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
+# shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
+HOSTING_CMD="hosting-dump-analyze"
+
+# ── declared ────────────────────────────────────────────────────────────────────────────────────
+ANALYZER_IMAGE="${HOSTING_DUMP_ANALYZER_IMAGE:-mcr.microsoft.com/dotnet/sdk:10.0}"
+DOTNET_DUMP_VERSION="${HOSTING_DOTNET_DUMP_VERSION:-10.0.750501}"
+# The Job's own budget, and the per-command bound inside it (a heap walk over a 16 GiB dump is the
+# slow one). Both sit well inside the operations lane's 45-minute hard cut.
+JOB_DEADLINE="${HOSTING_DUMP_DEADLINE:-1800}"
+CMD_TIMEOUT="${HOSTING_DUMP_COMMAND_TIMEOUT:-300}"
+# Bytes of one command's output the pod prints at most (the rest is counted, never silently cut).
+SECTION_BYTES="${HOSTING_DUMP_SECTION_BYTES:-1500000}"
+# The encoded analysis must fit the operations lane's log tail (ActionsExecutor.TailBytes = 24 KB,
+# shared with the run's other closing lines).
+FACT_BUDGET="${HOSTING_DUMP_FACT_BUDGET:-14000}"
+interval="${HOSTING_DUMP_INTERVAL:-10}" grace="${HOSTING_DUMP_GRACE:-180}"
+
+namespace="" dump="" pod="" around=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --namespace) namespace="${2:-}"; shift 2 ;;
+    --dump)      dump="${2:-}";      shift 2 ;;
+    --pod)       pod="${2:-}";       shift 2 ;;
+    --around)    around="${2:-}";    shift 2 ;;
+    *) hosting::die "unknown argument '$1'" ;;
+  esac
+done
+
+hosting::need_flag namespace "$namespace"
+hosting::safe_name namespace "$namespace"
+selectors=0
+[ -z "$dump" ] || selectors=$((selectors+1))
+[ -z "$pod" ] || selectors=$((selectors+1))
+[ -z "$around" ] || selectors=$((selectors+1))
+[ "$selectors" -le 1 ] || hosting::die "name the dump ONCE: --dump, --pod and --around are alternatives"
+if [ -n "$dump" ]; then
+  # `<pod dir>/coredump.<pid>[.<epoch>]`, relative to the dump root. Every segment starts with a
+  # letter or digit, so `..`, `.` and an absolute path cannot be spelled; the in-pod realpath check
+  # is the second half.
+  [[ "$dump" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*/coredump\.[0-9]+(\.[0-9]+)?$ ]] \
+    || hosting::die "--dump '${dump}' is not a dump on the dump volume: it must be '<pod directory>/coredump.<pid>.<epoch>', relative to the dump root (no leading '/', no '..') — refusing to read a path outside the dump volume"
+fi
+[ -z "$pod" ] || hosting::safe_name pod "$pod"
+if [ -n "$around" ]; then
+  [[ "$around" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2})?Z$ ]] \
+    || hosting::die "--around '${around}' is not a UTC instant (yyyy-mm-ddThh:mm[:ss]Z) — refusing"
+fi
+for n in "$JOB_DEADLINE" "$CMD_TIMEOUT" "$SECTION_BYTES" "$FACT_BUDGET" "$interval" "$grace"; do
+  [[ "$n" =~ ^[0-9]+$ ]] || hosting::die "a numeric setting ('${n}') is not a whole number — refusing"
+done
+[[ "$ANALYZER_IMAGE" =~ ^[A-Za-z0-9][A-Za-z0-9./_:@-]*$ ]] || hosting::die "analyser image '${ANALYZER_IMAGE}' is not a plain image reference — refusing"
+[[ "$DOTNET_DUMP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || hosting::die "dotnet-dump version '${DOTNET_DUMP_VERSION}' is not a plain version — refusing"
+command -v jq >/dev/null 2>&1 || hosting::die "jq is not installed in this image — the Deployment and the Job are JSON, and the analysis is condensed with jq"
+command -v gzip >/dev/null 2>&1 || hosting::die "gzip is not installed in this image — the analysis is reported gzip-compressed"
+
+selection="newest on the volume"
+[ -z "$dump" ] || selection="file ${dump}"
+[ -z "$pod" ] || selection="newest of pod ${pod}"
+[ -z "$around" ] || selection="nearest ${around}"
+
+hosting::step "Analyze the dump"
+if hosting::dry; then
+  echo "  DRY-RUN would read the dump volume of ${namespace} (${selection}) in a read-only Job and report its thread stacks, locks and thread pool"
+  hosting::say dump_analysis dry-run
+  exit 0
+fi
+
+# ── where the pods write their dumps: read off the portal Deployment ────────────────────────────
+hosting::probe output kubectl -n "$namespace" get deployments -o json
+case $? in
+  2) hosting::die_refused "the Deployments of ${namespace}, which say where its portal writes dumps" ;;
+  1) hosting::die "cannot read the Deployments of ${namespace} (${HOSTING_PROBE_ERR:-nothing listed}) — there is no portal whose dumps could be read" ;;
+esac
+volume="$(printf '%s' "$HOSTING_PROBE_OUT" | jq -c '
+  [ .items[] | .spec.template.spec as $s
+    | $s.containers[]? | select(.name == "memex-portal")
+    | ((.env // []) | map(select(.name == "MEMEX_CRASHDUMP_ROOT")) | first | .value) as $root
+    | select($root != null)
+    | ((.volumeMounts // [])
+        | map(. as $vm | select($vm.mountPath == $root or ($root | startswith($vm.mountPath + "/"))))
+        | max_by(.mountPath | length)) as $m
+    | select($m != null)
+    | (($s.volumes // []) | map(select(.name == $m.name)) | first) as $v
+    | { root: $root, mount: $m.mountPath, volume: $m.name,
+        claim: ($v.persistentVolumeClaim.claimName // null),
+        emptyDir: ($v.emptyDir != null),
+        subPath: ([ ($m.subPath // ""), ($root | ltrimstr($m.mountPath) | ltrimstr("/")) ]
+                  | map(select(. != "")) | join("/")) } ]
+  | first // empty')" \
+  || hosting::die "the Deployments of ${namespace} could not be read as JSON (jq failed) — nothing is known about where its dumps live"
+[ -n "$volume" ] \
+  || hosting::die "no portal container in ${namespace} declares MEMEX_CRASHDUMP_ROOT over a mounted volume — this instance runs a chart from before dumps outlived the pod (Doc/Architecture/DebuggingNativeCrashes → \"Taking effect\": Reconcile it onto the current chart). There is no dump volume to read."
+claim="$(printf '%s' "$volume" | jq -r '.claim // ""')"
+sub_path="$(printf '%s' "$volume" | jq -r '.subPath')"
+root="$(printf '%s' "$volume" | jq -r '.root')"
+if [ -z "$claim" ]; then
+  hosting::die "the portal of ${namespace} writes dumps to ${root} on volume '$(printf '%s' "$volume" | jq -r '.volume')', which is not a PersistentVolumeClaim (an emptyDir dies with the pod) — there is nothing that outlived a crash to read"
+fi
+hosting::safe_name claim "$claim"
+[ -z "$sub_path" ] || [[ "$sub_path" =~ ^[A-Za-z0-9_-][A-Za-z0-9._-]*(/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$ ]] \
+  || hosting::die "the dump root's path inside claim ${claim} ('${sub_path}') is not a plain relative path — refusing to mount it"
+hosting::log "dumps     ${root} → claim ${claim}${sub_path:+ (sub-path ${sub_path})}, read-only"
+hosting::log "select    ${selection}"
+hosting::log "analyser  ${ANALYZER_IMAGE}, dotnet-dump ${DOTNET_DUMP_VERSION}"
+
+# ── the analysis Job ────────────────────────────────────────────────────────────────────────────
+# The in-pod half lives beside this script (bin/_dump_analyze_pod.sh) so it can be tested on its own
+# with a stub dotnet-dump; it is handed to the Job as `sh -c`, never sourced here.
+pod_script_file="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_dump_analyze_pod.sh"
+[ -r "$pod_script_file" ] || hosting::die "the in-pod analysis script ${pod_script_file} is missing from this operator — refusing to start a Job with nothing to run"
+pod_script="$(cat "$pod_script_file")"
+
+job="mw-dump-analyze-$(date -u +%Y%m%d%H%M%S)"
+manifest="$(jq -n \
+  --arg ns "$namespace" --arg job "$job" --arg image "$ANALYZER_IMAGE" --arg claim "$claim" \
+  --arg sub "$sub_path" --arg script "$pod_script" \
+  --arg dump "$dump" --arg pod "$pod" --arg around "$around" --arg version "$DOTNET_DUMP_VERSION" \
+  --arg cmdTimeout "$CMD_TIMEOUT" --arg sectionBytes "$SECTION_BYTES" --argjson deadline "$JOB_DEADLINE" '
+  { apiVersion: "batch/v1", kind: "Job",
+    metadata: { name: $job, namespace: $ns,
+                labels: { "app.kubernetes.io/managed-by": "hosting-operator", "meshweaver.io/purpose": "dump-analysis" } },
+    spec: { backoffLimit: 0, activeDeadlineSeconds: $deadline, ttlSecondsAfterFinished: 600,
+      template: { metadata: { labels: { "meshweaver.io/purpose": "dump-analysis" } },
+        spec: { restartPolicy: "Never", automountServiceAccountToken: false,
+          securityContext: { runAsNonRoot: true, runAsUser: 1654, runAsGroup: 1654 },
+          containers: [ { name: "analyze", image: $image, command: ["/bin/sh", "-c", $script],
+            env: [ {name: "MW_DUMP", value: $dump}, {name: "MW_POD", value: $pod}, {name: "MW_AROUND", value: $around},
+                   {name: "MW_DOTNET_DUMP_VERSION", value: $version}, {name: "MW_CMD_TIMEOUT", value: $cmdTimeout},
+                   {name: "MW_SECTION_BYTES", value: $sectionBytes} ],
+            resources: { requests: { cpu: "500m", memory: "1Gi" }, limits: { memory: "8Gi" } },
+            securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: false, capabilities: { drop: ["ALL"] } },
+            volumeMounts: [ ({ name: "dumps", mountPath: "/dumps", readOnly: true } + (if $sub == "" then {} else { subPath: $sub } end)) ] } ],
+          volumes: [ { name: "dumps", persistentVolumeClaim: { claimName: $claim, readOnly: true } } ] } } } }')"
+
+created=0
+cleanup() {
+  [ "$created" = 1 ] || return 0
+  created=0
+  hosting::do kubectl -n "$namespace" delete job "$job" --wait=false >&2 \
+    || hosting::log "could not delete job/${job} in ${namespace} — its ttlSecondsAfterFinished (600 s) removes it"
+}
+trap cleanup EXIT
+
+hosting::do kubectl -n "$namespace" create -f - <<< "$manifest" >&2 \
+  || hosting::die "could not create the analysis Job ${job} in ${namespace}"
+created=1
+hosting::log "job       ${job} (deadline ${JOB_DEADLINE}s)"
+
+job_state=""
+read_job_state() {
+  hosting::probe any kubectl -n "$namespace" get job "$job" -o json
+  case $? in
+    2) hosting::die_refused "job/${job} in ${namespace}, the dump analysis this run created" ;;
+    1) job_state="absent"; return 0 ;;
+  esac
+  job_state="$(printf '%s' "$HOSTING_PROBE_OUT" | jq -r '
+    if (.status.succeeded // 0) >= 1 then "succeeded"
+    elif ((.status.conditions // []) | any(.type == "Failed" and .status == "True")) then "failed"
+    else "active" end')"
+}
+
+pod_log=""
+read_log() {
+  hosting::probe any kubectl -n "$namespace" logs "job/${job}"
+  case $? in
+    0) pod_log="$HOSTING_PROBE_OUT" ;;
+    2) hosting::die_refused "the log of job/${job} in ${namespace}" ;;
+    *) pod_log="" ;;
+  esac
+}
+
+limit=$(( JOB_DEADLINE + grace )) waited=0
+while :; do
+  read_job_state
+  case "$job_state" in
+    succeeded|failed) break ;;
+    absent) hosting::die "the analysis Job ${job} disappeared while it was being waited on — nothing was read" ;;
+  esac
+  [ "$waited" -ge "$limit" ] && hosting::die "the analysis Job ${job} has not finished after ${waited}s (deadline ${JOB_DEADLINE}s) — refusing to report a partial analysis"
+  sleep "$interval"
+  waited=$(( waited + interval ))
+  [ "$interval" -gt 0 ] || waited=$(( waited + 1 ))
+done
+read_log
+
+# The pod refuses by NAME (no such dump, outside the volume, tool not installable) — that sentence
+# is the verdict, whatever the Job's own state.
+refused="$(printf '%s\n' "$pod_log" | sed -n 's/^@@MW-DUMP refused	//p' | head -1)"
+[ -z "$refused" ] || hosting::die "the dump volume of ${namespace} answered: ${refused}"
+[ "$job_state" = "succeeded" ] \
+  || hosting::die "the analysis Job ${job} FAILED (deadline ${JOB_DEADLINE}s, or the pod could not start — a dump claim that cannot attach on another node, or no egress to nuget.org). Last lines: $(printf '%s\n' "$pod_log" | tail -5 | tr '\n' ' ')"
+case "$pod_log" in
+  *"@@MW-DUMP done"*) ;;
+  *) hosting::die "the analysis Job ${job} succeeded but its log never reached the end of the analysis — refusing to report a partial one. Last lines: $(printf '%s\n' "$pod_log" | tail -5 | tr '\n' ' ')" ;;
+esac
+cleanup
+
+# ── condense ────────────────────────────────────────────────────────────────────────────────────
+# One jq program: parse the sentinels, group `clrstack -all` threads by identical stack, cap each
+# text section, redact key=value secrets. The caps shrink until the encoded fact fits the budget;
+# every cap is STATED in the result (shown vs total), so a cut is never silent.
+# shellcheck disable=SC2016  # a jq program, not shell
+condense='
+def redact: gsub("(?<k>(?i:password|passwd|pwd|secret|token|apikey|api_key|connectionstring|accountkey|sharedaccesskey|clientsecret))(?<s>\\s*[=:]\\s*)[^\\s;\"'"'"',]+"; "\(.k)\(.s)<redacted>");
+def epoch: tonumber | todate;
+(split("\n") | reduce .[] as $l ({cur: null, listing: [], sections: [], selected: null};
+  if ($l | startswith("@@MW-DUMP ")) then
+    ($l[10:] | split("\t")) as $f
+    | if $f[0] == "listing" then .cur = "listing"
+      elif $f[0] == "selected" then .selected = {path: $f[1], bytes: ($f[2] | tonumber), modifiedAt: ($f[3] | epoch)} | .cur = null
+      elif $f[0] == "section" then .sections += [{name: $f[1], command: $f[2], lines: []}] | .cur = "section"
+      elif $f[0] == "end" then .sections[(.sections | length) - 1] += {exit: ($f[2] | tonumber), bytes: ($f[3] | tonumber)} | .cur = null
+      else .cur = null end
+  elif .cur == "listing" then
+    (if ($l | test("^[0-9]+\t[0-9]+\t")) then ($l | split("\t")) as $p
+       | .listing += [{path: $p[2], bytes: ($p[0] | tonumber), modifiedAt: ($p[1] | epoch)}] else . end)
+  elif .cur == "section" then .sections[(.sections | length) - 1].lines += [$l]
+  else . end)) as $r
+| ($r.sections | map(select(.name == "clrstack")) | first // {lines: []}) as $cs
+| ($cs.lines | reduce .[] as $l ([];
+    if ($l | test("^OS Thread Id: ")) then . + [{id: ($l | capture("OS Thread Id: (?<id>0x[0-9a-fA-F]+)").id // $l), frames: []}]
+    elif length > 0 and ($l | test("^\\s*[0-9a-fA-F]{8,}\\s+[0-9a-fA-F]{8,}\\s+\\S")) then
+      .[length - 1].frames += [$l | sub("^\\s*[0-9a-fA-F]{8,}\\s+[0-9a-fA-F]{8,}\\s+"; "") | sub("\\s+$"; "") | redact]
+    else . end)) as $threads
+| ($threads | group_by(.frames[:$frames]) | map({threads: length, threadIds: (map(.id)[:$ids]), frames: .[0].frames[:$frames]})
+   | sort_by(-.threads)) as $groups
+| {
+    namespace: $ns, claim: $claim, root: $root, analyzedAt: (now | todate),
+    analyzer: {image: $image, dotnetDump: $version},
+    listingCount: ($r.listing | length), listing: $r.listing[:50],
+    dump: $r.selected,
+    sections: [ $r.sections[] | select(.name != "clrstack") | if $text == 0 and (.name == "dumpasync" or .name == "clrthreads") then
+                  {name, command, exit, bytes, truncated: true, omitted: true, text: ""}
+                else (.lines | join("\n") | redact) as $t
+                  | {name, command, exit, bytes, truncated: (($t | length) > $text or .bytes > ($t | length)), text: $t[:(if $text == 0 then 1200 else $text end)]} end ],
+    stacks: {exit: $cs.exit, bytes: $cs.bytes, threadCount: ($threads | length), groupCount: ($groups | length),
+             groupsShown: ([$groups | length, $maxGroups] | min), framesCap: $frames, groups: $groups[:$maxGroups]}
+  }'
+
+fact="" analysis=""
+for caps in "6000 40 80 8" "3000 25 40 6" "1500 15 25 4" "800 10 15 3" "0 8 10 2"; do
+  read -r text frames groups ids <<< "$caps"
+  analysis="$(printf '%s' "$pod_log" | jq -R -s -c \
+    --arg ns "$namespace" --arg claim "$claim" --arg root "$root" --arg image "$ANALYZER_IMAGE" --arg version "$DOTNET_DUMP_VERSION" \
+    --argjson text "$text" --argjson frames "$frames" --argjson maxGroups "$groups" --argjson ids "$ids" "$condense")" \
+    || hosting::die "the analysis text of ${job} could not be condensed (jq failed) — nothing is reported"
+  fact="$(printf '%s' "$analysis" | gzip -9 -n | base64 | tr -d '\n')"
+  [ "${#fact}" -gt "$FACT_BUDGET" ] || break
+done
+[ "${#fact}" -le "$FACT_BUDGET" ] \
+  || hosting::die "even the smallest condensation of the analysis (${#fact} bytes encoded) exceeds the ${FACT_BUDGET}-byte budget the operations lane carries back — refusing to report a fact that would be cut"
+
+file_read="$(printf '%s' "$analysis" | jq -r '.dump.path // ""')"
+[ -n "$file_read" ] || hosting::die "the analysis names no dump file — refusing to report an analysis of nothing"
+threads="$(printf '%s' "$analysis" | jq -r '.stacks.threadCount')"
+listing="$(printf '%s' "$analysis" | jq -r '.listingCount')"
+hosting::log "read ${file_read} ($(printf '%s' "$analysis" | jq -r '.dump.bytes') bytes, written $(printf '%s' "$analysis" | jq -r '.dump.modifiedAt')) — one of ${listing} dump(s) on the volume"
+hosting::log "${threads} managed thread(s) in $(printf '%s' "$analysis" | jq -r '.stacks.groupCount') distinct stack(s); largest groups:"
+printf '%s' "$analysis" | jq -r '.stacks.groups[:5][] | "    \(.threads) × \(.frames[0] // "(no managed frame)")"'
+hosting::say dump_listing "$listing"
+hosting::say dump_file "$file_read"
+hosting::say dump_threads "$threads"
+hosting::say dump_analysis "$fact"
