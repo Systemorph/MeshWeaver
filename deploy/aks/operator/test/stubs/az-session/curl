@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# A stand-in for the GitHub Actions OIDC token endpoint: every request mints a NEW token
+# (gh-token-<n>), recording the URL it was asked (the audience rides on it) and whether the bearer
+# request token was presented.
+set -uo pipefail
+state="${HOSTING_AZS_STATE:?the az-session stub needs HOSTING_AZS_STATE}"
+n=$(( $(cat "$state/minted" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$state/minted"
+url="" bearer=no
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -H) case "${2:-}" in "Authorization: bearer "?*) bearer=yes ;; esac; shift 2 ;;
+    http*) url="$1"; shift ;;
+    *) shift ;;
+  esac
+done
+printf 'curl url=%s bearer=%s\n' "$url" "$bearer" >> "$state/log"
+printf '{"count":1,"value":"gh-token-%s"}' "$n"

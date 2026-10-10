@@ -128,6 +128,34 @@ read; a hand-set `PGUSER` is honoured only when `--user` is absent; a `--user` t
 name refuses before anything runs. The plan refuses a dump-based action whose record does not STATE
 `databaseUsername` (the derived fallback `postgres` is a guess, not a declaration).
 
+## The Azure session is re-established before any `az` call that follows long work
+
+`az` signs in with a federated client assertion and presents that SAME assertion to Entra for every
+token it later needs — Key Vault, Storage, ARM. The assertion is short-lived: a GitHub Actions OIDC
+token is valid for five minutes. So one sign-in at the start of a run cannot carry a step that works
+for longer and then calls `az`. Measured on `Ops/Actions/backup-memex-cloud-memex132-i`: the vault
+read and the login as `memexadmin` succeeded, `pg_dump` wrote 8.4 GB in 16.6 minutes, and the upload
+then failed with `AADSTS700024: Client assertion is not within its valid time range`. The
+workload-identity Job has the same shape — the kubelet refreshes the projected token file, but `az`
+had read it once.
+
+`_common.sh` therefore signs in from a FRESH assertion (`hosting::az_signin`, `hosting::az_refresh`):
+
+| route | where the fresh assertion comes from |
+|---|---|
+| the aks-ops lane (GitHub Actions) | a NEW OIDC token from `ACTIONS_ID_TOKEN_REQUEST_URL`/`_TOKEN`, audience `api://AzureADTokenExchange` — the runner exports both to every process of a job with `id-token: write`, so `run.sh` inherits them; the token file is rewritten so anything else reading it is current |
+| the workload-identity Job | the projected `AZURE_FEDERATED_TOKEN_FILE`, re-read |
+
+`run.sh` signs in that way at the start and again before every step; `hosting-backup` refreshes
+between the dump and the upload, and `hosting-restore` before its download. A refresh that cannot
+get a fresh assertion refuses, naming where and why, rather than letting the next `az` call fail on a
+dead session with a message that names neither. A by-hand run (no `run.sh` session) uses the
+caller's own `az login` and is not touched. The assertion goes from its source straight into `az`'s
+argument and is never printed. `run-tests.sh` holds it with a stub `az` that rejects every call on
+an expired assertion (AADSTS700024) and a `pg_dump` that expires it: both routes upload after the
+long dump; the controls — no fresh assertion to be had, and a single sign-in for the whole run — fail
+exactly as the measured run did.
+
 ## The chart's `secretEnvironment` block, after this
 
 `hostingOperator.secretEnvironment` and `hosting-operator-secrets.yaml` remain in the chart for a

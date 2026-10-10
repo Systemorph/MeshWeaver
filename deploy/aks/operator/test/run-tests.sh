@@ -1134,6 +1134,89 @@ emits "without a token the run says so and reports az_login=false" "::hosting:: 
 rm -rf "$_rl_dir"
 
 echo
+echo "── a FRESH Azure sign-in before any az call that follows long work (Memex#132 -i) ──"
+# Measured on Ops/Actions/backup-memex-cloud-memex132-i (Memex run 38025769128): pg_dump ran 16.6
+# minutes and the upload after it died with "AADSTS700024: Client assertion is not within its valid
+# time range" — run.sh had signed in ONCE from a 5-minute GitHub OIDC token, and az re-presents that
+# same assertion for every later token. The az-session stub models exactly that: a session holds the
+# assertion it signed in with, every call on an expired one fails AADSTS700024, and a new sign-in from
+# a fresh assertion works. Its pg_dump is the long work: it expires the session's assertion (and, on
+# the Job route, rotates the projected token file as the kubelet would).
+AZS_STUBS="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/stubs/az-session" && pwd)"
+azs_backup_step() { printf 'Back up database\thosting-backup --database acmedb --server pg.test --user acmeowner --vault Systemorph --password-secret memex-postgres-password --store-uri https://store.test/b/acme-%s --object acme-%s' "$1" "$1"; }
+azs_run() {  # azs_run <case> [env…] — run.sh with one backup step; sets $_azs_out $_azs_rc $_azs_log $_azs_state
+  local case_id="$1"; shift
+  _azs_state="$(mktemp -d)"; : > "$_azs_state/expired"
+  _azs_out="$(env -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_ID_TOKEN_REQUEST_TOKEN "$@" \
+    PATH="$AZS_STUBS:$PG_STUBS:$PATH" HOSTING_AZS_STATE="$_azs_state" HOSTING_PG_STATE="$_azs_state" \
+    AZURE_CLIENT_ID=11111111-2222-3333-4444-555555555555 AZURE_TENANT_ID=tenant-t \
+    HOSTING_ACTION=backup HOSTING_DEPLOYMENT=d HOSTING_PLAN="$(plan "$(azs_backup_step "$case_id")")" "$BIN/run.sh" 2>&1)"; _azs_rc=$?
+  _azs_log="$(cat "$_azs_state/log" 2>/dev/null || true)"
+}
+
+# The Job route: the projected token file, re-read — the kubelet keeps it fresh.
+_azs_tok="$(mktemp)"; printf 'job-token-1' > "$_azs_tok"
+azs_run job AZURE_FEDERATED_TOKEN_FILE="$_azs_tok"
+[ "$_azs_rc" -eq 0 ] && ok "Job route: a backup whose dump outlives the assertion still uploads" || bad "Job route backup uploads" "exited ${_azs_rc}: ${_azs_out} | ${_azs_log}"
+[ -s "$_azs_state/uploads" ] && ok "…the upload ran" || bad "the upload ran" "log: ${_azs_log}"
+_azs_after_dump="$(printf '%s\n' "$_azs_log" | sed -n '/^pg_dump ran$/,$p')"
+case "$_azs_after_dump" in *"az login assertion=job-token-rotated"*"storage blob upload"*"(session=job-token-rotated)"*) ok "…on a session signed in AFTER the dump from the re-read token file" ;;
+  *) bad "re-signs in after the dump from the re-read token file" "after the dump: ${_azs_after_dump}" ;; esac
+case "$_azs_out" in *"session refreshed from a fresh federated token (between the dump and the upload)"*) ok "…and the run says it refreshed, and where" ;;
+  *) bad "the refresh is narrated" "said: ${_azs_out}" ;; esac
+case "$_azs_out" in *job-token-*) bad "no assertion ever appears in the output" "it did: ${_azs_out}" ;; *) ok "no assertion ever appears in the output" ;; esac
+[ "$(printf '%s\n' "$_azs_log" | grep -c '^az login ')" -ge 3 ] && ok "run.sh signs in at the start AND again before the step (3+ sign-ins in all)" \
+  || bad "a sign-in at the start and before the step" "log: ${_azs_log}"
+rm -rf "$_azs_state" "$_azs_tok"
+
+# The Actions route: a NEW GitHub OIDC token for every sign-in, and the token file kept current.
+_azs_tok="$(mktemp)"; printf 'gh-token-stale' > "$_azs_tok"
+azs_run gh AZURE_FEDERATED_TOKEN_FILE="$_azs_tok" \
+  ACTIONS_ID_TOKEN_REQUEST_URL='https://oidc.test/token?api-version=2.0' ACTIONS_ID_TOKEN_REQUEST_TOKEN=request-token-NEVER-PRINTED
+[ "$_azs_rc" -eq 0 ] && ok "Actions route: a backup whose dump outlives the assertion still uploads" || bad "Actions route backup uploads" "exited ${_azs_rc}: ${_azs_out} | ${_azs_log}"
+_azs_after_dump="$(printf '%s\n' "$_azs_log" | sed -n '/^pg_dump ran$/,$p')"
+case "$_azs_after_dump" in *"curl url=https://oidc.test/token?api-version=2.0&audience=api://AzureADTokenExchange bearer=yes"*"az login assertion=gh-token-"*"storage blob upload"*) ok "…from a NEW OIDC token requested after the dump, audience api://AzureADTokenExchange, with the request token" ;;
+  *) bad "requests a new OIDC token after the dump" "after the dump: ${_azs_after_dump}" ;; esac
+case "$(cat "$_azs_tok")" in gh-token-stale) bad "the token file is rewritten with the fresh token" "still stale" ;; gh-token-*) ok "…and the token file is rewritten with the fresh token" ;; *) bad "token file content" "$(cat "$_azs_tok")" ;; esac
+case "$_azs_out" in *gh-token-*|*request-token-NEVER-PRINTED*) bad "neither token nor request token appears in the output" "it did: ${_azs_out}" ;; *) ok "neither token nor request token appears in the output" ;; esac
+rm -rf "$_azs_state" "$_azs_tok"
+
+# hosting-restore refreshes before its download (it may have waited on the vault and the quiesce).
+_azs_tok="$(mktemp)"; printf 'job-token-1' > "$_azs_tok"
+_azs_state="$(mktemp -d)"; : > "$_azs_state/expired"
+_azs_out="$(env -u ACTIONS_ID_TOKEN_REQUEST_URL PATH="$AZS_STUBS:$PG_STUBS:$PATH" HOSTING_AZS_STATE="$_azs_state" HOSTING_PG_STATE="$_azs_state" \
+  AZURE_FEDERATED_TOKEN_FILE="$_azs_tok" AZURE_CLIENT_ID=c AZURE_TENANT_ID=t HOSTING_ACTION=restore HOSTING_DEPLOYMENT=d \
+  HOSTING_PLAN="$(plan 'Restore archive	hosting-restore --database acmedb --server pg.test --user acmeowner --vault Systemorph --password-secret memex-postgres-password --store-uri https://store.test/b/acme-1')" \
+  "$BIN/run.sh" 2>&1)"; _azs_rc=$?
+[ "$_azs_rc" -eq 0 ] && ok "a restore runs on a refreshed session" || bad "restore on a refreshed session" "exited ${_azs_rc}: ${_azs_out} | $(cat "$_azs_state/log")"
+case "$_azs_out" in *"session refreshed from a fresh federated token (before the download)"*"downloading https://store.test/b/acme-1"*) ok "…refreshing it immediately before the download" ;;
+  *) bad "restore refreshes before the download" "said: ${_azs_out}" ;; esac
+rm -rf "$_azs_state" "$_azs_tok"
+
+# Negative control 1 — the stub really rejects an expired assertion: with no fresh assertion to be had
+# (the token file is not rotated), the refresh between dump and upload REFUSES, naming why, and the
+# upload is never attempted on the dead session.
+_azs_tok="$(mktemp)"; printf 'job-token-1' > "$_azs_tok"
+azs_run norotate AZURE_FEDERATED_TOKEN_FILE="$_azs_tok" HOSTING_AZS_NO_ROTATE=1
+[ "$_azs_rc" -ne 0 ] && ok "negative control: no fresh assertion → the step fails" || bad "no fresh assertion fails" "exited 0: ${_azs_out}"
+case "$_azs_out" in *"could not be refreshed between the dump and the upload"*"AADSTS700024"*) ok "…naming the refresh, where, and Entra's AADSTS700024" ;;
+  *) bad "names the failed refresh" "said: ${_azs_out}" ;; esac
+[ ! -s "$_azs_state/uploads" ] && ok "…and no upload was attempted on the dead session" || bad "no upload on a dead session" "log: ${_azs_log}"
+rm -rf "$_azs_state" "$_azs_tok"
+
+# Negative control 2 — the defect itself: signed in ONCE, no refresh (no run.sh session to refresh),
+# the dump outlives the assertion and the upload fails exactly as on the -i run.
+_azs_state="$(mktemp -d)"; : > "$_azs_state/expired"
+env PATH="$AZS_STUBS:$PG_STUBS:$PATH" HOSTING_AZS_STATE="$_azs_state" az login --service-principal --federated-token job-token-1 >/dev/null 2>&1
+_azs_out="$(env -u HOSTING_AZ_SESSION -u ACTIONS_ID_TOKEN_REQUEST_URL PATH="$AZS_STUBS:$PG_STUBS:$PATH" HOSTING_AZS_STATE="$_azs_state" HOSTING_PG_STATE="$_azs_state" \
+  hosting-backup --database acmedb --server pg.test --user acmeowner --vault Systemorph --password-secret memex-postgres-password --store-uri https://store.test/b/acme-once --object acme-once 2>&1)"; _azs_rc=$?
+[ "$_azs_rc" -ne 0 ] && ok "negative control: one sign-in for the whole run → the upload after a long dump fails (the -i defect)" || bad "one sign-in fails after a long dump" "exited 0: ${_azs_out}"
+case "$_azs_out" in *"AADSTS700024"*"upload to https://store.test/b/acme-once failed"*) ok "…with AADSTS700024 at the upload, as measured" ;;
+  *) bad "fails with AADSTS700024 at the upload" "said: ${_azs_out}" ;; esac
+rm -rf "$_azs_state"
+unset _azs_out _azs_rc _azs_log _azs_state _azs_tok _azs_after_dump
+
+echo
 echo "── hosting-pv-resize: capacity is a record property ──────────────"
 # The stub answers the command's reads from a per-scenario fixture and RECORDS the writes, so
 # the decisions — never shrink, never patch a class that cannot expand, patch once, read the
