@@ -160,6 +160,42 @@ public class NodeRepoLaneHostGuard
         AssertTheTwoImagesAreProvenOneBuild(Gate, lines);
     }
 
+    /// <summary>
+    /// In VOLUME mode the composed host is started with the runner's <c>dotnet</c>, so the portal image's
+    /// <c>MESHWEAVER_PLATFORM_VERSION</c> (which <c>docker run</c> inherits in container mode) never reaches the
+    /// tester, and <c>PlatformBuildInfo</c> falls back to the run-less assembly version (<c>3.1.0+&lt;sha&gt;</c>):
+    /// every package floored on the verified set was refused at install (MeshWeaver.Plugins#3237). The lane must
+    /// hand the served SET name over before the first tester call, through a shape guard that is RED on anything
+    /// the pipeline does not mint. The guard's own pattern is executed here against valid and invalid values.
+    /// </summary>
+    [Fact]
+    public void TheGateLane_VolumeHost_RunsAsTheSetItWasServed()
+    {
+        var lines = ExecutableLinesOf(File.ReadAllText(Path.Combine(FindRepoRoot(), Gate)));
+
+        Assert.True(lines.Contains("VOLUME_SET: ${{ steps.platform-source.outputs.set }}", StringComparison.Ordinal),
+            $"{Gate}: the gate step must receive the set the volume served (steps.platform-source.outputs.set).");
+        var export = lines.IndexOf("export MESHWEAVER_PLATFORM_VERSION=\"$VOLUME_SET\"", StringComparison.Ordinal);
+        Assert.True(export >= 0, $"{Gate}: volume mode must export the served set as MESHWEAVER_PLATFORM_VERSION.");
+        var volumeBranch = lines.IndexOf("P_SHARED=\"$RUNNER_SHARED_FRAMEWORKS\"", StringComparison.Ordinal);
+        var containerBranch = lines.IndexOf("P_APP=/app", StringComparison.Ordinal);
+        Assert.True(volumeBranch >= 0 && volumeBranch < export && export < containerBranch,
+            $"{Gate}: the export must sit in the VOLUME branch (container mode inherits the image's own variable).");
+        Assert.True(Regex.IsMatch(lines[export..], @"\n\s*run_tester "),
+            $"{Gate}: no tester invocation follows the export — it would reach nothing.");
+        Assert.True(lines[..export].Split('\n').All(l => !l.TrimStart().StartsWith("run_tester ", StringComparison.Ordinal)),
+            $"{Gate}: no tester may be started before the platform version is exported.");
+
+        var guard = Regex.Match(lines, @"\[\[ ""\$\{VOLUME_SET:-\}"" =~ (?<re>\S+) \]\]");
+        Assert.True(guard.Success, $"{Gate}: the export must be preceded by the release-version shape guard on VOLUME_SET.");
+        Assert.True(guard.Index < export, $"{Gate}: the shape guard must run BEFORE the export.");
+        var shape = new Regex(guard.Groups["re"].Value);
+        foreach (var ok in new[] { "3.1.10365", "3.0.0-ci.10317", "3.0.0-rc9.ci.12", "3.0.0-edge.5" })
+            Assert.True(shape.IsMatch(ok), $"the guard must accept the minted version '{ok}'");
+        foreach (var bad in new[] { "", "latest", "3.1", "3.0.0-alpha", "sha256:abc" })
+            Assert.False(shape.IsMatch(bad), $"the guard must refuse '{bad}' — the host could not be told which platform it runs");
+    }
+
     private static void AssertTheTwoImagesAreProvenOneBuild(string workflow, string lines)
     {
         // The two images must be proven ONE build before the composition is trusted.
