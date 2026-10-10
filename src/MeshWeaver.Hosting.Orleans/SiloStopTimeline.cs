@@ -24,8 +24,8 @@ namespace MeshWeaver.Hosting.Orleans;
 /// Information line: the stage, the time since the first stop callback, the time since the previous
 /// marker (that is, how long the stage above it took), the thread pool's thread count and queued
 /// work, the total GC pause so far and whether the stop is graceful. Lined up against the peers'
-/// fingerprint timestamps, the lines decide between the two causes; see the README section
-/// "Silo departure and cancellation timeouts".</para>
+/// fingerprint timestamps, the lines decide between the two causes; see the doc page
+/// <c>Doc/Architecture/ReadingASiloStop</c>.</para>
 ///
 /// <para><b>What it deliberately does not do.</b> It changes no behaviour: it holds nothing,
 /// cancels nothing and resolves nothing from DI at stop time (the logger is injected at
