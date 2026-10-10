@@ -133,9 +133,30 @@ public record UiContribution
     public const string PersonAppContext = "PersonApp";
 
     /// <summary>
+    /// The APP-SETTINGS context (<c>AppSettings</c>): a contribution here adds a TAB to the settings
+    /// page of ONE host app — the node named by <see cref="Host"/> (<c>/{host}/Settings/{Id}</c>). It
+    /// is how an app's own configuration (Threads › Models, Signature › Providers) and an instance
+    /// app's section (Administration › Manage apps, <c>Host = "Admin"</c>) are contributed as DATA by
+    /// a module compiled from mesh content, which cannot reach the host hub's configuration.
+    ///
+    /// <para>The tab's body EMBEDS <see cref="Area"/> of the hub at <see cref="Address"/> (unset ⇒ the
+    /// host app's own hub) through the platform's <c>LayoutAreaControl</c>, exactly like a
+    /// <see cref="PersonAppContext"/> tab, and the address obeys the same partition rule (it must lie
+    /// inside the contribution node's own partition). It shows ONLY on the host's settings page —
+    /// never on any other node's — and the node-shape gates still narrow it (<c>AdminOnly</c> for an
+    /// instance-app section, <c>NodeTypes</c>, …; <see cref="RequiredPermission"/> against the
+    /// viewer's permissions on the host node). <see cref="UiContributionGates.RequireAddressAccess"/>
+    /// is NOT folded on this lane (only the PersonApp lane probes the address live), so it is inert
+    /// here and <c>UiContributionSeedValidation</c> reports it as such; the embedded area still runs
+    /// its own access checks.</para>
+    /// </summary>
+    public const string AppSettingsContext = "AppSettings";
+
+    /// <summary>
     /// Which menu the entry contributes to: <c>Node</c>, <c>Mesh</c>, <c>Settings</c> (the GLOBAL
     /// settings page), <c>NodeSettings</c> (the PER-NODE settings page), <c>TopBar</c>, <c>AI</c>,
-    /// <c>Profile</c>, <c>PersonApp</c> or any key a <c>TopBar</c> declaration introduces. Unset ⇒ <c>Node</c>.
+    /// <c>Profile</c>, <c>PersonApp</c>, <c>AppSettings</c> (with <see cref="Host"/>) or any key a
+    /// <c>TopBar</c> declaration introduces. Unset ⇒ <c>Node</c>.
     ///
     /// <para>🚨 A context nobody consumes renders NOWHERE — no error, no warning, not even an
     /// area-not-found placeholder. <see cref="UiContributionSeedValidation"/> is the static check
@@ -164,15 +185,22 @@ public record UiContribution
 
     /// <summary>
     /// The hub address whose <see cref="Area"/> an EMBEDDING context renders —
-    /// <see cref="ProfileContext"/> and <see cref="PersonAppContext"/>, where e.g. <c>Address = "Store"</c>, <c>Area = "MyPlan"</c>
+    /// <see cref="ProfileContext"/>, <see cref="PersonAppContext"/> and <see cref="AppSettingsContext"/>, where e.g. <c>Address = "Store"</c>, <c>Area = "MyPlan"</c>
     /// puts the Store's own plan view on every profile page. Unset ⇒ the anchoring node's own hub
     /// (for a profile section, the user node). 🚨 It must lie inside the contribution node's OWN
     /// partition (<c>Store/ProfileSections/x</c> may embed <c>Store</c> or <c>Store/…</c>); any other
     /// address drops the entry, so a contribution can only point viewers at something its author
-    /// already controls. Menu and settings contexts ignore it: they open
+    /// already controls. Menu contexts and the Settings / NodeSettings tabs ignore it: they open
     /// <see cref="Area"/> on the anchoring node, or navigate to <see cref="Href"/>.
     /// </summary>
     public string? Address { get; init; }
+
+    /// <summary>
+    /// The host app an <see cref="AppSettingsContext"/> tab belongs to — the path of the app node
+    /// whose settings page carries it (<c>"Admin"</c>, <c>"AI/AiThreads"</c>). Matched
+    /// case-insensitively against the settings page's node path; ignored by every other context.
+    /// </summary>
+    public string? Host { get; init; }
 
     /// <summary>
     /// Optional explicit navigation URL, overriding the URL derived from <see cref="Area"/> on the
@@ -208,7 +236,8 @@ public record UiContribution
     /// only by the section's name (<c>PartitionSyncAdminLayoutArea</c> ships fifteen: "partitions",
     /// "sync source", "decouple", "delete space", …).
     ///
-    /// <para>Consumed by <see cref="NodeSettingsContext"/> only — the global settings page has no
+    /// <para>Consumed by <see cref="NodeSettingsContext"/> and <see cref="AppSettingsContext"/> (both
+    /// render on a per-node settings page) — the global settings page has no
     /// search box and <c>GlobalSettingsMenuItemDefinition</c> has no keyword slot; declaring them
     /// on a <see cref="SettingsContext"/> contribution is harmless but inert.</para>
     ///
