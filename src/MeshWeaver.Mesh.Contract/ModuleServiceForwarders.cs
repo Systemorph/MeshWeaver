@@ -20,15 +20,55 @@ public class ModuleServiceProxy : DispatchProxy
     private ModuleContexts? contexts;
     private string module = "";
     private int index;
+    private string service = "";
 
     /// <summary>Creates the proxy for <paramref name="serviceType"/>.</summary>
     public static object Create(Type serviceType, ModuleContexts contexts, string module, int index)
     {
+        ArgumentNullException.ThrowIfNull(serviceType);
         var proxy = (ModuleServiceProxy)DispatchProxy.Create(serviceType, typeof(ModuleServiceProxy));
         proxy.contexts = contexts;
         proxy.module = module;
         proxy.index = index;
+        proxy.service = serviceType.Name;
         return proxy;
+    }
+
+    /// <summary>
+    /// What this proxy forwards to RIGHT NOW, without resolving it: the implementation type the
+    /// module's CURRENT generation registered at this position (or the service interface, when that
+    /// registration is a factory, which names no type), the module and the position.
+    ///
+    /// <para>Read from the current generation's registration on every call, never remembered: the
+    /// proxy outlives a live swap, and a swap keeps route, service type and lifetime but may change
+    /// the implementing class — a name taken at boot would go on naming the retired one.</para>
+    /// </summary>
+    public override string ToString()
+    {
+        var descriptor = contexts?.Current(module)?.Services?.Registrations
+            .ElementAtOrDefault(index)?.Descriptor;
+        var implementation = descriptor is null
+            ? null
+            : descriptor.IsKeyedService
+                ? descriptor.KeyedImplementationType ?? descriptor.KeyedImplementationInstance?.GetType()
+                : descriptor.ImplementationType ?? descriptor.ImplementationInstance?.GetType();
+        return $"{implementation?.Name ?? service} [module {module}, registration {index}]";
+    }
+
+    /// <summary>
+    /// The name a diagnostic gives <paramref name="service"/>: its own type name, or — for a
+    /// module's forwarding proxy — what the proxy forwards to (<see cref="ToString"/>).
+    ///
+    /// <para>A proxy's runtime type is a generated class whose name says nothing, and the instance
+    /// behind it lives in the module's own container. A diagnostic that names a service the caller
+    /// is WAITING on must not resolve that instance to name it: the wait is usually that very
+    /// resolution (MeshWeaver#6391).</para>
+    /// </summary>
+    /// <param name="service">The resolved service — an instance, or a module's forwarding proxy.</param>
+    public static string Label(object service)
+    {
+        ArgumentNullException.ThrowIfNull(service);
+        return service is ModuleServiceProxy proxy ? proxy.ToString() : service.GetType().Name;
     }
 
     /// <inheritdoc />
