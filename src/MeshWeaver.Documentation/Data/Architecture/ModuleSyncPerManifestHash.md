@@ -107,7 +107,10 @@ What this does **not** do: it does not bring back sources an instance already lo
 Space records the current hash, so it reads as unchanged; a reconciling import of that Space
 (`reconcile`, which measures the mesh against the tree) is what restores them. And a lock this rule
 cannot recompute (no `files` map, or no `<Folder>/index.json` entry naming the package folder) is
-judged by its stated hash, as before.
+judged by its stated hash, as before. So is every module of a **truncated** listing
+(`RepoSnapshot.ListingIsComplete` false): a hash over a partial file set is the hash of no tree, so
+none is computed and none is recorded. When the lock states a hash other than its tree's, the
+outcome keeps both: `IncomingVersion` is the tree's and `StatedVersion` is the lock's.
 
 `AModuleSyncsWhenItsSourcesMoveUnderAnUnsettledLockTest` drives the three commits through the real
 import.
