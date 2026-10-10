@@ -782,6 +782,12 @@ public static class MeshExtensions
     private const string CreateStalledKey = "activity.node.create.stalled";
 
     /// <summary>
+    /// The refusal a create gives when one of its creation validators COMPLETED WITHOUT A VERDICT
+    /// (#6391) — no verdict is not consent, so the create is refused <c>Unavailable</c>.
+    /// </summary>
+    private const string ValidatorGaveNoVerdictKey = "activity.node.create.validatorGaveNoVerdict";
+
+    /// <summary>
     /// The verdict a create gives when its row is written but a post-creation handler has not
     /// finished by the deadline — written, outcome unknown, nothing cancelled or rolled back.
     /// </summary>
@@ -6518,18 +6524,44 @@ public static class MeshExtensions
         // Each validator is named at the moment Concat SUBSCRIBES to it (Defer), i.e. when it is
         // the one the chain is waiting on — so a stalled verdict reads
         // "validators: RlsNodeValidator (i/n)", never a bare stage name (#6391).
+        //
+        // 🚨 EXACTLY ONE VERDICT PER VALIDATOR (#6391). The INodeValidator contract is "emits
+        // exactly one NodeValidationResult and completes"; the runner holds every validator to it
+        // instead of trusting it:
+        //  • Take(1) — the FIRST emission is that validator's verdict. Concat subscribes to
+        //    validator i+1 only when validator i COMPLETES, so a validator that answered from a
+        //    live read and stayed subscribed (a hot fold that never completes) held every validator
+        //    after it, and as the last one the whole create, until the create's own deadline.
+        //  • An EMPTY completion is a refusal — a validator that completes without emitting gave
+        //    no verdict, and "no verdict" is not consent (the #2742 rule, generalised from RLS to
+        //    every validator). Concat used to skip it, and the create proceeded as if it had passed.
+        // A validator that never answers at all is deliberately NOT bounded here: the create's own
+        // budget answers it and names it (the stage above), and why it does not answer is that
+        // validator's defect to find — a per-validator timeout would only hide it.
         return validators
-            .Select((v, i) => onStage is null
-                ? v.Validate(context)
-                : Observable.Defer(() =>
+            .Select((v, i) => Observable.Defer(() =>
                 {
-                    onStage($"{v.GetType().Name} ({i + 1}/{validators.Count})");
+                    onStage?.Invoke($"{v.GetType().Name} ({i + 1}/{validators.Count})");
                     return v.Validate(context);
-                }))
+                })
+                .Take(1)
+                .Select(result => (Result: (NodeValidationResult?)result, Validator: v.GetType().Name))
+                .DefaultIfEmpty((Result: null, Validator: v.GetType().Name)))
             .Concat()
-            .Where(result => !result.IsValid)
-            .Select(result =>
+            .Where(verdict => verdict.Result is not { IsValid: true })
+            .Select(verdict =>
             {
+                if (verdict.Result is not { } result)
+                    return ((LocalizableText?, NodeCreationRejectionReason)?)(
+                        LocalizableText.Keyed(
+                            $"Creating '{node.Path}' was refused: creation validator {verdict.Validator} "
+                            + "completed without a verdict. No verdict is not consent, so nothing was "
+                            + "written; a validator must emit exactly one result.",
+                            ValidatorGaveNoVerdictKey,
+                            ("path", node.Path), ("validator", verdict.Validator)),
+                        // Unavailable, not ValidationFailed: nothing objected to the request — the
+                        // check was never established (#1446). Still fail-closed: nothing is written.
+                        NodeCreationRejectionReason.Unavailable);
                 var reason = result.Reason switch
                 {
                     NodeRejectionReason.NodeAlreadyExists => NodeCreationRejectionReason.NodeAlreadyExists,
