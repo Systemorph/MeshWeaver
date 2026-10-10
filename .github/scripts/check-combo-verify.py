@@ -67,12 +67,48 @@ there, and nothing else.
                                               credential to assert (#3848): each instance is reached
                                               as the run's own OIDC identity, so a missing grant is a
                                               401 in the verify job naming both provisioning halves.
+                                              🚨 And what it emits carries NO NAME — see part three.
+  5a. the derivation emitted no digest      → RED. Each verify job re-derives the roster and is held
+                                              to the preflight's digest; a hand-over without one
+                                              could land a verdict on another installation.
 
 🚨 It resolves each step BY ID into the parsed workflow (`jobs.preflight.steps[?id]`) and asserts a
 sentinel is present, so if a step is renamed, reordered or moved into a script this fails LOUD
 instead of silently testing nothing — the "a guard whose subject moved and whose roots did not"
 failure mode. The step BETWEEN them is the derivation, which needs the network and has its own
 falsification (`derive-combo-instances.py --self-test`, run beside this one).
+
+PART THREE — THE ROSTER NEVER CROSSES A JOB BOUNDARY, AND THE VERDICT COUNTS JOBS (#3848)
+-----------------------------------------------------------------------------------------
+(Listed here because it is about the preflight's hand-over; it runs after part two.)
+
+Measured 2026-10-10: the preflight published the roster as the job output `instances`. The roster
+names installations the private roster masks, and the runner DROPS a job output that contains a
+masked value — "Skip output 'instances' since it may contain secret", a WARNING inside a job that
+concludes success. `fromJSON('')` then could not expand the verify matrix, so no per-instance job
+was ever created: eight post-CD runs in a row read preflight=success verify=failure with no
+instance contacted and no reason printed. Two things are asserted so that cannot recur:
+
+  * STRUCTURE — the preflight's job outputs are exactly `slots`, `count`, `digest`; the verify matrix
+    is built from `slots`; nothing in the verify job reads a name out of the matrix or out of a
+    preflight output (a job NAME and an artifact NAME are not masked); and the verify job resolves
+    its slot by re-running the derivation with the preflight's count and digest, BEFORE the lander.
+  * BEHAVIOUR — the roster step's real shell is executed over a derived roster and every value it
+    writes to `$GITHUB_OUTPUT` is put through the runner's own rule: a value that CONTAINS any
+    installation name or host is one the runner would drop. And the `verdict` step's real shell is
+    executed over the outcomes below, with the per-instance job counts as inputs:
+
+      preflight ok, 6 instances, 0 jobs created     → RED naming the unexpanded matrix (the measured defect)
+      preflight ok, 6 instances, 5 jobs created     → RED: a partial matrix is not a verification
+      preflight ok, 6 of 6 created, 5 succeeded     → RED
+      preflight ok, 6 of 6 created and succeeded    → GREEN, `verified=true`
+      the job count itself missing                  → RED: a verdict with no numerator is not one
+      preflight skipped, CD cancelled               → GREEN "no candidate", `verified=false`
+      preflight skipped, CD succeeded               → RED (the skip-trapdoor)
+      preflight failed                              → RED
+
+`--self-test` re-publishes the roster as a job output, names the job after the instance, and guts the
+verdict — and requires each to be refused.
 
 PART TWO — THE LANDER HOLDS NOTHING (#3848)
 -------------------------------------------
@@ -117,6 +153,13 @@ SOURCE_LOOP_LINE = 'for s in "${source_pairs[@]}"; do src_args+=(--source "$s");
 # One sentinel per assertion step, proving we extracted THAT block and not a neighbouring step.
 SENTINELS = {"assert": "missing=()",
              "roster": "the derived instance roster is not a non-empty JSON array"}
+# The verdict step lives in its own job; same rule — by id, with a sentinel.
+VERDICT_SENTINEL = "the preflight was SKIPPED although the triggering CD concluded"
+VERIFY_JOB_NAME = "Verify instance slot ${{ matrix.slot }} against its roll target"
+# What the preflight may hand to another job. Anything else is a value that can carry a name.
+PREFLIGHT_OUTPUTS = {"slots": "${{ steps.roster.outputs.slots }}",
+                     "count": "${{ steps.roster.outputs.count }}",
+                     "digest": "${{ steps.roster.outputs.digest }}"}
 
 FULLY_PROVISIONED = {
     "AZURE_CLIENT_ID": "cid",
@@ -125,6 +168,7 @@ FULLY_PROVISIONED = {
     "FLEET_READER_APP_ID": "app",
     "FLEET_READER_APP_PRIVATE_KEY": "pem",
     "SOURCES": "Plugins=https://github.com/Systemorph/MeshWeaver.Plugins",
+    "DIGEST": "5" * 78,       # the derivation's digest: 78 decimal digits
 }
 
 # What the derivation step hands the roster step on a healthy fleet.
@@ -193,6 +237,81 @@ SCENARIOS = [
         {**FULLY_PROVISIONED, "INSTANCES": DERIVED},
         0,
         "2 instance(s) will be verified",
+    ),
+    (
+        "roster",
+        "the derivation emitted no roster digest ⇒ nothing is handed over",
+        {**FULLY_PROVISIONED, "INSTANCES": DERIVED, "DIGEST": ""},
+        1,
+        "emitted no roster digest",
+    ),
+]
+
+# What the runner treats as secret in the scenario above: every installation name and host of the
+# derived roster, and every source. In production only the PRIVATE ones are masked — but which
+# those are is not knowable here, and the property worth holding is the stronger one: nothing that
+# identifies ANY installation is in a value handed to another job.
+MASKED = [value for row in json.loads(DERIVED)
+          for value in (row["name"], row["baseUrl"], row["baseUrl"].split("//", 1)[1])]
+MASKED += FULLY_PROVISIONED["SOURCES"].split()
+
+# (label, env, expected exit code, text the output MUST contain, expected `verified=` or None)
+VERDICT_OK = {"PREFLIGHT": "success", "VERIFY": "success", "COUNT": "6", "TRIGGER": "success",
+              "STARTED": "6", "PASSED": "6"}
+VERDICT_SCENARIOS = [
+    (
+        # 🚨 THE MEASURED DEFECT (#3848, 2026-10-10): the matrix input was dropped, no job exists.
+        "6 instances derived, NO per-instance job created (the dropped-output shape)",
+        {**VERDICT_OK, "VERIFY": "failure", "STARTED": "0", "PASSED": "0"},
+        1, "created NO per-instance verify job", None,
+    ),
+    (
+        "6 instances derived, 5 per-instance jobs created",
+        {**VERDICT_OK, "STARTED": "5", "PASSED": "5"},
+        1, "The matrix does not cover the roster", None,
+    ),
+    (
+        "6 of 6 created, one failed",
+        {**VERDICT_OK, "VERIFY": "failure", "PASSED": "5"},
+        1, "5 of 6 per-instance job(s) succeeded", None,
+    ),
+    (
+        "6 of 6 created, the matrix reads success, only 5 concluded success",
+        {**VERDICT_OK, "PASSED": "5"},
+        1, "only 5 of 6 per-instance job(s) concluded success", None,
+    ),
+    (
+        "6 of 6 created and succeeded",
+        VERDICT_OK,
+        0, "Every derived instance (6 of 6)", "true",
+    ),
+    (
+        "the per-instance job count is missing",
+        {**VERDICT_OK, "STARTED": "", "PASSED": ""},
+        1, "the per-instance job count is missing", None,
+    ),
+    (
+        "the preflight passed and counted zero",
+        {**VERDICT_OK, "COUNT": "0", "STARTED": "0", "PASSED": "0"},
+        1, "named ZERO instances", None,
+    ),
+    (
+        "no candidate: the triggering CD was cancelled",
+        {**VERDICT_OK, "PREFLIGHT": "skipped", "VERIFY": "skipped", "COUNT": "",
+         "TRIGGER": "cancelled", "STARTED": "0", "PASSED": "0"},
+        0, "No candidate", "false",
+    ),
+    (
+        "the preflight was skipped although CD succeeded (the skip-trapdoor)",
+        {**VERDICT_OK, "PREFLIGHT": "skipped", "VERIFY": "skipped", "COUNT": "",
+         "STARTED": "0", "PASSED": "0"},
+        1, "the preflight was SKIPPED", None,
+    ),
+    (
+        "the preflight failed",
+        {**VERDICT_OK, "PREFLIGHT": "failure", "VERIFY": "skipped", "COUNT": "",
+         "STARTED": "0", "PASSED": "0"},
+        1, "the preflight FAILED", None,
     ),
 ]
 
@@ -294,24 +413,9 @@ def read_preflight(root: Path) -> dict[str, str]:
             "moved and this guard did not — it would otherwise pass having checked nothing."
         ) from exc
     by_id = {step.get("id"): step for step in steps if isinstance(step, dict)}
-    roster = by_id.get("roster", {})
-    derive = by_id.get("derive", {})
-    outputs = doc["jobs"]["preflight"].get("outputs", {})
-    if outputs.get("sources") != "${{ steps.roster.outputs.sources }}":
-        raise SystemExit(
-            f"::error::{WORKFLOW}: preflight must publish steps.roster.outputs.sources; "
-            "otherwise the verifier can run without the deployment-derived source map.")
-    if roster.get("env", {}).get("SOURCES") != "${{ steps.derive.outputs.sources }}":
-        raise SystemExit(
-            f"::error::{WORKFLOW}: the roster assertion must read SOURCES from "
-            "steps.derive.outputs.sources, not an external variable.")
-    verify_steps = doc["jobs"].get("verify", {}).get("steps", [])
-    lander = next((step for step in verify_steps
-                   if "bash .github/scripts/combo-verify-instance.sh" in step.get("run", "")), None)
-    if lander is None or lander.get("env", {}).get("SOURCES") != "${{ needs.preflight.outputs.sources }}":
-        raise SystemExit(
-            f"::error::{WORKFLOW}: the verifier must consume needs.preflight.outputs.sources; "
-            "otherwise it can run with a missing or stale source map.")
+    problems = handover_problems(doc)
+    if problems:
+        raise SystemExit("\n".join(f"::error::{WORKFLOW}: {problem}" for problem in problems))
     scripts: dict[str, str] = {}
     for step_id, sentinel in SENTINELS.items():
         step = by_id.get(step_id)
@@ -328,7 +432,153 @@ def read_preflight(root: Path) -> dict[str, str]:
                 "asserts, or restore the assertion."
             )
         scripts[step_id] = step["run"]
+    verdict = next((step for step in doc["jobs"].get("verdict", {}).get("steps", [])
+                    if isinstance(step, dict) and step.get("id") == "verdict"), None)
+    if verdict is None or VERDICT_SENTINEL not in verdict.get("run", ""):
+        raise SystemExit(
+            f"::error::{WORKFLOW}: jobs.verdict has no `run` step with id `verdict` containing "
+            f"{VERDICT_SENTINEL!r}. The verdict moved and this guard did not follow — it would "
+            "otherwise pass having checked nothing.")
+    scripts["verdict"] = verdict["run"]
     return scripts
+
+
+def handover_problems(doc: dict) -> list[str]:
+    """Why the roster could not reach the verify jobs, or would reach them wearing a name (#3848).
+
+    Structural, over the parsed workflow. Each arm is one way the measured defect — a job output
+    the runner dropped because it contained a masked name, so the matrix never expanded — or its
+    twin, a name printed where nothing masks it, comes back."""
+    problems: list[str] = []
+    jobs = doc.get("jobs", {})
+    preflight = jobs.get("preflight", {})
+    verify = jobs.get("verify", {})
+    verdict = jobs.get("verdict", {})
+
+    outputs = preflight.get("outputs", {})
+    if outputs != PREFLIGHT_OUTPUTS:
+        extra = sorted(set(outputs) - set(PREFLIGHT_OUTPUTS))
+        problems.append(
+            "jobs.preflight.outputs must be exactly slots/count/digest from the roster step"
+            + (f"; it also publishes {extra}" if extra else f"; it is {outputs}")
+            + ". The roster and the source map contain names the private roster masks, and the "
+            "runner DROPS a job output containing a masked value — the verify matrix then "
+            "receives an empty string and no per-instance job is created.")
+    by_id = {step.get("id"): step for step in preflight.get("steps", []) if isinstance(step, dict)}
+    roster_env = by_id.get("roster", {}).get("env", {})
+    for name in ("INSTANCES", "SOURCES", "DIGEST"):
+        want = "${{ steps.derive.outputs.%s }}" % name.lower()
+        if roster_env.get(name) != want:
+            problems.append(f"the roster assertion must read {name} from {want}, not an external "
+                            "variable.")
+
+    matrix = verify.get("strategy", {}).get("matrix", {})
+    if matrix != {"slot": "${{ fromJSON(needs.preflight.outputs.slots) }}"}:
+        problems.append(
+            f"jobs.verify's matrix must be exactly `slot: fromJSON(needs.preflight.outputs.slots)`; "
+            f"it is {matrix}. A matrix built from anything that carries a name is the dropped "
+            "output again.")
+    if verify.get("name") != VERIFY_JOB_NAME:
+        problems.append(
+            f"jobs.verify.name must be {VERIFY_JOB_NAME!r}; it is {verify.get('name')!r}. A job "
+            "name is NOT masked (so it must not carry an installation's name), and the verdict "
+            "job counts per-instance jobs by this exact name.")
+    if "if" in verify:
+        problems.append("jobs.verify carries an `if:` — it must be gated by `needs: preflight` "
+                        "and nothing else.")
+    verify_text = json.dumps(verify)
+    for needle, why in (
+        ("matrix.instance", "reads an installation out of the matrix"),
+        ("needs.preflight.outputs.instances", "reads the roster out of a job output"),
+        ("needs.preflight.outputs.sources", "reads the source map out of a job output"),
+    ):
+        if needle in verify_text:
+            problems.append(f"jobs.verify {why} (`{needle}`), which the runner drops whenever it "
+                            "contains a masked name.")
+    verify_steps = [step for step in verify.get("steps", []) if isinstance(step, dict)]
+    resolve_at = next((i for i, step in enumerate(verify_steps)
+                       if "derive-combo-instances.py --discover" in step.get("run", "")
+                       and "--slot" in step.get("run", "")), None)
+    lander_at = next((i for i, step in enumerate(verify_steps)
+                      if "bash .github/scripts/combo-verify-instance.sh" in step.get("run", "")),
+                     None)
+    if resolve_at is None or lander_at is None or resolve_at > lander_at:
+        problems.append(
+            "jobs.verify must resolve its slot with `derive-combo-instances.py --discover --slot` "
+            "BEFORE it runs the lander; otherwise the lander has no installation to verify.")
+    else:
+        resolve = verify_steps[resolve_at]
+        env = resolve.get("env", {})
+        for key, want in (("SLOT", "${{ matrix.slot }}"),
+                          ("EXPECT_COUNT", "${{ needs.preflight.outputs.count }}"),
+                          ("EXPECT_DIGEST", "${{ needs.preflight.outputs.digest }}"),
+                          ("MW_ACR_PRIVATE_ROSTER", "${{ secrets.ACR_RETENTION_PRIVATE_ROSTER }}")):
+            if env.get(key) != want:
+                problems.append(f"the slot step must set {key} to {want}; it has {env.get(key)!r}.")
+        for flag in ('--slot "$SLOT"', '--expect-count "$EXPECT_COUNT"',
+                     '--expect-digest "$EXPECT_DIGEST"'):
+            if flag not in resolve.get("run", ""):
+                problems.append(f"the slot step must pass {flag}: a re-derived roster that is not "
+                                "held to the preflight's can land a verdict on another "
+                                "installation.")
+        if "if" in resolve or resolve.get("continue-on-error"):
+            problems.append("the slot step is conditional or continue-on-error — a slot that "
+                            "cannot be resolved must be a red verify job.")
+        lander = verify_steps[lander_at]
+        if lander.get("env", {}).get("ARTIFACT_TAG") != "slot-${{ matrix.slot }}":
+            problems.append("the lander must name its files by slot (ARTIFACT_TAG: slot-N): an "
+                            "artifact's name and file names are not masked.")
+        for needle in ("${INSTANCE_NAME:?", "${BASE_URL:?", "${SOURCES:?"):
+            if needle not in lander.get("run", ""):
+                problems.append(f"the lander step must assert {needle}…}} before it runs, so a "
+                                "slot step that stops writing one is a red naming it.")
+
+    verdict_steps = [step for step in verdict.get("steps", []) if isinstance(step, dict)]
+    counter = next((step for step in verdict_steps if step.get("id") == "jobs"), None)
+    verdict_step = next((step for step in verdict_steps if step.get("id") == "verdict"), {})
+    if (counter is None or "/jobs?filter=latest" not in counter.get("run", "")
+            or "^Verify instance slot [0-9]+ against its roll target$" not in counter.get("run", "")):
+        problems.append("jobs.verdict must count this run's per-instance jobs (step id `jobs`) by "
+                        "the verify job's exact name.")
+    elif "if" in counter or counter.get("continue-on-error"):
+        problems.append("the job-count step is conditional or continue-on-error — a verdict "
+                        "whose numerator could not be read must be red.")
+    venv = verdict_step.get("env", {})
+    if (venv.get("STARTED") != "${{ steps.jobs.outputs.started }}"
+            or venv.get("PASSED") != "${{ steps.jobs.outputs.passed }}"):
+        problems.append("the verdict step must read STARTED and PASSED from the job-count step.")
+    if verdict.get("if") != "always()" or verdict.get("needs") != ["preflight", "verify"]:
+        problems.append("jobs.verdict must run `if: always()` and need [preflight, verify].")
+    if verdict.get("permissions") != {"actions": "read"}:
+        problems.append("jobs.verdict needs exactly `permissions: {actions: read}` to list the "
+                        "run's jobs.")
+    return problems
+
+
+def check_verdict(script: str) -> int:
+    """The verdict step's real shell, over the per-instance job counts (#3848)."""
+    failures = 0
+    for label, overrides, want_code, want_text, want_verified in VERDICT_SCENARIOS:
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = Path(tmp) / "summary"
+            summary.touch()
+            code, output, gh_output = run_scenario(
+                script, {**overrides, "GITHUB_STEP_SUMMARY": str(summary)})
+        ok = code == want_code and want_text in output
+        if ok and want_verified is not None:
+            ok = f"verified={want_verified}" in gh_output
+        if ok and want_code != 0:
+            # A red verdict must never have already told the reporter it verified something.
+            ok = "verified=true" not in gh_output
+        print(f"[{'PASS' if ok else 'FAIL'}] verdict: {label}: exit={code} (want {want_code})")
+        if not ok:
+            failures += 1
+            print(f"::error::combo-verify verdict scenario '{label}' behaved wrongly — exit {code}, "
+                  f"want {want_code}; message "
+                  f"{'contains' if want_text in output else 'DOES NOT contain'} {want_text!r}; "
+                  f"outputs {gh_output.strip()!r}")
+            print("  " + output.replace("\n", "\n  "))
+    return failures
 
 
 def run_scenario(script: str, env_overrides: dict[str, str]) -> tuple[int, str, str]:
@@ -359,17 +609,28 @@ def check(scripts: dict[str, str]) -> int:
         elif want_code == 0 and step_id == "roster":
             # Only the roster step emits the matrix, and a matrix that is never emitted skips the
             # verify job exactly as an empty one does.
-            if "instances=" not in gh_output or "count=" not in gh_output or "sources=" not in gh_output:
+            emitted = dict(line.split("=", 1) for line in gh_output.splitlines() if "=" in line)
+            count = len(json.loads(overrides["INSTANCES"]))
+            want = {"slots": json.dumps(list(range(count)), separators=(",", ":")),
+                    "count": str(count), "digest": overrides["DIGEST"]}
+            if emitted != want:
                 failures += 1
-                print("::error::the passing scenario did not emit the matrix, denominator and "
-                      "derived source map — the verify job could otherwise skip or run without "
-                      "its materialisation inputs")
+                print("::error::the passing scenario must hand over exactly one slot per instance, "
+                      f"the count and the digest ({want}); it emitted {emitted}")
             else:
                 print("  " + gh_output.strip().replace("\n", " | "))
-                expected_source = f"sources={overrides.get('SOURCES', '')}"
-                if expected_source not in gh_output:
+            # 🚨 THE RUNNER'S OWN RULE, APPLIED HERE (#3848): a job output whose value CONTAINS a
+            # masked string is dropped. Every name, host and source of the roster is treated as
+            # masked, so any value that would be dropped in production is a failure on this PR.
+            for key, value in emitted.items():
+                leaked = [secret for secret in MASKED if secret in value]
+                if leaked:
                     failures += 1
-                    print("::error::the preflight did not preserve the derived source map in its output")
+                    print(f"::error::the roster step writes output `{key}` containing "
+                          f"{len(leaked)} value(s) of the roster itself. The runner drops a job "
+                          "output that contains a masked value (\"Skip output since it may contain "
+                          "secret\"), so the verify matrix would receive nothing and no "
+                          "per-instance job would be created.")
     return failures
 
 
@@ -415,7 +676,7 @@ def check_source_split(root: Path) -> int:
 def self_test(root: Path) -> int:
     """Each part must be shown to FIRE on its own defect. An unproven guard is no guard."""
     gutted = {"assert": 'echo "Every external input is present"; exit 0',
-              "roster": ('echo "instances=[]" >>"$GITHUB_OUTPUT"; '
+              "roster": ('echo "slots=[]" >>"$GITHUB_OUTPUT"; '
                          'echo "count=0" >>"$GITHUB_OUTPUT"; '
                          'echo "0 instance(s) will be verified"; exit 0')}
     preflight_failures = check(gutted)
@@ -449,6 +710,83 @@ def self_test(root: Path) -> int:
     source_failures = check_source_split(root)
     if source_failures:
         return source_failures
+
+    # ── Part three (#3848): each way the roster's hand-over broke, or could break again ─────────
+    real = read_preflight(root)
+    # The roster step as it shipped until 2026-10-10: the roster itself, as an output.
+    leaking = real["roster"] + '\necho "instances=$(jq -c . <<<"$INSTANCES")" >>"$GITHUB_OUTPUT"\n'
+    leak_failures = check({**real, "roster": leaking})
+    if leak_failures == 0:
+        print("::error::--self-test: a roster step that publishes the roster as an output passed, "
+              "so the masked-output check proves nothing.")
+        return 1
+    print(f"--self-test: a roster step that publishes the roster failed {leak_failures} "
+          "scenario(s) — the dropped-output shape is detected.")
+
+    gutted_verdict = 'echo "verified=true" >>"$GITHUB_OUTPUT"; echo "Every derived instance"; exit 0'
+    verdict_failures = check_verdict(gutted_verdict)
+    if verdict_failures == 0:
+        print("::error::--self-test: a verdict that always says verified passed every scenario.")
+        return 1
+    print(f"--self-test: a verdict that always says verified failed {verdict_failures} scenario(s).")
+    # The verdict as it shipped until 2026-10-10: it trusted `needs.verify.result` and never
+    # counted a job. Strip the count arms and the measured defect must stop being NAMED.
+    # (The parsed `run:` text is dedented, so each arm opens and closes at column 0.)
+    uncounted = re.sub(r'^if \[ "\$STARTED" -ne "\$\{COUNT:-0\}" \]; then\n.*?^fi\n',
+                       "", real["verdict"], count=1, flags=re.S | re.M)
+    uncounted = re.sub(r'^if \[ "\$PASSED" -ne "\$COUNT" \]; then\n.*?^fi\n',
+                       "", uncounted, count=1, flags=re.S | re.M)
+    if uncounted == real["verdict"] or check_verdict(uncounted) == 0:
+        print("::error::--self-test: a verdict that never counts the per-instance jobs passed "
+              "every scenario (or the count arms could not be located to remove).")
+        return 1
+    print("--self-test: a verdict that never counts the per-instance jobs fails its scenarios.")
+
+    doc = yaml.safe_load((root / WORKFLOW).read_text(encoding="utf-8"))
+    if handover_problems(doc):
+        print("::error::--self-test: the shipped workflow fails the structural hand-over check; "
+              "run without --self-test for the list.")
+        return 1
+
+    def mutated(change) -> list[str]:
+        copy = json.loads(json.dumps(doc, default=str))
+        change(copy["jobs"])
+        return handover_problems(copy)
+
+    mutations = {
+        "the roster re-published as a job output":
+            lambda jobs: jobs["preflight"]["outputs"].update(
+                instances="${{ steps.roster.outputs.instances }}"),
+        "the matrix built from the roster":
+            lambda jobs: jobs["verify"]["strategy"].update(
+                matrix={"instance": "${{ fromJSON(needs.preflight.outputs.instances) }}"}),
+        "the job named after the installation":
+            lambda jobs: jobs["verify"].update(
+                name="Verify ${{ matrix.instance.name }} against its roll target"),
+        "the slot step removed":
+            lambda jobs: jobs["verify"].update(steps=[
+                step for step in jobs["verify"]["steps"]
+                if "--slot" not in str(step.get("run", ""))]),
+        "the slot step not held to the preflight's digest":
+            lambda jobs: [step["env"].pop("EXPECT_DIGEST") for step in jobs["verify"]["steps"]
+                          if "--slot" in str(step.get("run", ""))],
+        "the artifact named after the installation":
+            lambda jobs: [step["env"].pop("ARTIFACT_TAG") for step in jobs["verify"]["steps"]
+                          if "combo-verify-instance.sh" in str(step.get("run", ""))],
+        "the verdict no longer counting jobs":
+            lambda jobs: jobs["verdict"].update(steps=[
+                step for step in jobs["verdict"]["steps"] if step.get("id") != "jobs"]),
+        "the job count made continue-on-error":
+            lambda jobs: [step.update({"continue-on-error": True})
+                          for step in jobs["verdict"]["steps"] if step.get("id") == "jobs"],
+        "the verify job made conditional":
+            lambda jobs: jobs["verify"].update({"if": "needs.preflight.outputs.count != '0'"}),
+    }
+    for label, change in mutations.items():
+        if not mutated(change):
+            print(f"::error::--self-test: {label} passed the structural hand-over check.")
+            return 1
+    print(f"--self-test: {len(mutations)} hand-over mutation(s) each refused.")
     return 0
 
 
@@ -463,13 +801,15 @@ def main() -> int:
     if args.self_test:
         return self_test(root)
 
-    failures = (check(read_preflight(root)) + check_lander(read_lander(root))
-                + check_source_split(root))
+    scripts = read_preflight(root)
+    failures = (check(scripts) + check_lander(read_lander(root))
+                + check_source_split(root) + check_verdict(scripts["verdict"]))
     if failures:
         print(f"::error::{failures} combo-verify check(s) behaved wrongly.")
         return 1
     print(f"check-combo-verify: {len(SCENARIOS)} preflight scenario(s) over "
-          f"{len(SENTINELS)} assertion step(s) + the lander's identity checks, "
+          f"{len(SENTINELS)} assertion step(s) + the lander's identity checks + "
+          f"{len(VERDICT_SCENARIOS)} verdict scenario(s) + the roster hand-over's structure, "
           "0 violation(s).")
     # 🚨 WHAT THIS GREEN DOES NOT COVER, said by the gate rather than left to a reader.
     # Every `roster` scenario feeds a SUCCESSFUL derivation (`INSTANCES=DERIVED`), because that is

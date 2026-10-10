@@ -16,7 +16,12 @@
 # empty" (MeshWeaver#2642) and leaves no trace in the log or the exit code.
 #
 # Inputs, all environment. A missing one is a PREFLIGHT failure in the workflow, never a skip here.
-#   INSTANCE_NAME   the instance's name, for the summary and the artifact names
+#   INSTANCE_NAME   the instance's name, for the log lines and the summary (both are masked by the
+#                   runner when the name is a private one)
+#   ARTIFACT_TAG    what the files this script writes are named after — the workflow passes the
+#                   matrix SLOT (`slot-3`). 🚨 Never the name: an artifact's name and the file names
+#                   inside it are NOT masked, and this repository's artifacts are public (#3848).
+#                   Defaults to INSTANCE_NAME for a local run.
 #   BASE_URL        e.g. https://memex.systemorph.com  (no trailing slash)
 #   ACTIONS_ID_TOKEN_REQUEST_URL / ACTIONS_ID_TOKEN_REQUEST_TOKEN
 #                   set by the runner when the job holds `id-token: write`. The run's OWN identity
@@ -64,13 +69,14 @@ mint_token() {
 unauthorized_hint="The instance did not accept this run's identity. On $BASE_URL BOTH must hold: (1) the portal declares the audience — config Plugins:Registry:BuildPrincipalAudience = $BASE_URL (deployment record extraPortalConfig key Plugins__Registry__BuildPrincipalAudience); (2) a global admin of that instance has created Admin/_BuildPrincipal/systemorph--meshweaver granting verify:combo for workflow_run and workflow_dispatch on refs/heads/main (Doc/Architecture/ComboGateWiring → Provisioning an instance). There is no secret to set."
 
 out_dir=${GITHUB_WORKSPACE:-$PWD}
+tag=${ARTIFACT_TAG:-$INSTANCE_NAME}
 summary=${GITHUB_STEP_SUMMARY:-/dev/null}
 
 # ── 1. Which candidate would THIS instance roll to? ───────────────────────────────────────────
 # Asked OF THE INSTANCE rather than derived here, because "the newest tag" is not the question the
 # gate answers: ReleaseAvailabilityService already walks the completeness rule and names the release
 # this environment would actually take. Re-deriving it here would be a second rule.
-roll=$out_dir/combo-rolltarget-$INSTANCE_NAME.json
+roll=$out_dir/combo-rolltarget-$tag.json
 mint_token
 roll_code=$(curl -sS -o "$roll" -w '%{http_code}' --connect-timeout 15 --max-time 120 \
   -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/plugins/roll-target") || roll_code=000
@@ -92,7 +98,7 @@ fi
 note "candidate=$CANDIDATE (currently on $CURRENT)"
 
 # ── 2. What does the instance actually run? ────────────────────────────────────────────────────
-combo=$out_dir/combo-$INSTANCE_NAME.json
+combo=$out_dir/combo-$tag.json
 mint_token
 combo_code=$(curl -sS -o "$combo" -w '%{http_code}' --connect-timeout 15 --max-time 180 \
   -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/plugins/combo") || combo_code=000
@@ -110,7 +116,7 @@ fi
 note "combo: $(jq -r '.modules | length' <"$combo") module(s), readAt=$(jq -r '.readAt' <"$combo")"
 
 # ── 3. Verify ─────────────────────────────────────────────────────────────────────────────────
-verdict=$out_dir/combo-verdict-$INSTANCE_NAME.json
+verdict=$out_dir/combo-verdict-$tag.json
 src_args=()
 # The source list is deployment-record data. Split its validated space-delimited pairs without
 # pathname expansion, so a URL containing shell glob characters stays one literal argument.
@@ -123,7 +129,7 @@ dotnet run --project tools/MeshWeaver.ComboVerifier/MeshWeaver.ComboVerifier.csp
   "$combo" "$ACR/memex-portal-ai:$CANDIDATE" \
   --tag "$CANDIDATE" \
   --verdict "$verdict" \
-  --work-root "$WORK_ROOT/$INSTANCE_NAME" \
+  --work-root "$WORK_ROOT/$tag" \
   --platform "$PLATFORM" \
   --gate-timeout "$GATE_TIMEOUT" \
   "${src_args[@]}"
@@ -141,7 +147,7 @@ note "verdict=$KIND for $CANDIDATE (tool exit $verify_exit)"
 # merge rule exists ONCE, in the portal, and this script no longer re-implements it over a raw mesh
 # patch with a global admin's token. 🚨 The route answers 200 only AFTER Admin/UpdatePolicy carries
 # this exact verdict, so a 200 here IS the landing. The policy mode (including None) is preserved.
-landed=$out_dir/combo-landed-$INSTANCE_NAME.json
+landed=$out_dir/combo-landed-$tag.json
 mint_token
 land_code=$(curl -sS -o "$landed" -w '%{http_code}' --connect-timeout 15 --max-time 120 \
   -X POST "$BASE_URL/api/plugins/combo-verification" \

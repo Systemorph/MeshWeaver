@@ -31,6 +31,20 @@
 # `Hosting__Deployment` + `ingress.host` pair `lock-pinned-digests.py`'s AXIS 3 reads, through that
 # script's own extractor, and refuses — loudly — any derivation that would come back empty.
 #
+# 🚨 THE ROSTER NEVER CROSSES A JOB BOUNDARY — ONLY SLOT NUMBERS DO (#3848). The roster names
+# installations a client estate keeps private; the private roster registers those names as log
+# masks; and the runner DROPS any job output that contains a masked value ("Skip output
+# 'instances' since it may contain secret") — as a WARNING, inside a preflight that then concludes
+# SUCCESS. Measured 2026-10-10 over the eight newest post-CD runs: `instances` and `sources` were
+# dropped, `count` (6) passed, `fromJSON('')` could not expand the matrix, and NOT ONE per-instance
+# job was ever created — preflight=success, verify=failure, no instance contacted, no reason
+# printed. So the preflight hands over three values that carry no name at all — `slots`
+# (`[0,1,…]`), `count` and a salted `digest` — and each verify job derives the roster again with
+# the same script, takes the row at its slot, and refuses unless count and digest match the
+# preflight's. Job names and artifact names carry the SLOT, never the name: neither is masked.
+# The `verdict` job then counts the per-instance jobs this run actually created and reds unless
+# that number, and the number that succeeded, both equal the preflight's count.
+#
 # 🚨 NO SKIP TRAPDOORS. There is no `continue-on-error:` on any input step and no `if:` anywhere
 # that asks whether a secret or variable is set. GitHub paints a skipped job the same colour as a
 # passed one, so "the gate never ran" and "the gate passed" would become indistinguishable. The
@@ -87,10 +101,15 @@ jobs:
     # fleet-reader App reaches (~34 on 2026-09-15) and a file read per deployment overlay (12).
     # Seconds in practice; the fleet cap is 45 and nothing here has any business approaching it.
     timeout-minutes: 15
+    # 🚨 THREE VALUES, NONE OF WHICH CAN CONTAIN A NAME (#3848) — and that is the whole property.
+    # The runner drops any job output containing a masked value, and the roster and the source map
+    # both contain names the private roster masks. `slots` is `[0,1,…,count-1]`, `count` is a
+    # number, `digest` is a salted sha256 written as decimal digits (an alphabet no name is drawn
+    # from). `check-combo-verify.py` refuses any other output here.
     outputs:
-      instances: ${{ steps.roster.outputs.instances }}
+      slots: ${{ steps.roster.outputs.slots }}
       count: ${{ steps.roster.outputs.count }}
-      sources: ${{ steps.roster.outputs.sources }}
+      digest: ${{ steps.roster.outputs.digest }}
     steps:
       # STEP ONE OF TWO ASSERTIONS, and the split is not cosmetic. This one asks whether the inputs
       # that come from OUTSIDE the tree exist at all; it runs FIRST, before the checkout and before
@@ -195,8 +214,11 @@ jobs:
       - name: Every derived instance and its registry sources
         id: roster
         env:
+          # STEP outputs, read inside the job that produced them — where a masked value is masked,
+          # not dropped. Neither may be re-published as a JOB output (see `outputs:` above).
           INSTANCES: ${{ steps.derive.outputs.instances }}
           SOURCES: ${{ steps.derive.outputs.sources }}
+          DIGEST: ${{ steps.derive.outputs.digest }}
         run: |
           set -euo pipefail
           # DERIVED is not VALID, and an absent output is not an empty fleet. A malformed or empty
@@ -221,16 +243,36 @@ jobs:
             exit 1
           fi
 
+          if ! [[ "${DIGEST:-}" =~ ^[0-9]{78}$ ]]; then
+            echo "::error::the derivation emitted no roster digest. Each verify job re-derives the" >&2
+            echo "  roster and is held to this value; without it a verify job could land its verdict" >&2
+            echo "  on a different installation than the one counted here. Refusing to hand over." >&2
+            exit 1
+          fi
+
+          # 🚨 WHAT IS HANDED TO THE NEXT JOB CARRIES NO NAME (#3848). Not the roster and not the
+          # source map: the runner drops a job output that contains a masked value, and both do.
+          # `slots` is one opaque position per instance; the verify job at slot N re-derives the
+          # roster and takes row N.
           count=$(jq -r 'length' <<<"$INSTANCES")
+          slots=$(jq -c '[range(0; length)]' <<<"$INSTANCES")
+          if [ "$(jq -r 'length' <<<"$slots")" != "$count" ] || [ "$count" -lt 1 ]; then
+            echo "::error::built $(jq -r 'length' <<<"$slots") matrix slot(s) for $count instance(s); refusing to hand over a matrix that is not one slot per instance."
+            exit 1
+          fi
           {
-            echo "instances=$(jq -c '.' <<<"$INSTANCES")"
+            echo "slots=$slots"
             echo "count=$count"
-            echo "sources=$SOURCES"
+            echo "digest=$DIGEST"
           } >>"$GITHUB_OUTPUT"
-          echo "Roster and sources derived; $count instance(s) will be verified, each as this run's own identity."
+          echo "Roster and sources derived; $count instance(s) will be verified in $count slot(s), each as this run's own identity."
 
   verify:
-    name: "Verify ${{ matrix.instance.name }} against its roll target"
+    # 🚨 THE SLOT, NEVER THE NAME (#3848). A job's name is not masked, and this repository's runs
+    # are public — a client estate's installation name must not appear in one. The job's own log
+    # says which installation the slot resolved to (masked there when it is a private one), and the
+    # `verdict` job counts jobs by this exact name, so change both together.
+    name: "Verify instance slot ${{ matrix.slot }} against its roll target"
     # 🚨 `needs: preflight` and NOTHING else gating it. No `if:` — the preflight either asserted
     # every input or went red; this job never asks a second time.
     needs: preflight
@@ -239,9 +281,43 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        instance: ${{ fromJSON(needs.preflight.outputs.instances) }}
+        slot: ${{ fromJSON(needs.preflight.outputs.slots) }}
     steps:
       - uses: actions/checkout@v7
+
+      - name: Token for the deployment overlays and the module repositories
+        id: repo-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.FLEET_READER_APP_ID }}
+          private-key: ${{ secrets.FLEET_READER_APP_PRIVATE_KEY }}
+          owner: Systemorph
+          # Read-only, STATED rather than inherited: this job reads the deployment overlays (to
+          # resolve its slot) and the module sources, and writes nothing to GitHub. The read-only
+          # fleet-reader App cannot grant more anyway; this line keeps a later-widened App from
+          # widening this token.
+          permission-contents: read
+
+      # 🚨 WHICH INSTALLATION THIS SLOT IS, RE-DERIVED HERE (#3848). The roster cannot be handed
+      # over — a job output containing a masked name is dropped — so this job derives it with the
+      # same script the preflight ran and takes the row at its slot. The script refuses (exit 1)
+      # unless it derives the preflight's COUNT and the preflight's DIGEST, so a fleet that changed
+      # between the two jobs is a red naming the drift and never a verdict landed on a different
+      # installation than the one counted. It registers the private roster's masks before it prints
+      # anything, and writes INSTANCE_NAME / BASE_URL / SOURCES to $GITHUB_ENV for the steps below.
+      # No `continue-on-error:` and no `if:` — a slot that cannot be resolved is a red verify job.
+      - name: "Which installation slot ${{ matrix.slot }} is"
+        env:
+          GH_TOKEN: ${{ steps.repo-token.outputs.token }}
+          # A client estate's roster lines are private — see lock-pinned-digests.py PRIVATE_ROSTER_ENV.
+          MW_ACR_PRIVATE_ROSTER: ${{ secrets.ACR_RETENTION_PRIVATE_ROSTER }}
+          SLOT: ${{ matrix.slot }}
+          EXPECT_COUNT: ${{ needs.preflight.outputs.count }}
+          EXPECT_DIGEST: ${{ needs.preflight.outputs.digest }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/derive-combo-instances.py --discover \
+            --slot "$SLOT" --expect-count "$EXPECT_COUNT" --expect-digest "$EXPECT_DIGEST"
 
       - uses: actions/setup-dotnet@v6
         with:
@@ -260,42 +336,36 @@ jobs:
           command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
           bash .github/scripts/acr-login.sh
 
-      - name: Token for the module repositories
-        id: repo-token
-        uses: actions/create-github-app-token@v3
-        with:
-          app-id: ${{ secrets.FLEET_READER_APP_ID }}
-          private-key: ${{ secrets.FLEET_READER_APP_PRIVATE_KEY }}
-          owner: Systemorph
-          # Read-only, STATED rather than inherited: the verifier fetches module sources and writes
-          # nothing to GitHub. The read-only fleet-reader App cannot grant more anyway; this line keeps
-          # a later-widened App from widening this token.
-          permission-contents: read
-
       - name: Build the verifier
         run: dotnet build tools/MeshWeaver.ComboVerifier/MeshWeaver.ComboVerifier.csproj -c Release
 
-      - name: "Verify, and LAND the verdict on ${{ matrix.instance.name }}"
+      - name: "Verify, and LAND the verdict on the installation at slot ${{ matrix.slot }}"
         env:
-          INSTANCE_NAME: ${{ matrix.instance.name }}
-          BASE_URL: ${{ matrix.instance.baseUrl }}
-          SOURCES: ${{ needs.preflight.outputs.sources }}
+          # INSTANCE_NAME, BASE_URL and SOURCES come from $GITHUB_ENV — written by the slot step
+          # above, inside this job. They are asserted here rather than assumed: `${VAR:?}` reds
+          # naming the variable if that step ever stops writing one.
+          ARTIFACT_TAG: slot-${{ matrix.slot }}
           GITHUB_TOKEN: ${{ steps.repo-token.outputs.token }}
           WORK_ROOT: ${{ runner.temp }}/combo
         run: |
           set -euo pipefail
+          : "${INSTANCE_NAME:?the slot step resolved no installation name}"
+          : "${BASE_URL:?the slot step resolved no base URL}"
+          : "${SOURCES:?the slot step resolved no registry sources}"
           # 🚨 No credential is passed: the lander mints this run's own OIDC token per call
           # (the workflow holds `id-token: write`), audience = BASE_URL.
           bash .github/scripts/combo-verify-instance.sh
 
+      # 🚨 NAMED BY SLOT, files included (#3848): an artifact's name and the file names inside it
+      # are not masked, and a public repository's artifacts can be downloaded.
       - name: Keep the work root of a failed verification
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: combo-work-${{ matrix.instance.name }}
+          name: combo-work-slot-${{ matrix.slot }}
           path: |
-            combo-${{ matrix.instance.name }}.json
-            combo-verdict-${{ matrix.instance.name }}.json
+            combo-slot-${{ matrix.slot }}.json
+            combo-verdict-slot-${{ matrix.slot }}.json
           if-no-files-found: ignore
 
   verdict:
@@ -309,6 +379,11 @@ jobs:
     needs: [preflight, verify]
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # `actions: read` is what lets this job COUNT the per-instance jobs the run created (below).
+    # Job-level permissions replace the workflow's, and this job needs nothing else: it checks out
+    # nothing and mints no token.
+    permissions:
+      actions: read
     # 🚨 `result == 'success'` is NOT "verified" on this job, and the reporter below depends on the
     # difference. This job exits 0 for TWO different facts: a real verification, and "no candidate"
     # (the triggering CD published nothing, so there was nothing to check). Collapsing them is the
@@ -317,23 +392,56 @@ jobs:
     outputs:
       verified: ${{ steps.verdict.outputs.verified }}
     steps:
+      # 🚨 THE NUMERATOR, MEASURED — NOT INFERRED FROM `needs.verify.result` (#3848). That result is
+      # ONE word for the whole matrix: it cannot tell "six jobs ran and one failed" from "the matrix
+      # never expanded and no job exists", and it reads `success` over however many jobs the matrix
+      # happened to create. So this asks the run itself which per-instance jobs it has, by the exact
+      # name the `verify` job declares, and the step below holds both numbers to the preflight's
+      # count. No `continue-on-error:`: if the run cannot be read, this job is red and says so.
+      - name: Count the per-instance jobs this run created
+        id: jobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?filter=latest&per_page=100" \
+            --jq '.jobs[] | select(.name | test("^Verify instance slot [0-9]+ against its roll target$")) | (.conclusion // "none")' \
+            >verify-jobs.txt
+          started=$(awk 'END { print NR + 0 }' verify-jobs.txt)
+          passed=$(awk '$0 == "success" { n++ } END { print n + 0 }' verify-jobs.txt)
+          {
+            echo "started=$started"
+            echo "passed=$passed"
+          } >>"$GITHUB_OUTPUT"
+          echo "This run created $started per-instance verify job(s); $passed concluded success."
+
       - name: The verdict, and it can fail
         id: verdict
         env:
           PREFLIGHT: ${{ needs.preflight.result }}
           VERIFY: ${{ needs.verify.result }}
           COUNT: ${{ needs.preflight.outputs.count }}
+          STARTED: ${{ steps.jobs.outputs.started }}
+          PASSED: ${{ steps.jobs.outputs.passed }}
           # The trigger's own conclusion, so "no candidate" can be told from "inputs missing".
           TRIGGER: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion || 'dispatch' }}
         run: |
           set -euo pipefail
-          echo "preflight=$PREFLIGHT verify=$VERIFY instances=${COUNT:-0}"
+          echo "preflight=$PREFLIGHT verify=$VERIFY instances=${COUNT:-0} verify-jobs=${STARTED:-?} verify-jobs-succeeded=${PASSED:-?}"
           {
             echo "## Combo verification"
             echo
             echo "- preflight: \`$PREFLIGHT\`"
             echo "- verify: \`$VERIFY\` over \`${COUNT:-0}\` instance(s)"
+            echo "- per-instance jobs created: \`${STARTED:-?}\`, succeeded: \`${PASSED:-?}\`"
           } >>"$GITHUB_STEP_SUMMARY"
+          # The count step always writes both; an absent one means it did not run, and a verdict
+          # with no numerator is not a verdict.
+          if ! [[ "${STARTED:-}" =~ ^[0-9]+$ && "${PASSED:-}" =~ ^[0-9]+$ ]]; then
+            echo "::error::the per-instance job count is missing (started='${STARTED:-}', succeeded='${PASSED:-}'). The step that counts this run's verify jobs produced nothing, so nothing here can say how many instances were verified."
+            exit 1
+          fi
 
           # 🚨 THREE outcomes, not two. `skipped` and `failure` are different facts and used to
           # share one message — the exact collapse this gate exists to prevent, committed by the
@@ -360,8 +468,21 @@ jobs:
             echo "::error::the preflight FAILED, so NO instance was verified and every roll in the fleet is still UNVERIFIED (#3544). Read the preflight job: it either names the inputs to provision, or names the repository/declaration whose deployment overlays the instance roster could not be derived from."
             exit 1
           fi
+          # 🚨 THE EMPTY MATRIX, NAMED (#3848). The preflight succeeded and counted instances, and
+          # the run holds a different number of per-instance jobs — measured as ZERO on every
+          # post-CD run from 2026-10-09 to 2026-10-10, because the matrix input was a job output
+          # the runner had dropped. Before this arm the only word printed was `verify=failure`,
+          # which reads as "an instance refused the candidate" about a run that contacted nobody.
+          if [ "$STARTED" -ne "${COUNT:-0}" ]; then
+            if [ "$STARTED" -eq 0 ]; then
+              echo "::error::the preflight derived ${COUNT:-0} instance(s) and this run created NO per-instance verify job: the matrix did not expand, so NO instance was contacted and every roll is still UNVERIFIED (#3544). The matrix is built from the preflight's 'slots' output — read the preflight job's log for a 'Skip output' warning (the runner drops a job output that contains a masked value, #3848) or an output that is not a JSON array."
+            else
+              echo "::error::the preflight derived ${COUNT:-0} instance(s) and this run created $STARTED per-instance verify job(s). The matrix does not cover the roster, so at least one instance was never contacted; a partial verification is not a verification."
+            fi
+            exit 1
+          fi
           if [ "$VERIFY" != "success" ]; then
-            echo "::error::combo verification did not succeed for every instance (result: $VERIFY). A candidate a live instance cannot take is not delivered; read the per-instance jobs for the module that failed."
+            echo "::error::combo verification did not succeed for every instance (result: $VERIFY; $PASSED of $STARTED per-instance job(s) succeeded). A candidate a live instance cannot take is not delivered; read the per-instance jobs for the module that failed."
             exit 1
           fi
           # 🚨 THE LAST BACKSTOP, AND IT SURVIVED THE MOVE TO A DERIVED ROSTER ON PURPOSE (#3848).
@@ -373,8 +494,14 @@ jobs:
             echo "::error::the preflight passed but named ZERO instances — that is a vacuous green, not a verification."
             exit 1
           fi
+          # …and `verify=success` is held to the same denominator: every job the matrix created
+          # must itself have concluded success, and there must be exactly COUNT of them.
+          if [ "$PASSED" -ne "$COUNT" ]; then
+            echo "::error::the verify matrix reads success, but only $PASSED of $COUNT per-instance job(s) concluded success. Refusing to call that verified."
+            exit 1
+          fi
           echo "verified=true" >>"$GITHUB_OUTPUT"
-          echo "Every declared instance has a landed combo verdict for its roll target."
+          echo "Every derived instance ($PASSED of $COUNT) has a landed combo verdict for its roll target."
 
   # ── The audience (#4395) ────────────────────────────────────────────────────────────────────────
   #

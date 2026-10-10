@@ -54,6 +54,8 @@ back with nothing — for ANY reason — exits 1 rather than emitting `[]`:
 Usage:
     python3 .github/scripts/derive-combo-instances.py --discover    # GH_TOKEN = installation token
     python3 .github/scripts/derive-combo-instances.py --repos Systemorph/Memex
+    python3 .github/scripts/derive-combo-instances.py --discover --slot 2 \
+        --expect-count 6 --expect-digest <digest>     # ONE verify job's row → $GITHUB_ENV
     python3 .github/scripts/derive-combo-instances.py --root .      # one local checkout
     python3 .github/scripts/derive-combo-instances.py --self-test   # no network
 """
@@ -61,6 +63,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import os
@@ -266,6 +269,84 @@ def read_scans(repos: list[str], root: str | None):
     return [lock.scan_overlays_remote(repo, REGISTRY_FOR_SCAN) for repo in repos]
 
 
+# 2**256 has 78 decimal digits; the digest is zero-padded to that, so its length is a constant.
+DIGEST_DIGITS = 78
+
+
+def roster_digest(rows: list[dict[str, str]], sources: str) -> str:
+    """One opaque value that says "the same roster and the same source map" across a job boundary.
+
+    🚨 WHY A DIGEST AND NOT THE ROSTER (#3848). The roster names installations a client estate keeps
+    private, the private roster registers those names as log masks, and the runner refuses to pass
+    ANY job output that contains a masked value. So the preflight hands the verify matrix opaque
+    slot numbers, each verify job derives the roster again and takes its own row — and this value is
+    how that second derivation is held to the first: an overlay that changed between the two jobs
+    is a RED naming the drift, never a verdict landed on a different installation than the one the
+    preflight counted.
+
+    🚨 SALTED WITH THE PRIVATE ROSTER, so the public value confirms nothing to a reader who can only
+    guess at a private name: without the secret document the digest cannot be recomputed. Absent
+    (a fork, a local run) there is nothing private in the roster to protect.
+
+    🚨 DECIMAL DIGITS, NOT HEX — for the very reason this function exists. A job output is dropped
+    when it CONTAINS a masked value, and a hex digest is drawn from an alphabet that spells words
+    (`cafe`, `beef`, `added`…): a private identifier that happens to be one would, about once in a
+    thousand runs, appear inside the digest and take the hand-over down with it. An installation
+    id, a host or a repository name made only of digits is not a shape the fleet has."""
+    salt = os.environ.get(lock.PRIVATE_ROSTER_ENV, "").strip()
+    body = json.dumps({"instances": rows, "sources": sources}, separators=(",", ":"), sort_keys=True)
+    digest = hashlib.sha256(f"{salt}\n{body}".encode("utf-8")).hexdigest()
+    return f"{int(digest, 16):0{DIGEST_DIGITS}d}"
+
+
+def resolve_slot(rows: list[dict[str, str]], sources: str, slot: str,
+                 expect_count: str, expect_digest: str) -> int:
+    """ONE verify job's row of the roster, re-derived inside that job and held to the preflight's.
+
+    Writes INSTANCE_NAME / BASE_URL / SOURCES to `$GITHUB_ENV` — within one job, where a masked
+    value is masked rather than dropped. Every refusal exits 1: a verify job that cannot say WHICH
+    installation it is verifying must not verify one."""
+    def refuse(message: str) -> int:
+        print(f"::error::slot {slot!r}: {message}")
+        return 1
+
+    if not (expect_count or "").isdigit() or int(expect_count) < 1:
+        return refuse(
+            f"the preflight's instance count arrived as {expect_count!r}, not a positive integer. "
+            "The job output that carries the denominator was lost between the jobs; refusing to "
+            "verify against a roster nobody counted.")
+    if len(expect_digest or "") != DIGEST_DIGITS or not expect_digest.isdigit():
+        return refuse(
+            "the preflight's roster digest did not arrive (the runner drops a job output that "
+            "contains a masked value, #3848). Without it this job cannot show that the roster it "
+            "derived is the one the preflight counted.")
+    if not (slot or "").isdigit():
+        return refuse("the matrix slot is not a non-negative integer.")
+    if len(rows) != int(expect_count):
+        return refuse(
+            f"this job derived {len(rows)} live installation(s) and the preflight counted "
+            f"{expect_count}. The fleet's deployment overlays changed between the two jobs; re-run "
+            "the workflow so both read the same fleet.")
+    if roster_digest(rows, sources) != expect_digest:
+        return refuse(
+            "this job derived the same NUMBER of installations as the preflight but not the same "
+            "roster or source map (digest mismatch). The fleet's deployment overlays or records "
+            "changed between the two jobs; re-run the workflow so both read the same fleet.")
+    index = int(slot)
+    if index >= len(rows):
+        return refuse(f"the roster has {len(rows)} row(s); there is no slot {index}.")
+    row = rows[index]
+    print(f"slot {index} of {len(rows)}: {row['name']}: {row['baseUrl']} "
+          f"({len(sources.split())} registry source(s)); roster digest matches the preflight's.")
+    env_file = os.environ.get("GITHUB_ENV")
+    if env_file:
+        with open(env_file, "a", encoding="utf-8") as handle:
+            handle.write(f"INSTANCE_NAME={row['name']}\n")
+            handle.write(f"BASE_URL={row['baseUrl']}\n")
+            handle.write(f"SOURCES={sources}\n")
+    return 0
+
+
 def report(rows, excluded, blockers, repos: list[str], sources: str) -> int:
     for identifier, state, reason in excluded:
         print(f"excluded  {identifier}: declared {state} — {reason[:160]}")
@@ -285,10 +366,16 @@ def report(rows, excluded, blockers, repos: list[str], sources: str) -> int:
           f"{len(excluded)} declared not-live.")
     output = os.environ.get("GITHUB_OUTPUT")
     if output:
+        # 🚨 STEP outputs, and they must never become JOB outputs (#3848). `instances` and `sources`
+        # carry names the private roster masks, and the runner DROPS any job output containing a
+        # masked value ("Skip output 'instances' since it may contain secret") — silently, as a
+        # warning in a green job. Only `count` and `digest` are safe to hand to another job; each
+        # verify job re-derives its own row through --slot below.
         with open(output, "a", encoding="utf-8") as handle:
             handle.write(f"instances={payload}\n")
             handle.write(f"count={len(rows)}\n")
             handle.write(f"sources={sources}\n")
+            handle.write(f"digest={roster_digest(rows, sources)}\n")
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as handle:
@@ -512,8 +599,64 @@ def self_test() -> int:
             del os.environ["GITHUB_OUTPUT"]
         text = out.read_text(encoding="utf-8")
     check(code == 0 and "instances=[{" in text and "count=2" in text
-          and "sources=FundReporting=https://github.com/Systemorph/MeshWeaver.FundReporting" in text,
-          "a passing derivation emits the matrix, denominator and registry sources")
+          and "sources=FundReporting=https://github.com/Systemorph/MeshWeaver.FundReporting" in text
+          and f"digest={roster_digest(rows, derived_sources)}" in text,
+          "a passing derivation emits the roster, denominator, registry sources and roster digest")
+
+    # ── --slot: one verify job's row, re-derived and held to the preflight's (#3848) ─────────────
+    # The roster cannot cross a job boundary (a job output containing a masked name is DROPPED), so
+    # each verify job derives it again. These arms are what keeps "derived again" from meaning
+    # "derived something else".
+    digest = roster_digest(rows, derived_sources)
+
+    def slot_run(slot, count, expected, slot_rows=rows, slot_sources=derived_sources):
+        with tempfile.TemporaryDirectory() as tmp:
+            env_file = Path(tmp) / "env"
+            env_file.touch()
+            os.environ["GITHUB_ENV"] = str(env_file)
+            try:
+                code = resolve_slot(slot_rows, slot_sources, slot, count, expected)
+            finally:
+                del os.environ["GITHUB_ENV"]
+            return code, env_file.read_text(encoding="utf-8")
+
+    code, env_text = slot_run("1", "2", digest)
+    check(code == 0 and f"INSTANCE_NAME={rows[1]['name']}\n" in env_text
+          and f"BASE_URL={rows[1]['baseUrl']}\n" in env_text
+          and f"SOURCES={derived_sources}\n" in env_text,
+          "a slot resolves to ITS row of the re-derived roster, with the source map")
+    code, env_text = slot_run("0", "2", digest)
+    check(code == 0 and f"INSTANCE_NAME={rows[0]['name']}\n" in env_text,
+          "slot 0 resolves to the first row — slots are positions in the sorted roster")
+    for label, args in (
+        ("a slot beyond the roster", ("2", "2", digest)),
+        ("a non-numeric slot", ("memex", "2", digest)),
+        ("a count the preflight never delivered", ("0", "", digest)),
+        ("a zero count", ("0", "0", digest)),
+        ("a digest the preflight never delivered (the dropped-output shape)", ("0", "2", "")),
+        ("a roster that changed size between the jobs", ("0", "3", digest)),
+        ("a roster of the same size and different content", ("0", "2", "0" * DIGEST_DIGITS)),
+    ):
+        code, env_text = slot_run(*args)
+        check(code == 1 and env_text == "",
+              f"{label} is a RED that names no installation to verify")
+    moved = [dict(rows[0]), {"name": rows[1]["name"], "baseUrl": "https://moved.example.com"}]
+    code, env_text = slot_run("1", "2", digest, slot_rows=moved)
+    check(code == 1 and env_text == "",
+          "an installation whose host moved between the jobs is a RED, not a verdict landed elsewhere")
+    code, env_text = slot_run("0", "2", digest,
+                              slot_sources=derived_sources + " Extra=https://x.example")
+    check(code == 1 and env_text == "",
+          "a source map that changed between the jobs is a RED")
+    os.environ[lock.PRIVATE_ROSTER_ENV] = '{"instances":[{"id":"globex-test"}]}'
+    try:
+        salted = roster_digest(rows, derived_sources)
+    finally:
+        del os.environ[lock.PRIVATE_ROSTER_ENV]
+    check(salted != digest and len(salted) == DIGEST_DIGITS and salted.isdigit()
+          and len(digest) == DIGEST_DIGITS and digest.isdigit(),
+          "the digest is salted with the private roster — the public value cannot confirm a "
+          "guessed name — and is decimal digits of constant length, which no masked name is")
 
     if failures:
         print(f"::error::--self-test: {failures} arm(s) did not behave as documented.")
@@ -530,6 +673,12 @@ def main() -> int:
     parser.add_argument("--root", help="read one repository from a local checkout instead")
     parser.add_argument("--self-test", action="store_true",
                         help="prove every refusal fires; no network")
+    parser.add_argument("--slot", help="resolve ONE row of the roster (a verify job's matrix slot) "
+                                       "into $GITHUB_ENV instead of reporting the whole roster")
+    parser.add_argument("--expect-count", default="",
+                        help="with --slot: the instance count the preflight derived")
+    parser.add_argument("--expect-digest", default="",
+                        help="with --slot: the roster digest the preflight derived")
     args = parser.parse_args()
 
     if args.self_test:
@@ -563,7 +712,11 @@ def main() -> int:
     scans = read_scans(repos, args.root)
     rows, excluded, blockers = derive(scans, roster)
     sources, source_blockers = derive_sources(scans)
-    return report(rows, excluded, roster_problems + blockers + source_blockers, repos, sources)
+    all_blockers = roster_problems + blockers + source_blockers
+    if args.slot is not None and not all_blockers:
+        return resolve_slot(rows, sources, args.slot, args.expect_count, args.expect_digest)
+    # With --slot AND blockers this falls through on purpose: report() prints them and exits 1.
+    return report(rows, excluded, all_blockers, repos, sources)
 
 
 if __name__ == "__main__":
