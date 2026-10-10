@@ -4565,7 +4565,10 @@ public static class MeshExtensions
                         ? tornSubtreeNote
                         : string.Empty;
                     if ((isTimeout && tornSubtreeNote.Length > 0) || tornLeafNote.Length > 0)
-                        failMsgs = failMsgs.Add(new LogMessage(tornSubtreeNote.Trim(), LogLevel.Warning));
+                        failMsgs = failMsgs.Add(
+                            new LogMessage(tornSubtreeNote.Trim(), LogLevel.Warning)
+                                .WithKey("activity.delete.partialRetriable",
+                                    ("path", path), ("count", partial.Count)));
                     PostFailed(
                         isTimeout
                             // The stage detail rides along so the CALLER sees it too — the response
