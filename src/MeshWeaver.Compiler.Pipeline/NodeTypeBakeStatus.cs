@@ -697,22 +697,32 @@ public static class NodeTypeBakeStatus
             // The whole store read — the lookup (a store may list and open when CALLED, not only
             // when subscribed) and the MVID read of what it answered — is one leaf, so it is one
             // pool slot when a pool is given.
-            IObservable<(string? Path, string? Foreign)> ReadTheStore()
+            IObservable<(string? Path, string? Foreign, string? AtOwnPath)> ReadTheStore()
                 => (namesLiveBuild
                         ? store.TryGetBuildPath(
                             typePath, definition.LastCompiledVersion!.Value,
                             definition.LatestAssemblyPath, definition.LatestAssemblyMvid)
                         : store.TryGetAssemblyPath(typePath, definition.LastCompiledVersion!.Value))
                     .Take(1)
-                    .Select(path => (path,
-                        namesLiveBuild && !string.IsNullOrEmpty(path)
+                    .Select(path =>
+                    {
+                        var foreign = namesLiveBuild && !string.IsNullOrEmpty(path)
                             ? ForeignBuildAtTheRecordsKey(definition.LatestAssemblyMvid!, path)
-                            : null));
+                            : null;
+                        // The record's OWN file is asked about by itself, never inferred from which
+                        // file the store's fallback happened to answer with: that fallback is the
+                        // version's newest file, which can be a sibling while the own file is there
+                        // too, holding the wrong bytes.
+                        return (path, foreign, foreign is null
+                            ? null
+                            : ForeignBuildAtTheRecordsOwnPath(
+                                path!, definition.LatestAssemblyPath!, definition.LatestAssemblyMvid!));
+                    });
 
             return (pool is null ? Observable.Defer(ReadTheStore) : pool.InvokeObservable(_ => ReadTheStore()))
                 .Select(read =>
                 {
-                    var (path, foreign) = read;
+                    var (path, foreign, atOwnPath) = read;
                     var entry = Describe(
                         typePath, definition,
                         ClassifyDetailed(
@@ -729,14 +739,14 @@ public static class NodeTypeBakeStatus
                     //     the record did name a working build, and it has since been lost.
                     // The second is an ordinary store miss: it keeps its regression baseline, so an
                     // image that cannot rebuild a type that WAS working is still refused.
-                    return IsTheRecordsOwnPath(path!, definition.LatestAssemblyPath!)
+                    return atOwnPath is not null
                         ? entry with
                         {
                             RecordNamesABuildTheStoreLacks = true,
                             Detail =
                                 $"record names build MVID {definition.LatestAssemblyMvid} at "
                                 + $"{definition.LatestAssemblyCollection}/{definition.LatestAssemblyPath}, "
-                                + $"but the file at that path is MVID {foreign} — "
+                                + $"but the file at that path is MVID {atOwnPath} — "
                                 + "the build the record names never reached the store",
                         }
                         : entry with
@@ -771,11 +781,21 @@ public static class NodeTypeBakeStatus
             ? found
             : null;
 
-    /// <summary>Whether the file the store answered with IS the one the record's content path names
-    /// (the record's path is relative to the store's root, so it is the tail of the local path).</summary>
-    private static bool IsTheRecordsOwnPath(string resolvedPath, string recordContentPath) =>
-        resolvedPath.Replace('\\', '/').EndsWith(
-            "/" + recordContentPath.Replace('\\', '/').TrimStart('/'), StringComparison.Ordinal);
+    /// <summary>
+    /// The MVID of the file at the record's OWN content path, when that file exists and is not the
+    /// build the record names; null when it is gone, unreadable, or is that build. The store's
+    /// answer is used only to locate the type's directory: every build of a type sits beside its
+    /// siblings, and the record's content path ends in its own file name.
+    /// </summary>
+    private static string? ForeignBuildAtTheRecordsOwnPath(
+        string resolvedPath, string recordContentPath, string recordedMvid)
+    {
+        var directory = System.IO.Path.GetDirectoryName(resolvedPath);
+        var fileName = System.IO.Path.GetFileName(recordContentPath.Replace('\\', '/'));
+        return string.IsNullOrEmpty(directory) || string.IsNullOrEmpty(fileName)
+            ? null
+            : ForeignBuildAtTheRecordsKey(recordedMvid, System.IO.Path.Combine(directory, fileName));
+    }
 
     private static NodeTypeBakeEntry Describe(
         string typePath,

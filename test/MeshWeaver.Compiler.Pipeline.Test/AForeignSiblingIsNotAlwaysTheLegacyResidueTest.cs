@@ -109,6 +109,29 @@ public sealed class AForeignSiblingIsNotAlwaysTheLegacyResidueTest : IDisposable
             "an image that cannot rebuild a type that was working must still be refused");
     }
 
+    /// <summary>
+    /// The store's fallback answers with the version's NEWEST file, so the residue must be read off
+    /// the record's own path and not off whichever file answered: here the own file holds the wrong
+    /// bytes AND a newer sibling exists, neither of them the build the record names.
+    /// </summary>
+    [Fact]
+    public async Task TheResidue_IsStillTheResidue_WhenANewerSiblingAnswersForIt()
+    {
+        var n = await Put(BuildN);
+        var sibling = await Put(BuildN1);
+        File.SetLastWriteTimeUtc(sibling.LocalPath, DateTime.UtcNow.AddMinutes(1));   // the fallback's pick
+        var neverStored = Guid.NewGuid().ToString("N");
+
+        var entry = await Probe(Record(n, neverStored));
+
+        entry.State.Should().Be(BakeState.BytesMissing);
+        entry.RecordNamesABuildTheStoreLacks.Should().BeTrue(
+            "the file at the record's own path is not the build it names, whatever sibling the store "
+            + "answered with (" + entry.Detail + ")");
+        entry.Detail.Should().Contain(ServedBuildIdentity.OfBytes(BuildN)!, "the detail names the own file's bytes");
+        entry.IsRegressionBaselineFor(LaterPlatformBuild).Should().BeFalse();
+    }
+
     [Fact]
     public async Task ARecordWhoseOwnFileIsThere_IsBaked()
     {
