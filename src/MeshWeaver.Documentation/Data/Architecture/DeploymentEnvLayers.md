@@ -509,6 +509,8 @@ until then the probe gates the address the record declares, not the string the p
 
 ## Related
 
+- [Removing a key from a Deployment record](/Doc/Architecture/RemovingAKeyFromTheRecord) — how a
+  deploy tells a key the record stopped rendering from a hand-applied live-only value.
 - [Chart Drift — what a deploy actually does](/Doc/Architecture/ChartDriftSemantics) — what a
   `helm upgrade` does and does not remove, measured.
 - [Deployment on AKS](/Doc/Architecture/DeploymentAKS) — the `keyVaultSecrets` block, and why a

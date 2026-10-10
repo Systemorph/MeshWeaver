@@ -566,6 +566,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Docker Hub in CI](DockerHubInCi) — hosted runners pull Docker Hub anonymously against a per-IP limit they share with every tenant; the runtime images CI jobs declare come from a digest-pinned GHCR mirror read with the job's own token, or the ACR copy where a job is already logged in; what is still out of scope
 - [GitHub App Credentials](GitHubAppCredentials) — `meshweaver-cloud` writes to its own repo; every cross-repo READ mints from the read-only `fleet-reader`
 - [Deployment env layers — what a record must be able to hold](DeploymentEnvLayers)
+- [Removing a key from a Deployment record](RemovingAKeyFromTheRecord) — the record-owned manifest every deploy writes into the release, so a key the record stopped rendering is dropped deliberately while a hand-applied live-only value is still refused; the `HOSTING_RETIRE_VALUES` bootstrap for a release with no manifest
 - [DeploymentInventory](DeploymentInventory)
 - [Deployment Options (AKS)](DeploymentOptions)
 - [Environment Composition](EnvironmentComposition)

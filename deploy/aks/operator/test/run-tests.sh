@@ -3229,7 +3229,7 @@ printf '# GENERATED from the Hosting/Deployment record by HelmValues\nportal:\n 
 [ -f "$_dr_dir/status.json" ] || printf '{"info":{"status":"deployed"},"version":7}' > "$_dr_dir/status.json"
 printf 'cr.example.test/memex-portal-ai:1' > "$_dr_dir/running-image"
 _dr_run() { env PATH="$DP_STUBS:$PATH" HOSTING_CHART=/tmp HOSTING_DEPLOY_FIXTURE="$_dr_dir" HOSTING_DEPLOY_STUB_LOG="$_dr_log" \
-  hosting-deploy --namespace memex --release memex --database memex --values "$_dr_vals" 2>&1; }
+  hosting-deploy --namespace memex --release memex --database memex --values "$_dr_vals" "$@" 2>&1; }
 printf '{"features":{"fleetops":{"enabled":false,"packages":["Plugins/Hosting"]}},"portal":{"image":"cr.example.test/memex-portal-ai:1"}}' > "$_dr_dir/live-values.json"
 printf '{"portal":{"image":"cr.example.test/memex-portal-ai:1"}}' > "$_dr_dir/supplied-values.json"
 _dr_out="$(_dr_run)"; _dr_rc=$?
@@ -3259,6 +3259,106 @@ _dr_out="$(_dr_run)"; _dr_rc=$?
 ! grep -q '^helm get values' "$_dr_log" \
   && ok "a first install reads no live values" \
   || bad "a first install reads no live values" "calls: $(cat "$_dr_log")"
+
+# ── a key the RECORD stopped rendering is a deliberate removal, not a silent drop ──────────────────
+# 🚨 Removing a key from a Deployment record bricked every later deploy of that instance: build's rolls
+# refused on the four keys Memex#713 removed, memex-cloud on WebhookInbox__Targets__1 — the governed
+# HelmRelease removal exists for two instances only. Every deploy now writes the leaf paths the record
+# renders into the release (hostingDeploy.recordOwned); a dropped path the previous deploy's record
+# rendered is dropped and LOGGED, one it never rendered is still refused, and a release with no manifest
+# falls back to refusing unless the record retires the path (HOSTING_RETIRE_VALUES).
+echo
+echo "── hosting-deploy: a key removed from the record is dropped deliberately, by the manifest ──"
+printf '{"info":{"status":"deployed"},"version":7}' > "$_dr_dir/status.json"
+_dr_img='"portal":{"image":"cr.example.test/memex-portal-ai:1"}'
+# Every deploy WRITES the manifest: the record's leaf paths, never the manifest's own key.
+printf '{%s,"extraPortalConfig":{"A":"1"}}' "$_dr_img" > "$_dr_dir/live-values.json"
+printf '{%s,"extraPortalConfig":{"A":"1"}}' "$_dr_img" > "$_dr_dir/supplied-values.json"; : > "$_dr_log"
+_dr_out="$(_dr_run)"; _dr_rc=$?
+_dr_up="$(grep '^helm upgrade' "$_dr_log" | head -1)"
+case "$_dr_up" in
+  *'--set-json hostingDeploy={"recordOwned":["extraPortalConfig.A","portal.image"]}'*)
+    [ "$_dr_rc" -eq 0 ] && ok "every deploy writes the record-owned manifest into the release (hostingDeploy.recordOwned)" \
+      || bad "the manifest deploy succeeds" "rc=${_dr_rc} out: ${_dr_out}" ;;
+  *) bad "every deploy writes the record-owned manifest into the release" "upgrade: ${_dr_up} out: ${_dr_out}" ;;
+esac
+# The vault half is NOT record-owned: its leaves come from the record-only probe, never the full merge.
+printf '{%s,"extraPortalConfig":{"A":"1"},"secrets":{"x":"y"}}' "$_dr_img" > "$_dr_dir/supplied-values.json"
+printf '{%s,"extraPortalConfig":{"A":"1"}}' "$_dr_img" > "$_dr_dir/record-values.json"
+mkdir -p "$_dr_dir/vault"; printf 'secrets:\n  x: "y"\n' > "$_dr_dir/vault/helm-values-memex"; : > "$_dr_log"
+_dr_out="$(_dr_run --vault kv-test 2>&1)"; _dr_rc=$?
+_dr_up="$(grep '^helm upgrade' "$_dr_log" | head -1)"
+case "$_dr_up" in
+  *'secrets.x'*) bad "the vault half's leaves are never written as record-owned" "upgrade: ${_dr_up}" ;;
+  *'"recordOwned":["extraPortalConfig.A","portal.image"]'*) ok "the vault half's leaves are never written as record-owned (record-only probe)" ;;
+  *) bad "the record-only probe feeds the manifest when a vault half is layered" "rc=${_dr_rc} upgrade: ${_dr_up} out: ${_dr_out}" ;;
+esac
+rm -rf "$_dr_dir/vault" "$_dr_dir/record-values.json"
+# THE FIX: the previous deploy's record rendered B; the record no longer does → dropped, logged by name.
+printf '{%s,"extraPortalConfig":{"A":"1","B":"2"},"hostingDeploy":{"recordOwned":["extraPortalConfig.A","extraPortalConfig.B","portal.image"]}}' "$_dr_img" > "$_dr_dir/live-values.json"
+printf '{%s,"extraPortalConfig":{"A":"1"}}' "$_dr_img" > "$_dr_dir/supplied-values.json"; : > "$_dr_log"
+_dr_out="$(_dr_run)"; _dr_rc=$?
+if [ "$_dr_rc" -eq 0 ] && grep -q '^helm upgrade' "$_dr_log" \
+   && printf '%s' "$_dr_out" | grep -q 'DROPPING extraPortalConfig.B — the record rendered it on the previous deploy' \
+   && printf '%s' "$_dr_out" | grep -q '::hosting:: dropped_value=owned:extraPortalConfig.B'; then
+  ok "a key the record previously rendered and removed is DROPPED, with a log line naming it"
+else
+  bad "a record-owned key the record removed is dropped and logged" "rc=${_dr_rc} out: ${_dr_out} calls: $(cat "$_dr_log")"
+fi
+# NEGATIVE CONTROL: the same release, plus a hand-applied key the record NEVER rendered → still refused.
+printf '{%s,"extraPortalConfig":{"A":"1","B":"2"},"features":{"fleetops":{"enabled":false}},"hostingDeploy":{"recordOwned":["extraPortalConfig.A","extraPortalConfig.B","portal.image"]}}' "$_dr_img" > "$_dr_dir/live-values.json"; : > "$_dr_log"
+_dr_out="$(_dr_run)"; _dr_rc=$?
+if [ "$_dr_rc" -ne 0 ] && printf '%s' "$_dr_out" | grep -q 'would DROP 1 value(s)' \
+   && printf '%s' "$_dr_out" | grep -q 'features.fleetops.enabled' \
+   && printf '%s' "$_dr_out" | grep -q 'shows the record never rendered them' \
+   && ! grep -q '^helm upgrade' "$_dr_log"; then
+  ok "NEGATIVE CONTROL: a live-only key the record never rendered is still REFUSED before helm (Memex#376)"
+else
+  bad "a never-rendered live key is still refused" "rc=${_dr_rc} out: ${_dr_out} calls: $(cat "$_dr_log")"
+fi
+# FALLBACK: no manifest (deployed before it existed) → today's behaviour: refused, naming the remedy.
+printf '{%s,"extraPortalConfig":{"A":"1","B":"2"}}' "$_dr_img" > "$_dr_dir/live-values.json"; : > "$_dr_log"
+_dr_out="$(_dr_run)"; _dr_rc=$?
+if [ "$_dr_rc" -ne 0 ] && printf '%s' "$_dr_out" | grep -q 'extraPortalConfig.B' \
+   && printf '%s' "$_dr_out" | grep -q 'carries no record-owned manifest yet' \
+   && printf '%s' "$_dr_out" | grep -q 'HOSTING_RETIRE_VALUES' && ! grep -q '^helm upgrade' "$_dr_log"; then
+  ok "a release with no manifest falls back to refusing the drop, naming HOSTING_RETIRE_VALUES"
+else
+  bad "a release with no manifest falls back to refusing" "rc=${_dr_rc} out: ${_dr_out} calls: $(cat "$_dr_log")"
+fi
+# BOOTSTRAP: the record retires the path (operator.environment) → dropped and logged; a spent entry is named.
+: > "$_dr_log"
+_dr_out="$(HOSTING_RETIRE_VALUES='extraPortalConfig.B, extraPortalConfig.Gone' _dr_run)"; _dr_rc=$?
+if [ "$_dr_rc" -eq 0 ] && grep -q '^helm upgrade' "$_dr_log" \
+   && printf '%s' "$_dr_out" | grep -q 'DROPPING extraPortalConfig.B — the record retires it (HOSTING_RETIRE_VALUES)' \
+   && printf '%s' "$_dr_out" | grep -q 'entry extraPortalConfig.Gone matches nothing this upgrade drops' \
+   && ! printf '%s' "$_dr_out" | grep -q 'entry extraPortalConfig.B matches nothing'; then
+  ok "a release with no manifest drops a path the record RETIRES (HOSTING_RETIRE_VALUES), and names a spent entry"
+else
+  bad "the record's retire declaration drops the path" "rc=${_dr_rc} out: ${_dr_out} calls: $(cat "$_dr_log")"
+fi
+# A retire entry that is not a values path is refused, never guessed.
+: > "$_dr_log"
+_dr_out="$(HOSTING_RETIRE_VALUES='extraPortalConfig.B;$(rm -rf x)' _dr_run)"; _dr_rc=$?
+[ "$_dr_rc" -ne 0 ] && printf '%s' "$_dr_out" | grep -q 'not a dotted values path' && ! grep -q '^helm upgrade' "$_dr_log" \
+  && ok "a HOSTING_RETIRE_VALUES entry that is not a dotted path is refused" \
+  || bad "a malformed retire entry is refused" "rc=${_dr_rc} out: ${_dr_out}"
+# Ownership is EXACT: a manifest leaf `extraPortalConfig.X` says nothing about a hand-applied
+# `extraPortalConfig.X.y` that replaced it — refused, not dropped as owned.
+printf '{%s,"extraPortalConfig":{"A":"1","X":{"y":"hand"}},"hostingDeploy":{"recordOwned":["extraPortalConfig.A","extraPortalConfig.X","portal.image"]}}' "$_dr_img" > "$_dr_dir/live-values.json"
+printf '{%s,"extraPortalConfig":{"A":"1"}}' "$_dr_img" > "$_dr_dir/supplied-values.json"; : > "$_dr_log"
+_dr_out="$(_dr_run)"; _dr_rc=$?
+[ "$_dr_rc" -ne 0 ] && printf '%s' "$_dr_out" | grep -q 'extraPortalConfig.X.y' && ! grep -q '^helm upgrade' "$_dr_log" \
+  && ok "ownership is exact: a hand-applied path UNDER a record-owned leaf is still refused" \
+  || bad "a path under a record-owned leaf is refused" "rc=${_dr_rc} out: ${_dr_out}"
+# A retire path may carry `/` (an ingress annotation key).
+printf '{%s,"ingress":{"annotations":{"cert-manager.io/cluster-issuer":"x"}}}' "$_dr_img" > "$_dr_dir/live-values.json"
+printf '{%s}' "$_dr_img" > "$_dr_dir/supplied-values.json"; : > "$_dr_log"
+_dr_out="$(HOSTING_RETIRE_VALUES='ingress.annotations.cert-manager.io/cluster-issuer' _dr_run)"; _dr_rc=$?
+[ "$_dr_rc" -eq 0 ] && grep -q '^helm upgrade' "$_dr_log" \
+  && printf '%s' "$_dr_out" | grep -q 'DROPPING ingress.annotations.cert-manager.io/cluster-issuer' \
+  && ok "a retire path carrying '/' (an annotation key) is accepted and dropped" \
+  || bad "a retire path with '/' is accepted" "rc=${_dr_rc} out: ${_dr_out}"
 rm -rf "$_dr_dir"
 
 # ── hosting-db-reset: an EMPTY database without destroying the one the instance had ────────────────
