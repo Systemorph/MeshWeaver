@@ -281,6 +281,17 @@ in-mesh NodeType node's content:
 }
 ```
 
+> 🚨 **The `false` must survive the hub serializer.** The mesh serializes with
+> `WhenWritingDefault`, and `false` is `default(bool)`, so without an override an explicit
+> `keepsHistory: false` was dropped by the first write that went through the hub (every import does
+> one) and the reader re-applied the `true` initializer. The type then kept history while its JSON
+> said it did not, and a test that planted the JSON straight into the store could not see it.
+> `KeepsHistory` therefore carries `[JsonIgnore(Condition = JsonIgnoreCondition.Never)]`, like
+> `IncludeGlobalTypes`, and `NodeTypeOffSwitchesSurviveTheWireTest` checks every true-defaulted flag
+> of `NodeTypeDefinition` the same way. A type imported before the fix reads `true` until its source
+> is imported again or its package updated; its token changes then, because only a declared `false`
+> serializes differently. To verify on a portal, `get` the NodeType node and read `keepsHistory`.
+
 What the storage layer then does for a node of that type:
 
 | Event | Behaviour |

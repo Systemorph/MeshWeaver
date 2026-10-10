@@ -81,6 +81,10 @@ internal sealed class FakeOciRegistry : HttpMessageHandler
     /// <summary>Serve a manifest whose bytes differ from the digest they are asked for under.</summary>
     public bool TamperManifest { get; set; }
 
+    /// <summary>The token realm the 401 challenge names; null = this registry's own <c>/v2/token</c>.
+    /// A test points it at ANOTHER authority to stage a registry redirecting the key (MeshWeaver#4123).</summary>
+    public string? Realm { get; set; }
+
     /// <summary>Refuse the key at the realm.</summary>
     public bool RefuseKey { get; set; }
 
@@ -197,7 +201,7 @@ internal sealed class FakeOciRegistry : HttpMessageHandler
     {
         var response = new HttpResponseMessage(HttpStatusCode.Unauthorized);
         response.Headers.WwwAuthenticate.Add(new AuthenticationHeaderValue("Bearer",
-            $"realm=\"https://{Host}/v2/token\",service=\"{Host}\""));
+            $"realm=\"{Realm ?? $"https://{Host}/v2/token"}\",service=\"{Host}\""));
         return response;
     }
 

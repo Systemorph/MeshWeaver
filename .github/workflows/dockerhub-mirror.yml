@@ -8,8 +8,11 @@ name: Docker Hub mirror
 # IP and shared with every other tenant of the runner pool. Measured 2026-10-09: `toomanyrequests`
 # took down all six test shards and the Chart Gate of core pull requests (#6381 among them) — a
 # red no code change could cause or cure. Retrying is not a fix (the limit is a window, not a
-# blip); the fix is to stop asking Docker Hub from pull requests at all. This workflow is now the
-# ONLY place CI touches docker.io, once per new digest, from main or the schedule.
+# blip); the fix is to stop asking Docker Hub from pull requests for the runtime images a job
+# runs. For every image DECLARED in the list, this workflow is the only place CI touches docker.io,
+# once per new digest, from main or the schedule. Not in scope: base layers of images core builds
+# (path-filtered `FROM` lines) — the page lists them. The Chart Gate moves onto the mirror in the
+# follow-up to the change that introduced this workflow.
 #
 # Consumers: `bash .github/scripts/dockerhub-mirror.sh ref <name>:<tag>` and a ghcr.io login with
 # the job's GITHUB_TOKEN (`packages: read`). No stored credential — so forks and Dependabot pull
@@ -32,8 +35,8 @@ on:
       - .github/scripts/dockerhub-mirror.sh
       - .github/workflows/dockerhub-mirror.yml
   schedule:
-    # Daily: a mirror whose package was deleted or whose retention dropped a manifest is red the
-    # same day, not on the next pull request that needs it.
+    # Daily: a deleted package or a manifest retention dropped is RESTORED the same day (sync copies
+    # any declared digest the mirror lacks); the run is red only when it cannot restore it.
     - cron: "40 4 * * *"
   workflow_dispatch:
 

@@ -46,7 +46,12 @@ public class NodeRepoLaneSelfResolveGuard
         Assert.Contains("python3 \"$SCRIPT\" --self-test", lines, StringComparison.Ordinal);
         // The freeze is the CALLER's repository variable — `vars` in a reusable workflow resolve
         // from the caller's repository — and it is passed to the resolver, never dropped.
-        Assert.Contains("FREEZE: ${{ vars.MW_PLATFORM_REF }}", lines, StringComparison.Ordinal);
+        // The publish-bake lane's previous-epoch leg (policy bake-per-live-identity) freezes on the
+        // declared ceiling FIRST and falls back to the caller's variable — that one form, and only
+        // that one, is accepted beside the plain one.
+        Assert.Matches(
+            new Regex(@"FREEZE: \$\{\{ (needs\.epoch-leg\.outputs\.ceiling \|\| )?vars\.MW_PLATFORM_REF \}\}"),
+            lines);
         Assert.Contains("${FREEZE:+--freeze \"$FREEZE\"}", lines, StringComparison.Ordinal);
         // A half-pin is refused by name, never composed.
         Assert.Contains("a half-pin would compose two CD waves", lines, StringComparison.Ordinal);

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
-# dockerhub-mirror.sh — the ONE route by which CI reaches a Docker Hub image
-# (Doc/Architecture/DockerHubInCi).
+# dockerhub-mirror.sh — the route by which a CI job reaches a Docker Hub RUNTIME image it declares in
+# .github/dockerhub-mirror.list (Doc/Architecture/DockerHubInCi). Base layers of images core BUILDS
+# (`FROM` lines in path-filtered workflows) are out of its scope and listed on that page.
 #
 #   dockerhub-mirror.sh ref <name>:<tag>    print ghcr.io/systemorph/dockerhub/<name>:<tag>@<digest>
 #                                           for a line of .github/dockerhub-mirror.list; RED for an
@@ -12,7 +13,8 @@
 #
 # 🚨 No retries and no fallback to docker.io. A consumer that cannot reach the mirror is red, naming
 # the line — a silent fall back to the anonymous pull is exactly the rate-limited path this replaces.
-# `sync` is the only thing that touches Docker Hub, once per new digest, from a main/scheduled run.
+# For a declared image, `sync` is the only thing that touches Docker Hub, once per new digest, from a
+# main/scheduled run.
 set -euo pipefail
 
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -20,10 +22,11 @@ LIST="${DOCKERHUB_MIRROR_LIST:-$SELF_DIR/../dockerhub-mirror.list}"
 MIRROR="${DOCKERHUB_MIRROR_PREFIX:-ghcr.io/systemorph/dockerhub}"
 
 # Emits "<name>:<tag> <digest>" per declared line; RED on a malformed one, so a typo can never
-# read as "not declared".
+# read as "not declared", and RED on a second line for the same <name>:<tag> — otherwise `sync`
+# would mirror both digests while `ref` hands consumers whichever came first.
 entries() {
   [ -f "$LIST" ] || { echo "::error::dockerhub-mirror: no list at $LIST" >&2; return 1; }
-  local line n=0
+  local line n=0 seen=" "
   while IFS= read -r line || [ -n "$line" ]; do
     n=$((n + 1))
     line="${line%%#*}"; line="$(printf '%s' "$line" | tr -d '[:space:]')"
@@ -32,6 +35,11 @@ entries() {
       echo "::error::dockerhub-mirror: $LIST line $n is not <name>:<tag>@sha256:<64 hex>: '$line'" >&2
       return 1
     fi
+    if [[ "$seen" == *" ${BASH_REMATCH[1]}:${BASH_REMATCH[5]} "* ]]; then
+      echo "::error::dockerhub-mirror: $LIST line $n declares ${BASH_REMATCH[1]}:${BASH_REMATCH[5]} a second time — one digest per <name>:<tag>; move the existing line instead of appending" >&2
+      return 1
+    fi
+    seen="$seen${BASH_REMATCH[1]}:${BASH_REMATCH[5]} "
     printf '%s:%s %s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[5]}" "${BASH_REMATCH[6]}"
   done < "$LIST"
 }
@@ -61,7 +69,8 @@ sync() {
         rc=1; continue
       fi
     fi
-    got="$(docker buildx imagetools inspect "$target" --format '{{json .Manifest.Digest}}' 2>/dev/null || true)"
+    # stderr stays in the log: an unreadable copy must say WHY it read as nothing.
+    if ! got="$(docker buildx imagetools inspect "$target" --format '{{json .Manifest.Digest}}')"; then got=""; fi
     got="${got//\"/}"
     if [ "$got" != "$digest" ]; then
       echo "::error::dockerhub-mirror: $target reads back as '${got:-nothing}', not the declared $digest — a consumer pinned to the declared digest would not find it" >&2
@@ -79,6 +88,7 @@ self_test() {
   d1="sha256:$(printf '%064d' 1)"; d2="sha256:$(printf '%064d' 2)"
   printf '# comment\n\nfoo/bar:1.2@%s  # trailing\nbaz:pg17@%s\n' "$d1" "$d2" > "$tmp/ok.list"
   printf 'foo/bar:latest\n' > "$tmp/bad.list"
+  printf 'foo/bar:1.2@%s\nfoo/bar:1.2@%s\n' "$d1" "$d2" > "$tmp/dup.list"
   ok() { echo "  ✅ $1"; }
   ko() { echo "  ❌ $1"; fail=1; }
   out="$(DOCKERHUB_MIRROR_LIST="$tmp/ok.list" "$0" ref foo/bar:1.2)" || out=""
@@ -88,6 +98,7 @@ self_test() {
   if DOCKERHUB_MIRROR_LIST="$tmp/ok.list" "$0" ref foo/bar:9.9 2>/dev/null; then ko "an undeclared image is refused"; else ok "an undeclared image is refused"; fi
   if DOCKERHUB_MIRROR_LIST="$tmp/ok.list" "$0" ref foo/bar:1 2>/dev/null; then ko "a tag that only prefixes a declared one is refused"; else ok "a tag that only prefixes a declared one is refused"; fi
   if DOCKERHUB_MIRROR_LIST="$tmp/bad.list" "$0" ref foo/bar:latest 2>/dev/null; then ko "a line without a digest is RED, not 'undeclared'"; else ok "a line without a digest is RED, not 'undeclared'"; fi
+  if DOCKERHUB_MIRROR_LIST="$tmp/dup.list" "$0" ref foo/bar:1.2 2>/dev/null; then ko "a second digest for the same name:tag is RED, never first-wins"; else ok "a second digest for the same name:tag is RED, never first-wins"; fi
   if DOCKERHUB_MIRROR_LIST="$tmp/none.list" "$0" ref foo/bar:1.2 2>/dev/null; then ko "a missing list is RED"; else ok "a missing list is RED"; fi
   out="$(entries)" || out=""
   if [ -n "$out" ]; then ok "the committed list parses and declares at least one image"; else ko "the committed list parses and declares at least one image"; fi

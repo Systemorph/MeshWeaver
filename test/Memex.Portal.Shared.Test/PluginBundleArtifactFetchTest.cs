@@ -152,6 +152,61 @@ public class PluginBundleArtifactFetchTest(ITestOutputHelper output) : MonolithM
     }
 
     /// <summary>
+    /// 🚨 MeshWeaver#4123 — the instance key goes to an artifact's OCI host ONLY when the registry it
+    /// belongs to declares that host (index-level <c>artifactRegistry</c>) or it is the registry's own
+    /// host. A registry that declares none, or declares a DIFFERENT host, never sees the OCI host
+    /// asked for anything: the bytes come over the registry's own HTTP route, so the install still
+    /// adopts. The declared case is <see cref="AnAdvertisedArtifact_IsFetchedFromTheOciRegistry_NeverTheHttpRoute"/>
+    /// — the positive control for both arms below.
+    /// </summary>
+    [Theory(Timeout = 120_000)]
+    [InlineData(null)]
+    [InlineData("cr.someone-else.test")]
+    [InlineData("cr.artifact.test.evil")]
+    public async Task AnUndeclaredArtifactHost_NeverReceivesTheKey_AndTheHttpRouteServes(string? declared)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        registry.Artifact = oci.Reference;
+        registry.ArtifactRegistry = declared;
+
+        var landed = await Client().AdoptModule(Plugin, Module, "Plugins/" + Plugin)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+
+        landed.Should().Be(1, "the bundle still lands — over the registry's own HTTP route");
+        File.Exists(LandedDll()).Should().BeTrue();
+        oci.Requests.Should().BeEmpty(
+            $"a registry declaring '{declared ?? "(nothing)"}' never sends this instance's key to {OciHost}");
+        oci.PresentedSecret.Should().BeNull("the key was never presented at the undeclared host");
+        registry.BundleDownloads.Should().ContainSingle().Which.Should().Be(Plugin);
+    }
+
+    /// <summary>The rule itself, pure (MeshWeaver#4123): own host or the index's declared artifact
+    /// registry; whole-host and case-insensitive; a suffix-extended host or another port is not it.</summary>
+    [Fact]
+    public void TheArtifactKeyTarget_IsTheRegistrysOwnHost_OrItsDeclaredArtifactRegistry()
+    {
+        var artifact = "cr.meshweaver.cloud/plugins/Plugins/X@sha256:" + new string('a', 64);
+        PluginBundleClient.ArtifactKeyTarget("https://memex.meshweaver.cloud", "cr.meshweaver.cloud", artifact)
+            .Should().BeNull("the registry declares that host");
+        PluginBundleClient.ArtifactKeyTarget("https://memex.meshweaver.cloud", "CR.MeshWeaver.Cloud", artifact)
+            .Should().BeNull("hosts compare case-insensitively");
+        PluginBundleClient.ArtifactKeyTarget("https://memex.meshweaver.cloud", "https://cr.meshweaver.cloud/", artifact)
+            .Should().BeNull("a declaration written as a URL names the same host");
+        PluginBundleClient.ArtifactKeyTarget("https://cr.meshweaver.cloud", null, artifact)
+            .Should().BeNull("the registry's OWN host needs no declaration");
+
+        PluginBundleClient.ArtifactKeyTarget("https://memex.meshweaver.cloud", null, artifact)
+            .Should().Contain("declares no artifact registry");
+        PluginBundleClient.ArtifactKeyTarget("https://memex.meshweaver.cloud", "cr.other.example", artifact)
+            .Should().Contain("declares 'cr.other.example'");
+        PluginBundleClient.ArtifactKeyTarget("https://memex.meshweaver.cloud", "meshweaver.cloud", artifact)
+            .Should().NotBeNull("a parent domain is a different host");
+        PluginBundleClient.ArtifactKeyTarget("https://memex.meshweaver.cloud", "cr.meshweaver.cloud",
+                "cr.meshweaver.cloud:5000/plugins/Plugins/X@sha256:" + new string('a', 64))
+            .Should().NotBeNull("another port is another endpoint");
+    }
+
+    /// <summary>
     /// 🚨 MeshWeaver#6172 — what the adopt OUTCOME says about a failed artifact fetch decides whether a
     /// module reload is <c>Faulted</c> (retried) or <c>Failed</c> (final). A registry that is briefly
     /// down or rate-limiting answers something that clears on its own; a refusal or a tampered
@@ -236,6 +291,10 @@ public class PluginBundleArtifactFetchTest(ITestOutputHelper output) : MonolithM
 
         public string? Artifact;
 
+        /// <summary>The index-level <c>artifactRegistry</c> this registry declares (MeshWeaver#4123).
+        /// Defaults to the OCI fake's host, the fleet's shape; a test clears or changes it.</summary>
+        public string? ArtifactRegistry = OciHost;
+
         public ImmutableList<string> BundleDownloads => downloads;
 
         public bool Serves(string host) => string.Equals(host, RegistryHost, StringComparison.OrdinalIgnoreCase);
@@ -248,6 +307,7 @@ public class PluginBundleArtifactFetchTest(ITestOutputHelper output) : MonolithM
                 var body = JsonSerializer.Serialize(new
                 {
                     frameworkMvid = ServedFramework,
+                    artifactRegistry = ArtifactRegistry,
                     bundles = new[]
                     {
                         new

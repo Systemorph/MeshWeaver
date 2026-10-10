@@ -1104,6 +1104,12 @@ public static class PluginBundleEndpoints
         // NOW for the same reason as the logger above, and read once per index request. The
         // platform default records nothing, so `artifact` reads null until a host records pushes.
         var artifacts = Artifacts(http);
+        // 🚨 The ONE host besides this registry's own to which a consumer presents the key it holds
+        // here (MeshWeaver#4123): this registry's OWN declaration, from its config (the chart renders
+        // it from registry.host), never a publisher-written bundle entry. Blank ⇒ omitted, and a
+        // consumer then fetches every off-host artifact over the HTTP route below, keyless toward it.
+        var artifactRegistry = (http.RequestServices.GetService<IConfiguration>()
+            ?[PluginBundleClient.ArtifactRegistryConfigKey] ?? "").Trim();
 
         // 🚨 The SERVED activation list (#4963): a maintained snapshot, not a scan of every
         // module's records on the share per poll — see ModuleLandingService.GetServedActivation.
@@ -1135,6 +1141,8 @@ public static class PluginBundleEndpoints
                     // the wrong lane. Stating the architecture makes that miss diagnosable. Additive:
                     // a pre-#1751 client ignores it, and its BundleIndex simply reads null.
                     architecture = servedLane.Architecture,
+                    // Additive: an older client's BundleIndex ignores it; null when undeclared.
+                    artifactRegistry = artifactRegistry.Length == 0 ? null : artifactRegistry,
                     bundles = packages.Select(p => new
                     {
                         plugin = p.PluginId,
