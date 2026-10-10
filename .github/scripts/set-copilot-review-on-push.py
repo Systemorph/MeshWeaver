@@ -1,21 +1,20 @@
 #!/usr/bin/env python3
-"""set-copilot-review-once.py — set `review_on_push: false` on every fleet ruleset's `copilot_code_review` rule, nothing else.
+"""set-copilot-review-on-push.py — reconcile every fleet ruleset's `copilot_code_review` rule to the in-force `review_on_push` value, nothing else.
 
-Policy `review-once-per-pull-request` (Doc/Architecture/PolicyNotProse; manual:
-Doc/Architecture/ReviewFindingsAnswered → "One review per pull request"): a pull request gets ONE
-Copilot review, not one per push. `check-review-answered.py` accepts a landed Copilot review of any
-earlier head; this script makes the rulesets stop requesting a review on every push.
-
-🚨 ORDER: run `--apply` only AFTER the gate change in `check-review-answered.py` is merged. Flipped
-first, every new head carries no review of its own while the old stage and arm gates still demand one.
+Policy `copilot-code-review` as amended (Doc/Architecture/PolicyNotProse; manual:
+Doc/Architecture/ReviewFindingsAnswered → "Every push is reviewed again"): every push to a non-draft
+pull request gets a fresh Copilot review, so the rule runs with `review_on_push: true`. The value
+lives in ONE place, `REVIEW_ON_PUSH` below; the script only ever moves a ruleset TO it, so following
+its help can never restore a retired configuration. (It replaces `set-copilot-review-once.py`, which
+hard-coded the retired `false` of `review-once-per-pull-request`'s ruleset half.)
 
 What it does, per repository:
   1. lists the rulesets (REST), reads each in full, and picks every one carrying `copilot_code_review`
      (none → RED: the repository is outside the policy, say so rather than skip it);
   2. builds the PUT body from the ruleset AS READ — name, target, enforcement, bypass_actors,
      conditions, rules — changing ONLY `rules[copilot_code_review].parameters.review_on_push` to
-     false (`review_draft_pull_requests` keeps its value);
-  3. already false → "unchanged", nothing is written (idempotent);
+     `REVIEW_ON_PUSH` (`review_draft_pull_requests` keeps its value);
+  3. already at that value → "unchanged", nothing is written (idempotent);
   4. `--apply` PUTs it, reads the ruleset back and fails unless the read-back equals the body it sent.
 Without `--apply` it prints each body (a dry run). `--out DIR` also writes `<repo>.<id>.json`.
 
@@ -23,8 +22,8 @@ A ruleset read without `bypass_actors` (a token that cannot see them) is REFUSED
 field could not be shown to keep them.
 
 USAGE
-  set-copilot-review-once.py --self-test
-  set-copilot-review-once.py [--repo NAME ...] [--out DIR] [--apply]
+  set-copilot-review-on-push.py --self-test
+  set-copilot-review-on-push.py [--repo NAME ...] [--out DIR] [--apply]
 Every GitHub call is `gh api` (REST). Exit 0 = every repository done or unchanged, 1 = any refusal
 or failed read-back, 2 = usage error.
 """
@@ -41,6 +40,8 @@ OWNER = "Systemorph"
 FLEET = ("MeshWeaver", "MeshWeaver.Plugins", "Memex", "MeshWeaver.Crm", "MeshWeaver.Education",
          "MeshWeaver.Reinsurance", "MeshWeaver.SocialMedia", "MeshWeaver.Manufacturing", "MeshWeaver.FundReporting")
 RULE = "copilot_code_review"
+# The in-force value (policy `copilot-code-review`, as amended). Change it only with the policy.
+REVIEW_ON_PUSH = True
 BODY_FIELDS = ("name", "target", "enforcement", "bypass_actors", "conditions", "rules")
 
 
@@ -65,8 +66,8 @@ def put_body(ruleset: dict) -> tuple[dict, bool]:
     params = rules[0].setdefault("parameters", {})
     if "review_on_push" not in params:
         raise Refused(f"ruleset {ruleset.get('id')}: `{RULE}` has no `review_on_push` parameter — the rule's shape changed, look before writing")
-    changed = params["review_on_push"] is not False
-    params["review_on_push"] = False
+    changed = params["review_on_push"] is not REVIEW_ON_PUSH
+    params["review_on_push"] = REVIEW_ON_PUSH
     return body, changed
 
 
@@ -99,7 +100,7 @@ def one_repo(repo: str, apply: bool, out_dir: str | None) -> bool:
             with open(os.path.join(out_dir, f"{repo}.{rs['id']}.json"), "w") as f:
                 json.dump(body, f, indent=2)
         if not changed:
-            print(f"unchanged  {tag}: review_on_push is already false")
+            print(f"unchanged  {tag}: review_on_push is already {json.dumps(REVIEW_ON_PUSH)}")
             continue
         if not apply:
             print(f"would PUT  {tag}: PUT /repos/{OWNER}/{repo}/rulesets/{rs['id']}\n{json.dumps(body, indent=2)}")
@@ -108,7 +109,7 @@ def one_repo(repo: str, apply: bool, out_dir: str | None) -> bool:
         diff = readback_matches(body, gh(f"repos/{OWNER}/{repo}/rulesets/{rs['id']}"))
         if diff:
             raise Refused(f"{tag}: read-back differs after the PUT — {diff}")
-        print(f"applied    {tag}: review_on_push false, read back identical")
+        print(f"applied    {tag}: review_on_push {json.dumps(REVIEW_ON_PUSH)}, read back identical")
     return True
 
 
@@ -124,18 +125,19 @@ def self_test() -> int:
             "bypass_actors": [{"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always"}],
             "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}},
             "rules": [{"type": "deletion"},
-                      {"type": RULE, "parameters": {"review_on_push": True, "review_draft_pull_requests": False}}],
+                      {"type": RULE, "parameters": {"review_on_push": not REVIEW_ON_PUSH, "review_draft_pull_requests": False}}],
             "_links": {}, "node_id": "x", "source": "o/r"}
     body, changed = put_body(base)
     cop = [r for r in body["rules"] if r["type"] == RULE][0]["parameters"]
-    check("flips review_on_push to false", changed and cop["review_on_push"] is False)
+    check("moves review_on_push to the in-force value", changed and cop["review_on_push"] is REVIEW_ON_PUSH)
     check("keeps review_draft_pull_requests", cop["review_draft_pull_requests"] is False)
     check("keeps every other field identical",
           all(body[f] == base[f] for f in BODY_FIELDS if f != "rules") and body["rules"][0] == base["rules"][0])
     check("never sends read-only fields", set(body) == set(BODY_FIELDS))
-    check("does not mutate the ruleset as read", base["rules"][1]["parameters"]["review_on_push"] is True)
+    check("does not mutate the ruleset as read", base["rules"][1]["parameters"]["review_on_push"] is (not REVIEW_ON_PUSH))
     _, again = put_body(dict(base, rules=body["rules"]))
-    check("idempotent: already false -> unchanged", again is False)
+    check("idempotent: already at the in-force value -> unchanged", again is False)
+    check("in-force value is true (policy copilot-code-review, amended)", REVIEW_ON_PUSH is True)
     for name, bad in [("no bypass_actors read -> refused", {k: v for k, v in base.items() if k != "bypass_actors"}),
                       ("no copilot rule -> refused", dict(base, rules=[{"type": "deletion"}])),
                       ("rule without review_on_push -> refused", dict(base, rules=[{"type": RULE, "parameters": {}}]))]:
