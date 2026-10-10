@@ -211,9 +211,15 @@ dump the self-kill writes (step 4). Read it with the governed `AnalyzeDump` acti
 ([Debugging Native Crashes](../DebuggingNativeCrashes), "Reading a production dump"): filed on the
 control instance against `Deployments/<id>` with `dumpPod` or `dumpAround` naming the evicted pod, it
 runs `threadpool`, `syncblk`, `clrthreads`, `clrstack -all` and `dumpasync` in the cluster and lands
-the grouped stacks at `Ops/Dumps/<action id>`. No direct cluster access is needed. It reads only a
-dump that outlived the pod, so an instance whose dump root is still an `emptyDir` has nothing to
-read until its next Reconcile. In the result, look for receive-loop threads (`SiloConnection`,
+the grouped stacks at `Ops/Dumps/<action id>`. No direct cluster access is needed.
+
+A self-kill does not always leave a dump, so check before filing. The pod's first `[crash-dumps]`
+line after the roll says which it was: `armed` means the next crash writes one; `HELD: dumps are
+DISABLED` means it wrote **nothing**, which is what every pod logs where the shared claim is smaller
+than the dump gate requires. An instance whose dump root is still an `emptyDir` lost the dump with
+the pod. In both cases there is nothing for `AnalyzeDump` to read from that incident: fix the
+storage first (declare a `dumps` volume on the record and Reconcile; see Debugging Native Crashes),
+and the next recurrence is the one that can be read. In the result, look for receive-loop threads (`SiloConnection`,
 `MessageCenter.ReceiveMessage`) or activation threads parked on one lock or one `Wait`. Until it has
 been read, any tolerance change or watchdog is a band-aid over a blocking call nobody has seen.
 

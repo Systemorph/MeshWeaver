@@ -8,13 +8,15 @@ namespace MeshWeaver.Hosting.Orleans;
 /// issue #6395.
 ///
 /// <para><b>What happened.</b> On memex (2026-10-09 20:43:48Z, during a roll) two peers voted a
-/// healthy silo Dead after it missed their direct probes; the silo read the verdict at its next
-/// table refresh and killed itself (MembershipTableManager.KillMyselfLocally). Its IAmAlive row
-/// was still being written (20:44:06Z, after the votes): the process was alive, only its probe
-/// answers were late. Until this class THIS repository configured no ClusterMembershipOptions
-/// outside test fixtures, so a host that set none ran Orleans' defaults (ProbeTimeout 5 s,
-/// suspicion after NumMissedProbesLimit 3 misses, death on NumVotesForDeathDeclaration 2 votes):
-/// about 15 s of unanswered probes killed a silo.</para>
+/// silo Dead after it missed their direct probes; the silo read the verdict at its next table
+/// refresh and killed itself (MembershipTableManager.KillMyselfLocally). Its IAmAlive row was
+/// still being written (20:44:06Z, after the votes). That row proves only that the process could
+/// still update the membership table, not that it was serving grain calls: it was first read as a
+/// healthy silo whose probe answers were late, and the later investigation (next paragraph)
+/// reads it as a silo that answered nothing. Until this class THIS repository configured no
+/// ClusterMembershipOptions outside test fixtures, so a host that set none ran Orleans' defaults
+/// (ProbeTimeout 5 s, suspicion after NumMissedProbesLimit 3 misses, death on
+/// NumVotesForDeathDeclaration 2 votes): about 15 s of unanswered probes killed a silo.</para>
 ///
 /// <para><b>What that incident was not.</b> The portal host that silo ran in
 /// (Memex.Portal.Distributed, MeshWeaver.Plugins) configures its own ProbeTimeout 15 s ×
