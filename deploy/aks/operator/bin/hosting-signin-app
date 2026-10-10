@@ -110,7 +110,7 @@ fi
 hosting::step "Add a client secret to the sign-in app"
 umask 077
 secret_file="$(mktemp)"
-trap 'rm -f "$secret_file"' EXIT
+trap 'hosting::on_exit; rm -f "$secret_file"' EXIT
 # 🚨 stderr DISCARDED: az prints the minted secret there too. --append: an existing credential
 # stays valid — this adds a secret for THIS vault, it never rotates the app.
 if ! az ad app credential reset --id "$client_id" --append --display-name "$name" --years "$years" \

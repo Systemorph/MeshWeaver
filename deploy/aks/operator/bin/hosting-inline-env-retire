@@ -123,7 +123,7 @@ command -v jq >/dev/null 2>&1 \
   || hosting::die "jq is not installed in this image — the Deployment and its sources are JSON and cannot be measured without it"
 
 err="$(mktemp)"
-trap 'rm -f "$err"' EXIT
+trap 'hosting::on_exit; rm -f "$err"' EXIT
 
 # ── the Deployment as it is, and whether it is settled ─────────────────────────────────────────
 dep="$(hosting::read kubectl -n "$namespace" get deployment "$deployment" -o json 2>"$err")" \

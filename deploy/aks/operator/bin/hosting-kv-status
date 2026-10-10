@@ -49,7 +49,7 @@ if hosting::dry; then
 fi
 
 work="$(mktemp -d)" || hosting::die "could not create a working directory"
-trap 'rm -rf "$work"' EXIT
+trap 'hosting::on_exit; rm -rf "$work"' EXIT
 
 # Metadata only. `list` carries attributes and tags, never a value.
 az keyvault secret list --vault-name "$vault" --include-managed false -o json > "$work/live.json" 2>"$work/az.err" \
