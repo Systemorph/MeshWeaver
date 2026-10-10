@@ -147,8 +147,9 @@ The shared-`/data` gate needs `ceiling × 16 Gi + 2 Gi`:
 The control instance's record declares `memex-data` at 128 Gi, and a config audit has reported a
 16 Gi live claim against such a record. Where the claim is smaller than the gate requires, **every
 pod logs `HELD` and no dump is written**. That is deliberate: no dump is better than a full `/data`.
-Declaring a `dumps` volume on the record is what makes dumps reliable there. Read the first
-`[crash-dumps]` line after a roll instead of assuming.
+Declaring a `dumps` volume on the record is what makes dumps reliable there. Read the `armed`,
+`HELD` or `ERROR` line among the `[crash-dumps]` lines after a roll instead of assuming; retention's
+`parked`, `deleted` and `kept` lines can come before it.
 
 ### Taking effect
 

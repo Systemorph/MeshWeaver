@@ -213,10 +213,12 @@ control instance against `Deployments/<id>` with `dumpPod` or `dumpAround` namin
 runs `threadpool`, `syncblk`, `clrthreads`, `clrstack -all` and `dumpasync` in the cluster and lands
 the grouped stacks at `Ops/Dumps/<action id>`. No direct cluster access is needed.
 
-A self-kill does not always leave a dump, so check before filing. The pod's first `[crash-dumps]`
-line after the roll says which it was: `armed` means the next crash writes one; `HELD: dumps are
-DISABLED` means it wrote **nothing**, which is what every pod logs where the shared claim is smaller
-than the dump gate requires. An instance whose dump root is still an `emptyDir` lost the dump with
+A self-kill does not always leave a dump, so check before filing. The verdict is the `armed`,
+`HELD` or `ERROR` line among the pod's `[crash-dumps]` lines for that container start. It is not
+necessarily the first one: retention prints `parked`, `deleted` and `kept` lines before the headroom
+gate decides. `armed` means the next crash writes a dump; `HELD: dumps are DISABLED` means it wrote
+**nothing**, which is what every pod logs where the shared claim is smaller than the dump gate
+requires; `ERROR` names what could not be done, and says whether dumps stayed armed. An instance whose dump root is still an `emptyDir` lost the dump with
 the pod. In both cases there is nothing for `AnalyzeDump` to read from that incident: fix the
 storage first (declare a `dumps` volume on the record and Reconcile; see Debugging Native Crashes),
 and the next recurrence is the one that can be read. In the result, look for receive-loop threads (`SiloConnection`,
