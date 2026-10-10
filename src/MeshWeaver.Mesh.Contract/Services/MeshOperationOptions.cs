@@ -128,6 +128,56 @@ public sealed record MeshOperationOptions
     private readonly int cascadeFanOutConcurrency = 64;
 
     /// <summary>
+    /// The satellite segments whose rows are RECORDS. A record needs no per-node hub to be deleted:
+    /// no type-specific validator registered on its own hub, and no post-deletion handler. A
+    /// recursive delete validates rows under these segments in-process and removes them in
+    /// batches (<see cref="RecordSatelliteBatchSize"/> per storage call) instead of one leaf
+    /// round-trip each. The default is <c>_Activity</c> alone.
+    ///
+    /// <para><b>Why</b> (Systemorph/MeshWeaver, the 2026-10-09 <c>Crm/Client</c> delete on
+    /// memex.systemorph.com). Every planned descendant used to cost two activations of its own
+    /// per-node hub: one to answer the pre-flight <c>ValidateDeleteRequest</c> and one to commit its
+    /// own <c>DeleteNodeRequest</c>. A NodeType carrying several hundred
+    /// <c>_Activity/compile-*</c> records paid that for every one of them and took more than 60 s.
+    /// Nothing about an activity record needs its own hub to be deleted.</para>
+    ///
+    /// <para><b>Which rows qualify.</b> A path qualifies when its FIRST satellite segment is listed
+    /// here AND its owner (<c>SatelliteTableMapping.OwnerOfSatellitePath</c>) is the delete's root
+    /// or a node in the delete's own plan. Any other row takes the ordinary per-node lane. A
+    /// qualifying row is still VALIDATED: the pre-flight reads it from storage and runs the full
+    /// delete-validator chain on it in-process, under the caller's identity. That chain includes
+    /// the row's own access rule against its stored <c>MainNode</c>, so the verdict is the one its
+    /// own hub would give, without activating that hub. The batch keeps the per-node side effects that
+    /// do not need a hub: the change-feed <c>Deleted</c> event (children first), the stream-cache
+    /// invalidation, the "delete wins" tombstone, and disposal of a per-node hub that happens to
+    /// be activated.</para>
+    ///
+    /// <para>Declared, never derived. A segment whose rows gain per-node delete semantics must
+    /// leave this set in the same change. Clearing the set restores the per-node lane for
+    /// everything.</para>
+    /// </summary>
+    public System.Collections.Immutable.ImmutableHashSet<string> RecordSatelliteSegments { get; init; }
+        = System.Collections.Immutable.ImmutableHashSet.Create(StringComparer.OrdinalIgnoreCase, "_Activity");
+
+    /// <summary>
+    /// How many record satellites (<see cref="RecordSatelliteSegments"/>) one storage
+    /// <c>DeleteMany</c> call removes. Batches run one after another, and each batch is one tick of
+    /// the commit's no-progress watchdog, so a batch must stay well inside it. Postgres sends one
+    /// statement per window; the default adapter loops in-process. Must be at least 1.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">The value is below 1.</exception>
+    public int RecordSatelliteBatchSize
+    {
+        get => recordSatelliteBatchSize;
+        init => recordSatelliteBatchSize = value >= 1
+            ? value
+            : throw new ArgumentOutOfRangeException(nameof(value), value,
+                "RecordSatelliteBatchSize must be at least 1.");
+    }
+
+    private readonly int recordSatelliteBatchSize = 100;
+
+    /// <summary>
     /// <b>Rung 2 — work that runs INSIDE another operation's bounded stage.</b> Two shapes on the
     /// delete path: ONE LEG of the pre-flight <c>ValidateDeleteRequest</c> fan-out, as the caller
     /// bounds it, and a cascade leg re-entering <c>HandleDeleteNodeRequest</c> from within the

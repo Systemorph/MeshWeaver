@@ -30,7 +30,9 @@ Two things were wrong, and only one of them was the rate limit:
 2. **The jobs that DO need an image asked Docker Hub directly.** The Chart Gate runs the real
    `docker_auth` and `loki` binaries against the configuration the chart renders, which is the
    reason those checks exist. A pull request has no ACR credential in core: core pushes by OIDC,
-   and its federated credentials match only `main`. So these jobs pulled anonymously.
+   and its federated credentials match only `main`. So these jobs pulled anonymously. Both now resolve
+   their image with `dockerhub-mirror.sh ref`. They do this only on a GitHub runner, and the mirror's
+   digest must equal the chart's pin. On a laptop the Docker Hub name is used as written.
 
 ## The three allowed shapes
 
@@ -73,10 +75,6 @@ on `main` and on the schedule, once for each new digest.
 
 ## What this does not cover
 
-- **The Chart Gate, until its follow-up lands.** The change that added the mirror could not move
-  the Chart Gate's `docker_auth` and `loki` pulls in the same pull request, because the mirror
-  exists only after that change has merged and synced on `main`. The next pull request switches
-  both checks to `dockerhub-mirror.sh ref` and a GHCR login.
 - **`FROM` lines of images core builds** (`deploy/node-gate`, `deploy/python-gate`,
   `deploy/s1-extract`, `deploy/whisper`, `clients/voice-gateway`). BuildKit pulls those base
   images from Docker Hub. The workflows that build them are path-filtered and run rarely, and no

@@ -5090,6 +5090,20 @@ internal static class NodeTypeCompilationHelpers
                         ok ? ActivityStatus.Succeeded : ActivityStatus.Failed,
                         activityMessages.ToImmutable(), logger!);
 
+                    // The owner prunes its own compile history as it writes the newest record:
+                    // keep the newest N plus the last failure (CompileActivityRetention). Without
+                    // this every compile left one more `_Activity/compile-*` node forever, and a
+                    // recursive delete of the type paid a leaf round-trip for each of them.
+                    // Issued off SettleHub() for the same reason as the write above: the NodeType
+                    // hub may be recycled by this very compile's release.
+                    if (resolvedActivityPath is not null)
+                        CompileActivityRetention.Prune(SettleHub(), hubPath, resolvedActivityPath, logger)
+                            .Subscribe(
+                                _ => { },
+                                ex => logger?.LogWarning(ex,
+                                    "Compile-activity retention for {HubPath} faulted; its activities "
+                                    + "stay until the next compile prunes them", hubPath));
+
                     // 🚨 #3478 — THE ACTIVATION PATH'S HALF OF THE JOIN POINT. This is the same
                     // compile-state stamp the batch bake writes (the field-sets are literally
                     // shared — ApplyCompileSuccess / ApplyCompileFailure), so it carries the same

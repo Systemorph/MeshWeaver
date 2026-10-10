@@ -1511,6 +1511,12 @@ public static class DataExtensions
         var (code, prefix) = ex switch
         {
             UnauthorizedAccessException => (MeshNodeErrorCode.AccessDenied, "Access denied"),
+            // The owner's post-commit flush refused an update of a node deleted after it committed:
+            // the node is gone, so NotFound — terminal, never auto-retried (StoragePostCommitFlush).
+            NodeDeletedUpdateRefusedException => (MeshNodeErrorCode.NotFound, "Node deleted"),
+            // The flush ran into the storage guard while the node's subtree is being deleted: the
+            // node is going away, so the update cannot land — the same answer as above.
+            SubtreeDeletionInFlightException => (MeshNodeErrorCode.NotFound, "Node being deleted"),
             System.Text.Json.JsonException => (MeshNodeErrorCode.Deserialization, "Patch deserialization failed"),
             InvalidOperationException ioe when ioe.Message.Contains("Patch must be a JSON object", StringComparison.OrdinalIgnoreCase)
                 => (MeshNodeErrorCode.Deserialization, "Patch deserialization failed"),

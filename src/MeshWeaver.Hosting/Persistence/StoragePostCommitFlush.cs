@@ -76,7 +76,33 @@ internal sealed class StoragePostCommitFlush(IMessageHub hub) : IPostCommitFlush
         flushed?.Claim(node.Path, node.Version);
         var resolved = false;
 
-        return storage.WriteAndPublishUpdated(node, hub.JsonSerializerOptions, changeFeed)
+        // 🚨 "DELETE WINS" — the same tombstone the persistence sampler's save handler and the
+        // dispose-flush already honour, on the ONE write route that skipped it. This flush is always
+        // an UPDATE of a node the owner holds in memory (a patch on an absent node never stamps, so it
+        // never reaches here), yet the storage write beneath it is an upsert. A patch that commits at
+        // the owner AFTER a delete removed the row — the owner still holds the pre-delete node until
+        // its DisposeRequest lands, and UpdateRemote's optimistic emit has already told the writer
+        // "accepted" — therefore RE-CREATED the row the delete had just reported removed. Measured:
+        // GetMeshNodeStream(p).Update racing DeleteNode(p) left `p` in storage in 7 of 40 rounds after
+        // the delete answered `removed=true` (InstallRecordUpdateRacingDeleteTest; deterministic half:
+        // UpdateNeverResurrectsADeletedNodeTest), and the
+        // boot repair pass's install-record migration racing a partition delete is what kept
+        // `Plugins/{id}` alive behind InstallRecordFollowsItsPartitionTest and PackageUninstallTest.
+        //
+        // Checked INSIDE the deferred write — when the write is issued, not when the flush is built —
+        // because the delete marks its tombstones BEFORE it removes a row (RunDeletePass), so a write
+        // issued after the removal always sees the mark. A FAULT, not an empty success: the commit is
+        // NACKed as NotFound (NodeDeletedUpdateRefusedException) and the writer hears that its update
+        // did not land; the claim is
+        // released by the Finally below, and the sampler that then becomes the writer of record drops
+        // the same write against the same tombstone. A genuine re-create supersedes the tombstone
+        // (SubtreeDeletionGuardStorageAdapter → RecentlyDeletedRegistry.Supersede), so updates of a
+        // node created again after its delete flush normally.
+        var tombstones = hub.ServiceProvider.GetService<RecentlyDeletedRegistry>();
+
+        return Observable.Defer(() => tombstones?.IsRecentlyDeleted(node.Path) == true
+                ? Observable.Throw<MeshNode?>(new NodeDeletedUpdateRefusedException(node.Path))
+                : storage.WriteAndPublishUpdated(node, hub.JsonSerializerOptions, changeFeed))
             .Do(
                 saved =>
                 {

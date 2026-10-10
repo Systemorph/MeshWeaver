@@ -330,6 +330,42 @@ gone left a Job in `ImagePullBackOff` 639 times in 146 minutes, with the portal 
 That one covers tags in helm overlays; this one covers digests in CI workflows. **It is not wired
 into CI** — its header says so — which is a gap on that axis, not this one.
 
+## The governed path — nobody runs `apply` from a laptop
+
+Policy [`registry-retention`](../PolicyNotProse): the window is 30 days by age with no build-count
+quota, and the purge tasks' definition and enabled state change **only** through the control
+instance's `RegistryRetention` InstanceAction (MeshWeaver.Plugins `Hosting/InstanceAction`). The
+action dispatches the estate's operations lane (Systemorph/Memex `aks-ops.yml`), which signs in as
+the operator identity and runs `.github/scripts/acr-retention-tasks.sh` from the MeshWeaver checkout
+at the record's operator pin:
+
+| `registryMode` | runs | gate |
+|---|---|---|
+| `verify` | `acr-retention-tasks.sh verify` + `preflight`, and the read of `cr.meshweaver.cloud`'s storage-account management policy ([Fleet Registry Retention](../FleetRegistryRetention) §1) | none — read-only, unattended |
+| `apply` | `acr-retention-tasks.sh apply`, the confirmation passed as `MW_ACR_APPLY_CONFIRM` | the registry name typed back, and one mesh approval the lane verifies before any mutating step |
+
+`apply` refuses on its own, before touching the registry, in two independent ways:
+
+- **the reviewed half** — the record's `pause` block is in force and the record asks to enable a
+  task (`assert_pause_permits_enabling`). Lifting the pause is a diff against `tasks.json` that says
+  what satisfied `reEnableWhen`;
+- **the measured half** — the record asks to enable a task and the newest completed run of
+  `lock-pinned-digests.yml` on `main` is not green, or is older than 36 hours
+  (`assert_protection_current`, verdict in `acr-retention-protection.py`, self-tested in CI). It
+  fails closed on every unreadable answer.
+
+Pushing the window onto a task that stays **disabled** passes both: it deletes nothing. That is the
+first governed run (#3438) — it installs the decided `--ago 30d` on the live task, after which
+`recordAheadOfRegistry` is stale and `verify` reds until the declaration is deleted.
+
+🚨 **Measured 2026-10-09, the measured half refuses today**: the lock lane had been red on every
+nightly run since 2026-10-03 with *"installation `memex-cloud` reports core 57a6e5f and NO manifest in
+memex-portal-next carries a tag for it"*. The cause was the lane, not the registry: the portal's
+repository is named by the installation's `Hosting/Deployment` record (`imageRepository`, floating
+because records are never pinned), and the running-set axis keyed repositories on the overlay file
+alone. `running_repositories_of` joins the record by deployment id (self-test ARM 20b, with a
+control that a different installation's record is NOT joined).
+
 ## The retention half — the deletion is stopped, not reported
 
 🚨 **The purge task definitions are CLOUD-ONLY.** Established three ways rather than assumed:

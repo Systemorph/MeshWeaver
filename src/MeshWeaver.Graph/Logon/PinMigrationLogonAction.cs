@@ -42,8 +42,10 @@ public sealed class PinMigrationLogonAction(string id, LogonAction declaration) 
     /// <inheritdoc />
     public LogonActionMode Mode => declaration.Mode;
 
-    /// <inheritdoc />
-    public int Order => declaration.Order;
+    /// <summary>The declared order, clamped above <see cref="RestoreSelfGrantLogonAction.ReservedOrder"/>:
+    /// that first slot belongs to the self-grant repair, which every action writing into the home as
+    /// the user depends on, so no declaration may sort ahead of it.</summary>
+    public int Order => Math.Max(declaration.Order, RestoreSelfGrantLogonAction.ReservedOrder + 1);
 
     /// <summary>The declaration this action interprets — exposed so tests and diagnostics can see
     /// what a node actually asked for without re-reading it.</summary>
