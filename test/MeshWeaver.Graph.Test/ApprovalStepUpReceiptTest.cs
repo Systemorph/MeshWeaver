@@ -248,6 +248,20 @@ public class ApprovalStepUpReceiptTest(ITestOutputHelper output) : MonolithMeshT
         Assert.NotEqual(a, b with { StepUpReceipts = null });
         Assert.NotEqual(a, b with { Purpose = "something else" });
         Assert.Equal(PendingApproval(), PendingApproval());
+
+        // Symmetric whatever the maps' key comparers: "BOB" in an ordinal map and "bob" in a
+        // case-insensitive one differ in BOTH directions (each map's own lookup would disagree).
+        var ordinalUpper = PendingApproval() with { StepUpReceipts = ImmutableDictionary<string, string>.Empty.Add("BOB", "r-1") };
+        var ignoreCaseLower = PendingApproval() with
+        {
+            StepUpReceipts = ImmutableDictionary.Create<string, string>(StringComparer.OrdinalIgnoreCase).Add("bob", "r-1"),
+        };
+        Assert.False(ordinalUpper.Equals(ignoreCaseLower));
+        Assert.False(ignoreCaseLower.Equals(ordinalUpper));
+        Assert.True((PendingApproval() with
+        {
+            StepUpReceipts = ImmutableDictionary.Create<string, string>(StringComparer.OrdinalIgnoreCase).Add("BOB", "r-1"),
+        }).Equals(ordinalUpper), "same ordinal entries are equal across comparers");
     }
 
     /// <summary>

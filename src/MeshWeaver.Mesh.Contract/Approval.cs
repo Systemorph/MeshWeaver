@@ -163,9 +163,20 @@ public record Approval
     {
         if (ReferenceEquals(a, b)) return true;
         if (a is null || b is null || a.Count != b.Count) return false;
-        foreach (var (key, value) in a)
-            if (!b.TryGetValue(key, out var other) || !string.Equals(value, other, StringComparison.Ordinal))
-                return false;
-        return true;
+        // Canonical ORDINAL entry sequences — never either map's own key comparer, which would make
+        // equality asymmetric between an ordinal and a case-insensitive map.
+        return a.OrderBy(e => e.Key, StringComparer.Ordinal)
+            .SequenceEqual(b.OrderBy(e => e.Key, StringComparer.Ordinal), OrdinalEntryComparer.Instance);
+    }
+
+    private sealed class OrdinalEntryComparer : IEqualityComparer<KeyValuePair<string, string>>
+    {
+        public static readonly OrdinalEntryComparer Instance = new();
+
+        public bool Equals(KeyValuePair<string, string> x, KeyValuePair<string, string> y) =>
+            string.Equals(x.Key, y.Key, StringComparison.Ordinal) && string.Equals(x.Value, y.Value, StringComparison.Ordinal);
+
+        public int GetHashCode(KeyValuePair<string, string> obj) =>
+            HashCode.Combine(StringComparer.Ordinal.GetHashCode(obj.Key), StringComparer.Ordinal.GetHashCode(obj.Value));
     }
 }
