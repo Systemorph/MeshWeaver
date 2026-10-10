@@ -158,10 +158,44 @@ the emptyDir, and a roll still deletes its dump.
 
 ### Reading a production dump
 
-Any pod of the instance sees every retained dump: `ls -lt /data/dumps/*/` lists them newest first,
-including those in parked directories. No Hosting `InstanceAction` copies a dump off the volume yet,
-so reading the volume is a **break-glass** read (OperatingFromThePortal). Once the dump is copied
-off, the procedure is the same as for a CI dump: start at the macOS section below.
+**The governed read is the `AnalyzeDump` action** (MeshWeaver.Plugins `Hosting/InstanceAction`,
+[#6432](https://github.com/Systemorph/MeshWeaver/issues/6432)). File it on the control instance against
+`Deployments/<id>`, naming at most one of `dumpFile` (`<pod directory>/coredump.<pid>.<epoch>`, relative
+to the dump root), `dumpPod` (that pod's newest dump, parked directories included) or `dumpAround` (the
+dump whose file-name epoch is nearest that UTC instant, within 30 minutes). With none it reads the
+newest dump on the volume. It is read-only: no confirmation, no approval.
+
+Its one step is core's `hosting-dump-analyze --namespace <ns> [selector]`
+(`deploy/aks/operator/bin/hosting-dump-analyze`, with its in-pod half `_dump_analyze_pod.sh`). It:
+
+1. Reads where the pods write dumps **off the portal Deployment**: its `MEMEX_CRASHDUMP_ROOT` env and
+   the claim mounted over it. That is the dedicated dump claim mounted whole, or `memex-data` at the
+   root's sub-path. An `emptyDir` root and a chart that predates `MEMEX_CRASHDUMP_ROOT` are refused by
+   name, because nothing there outlived the crash.
+2. Creates **one short-lived Job in the instance's namespace**. The Job mounts that claim
+   `readOnly: true` and carries no secret and no ServiceAccount token. It runs as non-root on
+   `mcr.microsoft.com/dotnet/sdk:10.0` and installs the pinned `dotnet-dump` into its own `/tmp`.
+3. Inside the Job, the script resolves the selected file and refuses it unless its real path lies
+   under the mount, so a symlink cannot walk out. It then runs a **fixed** command set: `eeversion`,
+   `threadpool`, `syncblk`, `clrthreads`, `clrstack -all` and `dumpasync --coalesce`. None of them
+   prints object fields, string values or the environment, and the text is also passed through a
+   key=value secret redaction.
+4. Reads the Job's log and deletes the Job. It groups `clrstack -all` threads by identical stack and
+   reports **one gzip+base64 fact** that fits the operations lane's 24 KB log tail. Every cap it
+   applies is stated as shown-versus-found.
+
+The answer lands on the action node (`dumpAnalysis`) and as a Markdown page at `Ops/Dumps/<action id>`.
+The page carries the listing of every dump on the volume (the denominator), the file read with its
+size and write instant, the thread pool, the lock owners, and the stack groups, largest first. The
+raw dump never leaves the cluster. A selector that is not that shape is refused before anything
+reaches the cluster, and so is a pod refusal, a failed Job or a log that never reached the end. None
+of them reports an analysis. The Job needs egress to nuget.org (the tool) and Microsoft's symbol
+server (the DAC matching the dump). A namespace that forbids either fails the read by name.
+
+What it does **not** give you is the dump itself. For `verifyheap`, object inspection or the native
+`NT_SIGINFO` walk below you still need the file. Copying it off the volume is a **break-glass** read
+(OperatingFromThePortal), and from there the procedure is the same as for a CI dump: start at the
+macOS section below.
 
 ## 🚀 Start here on macOS: name the faulting frame with no container at all
 

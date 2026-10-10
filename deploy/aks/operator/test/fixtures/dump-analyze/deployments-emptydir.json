@@ -1,0 +1,38 @@
+{
+  "items": [
+    {
+      "metadata": {
+        "name": "memex-portal-deployment"
+      },
+      "spec": {
+        "template": {
+          "spec": {
+            "containers": [
+              {
+                "name": "memex-portal",
+                "env": [
+                  {
+                    "name": "MEMEX_CRASHDUMP_ROOT",
+                    "value": "/tmp/dumps"
+                  }
+                ],
+                "volumeMounts": [
+                  {
+                    "name": "memex-dumps",
+                    "mountPath": "/tmp/dumps"
+                  }
+                ]
+              }
+            ],
+            "volumes": [
+              {
+                "name": "memex-dumps",
+                "emptyDir": {}
+              }
+            ]
+          }
+        }
+      }
+    }
+  ]
+}
