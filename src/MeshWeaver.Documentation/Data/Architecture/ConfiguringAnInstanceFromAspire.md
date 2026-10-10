@@ -452,6 +452,7 @@ in-mesh `[Translation]` texts, preserved here until the catalog follow-up above)
 | `HostingOperatorSpec` | `Environment` | Job environment (KEY=VALUE) | Job-Umgebung (KEY=VALUE) |
 | `HostingOperatorSpec` | `Executor` | Executor: Job (in-cluster operator Job) or Actions (aks-ops.yml through the GitHub App) | Ausführung: Job (Operator-Job im Cluster) oder Actions (aks-ops.yml über die GitHub-App) |
 | `HostingOperatorSpec` | `Maintainer` | Maintainer: the one user id that may approve its own request | Maintainer: die eine Benutzer-ID, die den eigenen Antrag genehmigen darf |
+| `HostingOperatorSpec` | `CustomerGoverned` | Customer-governed: the instance's own global administrators approve the actions it requests | Kundengesteuert: die globalen Administratoren der Instanz genehmigen die Aktionen, die sie beantragt |
 | `InClusterDatabaseSpec` | `Release` | Database release name — blank derives {namespace}-db | Name des Datenbank-Releases — leer leitet {namespace}-db ab |
 | `InClusterDatabaseSpec` | `Instances` | Instances (primary + standbys, one per zone) | Instanzen (Primär + Standby, eine pro Zone) |
 | `InClusterDatabaseSpec` | `Size` | Volume size per instance | Volume-Größe pro Instanz |

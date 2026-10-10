@@ -516,6 +516,65 @@ case "$_kve_log" in *"secret set"*|*"--query value"*) bad "…never rewritten, a
 case "$_kve_out" in *"::hosting:: kv_values_half=kept"*) ok "…and reports kv_values_half=kept" ;; *) bad "reports kept" "said: ${_kve_out}" ;; esac
 rm -rf "$_kve_state"
 
+# 🚨 policy one-values-half-per-release (MeshWeaver#4685): with the record's vaultValuesKeys an
+# EXISTING half is held to EXACTLY those keys — kept when exact, re-stored FILTERED when it
+# over-supplies (values of kept keys unchanged), refused when a declared key is missing. Names only.
+_kvh_fix="$(mktemp)"
+printf 'pgbackrest:\n  azure:\n    accountKey: PGB-NEVER-PRINTED\nsecrets:\n  memex_portal:\n    ConnectionStrings__memex: CS-NEVER-PRINTED\n    Authentication__Google__ClientId: CID-NEVER-PRINTED\n    Apple__PrivateKey: |\n      -----BEGIN-----\n      PEM-NEVER-PRINTED\n      -----END-----\n    memex_postgres_password: PW-NEVER-PRINTED\n' > "$_kvh_fix"
+KVE_KEYS=(--vault-keys ConnectionStrings__memex,ConnectionStrings__orleans,MEMEX_PASSWORD,Apple__PrivateKey)
+kve HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey acme-PluginCatalog-RegistryToken acme-db-connection helm-values-acme" HOSTING_KVE_HALF_FIXTURE="$_kvh_fix" \
+  -- --vault Systemorph --prefix acme- --namespace acme "${KVE_HALF[@]}" "${KVE_KEYS[@]}"
+_kvh_new="$_kve_state/set.helm-values-acme"
+if [ "$_kve_rc" -eq 0 ] && [ -f "$_kvh_new" ] \
+   && [ "$(jq -r '.secrets.memex_portal | keys | sort | join(",")' "$_kvh_new")" = "Apple__PrivateKey,ConnectionStrings__memex,memex_postgres_password" ] \
+   && [ "$(jq -r 'keys | join(",")' "$_kvh_new")" = "secrets" ] \
+   && [ "$(jq -r '.secrets.memex_portal.Apple__PrivateKey' "$_kvh_new")" = "$(printf -- '-----BEGIN-----\nPEM-NEVER-PRINTED\n-----END-----')" ]; then
+  ok "an over-supplying half is re-stored FILTERED to the declared keys, kept values byte-identical"
+else
+  bad "an over-supplying half is filtered" "rc=${_kve_rc} out: ${_kve_out} wrote: $(cat "$_kvh_new" 2>/dev/null)"
+fi
+case "$_kve_out" in *"::hosting:: kv_values_half=filtered"*) ok "…and reports kv_values_half=filtered" ;; *) bad "reports filtered" "said: ${_kve_out}" ;; esac
+case "$_kve_out" in *"Authentication__Google__ClientId"*"pgbackrest"*) ok "…naming the dropped keys" ;; *) bad "names the dropped keys" "said: ${_kve_out}" ;; esac
+case "$_kve_out$_kve_log" in *NEVER-PRINTED*) bad "…and no value is printed or put on an argv" "out: ${_kve_out} az: ${_kve_log}" ;; *) ok "…and no value is printed or put on an argv" ;; esac
+rm -rf "$_kve_state"
+# Exact: kept, nothing written. (Negative control for the filter arm.)
+printf '{"secrets":{"memex_portal":{"ConnectionStrings__memex":"x","memex_postgres_password":"y","Apple__PrivateKey":"z"}}}\n' > "$_kvh_fix"
+kve HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey acme-PluginCatalog-RegistryToken acme-db-connection helm-values-acme" HOSTING_KVE_HALF_FIXTURE="$_kvh_fix" \
+  -- --vault Systemorph --prefix acme- --namespace acme "${KVE_HALF[@]}" "${KVE_KEYS[@]}"
+if [ "$_kve_rc" -eq 0 ] && [ ! -f "$_kve_state/set.helm-values-acme" ] && printf '%s' "$_kve_out" | grep -q '::hosting:: kv_values_half=kept'; then
+  ok "a half holding exactly the declared keys is kept and nothing is written"
+else
+  bad "an exact half is kept" "rc=${_kve_rc} out: ${_kve_out}"
+fi
+rm -rf "$_kve_state"
+# Missing a declared key: refused, nothing written — a value cannot be invented.
+printf '{"secrets":{"memex_portal":{"ConnectionStrings__memex":"x","memex_postgres_password":"y"}}}\n' > "$_kvh_fix"
+kve HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey acme-PluginCatalog-RegistryToken acme-db-connection helm-values-acme" HOSTING_KVE_HALF_FIXTURE="$_kvh_fix" \
+  -- --vault Systemorph --prefix acme- --namespace acme "${KVE_HALF[@]}" "${KVE_KEYS[@]}"
+if [ "$_kve_rc" -ne 0 ] && [ ! -f "$_kve_state/set.helm-values-acme" ] && printf '%s' "$_kve_out" | grep -q 'missing: Apple__PrivateKey'; then
+  ok "a half lacking a declared key is refused, naming it, and nothing is written"
+else
+  bad "a half lacking a declared key is refused" "rc=${_kve_rc} out: ${_kve_out}"
+fi
+rm -rf "$_kve_state"
+# Composing: a record declaring keys this step cannot compose is refused BEFORE anything is written.
+kve HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey acme-PluginCatalog-RegistryToken" HOSTING_KVE_PASSWORD_OBJECT=memex-postgres-password \
+  -- --vault Systemorph --prefix acme- --namespace acme "${KVE_DB[@]}" "${KVE_HALF[@]}" "${KVE_KEYS[@]}"
+if [ "$_kve_rc" -ne 0 ] && [ ! -f "$_kve_state/set.helm-values-acme" ] && printf '%s' "$_kve_out" | grep -q 'Apple__PrivateKey'; then
+  ok "composing for a record that declares an un-composable key refuses before writing, naming it"
+else
+  bad "un-composable declared key refuses" "rc=${_kve_rc} out: ${_kve_out}"
+fi
+rm -rf "$_kve_state"
+kve HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey acme-PluginCatalog-RegistryToken" HOSTING_KVE_PASSWORD_OBJECT=memex-postgres-password \
+  -- --vault Systemorph --prefix acme- --namespace acme "${KVE_DB[@]}" "${KVE_HALF[@]}" --vault-keys ConnectionStrings__memex,ConnectionStrings__orleans,MEMEX_PASSWORD
+[ "$_kve_rc" -eq 0 ] && [ -f "$_kve_state/set.helm-values-acme" ] \
+  && ok "composing for the provisioned shape (CS memex, CS orleans, MEMEX_PASSWORD) writes the half" \
+  || bad "the provisioned shape composes" "rc=${_kve_rc} out: ${_kve_out}"
+rm -rf "$_kve_state" "$_kvh_fix"
+refuses_hard "kv-ensure refuses --vault-keys without --values-half" "no --values-half" \
+  hosting-kv-ensure --vault V --namespace n --vault-keys A
+
 # Without its inputs it refuses; a dry run writes nothing and reads no value.
 kve HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey acme-PluginCatalog-RegistryToken" -- --vault Systemorph --prefix acme- --namespace acme "${KVE_HALF[@]}"
 [ "$_kve_rc" -ne 0 ] && ok "an absent half with no --db-connection refuses" || bad "half without inputs refuses" "exited 0: ${_kve_out}"
@@ -1132,6 +1191,89 @@ refuses "a missing tenant id is named" "AZURE_TENANT_ID" \
 emits "without a token the run says so and reports az_login=false" "::hosting:: az_login=false" \
   env -u AZURE_FEDERATED_TOKEN_FILE HOSTING_ACTION=reconcile HOSTING_DEPLOYMENT=d HOSTING_PLAN="$(plan 'First	echo one')" "$BIN/run.sh"
 rm -rf "$_rl_dir"
+
+echo
+echo "── a FRESH Azure sign-in before any az call that follows long work (Memex#132 -i) ──"
+# Measured on Ops/Actions/backup-memex-cloud-memex132-i (Memex run 38025769128): pg_dump ran 16.6
+# minutes and the upload after it died with "AADSTS700024: Client assertion is not within its valid
+# time range" — run.sh had signed in ONCE from a 5-minute GitHub OIDC token, and az re-presents that
+# same assertion for every later token. The az-session stub models exactly that: a session holds the
+# assertion it signed in with, every call on an expired one fails AADSTS700024, and a new sign-in from
+# a fresh assertion works. Its pg_dump is the long work: it expires the session's assertion (and, on
+# the Job route, rotates the projected token file as the kubelet would).
+AZS_STUBS="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/stubs/az-session" && pwd)"
+azs_backup_step() { printf 'Back up database\thosting-backup --database acmedb --server pg.test --user acmeowner --vault Systemorph --password-secret memex-postgres-password --store-uri https://store.test/b/acme-%s --object acme-%s' "$1" "$1"; }
+azs_run() {  # azs_run <case> [env…] — run.sh with one backup step; sets $_azs_out $_azs_rc $_azs_log $_azs_state
+  local case_id="$1"; shift
+  _azs_state="$(mktemp -d)"; : > "$_azs_state/expired"
+  _azs_out="$(env -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_ID_TOKEN_REQUEST_TOKEN "$@" \
+    PATH="$AZS_STUBS:$PG_STUBS:$PATH" HOSTING_AZS_STATE="$_azs_state" HOSTING_PG_STATE="$_azs_state" \
+    AZURE_CLIENT_ID=11111111-2222-3333-4444-555555555555 AZURE_TENANT_ID=tenant-t \
+    HOSTING_ACTION=backup HOSTING_DEPLOYMENT=d HOSTING_PLAN="$(plan "$(azs_backup_step "$case_id")")" "$BIN/run.sh" 2>&1)"; _azs_rc=$?
+  _azs_log="$(cat "$_azs_state/log" 2>/dev/null || true)"
+}
+
+# The Job route: the projected token file, re-read — the kubelet keeps it fresh.
+_azs_tok="$(mktemp)"; printf 'job-token-1' > "$_azs_tok"
+azs_run job AZURE_FEDERATED_TOKEN_FILE="$_azs_tok"
+[ "$_azs_rc" -eq 0 ] && ok "Job route: a backup whose dump outlives the assertion still uploads" || bad "Job route backup uploads" "exited ${_azs_rc}: ${_azs_out} | ${_azs_log}"
+[ -s "$_azs_state/uploads" ] && ok "…the upload ran" || bad "the upload ran" "log: ${_azs_log}"
+_azs_after_dump="$(printf '%s\n' "$_azs_log" | sed -n '/^pg_dump ran$/,$p')"
+case "$_azs_after_dump" in *"az login assertion=job-token-rotated"*"storage blob upload"*"(session=job-token-rotated)"*) ok "…on a session signed in AFTER the dump from the re-read token file" ;;
+  *) bad "re-signs in after the dump from the re-read token file" "after the dump: ${_azs_after_dump}" ;; esac
+case "$_azs_out" in *"session refreshed from a fresh federated token (between the dump and the upload)"*) ok "…and the run says it refreshed, and where" ;;
+  *) bad "the refresh is narrated" "said: ${_azs_out}" ;; esac
+case "$_azs_out" in *job-token-*) bad "no assertion ever appears in the output" "it did: ${_azs_out}" ;; *) ok "no assertion ever appears in the output" ;; esac
+[ "$(printf '%s\n' "$_azs_log" | grep -c '^az login ')" -ge 3 ] && ok "run.sh signs in at the start AND again before the step (3+ sign-ins in all)" \
+  || bad "a sign-in at the start and before the step" "log: ${_azs_log}"
+rm -rf "$_azs_state" "$_azs_tok"
+
+# The Actions route: a NEW GitHub OIDC token for every sign-in, and the token file kept current.
+_azs_tok="$(mktemp)"; printf 'gh-token-stale' > "$_azs_tok"
+azs_run gh AZURE_FEDERATED_TOKEN_FILE="$_azs_tok" \
+  ACTIONS_ID_TOKEN_REQUEST_URL='https://oidc.test/token?api-version=2.0' ACTIONS_ID_TOKEN_REQUEST_TOKEN=request-token-NEVER-PRINTED
+[ "$_azs_rc" -eq 0 ] && ok "Actions route: a backup whose dump outlives the assertion still uploads" || bad "Actions route backup uploads" "exited ${_azs_rc}: ${_azs_out} | ${_azs_log}"
+_azs_after_dump="$(printf '%s\n' "$_azs_log" | sed -n '/^pg_dump ran$/,$p')"
+case "$_azs_after_dump" in *"curl url=https://oidc.test/token?api-version=2.0&audience=api://AzureADTokenExchange bearer=yes"*"az login assertion=gh-token-"*"storage blob upload"*) ok "…from a NEW OIDC token requested after the dump, audience api://AzureADTokenExchange, with the request token" ;;
+  *) bad "requests a new OIDC token after the dump" "after the dump: ${_azs_after_dump}" ;; esac
+case "$(cat "$_azs_tok")" in gh-token-stale) bad "the token file is rewritten with the fresh token" "still stale" ;; gh-token-*) ok "…and the token file is rewritten with the fresh token" ;; *) bad "token file content" "$(cat "$_azs_tok")" ;; esac
+case "$_azs_out" in *gh-token-*|*request-token-NEVER-PRINTED*) bad "neither token nor request token appears in the output" "it did: ${_azs_out}" ;; *) ok "neither token nor request token appears in the output" ;; esac
+rm -rf "$_azs_state" "$_azs_tok"
+
+# hosting-restore refreshes before its download (it may have waited on the vault and the quiesce).
+_azs_tok="$(mktemp)"; printf 'job-token-1' > "$_azs_tok"
+_azs_state="$(mktemp -d)"; : > "$_azs_state/expired"
+_azs_out="$(env -u ACTIONS_ID_TOKEN_REQUEST_URL PATH="$AZS_STUBS:$PG_STUBS:$PATH" HOSTING_AZS_STATE="$_azs_state" HOSTING_PG_STATE="$_azs_state" \
+  AZURE_FEDERATED_TOKEN_FILE="$_azs_tok" AZURE_CLIENT_ID=c AZURE_TENANT_ID=t HOSTING_ACTION=restore HOSTING_DEPLOYMENT=d \
+  HOSTING_PLAN="$(plan 'Restore archive	hosting-restore --database acmedb --server pg.test --user acmeowner --vault Systemorph --password-secret memex-postgres-password --store-uri https://store.test/b/acme-1')" \
+  "$BIN/run.sh" 2>&1)"; _azs_rc=$?
+[ "$_azs_rc" -eq 0 ] && ok "a restore runs on a refreshed session" || bad "restore on a refreshed session" "exited ${_azs_rc}: ${_azs_out} | $(cat "$_azs_state/log")"
+case "$_azs_out" in *"session refreshed from a fresh federated token (before the download)"*"downloading https://store.test/b/acme-1"*) ok "…refreshing it immediately before the download" ;;
+  *) bad "restore refreshes before the download" "said: ${_azs_out}" ;; esac
+rm -rf "$_azs_state" "$_azs_tok"
+
+# Negative control 1 — the stub really rejects an expired assertion: with no fresh assertion to be had
+# (the token file is not rotated), the refresh between dump and upload REFUSES, naming why, and the
+# upload is never attempted on the dead session.
+_azs_tok="$(mktemp)"; printf 'job-token-1' > "$_azs_tok"
+azs_run norotate AZURE_FEDERATED_TOKEN_FILE="$_azs_tok" HOSTING_AZS_NO_ROTATE=1
+[ "$_azs_rc" -ne 0 ] && ok "negative control: no fresh assertion → the step fails" || bad "no fresh assertion fails" "exited 0: ${_azs_out}"
+case "$_azs_out" in *"could not be refreshed between the dump and the upload"*"AADSTS700024"*) ok "…naming the refresh, where, and Entra's AADSTS700024" ;;
+  *) bad "names the failed refresh" "said: ${_azs_out}" ;; esac
+[ ! -s "$_azs_state/uploads" ] && ok "…and no upload was attempted on the dead session" || bad "no upload on a dead session" "log: ${_azs_log}"
+rm -rf "$_azs_state" "$_azs_tok"
+
+# Negative control 2 — the defect itself: signed in ONCE, no refresh (no run.sh session to refresh),
+# the dump outlives the assertion and the upload fails exactly as on the -i run.
+_azs_state="$(mktemp -d)"; : > "$_azs_state/expired"
+env PATH="$AZS_STUBS:$PG_STUBS:$PATH" HOSTING_AZS_STATE="$_azs_state" az login --service-principal --federated-token job-token-1 >/dev/null 2>&1
+_azs_out="$(env -u HOSTING_AZ_SESSION -u ACTIONS_ID_TOKEN_REQUEST_URL PATH="$AZS_STUBS:$PG_STUBS:$PATH" HOSTING_AZS_STATE="$_azs_state" HOSTING_PG_STATE="$_azs_state" \
+  hosting-backup --database acmedb --server pg.test --user acmeowner --vault Systemorph --password-secret memex-postgres-password --store-uri https://store.test/b/acme-once --object acme-once 2>&1)"; _azs_rc=$?
+[ "$_azs_rc" -ne 0 ] && ok "negative control: one sign-in for the whole run → the upload after a long dump fails (the -i defect)" || bad "one sign-in fails after a long dump" "exited 0: ${_azs_out}"
+case "$_azs_out" in *"AADSTS700024"*"upload to https://store.test/b/acme-once failed"*) ok "…with AADSTS700024 at the upload, as measured" ;;
+  *) bad "fails with AADSTS700024 at the upload" "said: ${_azs_out}" ;; esac
+rm -rf "$_azs_state"
+unset _azs_out _azs_rc _azs_log _azs_state _azs_tok _azs_after_dump
 
 echo
 echo "── hosting-pv-resize: capacity is a record property ──────────────"
@@ -2107,6 +2249,41 @@ printf '{"secrets":{},"ingress":{"host":"h"}}\n' > "$_vh_dir/vault/helm-values-m
 _vh_out="$(_vh_run --vault kv-test)"; _vh_rc=$?
 [ "$_vh_rc" -ne 0 ] && printf '%s' "$_vh_out" | grep -q ' ingress' && ! grep -q '^helm ' "$_vh_log" \
   && ok "a JSON half carrying structure is refused" || bad "a JSON structural half is refused" "rc=${_vh_rc} out: ${_vh_out}"
+# 🚨 policy one-values-half-per-release (MeshWeaver#4685): with --vault-keys the half must feed
+# EXACTLY the record's declared keys — an undeclared key (a config leaf in a secret family,
+# Systemorph/Memex#295) or a missing declared one is refused before helm, by NAME.
+printf 'secrets:\n  memex_portal:\n    ConnectionStrings__memex: "CS-SENTINEL-NEVER-PRINTED"\n    memex_postgres_password: "PW-SENTINEL-NEVER-PRINTED"\n  memex_migration:\n    ConnectionStrings__memex: "CS-SENTINEL-NEVER-PRINTED"\n' > "$_vh_dir/vault/helm-values-memex"
+: > "$_vh_log"
+_vh_out="$(_vh_run --vault kv-test --vault-keys ConnectionStrings__memex,ConnectionStrings__orleans,MEMEX_PASSWORD)"; _vh_rc=$?
+[ "$_vh_rc" -eq 0 ] && grep -q '^helm upgrade' "$_vh_log" && printf '%s' "$_vh_out" | grep -q '::hosting:: vault_values_keys=exact' \
+  && ok "a half feeding exactly the declared keys is layered (orleans derived by the chart, the password alias read as MEMEX_PASSWORD)" \
+  || bad "an exact half is layered" "rc=${_vh_rc} out: ${_vh_out}"
+printf 'secrets:\n  memex_portal:\n    ConnectionStrings__memex: "CS-SENTINEL-NEVER-PRINTED"\n    memex_postgres_password: "PW-SENTINEL-NEVER-PRINTED"\n    Authentication__Google__ClientId: "CID-SENTINEL-NEVER-PRINTED"\n' > "$_vh_dir/vault/helm-values-memex"
+: > "$_vh_log"
+_vh_out="$(_vh_run --vault kv-test --vault-keys ConnectionStrings__memex,ConnectionStrings__orleans,MEMEX_PASSWORD)"; _vh_rc=$?
+if [ "$_vh_rc" -ne 0 ] && printf '%s' "$_vh_out" | grep -q 'undeclared: Authentication__Google__ClientId' \
+   && printf '%s' "$_vh_out" | grep -q 'one-values-half-per-release' && ! grep -q '^helm ' "$_vh_log"; then
+  ok "a half feeding an UNDECLARED key is refused before helm, naming the key and the policy"
+else
+  bad "an over-supplying half is refused" "rc=${_vh_rc} out: ${_vh_out}"
+fi
+case "$_vh_out" in *SENTINEL-NEVER-PRINTED*) bad "the key-set refusal names keys, never values" "a value reached the log: ${_vh_out}" ;;
+  *) ok "the key-set refusal names keys, never values" ;; esac
+: > "$_vh_log"
+_vh_out="$(_vh_run --vault kv-test --vault-keys ConnectionStrings__memex,ConnectionStrings__orleans,MEMEX_PASSWORD,Authentication__Google__ClientId,Anthropic__ApiKey)"; _vh_rc=$?
+[ "$_vh_rc" -ne 0 ] && printf '%s' "$_vh_out" | grep -q 'missing: Anthropic__ApiKey' && ! grep -q '^helm ' "$_vh_log" \
+  && ok "a half lacking a DECLARED key is refused before helm, naming it" \
+  || bad "a half lacking a declared key is refused" "rc=${_vh_rc} out: ${_vh_out}"
+# Without --vault-keys the same over-supplying half is layered as before (the plan opts in).
+: > "$_vh_log"
+_vh_out="$(_vh_run --vault kv-test)"; _vh_rc=$?
+[ "$_vh_rc" -eq 0 ] && grep -q '^helm upgrade' "$_vh_log" \
+  && ok "without --vault-keys the key set is not judged (the plan passes the record's keys)" \
+  || bad "without --vault-keys the half is layered" "rc=${_vh_rc} out: ${_vh_out}"
+refuses_hard "--vault-keys without --vault is refused" "no --vault" \
+  env HOSTING_DRY_RUN=true HOSTING_CHART=/tmp hosting-deploy --namespace memex --release memex --database memex --values "$_vh_vals" --vault-keys A
+refuses_hard "--vault-keys that is not a list of names is refused" "not a comma-separated list" \
+  env HOSTING_DRY_RUN=true HOSTING_CHART=/tmp hosting-deploy --namespace memex --release memex --database memex --values "$_vh_vals" --vault kv --vault-keys 'A;id'
 # What cannot be read is refused, never assumed clean; a half with no family at all is refused.
 printf -- '- secrets\n' > "$_vh_dir/vault/helm-values-memex"
 : > "$_vh_log"

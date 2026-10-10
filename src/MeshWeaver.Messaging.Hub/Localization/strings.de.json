@@ -1498,6 +1498,7 @@
   "activity.delete.blockedByDescendant": "'{path}' kann nicht gelöscht werden: {error}",
   "activity.delete.cancelled": "Das Löschen von '{path}' wurde abgebrochen, bevor ein Node entfernt wurde.",
   "activity.delete.cancelledPartial": "Das Löschen von '{path}' wurde abgebrochen, nachdem {count} Node(s) entfernt wurden — der Teilbaum ist unvollständig gelöscht.",
+  "activity.delete.partialRetriable": "Vor diesem Fehler wurden unter '{path}' bereits {count} Node(s) entfernt, der Teilbaum ist also unvollständig gelöscht; das Löschen ist idempotent - ein erneuter Versuch ist sinnvoll und entfernt den Rest.",
   "activity.delete.cleanupFailed": "Das Aufräumen nach dem Löschen ({handler}) ist für '{path}' fehlgeschlagen: {error}",
   "activity.node.created": "Node unter '{path}' erstellt",
   "activity.node.updated": "Node unter '{path}' aktualisiert",

@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# A stand-in pg_dump that is LONG WORK: by the time it returns, the assertion the session signed in
+# with has expired (it is appended to `expired`). The Job's projected token file is rotated to a
+# fresh value, as the kubelet would — unless HOSTING_AZS_NO_ROTATE=1, the negative control where no
+# fresh assertion exists. Writes a non-empty archive to --file.
+set -uo pipefail
+state="${HOSTING_AZS_STATE:?the az-session stub needs HOSTING_AZS_STATE}"
+{ cat "$state/session" 2>/dev/null; echo; } >> "$state/expired"
+if [ "${HOSTING_AZS_NO_ROTATE:-0}" != "1" ] && [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] && [ -n "${AZURE_FEDERATED_TOKEN_FILE:-}" ]; then
+  printf 'job-token-rotated' > "$AZURE_FEDERATED_TOKEN_FILE"
+fi
+echo "pg_dump ran" >> "$state/log"
+file=""
+while [ $# -gt 0 ]; do case "$1" in --file) file="${2:-}"; shift 2 ;; *) shift ;; esac; done
+[ -n "$file" ] && printf 'PGDMP fake archive\n' > "$file"
+exit 0

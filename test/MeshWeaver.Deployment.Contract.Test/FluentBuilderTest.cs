@@ -214,6 +214,33 @@ public class FluentBuilderTest
     }
 
     [Fact]
+    public void ACustomerGovernedRecordSurvivesTheContractAndRendersNothingIntoThePortal()
+    {
+        // Policy customer-instance-governance (Plugins#2495): the record DECLARES that the instance's
+        // own administrators approve what it requests. The control plane reads it from the record,
+        // so it must survive the JSON contract, and it must default to false so every record that
+        // never names it keeps the control-side rule.
+        var governed = new DeploymentContent
+        {
+            Operator = new HostingOperatorSpec { Maintainer = "customer.admin", CustomerGoverned = true },
+        };
+        var json = DeploymentRecordJson.Write(governed);
+        Assert.Contains("\"customerGoverned\":true", json);
+        Assert.True(DeploymentRecordJson.Read(json)!.Operator!.CustomerGoverned);
+        Assert.Equal("customer.admin", DeploymentRecordJson.Read(json)!.Operator!.Maintainer);
+
+        // Negative control: a record that does not name it reads false, before and after a round trip.
+        var plain = DeploymentRecordJson.Read("{\"operator\":{\"maintainer\":\"rbuergi\"}}")!;
+        Assert.False(plain.Operator!.CustomerGoverned);
+        Assert.False(DeploymentRecordJson.Read(DeploymentRecordJson.Write(plain))!.Operator!.CustomerGoverned);
+
+        // It is the control plane's input only, so neither renderer emits a key for it.
+        foreach (var options in new[] { PortalConfigOptions.Helm, PortalConfigOptions.Aspire("http://localhost:8080") })
+            Assert.DoesNotContain(DeploymentPortalConfig.PortalConfig(governed, options).Keys,
+                k => k.Contains("CustomerGoverned", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void TheSameRecordRendersTheSameKeysForHelmAndForAspire()
     {
         // The two renderers differ in exactly the ways PortalConfigOptions names: Helm emits the

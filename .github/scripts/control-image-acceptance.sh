@@ -76,13 +76,19 @@ docker network create "$NET" >/dev/null
 echo "== postgres ($POSTGRES_IMAGE)"
 docker run -d --name "$PG" --network "$NET" \
   -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB="$DB" "$POSTGRES_IMAGE" >/dev/null
+# 🚨 Readiness is asked over TCP, never the unix socket (#6402). The image's entrypoint runs initdb
+# behind a TEMPORARY server that listens on the socket only (listen_addresses=''), then stops it and
+# starts the real one. A socket probe therefore answered "ready" during init, and a second socket
+# probe landed in the stop/start gap — run 38023872356 reported "did not accept connections within
+# 60s" 1.4 s after the pull finished. The real server is the only one listening on TCP, so a TCP
+# answer is the signal, and the loop's OWN result decides, not a re-probe after it.
+pg_ready() { docker exec "$PG" pg_isready -h 127.0.0.1 -U postgres -d "$DB" >/dev/null 2>&1; }
+ready=0
 for _ in $(seq 1 60); do
-  docker exec "$PG" pg_isready -U postgres -d "$DB" >/dev/null 2>&1 && break
+  if pg_ready; then ready=1; break; fi
   sleep 1
 done
-docker exec "$PG" pg_isready -U postgres -d "$DB" >/dev/null || { echo "::error::postgres did not accept connections within 60s"; exit 1; }
-# pg_isready answers during the image's init restart; a real query is the signal.
-for _ in $(seq 1 30); do psql_exec -c 'select 1' >/dev/null 2>&1 && break; sleep 1; done
+[ "$ready" = 1 ] || { echo "::error::postgres did not accept TCP connections within 60s"; docker logs "$PG" 2>&1 | tail -n 40; exit 1; }
 psql_exec -c 'select 1' >/dev/null
 
 echo "== migration"

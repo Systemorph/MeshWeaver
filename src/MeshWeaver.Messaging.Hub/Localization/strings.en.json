@@ -1498,6 +1498,7 @@
   "activity.delete.blockedByDescendant": "Cannot delete '{path}': {error}",
   "activity.delete.cancelled": "Delete of '{path}' was cancelled before any node was removed.",
   "activity.delete.cancelledPartial": "Delete of '{path}' was cancelled after removing {count} node(s) — the subtree is left partially deleted.",
+  "activity.delete.partialRetriable": "{count} node(s) under '{path}' were already removed before this failure, so the subtree is partially deleted; the delete is idempotent - retrying it is meaningful and removes what is left.",
   "activity.delete.cleanupFailed": "Post-deletion cleanup ({handler}) failed for '{path}': {error}",
   "activity.node.created": "Created node at '{path}'",
   "activity.node.updated": "Updated node at '{path}'",

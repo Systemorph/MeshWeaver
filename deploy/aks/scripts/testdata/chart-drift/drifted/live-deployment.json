@@ -11,6 +11,7 @@
         "containers": [
           {
             "name": "memex-portal",
+            "image": "cr.example.test/portal-fixture:3.0.0-ci.8812",
             "envFrom": [
               {
                 "configMapRef": {

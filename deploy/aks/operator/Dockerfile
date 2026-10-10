@@ -31,7 +31,11 @@ ARG TARGETARCH=amd64
 # tar: needed to unpack helm, and not in the base. shadow-utils: useradd, for the non-root user.
 # jq: hosting-audit's detection is a jq program (bin/_audit.jq) — without it the audit cannot
 # compare a single field, and it refuses rather than reporting a namespace it never read as clean.
-RUN tdnf install -y --refresh postgresql tar shadow-utils ca-certificates jq \
+# python3 + PyYAML: the values-half key check (bin/_values_half.py, policy
+# `one-values-half-per-release`) reads a captured half's KEY NAMES and filters it to the record's
+# declared keys without touching a kept value — YAML block scalars (a PEM key) are not something to
+# rewrite in bash. The az CLI's own PyYAML lives in its private site-packages; this is the system one.
+RUN tdnf install -y --refresh postgresql tar shadow-utils ca-certificates jq python3 PyYAML \
  && tdnf clean all \
  && curl -fsSLo /usr/local/bin/kubectl \
       "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${TARGETARCH}/kubectl" \
