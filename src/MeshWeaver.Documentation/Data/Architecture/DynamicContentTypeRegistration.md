@@ -295,7 +295,7 @@ When `MeshNodeStreamCache.GetStream(path, options)` or `GetQuery(id, options, â€
 stays untyped and names a NodeType, the emission **waits** for `EnsureRegistered(nodeType)` and is
 typed after it:
 
-1. read the NodeType's record (as system: infrastructure, not a user read; bounded by
+1. read the NodeType's record from the STORE, the authority (never a query, whose stale or incomplete snapshot would be cached as a verdict; as system: infrastructure, not a user read; bounded by
    `RecordReadBudget`, the same 30 s budget as the pass's enumeration);
 2. run `DynamicContentTypeRegistrar.RegisterType`, which is the pass's own route for one type:
    `AlreadyRegistered` / `NotBaked` from the record, the identity-checked bytes from the store

@@ -23,7 +23,7 @@ namespace MeshWeaver.Hosting;
 /// they are this process's own hosted services, not traffic. So the stream cache's read seams ask
 /// this service before they hand out untyped content, and wait for the answer.</para>
 ///
-/// <para><b>What it does, per type, at most once per process:</b> read the type's NodeType record
+/// <para><b>What it does, per type, at most once per process:</b> read the type's NodeType record from the store
 /// (as system — infrastructure, not a user read) and run
 /// <see cref="DynamicContentTypeRegistrar.RegisterType"/>: the record's own claim of a usable build,
 /// the identity-checked bytes from the assembly store (refetched from the shipped bundle when this
@@ -93,18 +93,24 @@ public sealed class ContentTypeOnDemandRegistration(ILogger<ContentTypeOnDemandR
 
     private IObservable<ContentTypeRegistrationOutcome> Attempt(IMessageHub mesh, string path)
     {
-        var meshService = mesh.ServiceProvider.GetService<IMeshService>();
-        if (meshService is null)
+        // 🚨 The record is read from the STORE — the authority — never from a query (eventually
+        // consistent: a stale or incomplete snapshot would be cached here as a NotBaked verdict for
+        // the process) and never through the NodeType's own stream (whose first touch can drive the
+        // enrichment path, i.e. a compile). Null from the store means the record does not exist,
+        // which IS a verdict; a fault or an expired budget is Faulted and released for retry.
+        var storage = mesh.ServiceProvider.GetService<IStorageAdapter>();
+        if (storage is null)
             return Observable.Return(new ContentTypeRegistrationOutcome(
-                path, ContentTypeRegistrationStatus.NotBaked, "no mesh service on this mesh"));
+                path, ContentTypeRegistrationStatus.NotBaked, "no storage adapter on this mesh"));
         var accessService = mesh.ServiceProvider.GetService<AccessService>();
         var startedAt = DateTimeOffset.UtcNow;
         return accessService.RunAsSystem(
-                () => meshService
-                    .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{path}"))
+                () => storage
+                    .Read(path, mesh.JsonSerializerOptions)
                     .Take(1)
                     .Timeout(RecordReadBudget))
-            .Select(change => DynamicTypePreWarmer.DynamicTypesOf(change.Items, mesh.JsonSerializerOptions, logger))
+            .Select(record => DynamicTypePreWarmer.DynamicTypesOf(
+                record is null ? [] : [record], mesh.JsonSerializerOptions, logger))
             .SelectMany(types => DynamicContentTypeRegistrar.RegisterType(mesh, types, path, logger))
             .Take(1)
             .DefaultIfEmpty(new ContentTypeRegistrationOutcome(

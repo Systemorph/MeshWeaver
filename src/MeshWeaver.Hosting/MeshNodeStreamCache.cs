@@ -3696,8 +3696,12 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                     .ToArray();
                 return awaited.IsEmpty
                     ? Observable.Return(Final())
-                    : awaited.Select(nodeType => ensureRegistered(nodeType).Take(1))
-                        .Merge()
+                    // ONE type at a time, in a deterministic order: a broad result set must not fan
+                    // out into a burst of concurrent assembly loads and probes on the FileSystem
+                    // pool — the registrar's own pass is sequential for the same reason.
+                    : awaited.OrderBy(nodeType => nodeType, StringComparer.OrdinalIgnoreCase)
+                        .Select(nodeType => ensureRegistered(nodeType).Take(1))
+                        .Concat()
                         .ToList()
                         .Select(_ => Final());
             })
