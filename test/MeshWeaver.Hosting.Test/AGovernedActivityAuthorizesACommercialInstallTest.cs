@@ -109,7 +109,7 @@ public class AGovernedActivityAuthorizesACommercialInstallTest(ITestOutputHelper
     private Task<MeshNode?> Read(CancellationToken ct, string path) =>
         Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>()
             .Read(path, Mesh.JsonSerializerOptions)
-            .Take(1).Timeout(TimeSpan.FromSeconds(30)).Await(ct);
+            .Take(1).Timeout(TestTimeouts.Convergence).Await(ct);
 
     // ————————————————————————————————————————————————————————— the admit path
 
