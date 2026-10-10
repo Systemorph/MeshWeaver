@@ -284,8 +284,10 @@ public sealed class PluginBundleClient
     /// image's. Fetching the bundle anyway and counting "adopted 0/N" made every NodeType package a
     /// MISS, so <c>bundle_adoption</c> on the control instance read Degraded for ever ("Edu: adopted
     /// only 0/12 — the rest compile here") while nothing was compiled there at all. The attempt is
-    /// recorded as <see cref="BundleAdoptionKind.NothingToAdopt"/>, naming the policy, and nothing
-    /// is downloaded — the bytes could only ever be declined.
+    /// recorded as <see cref="BundleAdoptionKind.NotApplicable"/>, naming the policy — never as
+    /// <see cref="BundleAdoptionKind.NothingToAdopt"/>, since nothing was read and nothing may be
+    /// claimed about what the package carries — and nothing is downloaded: the bytes could only ever
+    /// be declined.
     /// </summary>
     private IObservable<int> AdoptNothingOnAClosedTypeSet(string pluginId) =>
         Observable.Defer(() =>
@@ -293,8 +295,11 @@ public sealed class PluginBundleClient
             _logger?.LogInformation(
                 "Bundle for {Plugin}: not fetched — {Key}=true, so this process adopts no database "
                 + "NodeType and compiles none in its place", pluginId, ClosedTypeSet.ConfigKey);
-            return Nothing(pluginId,
-                $"{ClosedTypeSet.ConfigKey}=true — this process adopts no database NodeType and compiles none in its place");
+            _ledger?.Record(new BundleAdoptionOutcome(
+                pluginId, BundleAdoptionKind.NotApplicable, _registryUrl,
+                Reason: $"{ClosedTypeSet.ConfigKey}=true — this process adopts no database NodeType "
+                        + "and compiles none in its place"));
+            return Observable.Return(0);
         });
 
     private IObservable<int> AdoptFromRegistry(string pluginId) =>

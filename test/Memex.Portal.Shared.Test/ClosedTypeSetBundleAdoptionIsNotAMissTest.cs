@@ -31,7 +31,7 @@ namespace Memex.Portal.Shared.Test;
 ///
 /// <para>Pinned: on a closed type set <see cref="PluginBundleClient.Adopt"/> asks the registry
 /// NOTHING (the bytes could only be declined), returns 0, and records
-/// <see cref="BundleAdoptionKind.NothingToAdopt"/> — so <c>bundle_adoption</c> reads "no misses".
+/// <see cref="BundleAdoptionKind.NotApplicable"/> — so <c>bundle_adoption</c> reads "no misses".
 /// The control (<see cref="OpenTypeSetBundleAdoptionControlTest"/>) is the same client on an open
 /// mesh against the same registry: it DOES fetch the index and DOES record the miss, so the closed
 /// arm's silence is a verdict and not a client that asks nothing anywhere.</para>
@@ -64,10 +64,12 @@ public class ClosedTypeSetBundleAdoptionIsNotAMissTest(ITestOutputHelper output)
             "a closed type set adopts no database NodeType, so the bundle could only be declined");
         var ledger = Mesh.ServiceProvider.GetRequiredService<BundleAdoptionLedger>();
         var outcome = ledger.Outcomes.Should().ContainSingle(o => o.PluginId == Plugin).Subject;
-        outcome.Kind.Should().Be(BundleAdoptionKind.NothingToAdopt);
+        outcome.Kind.Should().Be(BundleAdoptionKind.NotApplicable,
+            "nothing was fetched, so nothing may be claimed about what the package carries");
         outcome.Reason.Should().Contain(ClosedTypeSet.ConfigKey);
         ledger.Misses.Should().BeEmpty("nothing is compiled here in place of the bundle");
-        ledger.Describe().Should().Contain("no misses");
+        ledger.Describe().Should().Contain("no misses").And.Contain("1 not attempted")
+            .And.NotContain("carried no NodeTypes", "the package was never read");
     }
 }
 

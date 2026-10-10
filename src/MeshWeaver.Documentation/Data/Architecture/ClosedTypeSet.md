@@ -62,7 +62,7 @@ container environment variable, next to the module that registers its types.
    prebuilt gate, is never *held* on a build the row already carries.
 
 5. **Registry bundle adoption** — `PluginBundleClient.Adopt`, the install-time fetch from the plugin
-   registry. A closed mesh fetches **nothing** and records the attempt as `NothingToAdopt`, naming
+   registry. A closed mesh fetches **nothing** and records the attempt as `NotApplicable` (not a miss, and not `NothingToAdopt`, which claims a read bundle declared no NodeTypes), naming
    the switch. It used to download each bundle, have every assembly answered `NotSeeded` by the
    seeder (3, above), and record "adopted 0/N" — a **miss** — although nothing compiles in its
    place. On the control instance that held `/health`'s `bundle_adoption` at Degraded for good

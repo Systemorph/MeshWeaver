@@ -180,6 +180,57 @@ public class BootRegistrationWindowDefersUntypedWarningsTest
         Assert.Contains("stayed an untyped JsonElement", record.Message);
     }
 
+    /// <summary>
+    /// The close/read race (review on #6405): reads of distinct NodeTypes run in parallel while the
+    /// window settles mid-stream. Every read must be warned EXACTLY once — by its seam, or in the
+    /// settle's snapshot — never both, never neither.
+    /// </summary>
+    [Fact]
+    public void AReadRacingTheClose_IsWarnedExactlyOnce()
+    {
+        const int reads = 4000;
+        var logger = new RecordingLogger();
+        var degradations = new ContentDegradationRegistry();
+        var registry = new MeshContentTypeRegistry();
+        degradations.DeferWarningsUntilRegistrationSettles();
+        var settled = ImmutableList<ContentDegradation>.Empty;
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+
+        System.Threading.Tasks.Parallel.For(0, reads, i =>
+        {
+            if (i == reads / 2)
+                settled = degradations.SettleDeferredWarnings(registry);
+            var node = ProbeNode($"n{i}") with { NodeType = $"Probe/Race{i}" };
+            MeshNodeStreamCache.ConvertContentJsonElementToTyped(node, options, logger, registry, degradations);
+        });
+
+        var warnedAtTheRead = logger.Records.Where(ReachesTheTraceSink)
+            .Select(r => Assert.IsType<MeshNodeContentDegradedException>(r.Exception).NodeType)
+            .ToImmutableHashSet();
+        var warnedAtTheSettle = settled.Select(d => d.NodeType).ToImmutableHashSet();
+
+        Assert.Empty(warnedAtTheRead.Intersect(warnedAtTheSettle));
+        Assert.Equal(reads, warnedAtTheRead.Count + warnedAtTheSettle.Count);
+    }
+
+    /// <summary>A settled warning names the seam that read the path it names, never the first seam
+    /// paired with the last path.</summary>
+    [Fact]
+    public void TheSettledEntry_PairsTheLastPathWithItsOwnSeam()
+    {
+        var degradations = new ContentDegradationRegistry();
+        var registry = new MeshContentTypeRegistry();
+        degradations.DeferWarningsUntilRegistrationSettles();
+
+        Read("GetStream", ProbeNode("a"), new RecordingLogger(), registry, degradations);
+        Read("GetQuery", ProbeNode("b"), new RecordingLogger(), registry, degradations);
+
+        var d = Assert.Single(degradations.SettleDeferredWarnings(registry));
+        Assert.Equal("Ops/Status/b", d.LastPath);
+        Assert.Equal("MeshNodeStreamCache.GetQuery", d.LastSeam);
+        Assert.Equal("MeshNodeStreamCache.GetStream", d.Seam);
+    }
+
     /// <summary>The registration pass reaches the types readers are waiting on first.</summary>
     [Fact]
     public void ThePass_RegistersTheTypesAReadDegradedFirst_ThenThePathOrder()

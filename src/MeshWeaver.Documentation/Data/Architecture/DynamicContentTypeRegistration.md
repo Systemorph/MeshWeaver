@@ -259,9 +259,12 @@ before. They do not log the warning. When the pass ends (completed, faulted, or 
 that is **still** untyped. The service writes one warning per such type, with the same wording, the
 same `MeshNodeContentDegradedException` marker, and the count and window of the reads it stands for.
 A type the pass registered is never warned, because its readers were cured. A type it did not
-register is warned once, at the moment that is known. Nothing is dropped: the seam records before it
-asks whether the window is open, so a read racing the close is either in the settle's snapshot or
-warns itself.
+register is warned once, at the moment that is known. Nothing is dropped and nothing is doubled: a
+seam records a read and learns whether its warning is deferred in one step
+(`RecordDeferringWarning`), under the same gate as the settle's close-and-snapshot. A read that races
+the close is therefore either in the snapshot or warned by the seam, never both and never neither.
+The settled line names the seam that read the path it names (`ContentDegradation.LastSeam`), and the
+first seam beside it.
 
 A host that does not run the pass never opens the window, and every read there warns at the read, as
 before. That includes every test host, so the CI untyped-content gate is unaffected.

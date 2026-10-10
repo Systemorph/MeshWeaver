@@ -149,15 +149,21 @@ public sealed class DynamicContentTypeRegistrationHostedService(
             return;
         var contentTypes = mesh?.ServiceProvider.GetService<Mesh.Services.IMeshContentTypeRegistry>()
                            ?? services.GetService<Mesh.Services.IMeshContentTypeRegistry>();
+        // The seam is the one that read the path named (LastSeam), never the first seam paired with
+        // the last path — a type can degrade through GetStream first and GetQuery later.
         foreach (var d in _degradations.SettleDeferredWarnings(contentTypes))
+        {
+            var seam = d.LastSeam ?? d.Seam;
             logger.LogWarning(
-                new Mesh.MeshNodeContentDegradedException(d.Seam, d.LastPath, d.NodeType, rawJson: null),
+                new Mesh.MeshNodeContentDegradedException(seam, d.LastPath, d.NodeType, rawJson: null),
                 "{Seam}: Content for {Path} stayed an untyped JsonElement after deserialization "
-                + "(TypeRegistry lacks the $type discriminator) — {Count} read(s) of NodeType {NodeType} "
-                + "between {First:o} and {Last:o} degraded during the boot registration window, and the "
-                + "registration pass did not register it on this replica: downstream 'Content is X'/'as X' "
-                + "consumers will fail (renders empty) until an instance activates here",
-                d.Seam, d.LastPath, d.Count, d.NodeType, d.WindowStart, d.LastAt);
+                + "(TypeRegistry lacks the $type discriminator) — the latest of {Count} read(s) of NodeType "
+                + "{NodeType} that degraded between {First:o} and {Last:o}, during the boot registration "
+                + "window (first through {FirstSeam}); the registration pass did not register it on this "
+                + "replica: downstream 'Content is X'/'as X' consumers will fail (renders empty) until an "
+                + "instance activates here",
+                seam, d.LastPath, d.Count, d.NodeType, d.WindowStart, d.LastAt, d.Seam);
+        }
     }
 
     private void Summarise(
