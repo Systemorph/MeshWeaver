@@ -55,6 +55,8 @@ fi
 hosting::pg_password "$vault" "$password_secret"
 archive="/tmp/restore.dump"
 
+# The step may have waited on the vault and the quiesce; the session's assertion is short-lived.
+hosting::az_refresh "before the download"
 hosting::log "downloading ${store_uri}"
 az storage blob download --blob-url "$store_uri" --file "$archive" --auth-mode login --output none \
   || hosting::die "could not download ${store_uri} — nothing has been changed"
