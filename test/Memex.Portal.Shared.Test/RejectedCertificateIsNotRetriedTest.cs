@@ -100,6 +100,49 @@ public class RejectedCertificateIsNotRetriedTest
         Defaults.IsDeterministicTransportFailure(null).Should().BeFalse();
     }
 
+    /// <summary>
+    /// The opt-out a client gets by installing its own primary handler holds in BOTH registration
+    /// orders (Copilot review on #6418): the client's handler is never given the marker callback,
+    /// whether the client was registered before or after the defaults. Positive control: the
+    /// default primary handler of a client with no handler of its own DOES carry the callback.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void AClientWithItsOwnPrimaryHandler_IsLeftUnmarked_WhicheverWayItWasRegistered(bool clientFirst)
+    {
+        const string custom = "custom-primary";
+        const string plain = "plain-primary";
+        HttpClientHandler? created = null;
+        var services = new ServiceCollection();
+        services.AddLogging();
+        if (clientFirst)
+            services.AddHttpClient(custom).ConfigurePrimaryHttpMessageHandler(() => created = new HttpClientHandler());
+        Defaults.AddHttpClientResilienceDefaults(services);
+        if (!clientFirst)
+            services.AddHttpClient(custom).ConfigurePrimaryHttpMessageHandler(() => created = new HttpClientHandler());
+        services.AddHttpClient(plain);
+        using var provider = services.BuildServiceProvider();
+        var handlers = provider.GetRequiredService<IHttpMessageHandlerFactory>();
+
+        handlers.CreateHandler(custom);
+        created.Should().NotBeNull("the client's own primary handler factory must have run");
+        created!.ServerCertificateCustomValidationCallback.Should().BeNull(
+            $"a client that installs its own primary handler keeps it untouched (registered {(clientFirst ? "before" : "after")} the defaults)");
+
+        var primary = Primary(handlers.CreateHandler(plain));
+        (primary is SocketsHttpHandler { SslOptions.RemoteCertificateValidationCallback: not null }
+                or HttpClientHandler { ServerCertificateCustomValidationCallback: not null })
+            .Should().BeTrue($"the default primary handler must carry the marker callback, got {primary.GetType().Name}");
+    }
+
+    private static HttpMessageHandler Primary(HttpMessageHandler handler)
+    {
+        while (handler is DelegatingHandler { InnerHandler: { } inner })
+            handler = inner;
+        return handler;
+    }
+
     // ── Harness ─────────────────────────────────────────────────────────────────────────────────
 
     private static ServiceProvider Provider()

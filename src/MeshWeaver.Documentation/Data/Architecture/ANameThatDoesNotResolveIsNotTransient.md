@@ -76,8 +76,8 @@ downstream.
 `SocketError.TryAgain` (EAI_AGAIN) is a **nameserver that failed to answer** — genuinely transient,
 and excluding it would turn a DNS hiccup into a hard failure, which is the opposite defect and a
 worse one. `ConnectionRefused` is a host that exists and is not listening: about the *service*.
-`ConnectionReset`, `TimedOut` and every TLS failure are about the network or the peer. All of them
-keep being retried exactly as before.
+`ConnectionReset`, `TimedOut` and every TLS failure other than a rejected certificate (below) are
+about the network or the peer. All of them keep being retried exactly as before.
 
 `ServiceDefaults.NameDoesNotResolve` walks the inner-exception chain, because `HttpClient` wraps the
 resolver's `SocketException` in an `HttpRequestException` and a handler pipeline can wrap that again.
@@ -103,7 +103,10 @@ policy errors and the chain status. `ServiceDefaults.IsDeterministicTransportFai
 predicate both the retry and the breaker read.
 
 A client that installs its own validation callback or its own primary handler keeps it, and gets no
-marker — its rejections are retried as before. `RejectedCertificateIsNotRetriedTest` runs the real
+marker — its rejections are retried as before. That holds whether the client is registered before or
+after the defaults: the defaults' action runs on the handler the factory built for them, and a client's
+own primary-handler factory replaces that handler afterwards, so the marker never reaches the client's
+handler (pinned in both orders). `RejectedCertificateIsNotRetriedTest` runs the real
 defaults against a loopback TLS listener: an expired certificate is contacted once and arrives typed,
 and the control — a server that drops the handshake — is still retried.
 
