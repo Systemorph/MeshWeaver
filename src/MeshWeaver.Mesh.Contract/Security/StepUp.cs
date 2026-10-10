@@ -202,6 +202,14 @@ public sealed record StepUpPending
     /// <summary>The approver.</summary>
     public string UserId { get; init; } = "";
 
+    /// <summary>
+    /// The rung the SERVER decided when the step-up started (a <see cref="StepUpMethod"/> value) —
+    /// the only rung that may complete it. Every completing endpoint re-checks it, so a ceremony
+    /// started for one method can never be finished with another (an Entra step-up with a portal
+    /// passkey, say). Empty on a record written before the field existed — and empty completes nothing.
+    /// </summary>
+    public string Rung { get; init; } = "";
+
     /// <summary>What is being stepped up for.</summary>
     public ImmutableList<StepUpTarget> Targets { get; init; } = [];
 
@@ -548,6 +556,15 @@ public static class StepUpPaths
     /// <param name="targetKey">The target key.</param>
     /// <returns>The node path.</returns>
     public static string Consumption(string receiptId, string targetKey) => ConsumptionNamespace + "/" + receiptId + "-" + targetKey;
+
+    /// <summary>
+    /// Path of a single-use marker that is not a receipt's — a pending step-up taken, a TOTP step or
+    /// a recovery code spent. Same namespace and node type as a consumption marker, same rule: its
+    /// CREATION is the use, and the stored nonce says who won.
+    /// </summary>
+    /// <param name="markerId">The marker id (lowercase hex and hyphens).</param>
+    /// <returns>The node path.</returns>
+    public static string SingleUse(string markerId) => ConsumptionNamespace + "/" + markerId;
 
     /// <summary>True when <paramref name="receiptId"/> is shaped like a receipt id (32 lowercase hex) — anything else is never read.</summary>
     /// <param name="receiptId">The candidate.</param>

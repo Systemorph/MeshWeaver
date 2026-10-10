@@ -1,10 +1,12 @@
 using System.Collections.Immutable;
+using System.Reactive.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using Fido2NetLib;
 using Fido2NetLib.Exceptions;
 using Fido2NetLib.Objects;
 using MeshWeaver.Mesh.Security;
+using MeshWeaver.Mesh.Threading;
 
 namespace Memex.Portal.Shared.Authentication;
 
@@ -23,11 +25,17 @@ public sealed record PasskeyResult(bool Ok, string? Reason, PasskeyCredential? C
 /// origin, RP id, challenge, signature, user verification and the signature counter. The
 /// assertion challenge is DERIVED from the pending step-up (user, targets, nonce), so an assertion
 /// made for one approval can never confirm another.
+///
+/// <para>Reactive end to end: the library's verification is a <c>Task</c>-returning edge, so it
+/// runs through the <see cref="IIoPool"/> it is given and every caller receives an
+/// <see cref="IObservable{T}"/>. A refused ceremony is a <see cref="PasskeyResult"/> with a reason,
+/// never a fault; anything else the library throws stays a fault, so the caller fails closed.</para>
 /// </summary>
 /// <param name="rpId">The relying-party id — the portal's host name.</param>
 /// <param name="origin">The portal's origin (<c>https://host</c>).</param>
 /// <param name="rpName">The instance name shown by the authenticator.</param>
-internal sealed class PasskeyStepUp(string rpId, string origin, string rpName)
+/// <param name="pool">The pool the library's asynchronous verification runs through.</param>
+internal sealed class PasskeyStepUp(string rpId, string origin, string rpName, IIoPool pool)
 {
     private Fido2Configuration Config => new()
     {
@@ -78,41 +86,31 @@ internal sealed class PasskeyStepUp(string rpId, string origin, string rpName)
     /// <param name="options">The options issued for it.</param>
     /// <param name="existing">Already enrolled credentials (an id already present is refused).</param>
     /// <param name="now">The clock.</param>
-    /// <param name="ct">Cancellation.</param>
-    /// <returns>The credential to store.</returns>
-    public async Task<PasskeyResult> Register(string responseJson, CredentialCreateOptions options,
-        IReadOnlyCollection<PasskeyCredential> existing, DateTimeOffset now, CancellationToken ct)
-    {
-        try
+    /// <returns>Cold, single emission: the credential to store, or the refusal.</returns>
+    public IObservable<PasskeyResult> Register(string responseJson, CredentialCreateOptions options,
+        IReadOnlyCollection<PasskeyCredential> existing, DateTimeOffset now) =>
+        Observable.Defer(() =>
         {
-            var response = System.Text.Json.JsonSerializer.Deserialize<AuthenticatorAttestationRawResponse>(responseJson);
-            if (response is null) return PasskeyResult.Fail("passkey");
+            if (Parse<AuthenticatorAttestationRawResponse>(responseJson) is not { } response)
+                return Observable.Return(PasskeyResult.Fail("passkey"));
             var known = existing.Select(c => c.CredentialId).ToImmutableHashSet(StringComparer.Ordinal);
-            var registered = await Fido.MakeNewCredentialAsync(new MakeNewCredentialParams
-            {
-                AttestationResponse = response,
-                OriginalOptions = options,
-                IsCredentialIdUniqueToUserCallback = (p, _) => Task.FromResult(!known.Contains(Base64Url.Encode(p.CredentialId))),
-            }, ct).ConfigureAwait(false);
-            return new PasskeyResult(true, null, new PasskeyCredential
-            {
-                CredentialId = Base64Url.Encode(registered.Id),
-                PublicKey = Convert.ToBase64String(registered.PublicKey),
-                UserHandle = Base64Url.Encode(registered.User.Id),
-                SignCount = registered.SignCount,
-                AaGuid = registered.AaGuid,
-                CreatedAt = now,
-            });
-        }
-        catch (Fido2VerificationException)
-        {
-            return PasskeyResult.Fail("passkey");
-        }
-        catch (System.Text.Json.JsonException)
-        {
-            return PasskeyResult.Fail("passkey");
-        }
-    }
+            return pool.Invoke(ct => Fido.MakeNewCredentialAsync(new MakeNewCredentialParams
+                {
+                    AttestationResponse = response,
+                    OriginalOptions = options,
+                    IsCredentialIdUniqueToUserCallback = (p, _) => Task.FromResult(!known.Contains(Base64Url.Encode(p.CredentialId))),
+                }, ct))
+                .Select(registered => new PasskeyResult(true, null, new PasskeyCredential
+                {
+                    CredentialId = Base64Url.Encode(registered.Id),
+                    PublicKey = Convert.ToBase64String(registered.PublicKey),
+                    UserHandle = Base64Url.Encode(registered.User.Id),
+                    SignCount = registered.SignCount,
+                    AaGuid = registered.AaGuid,
+                    CreatedAt = now,
+                }))
+                .Catch((Fido2VerificationException _) => Observable.Return(PasskeyResult.Fail("passkey")));
+        });
 
     /// <summary>Assertion options for a pending step-up — the challenge is <see cref="ChallengeFor"/>.</summary>
     /// <param name="challenge">The bound challenge.</param>
@@ -128,41 +126,35 @@ internal sealed class PasskeyStepUp(string rpId, string origin, string rpName)
     /// <param name="options">The options (with the bound challenge) it answers.</param>
     /// <param name="credentials">The user's passkeys.</param>
     /// <param name="now">The clock.</param>
-    /// <param name="ct">Cancellation.</param>
-    /// <returns>The used credential with its counter moved.</returns>
-    public async Task<PasskeyResult> Assert(string responseJson, AssertionOptions options,
-        IReadOnlyCollection<PasskeyCredential> credentials, DateTimeOffset now, CancellationToken ct)
-    {
-        try
+    /// <returns>Cold, single emission: the used credential with its counter moved, or the refusal.</returns>
+    public IObservable<PasskeyResult> Assert(string responseJson, AssertionOptions options,
+        IReadOnlyCollection<PasskeyCredential> credentials, DateTimeOffset now) =>
+        Observable.Defer(() =>
         {
-            var response = System.Text.Json.JsonSerializer.Deserialize<AuthenticatorAssertionRawResponse>(responseJson);
-            if (response is null) return PasskeyResult.Fail("passkey");
+            if (Parse<AuthenticatorAssertionRawResponse>(responseJson) is not { } response)
+                return Observable.Return(PasskeyResult.Fail("passkey"));
             var id = Base64Url.Encode(response.RawId);
             var stored = credentials.FirstOrDefault(c => c.CredentialId == id);
-            if (stored is null) return PasskeyResult.Fail("unknownCredential");
-            var verified = await Fido.MakeAssertionAsync(new MakeAssertionParams
-            {
-                AssertionResponse = response,
-                OriginalOptions = options,
-                StoredPublicKey = Convert.FromBase64String(stored.PublicKey),
-                StoredSignatureCounter = stored.SignCount,
-                IsUserHandleOwnerOfCredentialIdCallback = (p, _) => Task.FromResult(
-                    p.UserHandle is null || Base64Url.Encode(p.UserHandle) == stored.UserHandle),
-            }, ct).ConfigureAwait(false);
-            return new PasskeyResult(true, null, stored with { SignCount = verified.SignCount, LastUsedAt = now });
-        }
-        catch (Fido2VerificationException ex) when (ex.Code == Fido2ErrorCode.InvalidSignCount)
-        {
-            return PasskeyResult.Fail("counter");
-        }
-        catch (Fido2VerificationException)
-        {
-            return PasskeyResult.Fail("passkey");
-        }
-        catch (System.Text.Json.JsonException)
-        {
-            return PasskeyResult.Fail("passkey");
-        }
+            if (stored is null) return Observable.Return(PasskeyResult.Fail("unknownCredential"));
+            return pool.Invoke(ct => Fido.MakeAssertionAsync(new MakeAssertionParams
+                {
+                    AssertionResponse = response,
+                    OriginalOptions = options,
+                    StoredPublicKey = Convert.FromBase64String(stored.PublicKey),
+                    StoredSignatureCounter = stored.SignCount,
+                    IsUserHandleOwnerOfCredentialIdCallback = (p, _) => Task.FromResult(
+                        p.UserHandle is null || Base64Url.Encode(p.UserHandle) == stored.UserHandle),
+                }, ct))
+                .Select(verified => new PasskeyResult(true, null, stored with { SignCount = verified.SignCount, LastUsedAt = now }))
+                .Catch((Fido2VerificationException ex) => Observable.Return(
+                    PasskeyResult.Fail(ex.Code == Fido2ErrorCode.InvalidSignCount ? "counter" : "passkey")));
+        });
+
+    /// <summary>The browser's response, or null when it is not one (a malformed body is a refusal, not a fault).</summary>
+    private static T? Parse<T>(string json) where T : class
+    {
+        try { return System.Text.Json.JsonSerializer.Deserialize<T>(json); }
+        catch (System.Text.Json.JsonException) { return null; }
     }
 }
 

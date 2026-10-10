@@ -19,10 +19,13 @@ namespace Memex.Portal.Shared.Authentication;
 /// The listing trails the store, so a factor enrolled a moment ago can read as absent once; the
 /// ladder then offers enrolment again, never a pass.</para>
 ///
-/// <para><b>Writes are folds</b> (a passkey appended, a counter moved, a TOTP step consumed), so
-/// they are CREATE-FIRST: the create carries the transform applied to an empty record, and only a
-/// create refused as "already exists" falls back to <c>GetMeshNodeStream(path).Update(fold)</c>,
-/// which the owning hub serialises.</para>
+/// <para><b>Creating the FIRST factor and adding a further one are different writes, and never
+/// fall back into each other.</b> Which one is allowed is an authorization decision (the first needs
+/// a fresh sign-in, every further one a step-up), so <see cref="Create"/> only ever creates — a node
+/// that already exists is a REFUSAL, never a silent update — and reads the stored node back so the
+/// caller can see whether its own write is the one that landed (a concurrent create response cannot
+/// say). <see cref="Update"/> folds onto a node known to exist, through
+/// <c>GetMeshNodeStream(path).Update(fold)</c>.</para>
 /// </summary>
 /// <param name="hub">The mesh hub.</param>
 internal sealed class StepUpFactorStore(IMessageHub hub)
@@ -47,42 +50,46 @@ internal sealed class StepUpFactorStore(IMessageHub hub)
                     .Select(node => node?.ContentAs<StepUpFactors>(hub.JsonSerializerOptions))
                 : Observable.Return<StepUpFactors?>(null));
 
-    /// <summary>Applies <paramref name="fold"/> to the user's factors — creating the node on first use.</summary>
+    /// <summary>
+    /// Creates the user's factors node with <paramref name="first"/> — the first factor's write. A node
+    /// that already exists is refused (null), never turned into an update: the caller was authorized
+    /// for a FIRST factor only, on a listing that may have been stale. Cold.
+    /// </summary>
     /// <param name="userId">The user.</param>
-    /// <param name="fold">The change, applied to the CURRENT value by the owning hub.</param>
-    /// <returns>Cold; emits once the write is acknowledged.</returns>
-    public IObservable<MeshNode> Update(string userId, Func<StepUpFactors, StepUpFactors> fold) =>
+    /// <param name="first">The factors to store.</param>
+    /// <returns>The STORED factors read back after the create, or null when the node already existed.</returns>
+    public IObservable<StepUpFactors?> Create(string userId, StepUpFactors first) =>
         Observable.Defer(() =>
         {
-            var empty = new StepUpFactors { UserId = userId };
             var node = new MeshNode(StepUpPaths.FactorsId, StepUpPaths.FactorsNamespaceOf(userId))
             {
                 Name = "Step-up factors",
                 NodeType = StepUpPaths.FactorsNodeType,
                 State = MeshNodeState.Active,
-                Content = fold(empty),
+                Content = first with { UserId = userId },
             };
             var mesh = hub.ServiceProvider.GetRequiredService<IMeshService>();
             return Access.RunAsSystem(() => mesh.CreateNode(node).Take(1)
-                .Catch((Exception ex) => !IsAlreadyExists(ex)
-                    ? Observable.Throw<MeshNode>(ex)
-                    : hub.GetWorkspace().GetMeshNodeStream(StepUpPaths.Factors(userId))
-                        .Update(current => current with
-                        {
-                            Content = fold(current.ContentAs<StepUpFactors>(hub.JsonSerializerOptions) ?? empty),
-                        })
-                        .Take(1)));
+                    .Select(_ => true)
+                    .Catch((Exception ex) => StepUpSingleUse.IsAlreadyExists(ex) ? Observable.Return(false) : Observable.Throw<bool>(ex))
+                    .SelectMany(created => !created
+                        ? Observable.Return<StepUpFactors?>(null)
+                        : hub.GetMeshNode(StepUpPaths.Factors(userId), ReadTimeout).Take(1)
+                            .Select(stored => stored?.ContentAs<StepUpFactors>(hub.JsonSerializerOptions))))
+                .Timeout(ReadTimeout);
         });
 
-    private static bool IsAlreadyExists(Exception ex)
-    {
-        for (var e = ex; e is not null; e = e.InnerException)
-        {
-            if (e.Data[NodeCreationFailure.RejectionReasonKey] is NodeCreationRejectionReason.NodeAlreadyExists)
-                return true;
-            if (e.Message?.StartsWith("Node already exists", StringComparison.Ordinal) == true)
-                return true;
-        }
-        return false;
-    }
+    /// <summary>
+    /// Applies <paramref name="fold"/> to the user's EXISTING factors node, through the node stream —
+    /// the owning hub serialises it. Only for a node a listing has named; never a create.
+    /// </summary>
+    /// <param name="userId">The user.</param>
+    /// <param name="fold">The change, applied to the current value.</param>
+    /// <returns>Cold; emits once the write is acknowledged.</returns>
+    public IObservable<MeshNode> Update(string userId, Func<StepUpFactors, StepUpFactors> fold) =>
+        Observable.Defer(() => Access.RunAsSystem(() => hub.GetWorkspace().GetMeshNodeStream(StepUpPaths.Factors(userId))
+            // Typed: null means ABSENT only; present-but-unreadable content faults instead of being
+            // folded over as an empty record.
+            .Update<StepUpFactors>((node, content) => node with { Content = fold(content ?? new StepUpFactors { UserId = userId }) })
+            .Take(1)));
 }

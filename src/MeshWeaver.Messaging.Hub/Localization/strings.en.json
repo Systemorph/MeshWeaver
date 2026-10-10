@@ -2261,8 +2261,11 @@
   "stepUp.reason.downgrade": "your account has a passkey — confirm with it instead of a code.",
   "stepUp.reason.notEnrolled": "no step-up method is set up for your account.",
   "stepUp.reason.enrollAuth": "adding a method needs a fresh confirmation.",
+  "stepUp.reason.wrongRung": "this confirmation was started for a different method — start the approval again.",
+  "stepUp.reason.microsoftAccount": "a Microsoft account confirms approvals through Microsoft's own sign-in, not with a method set up here.",
+  "stepUp.enroll.microsoft": "You sign in with a Microsoft account: Microsoft's own sign-in prompt confirms your approvals with your passkey. There is nothing to set up here.",
   "settings.security": "Security",
   "stepUp.settings.intro": "Approvals ask you to confirm it's you, every time. Set up how you confirm here.",
-  "stepUp.settings.entra": "You sign in with a Microsoft account: approvals are confirmed by Microsoft's own sign-in prompt with your passkey — there is nothing to set up here.",
+  "stepUp.settings.entra": "Signing in with a Microsoft account? Then Microsoft's own sign-in prompt confirms your approvals with your passkey, and there is nothing to set up here. Every other account confirms with a passkey set up on the page below.",
   "stepUp.settings.off": "Approval step-up is not switched on for this instance yet. You can still set up a passkey now."
 }

@@ -5,10 +5,21 @@ using MeshWeaver.Mesh.Security;
 
 namespace Memex.Portal.Shared.Authentication;
 
-/// <summary>The viewer's language and the catalog lookup a step-up page renders with.</summary>
+/// <summary>
+/// The viewer's language, captured ONCE at the action's edge, and the catalog lookup every step-up
+/// text renders with. Explicit on purpose: the actions continue downstream of store and pool
+/// emissions, where the request's ambient access context — and with it the viewer's locale — is no
+/// longer reliable.
+/// </summary>
 /// <param name="Locale">The resolved language tag.</param>
-/// <param name="L">Looks a key up in the localization catalog for the viewer.</param>
-internal sealed record StepUpPageTexts(string Locale, Func<string, string> L);
+internal sealed record StepUpPageTexts(string Locale)
+{
+    /// <summary>The catalog text for <paramref name="key"/> in <see cref="Locale"/>, with positional arguments.</summary>
+    /// <param name="key">The catalog key.</param>
+    /// <param name="args">Positional arguments.</param>
+    /// <returns>The text.</returns>
+    public string L(string key, params object?[] args) => MeshWeaver.Messaging.LocalizationCatalog.Get(key, Locale, args);
+}
 
 /// <summary>
 /// The few pages the passkey and TOTP rungs render themselves. They live OUTSIDE the Blazor shell by

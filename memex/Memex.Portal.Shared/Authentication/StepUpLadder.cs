@@ -53,7 +53,7 @@ public static class StepUpLadder
             return StepUpRung.NotRequired;
         if (string.IsNullOrEmpty(provider))
             return StepUpRung.RefuseUnknownSession;
-        if (string.Equals(provider, StepUpClaims.MicrosoftProvider, StringComparison.OrdinalIgnoreCase))
+        if (IsMicrosoft(provider))
             return string.IsNullOrEmpty(options.EntraAuthenticationContext) || !entraUsable
                 ? StepUpRung.RefuseNotConfigured
                 : StepUpRung.Entra;
@@ -92,4 +92,39 @@ public static class StepUpLadder
     /// <returns>True when an authenticator app may be set up.</returns>
     public static bool MayEnrollTotp(StepUpOptions options, StepUpFactors? factors) =>
         options.AllowTotpFallback && factors is not { Passkeys.Count: > 0 };
+
+    /// <summary>
+    /// Whether this session may enrol a PORTAL factor (passkey or TOTP) at all. A Microsoft account
+    /// steps up through Entra and nothing else, so a portal factor would be dead weight at best and,
+    /// at worst, a second way in that bypasses Entra's phishing-resistant prompt. A session that
+    /// predates the provider claim is refused too: the provider is never guessed.
+    /// </summary>
+    /// <param name="provider">The session's <c>idp</c> claim, or null for an older session.</param>
+    /// <returns>True only for a known, non-Microsoft provider.</returns>
+    public static bool MayEnrollPortalFactors(string? provider) =>
+        !string.IsNullOrEmpty(provider) && !IsMicrosoft(provider);
+
+    /// <summary>
+    /// Whether <paramref name="method"/> may COMPLETE a pending step-up: the rung the server decided
+    /// when the step-up started must be this method, AND the ladder decided again now — on the
+    /// session's provider and the account's factors as they are now — must still land on it. Every
+    /// completing endpoint asks this; none trusts that the page it served is the page that called.
+    /// </summary>
+    /// <param name="pendingRung">The rung recorded on the pending step-up.</param>
+    /// <param name="method">The method the calling endpoint verifies (a <see cref="StepUpMethod"/> value).</param>
+    /// <param name="provider">The session's <c>idp</c> claim.</param>
+    /// <param name="options">The instance's step-up options.</param>
+    /// <param name="entraUsable">The Microsoft sign-in app is configured for a single tenant.</param>
+    /// <param name="factors">The account's portal factors as read now.</param>
+    /// <returns>True only when both agree on <paramref name="method"/>.</returns>
+    public static bool MayComplete(string? pendingRung, string method, string? provider, StepUpOptions options,
+        bool entraUsable, StepUpFactors? factors) =>
+        string.Equals(pendingRung, method, StringComparison.Ordinal)
+        && string.Equals(Decide(provider, options, entraUsable, factors), method, StringComparison.Ordinal);
+
+    /// <summary>True when <paramref name="provider"/> is the Microsoft (Entra ID) sign-in.</summary>
+    /// <param name="provider">The session's <c>idp</c> claim.</param>
+    /// <returns>True for a Microsoft account.</returns>
+    public static bool IsMicrosoft(string? provider) =>
+        string.Equals(provider, StepUpClaims.MicrosoftProvider, StringComparison.OrdinalIgnoreCase);
 }

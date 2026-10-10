@@ -2234,7 +2234,7 @@
   "stepUp.passkey.intro": "Bestätigen Sie diese Genehmigung mit Ihrem Passkey.",
   "stepUp.passkey.button": "Passkey verwenden",
   "stepUp.passkey.unsupported": "Dieser Browser kann keine Passkeys verwenden.",
-  "stepUp.working": "Warte auf Ihren Authenticator …",
+  "stepUp.working": "Warten auf Ihren Authenticator …",
   "stepUp.failed.generic": "Das hat nicht geklappt — versuchen Sie es erneut.",
   "stepUp.totp.intro": "Geben Sie den 6-stelligen Code aus Ihrer Authenticator-App oder einen Ihrer Wiederherstellungscodes ein. Jede Bestätigung erlaubt einen Versuch.",
   "stepUp.totp.code": "Code",
@@ -2261,8 +2261,11 @@
   "stepUp.reason.downgrade": "Ihr Konto hat einen Passkey — bestätigen Sie damit statt mit einem Code.",
   "stepUp.reason.notEnrolled": "für Ihr Konto ist keine Step-up-Methode eingerichtet.",
   "stepUp.reason.enrollAuth": "das Hinzufügen einer Methode braucht eine frische Bestätigung.",
+  "stepUp.reason.wrongRung": "diese Bestätigung wurde für eine andere Methode gestartet — starten Sie die Genehmigung erneut.",
+  "stepUp.reason.microsoftAccount": "ein Microsoft-Konto bestätigt Genehmigungen über die Microsoft-Anmeldung selbst, nicht mit einer hier eingerichteten Methode.",
+  "stepUp.enroll.microsoft": "Sie melden sich mit einem Microsoft-Konto an: Die Microsoft-Anmeldung selbst bestätigt Ihre Genehmigungen mit Ihrem Passkey. Hier ist nichts einzurichten.",
   "settings.security": "Sicherheit",
-  "stepUp.settings.intro": "Bei Genehmigungen bestätigen Sie jedes Mal, dass Sie es sind. Hier richten Sie ein, wie.",
-  "stepUp.settings.entra": "Sie melden sich mit einem Microsoft-Konto an: Genehmigungen bestätigt die Microsoft-Anmeldung selbst mit Ihrem Passkey — hier ist nichts einzurichten.",
+  "stepUp.settings.intro": "Bei Genehmigungen bestätigen Sie jedes Mal, dass Sie es sind. Hier legen Sie fest, wie Sie das tun.",
+  "stepUp.settings.entra": "Sie melden sich mit einem Microsoft-Konto an? Dann bestätigt die Microsoft-Anmeldung selbst Ihre Genehmigungen mit Ihrem Passkey, und hier ist nichts einzurichten. Jedes andere Konto bestätigt mit einem Passkey, den Sie auf der Seite unten einrichten.",
   "stepUp.settings.off": "Der Step-up für Genehmigungen ist auf dieser Instanz noch nicht eingeschaltet. Sie können trotzdem schon einen Passkey einrichten."
 }

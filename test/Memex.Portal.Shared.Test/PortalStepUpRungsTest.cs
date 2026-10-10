@@ -5,6 +5,8 @@ using System.Text.Json;
 using Fido2NetLib;
 using Memex.Portal.Shared.Authentication;
 using MeshWeaver.Mesh.Security;
+using MeshWeaver.Mesh.Threading;
+using MeshWeaver.Messaging;
 using Xunit;
 
 namespace Memex.Portal.Shared.Test;
@@ -53,6 +55,51 @@ public class PortalStepUpRungsTest
         Assert.True(StepUpLadder.AcceptsTotp(On, TotpOnly()));
         Assert.True(StepUpLadder.MayEnrollTotp(On, null));
         Assert.False(StepUpLadder.MayEnrollTotp(On with { AllowTotpFallback = false }, null));
+    }
+
+    // ───────────── completing a pending step-up: the server-decided rung, re-checked ─────────────
+
+    private static StepUpPending StartedAs(string rung) => new() { Id = "p", UserId = "u", Rung = rung };
+
+    [Fact]
+    public void AMicrosoftAccountCannotFinishAnEntraStepUpWithAPortalFactor()
+    {
+        // A Microsoft account that somehow holds portal factors, with an Entra step-up pending.
+        var entraPending = StartedAs(StepUpRung.Entra);
+        Assert.False(StepUpLadder.MayComplete(entraPending.Rung, StepUpRung.Passkey, "Microsoft", On, true, Both()));
+        Assert.False(StepUpLadder.MayComplete(entraPending.Rung, StepUpRung.Totp, "Microsoft", On, true, TotpOnly()));
+        // Even a pending record claiming a portal rung does not help: the ladder decided NOW says Entra.
+        Assert.False(StepUpLadder.MayComplete(StepUpRung.Passkey, StepUpRung.Passkey, "Microsoft", On, true, Both()));
+        Assert.False(StepUpLadder.MayComplete(StepUpRung.Totp, StepUpRung.Totp, "Microsoft", On, true, TotpOnly()));
+        // Negative control: the Entra callback completes the Entra step-up it was started for.
+        Assert.True(StepUpLadder.MayComplete(entraPending.Rung, StepUpRung.Entra, "Microsoft", On, true, null));
+    }
+
+    [Fact]
+    public void APortalStepUpCompletesOnlyWithTheRungItWasStartedFor()
+    {
+        // Started as a passkey step-up: a TOTP code (or an Entra callback) does not finish it.
+        Assert.False(StepUpLadder.MayComplete(StepUpRung.Passkey, StepUpRung.Totp, "Google", On, true, Both()));
+        Assert.False(StepUpLadder.MayComplete(StepUpRung.Passkey, StepUpRung.Entra, "Google", On, true, Both()));
+        // A record from before the field existed completes nothing.
+        Assert.False(StepUpLadder.MayComplete("", StepUpRung.Passkey, "Google", On, true, PasskeyOnly()));
+        // A TOTP step-up whose account enrolled a passkey since: the ladder now says passkey.
+        Assert.False(StepUpLadder.MayComplete(StepUpRung.Totp, StepUpRung.Totp, "Google", On, true, Both()));
+        // Negative controls: each completes with its own rung.
+        Assert.True(StepUpLadder.MayComplete(StepUpRung.Passkey, StepUpRung.Passkey, "Google", On, true, PasskeyOnly()));
+        Assert.True(StepUpLadder.MayComplete(StepUpRung.Totp, StepUpRung.Totp, "LinkedIn", On, true, TotpOnly()));
+    }
+
+    [Fact]
+    public void OnlyAKnownNonMicrosoftAccountMayEnrolPortalFactors()
+    {
+        Assert.False(StepUpLadder.MayEnrollPortalFactors("Microsoft"));
+        Assert.False(StepUpLadder.MayEnrollPortalFactors("microsoft"));
+        Assert.False(StepUpLadder.MayEnrollPortalFactors(null));   // the provider is never guessed
+        Assert.False(StepUpLadder.MayEnrollPortalFactors(""));
+        // Negative control.
+        Assert.True(StepUpLadder.MayEnrollPortalFactors("Google"));
+        Assert.True(StepUpLadder.MayEnrollPortalFactors("LinkedIn"));
     }
 
     // ───────────── TOTP (RFC 6238 appendix B, SHA-1 secret) ─────────────
@@ -183,13 +230,13 @@ public class PortalStepUpRungsTest
         }
     }
 
-    private static PasskeyStepUp Rp() => new(RpId, Origin, "Portal");
+    private static PasskeyStepUp Rp() => new(RpId, Origin, "Portal", IoPool.Unbounded);
 
     private static async Task<(SoftAuthenticator Device, PasskeyCredential Stored)> Enrolled(CancellationToken ct)
     {
         var device = new SoftAuthenticator();
         var options = Rp().RegistrationOptions("alice", "alice@example.com", []);
-        var registered = await Rp().Register(device.Create(options), options, [], DateTimeOffset.UtcNow, ct);
+        var registered = await Rp().Register(device.Create(options), options, [], DateTimeOffset.UtcNow).Await(ct);
         Assert.True(registered.Ok, registered.Reason);
         return (device, registered.Credential!);
     }
@@ -204,13 +251,13 @@ public class PortalStepUpRungsTest
         var challenge = PasskeyStepUp.ChallengeFor("alice", TargetsA, "nonce-1");
         device.Counter = 1;
         var assertion = device.Get(challenge, PasskeyStepUp.UserHandle("alice"));
-        var accepted = await Rp().Assert(assertion, Rp().AssertionOptions(challenge, [stored]), [stored], DateTimeOffset.UtcNow, ct);
+        var accepted = await Rp().Assert(assertion, Rp().AssertionOptions(challenge, [stored]), [stored], DateTimeOffset.UtcNow).Await(ct);
         Assert.True(accepted.Ok, accepted.Reason);
         Assert.Equal(1u, accepted.Credential!.SignCount);
 
         // The SAME assertion presented for another approval: its challenge is bound to other targets.
         var other = PasskeyStepUp.ChallengeFor("alice", TargetsB, "nonce-1");
-        var refused = await Rp().Assert(assertion, Rp().AssertionOptions(other, [stored]), [stored], DateTimeOffset.UtcNow, ct);
+        var refused = await Rp().Assert(assertion, Rp().AssertionOptions(other, [stored]), [stored], DateTimeOffset.UtcNow).Await(ct);
         Assert.False(refused.Ok);
         Assert.Equal("passkey", refused.Reason);
     }
@@ -225,13 +272,13 @@ public class PortalStepUpRungsTest
 
         device.Counter = 5;   // the stored counter is 5 already
         var replayed = await Rp().Assert(device.Get(challenge, PasskeyStepUp.UserHandle("alice")),
-            Rp().AssertionOptions(challenge, [afterFive]), [afterFive], DateTimeOffset.UtcNow, ct);
+            Rp().AssertionOptions(challenge, [afterFive]), [afterFive], DateTimeOffset.UtcNow).Await(ct);
         Assert.False(replayed.Ok);
         Assert.Equal("counter", replayed.Reason);
 
         device.Counter = 6;   // negative control: a counter that moved forward passes
         var moved = await Rp().Assert(device.Get(challenge, PasskeyStepUp.UserHandle("alice")),
-            Rp().AssertionOptions(challenge, [afterFive]), [afterFive], DateTimeOffset.UtcNow, ct);
+            Rp().AssertionOptions(challenge, [afterFive]), [afterFive], DateTimeOffset.UtcNow).Await(ct);
         Assert.True(moved.Ok, moved.Reason);
     }
 
@@ -244,12 +291,12 @@ public class PortalStepUpRungsTest
         device.Counter = 1;
 
         var noUv = await Rp().Assert(device.Get(challenge, PasskeyStepUp.UserHandle("alice"), userVerified: false),
-            Rp().AssertionOptions(challenge, [stored]), [stored], DateTimeOffset.UtcNow, ct);
+            Rp().AssertionOptions(challenge, [stored]), [stored], DateTimeOffset.UtcNow).Await(ct);
         Assert.False(noUv.Ok);
 
         var stranger = new SoftAuthenticator { Counter = 1 };
         var unknown = await Rp().Assert(stranger.Get(challenge, PasskeyStepUp.UserHandle("alice")),
-            Rp().AssertionOptions(challenge, [stored]), [stored], DateTimeOffset.UtcNow, ct);
+            Rp().AssertionOptions(challenge, [stored]), [stored], DateTimeOffset.UtcNow).Await(ct);
         Assert.False(unknown.Ok);
         Assert.Equal("unknownCredential", unknown.Reason);
     }

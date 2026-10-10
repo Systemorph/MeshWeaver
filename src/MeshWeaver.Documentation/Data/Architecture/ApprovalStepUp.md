@@ -203,8 +203,12 @@ Where a factor lives: ONE System-only node per account, `Auth/_StepUpFactors/{us
 (`StepUpFactors`) — the passkeys (credential id, COSE public key, user handle, signature counter,
 AAGUID, created/last-used) and, if any, the TOTP enrolment. Never a private key, never a plaintext
 secret. Whether it exists is learned from a `scope:children` listing of `Auth/_StepUpFactors/{user}`
-— never a point read of a path that may be absent — and every write is create-first, falling back to
-a `GetMeshNodeStream(path).Update(fold)` the owning hub serialises.
+— never a point read of a path that may be absent. The FIRST factor is a CREATE that refuses a node
+already there (and reads the stored node back to see whether its own write landed); every further
+factor is a `GetMeshNodeStream(path).Update(fold)` onto the existing node. The two never fall back
+into each other, because WHICH one is allowed is an authorization decision: a stale "no factors"
+listing, or two enrolments at once, must not turn a first-factor create into adding a second factor
+without the step-up that adding one requires.
 
 - **Enrolment** at `/auth/step-up/enroll`, reached from *Settings → Security* (a person-app tab of
   framework controls with one button; the ceremony itself must run in the page that asks for it).
@@ -214,13 +218,37 @@ a `GetMeshNodeStream(path).Update(fold)` the owning hub serialises.
   **Who may enrol:** the FIRST factor only within ten minutes of a sign-in (the session's
   `mw_auth_time`); every further one only after a step-up WITH an existing factor — a receipt for the
   target `Auth/_StepUpFactors/{user}/factors`, binding `enroll`, checked when the options are issued
-  and CONSUMED at the write — so a stolen session cannot add its own authenticator.
+  and CONSUMED at the write — so a stolen session cannot add its own authenticator. **A Microsoft
+  account enrols nothing here** — nor does a session that predates the provider claim: every
+  enrolment endpoint refuses it, and the enrolment page tells a Microsoft account that Microsoft's
+  own sign-in confirms its approvals. A portal factor on a Microsoft account would be a second way
+  in around Entra's phishing-resistant prompt.
 - **Assertion** at step-up: `/auth/step-up` renders one button; `navigator.credentials.get` with a
   challenge DERIVED from the pending step-up — SHA-256 over the user, every target and the nonce —
   so an assertion made for one approval can never confirm another. `userVerification=required`.
   The library verifies signature, origin, RP id, challenge, the UV flag and a counter that moved
   forward (a counter that did not is refused as a possible clone); then the counter is stored and the
   same receipt minted with `method=passkey`.
+
+### What every completing endpoint re-checks
+
+The page decides nothing; each endpoint that can yield a proof — the Entra callback, the passkey
+verification, the TOTP verification — checks, in this order:
+
+1. **The pending step-up is TAKEN, not read.** It is claimed with the same store primitive the
+   receipt consumption uses: a marker node `Auth/_StepUpUse/pending-{handle}` carrying a fresh
+   nonce, read back, and the claimant goes on only when the stored nonce is its own. Two requests
+   carrying the same cookie at once yield at most one proof. The pending node is deleted afterwards
+   as tidying; the claim, not the delete, is the guarantee.
+2. **The rung the server recorded matches.** `StepUpPending.Rung` holds the rung decided at the
+   start, and `StepUpLadder.MayComplete` requires it to be this endpoint's method AND the ladder,
+   decided again now on the session's provider and the account's current factors, to land on it
+   too. A ceremony started for Entra can therefore never be finished with a portal passkey or TOTP
+   code, whatever factors the account holds; a record written before the field existed completes
+   nothing.
+3. **A TOTP step or recovery code is CLAIMED before the receipt is minted** — markers
+   `Auth/_StepUpUse/totp-{user}-{step}` and `…/rc-{user}-{hash}` — because validating the code
+   against a snapshot and folding the counter afterwards lets two concurrent confirmations both pass.
 
 ## The TOTP rung (only where no passkey is possible)
 
@@ -237,7 +265,8 @@ removes the rung entirely.
   encrypted with `IProviderKeyProtector` (the instance master key) — never in configuration. Ten
   one-time recovery codes are shown ONCE and stored as SHA-256 hashes.
 - Verification: RFC 6238 (HMAC-SHA1, 30 s, 6 digits, ±1 step), compared in constant time; each
-  time step is accepted once (`LastTotpStep`), a recovery code once (its hash is removed). **One
+  time step is accepted once and a recovery code once — decided by the single-use claim above, with
+  `LastTotpStep` moved forward and the code's hash removed afterwards. **One
   attempt per confirmation** — a wrong code ends the pending step-up, so codes cannot be guessed
   inside one.
 
