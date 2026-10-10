@@ -123,6 +123,29 @@ internal class ApiTokenService(
     public IObservable<TokenCreationResult> CreateToken(
         string userId, string userName, string userEmail, string label, DateTimeOffset? expiresAt = null)
     {
+        // 🚨 The OAuth label namespace is RESERVED: it is what makes a token subject to the idle
+        // rule (OAuthTokenLifetime), so a hand-minted token may not wear it — only
+        // CreateOAuthToken, the exchange's own surface, mints into it.
+        if (OAuthTokenLifetime.IsReservedLabel(label))
+            return Observable.Throw<TokenCreationResult>(new InvalidOperationException(
+                $"A token label may not start with '{OAuthTokenLifetime.LabelPrefix.Trim()}' — that prefix "
+                + "is reserved for tokens the OAuth sign-in issues. Choose another label."));
+        return CreateTokenCore(userId, userName, userEmail, label, expiresAt);
+    }
+
+    /// <summary>
+    /// Mints the token the OAuth exchange issues to <paramref name="clientId"/>, labelled
+    /// <c>OAuth: {clientId}</c> (<see cref="OAuthTokenLifetime.LabelFor"/>) — the one surface allowed
+    /// to mint into the reserved OAuth label namespace, and therefore the one whose tokens are
+    /// subject to the idle rule.
+    /// </summary>
+    internal IObservable<TokenCreationResult> CreateOAuthToken(
+        string userId, string userName, string userEmail, string clientId, DateTimeOffset? expiresAt)
+        => CreateTokenCore(userId, userName, userEmail, OAuthTokenLifetime.LabelFor(clientId), expiresAt);
+
+    private IObservable<TokenCreationResult> CreateTokenCore(
+        string userId, string userName, string userEmail, string label, DateTimeOffset? expiresAt)
+    {
         // 🚨 A person's surfaces never mint for a SERVICE principal. A service's tokens are issued
         // only through CreateServiceToken, which reads the service's record in the Admin partition
         // first — a token minted here for a `svc-…` id would carry no identity path, so revoking
@@ -325,11 +348,12 @@ internal class ApiTokenService(
     /// </para>
     ///
     /// <para>
-    /// 🚨 The predicate is deliberately narrow: a token is swept ONLY when it carries a
-    /// non-null <see cref="ApiToken.ExpiresAt"/> that is already in the PAST — i.e. a credential
-    /// <see cref="Validate"/> already refuses. A token with no expiry (a user's personal
-    /// long-lived token) is never touched, and neither is one that merely looks unused. Deleting
-    /// a live credential is the one failure mode this must not have.
+    /// 🚨 The predicate is deliberately narrow: a token is swept ONLY when <see cref="Validate"/>
+    /// already refuses it — its <see cref="ApiToken.ExpiresAt"/> is in the PAST, or it is an
+    /// OAuth-minted token past <see cref="OAuthTokenLifetime.IdleLifetime"/> without use
+    /// (<see cref="IsIdleOAuthToken"/>). A token a person minted by hand with no expiry is never
+    /// touched, however long it sits unused. Deleting a live credential is the one failure mode
+    /// this must not have.
     /// </para>
     ///
     /// <para>
@@ -385,8 +409,18 @@ internal class ApiTokenService(
     private bool IsExpired(MeshNode? node, DateTimeOffset now)
     {
         var token = node?.ContentAs<ApiToken>(hub.JsonSerializerOptions);
-        return token?.ExpiresAt is { } expiresAt && expiresAt < now;
+        return token is not null
+               && (token.ExpiresAt is { } expiresAt && expiresAt < now || IsIdleOAuthToken(token, now));
     }
+
+    /// <summary>
+    /// True when <paramref name="token"/> was minted by the OAuth exchange and has gone unused past
+    /// <see cref="OAuthTokenLifetime.IdleLifetime"/>. Validation refuses such a token and the expiry
+    /// sweep deletes it, exactly like one whose <see cref="ApiToken.ExpiresAt"/> has passed. The rule
+    /// itself is <see cref="OAuthTokenLifetime"/>, shared with <see cref="ApiTokenVerdict"/> so every
+    /// validator refuses the same token.
+    /// </summary>
+    internal static bool IsIdleOAuthToken(ApiToken token, DateTimeOffset now) => OAuthTokenLifetime.IsIdle(token, now);
 
     /// <summary>
     /// Deletes the global <c>ApiToken/{hashPrefix}</c> index entry under the well-known System
@@ -802,6 +836,13 @@ internal class ApiTokenService(
                 "API token validation failed at {Stage} for hash prefix {HashPrefix} after {ElapsedMs} ms (expired {ExpiresAt})",
                 "expired", hashPrefix, elapsed.ElapsedMilliseconds, apiToken.ExpiresAt.Value);
             return TokenValidationResult.Invalid("Token expired");
+        }
+        if (OAuthTokenLifetime.IsIdle(apiToken, DateTimeOffset.UtcNow))
+        {
+            logger.LogWarning(
+                "API token validation failed at {Stage} for hash prefix {HashPrefix} after {ElapsedMs} ms (OAuth token unused since {LastUse})",
+                "oauth-idle-expired", hashPrefix, elapsed.ElapsedMilliseconds, apiToken.LastUsedAt ?? apiToken.CreatedAt);
+            return TokenValidationResult.Invalid("OAuth token expired after being unused");
         }
 
         // Update LastUsedAt via the canonical workspace remote stream —

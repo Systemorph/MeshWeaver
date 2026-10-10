@@ -681,6 +681,14 @@ data:
   # inferred from name resemblance. It may be set through an overlay's config.memex_portal or a
   # record's extraPortalConfig; the values path below is what the instance record renders.
   SelfUpdate__RegistryValidationUrl: "{{ (.Values.selfUpdate).registryValidationUrl | default .Values.config.memex_portal.SelfUpdate__RegistryValidationUrl | default "" }}"
+  {{- if and (.Values.registry).enabled ((.Values.registry).host | default "" | trim) }}
+  # 🚨 The OCI host THIS instance's plugin registry declares as its artifact registry
+  # (MeshWeaver#4123): served on the bundle index as `artifactRegistry`, it is the one host besides
+  # this portal's own to which a consumer presents the instance key it holds here. Rendered from the
+  # hosted registry's own `registry.host`, so the declaration is the registry record's, made once —
+  # never a publisher-written bundle entry, and never copied into each consumer.
+  PluginBundles__ArtifactRegistry: "{{ .Values.registry.host | trim }}"
+  {{- end }}
   # 🚨 WHETHER THIS INSTALL MAY PATCH ITS OWN WORKLOADS (MeshWeaver#4098) — rendered from the SAME
   # value that renders (or, by default, does NOT render) the memex-portal-self-update Role in
   # rbac.yaml, so the right and the intent to use it are one declaration. "false" (the chart's

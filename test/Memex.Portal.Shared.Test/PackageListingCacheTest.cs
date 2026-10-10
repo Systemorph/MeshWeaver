@@ -158,6 +158,133 @@ public class PackageListingCacheTest
     }
 
     /// <summary>
+    /// 🚨 MeshWeaver#4963 — past the window the HELD listing answers at once while the re-read runs
+    /// behind it. Production, 2026-10-09: an expired entry made the request that found it wait for
+    /// the re-read, and on the fleet registry that wait outlasted the 25 s answer budget — 123
+    /// catalog refusals in 110 minutes with every source listing "running 24.9 s". The re-read here
+    /// is a source that has NOT answered yet: the request must not wait for it, and its answer must
+    /// replace the held one once it lands.
+    /// </summary>
+    [Fact]
+    public async Task PastTheWindow_TheHeldListingAnswersAtOnce_AndTheReReadReplacesItWhenItLands()
+    {
+        var ticks = 0L;
+        var cache = new PackageListingCache(Window, () => ticks);
+        var reads = 0;
+
+        var first = await Listing(Wrap(cache, NewSourcePerRequest(() => reads++, Manifest("Hosting"))));
+        Assert.Equal(["Hosting"], first.Select(p => p.Id));
+
+        ticks += StopwatchTicks(Window) * 2;
+        var reRead = new Subject<IReadOnlyList<PackageManifest>>();
+        var served = await Listing(Wrap(cache, new FakeSource(_ => { reads++; return reRead; })));
+
+        Assert.Equal(["Hosting"], served.Select(p => p.Id));
+        Assert.Equal(2, reads);
+
+        // A second request while the re-read is still in flight joins it rather than starting another.
+        var again = await Listing(Wrap(cache, new FakeSource(_ => { reads++; return reRead; })));
+        Assert.Equal(["Hosting"], again.Select(p => p.Id));
+        Assert.Equal(2, reads);
+
+        reRead.OnNext([Manifest("Hosting"), Manifest("Education")]);
+        reRead.OnCompleted();
+
+        var landed = await Listing(Wrap(cache, NewSourcePerRequest(() => reads++)));
+        Assert.Equal(["Hosting", "Education"], landed.Select(p => p.Id));
+        Assert.Equal(2, reads);
+    }
+
+    /// <summary>Negative control for the test above: a key that has NEVER been read has nothing to
+    /// answer from, so its first caller does wait for the source — the stall is real, and only the
+    /// held listing is what the fix serves past it.</summary>
+    [Fact]
+    public async Task AKeyNeverRead_WaitsForItsFirstRead()
+    {
+        var cache = new PackageListingCache(Window);
+        await Wrap(cache, new FakeSource(_ => Observable.Never<IReadOnlyList<PackageManifest>>()))
+            .ListPackages(Ref)
+            .Should().NotEmit(within: TimeSpan.FromMilliseconds(500),
+                because: "with nothing held, the first caller can only be answered by the source",
+                cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    /// <summary>A FAILED re-read keeps the held listing in service — a transient GitHub fault must not
+    /// turn a catalog that worked into an empty one — and leaves the entry expired, so the very next
+    /// request asks the source again rather than treating the old listing as fresh.</summary>
+    [Fact]
+    public async Task AFailedReRead_KeepsServingTheHeldListing_AndTheNextRequestAsksAgain()
+    {
+        var ticks = 0L;
+        var cache = new PackageListingCache(Window, () => ticks);
+        var reads = 0;
+
+        await Listing(Wrap(cache, NewSourcePerRequest(() => reads++, Manifest("Hosting"))));
+        ticks += StopwatchTicks(Window) * 2;
+
+        var failing = new FakeSource(_ =>
+        {
+            reads++;
+            return Observable.Throw<IReadOnlyList<PackageManifest>>(new InvalidOperationException("GitHub said no"));
+        });
+        Assert.Equal(["Hosting"], (await Listing(Wrap(cache, failing))).Select(p => p.Id));
+        Assert.Equal(["Hosting"], (await Listing(Wrap(cache, failing))).Select(p => p.Id));
+
+        Assert.Equal(3, reads);
+    }
+
+    /// <summary>
+    /// ONE subscription per revalidation (review of #6389): every request that finds the entry
+    /// expired while the re-read is in flight answers from the held listing WITHOUT subscribing to
+    /// the re-read. Measured by its terminal: when the stalled re-read finally faults, the failure is
+    /// logged once — not once per request that saw the expiry, which is what one retained observer
+    /// per request looked like.
+    /// </summary>
+    [Fact]
+    public async Task ManyRequestsDuringOneStalledReRead_HoldOneSubscription()
+    {
+        var ticks = 0L;
+        var log = new CapturingLogger<PackageListingCache>();
+        var cache = new PackageListingCache(Window, () => ticks, log);
+        var reads = 0;
+
+        await Listing(Wrap(cache, NewSourcePerRequest(() => reads++)));
+        ticks += StopwatchTicks(Window) * 2;
+        var reRead = new Subject<IReadOnlyList<PackageManifest>>();
+        for (var request = 0; request < 5; request++)
+            await Listing(Wrap(cache, new FakeSource(_ => { reads++; return reRead; })));
+        Assert.Equal(2, reads);
+
+        reRead.OnError(new InvalidOperationException("GitHub said no"));
+
+        Assert.Single(log.Lines(Microsoft.Extensions.Logging.LogLevel.Warning),
+            l => l.Contains("revalidating", StringComparison.Ordinal));
+    }
+
+    /// <summary>A green build that lands WHILE a re-read is in flight: that read started before the
+    /// merge, so its answer is served but stays stale — the next request reads again.</summary>
+    [Fact]
+    public async Task AReReadThatStartedBeforeAGreenBuild_LandsStale()
+    {
+        var ticks = 0L;
+        var cache = new PackageListingCache(Window, () => ticks);
+        var reads = 0;
+
+        await Listing(Wrap(cache, NewSourcePerRequest(() => reads++)));
+        ticks += StopwatchTicks(Window) * 2;
+        var reRead = new Subject<IReadOnlyList<PackageManifest>>();
+        await Listing(Wrap(cache, new FakeSource(_ => { reads++; return reRead; })));
+        Assert.Equal(2, reads);
+
+        Assert.Equal(1, cache.EvictRepo(Repo));
+        reRead.OnNext([Manifest("Hosting")]);
+        reRead.OnCompleted();
+
+        await Listing(Wrap(cache, NewSourcePerRequest(() => reads++)));
+        Assert.Equal(3, reads);
+    }
+
+    /// <summary>
     /// The PRIMARY invalidation: a green build of that repository forgets its listings immediately,
     /// so a merge does not have to wait out the window. And it forgets only that repository —
     /// spelled with or without <c>.git</c>, because the webhook and the configured source disagree.

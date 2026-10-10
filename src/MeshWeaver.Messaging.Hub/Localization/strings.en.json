@@ -1142,6 +1142,7 @@
   "apiTokens.field.labelPlaceholder": "e.g. Claude Code",
   "apiTokens.field.expiryDays": "Expires in (days)",
   "apiTokens.needLabel": "Please enter a label.",
+  "apiTokens.reservedLabel": "Labels starting with \"OAuth:\" are reserved for connections signed in through OAuth. Please choose another label.",
   "apiTokens.starting": "Starting…",
   "apiTokens.creating": "Creating token",
   "apiTokens.copyNow": "Copy your token now — it will not be shown again.",
