@@ -646,8 +646,9 @@ reports `Unavailable` rather than vanishing.
 gate — ends its chain in `TakeDecisionOutsideGate().Timeout(budget).Catch(…)`, which covers a value and
 a fault. `Take(1)` on an empty fold completes empty; `Timeout` forwards that completion unchanged (it
 bounds silence *before* a terminal, not an empty one); the `Catch` never fires; and the validator emits
-**no** `NodeValidationResult`. `RunCreationValidatorsObs`'s `Concat` skips a validator that yields
-nothing, so "no verdict" read as "nothing objected" — measured: a caller holding **no grant at all**
+**no** `NodeValidationResult`. `RunCreationValidatorsObs`'s `Concat` skipped a validator that yielded
+nothing (since #6391 the runner itself refuses such a validator, for every validator — see
+[Write Verdict Totality](../WriteVerdictTotality)), so "no verdict" read as "nothing objected" — measured: a caller holding **no grant at all**
 created a node under a silent evaluator and got back `State = Active, CreatedBy = <that user>`. It now
 ends in `.DefaultIfEmpty(UnestablishedCheck(…, cause: null))`, whose message names the silent case
 apart from the stalled and the faulted one, because the three have different causes.

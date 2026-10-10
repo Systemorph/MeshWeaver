@@ -731,6 +731,37 @@ stall on a named validator is that validator's read. `LifecycleRequestsAlwaysRea
 pins it: the silent validator's type name is in the verdict, and the assertion fails on the code
 before the change, which said only `validators`.
 
+**Each validator gives EXACTLY ONE verdict, and the runner enforces it** (MeshWeaver#6391). The
+`INodeValidator` contract is "emits exactly one `NodeValidationResult` and completes".
+`RunCreationValidatorsObs` used to trust that, and two ways of breaking it went unnoticed:
+
+- **A validator that answered and stayed subscribed blocked the rest.** `Concat` subscribes to
+  validator *i+1* only when validator *i* COMPLETES. So a validator that answered `Valid` from a
+  live read (a hot fold that never completes) held every validator after it. As the last one it held
+  the create itself, until the create's deadline answered it as a stall at
+  `validators: <that validator>`, although that validator had already answered. Now each validator's
+  first emission is its verdict (`Take(1)` per validator).
+- **A validator that completed WITHOUT a verdict counted as a pass.** `Concat` skipped it, and the
+  create went ahead as though it had been approved. This is the #2742 fail-open, which
+  [Access Control](../AccessControl) closed inside `RlsNodeValidator` alone. It is now closed for
+  every validator: an empty completion refuses the create as `Unavailable`
+  (`activity.node.create.validatorGaveNoVerdict`). The refusal names the path and the validator, and
+  nothing is written. Unavailable, not `ValidationFailed`, because nothing objected to the request:
+  the check was never established.
+
+A validator that **never answers at all** is deliberately **not** given a bound of its own. The
+create's deadline already answers it and names it (`validators: <TypeName> (i/n)`). A per-validator
+timeout would only turn a stall into a refusal one rung earlier, and would leave the actual defect
+in place: why that validator's read does not answer. The production stall that #6391 reports is
+still open on that question.
+
+Pinned by `CreationValidatorGivesExactlyOneVerdictTest` (MeshWeaver.Hosting.Test). One test arms a
+validator that answers `Valid` and then never completes, followed by one that refuses: the refusal
+arrives, and without the refusing validator the create commits. Another arms a validator that
+completes empty: the create is refused `Unavailable`, the validator is named, and nothing is stored.
+An unarmed control covers both. On the code before the change, the first two were answered only at
+the deadline, as a stall, and the empty validator's node was CREATED.
+
 **The deadline must release the hub after a prompt create.** Rx's absolute `Timeout` schedules a
 `LocalScheduler.WorkItem` that can remain in its priority queue until the deadline even after the
 subscription completes and disposes. Its fallback observable therefore captures only a small
