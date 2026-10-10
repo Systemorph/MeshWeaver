@@ -401,7 +401,7 @@ name:
 |---|---|---|
 | `slots` | `[0,1,…,count-1]` | one opaque position per instance; the matrix is built from this |
 | `count` | the number of live installations | the denominator |
-| `digest` | sha256 over the roster and the source map, salted with the private roster, written as single digits joined by underscores (`4_0_7_…`) | lets a verify job prove it derived the *same* roster; without the secret it cannot be recomputed, so the public value confirms no guessed name. The shape is the point: a hex string can spell a masked word and a plain decimal one can contain an all-digit id or a numeric secret, and an output containing either is dropped. A value can occur inside this one only if it itself alternates single digits with underscores |
+| `digest` | HMAC-SHA256 over the roster and the source map, keyed with a secret both jobs hold and salted with the private roster, written as single digits joined by underscores (`4_0_7_…`) | lets a verify job prove it derived the *same* roster; without the key it cannot be recomputed, so the public value confirms no guessed name. The shape is the point: a hex string can spell a masked word and a plain decimal one can contain an all-digit id or a numeric secret, and an output containing either is dropped. A value can occur inside this one only if it itself alternates single digits with underscores |
 
 Each `verify` job then runs the **same** derivation the preflight ran
 (`derive-combo-instances.py --discover --slot N --expect-count … --expect-digest …`), takes the row at
@@ -424,7 +424,9 @@ public only when the repository declaring it is in the committed
 id or host. Everything else is private — including every client row when the private-roster secret
 is missing, so a lost secret cannot turn a client's rows public. The preflight counts a private row
 without naming it, masks its derived host and id, and removes private identifiers from blocker and
-exclusion lines, where an id too short to be a log mask would otherwise be printed. For such a row the
+exclusion lines, where an id too short to be a log mask would otherwise be printed. A registry
+source that only an uncommitted repository's records declare is treated the same way: masked, and
+shown as `<private>` in the log and the summary. For such a row the
 lander prints the verdict and counts only: no name, no host, no response body, no module id, and the
 verifier's own output goes to a file that is never uploaded. The failed-verification artifact
 (`combo.json`, an installation's module list) is uploaded only when `INSTANCE_PRIVATE` is literally

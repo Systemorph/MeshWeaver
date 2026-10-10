@@ -64,6 +64,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import hmac
 import importlib.util
 import json
 import os
@@ -272,6 +273,8 @@ def read_scans(repos: list[str], root: str | None):
 
 # 2**256 has 78 decimal digits; the digest is zero-padded to that, so its length is a constant.
 DIGEST_DIGITS = 78
+# The HMAC key of the roster digest. Any high-entropy secret both jobs receive identically.
+DIGEST_KEY_ENV = "MW_COMBO_DIGEST_KEY"
 
 
 def roster_digest(rows: list[dict[str, str]], sources: str) -> str:
@@ -299,7 +302,12 @@ def roster_digest(rows: list[dict[str, str]], sources: str) -> str:
     `digest_can_contain` states the rule so the self-test can hold it."""
     salt = os.environ.get(lock.PRIVATE_ROSTER_ENV, "").strip()
     body = json.dumps({"instances": rows, "sources": sources}, separators=(",", ":"), sort_keys=True)
-    digest = hashlib.sha256(f"{salt}\n{body}".encode("utf-8")).hexdigest()
+    # 🚨 KEYED (HMAC), NOT MERELY SALTED. The private roster is OPTIONAL, and rows stay private
+    # without it — so a digest salted with it alone would, in that state, be a plain hash of
+    # low-entropy names: an offline oracle for a guessed private name. `DIGEST_KEY_ENV` carries a
+    # high-entropy secret the workflow hands to BOTH jobs; `main` refuses to run in CI without it.
+    key = os.environ.get(DIGEST_KEY_ENV, "").encode("utf-8")
+    digest = hmac.new(key, f"{salt}\n{body}".encode("utf-8"), hashlib.sha256).hexdigest()
     return "_".join(f"{int(digest, 16):0{DIGEST_DIGITS}d}")
 
 
@@ -382,7 +390,35 @@ def is_private_row(row: dict[str, str], declared_in: str,
     return _is_private(row["name"], row["baseUrl"].split("//", 1)[-1], declared_in, public_repos)
 
 
-def redactor(instances, repos: list[str], public_repos: frozenset[str] | None):
+def private_sources(scans, public_repos: frozenset[str] | None) -> list[tuple[str, str]]:
+    """(name, url) of every registry source that ONLY an uncommitted repository's records declare.
+
+    A deployment record's `pluginRepos` names the module repositories an installation draws from —
+    for a client estate, the client's own. They are in no roster, so nothing else classifies them:
+    a source is public only when a COMMITTED repository's records declare that same name and URL."""
+    def is_public(scan) -> bool:
+        return public_repos is not None and scan.gh_repo.lower() in public_repos
+    public = {(name.casefold(), url) for scan in scans if is_public(scan)
+              for name, url, _ in scan.sources}
+    found = {(name, url) for scan in scans if not is_public(scan)
+             for name, url, _ in scan.sources if (name.casefold(), url) not in public}
+    return sorted(found)
+
+
+def mask_private_sources(scans, public_repos: frozenset[str] | None) -> int:
+    """Register every private source URL (and name, when long enough) as a log mask."""
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        return 0
+    masked = 0
+    for name, url in private_sources(scans, public_repos):
+        for value in (url, f"{name}={url}", name if len(name) >= 4 else ""):
+            if value:
+                print(f"::add-mask::{value}")
+                masked += 1
+    return masked
+
+
+def redactor(instances, repos: list[str], public_repos: frozenset[str] | None, scans=()):
     """A function that removes every private identifier from a diagnostic line.
 
     🚨 FOR THE PATHS A MASK CANNOT COVER. A log mask needs four characters, and a blocker or an
@@ -401,6 +437,8 @@ def redactor(instances, repos: list[str], public_repos: frozenset[str] | None):
     for repo in repos:
         if public_repos is None or repo.lower() not in public_repos:
             values.update({repo, repo.split("/", 1)[-1]})
+    for name, url in private_sources(scans, public_repos):
+        values.update({name, url, url.rsplit("/", 1)[-1]})
     values.discard("")
     ordered = sorted(values, key=len, reverse=True)
 
@@ -506,6 +544,11 @@ def resolve_slot(rows: list[dict[str, str]], sources: str, slot: str,
     return 0
 
 
+def shown_source(source: str, redact) -> str:
+    """A `name=url` pair as it may be printed: whole, or `<private>` if any part of it is private."""
+    return source if redact(source) == source else "<private>"
+
+
 def report(rows, excluded, blockers, repos: list[str], sources: str,
            private_names: frozenset[str] = frozenset(), redact=lambda text: text) -> int:
     """Print the derivation. `private_names` are roster rows the private roster names: they are
@@ -526,7 +569,7 @@ def report(rows, excluded, blockers, repos: list[str], sources: str,
         else:
             print(f"derived   {row['name']}: {row['baseUrl']}")
     for source in sources.split():
-        print(f"source    {source}")
+        print(f"source    {shown_source(source, redact)}")
     payload = json.dumps(rows, separators=(",", ":"))
     print(f"{len(rows)} live installation(s) and {len(sources.split())} registry source(s) derived "
           f"from {len(repos)} repository(ies); "
@@ -554,9 +597,9 @@ def report(rows, excluded, blockers, repos: list[str], sources: str,
                     handle.write(f"- `{row['name']}` → {row['baseUrl']}\n")
             handle.write("\n## Registry sources (derived from DeploymentContent.PluginRepos)\n\n")
             for source in sources.split():
-                handle.write(f"- `{source}`\n")
+                handle.write(f"- `{shown_source(source, redact)}`\n")
             for identifier, state, _ in excluded:
-                handle.write(f"- ~~`{identifier}`~~ — declared `{state}`\n")
+                handle.write(redact(f"- ~~`{identifier}`~~ — declared `{state}`") + "\n")
     return 0
 
 
@@ -871,6 +914,67 @@ def self_test() -> int:
     check(naive_verdicts == [False],
           "…and the control: the name-keyed lookup this replaced classifies that same row PUBLIC")
 
+    # 🚨 THE DIGEST IS KEYED. Without the private roster the salt is empty while rows can still be
+    # private, so the key is what keeps the public value from confirming a guessed name.
+    os.environ.pop(lock.PRIVATE_ROSTER_ENV, None)
+    unkeyed = roster_digest(rows, derived_sources)
+    os.environ[DIGEST_KEY_ENV] = "key-one"
+    try:
+        keyed_one = roster_digest(rows, derived_sources)
+        keyed_again = roster_digest(rows, derived_sources)
+        os.environ[DIGEST_KEY_ENV] = "key-two"
+        keyed_two = roster_digest(rows, derived_sources)
+    finally:
+        del os.environ[DIGEST_KEY_ENV]
+    check(keyed_one == keyed_again and len({unkeyed, keyed_one, keyed_two}) == 3
+          and all(is_digest(value) for value in (unkeyed, keyed_one, keyed_two)),
+          "the digest depends on the key (two keys, two digests; no key, a third) and is stable "
+          "under one key — so the same roster cannot be confirmed without the secret")
+
+    # 🚨 A CLIENT'S REGISTRY SOURCES. They are in no roster, so only provenance can classify them.
+    source_scans = [
+        _scan("Systemorph/Memex", [], sources=[
+            ("Plugins", "https://github.com/Systemorph/MeshWeaver.Plugins", "Deployments/memex.json")]),
+        _scan("Systemorph/Umbrella.Memex", [], sources=[
+            ("Plugins", "https://github.com/Systemorph/MeshWeaver.Plugins", "Deployments/a.json"),
+            ("GlobexRisk", "https://github.com/Globex/Risk.Modules", "Deployments/a.json")]),
+    ]
+    two_sources, _ = derive_sources(source_scans)
+    import contextlib
+    import io
+    with tempfile.TemporaryDirectory() as tmp:
+        summary_file = Path(tmp) / "summary"
+        os.environ["GITHUB_STEP_SUMMARY"] = str(summary_file)
+        os.environ.pop("GITHUB_OUTPUT", None)
+        printed = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(printed):
+                report(rows, [("Systemorph/Umbrella.Memex:q7", "retired", "gone")], [],
+                       ["Systemorph/Memex", "Systemorph/Umbrella.Memex"], two_sources,
+                       redact=redactor([], ["Systemorph/Memex", "Systemorph/Umbrella.Memex"],
+                                       public, source_scans))
+        finally:
+            del os.environ["GITHUB_STEP_SUMMARY"]
+        log_text, summary_text = printed.getvalue(), summary_file.read_text(encoding="utf-8")
+    check(private_sources(source_scans, public) == [("GlobexRisk", "https://github.com/Globex/Risk.Modules")]
+          and private_sources(source_scans, None) != []
+          and all("Globex" not in text and "Risk.Modules" not in text and "Umbrella" not in text
+                  and "MeshWeaver.Plugins" in text and "<private>" in text
+                  for text in (log_text, summary_text)),
+          "a source only an uncommitted repository declares is `<private>` in log AND summary; a "
+          "source a committed repository also declares is named; the summary's excluded line "
+          "does not name a private repository")
+    os.environ["GITHUB_ACTIONS"] = "true"
+    printed = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(printed):
+            masked_sources = mask_private_sources(source_scans, public)
+    finally:
+        del os.environ["GITHUB_ACTIONS"]
+    check(masked_sources == 3 and "::add-mask::https://github.com/Globex/Risk.Modules\n" in printed.getvalue()
+          and "MeshWeaver.Plugins" not in printed.getvalue(),
+          "a private source's URL, pair and name are masked; a public source is not")
+
     # 🚨 THE SECRET IS MISSING. With no private roster at all, a client repository's row must
     # still be private: public is what has to be shown (a COMMITTED repository), never private.
     os.environ.pop(lock.PRIVATE_ROSTER_ENV, None)
@@ -911,8 +1015,6 @@ def self_test() -> int:
     short_instances = lock.build_instances(short_scans, short_roster, probe=_no_probe)[0]
     short_derived, short_excluded, short_blockers = derive(short_scans, short_roster)
     scanned = ["Systemorph/Memex", "Systemorph/Umbrella.Memex"]
-    import contextlib
-    import io
     shown = {}
     for label, redact in (("redacted", redactor(short_instances, scanned, public)),
                           ("raw", lambda text: text)):
@@ -1001,7 +1103,7 @@ def self_test() -> int:
     check(digest_can_contain("4_2") and digest_can_contain("_7_") and not digest_can_contain("42"),
           "the containment rule is not vacuous: only a digit/underscore alternation can occur")
     found = 0
-    for variant in range(400):
+    for variant in range(3000):
         candidate = roster_digest(rows, f"{derived_sources} Probe{variant}=https://x.example")
         if not is_digest(candidate):
             found += 1
@@ -1009,13 +1111,13 @@ def self_test() -> int:
                      for number in ("12", "123", "1234", "00", "000", "0000", "99", "4242")
                      if len(number) == width and number in candidate)
     check(found == 0,
-          "400 different digests: none contains any 2-, 3- or 4-digit number (a plain decimal "
+          "3000 different digests: none contains any 2-, 3- or 4-digit number (a plain decimal "
           "digest contains `1234` within a few hundred)")
-    plain = sum(1 for variant in range(400)
+    plain = sum(1 for variant in range(3000)
                 if "1234" in roster_digest(rows, f"{derived_sources} P{variant}=https://x.example")
                 .replace("_", ""))
     check(plain > 0,
-          "…and the control: the SAME 400 digests with the separators removed do contain `1234`, "
+          "…and the control: the SAME 3000 digests with the separators removed do contain `1234`, "
           "so the search above can find what it is looking for")
 
     if failures:
@@ -1076,11 +1178,18 @@ def main() -> int:
     # blocker naming one, and before `report` or `resolve_slot` prints anything.
     instances = lock.build_instances(scans, roster, probe=_no_probe)[0]
     mask_private_instances(instances, public_repos)
+    mask_private_sources(scans, public_repos)
     owners = row_owners(instances)
-    redact = redactor(instances, repos, public_repos)
+    redact = redactor(instances, repos, public_repos, scans)
     rows, excluded, blockers = derive(scans, roster)
     sources, source_blockers = derive_sources(scans)
     all_blockers = roster_problems + blockers + source_blockers
+    if os.environ.get("GITHUB_ACTIONS") == "true" and not os.environ.get(DIGEST_KEY_ENV, "").strip():
+        all_blockers.append(
+            f"{DIGEST_KEY_ENV} is empty. The roster digest that crosses the job boundary is an "
+            "HMAC, and without a key it is a plain hash of installation names — a public value "
+            "that would confirm a guessed private name. The workflow maps a secret into this "
+            "variable for BOTH the preflight's derivation and each verify job's slot step.")
     if args.slot is not None and not all_blockers:
         return resolve_slot(rows, sources, args.slot, args.expect_count, args.expect_digest,
                             owners, public_repos)

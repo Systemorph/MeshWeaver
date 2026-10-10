@@ -200,6 +200,9 @@ jobs:
           GH_TOKEN: ${{ steps.fleet-token.outputs.token }}
           # A client estate's roster lines are private — see lock-pinned-digests.py PRIVATE_ROSTER_ENV.
           MW_ACR_PRIVATE_ROSTER: ${{ secrets.ACR_RETENTION_PRIVATE_ROSTER }}
+          # The HMAC key of the roster digest — any high-entropy secret BOTH jobs receive identically.
+          # The preflight already asserts this one. It is used as key material only, never printed.
+          MW_COMBO_DIGEST_KEY: ${{ secrets.FLEET_READER_APP_PRIVATE_KEY }}
         run: |
           set -euo pipefail
           python3 .github/scripts/derive-combo-instances.py --discover
@@ -312,6 +315,9 @@ jobs:
           GH_TOKEN: ${{ steps.repo-token.outputs.token }}
           # A client estate's roster lines are private — see lock-pinned-digests.py PRIVATE_ROSTER_ENV.
           MW_ACR_PRIVATE_ROSTER: ${{ secrets.ACR_RETENTION_PRIVATE_ROSTER }}
+          # The HMAC key of the roster digest — any high-entropy secret BOTH jobs receive identically.
+          # The preflight already asserts this one. It is used as key material only, never printed.
+          MW_COMBO_DIGEST_KEY: ${{ secrets.FLEET_READER_APP_PRIVATE_KEY }}
           SLOT: ${{ matrix.slot }}
           EXPECT_COUNT: ${{ needs.preflight.outputs.count }}
           EXPECT_DIGEST: ${{ needs.preflight.outputs.digest }}

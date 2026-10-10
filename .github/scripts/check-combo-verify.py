@@ -156,6 +156,8 @@ SENTINELS = {"assert": "missing=()",
 # The verdict step lives in its own job; same rule — by id, with a sentinel.
 VERDICT_SENTINEL = "the preflight was SKIPPED although the triggering CD concluded"
 VERIFY_JOB_NAME = "Verify instance slot ${{ matrix.slot }} against its roll target"
+# The roster digest's HMAC key: a secret the preflight asserts, identical in both jobs.
+DIGEST_KEY = "${{ secrets.FLEET_READER_APP_PRIVATE_KEY }}"
 # The ONLY condition under which a verify job may upload anything (see handover_problems).
 UPLOAD_CONDITION = "failure() && env.INSTANCE_PRIVATE == 'false'"
 # …and what it may be called and may contain: the slot, never a name. An artifact's name and the
@@ -494,6 +496,11 @@ def handover_problems(doc: dict) -> list[str]:
             problems.append(f"the roster assertion must read {name} from {want}, not an external "
                             "variable.")
 
+    # The digest is an HMAC: the preflight's derivation and every slot step must hold the SAME key,
+    # or no slot would ever match — and neither may run without one (an unkeyed digest of
+    # low-entropy names confirms a guess).
+    if by_id.get("derive", {}).get("env", {}).get("MW_COMBO_DIGEST_KEY") != DIGEST_KEY:
+        problems.append(f"the preflight's derivation must set MW_COMBO_DIGEST_KEY to {DIGEST_KEY}.")
     matrix = verify.get("strategy", {}).get("matrix", {})
     if matrix != {"slot": "${{ fromJSON(needs.preflight.outputs.slots) }}"}:
         problems.append(
@@ -534,7 +541,8 @@ def handover_problems(doc: dict) -> list[str]:
         for key, want in (("SLOT", "${{ matrix.slot }}"),
                           ("EXPECT_COUNT", "${{ needs.preflight.outputs.count }}"),
                           ("EXPECT_DIGEST", "${{ needs.preflight.outputs.digest }}"),
-                          ("MW_ACR_PRIVATE_ROSTER", "${{ secrets.ACR_RETENTION_PRIVATE_ROSTER }}")):
+                          ("MW_ACR_PRIVATE_ROSTER", "${{ secrets.ACR_RETENTION_PRIVATE_ROSTER }}"),
+                          ("MW_COMBO_DIGEST_KEY", DIGEST_KEY)):
             if env.get(key) != want:
                 problems.append(f"the slot step must set {key} to {want}; it has {env.get(key)!r}.")
         for flag in ('--slot "$SLOT"', '--expect-count "$EXPECT_COUNT"',
@@ -846,6 +854,12 @@ def self_test(root: Path) -> int:
             lambda jobs: [step.update(run=step["run"].replace("${INSTANCE_PRIVATE:?", "${X:-"))
                           for step in jobs["verify"]["steps"]
                           if "combo-verify-instance.sh" in str(step.get("run", ""))],
+        "the digest key dropped from the preflight":
+            lambda jobs: [step["env"].pop("MW_COMBO_DIGEST_KEY") for step in jobs["preflight"]["steps"]
+                          if step.get("id") == "derive"],
+        "the digest key different in the verify job":
+            lambda jobs: [step["env"].update(MW_COMBO_DIGEST_KEY="${{ secrets.OTHER }}")
+                          for step in jobs["verify"]["steps"] if "--slot" in str(step.get("run", ""))],
         "the verdict no longer counting jobs":
             lambda jobs: jobs["verdict"].update(steps=[
                 step for step in jobs["verdict"]["steps"] if step.get("id") != "jobs"]),
