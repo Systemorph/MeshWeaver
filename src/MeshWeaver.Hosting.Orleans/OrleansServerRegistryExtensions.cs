@@ -143,6 +143,12 @@ public static class OrleansServerRegistryExtensions
             // notices. Pinned by CrossGenerationManifestExchangeTest; see RollingUpdateBuildTolerance.
             services.Configure<global::Orleans.Configuration.ClusterManifestOptions>(
                 options => options.EnableContentAddressedRetrieval = false);
+            // Issue #6395. A healthy silo must not be voted dead by a probe stall that a live
+            // process recovers from. ClusterMembershipTolerance widens Orleans' probe window for
+            // every MeshWeaver silo; it is registered FIRST in the container, so a host's, a
+            // deployment's or a test fixture's explicit ClusterMembershipOptions still wins.
+            // Pinned by ClusterMembershipToleranceTest.
+            services.AddMeshWeaverClusterMembershipTolerance();
         });
 
         silo.AddMemoryStreams(StreamProviders.Memory);
