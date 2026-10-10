@@ -54,6 +54,8 @@ back with nothing — for ANY reason — exits 1 rather than emitting `[]`:
 Usage:
     python3 .github/scripts/derive-combo-instances.py --discover    # GH_TOKEN = installation token
     python3 .github/scripts/derive-combo-instances.py --repos Systemorph/Memex
+    python3 .github/scripts/derive-combo-instances.py --discover --slot 2 \
+        --expect-count 6 --expect-digest <digest>     # ONE verify job's row → $GITHUB_ENV
     python3 .github/scripts/derive-combo-instances.py --root .      # one local checkout
     python3 .github/scripts/derive-combo-instances.py --self-test   # no network
 """
@@ -61,9 +63,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
+import hmac
 import importlib.util
 import json
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -266,40 +271,335 @@ def read_scans(repos: list[str], root: str | None):
     return [lock.scan_overlays_remote(repo, REGISTRY_FOR_SCAN) for repo in repos]
 
 
-def report(rows, excluded, blockers, repos: list[str], sources: str) -> int:
+# 2**256 has 78 decimal digits; the digest is zero-padded to that, so its length is a constant.
+DIGEST_DIGITS = 78
+# The HMAC key of the roster digest. Any high-entropy secret both jobs receive identically.
+DIGEST_KEY_ENV = "MW_COMBO_DIGEST_KEY"
+
+
+def roster_digest(rows: list[dict[str, str]], sources: str) -> str:
+    """One opaque value that says "the same roster and the same source map" across a job boundary.
+
+    🚨 WHY A DIGEST AND NOT THE ROSTER (#3848). The roster names installations a client estate keeps
+    private, the private roster registers those names as log masks, and the runner refuses to pass
+    ANY job output that contains a masked value. So the preflight hands the verify matrix opaque
+    slot numbers, each verify job derives the roster again and takes its own row — and this value is
+    how that second derivation is held to the first: an overlay that changed between the two jobs
+    is a RED naming the drift, never a verdict landed on a different installation than the one the
+    preflight counted.
+
+    🚨 SALTED WITH THE PRIVATE ROSTER, so the public value confirms nothing to a reader who can only
+    guess at a private name: without the secret document the digest cannot be recomputed. Absent
+    (a fork, a local run) there is nothing private in the roster to protect.
+
+    🚨 ONE DIGIT, ONE SEPARATOR, ALTERNATING — for the very reason this function exists. A job
+    output is dropped when it CONTAINS a masked value, and no plain alphabet is safe from that: hex
+    spells words (`cafe`, `beef`), and decimal digits collide with an all-digit installation id or
+    a numeric secret such as a GitHub App id (a 4-digit value sits inside a 78-digit number about
+    once in 130 runs). So the digest is written `d_d_d_…`: every two adjacent characters are one
+    digit and one underscore, which means a value can only occur inside it if that value ITSELF
+    alternates single digits with underscores. No identifier and no credential has that shape, and
+    `digest_can_contain` states the rule so the self-test can hold it."""
+    salt = os.environ.get(lock.PRIVATE_ROSTER_ENV, "").strip()
+    body = json.dumps({"instances": rows, "sources": sources}, separators=(",", ":"), sort_keys=True)
+    # 🚨 KEYED (HMAC), NOT MERELY SALTED. The private roster is OPTIONAL, and rows stay private
+    # without it — so a digest salted with it alone would, in that state, be a plain hash of
+    # low-entropy names: an offline oracle for a guessed private name. `DIGEST_KEY_ENV` carries a
+    # high-entropy secret the workflow hands to BOTH jobs; `main` refuses to run in CI without it.
+    key = os.environ.get(DIGEST_KEY_ENV, "").encode("utf-8")
+    digest = hmac.new(key, f"{salt}\n{body}".encode("utf-8"), hashlib.sha256).hexdigest()
+    return "_".join(f"{int(digest, 16):0{DIGEST_DIGITS}d}")
+
+
+def is_digest(value: str) -> bool:
+    """Whether `value` has the digest's exact shape: 78 single digits joined by underscores."""
+    return re.fullmatch(r"[0-9](?:_[0-9]){%d}" % (DIGEST_DIGITS - 1), value or "") is not None
+
+
+def digest_can_contain(value: str) -> bool:
+    """Whether `value` COULD be a substring of some digest — i.e. could get the output dropped.
+
+    True only for a value of two or more characters that alternates single digits with
+    underscores (`4_2`, `_7_`), or a single digit or underscore. Everything else — every word,
+    every number of two or more digits, every host, every token — can never occur."""
+    if len(value) < 2:
+        return value.isdigit() or value == "_"
+    return all((a.isdigit() and b == "_") or (a == "_" and b.isdigit())
+               for a, b in zip(value, value[1:]))
+
+
+def committed_repositories(root: str) -> frozenset[str]:
+    """The repositories the COMMITTED roster declares — the only ones whose rows may be public.
+
+    Read from the file in this (public) repository alone, never merged with the private roster:
+    what is written there is public by construction. Lower-cased. Unreadable means none, which
+    makes every row private — the roster reader reports the unreadable file by name."""
+    path = Path(root) / ".github" / "acr-retention" / lock.ROSTER_PATH
+    try:
+        table = json.loads(path.read_text(encoding="utf-8")).get("repositories")
+    except (OSError, ValueError, AttributeError):
+        return frozenset()
+    return frozenset(str(key).strip().lower() for key in table) if isinstance(table, dict) else frozenset()
+
+
+def _is_private(name: str, host: str, declared_in: str,
+                public_repos: frozenset[str] | None = None) -> bool:
+    """Whether this installation must be treated as a client estate's.
+
+    🚨 PUBLIC IS WHAT MUST BE SHOWN, NOT PRIVATE. An installation is public only when the
+    repository that declares it is in the COMMITTED roster (`committed_repositories`) — a
+    reviewed, public line. Everything else is private: a repository only the private roster
+    declares, a repository nobody declares, an unknown declaring repository, and every row when
+    the committed table is not supplied. So a MISSING `ACR_RETENTION_PRIVATE_ROSTER` secret
+    cannot turn a client's rows public; it leaves them exactly as private as they were.
+
+    Then, for a repository that IS committed, the private roster can still name one installation:
+
+    🚨 EXACT MATCH ON THE COMPLETE SET FIRST (`lock.private_roster_entries`, no length floor), so a
+    one-character private id is as private as a long one. Then the mask rule: anything the runner
+    would mask a part of (a private value of four or more characters occurring inside the name,
+    host or repository) is private too. Both directions fail CLOSED — more rows private, never
+    fewer. Case-insensitive, because a host is."""
+    name, host, declared_in = name.lower(), host.rstrip(".").lower(), (declared_in or "").lower()
+    if public_repos is None or declared_in not in public_repos:
+        return True
+    entries = lock.private_roster_entries()
+    if name in {v.lower() for v in entries["ids"]}:
+        return True
+    if host and host in {v.rstrip(".").lower() for v in entries["hosts"]}:
+        return True
+    if declared_in and declared_in in {v.lower() for v in entries["repos"]}:
+        return True
+    haystack = [name, host, declared_in]
+    for value in lock.private_roster_values():
+        needles = {value.lower()}
+        if "/" in value:
+            needles.add(value.split("/", 1)[1].lower())
+        if any(needle in text for needle in needles for text in haystack):
+            return True
+    return False
+
+
+def is_private_row(row: dict[str, str], declared_in: str,
+                   public_repos: frozenset[str] | None = None) -> bool:
+    """Whether a roster row belongs to a client estate — i.e. the private roster names it.
+
+    🚨 THIS REPOSITORY IS PUBLIC, and a verify job's log, step summary and artifacts are too. For a
+    private row the preflight prints no name or host, and the lander prints the verdict and counts
+    only and uploads nothing: an installation's module list is the client's inventory."""
+    return _is_private(row["name"], row["baseUrl"].split("//", 1)[-1], declared_in, public_repos)
+
+
+def private_sources(scans, public_repos: frozenset[str] | None) -> list[tuple[str, str]]:
+    """(name, url) of every registry source that ONLY an uncommitted repository's records declare.
+
+    A deployment record's `pluginRepos` names the module repositories an installation draws from —
+    for a client estate, the client's own. They are in no roster, so nothing else classifies them:
+    a source is public only when a COMMITTED repository's records declare that same name and URL."""
+    def is_public(scan) -> bool:
+        return public_repos is not None and scan.gh_repo.lower() in public_repos
+    public = {(name.casefold(), url) for scan in scans if is_public(scan)
+              for name, url, _ in scan.sources}
+    found = {(name, url) for scan in scans if not is_public(scan)
+             for name, url, _ in scan.sources if (name.casefold(), url) not in public}
+    return sorted(found)
+
+
+def mask_private_sources(scans, public_repos: frozenset[str] | None) -> int:
+    """Register every private source URL (and name, when long enough) as a log mask."""
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        return 0
+    masked = 0
+    for name, url in private_sources(scans, public_repos):
+        for value in (url, f"{name}={url}", name if len(name) >= 4 else ""):
+            if value:
+                print(f"::add-mask::{value}")
+                masked += 1
+    return masked
+
+
+def redactor(instances, repos: list[str], public_repos: frozenset[str] | None, scans=()):
+    """A function that removes every private identifier from a diagnostic line.
+
+    🚨 FOR THE PATHS A MASK CANNOT COVER. A log mask needs four characters, and a blocker or an
+    `excluded` line is built from an installation's id, host and repository verbatim — so a
+    private installation named `x9` would be printed by the very message that refuses it. This
+    works from the COMPLETE private set (no length floor): each private installation's host,
+    repository and id, and every scanned repository that is not a committed one, is replaced by
+    `<private>` wherever it stands as a whole word (so also inside an overlay path such as
+    `values.x9.yaml`). A private id equal to a public one redacts
+    both, which is the direction to be wrong in."""
+    values: set[str] = set()
+    for instance in instances:
+        if _is_private(instance.id, instance.host or "", instance.gh_repo, public_repos):
+            values.update({instance.id, instance.host or "", instance.gh_repo,
+                           instance.gh_repo.split("/", 1)[-1]})
+    for repo in repos:
+        if public_repos is None or repo.lower() not in public_repos:
+            values.update({repo, repo.split("/", 1)[-1]})
+    for name, url in private_sources(scans, public_repos):
+        values.update({name, url, url.rsplit("/", 1)[-1]})
+    values.discard("")
+    ordered = sorted(values, key=len, reverse=True)
+
+    def redact(text: str) -> str:
+        for value in ordered:
+            text = re.sub(r"(?<![A-Za-z0-9_])" + re.escape(value) + r"(?![A-Za-z0-9_])",
+                          "<private>", text, flags=re.IGNORECASE)
+        return text
+    return redact
+
+
+def row_owners(instances) -> dict[tuple[str, str], str]:
+    """(name, baseUrl) → the repository whose overlay declares that LIVE installation.
+
+    🚨 KEYED BY NAME **AND** URL, NEVER BY NAME ALONE. Identity upstream is `gh_repo:id`, so two
+    repositories may declare one id; `derive` refuses that only while BOTH are live. With one of
+    them retired, a name-keyed lookup would be answered by whichever was iterated last — and a
+    live private row could be handed the PUBLIC repository's name and be classified public."""
+    return {(instance.id, f"https://{instance.host}"): instance.gh_repo
+            for instance in instances if instance.state == "live" and instance.host}
+
+
+def mask_private_instances(instances, public_repos: frozenset[str] | None = None) -> int:
+    """Register every DERIVED identifier of a private installation as a log mask.
+
+    The private roster's own strings are masked by `lock.mask_private_roster`. That is not enough:
+    a row can be private through its declaring repository alone, and then its installation id and
+    host appear nowhere in the secret — they are derived from that repository's overlays. Called
+    before anything is printed about any installation, live or not. Returns how many it masked."""
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        return 0
+    masked = 0
+    for instance in instances:
+        if not _is_private(instance.id, instance.host or "", instance.gh_repo, public_repos):
+            continue
+        values = [instance.host or "", f"https://{instance.host}" if instance.host else ""]
+        if len(instance.id) >= 4:       # a shorter mask would shred the log; a short id is kept
+            values.append(instance.id)  # out of the log by `redactor` and by printing no name
+        for value in values:
+            if value:
+                print(f"::add-mask::{value}")
+                masked += 1
+    return masked
+
+
+def resolve_slot(rows: list[dict[str, str]], sources: str, slot: str,
+                 expect_count: str, expect_digest: str,
+                 owners: dict[tuple[str, str], str] | None = None,
+                 public_repos: frozenset[str] | None = None) -> int:
+    """ONE verify job's row of the roster, re-derived inside that job and held to the preflight's.
+
+    Writes INSTANCE_NAME / BASE_URL / SOURCES to `$GITHUB_ENV` — within one job, where a masked
+    value is masked rather than dropped. Every refusal exits 1: a verify job that cannot say WHICH
+    installation it is verifying must not verify one."""
+    def refuse(message: str) -> int:
+        print(f"::error::slot {slot!r}: {message}")
+        return 1
+
+    if not (expect_count or "").isdigit() or int(expect_count) < 1:
+        return refuse(
+            f"the preflight's instance count arrived as {expect_count!r}, not a positive integer. "
+            "The job output that carries the denominator was lost between the jobs; refusing to "
+            "verify against a roster nobody counted.")
+    if not is_digest(expect_digest):
+        return refuse(
+            "the preflight's roster digest did not arrive (the runner drops a job output that "
+            "contains a masked value, #3848). Without it this job cannot show that the roster it "
+            "derived is the one the preflight counted.")
+    if not (slot or "").isdigit():
+        return refuse("the matrix slot is not a non-negative integer.")
+    if len(rows) != int(expect_count):
+        return refuse(
+            f"this job derived {len(rows)} live installation(s) and the preflight counted "
+            f"{expect_count}. The fleet's deployment overlays changed between the two jobs; re-run "
+            "the workflow so both read the same fleet.")
+    if roster_digest(rows, sources) != expect_digest:
+        return refuse(
+            "this job derived the same NUMBER of installations as the preflight but not the same "
+            "roster or source map (digest mismatch). The fleet's deployment overlays or records "
+            "changed between the two jobs; re-run the workflow so both read the same fleet.")
+    index = int(slot)
+    if index >= len(rows):
+        return refuse(f"the roster has {len(rows)} row(s); there is no slot {index}.")
+    row = rows[index]
+    private = is_private_row(row, (owners or {}).get((row["name"], row["baseUrl"]), ""),
+                             public_repos)
+    if private:
+        # No name, no host: the masks would cover them, but a private row's line says nothing a
+        # reader of a public log needs beyond its slot.
+        print(f"slot {index} of {len(rows)}: a PRIVATE roster row ({len(sources.split())} registry "
+              "source(s)); roster digest matches the preflight's. Its job prints the verdict and "
+              "counts only and uploads no artifact.")
+    else:
+        print(f"slot {index} of {len(rows)}: {row['name']}: {row['baseUrl']} "
+              f"({len(sources.split())} registry source(s)); roster digest matches the preflight's.")
+    env_file = os.environ.get("GITHUB_ENV")
+    if env_file:
+        with open(env_file, "a", encoding="utf-8") as handle:
+            handle.write(f"INSTANCE_NAME={row['name']}\n")
+            handle.write(f"BASE_URL={row['baseUrl']}\n")
+            handle.write(f"SOURCES={sources}\n")
+            handle.write(f"INSTANCE_PRIVATE={'true' if private else 'false'}\n")
+    return 0
+
+
+def shown_source(source: str, redact) -> str:
+    """A `name=url` pair as it may be printed: whole, or `<private>` if any part of it is private."""
+    return source if redact(source) == source else "<private>"
+
+
+def report(rows, excluded, blockers, repos: list[str], sources: str,
+           private_names: frozenset[str] = frozenset(), redact=lambda text: text) -> int:
+    """Print the derivation. `private_names` are roster rows the private roster names: they are
+    COUNTED here and never named — not in the log and not in the step summary, neither of which a
+    public repository keeps private."""
+    # `redact` removes private identifiers from the lines built out of them (see `redactor`).
     for identifier, state, reason in excluded:
-        print(f"excluded  {identifier}: declared {state} — {reason[:160]}")
+        print(redact(f"excluded  {identifier}: declared {state} — {reason[:160]}"))
     if blockers:
         print("::error::the combo-verification roster and sources could not be derived:")
         for blocker in blockers:
-            print(f"  • {blocker}")
-        print(f"  Scanned {len(repos)} repository(ies): {', '.join(repos)}")
+            print(redact(f"  • {blocker}"))
+        print(redact(f"  Scanned {len(repos)} repository(ies): {', '.join(repos)}"))
         return 1
-    for row in rows:
-        print(f"derived   {row['name']}: {row['baseUrl']}")
+    for index, row in enumerate(rows):
+        if row["name"] in private_names:
+            print(f"derived   slot {index}: a private roster row (name and host withheld)")
+        else:
+            print(f"derived   {row['name']}: {row['baseUrl']}")
     for source in sources.split():
-        print(f"source    {source}")
+        print(f"source    {shown_source(source, redact)}")
     payload = json.dumps(rows, separators=(",", ":"))
     print(f"{len(rows)} live installation(s) and {len(sources.split())} registry source(s) derived "
           f"from {len(repos)} repository(ies); "
           f"{len(excluded)} declared not-live.")
     output = os.environ.get("GITHUB_OUTPUT")
     if output:
+        # 🚨 STEP outputs, and they must never become JOB outputs (#3848). `instances` and `sources`
+        # carry names the private roster masks, and the runner DROPS any job output containing a
+        # masked value ("Skip output 'instances' since it may contain secret") — silently, as a
+        # warning in a green job. Only `count` and `digest` are safe to hand to another job; each
+        # verify job re-derives its own row through --slot below.
         with open(output, "a", encoding="utf-8") as handle:
             handle.write(f"instances={payload}\n")
             handle.write(f"count={len(rows)}\n")
             handle.write(f"sources={sources}\n")
+            handle.write(f"digest={roster_digest(rows, sources)}\n")
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as handle:
             handle.write("## Combo-verification roster (derived)\n\n")
-            for row in rows:
-                handle.write(f"- `{row['name']}` → {row['baseUrl']}\n")
+            for index, row in enumerate(rows):
+                if row["name"] in private_names:
+                    handle.write(f"- slot {index}: a private roster row (name and host withheld)\n")
+                else:
+                    handle.write(f"- `{row['name']}` → {row['baseUrl']}\n")
             handle.write("\n## Registry sources (derived from DeploymentContent.PluginRepos)\n\n")
             for source in sources.split():
-                handle.write(f"- `{source}`\n")
+                handle.write(f"- `{shown_source(source, redact)}`\n")
             for identifier, state, _ in excluded:
-                handle.write(f"- ~~`{identifier}`~~ — declared `{state}`\n")
+                handle.write(redact(f"- ~~`{identifier}`~~ — declared `{state}`") + "\n")
     return 0
 
 
@@ -512,8 +812,313 @@ def self_test() -> int:
             del os.environ["GITHUB_OUTPUT"]
         text = out.read_text(encoding="utf-8")
     check(code == 0 and "instances=[{" in text and "count=2" in text
-          and "sources=FundReporting=https://github.com/Systemorph/MeshWeaver.FundReporting" in text,
-          "a passing derivation emits the matrix, denominator and registry sources")
+          and "sources=FundReporting=https://github.com/Systemorph/MeshWeaver.FundReporting" in text
+          and f"digest={roster_digest(rows, derived_sources)}" in text,
+          "a passing derivation emits the roster, denominator, registry sources and roster digest")
+
+    # ── --slot: one verify job's row, re-derived and held to the preflight's (#3848) ─────────────
+    # The roster cannot cross a job boundary (a job output containing a masked name is DROPPED), so
+    # each verify job derives it again. These arms are what keeps "derived again" from meaning
+    # "derived something else".
+    digest = roster_digest(rows, derived_sources)
+
+    # The committed roster's repositories, as the fixtures spell them. Only these can be public.
+    public = frozenset({"systemorph/memex"})
+
+    def slot_run(slot, count, expected, slot_rows=rows, slot_sources=derived_sources,
+                 owners=None):
+        if owners is None:      # the ordinary fleet: every row declared by the committed repository
+            owners = {(row["name"], row["baseUrl"]): "Systemorph/Memex" for row in slot_rows}
+        with tempfile.TemporaryDirectory() as tmp:
+            env_file = Path(tmp) / "env"
+            env_file.touch()
+            os.environ["GITHUB_ENV"] = str(env_file)
+            try:
+                code = resolve_slot(slot_rows, slot_sources, slot, count, expected, owners, public)
+            finally:
+                del os.environ["GITHUB_ENV"]
+            return code, env_file.read_text(encoding="utf-8")
+
+    code, env_text = slot_run("1", "2", digest)
+    check(code == 0 and f"INSTANCE_NAME={rows[1]['name']}\n" in env_text
+          and f"BASE_URL={rows[1]['baseUrl']}\n" in env_text
+          and f"SOURCES={derived_sources}\n" in env_text,
+          "a slot resolves to ITS row of the re-derived roster, with the source map")
+    code, env_text = slot_run("0", "2", digest)
+    check(code == 0 and f"INSTANCE_NAME={rows[0]['name']}\n" in env_text
+          and "INSTANCE_PRIVATE=false\n" in env_text,
+          "slot 0 resolves to the first row — slots are positions in the sorted roster — and a "
+          "row the private roster does not name is NOT private")
+
+    # ── A PRIVATE row: its module list must not leave the run (this repository is public) ───────
+    private_rows = [{"name": "globex-test", "baseUrl": "https://portal.globex.example"},
+                    {"name": "memex", "baseUrl": "https://memex.systemorph.com"}]
+    owners = {("globex-test", "https://portal.globex.example"): "Systemorph/Umbrella.Memex",
+              ("memex", "https://memex.systemorph.com"): "Systemorph/Memex"}
+    for label, document in (
+        ("its instance id", '{"instances":[{"id":"globex-test"}]}'),
+        ("its host", '{"instances":[{"host":"PORTAL.globex.example"}]}'),
+        ("its declaring repository", '{"repositories":{"Systemorph/Umbrella.Memex":{}}}'),
+    ):
+        os.environ[lock.PRIVATE_ROSTER_ENV] = document
+        try:
+            private_digest = roster_digest(private_rows, derived_sources)
+            code0, env0 = slot_run("0", "2", private_digest, slot_rows=private_rows, owners=owners)
+            code1, env1 = slot_run("1", "2", private_digest, slot_rows=private_rows, owners=owners)
+        finally:
+            del os.environ[lock.PRIVATE_ROSTER_ENV]
+        check(code0 == 0 and "INSTANCE_PRIVATE=true\n" in env0
+              and code1 == 0 and "INSTANCE_PRIVATE=false\n" in env1,
+              f"a row the private roster names by {label} is PRIVATE, and its public neighbour is not")
+
+    # 🚨 A SHORT private id is still private. The log-mask set drops values under four characters
+    # (a one-character mask shreds the log); the classification set must not.
+    short_rows = [{"name": "memex", "baseUrl": "https://memex.systemorph.com"},
+                  {"name": "x9", "baseUrl": "https://portal.short.example"}]
+    os.environ[lock.PRIVATE_ROSTER_ENV] = '{"instances":[{"id":"x9"}]}'
+    try:
+        short_private = [is_private_row(row, "Systemorph/Memex", public) for row in short_rows]
+        mask_set = lock.private_roster_values()
+    finally:
+        del os.environ[lock.PRIVATE_ROSTER_ENV]
+    check(short_private == [False, True] and mask_set == [],
+          "a two-character private id is PRIVATE although it is too short to be a log mask, and "
+          "it does not make its neighbour private")
+
+    # 🚨 ONE id, TWO repositories, one of them retired. A lookup keyed by the bare id would hand
+    # the LIVE private row whichever repository was iterated last — here the public one.
+    collision = [
+        _scan("Systemorph/Umbrella.Memex", [
+            ("memex", "portal.globex.example", "deployments/aks/memex/values.memex.yaml")]),
+        _scan("Systemorph/Memex", [
+            ("memex", "memex.systemorph.com", "deployments/aks/memex/values.memex.public.yaml")]),
+    ]
+    collision_roster = {"Systemorph/Memex:memex": ("retired", "moved", "Systemorph/Memex")}
+    collided, collision_blockers = lock.build_instances(collision, collision_roster, probe=_no_probe)
+    collision_rows, _, derive_blockers = derive(collision, collision_roster)
+    collision_owners = row_owners(collided)
+    os.environ[lock.PRIVATE_ROSTER_ENV] = '{"repositories":{"Systemorph/Umbrella.Memex":{}}}'
+    try:
+        verdicts = [is_private_row(row, collision_owners.get((row["name"], row["baseUrl"]), ""),
+                                   public)
+                    for row in collision_rows]
+        naive = {instance.id: instance.gh_repo for instance in collided}
+        naive_verdicts = [is_private_row(row, naive.get(row["name"], ""), public)
+                          for row in collision_rows]
+    finally:
+        del os.environ[lock.PRIVATE_ROSTER_ENV]
+    check(not collision_blockers and not derive_blockers
+          and collision_rows == [{"name": "memex", "baseUrl": "https://portal.globex.example"}]
+          and verdicts == [True],
+          "a live private row sharing its id with a retired public installation is PRIVATE")
+    check(naive_verdicts == [False],
+          "…and the control: the name-keyed lookup this replaced classifies that same row PUBLIC")
+
+    # 🚨 THE DIGEST IS KEYED. Without the private roster the salt is empty while rows can still be
+    # private, so the key is what keeps the public value from confirming a guessed name.
+    os.environ.pop(lock.PRIVATE_ROSTER_ENV, None)
+    unkeyed = roster_digest(rows, derived_sources)
+    os.environ[DIGEST_KEY_ENV] = "key-one"
+    try:
+        keyed_one = roster_digest(rows, derived_sources)
+        keyed_again = roster_digest(rows, derived_sources)
+        os.environ[DIGEST_KEY_ENV] = "key-two"
+        keyed_two = roster_digest(rows, derived_sources)
+    finally:
+        del os.environ[DIGEST_KEY_ENV]
+    check(keyed_one == keyed_again and len({unkeyed, keyed_one, keyed_two}) == 3
+          and all(is_digest(value) for value in (unkeyed, keyed_one, keyed_two)),
+          "the digest depends on the key (two keys, two digests; no key, a third) and is stable "
+          "under one key — so the same roster cannot be confirmed without the secret")
+
+    # 🚨 A CLIENT'S REGISTRY SOURCES. They are in no roster, so only provenance can classify them.
+    source_scans = [
+        _scan("Systemorph/Memex", [], sources=[
+            ("Plugins", "https://github.com/Systemorph/MeshWeaver.Plugins", "Deployments/memex.json")]),
+        _scan("Systemorph/Umbrella.Memex", [], sources=[
+            ("Plugins", "https://github.com/Systemorph/MeshWeaver.Plugins", "Deployments/a.json"),
+            ("GlobexRisk", "https://github.com/Globex/Risk.Modules", "Deployments/a.json")]),
+    ]
+    two_sources, _ = derive_sources(source_scans)
+    import contextlib
+    import io
+    with tempfile.TemporaryDirectory() as tmp:
+        summary_file = Path(tmp) / "summary"
+        os.environ["GITHUB_STEP_SUMMARY"] = str(summary_file)
+        os.environ.pop("GITHUB_OUTPUT", None)
+        printed = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(printed):
+                report(rows, [("Systemorph/Umbrella.Memex:q7", "retired", "gone")], [],
+                       ["Systemorph/Memex", "Systemorph/Umbrella.Memex"], two_sources,
+                       redact=redactor([], ["Systemorph/Memex", "Systemorph/Umbrella.Memex"],
+                                       public, source_scans))
+        finally:
+            del os.environ["GITHUB_STEP_SUMMARY"]
+        log_text, summary_text = printed.getvalue(), summary_file.read_text(encoding="utf-8")
+    check(private_sources(source_scans, public) == [("GlobexRisk", "https://github.com/Globex/Risk.Modules")]
+          and private_sources(source_scans, None) != []
+          and all("Globex" not in text and "Risk.Modules" not in text and "Umbrella" not in text
+                  and "MeshWeaver.Plugins" in text and "<private>" in text
+                  for text in (log_text, summary_text)),
+          "a source only an uncommitted repository declares is `<private>` in log AND summary; a "
+          "source a committed repository also declares is named; the summary's excluded line "
+          "does not name a private repository")
+    os.environ["GITHUB_ACTIONS"] = "true"
+    printed = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(printed):
+            masked_sources = mask_private_sources(source_scans, public)
+    finally:
+        del os.environ["GITHUB_ACTIONS"]
+    check(masked_sources == 3 and "::add-mask::https://github.com/Globex/Risk.Modules\n" in printed.getvalue()
+          and "MeshWeaver.Plugins" not in printed.getvalue(),
+          "a private source's URL, pair and name are masked; a public source is not")
+
+    # 🚨 THE SECRET IS MISSING. With no private roster at all, a client repository's row must
+    # still be private: public is what has to be shown (a COMMITTED repository), never private.
+    os.environ.pop(lock.PRIVATE_ROSTER_ENV, None)
+    client_row = {"name": "globex-test", "baseUrl": "https://portal.globex.example"}
+    check(is_private_row(client_row, "Systemorph/Umbrella.Memex", public)
+          and is_private_row(client_row, "", public)
+          and is_private_row(rows[0], "Systemorph/Memex", None)
+          and not is_private_row(rows[0], "Systemorph/Memex", public),
+          "with NO private roster: a row from an uncommitted repository, from an unknown one, or "
+          "with no committed table at all is PRIVATE; only a committed repository's row is public")
+    code, env_text = slot_run("0", "2", digest, owners={})
+    check(code == 0 and "INSTANCE_PRIVATE=true\n" in env_text,
+          "a slot whose declaring repository is unknown resolves PRIVATE")
+    with tempfile.TemporaryDirectory() as tmp:
+        folder = Path(tmp) / ".github" / "acr-retention"
+        folder.mkdir(parents=True)
+        (folder / lock.ROSTER_PATH).write_text(
+            '{"repositories": {"Systemorph/Memex": {}}, "instances": []}', encoding="utf-8")
+        os.environ[lock.PRIVATE_ROSTER_ENV] = '{"repositories":{"Systemorph/Umbrella.Memex":{}}}'
+        try:
+            committed = committed_repositories(tmp)
+        finally:
+            del os.environ[lock.PRIVATE_ROSTER_ENV]
+        check(committed == public and committed_repositories(str(Path(tmp) / "absent")) == frozenset(),
+              "the public set is the COMMITTED file's repositories only — never the private "
+              "roster's — and an unreadable file yields none")
+
+    # 🚨 A SHORT private id in a BLOCKER and in an EXCLUDED line. No mask can cover two characters,
+    # and both lines are built from the id, host and repository verbatim.
+    short_scans = [
+        _scan("Systemorph/Memex", [
+            ("memex", "memex.systemorph.com", "deployments/aks/memex/values.memex.public.yaml")]),
+        _scan("Systemorph/Umbrella.Memex", [
+            ("x9", None, "deployments/aks/x9/values.x9.yaml"),
+            ("q7", "q7.globex.example", "deployments/aks/q7/values.q7.yaml")]),
+    ]
+    short_roster = {"Systemorph/Umbrella.Memex:q7": ("retired", "q7 was moved", "Systemorph/Umbrella.Memex")}
+    short_instances = lock.build_instances(short_scans, short_roster, probe=_no_probe)[0]
+    short_derived, short_excluded, short_blockers = derive(short_scans, short_roster)
+    scanned = ["Systemorph/Memex", "Systemorph/Umbrella.Memex"]
+    shown = {}
+    for label, redact in (("redacted", redactor(short_instances, scanned, public)),
+                          ("raw", lambda text: text)):
+        printed = io.StringIO()
+        with contextlib.redirect_stdout(printed):
+            code = report(short_derived, short_excluded, short_blockers, scanned, "", redact=redact)
+        shown[label] = printed.getvalue()
+    leaks = [needle for needle in ("x9", "q7", "globex", "Umbrella")
+             if re.search(r"(?<![A-Za-z0-9])" + needle, shown["redacted"])]
+    check(code == 1 and short_excluded and short_blockers and not leaks
+          and "<private>" in shown["redacted"] and "Systemorph/Memex" in shown["redacted"],
+          "a blocker and an excluded line about a private installation with a TWO-character id "
+          "print neither its id, its host nor its repository; the public repository is still named")
+    check(all(needle in shown["raw"] for needle in ("x9", "q7", "Umbrella")),
+          "…and the control: the same report without the redactor prints all of them")
+
+    # 🚨 A row private ONLY through its repository: its name and host are in no secret, so nothing
+    # masks them — the preflight's report must not print them, in the log or the summary.
+    with tempfile.TemporaryDirectory() as tmp:
+        summary_file = Path(tmp) / "summary"
+        os.environ["GITHUB_STEP_SUMMARY"] = str(summary_file)
+        os.environ.pop("GITHUB_OUTPUT", None)
+        printed = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(printed):
+                code = report(private_rows, [], [], ["a"], derived_sources,
+                              frozenset({"globex-test"}))
+        finally:
+            del os.environ["GITHUB_STEP_SUMMARY"]
+        shown = printed.getvalue() + summary_file.read_text(encoding="utf-8")
+    check(code == 0 and "globex" not in shown and "slot 0: a private roster row" in shown
+          and "memex.systemorph.com" in shown,
+          "the report names a public row and only COUNTS a private one, in log and summary")
+    os.environ["GITHUB_ACTIONS"] = "true"
+    os.environ[lock.PRIVATE_ROSTER_ENV] = '{"repositories":{"Systemorph/Umbrella.Memex":{}}}'
+    printed = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(printed):
+            masked_count = mask_private_instances(collided, public)
+    finally:
+        del os.environ["GITHUB_ACTIONS"]
+        del os.environ[lock.PRIVATE_ROSTER_ENV]
+    check(masked_count == 3 and "::add-mask::portal.globex.example" in printed.getvalue()
+          and "::add-mask::memex\n" in printed.getvalue()
+          and "memex.systemorph.com" not in printed.getvalue(),
+          "the derived host and id of a repository-private installation are masked; a public "
+          "installation's are not")
+
+    for label, args in (
+        ("a slot beyond the roster", ("2", "2", digest)),
+        ("a non-numeric slot", ("memex", "2", digest)),
+        ("a count the preflight never delivered", ("0", "", digest)),
+        ("a zero count", ("0", "0", digest)),
+        ("a digest the preflight never delivered (the dropped-output shape)", ("0", "2", "")),
+        ("a roster that changed size between the jobs", ("0", "3", digest)),
+        ("a roster of the same size and different content", ("0", "2", "_".join("0" * DIGEST_DIGITS))),
+    ):
+        code, env_text = slot_run(*args)
+        check(code == 1 and env_text == "",
+              f"{label} is a RED that names no installation to verify")
+    moved = [dict(rows[0]), {"name": rows[1]["name"], "baseUrl": "https://moved.example.com"}]
+    code, env_text = slot_run("1", "2", digest, slot_rows=moved)
+    check(code == 1 and env_text == "",
+          "an installation whose host moved between the jobs is a RED, not a verdict landed elsewhere")
+    code, env_text = slot_run("0", "2", digest,
+                              slot_sources=derived_sources + " Extra=https://x.example")
+    check(code == 1 and env_text == "",
+          "a source map that changed between the jobs is a RED")
+    os.environ[lock.PRIVATE_ROSTER_ENV] = '{"instances":[{"id":"globex-test"}]}'
+    try:
+        salted = roster_digest(rows, derived_sources)
+    finally:
+        del os.environ[lock.PRIVATE_ROSTER_ENV]
+    check(salted != digest and is_digest(salted) and is_digest(digest),
+          "the digest is salted with the private roster — the public value cannot confirm a "
+          "guessed name — and has the digest's exact shape")
+
+    # 🚨 THE DIGEST CANNOT CONTAIN A MASKED VALUE, whatever the value is. A plain decimal digest
+    # could: an all-digit installation id or a numeric secret (a GitHub App id) is a substring of
+    # a 78-digit number often enough to matter, and a job output containing a masked value is
+    # dropped. Hold the property two ways: the rule, and a brute-force search for a counterexample.
+    hostile = ["1234", "0000", "4242", "12", "987654", "cafe", "beef", "memex", "globex-test",
+               "portal.globex.example", "Systemorph/Umbrella.Memex", "1.2.3.4", "a_b", "12_34"]
+    check(not any(digest_can_contain(value) for value in hostile),
+          "no identifier, host, repository, word or multi-digit number can occur inside a digest")
+    check(digest_can_contain("4_2") and digest_can_contain("_7_") and not digest_can_contain("42"),
+          "the containment rule is not vacuous: only a digit/underscore alternation can occur")
+    found = 0
+    for variant in range(3000):
+        candidate = roster_digest(rows, f"{derived_sources} Probe{variant}=https://x.example")
+        if not is_digest(candidate):
+            found += 1
+        found += sum(1 for width in (2, 3, 4)
+                     for number in ("12", "123", "1234", "00", "000", "0000", "99", "4242")
+                     if len(number) == width and number in candidate)
+    check(found == 0,
+          "3000 different digests: none contains any 2-, 3- or 4-digit number (a plain decimal "
+          "digest contains `1234` within a few hundred)")
+    plain = sum(1 for variant in range(3000)
+                if "1234" in roster_digest(rows, f"{derived_sources} P{variant}=https://x.example")
+                .replace("_", ""))
+    check(plain > 0,
+          "…and the control: the SAME 3000 digests with the separators removed do contain `1234`, "
+          "so the search above can find what it is looking for")
 
     if failures:
         print(f"::error::--self-test: {failures} arm(s) did not behave as documented.")
@@ -530,6 +1135,12 @@ def main() -> int:
     parser.add_argument("--root", help="read one repository from a local checkout instead")
     parser.add_argument("--self-test", action="store_true",
                         help="prove every refusal fires; no network")
+    parser.add_argument("--slot", help="resolve ONE row of the roster (a verify job's matrix slot) "
+                                       "into $GITHUB_ENV instead of reporting the whole roster")
+    parser.add_argument("--expect-count", default="",
+                        help="with --slot: the instance count the preflight derived")
+    parser.add_argument("--expect-digest", default="",
+                        help="with --slot: the roster digest the preflight derived")
     args = parser.parse_args()
 
     if args.self_test:
@@ -557,13 +1168,36 @@ def main() -> int:
             print(f"  • {problem}")
         return 1
 
+    public_repos = committed_repositories(args.root or ".")
     print(f"deriving the combo-verification roster from {len(repos)} repository(ies): "
-          + ", ".join(repos))
+          + ", ".join(repo if repo.lower() in public_repos else "<private>" for repo in repos))
     roster, roster_problems = lock.read_instance_roster(args.root or ".")
     scans = read_scans(repos, args.root)
+    # 🚨 PRIVACY BEFORE ANY LINE ABOUT AN INSTALLATION. Which rows are private is decided here, and
+    # every derived identifier of a private installation is masked here — before `derive` builds a
+    # blocker naming one, and before `report` or `resolve_slot` prints anything.
+    instances = lock.build_instances(scans, roster, probe=_no_probe)[0]
+    mask_private_instances(instances, public_repos)
+    mask_private_sources(scans, public_repos)
+    owners = row_owners(instances)
+    redact = redactor(instances, repos, public_repos, scans)
     rows, excluded, blockers = derive(scans, roster)
     sources, source_blockers = derive_sources(scans)
-    return report(rows, excluded, roster_problems + blockers + source_blockers, repos, sources)
+    all_blockers = roster_problems + blockers + source_blockers
+    if os.environ.get("GITHUB_ACTIONS") == "true" and not os.environ.get(DIGEST_KEY_ENV, "").strip():
+        all_blockers.append(
+            f"{DIGEST_KEY_ENV} is empty. The roster digest that crosses the job boundary is an "
+            "HMAC, and without a key it is a plain hash of installation names — a public value "
+            "that would confirm a guessed private name. The workflow maps a secret into this "
+            "variable for BOTH the preflight's derivation and each verify job's slot step.")
+    if args.slot is not None and not all_blockers:
+        return resolve_slot(rows, sources, args.slot, args.expect_count, args.expect_digest,
+                            owners, public_repos)
+    private_names = frozenset(
+        row["name"] for row in rows
+        if is_private_row(row, owners.get((row["name"], row["baseUrl"]), ""), public_repos))
+    # With --slot AND blockers this falls through on purpose: report() prints them and exits 1.
+    return report(rows, excluded, all_blockers, repos, sources, private_names, redact)
 
 
 if __name__ == "__main__":

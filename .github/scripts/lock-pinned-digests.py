@@ -1203,6 +1203,45 @@ def merge_roster(committed: dict, private: dict) -> dict:
     return merged
 
 
+def private_roster_entries() -> dict[str, set[str]]:
+    """What the PRIVATE roster declares, by KIND — `ids`, `hosts`, `repos`, `registries`.
+
+    🚨 COMPLETE, with no length floor. This is the classification set: a row is private when the
+    private roster names it, however short the name. The LOG-MASK set (`private_roster_values`)
+    is a subset — a one-character mask would shred every log line — and must never be used to
+    decide whether something is private, or a short identifier would be neither masked nor
+    recognised. Empty without the secret or when it does not parse — the roster readers refuse a
+    malformed one by name."""
+    entries: dict[str, set[str]] = {"ids": set(), "hosts": set(), "repos": set(), "registries": set()}
+    extra = os.environ.get(PRIVATE_ROSTER_ENV, "").strip()
+    if not extra:
+        return entries
+    try:
+        private = json.loads(extra)
+    except ValueError:
+        return entries         # the readers refuse it by name; nothing identifiable to mask
+    if isinstance(private, dict):
+        for table, kind in (("repositories", "repos"), ("registries", "registries")):
+            if isinstance(private.get(table), dict):
+                entries[kind].update(str(k).strip() for k in private[table])
+        for entry in private.get("instances") or []:
+            if isinstance(entry, dict):
+                for key, kind in (("id", "ids"), ("repo", "repos"), ("host", "hosts")):
+                    entries[kind].add(str(entry.get(key, "")).strip())
+    for kind in entries:
+        entries[kind].discard("")
+    return entries
+
+
+def private_roster_values() -> list[str]:
+    """Every private identifier long enough to be a LOG MASK (four characters or more).
+
+    For masking only. To decide whether a row is private use `private_roster_entries`, which has
+    no length floor."""
+    values = set().union(*private_roster_entries().values())
+    return sorted(v for v in values if len(v) >= 4)
+
+
 def mask_private_roster() -> list[str]:
     """Register every identifier the PRIVATE roster carries as a GitHub Actions log mask.
 
@@ -1211,22 +1250,9 @@ def mask_private_roster() -> list[str]:
     not reappear in plain text on a red run. Called once from `main()` (never from the
     self-test, whose fixtures would mask ordinary words); a no-op outside GitHub Actions or
     without the secret. Returns the masked values so the caller can say how many."""
-    extra = os.environ.get(PRIVATE_ROSTER_ENV, "").strip()
-    if not extra or os.environ.get("GITHUB_ACTIONS") != "true":
+    if os.environ.get("GITHUB_ACTIONS") != "true":
         return []
-    try:
-        private = json.loads(extra)
-    except ValueError:
-        return []              # the readers refuse it by name; nothing identifiable to mask
-    values: set[str] = set()
-    if isinstance(private, dict):
-        for table in ("repositories", "registries"):
-            if isinstance(private.get(table), dict):
-                values.update(str(k) for k in private[table])
-        for entry in private.get("instances") or []:
-            if isinstance(entry, dict):
-                values.update(str(entry.get(k, "")) for k in ("id", "repo", "host"))
-    masked = sorted(v.strip() for v in values if len(v.strip()) >= 4)
+    masked = private_roster_values()
     for value in masked:
         print(f"::add-mask::{value}")
         if "/" in value:       # an owner/name repository also appears as its bare name
