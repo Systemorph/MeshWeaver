@@ -52,6 +52,13 @@ if [ "$PRIVATE" = false ]; then
 else
   shown=${ARTIFACT_TAG:-private}; where="this instance (private roster row)"
 fi
+# What the audience must be SET TO. `$where` is a description for a private row, never a value to
+# configure — so the 401 guidance says where the real value is recorded instead of printing it.
+if [ "$PRIVATE" = false ]; then
+  audience_value=$BASE_URL
+else
+  audience_value="the instance's own externally reachable base URL (https:// + the ingress.host of its deployment overlay; withheld here)"
+fi
 fail() { echo "::error::[$shown] $*"; exit 1; }
 note() { echo "[$shown] $*"; }
 # A response body, or the fact that one is withheld. Bodies of a private row can name its modules.
@@ -84,7 +91,7 @@ mint_token() {
 
 # What a 401 from the instance means, said once. The instance does not tell a refused caller WHICH
 # half is missing, so both provisioning acts are named. Neither is a secret in this repository.
-unauthorized_hint="The instance did not accept this run's identity. On $where BOTH must hold: (1) the portal declares the audience — config Plugins:Registry:BuildPrincipalAudience = $where (deployment record extraPortalConfig key Plugins__Registry__BuildPrincipalAudience); (2) a global admin of that instance has created Admin/_BuildPrincipal/systemorph--meshweaver granting verify:combo for workflow_run and workflow_dispatch on refs/heads/main (Doc/Architecture/ComboGateWiring → Provisioning an instance). There is no secret to set."
+unauthorized_hint="The instance did not accept this run's identity. On $where BOTH must hold: (1) the portal declares the audience — config Plugins:Registry:BuildPrincipalAudience = $audience_value (deployment record extraPortalConfig key Plugins__Registry__BuildPrincipalAudience); (2) a global admin of that instance has created Admin/_BuildPrincipal/systemorph--meshweaver granting verify:combo for workflow_run and workflow_dispatch on refs/heads/main (Doc/Architecture/ComboGateWiring → Provisioning an instance). There is no secret to set."
 
 out_dir=${GITHUB_WORKSPACE:-$PWD}
 tag=${ARTIFACT_TAG:-$INSTANCE_NAME}

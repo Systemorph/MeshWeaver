@@ -336,6 +336,8 @@ LANDER_REQUIRED = {
         'PRIVATE=true\n[ "${INSTANCE_PRIVATE:-}" = "false" ] && PRIVATE=false',
     "a private row's verifier output is withheld": '>"$WORK_ROOT/verifier-$tag.log" 2>&1',
     "a private row's summary carries no module id": "Module ids, failures and caveat text are withheld",
+    "the 401 guidance names a VALUE to configure, never a description of the row":
+        "config Plugins:Registry:BuildPrincipalAudience = $audience_value ",
 }
 LANDER_FORBIDDEN = {
     "an mwi_ instance key": "INSTANCE_KEY",
@@ -343,6 +345,8 @@ LANDER_FORBIDDEN = {
     "a raw mesh patch of Admin/UpdatePolicy": "/api/mesh/patch",
     "a client-side copy of the verdict merge": "--slurpfile p",
     "an unconditional print of a response body (a private row's names its modules)": '$(head -c',
+    "401 guidance that tells an operator to set the audience to a description":
+        "BuildPrincipalAudience = $where",
 }
 
 
