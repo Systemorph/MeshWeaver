@@ -1075,6 +1075,13 @@ data:
   {{- if hasKey .Values.config.memex_portal "Modules__AutoRecycleOnStaleBuild" }}
   Modules__AutoRecycleOnStaleBuild: "{{ .Values.config.memex_portal.Modules__AutoRecycleOnStaleBuild }}"
   {{- end }}
+  # Where the home's Apps band reads its tiles (MeshWeaver#6446): the image default is the app
+  # directory; Records (the legacy per-user _App copies) is an explicit escape hatch. Emitted only
+  # when a deployment sets it.
+  {{- $appSource := .Values.config.memex_portal.Home__AppSource }}
+  {{- if and (hasKey .Values.config.memex_portal "Home__AppSource") (not (kindIs "invalid" $appSource)) (ne ($appSource | toString | trim) "") }}
+  Home__AppSource: {{ $appSource | toString | trim | quote }}
+  {{- end }}
   # ---- OpenAI-compatible provider (self-hosted / local: Ollama, vLLM, LM Studio, …) ----
   # Generic OpenAI-wire endpoint. Set Endpoint + Models (+ ApiKey in secrets) to seed a
   # provider + LanguageModel nodes pointing at any OpenAI-compatible gateway. Empty = inert.

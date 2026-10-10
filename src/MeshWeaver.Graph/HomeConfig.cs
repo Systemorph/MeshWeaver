@@ -65,15 +65,14 @@ public record HomeConfig
     public HomeStyle Style { get; init; } = HomeStyle.Tabs;
 
     /// <summary>
-    /// The platform's default apps — node paths (usually Store plugin covers, e.g. <c>Store</c>,
-    /// <c>Doc</c>) every user's Apps tab starts with. An entry starting with <c>~/</c> is not a
-    /// node but an AREA on the viewer's own hub (<c>~/Chat</c> → the Threads app at
-    /// <c>/{owner}/Chat</c>), rendered as a fixed system tile. Rendered live from config (no
-    /// seeding), so an admin's edit updates every home. Users add more apps by installing from the
-    /// Store, which writes <c>{user}/_App/{appId}</c> records.
+    /// The platform's default apps for the LEGACY records launcher (<c>Home:AppSource = Records</c>):
+    /// node paths (e.g. <c>Store</c>, <c>Doc</c>) or <c>~/</c>-prefixed viewer areas (<c>~/Chat</c>)
+    /// seeded as <c>{user}/_App</c> records. 🚨 Under the default app directory (MeshWeaver#6448) this
+    /// list does NOT control the launcher: a viewer sees every app root they can read, plus the
+    /// built-in Settings, Inbox and (for admins) Administration entries.
     /// </summary>
-    [Description("The default apps every user's Apps tab starts with — node paths such as Store or Doc, or ~/-prefixed viewer areas such as ~/Chat (the Threads app). Users add more by installing from the Store.")]
-    [Translation("de", "Die Standard-Apps, mit denen der Apps-Tab jedes Benutzers startet — Knotenpfade wie Store oder Doc, oder ~/-Einträge für eigene Bereiche wie ~/Chat (die Threads-App). Weitere Apps kommen über den Store hinzu.")]
+    [Description("Legacy launcher only (Home:AppSource = Records): the default apps seeded into each user's Apps tab — node paths such as Store or Doc, or ~/-prefixed viewer areas such as ~/Chat. The default launcher (the app directory) ignores this list and shows every app the user can access.")]
+    [Translation("de", "Nur für den alten Launcher (Home:AppSource = Records): die Standard-Apps, die jedem Benutzer in den Apps-Tab gelegt werden — Knotenpfade wie Store oder Doc, oder ~/-Einträge wie ~/Chat. Der Standard-Launcher (das App-Verzeichnis) ignoriert diese Liste und zeigt alle Apps, auf die der Benutzer Zugriff hat.")]
     // Browsable(false): the generic node-content edit form has no list-capable field kind yet — a
     // Text field would write a plain string into this list-typed slot and corrupt the config. Until
     // a list field ships, admins edit DefaultApps on the node content directly (MCP patch /
