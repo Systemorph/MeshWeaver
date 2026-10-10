@@ -3343,6 +3343,22 @@ _dr_out="$(HOSTING_RETIRE_VALUES='extraPortalConfig.B;$(rm -rf x)' _dr_run)"; _d
 [ "$_dr_rc" -ne 0 ] && printf '%s' "$_dr_out" | grep -q 'not a dotted values path' && ! grep -q '^helm upgrade' "$_dr_log" \
   && ok "a HOSTING_RETIRE_VALUES entry that is not a dotted path is refused" \
   || bad "a malformed retire entry is refused" "rc=${_dr_rc} out: ${_dr_out}"
+# Ownership is EXACT: a manifest leaf `extraPortalConfig.X` says nothing about a hand-applied
+# `extraPortalConfig.X.y` that replaced it — refused, not dropped as owned.
+printf '{%s,"extraPortalConfig":{"A":"1","X":{"y":"hand"}},"hostingDeploy":{"recordOwned":["extraPortalConfig.A","extraPortalConfig.X","portal.image"]}}' "$_dr_img" > "$_dr_dir/live-values.json"
+printf '{%s,"extraPortalConfig":{"A":"1"}}' "$_dr_img" > "$_dr_dir/supplied-values.json"; : > "$_dr_log"
+_dr_out="$(_dr_run)"; _dr_rc=$?
+[ "$_dr_rc" -ne 0 ] && printf '%s' "$_dr_out" | grep -q 'extraPortalConfig.X.y' && ! grep -q '^helm upgrade' "$_dr_log" \
+  && ok "ownership is exact: a hand-applied path UNDER a record-owned leaf is still refused" \
+  || bad "a path under a record-owned leaf is refused" "rc=${_dr_rc} out: ${_dr_out}"
+# A retire path may carry `/` (an ingress annotation key).
+printf '{%s,"ingress":{"annotations":{"cert-manager.io/cluster-issuer":"x"}}}' "$_dr_img" > "$_dr_dir/live-values.json"
+printf '{%s}' "$_dr_img" > "$_dr_dir/supplied-values.json"; : > "$_dr_log"
+_dr_out="$(HOSTING_RETIRE_VALUES='ingress.annotations.cert-manager.io/cluster-issuer' _dr_run)"; _dr_rc=$?
+[ "$_dr_rc" -eq 0 ] && grep -q '^helm upgrade' "$_dr_log" \
+  && printf '%s' "$_dr_out" | grep -q 'DROPPING ingress.annotations.cert-manager.io/cluster-issuer' \
+  && ok "a retire path carrying '/' (an annotation key) is accepted and dropped" \
+  || bad "a retire path with '/' is accepted" "rc=${_dr_rc} out: ${_dr_out}"
 rm -rf "$_dr_dir"
 
 # ── hosting-db-reset: an EMPTY database without destroying the one the instance had ────────────────

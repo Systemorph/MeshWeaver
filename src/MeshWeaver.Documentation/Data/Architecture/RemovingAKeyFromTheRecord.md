@@ -41,8 +41,8 @@ The next deploy reads it back with `helm get values` and classifies each path it
 
 | Class | Condition | Outcome |
 |---|---|---|
-| record-owned | the previous deploy's manifest lists the path (or a parent of it) | **dropped**, logged `values    DROPPING <path> — the record rendered it on the previous deploy …` and reported as `::hosting:: dropped_value=owned:<path>` |
-| retired | the record declares `HOSTING_RETIRE_VALUES` naming the path (or a parent) | **dropped**, logged and reported as `retired:<path>` |
+| record-owned | the previous deploy's manifest lists exactly this leaf path (never a parent: a manifest leaf `a.b` says nothing about a hand-applied `a.b.c` that replaced it) | **dropped**, logged `values    DROPPING <path> — the record rendered it on the previous deploy …` and reported as `::hosting:: dropped_value=owned:<path>` |
+| retired | the record declares `HOSTING_RETIRE_VALUES` naming the path or a parent of it | **dropped**, logged and reported as `retired:<path>` |
 | live-only | neither | **refused** before helm, naming every path (Memex#376, unchanged) |
 
 ## A release with no manifest
@@ -58,14 +58,27 @@ the old behaviour: every drop is refused. The refusal says so and names the boot
 HOSTING_RETIRE_VALUES=extraPortalConfig.Hosting__Builds__Concurrency,extraPortalConfig.Hosting__Builds__PublicUrl
 ```
 
-(comma-separated dotted values paths; each must match `[A-Za-z0-9_][A-Za-z0-9_.-]*`, anything else
-is refused). The next deploy drops those paths, logs each one, and writes the manifest — from then
+(comma-separated dotted values paths; each must match `[A-Za-z0-9_][A-Za-z0-9_./-]*` — `/` for keys
+such as ingress annotations — anything else is refused). The next deploy drops those paths, logs each one, and writes the manifest — from then
 on a removal from the record needs no declaration. An entry that matches nothing the upgrade drops
 is named in the log as spent, so the declaration can leave the record once the release no longer
 carries the value.
 
 The path to name is the one the refusal printed (`would DROP n value(s) … : <path> <path>`), so the
 refusal itself is the input to the declaration.
+
+### Why not the history on the control instance
+
+Inferring the bootstrap from the control instance's history — the record's earlier versions, or the
+`renderedValues` of the last successful action for the deployment — was considered and measured
+against the first two cases, and it does not cover them. On 2026-10-10 the pearl Provision
+(`Ops/Actions/provision-pearl-20261010-values-half`) refused on
+`config.memex_portal.OpenRouter__Models__0..3`. The control instance holds pearl's record from
+version 1 (2026-10-08), and version 1 already renders the EU route instead of those keys; the only
+`Done` action for pearl there is a secret-status read with no render. The keys were rendered by a
+record version that predates the control instance's copy, so no control-side history names them,
+while a declaration on the record covers that case and every other one. History that exists for
+one instance and not another is a guess about provenance; the declaration is not.
 
 ## What is unchanged
 

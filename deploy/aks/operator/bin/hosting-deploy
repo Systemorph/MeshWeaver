@@ -479,9 +479,12 @@ esac
 # half, whose leaves were captured from whatever was live) into the release itself, at
 # `hostingDeploy.recordOwned`, and the next deploy reads it back with `helm get values`. A dropped path
 # is then one of three things:
-#   record-owned   the previous deploy's record rendered it → dropped, and each one is LOGGED by name;
+#   record-owned   the previous deploy's record rendered EXACTLY this leaf path → dropped, and each one
+#                  is LOGGED by name. Exact, never "under": a manifest leaf `a.b` says nothing about a
+#                  hand-applied `a.b.c` that replaced it;
 #   retired        the record declares its removal in operator.environment
-#                  HOSTING_RETIRE_VALUES=<path>[,<path>…] → dropped and logged. This is the bootstrap for
+#                  HOSTING_RETIRE_VALUES=<path>[,<path>…] (the path or a parent of it; a key may carry
+#                  `/`, e.g. an ingress annotation) → dropped and logged. This is the bootstrap for
 #                  a release last deployed before the manifest existed, where nothing else can tell;
 #   live-only      neither → REFUSED, as before (Memex#376), naming every path.
 # A release with no manifest (deployed before this, or last applied by the config repo's lane, which
@@ -537,7 +540,7 @@ if [ -n "$release_state" ]; then
   retire_json="$(printf '%s' "${HOSTING_RETIRE_VALUES:-}" | tr ',;' '\n' | tr -d ' \t\r' | grep -v '^$' \
                  | jq -Rsc 'split("\n") | map(select(length > 0))' 2>/dev/null)" || retire_json='[]'
   [ -n "$retire_json" ] || retire_json='[]'
-  bad_retire="$(jq -r '.[] | select(test("^[A-Za-z0-9_][A-Za-z0-9_.-]*$") | not)' <<< "$retire_json" 2>/dev/null)"
+  bad_retire="$(jq -r '.[] | select(test("^[A-Za-z0-9_][A-Za-z0-9_./-]*$") | not)' <<< "$retire_json" 2>/dev/null)"
   [ -z "$bad_retire" ] \
     || hosting::die "HOSTING_RETIRE_VALUES names something that is not a dotted values path: $(printf '%s' "$bad_retire" | tr '\n' ' ')— refused rather than guessing which value the record meant to retire"
   # One line per dropped path: `<class>\t<path>`, class ∈ owned | retired | refused. The manifest's own
@@ -552,7 +555,7 @@ if [ -n "$release_state" ]; then
       | (\$next // {} | ${leaf_paths_jq}) as \$n
       | \$l[] | . as \$path
       | select([\$n[] | covers(.; \$path)] | any | not)
-      | if \$owned != null and ([\$owned[] | under(\$path; .)] | any) then \"owned\t\" + \$path
+      | if \$owned != null and ([\$owned[] | . == \$path] | any) then \"owned\t\" + \$path
         elif ([\$retire[] | under(\$path; .)] | any) then \"retired\t\" + \$path
         else \"refused\t\" + \$path end" 2>/dev/null)" \
     || hosting::die "the live and the supplied values of ${release} could not be compared (jq) — refused rather than risking a silent drop (Memex#376)"
