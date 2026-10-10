@@ -17,8 +17,11 @@ namespace MeshWeaver.GitSync;
 /// direction rule — so an Azure Repos source always gets the push-only refusal, whatever direction
 /// it is declared in. Pure functions of the configuration, so the order is pinned without a mesh.</para>
 ///
-/// <para>Every refusal is a <see cref="GitSyncRefusal"/> (a catalog key plus named arguments), so
-/// it renders in the viewer's language.</para>
+/// <para>Every Azure Repos refusal is a <see cref="GitSyncRefusal"/> (a catalog key plus named
+/// arguments), so it renders in the viewer's language. The two GENERIC direction refusals keep their
+/// shipped contract — a plain <see cref="InvalidOperationException"/> with the exact English message
+/// (<see cref="GitSyncRefusal.Legacy"/>) — because GitHub-path callers and the dependent suites
+/// assert on that type and text; this change must leave the GitHub path exactly as it was.</para>
 /// </summary>
 public static class AzureReposPushPolicy
 {
@@ -68,7 +71,9 @@ public static class AzureReposPushPolicy
     public static GitSyncRefusal? ExportGuard(GitHubSyncConfig config)
         => RefuseExport(config)
            ?? (config.Direction == SyncDirection.ImportOnly
-               ? GitSyncRefusal.Of("gitsync.direction.importOnlyNoExport", ("url", config.RepositoryUrl ?? ""))
+               ? GitSyncRefusal.Legacy("gitsync.direction.importOnlyNoExport",
+                   $"This sync source is import-only (repo → mesh): exporting to {config.RepositoryUrl} is not allowed. " +
+                   "Change the source's Sync direction to Bidirectional or Export-only to commit.")
                : null);
 
     /// <summary>
@@ -78,6 +83,8 @@ public static class AzureReposPushPolicy
     public static GitSyncRefusal? ReimportGuard(GitHubSyncConfig config)
         => RefuseInbound(config.RepositoryUrl, InboundOperation.Reimport)
            ?? (config.Direction == SyncDirection.ExportOnly
-               ? GitSyncRefusal.Of("gitsync.direction.exportOnlyNoImport", ("url", config.RepositoryUrl ?? ""))
+               ? GitSyncRefusal.Legacy("gitsync.direction.exportOnlyNoImport",
+                   $"This sync source is export-only (mesh → repo): importing from {config.RepositoryUrl} is not allowed. " +
+                   "Change the source's Sync direction to Bidirectional or Import-only to re-import.")
                : null);
 }

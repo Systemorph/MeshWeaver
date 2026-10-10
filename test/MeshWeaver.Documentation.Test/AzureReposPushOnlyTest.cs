@@ -173,6 +173,32 @@ public class AzureReposPushOnlyTest
             .Should().BeFalse("an inline export-only check in the service would bypass the guard order");
     }
 
+    [Fact]
+    public void TheGenericDirectionRefusals_KeepTheirShippedExceptionTypeAndMessage()
+    {
+        // The GitHub path must behave exactly as before this change: MeshWeaver.Plugins'
+        // SyncDirectionAndSourcesTest asserts Assert.Throws<InvalidOperationException> (an EXACT
+        // type match) and the English text. A GitSyncRefusalException here broke it.
+        var export = AzureReposPushPolicy.ExportGuard(
+            new GitHubSyncConfig { RepositoryUrl = GitHubUrl, Direction = SyncDirection.ImportOnly })!.ToException();
+        export.GetType().Should().Be(typeof(InvalidOperationException));
+        export.Message.Should().Be(
+            $"This sync source is import-only (repo → mesh): exporting to {GitHubUrl} is not allowed. " +
+            "Change the source's Sync direction to Bidirectional or Export-only to commit.");
+
+        var import = AzureReposPushPolicy.ReimportGuard(
+            new GitHubSyncConfig { RepositoryUrl = GitHubUrl, Direction = SyncDirection.ExportOnly })!.ToException();
+        import.GetType().Should().Be(typeof(InvalidOperationException));
+        import.Message.Should().Be(
+            $"This sync source is export-only (mesh → repo): importing from {GitHubUrl} is not allowed. " +
+            "Change the source's Sync direction to Bidirectional or Import-only to re-import.");
+
+        // Negative control: an Azure Repos refusal IS the localizable type.
+        AzureReposPushPolicy.ExportGuard(
+                new GitHubSyncConfig { RepositoryUrl = AzureUrl, Direction = SyncDirection.ImportOnly })!
+            .ToException().GetType().Should().Be(typeof(GitSyncRefusalException));
+    }
+
     private static string RepoRoot()
     {
         var dir = new System.IO.DirectoryInfo(AppContext.BaseDirectory);
@@ -193,8 +219,6 @@ public class AzureReposPushOnlyTest
     [InlineData("gitsync.azure.identityNotDeclared")]
     [InlineData("gitsync.azure.noWorkloadIdentity")]
     [InlineData("gitsync.azure.notRegistered")]
-    [InlineData("gitsync.direction.importOnlyNoExport")]
-    [InlineData("gitsync.direction.exportOnlyNoImport")]
     [InlineData("ui.gitSync.pullRequestsNotOffered")]
     public void EveryRefusal_RendersInEnglishAndGerman(string key)
     {

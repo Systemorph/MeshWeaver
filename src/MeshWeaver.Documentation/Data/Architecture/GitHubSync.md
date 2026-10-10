@@ -113,7 +113,7 @@ name, would need a migration of every stored `$type` and could break code CI nev
 | Import / update to latest / re-import at a commit | ✗ refused by name — nothing is read from the repository |
 | Check branch / branch-head lookup | ✗ refused by name |
 | Webhooks (Azure DevOps service hooks), branch reconcile, sealed-publication reconcile | not consulted — every inbound path already skips `ExportOnly` sources |
-| Pull requests | not offered — the settings tab shows a notice instead of the draft button, and every `PullRequestService` operation refuses an Azure Repos source |
+| Pull requests | not offered — every `PullRequestService` operation refuses an Azure Repos source (in the viewer's language), and the settings tab shows a notice under the draft button |
 | Create the repository if missing | not done — the repository must exist; a missing one fails the clone with git's own message |
 
 A refusal is an error with a message, never a silent skip: `AzureReposPushPolicy.RefuseExport` and

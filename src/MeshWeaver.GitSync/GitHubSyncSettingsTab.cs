@@ -226,13 +226,18 @@ public static class GitHubSyncSettingsTab
 
         // ── 5. Pull request (AI-drafted → user edits the bound node → submit) ──
         stack = stack.WithView(Section("Pull request"));
-        // Policy azure-repos-push-only (MeshWeaver#5248): an Azure Repos source is offered NO pull
-        // request — the draft button is replaced by a notice, live, so it follows an edit of the URL.
-        // PullRequestService refuses the same operations server-side.
+        // The draft row stays a STATIC part of the tab, exactly as it rendered before Azure Repos
+        // existed: the GitHub path's render shape is unchanged (MeshWeaver.Plugins' settings-tab suite
+        // pins it). Policy azure-repos-push-only (MeshWeaver#5248) is enforced where it cannot be
+        // bypassed — PullRequestService refuses every pull-request operation on an Azure Repos source,
+        // in the viewer's language — and the live notice below tells an Azure source's viewer so
+        // before they click.
+        foreach (var control in BuildDraftPullRequest(host, prService, spacePath))
+            stack = stack.WithView(control);
         stack = stack.WithView((h, _) => sync.WatchConfig(spacePath)
             .Select(cfg => GitRepositoryProvider.IsAzureRepos(cfg?.RepositoryUrl)
                 ? (UiControl?)Controls.Markdown(h.Localize("ui.gitSync.pullRequestsNotOffered"))
-                : (UiControl?)BuildDraftPullRequest(host, prService, spacePath))
+                : (UiControl?)Controls.Stack.WithWidth("100%"))
             .StartWith((UiControl?)Controls.Stack.WithWidth("100%")));
 
         // The PR editor + status, bound to the draft path the button stashes. Re-renders whenever
@@ -252,19 +257,18 @@ public static class GitHubSyncSettingsTab
         return stack;
     }
 
-    /// <summary>The pull-request draft row (description + "Draft pull request" button) for a
-    /// provider that supports pull requests.</summary>
-    private static UiControl BuildDraftPullRequest(LayoutAreaHost host, PullRequestService prService, string spacePath)
+    /// <summary>The pull-request draft row (description + "Draft pull request" button), added as
+    /// direct children of the tab's stack — the shape it has always had.</summary>
+    private static IEnumerable<UiControl> BuildDraftPullRequest(LayoutAreaHost host, PullRequestService prService, string spacePath)
     {
-        var section = Controls.Stack.WithWidth("100%");
-        section = section.WithView(Controls.Html(
+        yield return Controls.Html(
             "<p style=\"font-size:0.85rem;color:var(--neutral-foreground-hint);margin:0 0 8px 0;\">" +
             "Draft a pull request with AI, edit the title and body, then submit it to GitHub. " +
-            "The draft is a mesh node bound directly to the editor below — your edits save as you type.</p>"));
+            "The draft is a mesh node bound directly to the editor below — your edits save as you type.</p>");
 
         // "Draft pull request" — AI drafts title+body and creates a draft PR node, then we point
         // the editor at that node by stashing its path in the PrPathId data id.
-        section = section.WithView(Controls.Button(host.Localize("ui.draftPrWithAi"))
+        yield return Controls.Button(host.Localize("ui.draftPrWithAi"))
             .WithAppearance(Appearance.Accent)
             .WithClickAction(ctx =>
             {
@@ -277,8 +281,7 @@ public static class GitHubSyncSettingsTab
                     },
                     ex => ctx.Host.UpdateData(ResultId, Err(GitSyncRefusalException.Localize(ex, ctx.Host.ViewerLocale()))));
                 return Task.CompletedTask;
-            }));
-        return section;
+            });
     }
 
     // ── Connect (OAuth authorization-code / callback flow) ─────────────────────
