@@ -158,7 +158,7 @@ with no per-user records.** `Home:AppSource` is a closed two-value deployment se
 | anything else | a configuration ERROR: the home logs it at error level, naming the key, and serves the default; the page never fails on a typo |
 
 The Store's, Edu's and the AI engine's per-user home writers read the same key with the same rule,
-and follow the RUNNING image's default for an absent value (MeshWeaver.Plugins#3321), so the launcher
+and follow the RUNNING image's default for an absent value (MeshWeaver.Plugins#3321; the writers' switch itself landed in #3316), so the launcher
 and its writers switch together.
 
 | Piece | Where | What it does |
