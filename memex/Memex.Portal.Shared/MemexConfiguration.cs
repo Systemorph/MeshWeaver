@@ -1031,6 +1031,8 @@ public static class MemexConfiguration
                         // APP (PersonApp.AddPersonAppTab): they show on the viewer's own
                         // /{user}/Settings only, and an old link on any other page redirects there.
                         .AddApiTokensSettingsTab()
+                        // Security: how this person confirms approvals (passkey / authenticator app).
+                        .AddStepUpSettingsTab()
                         .AddInstancesSettingsTab()
                         .AddNotificationsSettingsTab()
                         // The AI top-bar menu entry ("New thread") is GUI: its action is a click-time

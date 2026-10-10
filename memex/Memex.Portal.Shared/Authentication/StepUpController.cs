@@ -1,4 +1,3 @@
-using System.Net;
 using System.Reactive;
 using System.Reactive.Linq;
 using System.Security.Cryptography;
@@ -87,8 +86,16 @@ public sealed partial class StepUpController(
 
         var options = StepUpOptions.From(configuration);
         var provider = StepUpClaims.ProviderOf(User);
+        var isMicrosoft = string.Equals(provider, StepUpClaims.MicrosoftProvider, StringComparison.OrdinalIgnoreCase);
+        StepUpFactors? factors = null;
+        if (options.Enabled && !string.IsNullOrEmpty(provider) && !isMicrosoft)
+        {
+            var read = await ReadFactors(userId, ct);
+            if (!read.Answered) return Failure(safeReturn, "unavailable");
+            factors = read.Factors;
+        }
         var entra = Entra();
-        var rung = StepUpLadder.Decide(provider, options, entra.IsConfigured && entra.TenantIsSpecific);
+        var rung = StepUpLadder.Decide(provider, options, entra.IsConfigured && entra.TenantIsSpecific, factors);
         logger.LogInformation("Step-up start for {User}: rung {Rung}, {Count} target(s)", userId, rung, pairs.Count);
 
         switch (rung)
@@ -99,7 +106,12 @@ public sealed partial class StepUpController(
                 return Refusal(safeReturn, access.Localize("stepUp.refused.unknownSession"));
             case StepUpRung.RefuseNotConfigured:
                 return Refusal(safeReturn, access.Localize("stepUp.refused.notConfigured"));
+            case StepUpRung.Enroll:
+                return Page(StepUpPages.EnrollNeeded(Texts(),
+                    EnrollPath + "?returnUrl=" + Uri.EscapeDataString(Request.Path + Request.QueryString)));
             case StepUpRung.Entra:
+            case StepUpRung.Passkey:
+            case StepUpRung.Totp:
                 break;
             default:
                 return Refusal(safeReturn, access.Localize("stepUp.refused.provider", provider));
@@ -107,6 +119,11 @@ public sealed partial class StepUpController(
 
         var pending = await BeginPending(userId, pairs, safeReturn, ct);
         if (pending is null) return Failure(safeReturn, "unavailable");
+        if (rung == StepUpRung.Passkey)
+            return Page(StepUpPages.Passkey(Texts(), EnrollPath + "?returnUrl=" + Uri.EscapeDataString(safeReturn)));
+        if (rung == StepUpRung.Totp)
+            return Page(StepUpPages.Totp(Texts(), "/" + BasePath + "/" + TotpVerifyAction,
+                EnrollPath + "?returnUrl=" + Uri.EscapeDataString(safeReturn)));
         var loginHint = User.FindFirst("email")?.Value ?? User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value;
         return Redirect(entra.AuthorizeUrl(pending.State, pending.Nonce, CallbackUri, loginHint, options.EntraAuthenticationContext!));
     }
@@ -199,7 +216,7 @@ public sealed partial class StepUpController(
 
     /// <summary>A target that authorizes enrolling another step-up factor rather than an approval.</summary>
     internal static bool IsEnrollmentTarget(StepUpTarget target) =>
-        target.ActionPath.StartsWith("Auth/_StepUpFactors/", StringComparison.Ordinal);
+        target.ActionPath.StartsWith(StepUpPaths.FactorsNamespace + "/", StringComparison.Ordinal);
 
     /// <summary>
     /// Where a successful step-up returns: the page with <c>stepUp=done</c> — and, when it covered a
@@ -332,23 +349,14 @@ public sealed partial class StepUpController(
     private ContentResult Failure(string returnUrl, string reason) =>
         Refusal(returnUrl, access.Localize("stepUp.failed", access.Localize("stepUp.reason." + reason)));
 
-    /// <summary>
-    /// A refusal or failure, localized, with a way back. It is outside the Blazor shell by necessity
-    /// (the IdP round trip is a full-page navigation to an MVC endpoint), so it is deliberately
-    /// minimal — a heading, one sentence, one link — and takes the viewer's colour scheme.
-    /// </summary>
-    private ContentResult Refusal(string returnUrl, string message)
-    {
-        var html = new StringBuilder()
-            .Append("<!doctype html><html lang=\"").Append(WebUtility.HtmlEncode(access.ViewerLocale())).Append("\"><head><meta charset=\"utf-8\">")
-            .Append("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><meta name=\"color-scheme\" content=\"light dark\"><title>")
-            .Append(WebUtility.HtmlEncode(access.Localize("stepUp.title"))).Append("</title></head>")
-            .Append("<body style=\"font-family:system-ui,sans-serif;max-width:40rem;margin:4rem auto;padding:0 1rem\">")
-            .Append("<main><h1>").Append(WebUtility.HtmlEncode(access.Localize("stepUp.title"))).Append("</h1>")
-            .Append("<p role=\"alert\">").Append(WebUtility.HtmlEncode(message)).Append("</p>")
-            .Append("<p><a href=\"").Append(WebUtility.HtmlEncode(ReturnUrlPolicy.Sanitize(returnUrl))).Append("\">")
-            .Append(WebUtility.HtmlEncode(access.Localize("stepUp.back"))).Append("</a></p></main>")
-            .Append("</body></html>");
-        return new ContentResult { Content = html.ToString(), ContentType = "text/html; charset=utf-8", StatusCode = StatusCodes.Status403Forbidden };
-    }
+    /// <summary>A refusal or failure — localized, with a way back (<see cref="StepUpPages.Message"/>).</summary>
+    private ContentResult Refusal(string returnUrl, string message) =>
+        Page(StepUpPages.Message(Texts(), message, ReturnUrlPolicy.Sanitize(returnUrl)), StatusCodes.Status403Forbidden);
+
+    /// <summary>One of the step-up pages as the response.</summary>
+    private static ContentResult Page(string html, int status = StatusCodes.Status200OK) =>
+        new() { Content = html, ContentType = "text/html; charset=utf-8", StatusCode = status };
+
+    /// <summary>The viewer's language and catalog for a page.</summary>
+    private StepUpPageTexts Texts() => new(access.ViewerLocale(), key => access.Localize(key));
 }
