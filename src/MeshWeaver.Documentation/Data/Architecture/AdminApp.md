@@ -111,6 +111,7 @@ signed-in viewer and change nothing.
 | merge two tabs | `config.AliasSettingsTab(retiredId, survivingId)` on the hub whose page carries them |
 | title an app | `config.WithSettingsTitle((host, node) => …)` |
 | contribute a tab as DATA | a `UiContribution` with `Context: NodeSettings`; the instance app's are gated `Gates: { AdminOnly: true, NodeTypes: [AdminApp] }` |
+| contribute a tab to ONE app's settings as DATA | a `UiContribution` with `Context: AppSettings` and `Host: <the app's path>` (`Admin` for an instance-app section, `AI/AiThreads` for Threads › Models), embedding `Area` of `Address` (inside the contribution's own partition; unset ⇒ the host's hub). It joins that host's settings page only; the closed gates still narrow it (`AdminOnly` for an Administration section). `UiContributionSeedValidation` reports a hostless one |
 | contribute a PERSON-APP tab as DATA | a `UiContribution` with `Context: PersonApp`, embedding `Area` of `Address` (inside the contribution's own partition); add `Gates: { RequireAddressAccess: true }` for an [in-app extension](../InAppExtensions) so the tab shows only once the viewer holds it |
 
 `AddAdminAppTab` / `AddPersonAppTab` providers yield nothing anywhere else, so it is safe — and was
