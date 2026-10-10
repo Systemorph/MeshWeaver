@@ -162,11 +162,13 @@ internal static class UiContributionProjection
             if (!PassesNodeGates(contribution.Gates, menuPath, menuNode, isAdmin, viewerId))
                 continue;
             // An app-settings tab may embed its module's own hub — inside its partition only.
-            var address = isAppSettings && contribution.Address is { Length: > 0 } declared
-                ? declared.Trim('/')
-                : null;
-            if (address is not null && !IsInContributorsPartition(address, node.Path))
-                continue;
+            string? address = null;
+            if (isAppSettings && contribution.Address is { Length: > 0 })
+            {
+                address = AppSettingsAddress(contribution, node.Path, menuPath);
+                if (address is null)
+                    continue;
+            }
 
             items.Add(new SettingsMenuItemDefinition(
                 // The node id (= the trailing path segment) keeps the tab's /Settings/{Id} deep
@@ -310,8 +312,22 @@ internal static class UiContributionProjection
     /// A tab with no host belongs to no page.
     /// </summary>
     internal static bool IsHost(string? host, string menuPath)
-        => host is { Length: > 0 }
-           && string.Equals(host.Trim('/'), menuPath.Trim('/'), StringComparison.OrdinalIgnoreCase);
+        => (host?.Trim().Trim('/') ?? "") is { Length: > 0 } normalized
+           && string.Equals(normalized, menuPath.Trim().Trim('/'), StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The hub an <see cref="UiContribution.AppSettingsContext"/> tab embeds: its declared
+    /// <see cref="UiContribution.Address"/> (trimmed) when that lies inside the contribution's own
+    /// partition, <paramref name="hostAddress"/> when none is declared, and null when the declared one
+    /// is foreign — the tab is then dropped. Pure; the projection's ContentBuilder renders exactly this.
+    /// </summary>
+    internal static string? AppSettingsAddress(UiContribution contribution, string? contributionPath, string hostAddress)
+    {
+        if (contribution.Address is not { Length: > 0 } declared)
+            return hostAddress;
+        var address = declared.Trim('/');
+        return IsInContributorsPartition(address, contributionPath) ? address : null;
+    }
 
     /// <summary>
     /// 🚨 The render-target authorization for an embedding contribution: a contribution may only

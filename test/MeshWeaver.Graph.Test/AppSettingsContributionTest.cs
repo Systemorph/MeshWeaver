@@ -138,4 +138,22 @@ public class AppSettingsContributionTest
         Assert.Single(UiContributionProjection.ProjectNodeSettingsTabs([gated], "Admin", AdminNode, isAdmin: true, viewerId: "alice"));
         Assert.Contains(UiContributionSeedValidation.Validate([Seed(gated)]), p => p.Contains("inert"));
     }
+
+    [Fact]
+    public void TheEmbeddedHub_IsTheDeclaredAddress_OrTheHostsOwn_NeverAForeignOne()
+    {
+        Assert.Equal("Store", UiContributionProjection.AppSettingsAddress(ManageApps, "Store/AdminTabs/ManageApps", "Admin"));
+        Assert.Equal("Store/Catalog", UiContributionProjection.AppSettingsAddress(
+            ManageApps with { Address = "/Store/Catalog/" }, "Store/AdminTabs/ManageApps", "Admin"));
+        Assert.Equal("AI/AiThreads", UiContributionProjection.AppSettingsAddress(
+            ManageApps with { Address = null }, "AI/AppSettings/Models", "AI/AiThreads"));
+        Assert.Null(UiContributionProjection.AppSettingsAddress(ManageApps, "Acme/AdminTabs/ManageApps", "Admin"));
+    }
+
+    [Theory]
+    [InlineData("/", "")]
+    [InlineData("///", "/")]
+    [InlineData(" ", "")]
+    public void ASlashOnlyHost_NeverMatchesARootPage(string host, string menuPath)
+        => Assert.False(UiContributionProjection.IsHost(host, menuPath));
 }

@@ -155,7 +155,8 @@ public record UiContribution
     /// <summary>
     /// Which menu the entry contributes to: <c>Node</c>, <c>Mesh</c>, <c>Settings</c> (the GLOBAL
     /// settings page), <c>NodeSettings</c> (the PER-NODE settings page), <c>TopBar</c>, <c>AI</c>,
-    /// <c>Profile</c>, <c>PersonApp</c> or any key a <c>TopBar</c> declaration introduces. Unset ⇒ <c>Node</c>.
+    /// <c>Profile</c>, <c>PersonApp</c>, <c>AppSettings</c> (with <see cref="Host"/>) or any key a
+    /// <c>TopBar</c> declaration introduces. Unset ⇒ <c>Node</c>.
     ///
     /// <para>🚨 A context nobody consumes renders NOWHERE — no error, no warning, not even an
     /// area-not-found placeholder. <see cref="UiContributionSeedValidation"/> is the static check
@@ -184,12 +185,12 @@ public record UiContribution
 
     /// <summary>
     /// The hub address whose <see cref="Area"/> an EMBEDDING context renders —
-    /// <see cref="ProfileContext"/> and <see cref="PersonAppContext"/>, where e.g. <c>Address = "Store"</c>, <c>Area = "MyPlan"</c>
+    /// <see cref="ProfileContext"/>, <see cref="PersonAppContext"/> and <see cref="AppSettingsContext"/>, where e.g. <c>Address = "Store"</c>, <c>Area = "MyPlan"</c>
     /// puts the Store's own plan view on every profile page. Unset ⇒ the anchoring node's own hub
     /// (for a profile section, the user node). 🚨 It must lie inside the contribution node's OWN
     /// partition (<c>Store/ProfileSections/x</c> may embed <c>Store</c> or <c>Store/…</c>); any other
     /// address drops the entry, so a contribution can only point viewers at something its author
-    /// already controls. Menu and settings contexts ignore it: they open
+    /// already controls. Menu contexts and the Settings / NodeSettings tabs ignore it: they open
     /// <see cref="Area"/> on the anchoring node, or navigate to <see cref="Href"/>.
     /// </summary>
     public string? Address { get; init; }
@@ -235,7 +236,8 @@ public record UiContribution
     /// only by the section's name (<c>PartitionSyncAdminLayoutArea</c> ships fifteen: "partitions",
     /// "sync source", "decouple", "delete space", …).
     ///
-    /// <para>Consumed by <see cref="NodeSettingsContext"/> only — the global settings page has no
+    /// <para>Consumed by <see cref="NodeSettingsContext"/> and <see cref="AppSettingsContext"/> (both
+    /// render on a per-node settings page) — the global settings page has no
     /// search box and <c>GlobalSettingsMenuItemDefinition</c> has no keyword slot; declaring them
     /// on a <see cref="SettingsContext"/> contribution is harmless but inert.</para>
     ///
