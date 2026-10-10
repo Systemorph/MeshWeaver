@@ -144,17 +144,18 @@ public class EntraStepUpTest
     }
 
     [Fact]
-    public void TheLadder_RefusesNonEntraAccounts_AndNeverWavesThrough()
+    public void TheLadder_SendsMicrosoftAccountsToEntra_AndNeverWavesThrough()
     {
         var on = Options();
-        Assert.Equal(StepUpRung.Entra, StepUpLadder.Decide("Microsoft", on, entraUsable: true));
-        Assert.Equal(StepUpRung.RefuseProvider, StepUpLadder.Decide("Google", on, entraUsable: true));
-        Assert.Equal(StepUpRung.RefuseProvider, StepUpLadder.Decide("LinkedIn", on, entraUsable: true));
-        Assert.Equal(StepUpRung.RefuseUnknownSession, StepUpLadder.Decide(null, on, entraUsable: true));
-        Assert.Equal(StepUpRung.RefuseNotConfigured, StepUpLadder.Decide("Microsoft", on with { EntraAuthenticationContext = null }, entraUsable: true));
-        Assert.Equal(StepUpRung.RefuseNotConfigured, StepUpLadder.Decide("Microsoft", on, entraUsable: false));
+        Assert.Equal(StepUpRung.Entra, StepUpLadder.Decide("Microsoft", on, entraUsable: true, factors: null));
+        // Every other account steps up with the portal's own factors — with none yet, it enrols first.
+        Assert.Equal(StepUpRung.Enroll, StepUpLadder.Decide("Google", on, entraUsable: true, factors: null));
+        Assert.Equal(StepUpRung.Enroll, StepUpLadder.Decide("LinkedIn", on, entraUsable: true, factors: null));
+        Assert.Equal(StepUpRung.RefuseUnknownSession, StepUpLadder.Decide(null, on, entraUsable: true, factors: null));
+        Assert.Equal(StepUpRung.RefuseNotConfigured, StepUpLadder.Decide("Microsoft", on with { EntraAuthenticationContext = null }, entraUsable: true, factors: null));
+        Assert.Equal(StepUpRung.RefuseNotConfigured, StepUpLadder.Decide("Microsoft", on, entraUsable: false, factors: null));
         // Off until declared — only then does nobody step up.
-        Assert.Equal(StepUpRung.NotRequired, StepUpLadder.Decide("Google", new StepUpOptions(), entraUsable: true));
+        Assert.Equal(StepUpRung.NotRequired, StepUpLadder.Decide("Google", new StepUpOptions(), entraUsable: true, factors: null));
     }
 
     [Fact]
