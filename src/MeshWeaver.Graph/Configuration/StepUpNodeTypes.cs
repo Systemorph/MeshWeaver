@@ -41,6 +41,14 @@ public static class StepUpNodeTypes
                 HubConfiguration = config => config
                     .AddMeshDataSource(source => source.WithContentType<StepUpConsumption>())
             },
+            new MeshNode(StepUpPaths.FactorsNodeType)
+            {
+                Name = "Step-up factors",
+                Icon = "/static/NodeTypeIcons/key.svg",
+                ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
+                HubConfiguration = config => config
+                    .AddMeshDataSource(source => source.WithContentType<StepUpFactors>())
+            },
             new MeshNode(StepUpPaths.PendingNodeType)
             {
                 Name = "Step-up in progress",
@@ -54,13 +62,15 @@ public static class StepUpNodeTypes
         builder.ConfigureHub(config => config
             .WithType<StepUpReceipt>(nameof(StepUpReceipt))
             .WithType<StepUpConsumption>(nameof(StepUpConsumption))
-            .WithType<StepUpPending>(nameof(StepUpPending)));
-        builder.AddAutocompleteExcludedTypes(StepUpPaths.ReceiptNodeType, StepUpPaths.ConsumptionNodeType, StepUpPaths.PendingNodeType);
+            .WithType<StepUpPending>(nameof(StepUpPending))
+            .WithType<StepUpFactors>(nameof(StepUpFactors)));
+        builder.AddAutocompleteExcludedTypes(StepUpPaths.ReceiptNodeType, StepUpPaths.ConsumptionNodeType, StepUpPaths.PendingNodeType, StepUpPaths.FactorsNodeType);
         builder.ConfigureServices(s =>
         {
             s.AddSingleton<INodeTypeAccessRule>(new SystemOnlyAccessRule(StepUpPaths.ReceiptNodeType));
             s.AddSingleton<INodeTypeAccessRule>(new SystemOnlyAccessRule(StepUpPaths.ConsumptionNodeType));
             s.AddSingleton<INodeTypeAccessRule>(new SystemOnlyAccessRule(StepUpPaths.PendingNodeType));
+            s.AddSingleton<INodeTypeAccessRule>(new SystemOnlyAccessRule(StepUpPaths.FactorsNodeType));
             // The concrete service is INTERNAL (it alone can mint); consumers get the interface.
             s.TryAddSingleton<StepUpService>();
             s.TryAddSingleton<IStepUpService>(sp => sp.GetRequiredService<StepUpService>());
