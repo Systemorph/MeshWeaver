@@ -709,6 +709,9 @@ public static class PersistenceExtensions
 
         DecorateStorageAdapterWithVersionWriting(services);
 
+        // The mesh's query predicate for providers that synthesize rows (the app directory).
+        services.TryAddSingleton<IMeshNodeQueryMatcher, QueryEvaluatorMatcher>();
+
         // Static-node query provider for built-in catalogs (Agent, Model, Role).
         services.AddSingleton<IMeshQueryProvider>(sp =>
         {
@@ -774,6 +777,9 @@ public static class PersistenceExtensions
             new MeshQuery(
                 sp.GetServices<IMeshQueryProvider>(), hub: null!,
                 sp.GetService<MeshOperationOptions>() ?? new MeshOperationOptions()));
+
+        // The mesh's query predicate for providers that synthesize rows (the app directory).
+        services.TryAddSingleton<IMeshNodeQueryMatcher, QueryEvaluatorMatcher>();
 
         services.AddSingleton<StaticNodeQueryProvider>(sp =>
         {

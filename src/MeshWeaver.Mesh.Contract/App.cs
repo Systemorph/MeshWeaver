@@ -52,6 +52,15 @@ public record App
     public string? Group { get; init; }
 
     /// <summary>
+    /// Whether <see cref="Group"/> is the VIEWER's own choice (written by every drag, drop and
+    /// rename on the grid) rather than a stamped copy of the package's category — the flag the
+    /// Store's tile refresh honours, and the one the app directory's arrangement seed carries over.
+    /// Wire name <c>customGroup</c>.
+    /// </summary>
+    [Browsable(false)]
+    public bool CustomGroup { get; init; }
+
+    /// <summary>
     /// Optional navigation override — where the icon opens. Empty resolves to the
     /// <see cref="Plugin"/> node itself.
     /// </summary>

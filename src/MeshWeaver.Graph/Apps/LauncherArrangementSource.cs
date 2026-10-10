@@ -202,29 +202,10 @@ public sealed class LauncherArrangementSource
             {
                 Group = app.Group,
                 Order = app.Order,
-                CustomGroup = ReadCustomGroup(record, options),
+                CustomGroup = app.CustomGroup,
             };
         }
         return new LauncherArrangement { Entries = entries.ToImmutable() };
-    }
-
-    /// <summary>The <c>customGroup</c> flag the launcher view writes onto a record — not a property
-    /// of <see cref="App"/>, so read from the raw content in whatever shape it arrived.</summary>
-    private static bool ReadCustomGroup(MeshNode record, JsonSerializerOptions options)
-    {
-        var element = record.Content switch
-        {
-            null => (JsonElement?)null,
-            JsonElement je => je,
-            System.Text.Json.Nodes.JsonNode jn => JsonSerializer.SerializeToElement(jn, options),
-            var typed => JsonSerializer.SerializeToElement(typed, typed.GetType(), options),
-        };
-        if (element is not { ValueKind: JsonValueKind.Object } content)
-            return false;
-        foreach (var property in content.EnumerateObject())
-            if (string.Equals(property.Name, "customGroup", StringComparison.OrdinalIgnoreCase))
-                return property.Value.ValueKind == JsonValueKind.True;
-        return false;
     }
 
     private static MeshQueryRequest SystemRequest(string query) =>

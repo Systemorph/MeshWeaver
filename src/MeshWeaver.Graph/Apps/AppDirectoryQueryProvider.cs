@@ -58,9 +58,12 @@ public sealed class AppDirectoryQueryProvider(IServiceProvider services) : IMesh
         // arrangement node to write to.
         var arrangement = isOwner ? arrangements.ObserveSeeded(owner) : arrangements.Observe(owner);
 
+        // The FULL predicate — filter conditions and free text — exactly as the mesh's in-memory
+        // providers apply it, so a directory query means what the same query means elsewhere.
+        var matcher = services.GetRequiredService<IMeshNodeQueryMatcher>();
         return cache.ForViewer(owner)
             .CombineLatest(arrangement, (entries, placed) => Rows(owner, entries, placed, options))
-            .Select(rows => Filter(rows, parsed))
+            .Select(rows => rows.Where(row => matcher.Matches(row, parsed)).ToImmutableList())
             .Scan((Previous: (ImmutableDictionary<string, MeshNode>?)null, Changes: (IReadOnlyList<QueryResultChange<T>>)[]),
                 (state, rows) =>
                 {
@@ -69,6 +72,17 @@ public sealed class AppDirectoryQueryProvider(IServiceProvider services) : IMesh
                 })
             .SelectMany(state => state.Changes);
     }
+
+    /// <summary>
+    /// The snapshot surface, folded from <see cref="Query{T}"/> with EVERY delta kind applied —
+    /// including <c>Removed</c>, which the interface's default bridge drops: a revoked app must
+    /// leave this surface too, not linger in its accumulated snapshot.
+    /// </summary>
+    public IObservable<IReadOnlyCollection<QueryResult>> Query(MeshQueryRequest request, JsonSerializerOptions options)
+        => LauncherArrangementSource.Fold(Query<MeshNode>(request, options))
+            .Select(rows => (IReadOnlyCollection<QueryResult>)rows.Values
+                .Select(node => QueryResult.FromNode(node, 0, providerName: Name))
+                .ToList());
 
     /// <inheritdoc />
     public IObservable<IReadOnlyCollection<QueryResult>> Autocomplete(
@@ -140,13 +154,6 @@ public sealed class AppDirectoryQueryProvider(IServiceProvider services) : IMesh
                 },
             };
         }).ToImmutableList();
-
-    /// <summary>Honours the query's <c>nodeType:</c> filter — the only filter a launcher sends.</summary>
-    private static ImmutableList<MeshNode> Filter(ImmutableList<MeshNode> rows, ParsedQuery parsed) =>
-        parsed.ExtractNodeType() is { } nodeType
-        && !string.Equals(nodeType, AppNodeType.NodeType, StringComparison.OrdinalIgnoreCase)
-            ? ImmutableList<MeshNode>.Empty
-            : rows;
 
     /// <summary>The first emission is the <c>Initial</c>; every later one the deltas against the
     /// last — removals, additions and updates, each its own change (live consumers fold by path),

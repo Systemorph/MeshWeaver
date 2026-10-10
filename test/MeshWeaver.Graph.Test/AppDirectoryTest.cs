@@ -327,6 +327,22 @@ public class AppDirectoryPureTest
         rows[0].ContentAs<App>(Options)!.Source.Should().Be(AppSources.Directory);
     }
 
+    /// <summary>The snapshot fold behind the provider's unified surface applies EVERY delta kind —
+    /// a Removed path leaves the snapshot (the interface's default bridge drops Removed).</summary>
+    [Fact]
+    public void TheSnapshotFold_AppliesRemovals()
+    {
+        var parsed = new QueryParser().Parse("namespace:alice/_Apps");
+        MeshNode Row(string id) => new(id, "alice/_Apps") { NodeType = AppNodeType.NodeType };
+        var folded = new List<ImmutableDictionary<string, MeshNode>>();
+        LauncherArrangementSource.Fold(new[]
+        {
+            new QueryResultChange<MeshNode> { ChangeType = QueryChangeType.Initial, Items = [Row("A"), Row("B")], Query = parsed },
+            new QueryResultChange<MeshNode> { ChangeType = QueryChangeType.Removed, Items = [Row("A")], Query = parsed },
+        }.ToObservable()).Subscribe(folded.Add);
+        folded.Last().Keys.Should().Equal("alice/_Apps/B");
+    }
+
     [Theory]
     [InlineData(null, true)]
     [InlineData("Records", true)]
@@ -572,6 +588,13 @@ public class AppDirectoryTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         await Live(access.RunAs(owner, () => mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(query))))
             .Where(items => items.Any(r => r.Id == "Inbox" && r.ContentAs<App>(Mesh.JsonSerializerOptions)?.Group == "Elsewhere"))
             .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+
+        // The FULL predicate applies, like on any stored namespace: a content filter narrows the rows.
+        var narrowed = await Live(access.RunAs(owner, () => mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(
+                $"namespace:{Seeded}/_Apps content.group:Elsewhere"))))
+            .Where(items => items.Count > 0)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        narrowed.Select(r => r.Id).Should().Equal("Inbox");
 
         // Someone else asking for the owner's directory gets nothing.
         var intruder = new AccessContext { ObjectId = Ungranted, Name = Ungranted };
