@@ -1400,8 +1400,11 @@ data:
   {{- end }}
   # ---- Per-environment composition: FEATURE FLAGS ---------------------------
   # An enabled flag INSTALLS the packages it names (reconciled on every boot — unlike
-  # installByDefault above, which seeds once and can therefore say nothing about an
-  # already-populated portal); a declared-but-DISABLED flag EXCLUDES them, and the exclusion wins
+  # installByDefault above, which also runs on every boot but seeds each package at most once,
+  # gated per package by the Plugins/_DefaultInstallLedger, so it never re-installs one an
+  # operator removed; a newly listed whole-source package is held with no ledger entry, and a
+  # commercial package that passes the hold lands under `skipped`, never installed); a
+  # declared-but-DISABLED flag EXCLUDES them, and the exclusion wins
   # over every other selection signal. That is what makes "all of Plugins, without the games" one
   # line in an environment's values file on top of a shared declaration. A flag with no packages is
   # a plain named boolean. See Doc/Architecture/EnvironmentComposition.

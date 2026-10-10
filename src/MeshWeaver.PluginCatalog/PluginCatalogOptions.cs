@@ -86,7 +86,7 @@ public sealed class PluginCatalogOptions
     public string InstanceName { get; set; } = "";
 
     /// <summary>
-    /// Packages a FRESH installation installs by itself on first startup, in the same
+    /// Packages this installation installs by itself at startup, in the same
     /// <c>Source/Package</c> notation as the registry's grants — e.g. <c>["Plugins/*"]</c> for the
     /// whole platform plugin repo (which is what carries the Store), or
     /// <c>["Plugins/Store", "Plugins/Essentials"]</c> to be selective. Empty (the platform default)
@@ -98,10 +98,16 @@ public sealed class PluginCatalogOptions
     /// <see cref="PackageManifest.Source"/>, so a registry that does not stamp the source matches
     /// nothing and installs nothing — failing closed.</para>
     ///
-    /// <para>Runs ONCE, on an installation with no install records yet: this seeds a new
-    /// deployment, it is not a policy that re-asserts itself. (An installation whose packages are
-    /// ALL later uninstalled looks fresh again and would re-seed on the next restart — deliberate,
-    /// so a wiped instance recovers, and harmless because installs are additive.)</para>
+    /// <para>Runs on EVERY boot, gated PER PACKAGE by the default-install ledger
+    /// (<c>Plugins/_DefaultInstallLedger</c>): a package the seed already delivered once is never
+    /// re-installed, even if it is gone now (an operator removed it, and the seed does not fight
+    /// an operator); a package it never delivered is installed — which is what repairs a bad first
+    /// config or a failed install. A package newly listed in a source this installation already
+    /// seeded from, and covered only by a whole-source pattern (<c>Plugins/*</c>), is HELD: it lands
+    /// through a governed <c>package.provision</c> activity or by being named here; a held package
+    /// gets NO ledger entry. A COMMERCIAL package that passes the hold is never installed by this
+    /// unattended pass — it has no authorizing principal — and is recorded under <c>skipped</c> on
+    /// the ledger with its reason.</para>
     /// </summary>
     public List<string> InstallByDefault { get; set; } = [];
 
@@ -113,7 +119,8 @@ public sealed class PluginCatalogOptions
     /// having to know to opt in. Set <c>PluginCatalog:InstallPreInstalledPackages=false</c> to
     /// suppress it entirely (an air-gapped or hand-curated instance that manages its own content).
     ///
-    /// <para>Unlike <see cref="InstallByDefault"/> — which SEEDS a fresh deployment once — the
+    /// <para>Unlike <see cref="InstallByDefault"/> — which SEEDS each package once, per the
+    /// ledger — the
     /// pre-installed baseline is reconciled on EVERY boot, because it is what the platform itself
     /// requires to function and what must survive a self-update. That reconcile is free on an
     /// up-to-date instance: the content-identity gate in <c>CatalogLayoutAreas.InstallOrUpdate</c>
