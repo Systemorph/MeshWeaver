@@ -18,9 +18,9 @@ public class StepUpRecordTest
           "signIn": {
             "provider": "Custom",
             "microsoftClientId": "client",
-            "microsoftTenantId": "tenant-guid",
-            "stepUp": { "enabled": true, "entraAuthenticationContext": "c1", "maxAuthAgeSeconds": 90 }
-          }
+            "microsoftTenantId": "tenant-guid"
+          },
+          "approvalStepUp": { "enabled": true, "entraAuthenticationContext": "c1", "maxAuthAgeSeconds": 90 }
         }
         """;
 
@@ -36,7 +36,7 @@ public class StepUpRecordTest
     public void ADeclaredStepUpRendersItsKeys()
     {
         var record = DeploymentRecordJson.Read(Declared)!;
-        Assert.Equal("c1", record.SignIn!.StepUp!.EntraAuthenticationContext);
+        Assert.Equal("c1", record.ApprovalStepUp!.EntraAuthenticationContext);
 
         var config = DeploymentPortalConfig.PortalConfig(record);
         Assert.Equal("true", config["Authentication__StepUp__Enabled"]);

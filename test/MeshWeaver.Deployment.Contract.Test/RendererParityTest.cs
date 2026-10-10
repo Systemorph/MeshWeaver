@@ -159,6 +159,7 @@ public class RendererParityTest
             .WithDatabase("portal", server: "pg-portal", username: "memex", host: "pg-portal.example.internal", port: 5432, connectionSecret: "portal-pg-connection")
             .WithImage("ghcr.io/systemorph/memex-portal-ai", tag: "3.1.0", pullSecret: "ghcr-pull")
             .WithUpdatePolicy("stable").WithUpdatePattern("3.0.0-ci*").WithModuleUpdatePolicy("Notify").WithMinRollInterval("00:30:00").WithAutoRecycleOnStaleBuild(true).WithDenyAnonymous(true)
+            .WithApprovalStepUp(true, "c1", "tenant")
             .WithPluginRepo("plugins", "https://github.com/Systemorph/MeshWeaver.Plugins", gitRef: "main")
             .PreInstall("MeshWeaver.Plugins/Hosting")
             .WithRequiredModule("MeshWeaver.Hosting.Postgres").WithRequiredModulesAuthoritative(true)

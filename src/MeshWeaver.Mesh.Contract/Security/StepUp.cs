@@ -207,7 +207,7 @@ public sealed record StepUpVerdict(string Outcome, string? ReceiptId = null, str
 
 /// <summary>
 /// The step-up configuration of THIS instance, read from <c>Authentication:StepUp:*</c> — declared
-/// per deployment record (<c>SignIn.StepUp</c>). Default OFF: absent, empty or unparseable
+/// per deployment record (<c>ApprovalStepUp</c>). Default OFF: absent, empty or unparseable
 /// <see cref="EnabledKey"/> reads as disabled, so nothing changes until an instance declares it.
 /// </summary>
 public sealed record StepUpOptions
