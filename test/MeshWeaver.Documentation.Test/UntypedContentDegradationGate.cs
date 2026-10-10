@@ -150,15 +150,13 @@ public class UntypedContentDegradationGate
     [Fact]
     public void ADivertedDegradationIsAssertedWhereItIsDiverted()
     {
-        const string Diversion = "ILogger<MeshWeaver.Hosting.MeshNodeStreamCache>";
         const string ShortDiversion = "ILogger<MeshNodeStreamCache>";
         const string Assertion = "AssertReportedFor(";
 
         var root = SourceScan.FindRepoRoot();
         var diverting = SourceScan.SourceFiles(root, ["test"])
             .Select(path => (Path: path, Text: File.ReadAllText(path)))
-            .Where(f => f.Text.Contains(Diversion, StringComparison.Ordinal)
-                        || f.Text.Contains(ShortDiversion, StringComparison.Ordinal))
+            .Where(f => DivertsTheEmitterLogger(f.Text))
             // This gate's own prose names the type; only a file that USES it counts.
             .Where(f => !SourceScan.Relative(root, f.Path)
                 .EndsWith("MeshWeaver.Documentation.Test/UntypedContentDegradationGate.cs", StringComparison.Ordinal))
@@ -190,6 +188,51 @@ public class UntypedContentDegradationGate
             + "degraded, and is the exact state #3625 was about. Assert that the record WAS "
             + "produced, that it names the node you expect, and that it would have satisfied the "
             + "trace sink's own predicate (exception is not null && level >= Warning).");
+    }
+
+    /// <summary>
+    /// Resolving the mesh's OWN <c>ILogger&lt;MeshNodeStreamCache&gt;</c> from its service provider
+    /// (<c>GetRequiredService&lt;ILogger&lt;MeshNodeStreamCache&gt;&gt;()</c>) hands back the shared
+    /// logger that feeds <c>TestTraceLog</c> — the opposite of a diversion, so a test that
+    /// constructs a cache by hand with it keeps every record on the gate's path (#6078).
+    /// </summary>
+    private static readonly Regex SharedLoggerResolution = new(
+        @"\bGet(?:Required)?Service\s*<\s*ILogger\s*<\s*(?:MeshWeaver\.Hosting\.)?MeshNodeStreamCache\s*>\s*>\s*\(\s*\)",
+        RegexOptions.Compiled);
+
+    private static readonly Regex EmitterLoggerMention = new(
+        @"\bILogger\s*<\s*(?:MeshWeaver\.Hosting\.)?MeshNodeStreamCache\s*>",
+        RegexOptions.Compiled);
+
+    /// <summary>
+    /// Whether a test file DIVERTS the emitter's logger: names <c>ILogger&lt;MeshNodeStreamCache&gt;</c>
+    /// anywhere other than a plain resolution of the mesh's shared instance — registering it,
+    /// implementing it, or handing one of its own to a constructor all count. Only the exact
+    /// shared-resolution form is exempt, so every substitution route still counts.
+    /// </summary>
+    internal static bool DivertsTheEmitterLogger(string text) =>
+        EmitterLoggerMention.IsMatch(SharedLoggerResolution.Replace(text, string.Empty));
+
+    /// <summary>
+    /// 🚨 Control for the classifier above, both directions: a registration, an implementation and
+    /// a cast ARE diversions; resolving the mesh's shared logger is not; and a file that resolves
+    /// the shared logger AND registers its own is still a diversion.
+    /// </summary>
+    [Fact]
+    public void TheDiversionClassifier_CountsSubstitutions_AndNotTheSharedLogger()
+    {
+        Assert.True(DivertsTheEmitterLogger(
+            "services.AddSingleton<ILogger<MeshNodeStreamCache>>(recorder);"));
+        Assert.True(DivertsTheEmitterLogger(
+            "sealed class Recorder : ILogger<MeshWeaver.Hosting.MeshNodeStreamCache> { }"));
+        Assert.True(DivertsTheEmitterLogger(
+            "new MeshNodeStreamCache(hub, (ILogger<MeshNodeStreamCache>)recorder);"));
+        Assert.False(DivertsTheEmitterLogger(
+            "new(owner, Mesh.ServiceProvider.GetRequiredService<ILogger<MeshNodeStreamCache>>());"));
+        Assert.False(DivertsTheEmitterLogger("nothing about the cache logger here"));
+        Assert.True(DivertsTheEmitterLogger(
+            "sp.GetRequiredService<ILogger<MeshNodeStreamCache>>();\n"
+            + "services.AddSingleton<ILogger<MeshNodeStreamCache>>(recorder);"));
     }
 
     [Fact]

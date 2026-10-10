@@ -875,6 +875,28 @@ public record MessageHubConfiguration
     public bool ReactivatesOnDemand => Get<ReactivatesOnDemand>() is not null;
 
     /// <summary>
+    /// Declares that this hub is a DEPENDENCY of its siblings: hosted beside the hubs that read
+    /// through it, it is torn down only after every sibling hub has finished its own teardown.
+    ///
+    /// <para>🚨 <b>Why.</b> The owner's hosted hubs are disposed as one wave, so without this a
+    /// hub that SERVES its siblings races them to its ShutDown. The node-stream cache's hub is the
+    /// case that made this a defect (#6078): its ShutDown ends every held read with the disposal
+    /// terminal, and a sibling still tearing down (mid-turn, mid-quiesce) received that fault for
+    /// its own teardown — the outgoing pod of every roll logged it at Error from long-lived
+    /// readers such as the PR sweep and the fleet coordinator. Declared, the order is the
+    /// dependency order: readers release their reads, then what they read goes.</para>
+    ///
+    /// <para>Only the ORDER within one owner's teardown changes. The owner still waits for this
+    /// hub as well, and a hub declared this way still refuses new work from the moment its
+    /// owner's teardown begins, because creation under the owner is closed then.</para>
+    /// </summary>
+    /// <returns>The configuration, marked.</returns>
+    public MessageHubConfiguration WithTeardownAfterSiblings() => Set(new TearsDownAfterSiblingsMarker());
+
+    /// <summary>True when <see cref="WithTeardownAfterSiblings"/> was declared.</summary>
+    public bool TearsDownAfterSiblings => Get<TearsDownAfterSiblingsMarker>() is not null;
+
+    /// <summary>
     /// Per-hub aggregate inbound-depth watermark for the storm breaker's Invariant-3 safety
     /// net (see <c>Doc/Architecture/ActionBlockWedgePrevention.md</c>). Default
     /// <see cref="MessageStormBreaker.DefaultAggregateWatermark"/>. When this hub's single
@@ -1133,3 +1155,9 @@ internal record MessageHandlerItem(Type MessageType, Func<IMessageHub, IMessageD
 /// the activation instead of latching it FAILED.
 /// </summary>
 public sealed record ReactivatesOnDemand;
+
+/// <summary>
+/// Marker for <see cref="MessageHubConfiguration.WithTeardownAfterSiblings"/>: the owner tears this
+/// hub down after every sibling hub has finished.
+/// </summary>
+internal sealed record TearsDownAfterSiblingsMarker;
