@@ -122,8 +122,13 @@ members, called only from a governed task a global admin triggers (policy
 - **The answer is an outcome, never a fault.** `PaymentEndpointChange.Outcome` is an OPEN vocabulary
   (`PaymentEndpointOutcome`: `WouldCreate`/`Created`, `WouldAddEvents`/`EventsAdded`,
   `AlreadyComplete`, `SecretNotRecovered`, `WouldRemove`/`Removed`/`NothingToRemove`, `Refused`,
-  `NotSupported`); a caller reports a word it does not know verbatim and as a failure, never as a
-  known one. `Refusal` is a `LocalizableText`: the two defaults carry their own catalog keys
+  `Indeterminate`, `NotSupported`); a caller reports a word it does not know verbatim and as a
+  failure, never as a known one. **`Refused` means nothing was written** — a failed precondition, or
+  a call that failed before any write was sent. **A write call that was sent and got no answer** (a
+  timeout, a dropped connection, a 5xx) **is `Indeterminate`**: the provider may have applied it, so
+  the caller never reports "nothing written" for it, and reconciles by running again — a dry run
+  reads the account's listing, which is the truth, and the recorded `IdempotencyKey` makes a retried
+  create safe. `Refusal` is a `LocalizableText`: the two defaults carry their own catalog keys
   (`payments.endpoint.ensureNotSupported`, `payments.endpoint.removeNotSupported`), each naming its
   own manual remedy.
 - **Additive only.** An ensure never removes an event, changes a URL, or disables or re-enables an

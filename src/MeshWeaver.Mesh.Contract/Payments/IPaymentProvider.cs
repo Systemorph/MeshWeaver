@@ -182,7 +182,10 @@ public interface IPaymentProvider
     /// Creates this instance's delivery endpoint at the provider, or adds the required events an
     /// existing one lacks — the governed, deliberately triggered write behind a broken delivery
     /// path (policy <c>payment-endpoint-governed-task</c>). Cold; emits once and never faults: a
-    /// failed precondition or a failed call is a <see cref="PaymentEndpointOutcome.Refused"/> answer.
+    /// failed precondition, or a call that failed before any write was sent, is a
+    /// <see cref="PaymentEndpointOutcome.Refused"/> answer (nothing written); a WRITE call that was
+    /// sent and got no answer is <see cref="PaymentEndpointOutcome.Indeterminate"/> (the provider may
+    /// have applied it; the caller reconciles with a dry run, never reports "nothing written").
     ///
     /// <para>The provider decides what its account allows and refuses, naming why: a truncated or
     /// unreadable listing, more than one endpoint for the URL, endpoints for other hosts in the
@@ -208,8 +211,9 @@ public interface IPaymentProvider
     /// Removes the delivery endpoints whose metadata names this instance
     /// (<see cref="PaymentEndpointRequest.Owner"/>) — and no other endpoint, ever. The way out of
     /// <see cref="PaymentEndpointOutcome.SecretNotRecovered"/>, and the cleanup of an instance that
-    /// goes away. Cold; emits once and never faults. The default answers
-    /// <see cref="PaymentEndpointOutcome.NotSupported"/>.
+    /// goes away. Cold; emits once and never faults: a delete that was sent and got no answer is
+    /// <see cref="PaymentEndpointOutcome.Indeterminate"/>, never <see cref="PaymentEndpointOutcome.Refused"/>.
+    /// The default answers <see cref="PaymentEndpointOutcome.NotSupported"/>.
     /// </summary>
     IObservable<PaymentEndpointChange> RemoveDeliveryEndpoint(PaymentEndpointRequest request) =>
         System.Reactive.Linq.Observable.Return(new PaymentEndpointChange

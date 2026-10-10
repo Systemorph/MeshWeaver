@@ -16,8 +16,22 @@ public static class PaymentEndpointOutcome
     /// <summary>The provider does not manage its own delivery endpoints (the contract default).</summary>
     public const string NotSupported = "NotSupported";
 
-    /// <summary>A precondition failed and nothing was written; <see cref="PaymentEndpointChange.Refusal"/> names it.</summary>
+    /// <summary>
+    /// A precondition failed, or a call failed BEFORE any write was sent, and nothing was written;
+    /// <see cref="PaymentEndpointChange.Refusal"/> names it. Never the answer to a write call whose
+    /// fate is unknown — that is <see cref="Indeterminate"/>.
+    /// </summary>
     public const string Refused = "Refused";
+
+    /// <summary>
+    /// A write call (create, update, delete) was sent and did not come back with an answer — a
+    /// timeout, a dropped connection, a 5xx — so the provider MAY have applied it. Nothing is known
+    /// either way, and the caller must not report it as "nothing written". Reconcile by running
+    /// again: a dry run reads the account's listing, which is the truth, and a retried create is
+    /// made safe by <see cref="PaymentEndpointRequest.IdempotencyKey"/>.
+    /// <see cref="PaymentEndpointChange.Refusal"/> names the call that failed.
+    /// </summary>
+    public const string Indeterminate = "Indeterminate";
 
     /// <summary>Dry run: no endpoint exists for this URL, and an executed run would create one.</summary>
     public const string WouldCreate = "WouldCreate";
@@ -117,7 +131,8 @@ public sealed record PaymentEndpointChange
 
     /// <summary>
     /// Why nothing was written, for <see cref="PaymentEndpointOutcome.Refused"/> and
-    /// <see cref="PaymentEndpointOutcome.NotSupported"/> — its English plus, where the platform
+    /// <see cref="PaymentEndpointOutcome.NotSupported"/> — or which write call's fate is unknown, for
+    /// <see cref="PaymentEndpointOutcome.Indeterminate"/> — its English plus, where the platform
     /// authored it, the catalog key that renders it in the viewer's language.
     /// </summary>
     public LocalizableText? Refusal { get; init; }
