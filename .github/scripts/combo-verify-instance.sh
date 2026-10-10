@@ -16,7 +16,19 @@
 # empty" (MeshWeaver#2642) and leaves no trace in the log or the exit code.
 #
 # Inputs, all environment. A missing one is a PREFLIGHT failure in the workflow, never a skip here.
-#   INSTANCE_NAME   the instance's name, for the summary and the artifact names
+#   INSTANCE_NAME   the instance's name, for the log lines and the summary (both are masked by the
+#                   runner when the name is a private one)
+#   ARTIFACT_TAG    what the files this script writes are named after — the workflow passes the
+#                   matrix SLOT (`slot-3`). 🚨 Never the name: an artifact's name and the file names
+#                   inside it are NOT masked, and this repository's artifacts are public (#3848).
+#                   Defaults to INSTANCE_NAME for a local run.
+#   INSTANCE_PRIVATE  `false` for an installation of this estate, anything else for a client estate's
+#                   (a row the private roster names). 🚨 FAILS CLOSED: unset means private. For a
+#                   private row this script prints the VERDICT AND COUNTS ONLY — no name, no host,
+#                   no response body, no module id, and the verifier's own output is withheld —
+#                   because this repository's logs and summaries are public and an installation's
+#                   module list is the client's inventory. The verdict is still LANDED on the
+#                   instance, in full, where its owner can read it.
 #   BASE_URL        e.g. https://memex.systemorph.com  (no trailing slash)
 #   ACTIONS_ID_TOKEN_REQUEST_URL / ACTIONS_ID_TOKEN_REQUEST_TOKEN
 #                   set by the runner when the job holds `id-token: write`. The run's OWN identity
@@ -33,8 +45,26 @@
 #   WORK_ROOT       materialisation root
 set -euo pipefail
 
-fail() { echo "::error::[$INSTANCE_NAME] $*"; exit 1; }
-note() { echo "[$INSTANCE_NAME] $*"; }
+PRIVATE=true
+[ "${INSTANCE_PRIVATE:-}" = "false" ] && PRIVATE=false
+if [ "$PRIVATE" = false ]; then
+  shown=$INSTANCE_NAME; where=$BASE_URL
+else
+  shown=${ARTIFACT_TAG:-private}; where="this instance (private roster row)"
+fi
+# What the audience must be SET TO. `$where` is a description for a private row, never a value to
+# configure — so the 401 guidance says where the real value is recorded instead of printing it.
+if [ "$PRIVATE" = false ]; then
+  audience_value=$BASE_URL
+else
+  audience_value="the instance's own externally reachable base URL (https:// + the ingress.host of its deployment overlay; withheld here)"
+fi
+fail() { echo "::error::[$shown] $*"; exit 1; }
+note() { echo "[$shown] $*"; }
+# A response body, or the fact that one is withheld. Bodies of a private row can name its modules.
+body_of() {  # body_of <bytes> <file>
+  if [ "$PRIVATE" = false ]; then head -c "$1" "$2"; else printf '(response body withheld: private roster row)'; fi
+}
 
 # ── 0. The run's own identity — minted per call, never stored ──────────────────────────────────
 # 🚨 Minted FRESH for every request, never once per script. The token lives for minutes and the
@@ -52,31 +82,32 @@ mint_token() {
   body=$(curl -sS --fail-with-body --connect-timeout 15 --max-time 60 \
     -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
     "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$(jq -rn --arg a "$BASE_URL" '$a | @uri')") \
-    || fail "the runner refused an OIDC token for audience $BASE_URL: $(head -c 300 <<<"${body:-}")"
+    || fail "the runner refused an OIDC token for audience $where: ${body:0:300}"
   value=$(jq -r '.value // ""' <<<"$body")
-  [ -n "$value" ] || fail "the runner's OIDC answer carried no token for audience $BASE_URL"
+  [ -n "$value" ] || fail "the runner's OIDC answer carried no token for audience $where"
   echo "::add-mask::$value"
   TOKEN=$value
 }
 
 # What a 401 from the instance means, said once. The instance does not tell a refused caller WHICH
 # half is missing, so both provisioning acts are named. Neither is a secret in this repository.
-unauthorized_hint="The instance did not accept this run's identity. On $BASE_URL BOTH must hold: (1) the portal declares the audience — config Plugins:Registry:BuildPrincipalAudience = $BASE_URL (deployment record extraPortalConfig key Plugins__Registry__BuildPrincipalAudience); (2) a global admin of that instance has created Admin/_BuildPrincipal/systemorph--meshweaver granting verify:combo for workflow_run and workflow_dispatch on refs/heads/main (Doc/Architecture/ComboGateWiring → Provisioning an instance). There is no secret to set."
+unauthorized_hint="The instance did not accept this run's identity. On $where BOTH must hold: (1) the portal declares the audience — config Plugins:Registry:BuildPrincipalAudience = $audience_value (deployment record extraPortalConfig key Plugins__Registry__BuildPrincipalAudience); (2) a global admin of that instance has created Admin/_BuildPrincipal/systemorph--meshweaver granting verify:combo for workflow_run and workflow_dispatch on refs/heads/main (Doc/Architecture/ComboGateWiring → Provisioning an instance). There is no secret to set."
 
 out_dir=${GITHUB_WORKSPACE:-$PWD}
+tag=${ARTIFACT_TAG:-$INSTANCE_NAME}
 summary=${GITHUB_STEP_SUMMARY:-/dev/null}
 
 # ── 1. Which candidate would THIS instance roll to? ───────────────────────────────────────────
 # Asked OF THE INSTANCE rather than derived here, because "the newest tag" is not the question the
 # gate answers: ReleaseAvailabilityService already walks the completeness rule and names the release
 # this environment would actually take. Re-deriving it here would be a second rule.
-roll=$out_dir/combo-rolltarget-$INSTANCE_NAME.json
+roll=$out_dir/combo-rolltarget-$tag.json
 mint_token
 roll_code=$(curl -sS -o "$roll" -w '%{http_code}' --connect-timeout 15 --max-time 120 \
   -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/plugins/roll-target") || roll_code=000
-[ "$roll_code" != "401" ] || fail "GET $BASE_URL/api/plugins/roll-target -> HTTP 401. $unauthorized_hint"
+[ "$roll_code" != "401" ] || fail "GET $where/api/plugins/roll-target -> HTTP 401. $unauthorized_hint"
 [ "$roll_code" = "200" ] \
-  || fail "GET $BASE_URL/api/plugins/roll-target -> HTTP $roll_code. $(head -c 400 "$roll")"
+  || fail "GET $where/api/plugins/roll-target -> HTTP $roll_code. $(body_of 400 "$roll")"
 
 CANDIDATE=$(jq -r '.selected // ""' <"$roll")
 CURRENT=$(jq -r '.current // "?"' <"$roll")
@@ -86,49 +117,62 @@ if [ -z "$CANDIDATE" ] || [ "$CANDIDATE" = "null" ]; then
   note "NOTHING TO VERIFY — the instance selects no roll target (current=$CURRENT)."
   # shellcheck disable=SC2016  # the backticks are MARKDOWN for the step summary, not a subshell
   printf '### %s — nothing to verify\n\nThe instance selects no roll target (currently on `%s`).\n' \
-    "$INSTANCE_NAME" "$CURRENT" >>"$summary"
+    "$shown" "$CURRENT" >>"$summary"
   exit 0
 fi
 note "candidate=$CANDIDATE (currently on $CURRENT)"
 
 # ── 2. What does the instance actually run? ────────────────────────────────────────────────────
-combo=$out_dir/combo-$INSTANCE_NAME.json
+combo=$out_dir/combo-$tag.json
 mint_token
 combo_code=$(curl -sS -o "$combo" -w '%{http_code}' --connect-timeout 15 --max-time 180 \
   -H "Authorization: Bearer $TOKEN" "$BASE_URL/api/plugins/combo") || combo_code=000
-[ "$combo_code" != "401" ] || fail "GET $BASE_URL/api/plugins/combo -> HTTP 401. $unauthorized_hint"
+[ "$combo_code" != "401" ] || fail "GET $where/api/plugins/combo -> HTTP 401. $unauthorized_hint"
 if [ "$combo_code" != "200" ]; then
-  fail "GET $BASE_URL/api/plugins/combo -> HTTP $combo_code. $(head -c 400 "$combo") ::: A 404 here means the instance runs a portal image from before #3544 added the route — roll it to an image that serves /api/plugins/combo first. There is deliberately NO fallback: the only other source (Hosting/ModuleInventory) drops readAt, isComplete, caveats and the per-module sync detail, so a verdict derived from it would be about something other than this instance's real module set."
+  fail "GET $where/api/plugins/combo -> HTTP $combo_code. $(body_of 400 "$combo") ::: A 404 here means the instance runs a portal image from before #3544 added the route — roll it to an image that serves /api/plugins/combo first. There is deliberately NO fallback: the only other source (Hosting/ModuleInventory) drops readAt, isComplete, caveats and the per-module sync detail, so a verdict derived from it would be about something other than this instance's real module set."
 fi
 jq -e 'has("modules")' >/dev/null <"$combo" \
-  || fail "the combo read from $BASE_URL is not an InstanceCombo: $(head -c 400 "$combo")"
+  || fail "the combo read from $where is not an InstanceCombo: $(body_of 400 "$combo")"
 if [ "$(jq -r '.isComplete' <"$combo")" != "true" ]; then
   # Stated, never swallowed. The reader folds an unreadable source into caveats rather than
   # faulting, and the verifier can then only answer NotVerifiable — which fails this script below.
-  note "the instance reports an INCOMPLETE combo: $(jq -c '.caveats' <"$combo")"
+  if [ "$PRIVATE" = false ]; then
+    note "the instance reports an INCOMPLETE combo: $(jq -c '.caveats' <"$combo")"
+  else
+    note "the instance reports an INCOMPLETE combo: $(jq -r '.caveats | length' <"$combo") caveat(s), text withheld (private roster row)"
+  fi
 fi
 note "combo: $(jq -r '.modules | length' <"$combo") module(s), readAt=$(jq -r '.readAt' <"$combo")"
 
 # ── 3. Verify ─────────────────────────────────────────────────────────────────────────────────
-verdict=$out_dir/combo-verdict-$INSTANCE_NAME.json
+verdict=$out_dir/combo-verdict-$tag.json
 src_args=()
 # The source list is deployment-record data. Split its validated space-delimited pairs without
 # pathname expansion, so a URL containing shell glob characters stays one literal argument.
 IFS=' ' read -r -a source_pairs <<<"$SOURCES"
 for s in "${source_pairs[@]}"; do src_args+=(--source "$s"); done
 
+# 🚨 A private row's verifier output names every module it materialises, so it goes to a file that
+# is never uploaded and only its line count is printed. The verdict below carries the counts.
+verifier_cmd=(dotnet run --project tools/MeshWeaver.ComboVerifier/MeshWeaver.ComboVerifier.csproj
+  -c Release --no-build --
+  "$combo" "$ACR/memex-portal-ai:$CANDIDATE"
+  --tag "$CANDIDATE"
+  --verdict "$verdict"
+  --work-root "$WORK_ROOT/$tag"
+  --platform "$PLATFORM"
+  --gate-timeout "$GATE_TIMEOUT"
+  "${src_args[@]}")
 set +e
-dotnet run --project tools/MeshWeaver.ComboVerifier/MeshWeaver.ComboVerifier.csproj \
-  -c Release --no-build -- \
-  "$combo" "$ACR/memex-portal-ai:$CANDIDATE" \
-  --tag "$CANDIDATE" \
-  --verdict "$verdict" \
-  --work-root "$WORK_ROOT/$INSTANCE_NAME" \
-  --platform "$PLATFORM" \
-  --gate-timeout "$GATE_TIMEOUT" \
-  "${src_args[@]}"
+if [ "$PRIVATE" = false ]; then
+  "${verifier_cmd[@]}"
+else
+  mkdir -p "$WORK_ROOT"
+  "${verifier_cmd[@]}" >"$WORK_ROOT/verifier-$tag.log" 2>&1
+fi
 verify_exit=$?
 set -e
+[ "$PRIVATE" = false ] || note "verifier output withheld (private roster row): $(awk 'END { print NR + 0 }' "$WORK_ROOT/verifier-$tag.log") line(s)"
 
 [ -f "$verdict" ] || fail "mw-combo-verify exited $verify_exit and wrote no verdict file — nothing was verified, so there is nothing to land."
 KIND=$(jq -r '.verdict' <"$verdict")
@@ -141,26 +185,30 @@ note "verdict=$KIND for $CANDIDATE (tool exit $verify_exit)"
 # merge rule exists ONCE, in the portal, and this script no longer re-implements it over a raw mesh
 # patch with a global admin's token. 🚨 The route answers 200 only AFTER Admin/UpdatePolicy carries
 # this exact verdict, so a 200 here IS the landing. The policy mode (including None) is preserved.
-landed=$out_dir/combo-landed-$INSTANCE_NAME.json
+landed=$out_dir/combo-landed-$tag.json
 mint_token
 land_code=$(curl -sS -o "$landed" -w '%{http_code}' --connect-timeout 15 --max-time 120 \
   -X POST "$BASE_URL/api/plugins/combo-verification" \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   --data-binary "@$verdict") || land_code=000
 [ "$land_code" != "401" ] \
-  || fail "POST $BASE_URL/api/plugins/combo-verification -> HTTP 401: the $KIND verdict for $CANDIDATE was NOT landed. $unauthorized_hint"
+  || fail "POST $where/api/plugins/combo-verification -> HTTP 401: the $KIND verdict for $CANDIDATE was NOT landed. $unauthorized_hint"
 [ "$land_code" = "200" ] \
-  || fail "POST $BASE_URL/api/plugins/combo-verification -> HTTP $land_code: the $KIND verdict for $CANDIDATE was NOT landed: $(head -c 400 "$landed")"
+  || fail "POST $where/api/plugins/combo-verification -> HTTP $land_code: the $KIND verdict for $CANDIDATE was NOT landed: $(body_of 400 "$landed")"
 jq -e '.recorded == true' >/dev/null <"$landed" \
-  || fail "the instance answered 200 but did not confirm the verdict was recorded: $(head -c 400 "$landed")"
-note "landed: $(head -c 200 "$landed")"
+  || fail "the instance answered 200 but did not confirm the verdict was recorded: $(body_of 400 "$landed")"
+note "landed: $(body_of 200 "$landed")"
 
 {
   # shellcheck disable=SC2016  # the backticks are MARKDOWN for the step summary, not a subshell
-  printf '### %s — `%s` → **%s**\n\n' "$INSTANCE_NAME" "$CANDIDATE" "$KIND"
+  printf '### %s — `%s` → **%s**\n\n' "$shown" "$CANDIDATE" "$KIND"
   jq -r '"- modules: \(.modules | length), passed: \([.modules[] | select(.outcome == "Passed")] | length), failed: \([.modules[] | select(.outcome == "Failed")] | length)"' <"$verdict"
-  jq -r '.modules[] | select(.outcome != "Passed") | "  - `\(.moduleId)` \(.outcome): \(.failures | join("; "))"' <"$verdict"
-  jq -r '.caveats[]? | "  - caveat: \(.)"' <"$verdict"
+  if [ "$PRIVATE" = false ]; then
+    jq -r '.modules[] | select(.outcome != "Passed") | "  - `\(.moduleId)` \(.outcome): \(.failures | join("; "))"' <"$verdict"
+    jq -r '.caveats[]? | "  - caveat: \(.)"' <"$verdict"
+  else
+    jq -r '"- caveats: \(.caveats // [] | length). Module ids, failures and caveat text are withheld for a private roster row; the full verdict is landed on the instance."' <"$verdict"
+  fi
 } >>"$summary"
 
 # 🚨 Exit AFTER landing, and Green is the ONLY pass. A Red says this candidate cannot serve the
@@ -168,5 +216,5 @@ note "landed: $(head -c 200 "$landed")"
 # NotVerifiable says nothing was checked at all, which is the one outcome a gate must never paint
 # green: it is "the gate never ran" wearing the colour of "the gate passed".
 [ "$KIND" = "Green" ] \
-  || fail "verdict is $KIND for $CANDIDATE. It IS landed on $BASE_URL, so the instance's own gate will act on it; this run is red because a candidate a live instance cannot take has not been delivered."
+  || fail "verdict is $KIND for $CANDIDATE. It IS landed on $where, so the instance's own gate will act on it; this run is red because a candidate a live instance cannot take has not been delivered."
 note "GREEN"
