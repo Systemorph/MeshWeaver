@@ -496,6 +496,39 @@ def extract_overlay_pins(text: str, registry: str = "") -> tuple[list[tuple[str,
     return pins, floating
 
 
+# The ONE values key under which an overlay configures the hosting operator (the chart's
+# `hostingOperator:` block, `deploy/helm/values.yaml`). Its `image` is the OPERATOR's — a separate
+# workload, pinned on its own cadence, that `/api/version` says nothing about.
+OPERATOR_OVERLAY_KEY = "hostingOperator"
+TOP_LEVEL_KEY_RE = re.compile(r"^(?P<key>[A-Za-z_][A-Za-z0-9_.-]*)[ \t]*:")
+
+
+def without_operator_block(text: str) -> str:
+    """The overlay with its top-level `hostingOperator:` mapping blanked, line for line.
+
+    A top-level key owns every following line until the next line that starts in column 0 and is
+    not a comment. Lines are blanked rather than dropped so nothing downstream shifts."""
+    kept: list[str] = []
+    inside = False
+    for line in text.splitlines():
+        if line[:1] not in ("", " ", "\t", "#"):
+            match = TOP_LEVEL_KEY_RE.match(line)
+            inside = bool(match) and match.group("key") == OPERATOR_OVERLAY_KEY
+        kept.append("" if inside else line)
+    return "\n".join(kept)
+
+
+def extract_overlay_operator_repositories(text: str, registry: str = "") -> list[str]:
+    """The repositories one overlay pins ONLY as its operator image — and nowhere else in the file.
+
+    "Only" is the point: a repository the overlay also pins outside the `hostingOperator:` block is
+    part of what the installation runs as itself and must stay in its running set."""
+    everywhere = {repo for pairs in extract_overlay_pins(text, registry) for repo, _ in pairs}
+    outside = {repo for pairs in extract_overlay_pins(without_operator_block(text), registry)
+               for repo, _ in pairs}
+    return sorted(everywhere - outside)
+
+
 # ── AXIS 3: the installations the overlays declare ─────────────────────────────────────────────
 #
 # An overlay does not only pin images; it NAMES the installation it configures. Both keys are
@@ -568,6 +601,11 @@ class OverlayScan:
     # operator, gates, portal-next), which AXIS 3 must not read as the running PORTAL set — see
     # `running_repositories_of`.
     record_portals: list[tuple[str, str]] = field(default_factory=list)
+    # (repo, overlay path) — a repository an OVERLAY pins only under its `hostingOperator:` block.
+    # Still in `pins`/`floating` (AXIS 2 locks the operator by its pinned tag); named here so
+    # AXIS 3 can leave it out of the installation's running PORTAL set — the overlay half of the
+    # same rule `record_portals` states for the record.
+    overlay_operators: list[tuple[str, str]] = field(default_factory=list)
     unreadable: str | None = None
 
 
@@ -628,6 +666,9 @@ def scan_overlays_remote(gh_repo: str, registry: str) -> OverlayScan:
                 scan.source_errors.append((path, source_error))
             else:
                 scan.sources.extend((name, url, path) for name, url in sources)
+        else:
+            scan.overlay_operators.extend(
+                (repo, path) for repo in extract_overlay_operator_repositories(text, registry))
         scan.pins.extend((repo, tag, path) for repo, tag in pins)
         scan.floating.extend((repo, tag, path) for repo, tag in floating)
         scan.instances.extend((ident, host, path)
@@ -668,6 +709,9 @@ def scan_overlays_local(root: str, gh_repo: str, registry: str) -> OverlayScan:
                 scan.source_errors.append((rel, source_error))
             else:
                 scan.sources.extend((name, url, rel) for name, url in sources)
+        else:
+            scan.overlay_operators.extend(
+                (repo, rel) for repo in extract_overlay_operator_repositories(text, registry))
         scan.pins.extend((repo, tag, rel) for repo, tag in pins)
         scan.floating.extend((repo, tag, rel) for repo, tag in floating)
         scan.instances.extend((ident, host, rel) for ident, host in extract_overlay_instances(text))
@@ -1808,12 +1852,23 @@ def running_repositories_of(axis2: list[OverlayScan],
     # stayed red on a false reading. The side images are still protected: AXIS 2 locks them by the
     # tag the record pins. What AXIS 3 needs from the record is where the PORTAL's running set
     # lives, which is `imageRepository` and nothing else.
+    #
+    # 🚨 AND THE OVERLAY HAS AN OPERATOR PIN OF ITS OWN (Memex#219, measured 2026-10-10 on push run
+    # 38054665690 — the first one carrying the record fix above, and still red). The record was
+    # only one of the two files: an overlay configures the operator under `hostingOperator.image`,
+    # and the overlay half of this join took every in-registry image the overlay's text mentions.
+    # Two installations whose portal lives in a fleet-unlockable registry pin their operator here
+    # in the OVERLAY (one floating on `main`, one on a fixed tag), so `hosting-operator` was still
+    # their whole "running set" and HALF COVERED still fired on both. Same rule, other file: a
+    # repository the overlay pins ONLY under `hostingOperator:` is left out. AXIS 2 keeps locking
+    # it by its pinned tag.
     result: dict[str, list[str]] = {}
     for instance in instances:
         repos: set[str] = set()
         for scan in axis2:
+            operators = set(scan.overlay_operators)
             for repo, _tag, where in list(scan.pins) + list(scan.floating):
-                if f"{scan.gh_repo} {where}" == instance.source:
+                if f"{scan.gh_repo} {where}" == instance.source and (repo, where) not in operators:
                     repos.add(repo)
             if scan.gh_repo == instance.gh_repo:
                 for repo, where in scan.record_portals:
@@ -5270,6 +5325,68 @@ whisper:
     check(any("Half its running" in b and "build" in b for b in plan.blockers),
           f"ARM 20c (control): a record naming its PORTAL in this registry was not joined: "
           f"{plan.blockers}")
+
+    # ── ARM 20d: the OVERLAY's operator image does not join the running set either ──────────────
+    # Memex#219, measured 2026-10-10 on push run 38054665690 — the first carrying ARM 20c's fix,
+    # and still red on two installations of a client estate: each "pins 1 repository(ies) in the
+    # registry this run locks (hosting-operator) AND images in <their registry> … Half its running
+    # set would be protected". ARM 20c closed the RECORD; these two pin the operator in the
+    # OVERLAY, under the chart's `hostingOperator.image`, one on a fixed tag and one floating on
+    # `main` — both shapes are driven here, through the PRODUCTION scanner over a real tree.
+    def _overlay_tree(operator_tag: str, operator_key: str = "hostingOperator",
+                      extra: str = "") -> list[OverlayScan]:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            overlay = root / "deployments" / "aks" / "build" / "values.build.public.yaml"
+            overlay.parent.mkdir(parents=True)
+            overlay.write_text(
+                FIXTURE_OVERLAY_FOREIGN
+                + f"{operator_key}:\n"
+                  "  enabled: true\n"
+                  "  # the operator is published to the shared registry, not the estate's own\n"
+                  "  serviceAccount: \"hosting-operator\"\n"
+                  f"  image: \"meshweaver.azurecr.io/hosting-operator:{operator_tag}\"\n"
+                  "secrets:\n"
+                  "  create: false\n" + extra,
+                encoding="utf-8")
+            return [scan_overlays_local(str(root), "Systemorph/Memex", "meshweaver")]
+
+    for operator_tag in ("1979979", "main"):
+        in_overlay = _overlay_tree(operator_tag)
+        seen = in_overlay[0].pins + in_overlay[0].floating
+        check(any(repo == "hosting-operator" for repo, _, _ in seen),
+              f"ARM 20d (control, {operator_tag}): the scanner no longer extracts the overlay's "
+              f"operator pin, so AXIS 2 stopped protecting it and this arm passes about nothing: "
+              f"{seen}")
+        plan, _, _ = _drive(clean1, clean2 + in_overlay, FakeRegistry(_inventory(), FAKE_TAGS),
+                            probe=_answers(), dispositions=FLEET_UNLOCKABLE)
+        check(not any("Half its running" in b for b in plan.blockers),
+              f"ARM 20d ({operator_tag}): the overlay's OPERATOR image was joined to `build`'s "
+              f"running PORTAL set, and HALF COVERED fired on an installation whose portal is "
+              f"wholly in a fleet-unlockable registry: {plan.blockers}")
+        check([i.id for i in plan.instances if i.out_of_scope] == ["build"],
+              f"ARM 20d ({operator_tag}): `build` is not out of scope although nothing of its "
+              f"portal set is in this registry: "
+              f"{[(i.id, i.out_of_scope) for i in plan.instances]}")
+    # 🚨 NEGATIVE CONTROL 1: the same image under a key that is NOT the operator's. It must still
+    # join — and that IS half covered — so the arm above passed because of WHERE the image is
+    # declared, not because `hosting-operator` became a name the join ignores.
+    elsewhere = _overlay_tree("1979979", operator_key="sidecar")
+    plan, _, _ = _drive(clean1, clean2 + elsewhere, FakeRegistry(_inventory(), FAKE_TAGS),
+                        probe=_answers(), dispositions=FLEET_UNLOCKABLE)
+    check(any("Half its running" in b and "build" in b for b in plan.blockers),
+          f"ARM 20d (control 1): an in-registry image outside `hostingOperator:` was not joined: "
+          f"{plan.blockers}")
+    # 🚨 NEGATIVE CONTROL 2: a repository pinned under `hostingOperator:` AND elsewhere in the
+    # same overlay stays in the running set — the exclusion is for operator-ONLY repositories, and
+    # the block ends at the next top-level key (`secrets:`), not at the end of the file.
+    both = _overlay_tree("1979979", extra="other:\n  image: \"meshweaver.azurecr.io/"
+                                            "hosting-operator:1979979\"\n")
+    plan, _, _ = _drive(clean1, clean2 + both, FakeRegistry(_inventory(), FAKE_TAGS),
+                        probe=_answers(), dispositions=FLEET_UNLOCKABLE)
+    check(any("Half its running" in b and "build" in b for b in plan.blockers),
+          f"ARM 20d (control 2): a repository also pinned OUTSIDE `hostingOperator:` was dropped "
+          f"from the running set: {plan.blockers}")
 
     # 🚨 A `third-party` disposition must NOT make an installation out of scope: its portal images
     # are then accounted for by nothing that holds our images, which is a different incident.
