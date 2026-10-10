@@ -63,6 +63,9 @@ public static class LogonActionNodeType
             // Seeding the platform defaults ships with the framework because a user with no app
             // records has no way to reach the Store — that is not deployment-specific, even though
             // WHICH apps get seeded is (it comes from Admin/HomeConfig).
+            // A user's own Admin grant on their home, restored at logon when it is missing — first of
+            // all, because every action below writes into the home as the user (#5225).
+            .AddSingleton<ILogonAction, RestoreSelfGrantLogonAction>()
             .AddSingleton<ILogonAction, SeedDefaultAppsLogonAction>()
             // The Inbox app for every user — seeded on its own so a deployment's DefaultApps list
             // cannot leave it out (see SeedInboxAppLogonAction).

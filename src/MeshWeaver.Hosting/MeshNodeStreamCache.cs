@@ -2920,16 +2920,22 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 // to fire at all. The job log is not an equivalent sink: it carries only the output
                 // of tests that FAILED, and a degradation is overwhelmingly logged under a test
                 // that passes. Reaching the sink is a property of the CALL, not of the wording.
-                degradations?.Record(
-                    node.NodeType, node.Path, "MeshNodeStreamCache.GetStream", Discriminator(degraded));
-                logger.LogWarning(
-                    new MeshNodeContentDegradedException(
-                        "MeshNodeStreamCache.GetStream", node.Path, node.NodeType, TruncateRaw(je)),
-                    "MeshNodeStreamCache.GetStream: Content for {Path} stayed an untyped JsonElement after "
-                    + "deserialization (TypeRegistry lacks the $type discriminator) — downstream "
-                    + "'Content is X'/'as X' consumers will fail (renders empty, reactive waits time out). "
-                    + "Raw: {RawJson}",
-                    node.Path, TruncateRaw(je));
+                // 🚨 Plugins#2799 — during the boot registration window the verdict is not yet
+                // decidable: the read is RECORDED (so /health names it) and the registration pass
+                // writes this warning for whatever is still untyped when it settles
+                // (ContentDegradationRegistry.SettleDeferredWarnings). Record-and-answer is one
+                // atomic step with the settle, so a read racing the close is warned exactly once.
+                var deferred = degradations?.RecordDeferringWarning(
+                    node.NodeType, node.Path, "MeshNodeStreamCache.GetStream", Discriminator(degraded)) == true;
+                if (!deferred)
+                    logger.LogWarning(
+                        new MeshNodeContentDegradedException(
+                            "MeshNodeStreamCache.GetStream", node.Path, node.NodeType, TruncateRaw(je)),
+                        "MeshNodeStreamCache.GetStream: Content for {Path} stayed an untyped JsonElement after "
+                        + "deserialization (TypeRegistry lacks the $type discriminator) — downstream "
+                        + "'Content is X'/'as X' consumers will fail (renders empty, reactive waits time out). "
+                        + "Raw: {RawJson}",
+                        node.Path, TruncateRaw(je));
             }
             return node with { Content = deserialized };
         }
@@ -3648,8 +3654,10 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 // 🚨 Carries the exception for the same reason the GetStream seam does — see there.
                 // A record with no exception object cannot reach the trace log, which is the only
                 // sink the untyped-content shard gate scans (#3625).
-                degradations?.Record(
-                    node.NodeType, node.Path, "MeshNodeStreamCache.GetQuery", Discriminator(degraded));
+                // Plugins#2799 — deferred during the boot registration window, as at the GetStream seam.
+                if (degradations?.RecordDeferringWarning(
+                        node.NodeType, node.Path, "MeshNodeStreamCache.GetQuery", Discriminator(degraded)) == true)
+                    return node;
                 var rawText = QueryDiagnosticRaw(node.Content);
                 logger.LogWarning(
                     new MeshNodeContentDegradedException(

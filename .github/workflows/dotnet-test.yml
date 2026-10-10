@@ -2783,6 +2783,14 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/lock-pinned-digests.py --self-test
 
+    # The re-enable interlock's MEASURED half (MeshWeaver#3438): `acr-retention-tasks.sh apply`
+    # refuses to switch a purge on unless the newest lock-lane run on main is green and recent. Its
+    # verdict is a pure function over GitHub's answer, so every refusing shape (red, cancelled,
+    # stale, undated, empty, not JSON) and the one allowing shape are driven offline here.
+    - name: "…and a purge cannot be switched on behind a red or stale protection run (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/acr-retention-protection.py --self-test
+
     # The premise the lock rests on, asserted with NO credential: a lock protects only because
     # `acr purge` skips locked manifests unless `--include-locked` is passed. The purge tasks are
     # CLOUD-ONLY (`az acr task show` returns an EncodedTask with `contextPath: null`), so
