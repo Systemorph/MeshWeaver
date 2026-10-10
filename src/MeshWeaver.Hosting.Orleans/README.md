@@ -55,6 +55,10 @@ app.StartPortalApplication();
 - Uses [Microsoft Orleans](https://learn.microsoft.com/en-us/dotnet/orleans/overview) for distribution
 - Compatible with all mesh message patterns
 
+## Silo departure and cancellation timeouts (#6392)
+
+`SiloStopTimeline` (registered by `AddOrleansMeshServices`) logs one Information line per silo lifecycle stage as the silo stops, so a departing silo's own log shows where its stop spent its time. How to read those lines next to peers' `GrainCallCancellationManager` 30 s timeouts (fingerprint `97b80f6a91dbdb74`), and what is and is not established about the cause, is the doc page `Doc/Architecture/ReadingASiloStop` (`src/MeshWeaver.Documentation/Data/Architecture/ReadingASiloStop.md`).
+
 ## See Also
 - [Orleans Documentation](https://learn.microsoft.com/en-us/dotnet/orleans/overview) - Learn more about the Orleans virtual actor model
 - [Main MeshWeaver Documentation](../../Readme.md) - More about MeshWeaver hosting options
