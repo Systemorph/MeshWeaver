@@ -366,6 +366,19 @@ because records are never pinned), and the running-set axis keyed repositories o
 alone. `running_repositories_of` joins the record by deployment id (self-test ARM 20b, with a
 control that a different installation's record is NOT joined).
 
+🚨 **The join takes the record's PORTAL repository only.** It was measured on 2026-10-10, on push run
+`38013647613`, the first run to carry the join. Its first cut joined every in-registry image the
+record's text mentions. A record also pins its operator (`operator.image` →
+`hosting-operator:<sha>`, built from the operator's own commit). So for `pearl` and for the client
+estate's control/test pair, whose portals live in fleet-unlockable registries, `hosting-operator`
+landed in the running PORTAL set. The *half covered* blocker then fired on all three, and those were
+the run's only reds. The scanner now keeps the record's split `imageRepository` pin apart
+(`OverlayScan.record_portals`), and only that pin joins AXIS 3. The record's side images are still
+locked by AXIS 2, by the tag the record pins. Self-test ARM 20c drives this through the production
+scanner over a real tree: the operator-only record keeps `build` out of scope. Its control, the same
+tree with the record's portal in this registry, is still *half covered*. With the old join, ARM 20c
+reproduces the production line verbatim.
+
 ## The retention half — the deletion is stopped, not reported
 
 🚨 **The purge task definitions are CLOUD-ONLY.** Established three ways rather than assumed:
