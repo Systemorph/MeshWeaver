@@ -683,9 +683,10 @@ def landed_copilot_reviews(reviews, as_of: str | None = None) -> list:
 
 
 def copilot_review_of_pull_request(reviews, head_sha: str, as_of: str | None = None) -> dict | None:
-    """Policy `review-once-per-pull-request`: the pull request's ONE Copilot review — the newest
-    landed review against `head_sha` when there is one, otherwise the newest landed review against
-    ANY earlier head. `pulls/{n}/reviews` lists only this pull request's reviews, so every review it
+    """Policy `review-once-per-pull-request`, gate half (any-head evidence): the Copilot review that
+    counts — the newest landed review against `head_sha` when there is one, otherwise the newest
+    landed review against ANY earlier head. With `review_on_push: true` every push requests a fresh
+    review, so the earlier head's review is what counts while the current head's own review lands. `pulls/{n}/reviews` lists only this pull request's reviews, so every review it
     returns reviewed this pull request, and a later push does not undo it. Its threads stay under the
     thread condition wherever they were opened, so no finding is skipped by a push."""
     on_head = copilot_review_on(reviews, head_sha, as_of)
@@ -702,7 +703,8 @@ def copilot_note(review: dict, short: str) -> str:
                 f"(\"{first_line(review.get('body'))}\") — policy copilot-code-review")
     return (f"Copilot reviewed this pull request at its earlier head {reviewed} (current head {short}): review "
             f"{review.get('id')} at {review.get('submitted_at')} (\"{first_line(review.get('body'))}\") — "
-            "one review per pull request, policy review-once-per-pull-request")
+            "an earlier head's review counts while this head's own review lands (any-head gate, policy "
+            "review-once-per-pull-request)")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1828,13 +1830,16 @@ def guidance(verdict: Verdict) -> list[str]:
                    f"the `{WAIVER_LABEL}` label — never an agent, and never automatically.")
     elif verdict.not_copilot:
         # 🚨 Policy review-evidence-any-head (#4730). The internal reviewer's clean review is not
-        # Copilot's, and the ruleset requests Copilot once, at open — waiting delivers nothing here.
+        # Copilot's. The ruleset requests a Copilot review on every push (review_on_push: true), so one
+        # may already be pending — re-requesting it on top would only duplicate it.
         out.append("a Copilot review of this pull request — \"reviewed, nothing found\" is only ever a completed Copilot "
                    "review with zero findings (on any head), never the internal reviewer's clean review or elapsed time. "
-                   "Waiting does not deliver one (the ruleset reviews once per pull request): a maintainer re-requests the "
-                   f"Copilot review, or applies the `{WAIVER_LABEL}` label — never an agent, and never automatically.")
+                   "The ruleset requests a Copilot review on every push to a non-draft pull request, so one may already be "
+                   "pending after the latest push — let it land; do not re-request it on top. Only if none arrives (the "
+                   "reviewer refused or cannot review this change), a maintainer then re-requests the Copilot review, or applies "
+                   f"the `{WAIVER_LABEL}` label — never an agent, and never automatically.")
     elif "has not landed" in text:
-        out.append("the automatic review must land. It usually arrives minutes after the pull request opens; if the "
+        out.append("the automatic review must land. It usually arrives minutes after the pull request opens or after each push; if the "
                    "reviewer refused (quota) or cannot review this change, a maintainer re-requests the review, or applies "
                    f"the `{WAIVER_LABEL}` label to waive it — never an agent, and never automatically. Elapsed time and "
                    "a \"Reviewer unavailable\" run release nothing (policy review-evidence-any-head).")

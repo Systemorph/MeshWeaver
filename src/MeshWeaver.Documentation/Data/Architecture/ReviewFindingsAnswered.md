@@ -954,7 +954,9 @@ The check's own pull request, in order, with the run that did the work:
 
 The review that counts was submitted on the **previous** head (`c496a0bffb`) and the check is green on
 the new one (`bf37e92a09`): condition 1 asks whether the review landed, never whether it landed on the
-head, because the reviewer reviews once. And the 15-minute wait was exercised against #645 — three
+head — the any-head gate (policy `review-once-per-pull-request`, gate half). At the time of this record
+the reviewer also reviewed only once per pull request; it now reviews every push again
+([Every push is reviewed again](#every-push-is-reviewed-again)), and the gate still counts any head's review. And the 15-minute wait was exercised against #645 — three
 polls, then RED naming the quota refusal.
 
 ## Rollout — done; kept as the record
