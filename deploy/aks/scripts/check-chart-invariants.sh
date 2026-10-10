@@ -343,6 +343,7 @@ REFUSALS=(
   "a database release AND the bundled Postgres (two answers to which database)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.db-release-with-bundled-postgres.yaml|exclusive with postgres.enabled"
   # Plugins#1738: an executor the portal would silently read as Job must fail the render.
   "a misspelled operator executor|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.operator-executor-misspelled.yaml|must be Job or Actions"
+  "a quoted maintainerSignsAlone (a string is truthy, so \"false\" would read as true)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.operator-signs-alone-quoted.yaml|must be a boolean"
   # MeshWeaver#6052: two replicas on per-pod emptyDir /data — each pod's assembly cache is its own,
   # and the shared NodeType records name bytes only the compiling pod holds.
   "two replicas with a pod-local /data (the #6052 estate)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.two-replicas-pod-local-data.yaml|needs a SHARED /data"

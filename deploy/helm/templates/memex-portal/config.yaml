@@ -367,8 +367,13 @@ data:
 {{- end }}
 {{- /* Whether that maintainer SIGNS ALONE (policy sole-maintainer-approval): their one valid signature
   satisfies a governed activity's Signatures gate of any count. Rendered only when true; false or
-  unset renders NO key, and then every count stands. */}}
-{{- if (.Values.hostingOperator).maintainerSignsAlone }}
+  unset renders NO key, and then every count stands. The value must be a YAML BOOLEAN: a string such
+  as "false" is truthy to a template, so anything else is REFUSED rather than read as true. */}}
+{{- $signsAlone := (.Values.hostingOperator).maintainerSignsAlone }}
+{{- if and (not (kindIs "invalid" $signsAlone)) (not (kindIs "bool" $signsAlone)) }}
+{{- fail (printf "hostingOperator.maintainerSignsAlone is %q, and it must be a boolean (true or false, unquoted). A string is truthy to the chart, so \"false\" would render the key as true and let the maintainer sign alone against the declared value." (toString $signsAlone)) }}
+{{- end }}
+{{- if and (kindIs "bool" $signsAlone) $signsAlone }}
   Hosting__Operator__MaintainerSignsAlone: "true"
 {{- end }}
 {{- if (.Values.hostingOperator).enabled }}
