@@ -207,6 +207,9 @@ gh pr create --base main --head "$(git branch --show-current)" --title "…" --b
 #      • Never DELETE the request "to save credits" — that cancels a review the maintainer wants.
 #      • Just wait for it: it lands as the "Running Copilot Code Review" run / a Copilot review on
 #        the PR. Address it in step 4.
+#      • EVERY push to a non-draft PR triggers a FRESH review (`review_on_push: true`, policy
+#        `copilot-code-review`), so every push opens a new round of threads to answer — push only
+#        for a real defect; answer a nit or a question ON its thread, not with a commit.
 #    If that run FAILED, find out why before merging unreviewed:
 #      gh run view <run-id> --log-failed | grep -iE "quota|errorType|statusCode"
 #    `statusCode: 402, errorType: 'quota'` ("You have exceeded your monthly quota") = the org's

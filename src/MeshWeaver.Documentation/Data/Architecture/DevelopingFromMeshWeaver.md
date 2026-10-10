@@ -56,7 +56,9 @@ ship sequence:
    branch ruleset carries a `copilot_code_review` rule, so every PR against `main` is reviewed
    automatically; requesting it again just queues a second review and burns extra Copilot credits.
    (A 402 quota error means the monthly allowance is spent and the PR is silently left unreviewed —
-   check for that rather than re-requesting.)
+   check for that rather than re-requesting.) Every later push to a non-draft PR triggers a fresh
+   review on its own (policy [`copilot-code-review`](../PolicyNotProse)), so each push opens a new
+   round of threads — push for real defects, answer nits on the thread.
 4. **Wait for CI to conclude**, fix any red at the root, and **triage Copilot's comments** (fix the
    correct ones, reply with a reason for any kept).
 
