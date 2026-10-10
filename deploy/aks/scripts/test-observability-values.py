@@ -150,7 +150,8 @@ class CheckerVerdictTest(unittest.TestCase):
         mis-nested key arrives intact and every leaf 'reaches' the render. Only the binary knows."""
         result = self.run_checker(self.CLEAN, binary_valid=False, binary_exit=1)
         self.assertEqual(result.returncode, 1, result.stdout)
-        self.assertIn('REJECTED by grafana/loki:', result.stdout)
+        # On a GitHub runner the image is the GHCR mirror of grafana/loki (Doc/Architecture/DockerHubInCi).
+        self.assertRegex(result.stdout, r'REJECTED by (ghcr\.io/systemorph/dockerhub/)?grafana/loki:')
 
     def test_binary_silence_fails(self):
         """Exit 0 without the verdict line means the validator never ran. Silence is not success."""
