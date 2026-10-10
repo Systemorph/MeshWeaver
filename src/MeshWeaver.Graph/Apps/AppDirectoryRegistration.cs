@@ -49,29 +49,30 @@ public static class AppDirectoryRegistration
 /// <summary>
 /// <c>Home:AppSource</c> — where the home's Apps band reads its tiles from. An open vocabulary
 /// (policy <c>open-vocabulary-string-constants</c>): an unknown value falls back to
-/// <see cref="Records"/>, the shipped behaviour, and the home's render logs it by name
-/// (<see cref="IsKnown"/>).
+/// <see cref="Directory"/>, the default, and the home's render logs it by name
+/// (<see cref="IsKnown"/>). <see cref="Records"/> stays selectable as an explicit escape hatch
+/// while the per-user <c>_App</c> records still exist (MeshWeaver.Plugins Store/AppsOnTheInstance §8).
 /// </summary>
 public static class HomeAppSource
 {
     /// <summary>The configuration key.</summary>
     public const string ConfigKey = "Home:AppSource";
 
-    /// <summary>The viewer's own <c>{user}/_App</c> records (the default).</summary>
+    /// <summary>The viewer's own <c>{user}/_App</c> records — the legacy source, only when set explicitly.</summary>
     public const string Records = "Records";
 
-    /// <summary>The app directory — the apps the viewer can see, via <c>{user}/_Apps</c>.</summary>
+    /// <summary>The app directory — the apps the viewer can see, via <c>{user}/_Apps</c> (the default).</summary>
     public const string Directory = "Directory";
 
-    /// <summary>Whether <paramref name="value"/> selects the directory. Anything else — absent,
-    /// <see cref="Records"/>, or an unknown value — keeps the records. Pure.</summary>
+    /// <summary>Whether <paramref name="value"/> selects the directory: everything except an explicit
+    /// <see cref="Records"/> — absent, <see cref="Directory"/>, or an unknown value. Pure.</summary>
     public static bool IsDirectory(string? value) =>
-        string.Equals(value?.Trim(), Directory, StringComparison.OrdinalIgnoreCase);
+        !string.Equals(value?.Trim(), Records, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Whether <paramref name="value"/> is absent or one of this vocabulary's values —
     /// anything else is a configuration the deployment should hear about. Pure.</summary>
     public static bool IsKnown(string? value) =>
         string.IsNullOrWhiteSpace(value)
-        || IsDirectory(value)
+        || string.Equals(value.Trim(), Directory, StringComparison.OrdinalIgnoreCase)
         || string.Equals(value.Trim(), Records, StringComparison.OrdinalIgnoreCase);
 }

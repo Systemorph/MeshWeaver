@@ -550,8 +550,9 @@ public static class UserActivityLayoutAreas
         // seeds instead because there the screen only picks a label. See Doc/GUI/PresentationMode
         // rule 2 before "fixing" this to match the menu.
         var screen = host.ViewerScreen();
-        // Where the Apps band reads its tiles: the viewer's own _App records (the default) or the
-        // app directory (Home:AppSource = Directory). Deployment config, read once per render.
+        // Where the Apps band reads its tiles: the app directory (the default) or, only when
+        // Home:AppSource = Records is set explicitly, the viewer's legacy _App records. Deployment
+        // config, read once per render.
         var appSource = host.Hub.ServiceProvider.GetService<IConfiguration>()?[HomeAppSource.ConfigKey];
         var appsFromDirectory = HomeAppSource.IsDirectory(appSource);
         // The home's DISPLAY CONFIG is DATA-DRIVEN: read the admin-editable Admin/HomeConfig platform
@@ -574,7 +575,7 @@ public static class UserActivityLayoutAreas
         if (!HomeAppSource.IsKnown(appSource))
             homeLogger?.LogWarning(
                 "[Home] {Key}='{Value}' is not a known app source; the Apps band reads {Fallback}",
-                HomeAppSource.ConfigKey, appSource, HomeAppSource.Records);
+                HomeAppSource.ConfigKey, appSource, HomeAppSource.Directory);
         return HomeConfigNodeType.Observe(host.Workspace, options)
             .CombineLatest(
                 syncStream!.Select(change => change.Value.ContentAs<User>(options)).StartWith((User?)null),
