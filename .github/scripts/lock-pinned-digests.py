@@ -562,6 +562,12 @@ class OverlayScan:
     # (registry source name, module repository URL, record path) for combo verification.
     sources: list[tuple[str, str, str]] = field(default_factory=list)
     source_errors: list[tuple[str, str]] = field(default_factory=list)
+    # (repo, record path) — the PORTAL repository a `Hosting/Deployment` record names through its
+    # split `imageRepository` (+ `pinnedImageTag`) pair, in this registry, pinned or floating. Kept
+    # apart from `pins`/`floating` because those ALSO carry the record's side images (the
+    # operator, gates, portal-next), which AXIS 3 must not read as the running PORTAL set — see
+    # `running_repositories_of`.
+    record_portals: list[tuple[str, str]] = field(default_factory=list)
     unreadable: str | None = None
 
 
@@ -616,6 +622,7 @@ def scan_overlays_remote(gh_repo: str, registry: str) -> OverlayScan:
             record_pins, record_floating = extract_record_pins(text, registry)
             pins = pins + record_pins
             floating = floating + record_floating
+            scan.record_portals.extend((repo, path) for repo, _ in record_pins + record_floating)
             sources, source_error = extract_record_sources(text)
             if source_error:
                 scan.source_errors.append((path, source_error))
@@ -655,6 +662,7 @@ def scan_overlays_local(root: str, gh_repo: str, registry: str) -> OverlayScan:
             record_pins, record_floating = extract_record_pins(text, registry)
             pins = pins + record_pins
             floating = floating + record_floating
+            scan.record_portals.extend((repo, rel) for repo, _ in record_pins + record_floating)
             sources, source_error = extract_record_sources(text)
             if source_error:
                 scan.source_errors.append((rel, source_error))
@@ -1789,6 +1797,17 @@ def running_repositories_of(axis2: list[OverlayScan],
         return (is_deployment_record_path(where)
                 and where.split("/")[-1] == f"{instance.id}.json")
 
+    # 🚨 FROM THE RECORD, ONLY ITS PORTAL REPOSITORY (MeshWeaver#3438 / Memex#219, measured
+    # 2026-10-10). The first cut of the record join took EVERY in-registry repository the record's
+    # text mentions — and a record also pins its side images, `operator.image` above all
+    # (`hosting-operator:<sha>`, built from its OWN commit, never the portal's). For an installation
+    # whose portal lives in a fleet-unlockable registry (`pearl` → cr.meshweaver.cloud, and the
+    # client estate's control/test pair) that put `hosting-operator` into its running set, and the
+    # HALF COVERED blocker below then fired on all three — the first push run carrying the join
+    # (38013647613) was red on exactly those three and nothing else, so the purge's reEnableWhen
+    # stayed red on a false reading. The side images are still protected: AXIS 2 locks them by the
+    # tag the record pins. What AXIS 3 needs from the record is where the PORTAL's running set
+    # lives, which is `imageRepository` and nothing else.
     result: dict[str, list[str]] = {}
     for instance in instances:
         repos: set[str] = set()
@@ -1796,8 +1815,10 @@ def running_repositories_of(axis2: list[OverlayScan],
             for repo, _tag, where in list(scan.pins) + list(scan.floating):
                 if f"{scan.gh_repo} {where}" == instance.source:
                     repos.add(repo)
-                elif scan.gh_repo == instance.gh_repo and record_of(instance, where):
-                    repos.add(repo)
+            if scan.gh_repo == instance.gh_repo:
+                for repo, where in scan.record_portals:
+                    if record_of(instance, where):
+                        repos.add(repo)
         result[instance.key] = sorted(repos)
     return result
 
@@ -5067,6 +5088,7 @@ whisper:
         scan.files += 1
         scan.pins += [(repo, tag, record_where) for repo, tag in record_pins]
         scan.floating += [(repo, tag, record_where) for repo, tag in record_floating]
+        scan.record_portals += [(repo, record_where) for repo, _ in record_pins + record_floating]
         return [scan]
 
     plan, fails, registry = _drive(clean1, _with_record("mesh/Deployments/memex-cloud.json"),
@@ -5200,6 +5222,54 @@ whisper:
     check([i.id for i in plan.instances if i.out_of_scope] == ["build"],
           "ARM 32: a declared out-of-scope installation was not marked as such, so it would be "
           "counted among the answered and read as PROTECTED")
+
+    # ── ARM 20c: from the RECORD only its PORTAL repository joins the running set ───────────────
+    # MeshWeaver#3438 / Memex#219, measured 2026-10-10 on push run 38013647613 — the first one
+    # carrying the record join: red on `pearl` and the client estate's control/test pair, each
+    # "pins 1 repository(ies) in the registry this run locks (hosting-operator) AND images in
+    # <their registry> … Half its running set would be protected". The join had taken every
+    # in-registry image the record's TEXT mentions, and a record pins its operator here even when
+    # its portal lives in a fleet-unlockable registry. The operator is built from its OWN commit,
+    # is no part of the portal set `/api/version` names, and AXIS 2 already locks it by its pinned
+    # tag. Driven through the PRODUCTION scanner over a real tree, so `record_portals` is filled
+    # the way a nightly run fills it.
+    def _record_tree(portal_repository: str) -> list[OverlayScan]:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            overlay = root / "deployments" / "aks" / "build" / "values.build.public.yaml"
+            overlay.parent.mkdir(parents=True)
+            overlay.write_text(FIXTURE_OVERLAY_FOREIGN, encoding="utf-8")
+            record = root / "mesh" / "Deployments" / "build.json"
+            record.parent.mkdir(parents=True)
+            record.write_text(json.dumps({"content": {
+                "imageRepository": portal_repository, "pinnedImageTag": "",
+                "operator": {"image": "meshweaver.azurecr.io/hosting-operator:1979979"}}}),
+                encoding="utf-8")
+            return [scan_overlays_local(str(root), "Systemorph/Memex", "meshweaver")]
+
+    operator_only = _record_tree("cr.meshweaver.cloud/memex-portal-ai")
+    check(any(repo == "hosting-operator" for repo, _, _ in operator_only[0].pins),
+          f"ARM 20c (control): the scanner no longer extracts the record's operator pin, so this "
+          f"arm would pass about nothing: {operator_only[0].pins}")
+    plan, _, _ = _drive(clean1, clean2 + operator_only, FakeRegistry(_inventory(), FAKE_TAGS),
+                        probe=_answers(), dispositions=FLEET_UNLOCKABLE)
+    check(not any("Half its running" in b for b in plan.blockers),
+          f"ARM 20c: the record's OPERATOR image was joined to `build`'s running PORTAL set, and "
+          f"HALF COVERED fired on an installation whose portal is wholly in a fleet-unlockable "
+          f"registry: {plan.blockers}")
+    check([i.id for i in plan.instances if i.out_of_scope] == ["build"],
+          f"ARM 20c: `build` stopped being out of scope once its record was scanned: "
+          f"{[(i.id, i.out_of_scope) for i in plan.instances]}")
+    # 🚨 NEGATIVE CONTROL: the same tree with the record's PORTAL in this registry. The portal
+    # repository must still join — and with the overlay's images in cr.meshweaver.cloud, that IS
+    # half covered — which proves the arm above passed because the operator was excluded, not
+    # because the record stopped being read.
+    portal_here = _record_tree("meshweaver.azurecr.io/memex-portal-ai")
+    plan, _, _ = _drive(clean1, clean2 + portal_here, FakeRegistry(_inventory(), FAKE_TAGS),
+                        probe=_answers(), dispositions=FLEET_UNLOCKABLE)
+    check(any("Half its running" in b and "build" in b for b in plan.blockers),
+          f"ARM 20c (control): a record naming its PORTAL in this registry was not joined: "
+          f"{plan.blockers}")
 
     # 🚨 A `third-party` disposition must NOT make an installation out of scope: its portal images
     # are then accounted for by nothing that holds our images, which is a different incident.
