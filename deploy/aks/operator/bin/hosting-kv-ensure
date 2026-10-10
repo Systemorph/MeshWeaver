@@ -3,7 +3,7 @@
 #                   [--db-connection <vault object> --db-host <fqdn> --db-port <n> --db-user <user>
 #                    --db-name <database> --db-password-secret <vault object>]
 #                   [--skip-registry-key | --registry-key-vault <name> --registry-key-object <object>]
-#                   [--values-half <release>]
+#                   [--values-half <release> [--vault-keys K1,K2,…]]
 #
 # Make sure the per-instance Key Vault secrets EXIST, and mint the ones only this step can mint.
 #
@@ -31,7 +31,7 @@ HOSTING_CMD="hosting-kv-ensure"
 vault="" prefix="" namespace=""
 db_connection="" db_host="" db_port="" db_user="" db_name="" db_password_secret=""
 skip_registry_key=false registry_key_vault="" registry_key_object=""
-values_half=""
+values_half="" vault_keys=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --vault)              vault="${2:-}";              shift 2 ;;
@@ -47,6 +47,7 @@ while [ $# -gt 0 ]; do
     --registry-key-vault)  registry_key_vault="${2:-}"; shift 2 ;;
     --registry-key-object) registry_key_object="${2:-}"; shift 2 ;;
     --values-half)         values_half="${2:-}";         shift 2 ;;
+    --vault-keys)          vault_keys="${2:-}";          shift 2 ;;
     *) hosting::die "unknown argument '$1'" ;;
   esac
 done
@@ -67,6 +68,11 @@ hosting::safe_name namespace "$namespace"
 [ -z "$registry_key_vault" ] || hosting::safe_name registry-key-vault "$registry_key_vault"
 [ -z "$registry_key_object" ] || hosting::safe_name registry-key-object "$registry_key_object"
 [ -z "$values_half" ] || hosting::safe_name values-half "$values_half"
+if [ -n "$vault_keys" ]; then
+  [ -n "$values_half" ] || hosting::die "--vault-keys declares the keys of a values half, but no --values-half <release> was given"
+  [[ "$vault_keys" =~ ^[A-Za-z_][A-Za-z0-9_]*(,[A-Za-z_][A-Za-z0-9_]*)*$ ]] \
+    || hosting::die "--vault-keys '${vault_keys}' is not a comma-separated list of env-key names"
+fi
 if [ "$skip_registry_key" = true ] && { [ -n "$registry_key_vault" ] || [ -n "$registry_key_object" ]; }; then
   hosting::die "--skip-registry-key cannot be combined with --registry-key-vault or --registry-key-object"
 fi
@@ -207,7 +213,45 @@ fi
 # accepts a JSON object.
 if [ -n "$values_half" ]; then
   half_name="helm-values-${values_half}"
-  if kv_exists "$half_name"; then
+  if kv_exists "$half_name" && [ -n "$vault_keys" ]; then
+    # 🚨 EXACTLY THE DECLARED KEYS (policy `one-values-half-per-release`, MeshWeaver#4685). With the
+    # record's vaultValuesKeys this step no longer keeps a half blind: it reads the KEY NAMES and
+    #   * exact                → kept, untouched;
+    #   * over-supplies only   → re-stored FILTERED to the declared keys. Only keys are REMOVED — a
+    #                            kept key's value is the same bytes — and the previous version stays in
+    #                            the vault as the rollback. This is "what Provision writes";
+    #   * a declared key absent → refused: a value cannot be invented, and the master-key rule above
+    #                            (never mint over what may seal data) applies to it as to every secret.
+    umask 077
+    half_cur="$(mktemp)"; half_new="$(mktemp)"
+    trap 'rm -f "${half_cur:-}" "${half_new:-}"' EXIT
+    az keyvault secret download --vault-name "$vault" --name "$half_name" --file "$half_cur" --overwrite --output none 2>/dev/null \
+      || hosting::die "could not read ${half_name} from vault ${vault} to check its keys against the record's vaultValuesKeys. Nothing was written."
+    half_diff="$(hosting::values_half check "$half_cur" --keys "$vault_keys")"; half_rc=$?
+    case "$half_rc" in
+      0) hosting::log "keep    ${half_name} (holds exactly the record's declared keys)"
+         kept=$((kept + 1))
+         hosting::say kv_values_half kept ;;
+      3) if printf '%s\n' "$half_diff" | grep -q '^missing: '; then
+           hosting::die "${half_name} in vault ${vault} lacks declared key(s) — $(grep '^missing: ' <<< "$half_diff") — and a value cannot be invented. Put the key in the half, or drop it from the record's vaultValuesKeys. Nothing was written."
+         fi
+         hosting::log "filter  ${half_name} to the record's declared keys — $(tr '\n' ' ' <<< "$half_diff")(names only; values of kept keys unchanged; the previous version stays as the rollback)"
+         if hosting::dry; then
+           hosting::say kv_values_half would-filter
+         else
+           hosting::values_half filter "$half_cur" "$half_new" --keys "$vault_keys" >/dev/null \
+             || hosting::die "could not filter ${half_name} to the declared keys. Nothing was written."
+           hosting::values_half check "$half_new" --keys "$vault_keys" >/dev/null \
+             || hosting::die "the filtered ${half_name} still does not hold exactly the declared keys — refusing to store it. Nothing was written."
+           az keyvault secret set --vault-name "$vault" --name "$half_name" --file "$half_new" --output none \
+             || hosting::die "could not store the filtered ${half_name} in vault ${vault}. Nothing was written."
+           hosting::say kv_values_half filtered
+         fi
+         rm -f "$half_cur" "$half_new"
+         created=$((created + 1)) ;;
+      *) hosting::die "${half_name} in vault ${vault} could not be checked against the record's vaultValuesKeys (rc ${half_rc}). Nothing was written." ;;
+    esac
+  elif kv_exists "$half_name"; then
     hosting::log "keep    ${half_name} (exists — never rewritten: a captured half may carry keys this step does not know)"
     kept=$((kept + 1))
     hosting::say kv_values_half kept
@@ -236,6 +280,13 @@ if [ -n "$values_half" ]; then
                     memex_migration: {ConnectionStrings__memex: $cs, memex_postgres_password: $pw}}}' \
         > "$half_dir/half.json" \
         || hosting::die "could not compose ${half_name} (jq). Nothing was written."
+      # Exactly the declared keys, before anything is written (policy `one-values-half-per-release`):
+      # this step composes the database keys only, so a record declaring more cannot be provisioned
+      # here — named, not half-written.
+      if [ -n "$vault_keys" ]; then
+        compose_diff="$(hosting::values_half check "$half_dir/half.json" --keys "$vault_keys")" \
+          || hosting::die "the ${half_name} this step can compose (ConnectionStrings__memex, ConnectionStrings__orleans via the chart, MEMEX_PASSWORD) is not the record's declared key set — $(tr '\n' ';' <<< "$compose_diff"). Nothing was written."
+      fi
       rm -f "$half_dir/cs" "$half_dir/pw" "$half_dir/cs.v" "$half_dir/pw.v"
       az keyvault secret set --vault-name "$vault" --name "$half_name" --file "$half_dir/half.json" --output none \
         || hosting::die "could not create ${half_name} in vault ${vault}. Nothing was written."

@@ -516,6 +516,65 @@ case "$_kve_log" in *"secret set"*|*"--query value"*) bad "…never rewritten, a
 case "$_kve_out" in *"::hosting:: kv_values_half=kept"*) ok "…and reports kv_values_half=kept" ;; *) bad "reports kept" "said: ${_kve_out}" ;; esac
 rm -rf "$_kve_state"
 
+# 🚨 policy one-values-half-per-release (MeshWeaver#4685): with the record's vaultValuesKeys an
+# EXISTING half is held to EXACTLY those keys — kept when exact, re-stored FILTERED when it
+# over-supplies (values of kept keys unchanged), refused when a declared key is missing. Names only.
+_kvh_fix="$(mktemp)"
+printf 'pgbackrest:\n  azure:\n    accountKey: PGB-NEVER-PRINTED\nsecrets:\n  memex_portal:\n    ConnectionStrings__memex: CS-NEVER-PRINTED\n    Authentication__Google__ClientId: CID-NEVER-PRINTED\n    Apple__PrivateKey: |\n      -----BEGIN-----\n      PEM-NEVER-PRINTED\n      -----END-----\n    memex_postgres_password: PW-NEVER-PRINTED\n' > "$_kvh_fix"
+KVE_KEYS=(--vault-keys ConnectionStrings__memex,ConnectionStrings__orleans,MEMEX_PASSWORD,Apple__PrivateKey)
+kve HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey acme-PluginCatalog-RegistryToken acme-db-connection helm-values-acme" HOSTING_KVE_HALF_FIXTURE="$_kvh_fix" \
+  -- --vault Systemorph --prefix acme- --namespace acme "${KVE_HALF[@]}" "${KVE_KEYS[@]}"
+_kvh_new="$_kve_state/set.helm-values-acme"
+if [ "$_kve_rc" -eq 0 ] && [ -f "$_kvh_new" ] \
+   && [ "$(jq -r '.secrets.memex_portal | keys | sort | join(",")' "$_kvh_new")" = "Apple__PrivateKey,ConnectionStrings__memex,memex_postgres_password" ] \
+   && [ "$(jq -r 'keys | join(",")' "$_kvh_new")" = "secrets" ] \
+   && [ "$(jq -r '.secrets.memex_portal.Apple__PrivateKey' "$_kvh_new")" = "$(printf -- '-----BEGIN-----\nPEM-NEVER-PRINTED\n-----END-----')" ]; then
+  ok "an over-supplying half is re-stored FILTERED to the declared keys, kept values byte-identical"
+else
+  bad "an over-supplying half is filtered" "rc=${_kve_rc} out: ${_kve_out} wrote: $(cat "$_kvh_new" 2>/dev/null)"
+fi
+case "$_kve_out" in *"::hosting:: kv_values_half=filtered"*) ok "…and reports kv_values_half=filtered" ;; *) bad "reports filtered" "said: ${_kve_out}" ;; esac
+case "$_kve_out" in *"Authentication__Google__ClientId"*"pgbackrest"*) ok "…naming the dropped keys" ;; *) bad "names the dropped keys" "said: ${_kve_out}" ;; esac
+case "$_kve_out$_kve_log" in *NEVER-PRINTED*) bad "…and no value is printed or put on an argv" "out: ${_kve_out} az: ${_kve_log}" ;; *) ok "…and no value is printed or put on an argv" ;; esac
+rm -rf "$_kve_state"
+# Exact: kept, nothing written. (Negative control for the filter arm.)
+printf '{"secrets":{"memex_portal":{"ConnectionStrings__memex":"x","memex_postgres_password":"y","Apple__PrivateKey":"z"}}}\n' > "$_kvh_fix"
+kve HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey acme-PluginCatalog-RegistryToken acme-db-connection helm-values-acme" HOSTING_KVE_HALF_FIXTURE="$_kvh_fix" \
+  -- --vault Systemorph --prefix acme- --namespace acme "${KVE_HALF[@]}" "${KVE_KEYS[@]}"
+if [ "$_kve_rc" -eq 0 ] && [ ! -f "$_kve_state/set.helm-values-acme" ] && printf '%s' "$_kve_out" | grep -q '::hosting:: kv_values_half=kept'; then
+  ok "a half holding exactly the declared keys is kept and nothing is written"
+else
+  bad "an exact half is kept" "rc=${_kve_rc} out: ${_kve_out}"
+fi
+rm -rf "$_kve_state"
+# Missing a declared key: refused, nothing written — a value cannot be invented.
+printf '{"secrets":{"memex_portal":{"ConnectionStrings__memex":"x","memex_postgres_password":"y"}}}\n' > "$_kvh_fix"
+kve HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey acme-PluginCatalog-RegistryToken acme-db-connection helm-values-acme" HOSTING_KVE_HALF_FIXTURE="$_kvh_fix" \
+  -- --vault Systemorph --prefix acme- --namespace acme "${KVE_HALF[@]}" "${KVE_KEYS[@]}"
+if [ "$_kve_rc" -ne 0 ] && [ ! -f "$_kve_state/set.helm-values-acme" ] && printf '%s' "$_kve_out" | grep -q 'missing: Apple__PrivateKey'; then
+  ok "a half lacking a declared key is refused, naming it, and nothing is written"
+else
+  bad "a half lacking a declared key is refused" "rc=${_kve_rc} out: ${_kve_out}"
+fi
+rm -rf "$_kve_state"
+# Composing: a record declaring keys this step cannot compose is refused BEFORE anything is written.
+kve HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey acme-PluginCatalog-RegistryToken" HOSTING_KVE_PASSWORD_OBJECT=memex-postgres-password \
+  -- --vault Systemorph --prefix acme- --namespace acme "${KVE_DB[@]}" "${KVE_HALF[@]}" "${KVE_KEYS[@]}"
+if [ "$_kve_rc" -ne 0 ] && [ ! -f "$_kve_state/set.helm-values-acme" ] && printf '%s' "$_kve_out" | grep -q 'Apple__PrivateKey'; then
+  ok "composing for a record that declares an un-composable key refuses before writing, naming it"
+else
+  bad "un-composable declared key refuses" "rc=${_kve_rc} out: ${_kve_out}"
+fi
+rm -rf "$_kve_state"
+kve HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey acme-PluginCatalog-RegistryToken" HOSTING_KVE_PASSWORD_OBJECT=memex-postgres-password \
+  -- --vault Systemorph --prefix acme- --namespace acme "${KVE_DB[@]}" "${KVE_HALF[@]}" --vault-keys ConnectionStrings__memex,ConnectionStrings__orleans,MEMEX_PASSWORD
+[ "$_kve_rc" -eq 0 ] && [ -f "$_kve_state/set.helm-values-acme" ] \
+  && ok "composing for the provisioned shape (CS memex, CS orleans, MEMEX_PASSWORD) writes the half" \
+  || bad "the provisioned shape composes" "rc=${_kve_rc} out: ${_kve_out}"
+rm -rf "$_kve_state" "$_kvh_fix"
+refuses_hard "kv-ensure refuses --vault-keys without --values-half" "no --values-half" \
+  hosting-kv-ensure --vault V --namespace n --vault-keys A
+
 # Without its inputs it refuses; a dry run writes nothing and reads no value.
 kve HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey acme-PluginCatalog-RegistryToken" -- --vault Systemorph --prefix acme- --namespace acme "${KVE_HALF[@]}"
 [ "$_kve_rc" -ne 0 ] && ok "an absent half with no --db-connection refuses" || bad "half without inputs refuses" "exited 0: ${_kve_out}"
@@ -2107,6 +2166,41 @@ printf '{"secrets":{},"ingress":{"host":"h"}}\n' > "$_vh_dir/vault/helm-values-m
 _vh_out="$(_vh_run --vault kv-test)"; _vh_rc=$?
 [ "$_vh_rc" -ne 0 ] && printf '%s' "$_vh_out" | grep -q ' ingress' && ! grep -q '^helm ' "$_vh_log" \
   && ok "a JSON half carrying structure is refused" || bad "a JSON structural half is refused" "rc=${_vh_rc} out: ${_vh_out}"
+# 🚨 policy one-values-half-per-release (MeshWeaver#4685): with --vault-keys the half must feed
+# EXACTLY the record's declared keys — an undeclared key (a config leaf in a secret family,
+# Systemorph/Memex#295) or a missing declared one is refused before helm, by NAME.
+printf 'secrets:\n  memex_portal:\n    ConnectionStrings__memex: "CS-SENTINEL-NEVER-PRINTED"\n    memex_postgres_password: "PW-SENTINEL-NEVER-PRINTED"\n  memex_migration:\n    ConnectionStrings__memex: "CS-SENTINEL-NEVER-PRINTED"\n' > "$_vh_dir/vault/helm-values-memex"
+: > "$_vh_log"
+_vh_out="$(_vh_run --vault kv-test --vault-keys ConnectionStrings__memex,ConnectionStrings__orleans,MEMEX_PASSWORD)"; _vh_rc=$?
+[ "$_vh_rc" -eq 0 ] && grep -q '^helm upgrade' "$_vh_log" && printf '%s' "$_vh_out" | grep -q '::hosting:: vault_values_keys=exact' \
+  && ok "a half feeding exactly the declared keys is layered (orleans derived by the chart, the password alias read as MEMEX_PASSWORD)" \
+  || bad "an exact half is layered" "rc=${_vh_rc} out: ${_vh_out}"
+printf 'secrets:\n  memex_portal:\n    ConnectionStrings__memex: "CS-SENTINEL-NEVER-PRINTED"\n    memex_postgres_password: "PW-SENTINEL-NEVER-PRINTED"\n    Authentication__Google__ClientId: "CID-SENTINEL-NEVER-PRINTED"\n' > "$_vh_dir/vault/helm-values-memex"
+: > "$_vh_log"
+_vh_out="$(_vh_run --vault kv-test --vault-keys ConnectionStrings__memex,ConnectionStrings__orleans,MEMEX_PASSWORD)"; _vh_rc=$?
+if [ "$_vh_rc" -ne 0 ] && printf '%s' "$_vh_out" | grep -q 'undeclared: Authentication__Google__ClientId' \
+   && printf '%s' "$_vh_out" | grep -q 'one-values-half-per-release' && ! grep -q '^helm ' "$_vh_log"; then
+  ok "a half feeding an UNDECLARED key is refused before helm, naming the key and the policy"
+else
+  bad "an over-supplying half is refused" "rc=${_vh_rc} out: ${_vh_out}"
+fi
+case "$_vh_out" in *SENTINEL-NEVER-PRINTED*) bad "the key-set refusal names keys, never values" "a value reached the log: ${_vh_out}" ;;
+  *) ok "the key-set refusal names keys, never values" ;; esac
+: > "$_vh_log"
+_vh_out="$(_vh_run --vault kv-test --vault-keys ConnectionStrings__memex,ConnectionStrings__orleans,MEMEX_PASSWORD,Authentication__Google__ClientId,Anthropic__ApiKey)"; _vh_rc=$?
+[ "$_vh_rc" -ne 0 ] && printf '%s' "$_vh_out" | grep -q 'missing: Anthropic__ApiKey' && ! grep -q '^helm ' "$_vh_log" \
+  && ok "a half lacking a DECLARED key is refused before helm, naming it" \
+  || bad "a half lacking a declared key is refused" "rc=${_vh_rc} out: ${_vh_out}"
+# Without --vault-keys the same over-supplying half is layered as before (the plan opts in).
+: > "$_vh_log"
+_vh_out="$(_vh_run --vault kv-test)"; _vh_rc=$?
+[ "$_vh_rc" -eq 0 ] && grep -q '^helm upgrade' "$_vh_log" \
+  && ok "without --vault-keys the key set is not judged (the plan passes the record's keys)" \
+  || bad "without --vault-keys the half is layered" "rc=${_vh_rc} out: ${_vh_out}"
+refuses_hard "--vault-keys without --vault is refused" "no --vault" \
+  env HOSTING_DRY_RUN=true HOSTING_CHART=/tmp hosting-deploy --namespace memex --release memex --database memex --values "$_vh_vals" --vault-keys A
+refuses_hard "--vault-keys that is not a list of names is refused" "not a comma-separated list" \
+  env HOSTING_DRY_RUN=true HOSTING_CHART=/tmp hosting-deploy --namespace memex --release memex --database memex --values "$_vh_vals" --vault kv --vault-keys 'A;id'
 # What cannot be read is refused, never assumed clean; a half with no family at all is refused.
 printf -- '- secrets\n' > "$_vh_dir/vault/helm-values-memex"
 : > "$_vh_log"
