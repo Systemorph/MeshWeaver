@@ -38,7 +38,8 @@ public class PartialDeleteIsReportedAsRetriableTest(ITestOutputHelper output)
             });
 
         var reported = await failure.Should().Within(60.Seconds()).Emit(
-            "a lane that stops serving removals must end the delete with a named failure");
+            "a lane that stops serving removals must end the delete with a named failure",
+            cancellationToken: TestContext.Current.CancellationToken);
 
         reported.Message.Should().Contain("made no progress",
             "the failure is still the leaf's own watchdog - the cause is not rewritten");
@@ -68,7 +69,9 @@ public class PartialDeleteIsReportedAsRetriableTest(ITestOutputHelper output)
                 failure.OnNext(ex);
                 failure.OnCompleted();
             });
-        await failure.Should().Within(60.Seconds()).Emit("the first delete must fail while the lane is held");
+        await failure.Should().Within(60.Seconds()).Emit(
+            "the first delete must fail while the lane is held",
+            cancellationToken: TestContext.Current.CancellationToken);
 
         // The lane serves again.
         Storage.StallAfterDeletes = null;
