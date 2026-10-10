@@ -5203,7 +5203,7 @@ public static class MeshExtensions
                         $"the validation of record satellite '{row}' did not answer within {legTimeout.TotalSeconds:0}s",
                         NodeDeletionRejectionReason.Unavailable))))
                 .Do(_ => progress?.OnNext(row)))
-            .Merge(PreValidateFanOutConcurrency)
+            .MergeBounded(PreValidateFanOutConcurrency)
             .Where(failure => failure is not null)
             .Take(1)
             .DefaultIfEmpty(null);
