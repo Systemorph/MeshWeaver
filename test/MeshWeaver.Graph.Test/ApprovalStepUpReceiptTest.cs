@@ -249,6 +249,26 @@ public class ApprovalStepUpReceiptTest(ITestOutputHelper output) : MonolithMeshT
         Assert.NotEqual(a, b with { Purpose = "something else" });
         Assert.Equal(PendingApproval(), PendingApproval());
 
+        // One negative control per field the hand-written Equals owns — dropping any of them from
+        // Equals would let the control plane's "still the revision I judged" guard accept another approval.
+        var at = new DateTimeOffset(2026, 10, 10, 9, 0, 0, TimeSpan.Zero);
+        foreach (var (other, field) in new (Approval, string)[]
+        {
+            (a with { Id = "appr-2" }, nameof(Approval.Id)),
+            (a with { PrimaryNodePath = "stepup/Doc2" }, nameof(Approval.PrimaryNodePath)),
+            (a with { Requester = "carol" }, nameof(Approval.Requester)),
+            (a with { Approver = "carol" }, nameof(Approval.Approver)),
+            (a with { Purpose = "other" }, nameof(Approval.Purpose)),
+            (a with { DueDate = at }, nameof(Approval.DueDate)),
+            (a with { ApprovalDate = at }, nameof(Approval.ApprovalDate)),
+            (a with { CreatedAt = at }, nameof(Approval.CreatedAt)),
+            (a with { Status = ApprovalStatus.Approved }, nameof(Approval.Status)),
+        })
+        {
+            Assert.False(a.Equals(other), $"{field} must take part in equality");
+            Assert.False(other.Equals(a), $"{field} must take part in equality (reverse)");
+        }
+
         // Symmetric whatever the maps' key comparers: "BOB" in an ordinal map and "bob" in a
         // case-insensitive one differ in BOTH directions (each map's own lookup would disagree).
         var ordinalUpper = PendingApproval() with { StepUpReceipts = ImmutableDictionary<string, string>.Empty.Add("BOB", "r-1") };
@@ -285,6 +305,7 @@ public class ApprovalStepUpReceiptTest(ITestOutputHelper output) : MonolithMeshT
         Assert.NotEqual(binding, (approve with { Status = ApprovalStatus.Rejected }).StepUpBinding());
         Assert.NotEqual(binding, (approve with { Purpose = "publish another report" }).StepUpBinding());
         Assert.NotEqual(binding, (approve with { Approver = "carol" }).StepUpBinding());
+        Assert.NotEqual(binding, (approve with { Requester = "carol" }).StepUpBinding());
         Assert.NotEqual(binding, (approve with { PrimaryNodePath = "stepup/Doc2" }).StepUpBinding());
         Assert.NotEqual(binding, (approve with { DueDate = DateTimeOffset.UnixEpoch }).StepUpBinding());
         Assert.NotEqual(binding, (approve with { Id = "appr-2" }).StepUpBinding());
