@@ -44,15 +44,19 @@ public sealed class AppDirectoryQueryProvider(IServiceProvider services) : IMesh
             return Observable.Return(Empty<T>(parsedQueries.FirstOrDefault() ?? ParsedQuery.Empty));
         var (owner, parsed) = target.Value;
         var viewer = request.UserId;
-        if (!string.Equals(viewer, owner, StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(viewer, WellKnownUsers.System, StringComparison.Ordinal))
+        var isOwner = string.Equals(viewer, owner, StringComparison.OrdinalIgnoreCase);
+        if (!isOwner && !string.Equals(viewer, WellKnownUsers.System, StringComparison.Ordinal))
             return Observable.Return(Empty<T>(parsed));
 
         var cache = services.GetRequiredService<AppDirectoryCache>();
         var arrangements = services.GetRequiredService<LauncherArrangementSource>();
-        // First directory render for this viewer: the seed of their arrangement is COMPOSED here
-        // — rows wait for it, so a drop always has an arrangement node to write to.
-        var arrangement = arrangements.ObserveSeeded(owner);
+        // 🚨 Only the OWNER's own request may write. A System request is a process-wide synced
+        // query whose real caller is checked only downstream (per-subscriber RLS), so it is served
+        // SIDE-EFFECT FREE: it reads the arrangement and never seeds one — a foreign viewer asking
+        // for someone else's directory through that channel must not write into their home.
+        // For the owner, the seed is COMPOSED here — rows wait for it, so a drop always has an
+        // arrangement node to write to.
+        var arrangement = isOwner ? arrangements.ObserveSeeded(owner) : arrangements.Observe(owner);
 
         return cache.ForViewer(owner)
             .CombineLatest(arrangement, (entries, placed) => Rows(owner, entries, placed, options))

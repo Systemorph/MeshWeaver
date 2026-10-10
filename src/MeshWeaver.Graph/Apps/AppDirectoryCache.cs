@@ -104,13 +104,16 @@ public sealed class AppDirectoryCache : IDisposable
             if (connect)
             {
                 var connection = slot.Shared.ConnectOwnedBy(connections);
+                var releaseNow = false;
                 lock (gate)
                 {
                     if (slot.Released)
-                        connection.Dispose();
+                        releaseNow = true;
                     else
                         slot.Connection = connection;
                 }
+                if (releaseNow)
+                    Release(connection);
             }
 
             return Disposable.Create(() =>
@@ -135,6 +138,14 @@ public sealed class AppDirectoryCache : IDisposable
             return slots.ContainsKey(viewer);
     }
 
+    /// <summary>Releases one slot's connection AND drops its handle from the owner, so the owner
+    /// never accumulates a handle per released connection. <c>Remove</c> disposes it.</summary>
+    private void Release(IDisposable? connection)
+    {
+        if (connection is not null)
+            connections.Remove(connection);
+    }
+
     private void Evict(string viewer, Slot slot)
     {
         IDisposable? connection;
@@ -148,7 +159,7 @@ public sealed class AppDirectoryCache : IDisposable
             connection = slot.Connection;
             slot.Connection = null;
         }
-        connection?.Dispose();
+        Release(connection);
     }
 
     private void Expire(string viewer, Slot slot)
@@ -166,7 +177,7 @@ public sealed class AppDirectoryCache : IDisposable
             connection = slot.Connection;
             slot.Connection = null;
         }
-        connection?.Dispose();
+        Release(connection);
     }
 
     /// <inheritdoc />
@@ -191,7 +202,7 @@ public sealed class AppDirectoryCache : IDisposable
                 connection = slot.Connection;
                 slot.Connection = null;
             }
-            connection?.Dispose();
+            Release(connection);
         }
         connections.Dispose();
     }

@@ -135,12 +135,12 @@ public sealed class AppDirectory
         var visible = Roots()
             .Select(roots => VisibleRoots(roots, viewer))
             .Switch();
+        // 🚨 A FAULT is not a verdict: it propagates, so AppDirectoryCache evicts this computation
+        // and the next subscriber recomputes — a Catch(false) here would cache "not an admin" and
+        // complete the leg, so no later grant could ever reach it.
         var admin = hub.IsGlobalAdmin(viewer)
-            .Catch<bool, Exception>(exception =>
-            {
-                logger?.LogWarning(exception, "[AppDirectory] admin check failed for {Viewer}", viewer);
-                return Observable.Return(false);
-            })
+            .Do(_ => { }, exception => logger?.LogWarning(exception,
+                "[AppDirectory] admin check failed for {Viewer}; the directory recomputes on the next subscriber", viewer))
             .DistinctUntilChanged();
         return visible
             .CombineLatest(admin, (apps, isAdmin) => Compose(viewer, apps, isAdmin))
@@ -154,13 +154,13 @@ public sealed class AppDirectory
         var checks = roots.Select(root => hub.CheckPermissionOutcome(root.ProbePath, viewer, Permission.Read)
             .Select(outcome =>
             {
-                // A fold that reached NO verdict is not a denial — but a launcher can only show or
-                // hide a tile, so the tile stays off for now and the reason is logged by name; the
-                // live check re-emits once the fold answers.
+                // A check that reached NO verdict is neither a grant nor a denial — and the outcome
+                // stream that reports it has ended. Treating it as "hidden" would latch the tile off;
+                // it FAILS the computation instead, so the cache evicts it and the next subscriber
+                // recomputes against a fold that can answer.
                 if (outcome.IsUndetermined)
-                    logger?.LogWarning(
-                        "[AppDirectory] read check on {Probe} for {Viewer} reached no verdict: {Reason}",
-                        root.ProbePath, viewer, outcome.UndeterminedReason);
+                    throw new InvalidOperationException(
+                        $"[AppDirectory] read check on '{root.ProbePath}' for '{viewer}' reached no verdict: {outcome.UndeterminedReason}");
                 return outcome.IsGranted;
             })
             .DistinctUntilChanged()

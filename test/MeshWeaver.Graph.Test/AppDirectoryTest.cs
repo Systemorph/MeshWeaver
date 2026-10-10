@@ -580,6 +580,34 @@ public class AppDirectoryTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         foreign.Items.Should().BeEmpty("a viewer's directory is served to that viewer only");
     }
 
+    /// <summary>
+    /// The System channel (a process-wide synced query, whose real caller is checked only
+    /// downstream) is served SIDE-EFFECT FREE: it gets the rows but never seeds the owner's
+    /// arrangement — a foreign viewer must not be able to write into someone's home through it.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task TheSystemChannel_ServesRows_ButNeverWrites()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string target = "dir-system-target";
+        var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        await CreateUserAsync(target, ct);
+
+        var rows = await Live(access.RunAsSystem(() => mesh.Query<MeshNode>(
+                MeshQueryRequest.FromQuery(UserActivityLayoutAreas.AppsQuery(target, fromDirectory: true)))))
+            .Where(items => items.Any(r => r.Id == AppDirectory.SettingsId))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        rows.Should().NotBeEmpty();
+
+        var source = Mesh.ServiceProvider.GetRequiredService<LauncherArrangementSource>();
+        source.IsSeeded(target).Should().BeFalse("the System channel never seeds");
+        var settings = await access.RunAsSystem(() => mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(
+                LauncherArrangementSource.ArrangementQuery(target))))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        settings.Items.Should().BeEmpty("no arrangement was written for the target");
+    }
+
     /// <summary>The live row set of a query — its Initial folded with every later delta.</summary>
     private static IObservable<List<MeshNode>> Live(IObservable<QueryResultChange<MeshNode>> changes)
         => LauncherArrangementSource.Fold(changes).Select(rows => rows.Values.ToList());
