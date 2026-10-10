@@ -141,6 +141,62 @@ subsystem.** Before accepting any of them, check the pod's own stall lines in th
 [An Unreachable Store Is Not a Refusal](../StoreUnreachableIsNotARefusal) for that measurement and
 the reading rule it produces.
 
+## The second shape: a silo wedged from boot, with no stall at all
+
+The 2026-10 recurrences (#6395 on memex, #6432 twice on memex-cloud) had **no** memory-pressure
+signature, so they reopened the membership question (procedure step 5 below). They resolve the
+same way, as a correct eviction of a silo that was not serving, but the evidence looks different.
+
+**The boot fingerprint.** About 30 s after the silo starts, its own hosted client gets no answer
+from a grain placed on **that same silo**:
+
+```
+Response did not arrive on time in '00:00:30' for message: 'Request
+[S<ip> sys.client/hosted-<ip>]->[S<ip> messagehub/Agent/_Activity/import-manifest] … DeliverMessage'
+```
+
+The first minute then reads the same way every time. `GetMeshNode('Agent/_Activity/import-manifest')
+timed out … NO LOCAL HUB … it never activated here`, the platform-startup `CreateNode` reports
+"post-creation handlers had not finished within 30s", and the static-repo import fails partition
+by partition. Measured: 3 of 3 evicted pods carried it. None of the healthy new pods in the same
+rolls did; they created their import manifest within 3 s. The query is
+`did not arrive on time.*_Activity/import-` over the roll window.
+
+**Threads are consumed, not starved.** `[LIVENESS]` on the doomed pod keeps a 10.00 s gap and a
+flat GC, so it shows no pause and no thread-pool stall, and `LocalSiloHealthMonitor` stays quiet.
+But `poolThreads` climbs steadily (20 → 55 over 16 minutes on 5j9gx) while the work completed per
+10 s collapses (about 500 against about 47 000 on a healthy pod in the same roll, which ran on 16
+threads). Threads block one at a time and do not return.
+
+**Why it takes minutes, not seconds, to be evicted.** Orleans 10 answers a membership ping
+**inside the connection's receive loop** (`SiloConnection.HandlePingMessage`). Every other message
+goes through `MessageCenter.ReceiveMessage`, which runs synchronously on that loop and calls
+`Catalog.GetOrCreateActivation`, where the grain is constructed. A silo whose activation or
+dispatch path blocks therefore keeps passing probes on every connection whose loop has not yet hit
+a blocking message. Meanwhile it answers nothing else in either direction, writes `IAmAlive` to
+the membership table normally, and logs no connection error. The measured eviction times were 8,
+15 and 20 minutes. A silo failing probes from the start would be gone in about 2 to 3 minutes
+under the deployed `ProbeTimeout` of 15 s and `NumMissedProbesLimit` of 5.
+
+So "requests reach it, nothing comes back" is **not**, by itself, evidence of a broken pod network
+path. Check the thread trend first.
+
+**The scatter it files.** Peers see 30 s timeouts against the silo: a stream `RegisterConsumer`
+against a rendezvous grain on a remote silo (#6429) and grain-call cancellation batches that all
+target one silo (#6392). Each names a different innocent subsystem, as in the stall case above.
+Two more incidents from the same roll windows are **correlated, not established**: a placement
+timeout (#6394) whose sample does not say which silo was chosen, and a memory-stream dequeue that
+timed out while 5j9gx called a queue grain on another silo (#6431). Neither shows that this silo
+received a response and failed to dispatch it. Count them as the same failure only once the heap
+dump or the remote silo's own log shows the same path.
+
+**What is still open.** Which call blocks is not in any log. The instrument is the `FailFast` heap
+dump the self-kill writes (step 4). Open it with `dotnet-dump analyze` and look for receive-loop
+threads (`SiloConnection`, `MessageCenter.ReceiveMessage`) or activation threads parked on one
+lock or one `Wait`: `clrstack -all`, `syncblk`, `dumpasync`. Reading the dump needs cluster
+access, since there is no governed dump action. Until it has been read, any tolerance change or
+watchdog is a band-aid over a blocking call nobody has seen.
+
 ## Procedure
 
 1. **Read the victim's own log first**, not the membership table. `LocalSiloHealthMonitor`
@@ -156,6 +212,10 @@ the reading rule it produces.
    an incident about the memory, not about membership. A recurrence *without* that signature is the
    sample that reopens the membership question — name it explicitly rather than closing on
    "could not reproduce".
+6. **No stall and no memory pressure? Look for the boot fingerprint** (above): unanswered
+   `_Activity/import-*` deliveries to the silo's own grains in its first minute, and `poolThreads`
+   climbing while throughput falls. Then read the `FailFast` dump for the blocked threads before
+   touching membership options.
 
 ## See also
 
