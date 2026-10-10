@@ -181,10 +181,14 @@ under the deployed `ProbeTimeout` of 15 s and `NumMissedProbesLimit` of 5.
 So "requests reach it, nothing comes back" is **not**, by itself, evidence of a broken pod network
 path. Check the thread trend first.
 
-**The scatter it files.** Peers see 30 s timeouts against the silo (stream `RegisterConsumer`
-#6429, grain-call cancellation #6392, placement #6394). The silo's own outbound calls time out too
-(memory-stream dequeue #6431), because the responses arrive and are never dispatched. Each names a
-different innocent subsystem, as in the stall case above.
+**The scatter it files.** Peers see 30 s timeouts against the silo: a stream `RegisterConsumer`
+against a rendezvous grain on a remote silo (#6429) and grain-call cancellation batches that all
+target one silo (#6392). Each names a different innocent subsystem, as in the stall case above.
+Two more incidents from the same roll windows are **correlated, not established**: a placement
+timeout (#6394) whose sample does not say which silo was chosen, and a memory-stream dequeue that
+timed out while 5j9gx called a queue grain on another silo (#6431). Neither shows that this silo
+received a response and failed to dispatch it. Count them as the same failure only once the heap
+dump or the remote silo's own log shows the same path.
 
 **What is still open.** Which call blocks is not in any log. The instrument is the `FailFast` heap
 dump the self-kill writes (step 4). Open it with `dotnet-dump analyze` and look for receive-loop
