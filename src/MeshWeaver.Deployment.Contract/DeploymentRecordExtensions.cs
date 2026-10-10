@@ -186,6 +186,23 @@ public static class DeploymentRecordExtensions
         d with { DenyAnonymous = enabled };
 
     /// <summary>
+    /// Approval step-up (<c>Authentication:StepUp:*</c>): every approval then needs a fresh,
+    /// phishing-resistant authentication. Declare <paramref name="entraAuthenticationContext"/> (the
+    /// tenant's Conditional Access authentication context) before switching it on.
+    /// </summary>
+    public static DeploymentContent WithApprovalStepUp(this DeploymentContent d, bool? enabled = true,
+        string? entraAuthenticationContext = null, string? entraTenantId = null) =>
+        d with
+        {
+            ApprovalStepUp = (d.ApprovalStepUp ?? new StepUpSpec()) with
+            {
+                Enabled = enabled,
+                EntraAuthenticationContext = entraAuthenticationContext ?? d.ApprovalStepUp?.EntraAuthenticationContext,
+                EntraTenantId = entraTenantId ?? d.ApprovalStepUp?.EntraTenantId,
+            },
+        };
+
+    /// <summary>
     /// Let this instance PATCH its own portal Deployment on a detected release — the chart's
     /// <c>selfUpdate.canPatch</c>, one value for the self-patch Role and <c>SelfUpdate__CanPatch</c>.
     /// The fleet hands over; the control instance, whose hand-over is a write into its own mesh,
