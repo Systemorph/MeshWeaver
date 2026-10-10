@@ -3802,6 +3802,8 @@ case "$_da_out" in *"::hosting:: dump_listing=2"*"::hosting:: dump_file=${_da_po
 [ "$(printf '%s' "$_da_json" | jq -r '[.sections[].name] | join(",")')" = "eeversion,threadpool,syncblk,clrthreads,dumpasync" ] \
   && ok "…with the fixed text sections beside it" || bad "sections" "json: ${_da_json}"
 case "$(printf '%s' "$_da_json" | jq -r '.sections[] | select(.name == "syncblk") | .text')" in *"2c  12"*"System.Object"*) ok "…the lock owner (syncblk) survives intact" ;; *) bad "syncblk text" "json: ${_da_json}" ;; esac
+[ "$(printf '%s' "$_da_json" | jq -r '[.sections[].truncated] | any')" = false ] \
+  && ok "…and a section that fits is never marked cut (only the pod's byte cap or the text cap cuts)" || bad "no false truncation" "json: ${_da_json}"
 case "$_da_json" in *hunter2*) bad "a key=value secret in the text is redacted" "json: ${_da_json}" ;; *"Password=<redacted>"*) ok "a key=value secret in the text is redacted" ;; *) bad "redaction marker" "json: ${_da_json}" ;; esac
 [ "$(printf '%s' "$_da_json" | jq -r '.listingCount, .dump.bytes, .dump.modifiedAt, .claim' | tr '\n' '|')" = "2|17179869184|2026-10-10T08:30:03Z|memex-data|" ] \
   && ok "…naming the dump's size, write instant and the claim it was read from" || bad "dump provenance" "json: ${_da_json}"

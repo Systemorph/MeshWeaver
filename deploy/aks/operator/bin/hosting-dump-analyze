@@ -286,7 +286,7 @@ def epoch: tonumber | todate;
     sections: [ $r.sections[] | select(.name != "clrstack") | if $text == 0 and (.name == "dumpasync" or .name == "clrthreads") then
                   {name, command, exit, bytes, truncated: true, omitted: true, text: ""}
                 else (.lines | join("\n") | redact) as $t
-                  | {name, command, exit, bytes, truncated: (($t | length) > $text or .bytes > ($t | length)), text: $t[:(if $text == 0 then 1200 else $text end)]} end ],
+                  | {name, command, exit, bytes, truncated: ((.bytes // 0) > $sectionBytes or ($t | length) > (if $text == 0 then 1200 else $text end)), text: $t[:(if $text == 0 then 1200 else $text end)]} end ],
     stacks: {exit: $cs.exit, bytes: $cs.bytes, threadCount: ($threads | length), groupCount: ($groups | length),
              groupsShown: ([$groups | length, $maxGroups] | min), framesCap: $frames, groups: $groups[:$maxGroups]}
   }'
@@ -296,7 +296,7 @@ for caps in "6000 40 80 8" "3000 25 40 6" "1500 15 25 4" "800 10 15 3" "0 8 10 2
   read -r text frames groups ids <<< "$caps"
   analysis="$(printf '%s' "$pod_log" | jq -R -s -c \
     --arg ns "$namespace" --arg claim "$claim" --arg root "$root" --arg image "$ANALYZER_IMAGE" --arg version "$DOTNET_DUMP_VERSION" \
-    --argjson text "$text" --argjson frames "$frames" --argjson maxGroups "$groups" --argjson ids "$ids" "$condense")" \
+    --argjson sectionBytes "$SECTION_BYTES" --argjson text "$text" --argjson frames "$frames" --argjson maxGroups "$groups" --argjson ids "$ids" "$condense")" \
     || hosting::die "the analysis text of ${job} could not be condensed (jq failed) — nothing is reported"
   fact="$(printf '%s' "$analysis" | gzip -9 -n | base64 | tr -d '\n')"
   [ "${#fact}" -gt "$FACT_BUDGET" ] || break
