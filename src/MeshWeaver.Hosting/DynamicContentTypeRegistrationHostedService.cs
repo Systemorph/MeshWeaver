@@ -44,6 +44,21 @@ public sealed class DynamicContentTypeRegistrationHostedService(
     private IDisposable? _startedRegistration;
     private IDisposable? _pass;
 
+    // 🚨 Plugins#2799 — the boot registration window opens HERE, at construction: the host
+    // resolves every hosted service before it starts any of them, so this precedes the boot-time
+    // readers (measured: they degrade before the pre-warmer starts). Resolved optionally, like
+    // everything else here — a host without the registry simply has no window. It is the same
+    // instance the stream cache records into (registered beside it, read by the host's
+    // content-types health check off this provider).
+    private readonly ContentDegradationRegistry? _degradations = OpenRegistrationWindow(services);
+
+    private static ContentDegradationRegistry? OpenRegistrationWindow(IServiceProvider services)
+    {
+        var degradations = services.GetService<ContentDegradationRegistry>();
+        degradations?.DeferWarningsUntilRegistrationSettles();
+        return degradations;
+    }
+
     /// <inheritdoc />
     public Task StartAsync(CancellationToken cancellationToken)
     {
@@ -60,6 +75,7 @@ public sealed class DynamicContentTypeRegistrationHostedService(
                 "DynamicContentTypeRegistration: OFF ({Key}=false) — a dynamic NodeType's content type "
                 + "registers on this replica only when one of its instances activates here",
                 EnabledConfigKey);
+            SettleDeferredWarnings(null);
             return;
         }
 
@@ -81,6 +97,7 @@ public sealed class DynamicContentTypeRegistrationHostedService(
         if (mesh is null)
         {
             logger.LogDebug("DynamicContentTypeRegistration: no mesh hub resolved — nothing to register");
+            SettleDeferredWarnings(null);
             return;
         }
         // No barrier registered means no bake to wait for: run straight away.
@@ -103,11 +120,50 @@ public sealed class DynamicContentTypeRegistrationHostedService(
                             "DynamicContentTypeRegistration: registered {TypePath} → {ContentType}",
                             outcome.TypePath, outcome.Detail);
                 },
-                ex => logger.LogWarning(ex,
-                    "DynamicContentTypeRegistration: the pass FAULTED after {Count} type(s) — the rest "
-                    + "register only when an instance activates on this replica, as before this pass existed",
-                    outcomes.Count),
-                () => Summarise(outcomes, DateTimeOffset.UtcNow - startedAt, pacing));
+                ex =>
+                {
+                    logger.LogWarning(ex,
+                        "DynamicContentTypeRegistration: the pass FAULTED after {Count} type(s) — the rest "
+                        + "register only when an instance activates on this replica, as before this pass existed",
+                        outcomes.Count);
+                    SettleDeferredWarnings(mesh);
+                },
+                () =>
+                {
+                    Summarise(outcomes, DateTimeOffset.UtcNow - startedAt, pacing);
+                    SettleDeferredWarnings(mesh);
+                });
+    }
+
+    /// <summary>
+    /// Closes the boot registration window (Plugins#2799) and writes, ONCE per NodeType, the
+    /// "stayed an untyped JsonElement" warning the read seams deferred — for exactly the types that
+    /// are still untyped now that the pass has had its chance. Same wording and the same
+    /// <see cref="Mesh.MeshNodeContentDegradedException"/> marker as the read seams, so a log query or the
+    /// CI trace sink that counts them counts these too; the count and the window of the reads it
+    /// covers are in the line, because one line now stands for every deferred read of the type.
+    /// </summary>
+    private void SettleDeferredWarnings(IMessageHub? mesh)
+    {
+        if (_degradations is null)
+            return;
+        var contentTypes = mesh?.ServiceProvider.GetService<Mesh.Services.IMeshContentTypeRegistry>()
+                           ?? services.GetService<Mesh.Services.IMeshContentTypeRegistry>();
+        // The seam is the one that read the path named (LastSeam), never the first seam paired with
+        // the last path — a type can degrade through GetStream first and GetQuery later.
+        foreach (var d in _degradations.SettleDeferredWarnings(contentTypes))
+        {
+            var seam = d.LastSeam ?? d.Seam;
+            logger.LogWarning(
+                new Mesh.MeshNodeContentDegradedException(seam, d.LastPath, d.NodeType, rawJson: null),
+                "{Seam}: Content for {Path} stayed an untyped JsonElement after deserialization "
+                + "(TypeRegistry lacks the $type discriminator) — the latest of {Count} read(s) of NodeType "
+                + "{NodeType} that degraded between {First:o} and {Last:o}, during the boot registration "
+                + "window (first through {FirstSeam}); the registration pass did not register it on this "
+                + "replica: downstream 'Content is X'/'as X' consumers will fail (renders empty) until an "
+                + "instance activates here",
+                seam, d.LastPath, d.Count, d.NodeType, d.WindowStart, d.LastAt, d.Seam);
+        }
     }
 
     private void Summarise(

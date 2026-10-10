@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# A stand-in `az` that models the ONE behaviour the fresh-sign-in fix depends on (Memex#132, the
+# failed -i backup): a session signed in from a federated assertion keeps presenting THAT assertion
+# for every later token, so once the assertion has expired every call fails with Entra's
+# AADSTS700024 — and a NEW sign-in from a fresh assertion works again. Nothing else of az is modelled.
+#
+#   HOSTING_AZS_STATE   directory: log (every invocation), session (the assertion the current session
+#                       holds), expired (one dead assertion per line), uploads (one line per upload)
+set -uo pipefail
+state="${HOSTING_AZS_STATE:?the az-session stub needs HOSTING_AZS_STATE}"
+expired() { [ -n "$1" ] && grep -qxF -- "$1" "$state/expired" 2>/dev/null; }
+aadsts() { echo "ERROR: AADSTS700024: Client assertion is not within its valid time range. (assertion ${1:-?} expired)" >&2; exit 1; }
+session="$(cat "$state/session" 2>/dev/null || true)"
+if [ "${1:-}" = "login" ]; then
+  tok=""; args=("$@")
+  for ((i = 0; i < ${#args[@]}; i++)); do [ "${args[$i]}" = "--federated-token" ] && tok="${args[$((i + 1))]:-}"; done
+  printf 'az login assertion=%s\n' "$tok" >> "$state/log"
+  expired "$tok" && aadsts "$tok"
+  printf '%s' "$tok" > "$state/session"
+  exit 0
+fi
+printf 'az %s (session=%s)\n' "$*" "$session" >> "$state/log"
+case "${1:-} ${2:-}" in
+  "account show") echo "00000000-0000-0000-0000-000000000000"; exit 0 ;;
+esac
+[ -n "$session" ] || { echo "ERROR: Please run 'az login' to setup account." >&2; exit 1; }
+expired "$session" && aadsts "$session"
+case "${1:-} ${2:-} ${3:-}" in
+  "keyvault secret show") echo "fake-server-password-NEVER-PRINTED"; exit 0 ;;
+  "storage blob upload")  echo "uploaded" >> "$state/uploads"; exit 0 ;;
+  "storage blob download")
+    file=""; while [ $# -gt 0 ]; do case "$1" in --file) file="${2:-}"; shift 2 ;; *) shift ;; esac; done
+    printf 'fake archive\n' > "$file"; exit 0 ;;
+esac
+echo "az-session stub: unexpected invocation: $*" >&2
+exit 1

@@ -380,13 +380,16 @@ public class OAuthConnectController(
                 // days surprises users who connect once and come back months later.
                 // Refresh-token flow isn't implemented yet; until it is, default to
                 // 1 year. Bump if needed via TokenLifetime below.
-                var label = $"OAuth: {request.client_id}";
+                // An unused token still expires after 30 days (policy oauth-idle-expiry,
+                // OAuthTokenLifetime): the one-year term bounds a token in use, the idle rule one
+                // nobody is using any more.
+                var label = OAuthTokenLifetime.LabelFor(request.client_id);
 
-                return tokens.CreateToken(
+                return tokens.CreateOAuthToken(
                         userId: entry.UserId,
                         userName: entry.UserName,
                         userEmail: entry.UserEmail,
-                        label: label,
+                        clientId: request.client_id,
                         expiresAt: DateTimeOffset.UtcNow.Add(TokenLifetime))
                     // 🚨 A BOUNDED number of live credentials per client (#1493, #5074). Every authorization used to
                     // mint a FRESH year-long token and leave the previous one live and listed, so a

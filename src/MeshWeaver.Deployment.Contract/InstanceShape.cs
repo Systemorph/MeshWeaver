@@ -669,6 +669,50 @@ public sealed record SignInSpec
 }
 
 /// <summary>
+/// Approval step-up, rendered to <c>Authentication__StepUp__*</c>. Every field is optional and an
+/// unstated one renders nothing, so the portal default applies — and the default of
+/// <see cref="Enabled"/> is OFF: nothing changes until a record declares it. Declare
+/// <see cref="EntraAuthenticationContext"/> BEFORE switching <see cref="Enabled"/> on, or every
+/// Microsoft-account approval is refused as "not configured" (fail closed, by design). The tenant
+/// admin's half — the authentication context and its Conditional Access policy — is listed on
+/// <c>Doc/Architecture/ApprovalStepUp</c>.
+/// </summary>
+public sealed record StepUpSpec
+{
+    /// <summary>Every approval requires a step-up receipt.</summary>
+    [Description("Require step-up on every approval")]
+    public bool? Enabled { get; init; }
+
+    /// <summary>The Conditional Access authentication context id (<c>c1</c>…<c>c99</c>) requested for Microsoft accounts.</summary>
+    [Description("Entra authentication context id (c1–c99)")]
+    public string? EntraAuthenticationContext { get; init; }
+
+    /// <summary>The tenant step-up tokens must come from; required when the sign-in tenant is multi-tenant.</summary>
+    [Description("Entra step-up tenant id — blank means the sign-in tenant")]
+    public string? EntraTenantId { get; init; }
+
+    /// <summary>Refuse a step-up token without an <c>amr</c> claim (portal default: true — <c>false</c> accepts <c>acrs</c> alone).</summary>
+    [Description("Require an amr claim")]
+    public bool? EntraRequireAmr { get; init; }
+
+    /// <summary>Comma-separated <c>amr</c> values that count as phishing-resistant.</summary>
+    [Description("Phishing-resistant amr values (comma-separated)")]
+    public string? EntraPhishingResistantAmr { get; init; }
+
+    /// <summary>Maximum age of the authentication when it arrives, in seconds (default 120).</summary>
+    [Description("Maximum authentication age, seconds")]
+    public int? MaxAuthAgeSeconds { get; init; }
+
+    /// <summary>How long a receipt stays consumable, in seconds (default 300).</summary>
+    [Description("Receipt lifetime, seconds")]
+    public int? ReceiptLifetimeSeconds { get; init; }
+
+    /// <summary>Whether the TOTP rung exists (default true).</summary>
+    [Description("Allow the TOTP fallback")]
+    public bool? AllowTotpFallback { get; init; }
+}
+
+/// <summary>
 /// System email through Microsoft Graph (client-secret flow). The sender must be a DEDICATED mail
 /// app holding <c>Mail.Send</c> as an admin-consented APPLICATION role — the portal's own sign-in
 /// app carries only delegated scopes and cannot send in this flow; wiring it here looks complete
@@ -817,6 +861,20 @@ public sealed record HostingOperatorSpec
     /// </summary>
     [Description("Maintainer: the one user id that may approve its own request")]
     public string? Maintainer { get; init; }
+
+    /// <summary>
+    /// Whether this is a CUSTOMER instance that governs itself (policy <c>customer-instance-governance</c>).
+    /// When true, the governed actions the instance REQUESTS from its control instance are approved by
+    /// the instance's OWN global administrators, attested by the instance over its signed lane, under
+    /// the sole-maintainer rule with <see cref="Maintainer"/> as the declared maintainer. No
+    /// administrator of the control instance is required for them. The instance may request only
+    /// <c>Restart</c>, <c>Recycle</c>, <c>Logs</c> and <c>Sample</c>; rolls and every other kind stay
+    /// with the control instance (policy <c>customer-instance-requests</c>). False, the default, keeps
+    /// the control-side approval rule unchanged, which is right for every instance Systemorph manages.
+    /// The control plane reads it from the record and nothing renders it into the portal's configuration.
+    /// </summary>
+    [Description("Customer-governed: the instance's own global administrators approve the actions it requests")]
+    public bool CustomerGoverned { get; init; }
 
     /// <summary>
     /// THE executor rule, shared by <see cref="DeploymentRecordExtensions.WithOperatorExecutor"/>

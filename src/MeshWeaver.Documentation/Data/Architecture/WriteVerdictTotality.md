@@ -709,13 +709,27 @@ RequestTimeout").
 
 | Handler | Bound | What the stalled verdict says |
 |---|---|---|
-| Create | `Timeout` from handler entry, over the chain up to the written row | `Unavailable`, naming the stage: `authorship-source`, `existence-read`, `partition-bootstrap`, `write-guards`, `validators`, `nodetype-resolution`, `write` |
+| Create | `Timeout` from handler entry, over the chain up to the written row | `Unavailable`, naming the stage: `authorship-source`, `existence-read`, `partition-bootstrap`, `write-guards`, `validators: <validator> (i/n)` (or `validators: resolving`), `nodetype-resolution`, `write` |
 | Create, after the write | the same deadline, as a VERDICT only — a post-creation handler still running is neither cancelled nor rolled back, because it may yet land its own writes | `Unavailable`: "written, a post-creation step had not finished, the outcome is unknown" — a later completion or compensation is not answered twice |
 | Copy | `Timeout` from handler entry | `Unknown` with the `Copy reached no verdict:` prefix, naming the stage and, for the create leg, the TARGET paths still outstanding |
 | Move | ONE move-wide deadline, `Timeout` from entry; its delete pre-flight's ladder moved one rung inside it (`NestedTimeout` stage, then leg, then absence probe) so the pre-flight can still name the silent descendant first | `Unavailable` naming the stage (`delete-preflight`, `copy`) when nothing at the source was touched; `Unknown` with "the copy had already landed" when it stalls in `delete-source`; a copy that ANSWERED a failure carries the copy's own reason and transcript, never re-derived from the wording |
 
 Each stage is also stamped on the request's fate trail (`CREATE_STAGE …`, `COPY_STAGE …`), so a trail
 that ends early names the leg that was running instead of ending at `CREATE_CHAIN_SUBSCRIBED`.
+
+**The validators stage names the validator it is waiting on** (MeshWeaver#6391). The create runs its
+`INodeValidator`s one after another (`Concat`), so `stalled at stage 'validators'` named every
+registered validator at once. On memex.systemorph.com it fired ten
+times in three minutes on one freshly booted pod, for System-written creates
+(`Admin/_Notification/…`, `Admin/PlatformVersion/_Activity/startup-…`, `Doc/_Activity/import-…`),
+and every core validator answers SYNCHRONOUSLY for a System write — so the reading could not even say
+whether a validator was silent or the chain stalled before any was asked. The stage now reads
+`validators: resolving` while the scoped validators are constructed (DI), then
+`validators: <TypeName> (i/n)` from the moment the chain subscribes to each one, on both the stalled
+verdict and the trail. A stall in `resolving` is a blocked construction, not a silent validator; a
+stall on a named validator is that validator's read. `LifecycleRequestsAlwaysReachAVerdictTest`
+pins it: the silent validator's type name is in the verdict, and the assertion fails on the code
+before the change, which said only `validators`.
 
 **The deadline must release the hub after a prompt create.** Rx's absolute `Timeout` schedules a
 `LocalScheduler.WorkItem` that can remain in its priority queue until the deadline even after the

@@ -30,11 +30,13 @@ THE RULE (all three must hold, or the check is RED — it never skips)
    below for what requiring a recognisable shape cost on 2026-09-18. Only an EMPTY body is
    unrecognised — there is then nothing to read as either a review or a refusal.
    🚨 With NO reviewer thread on the pull request, the review must be a COPILOT review of the
-   CURRENT head (policy `review-evidence-current-head`, #4730): "reviewed, nothing found" and
-   "never reviewed" both read "0 unanswered threads", and the only evidence that separates them is
-   a completed Copilot review object on the head now with zero findings. A clean review of an
-   earlier head, the internal reviewer's clean review, a degradation run or elapsed time is not it;
-   the waiver label is the escape. With findings, the threads prove the review (review-once).
+   pull request — of ANY of its heads (policy `review-evidence-any-head`, #4730): "reviewed,
+   nothing found" and "never reviewed" both read "0 unanswered threads", and the only evidence that
+   separates them is a completed Copilot review object with zero findings. A re-review on every
+   push is NOT required — a clean review of an earlier head, followed by a push (a merge of main,
+   a fix), stays reviewed. The internal reviewer's clean review, a degradation run or elapsed time
+   is not that evidence; the waiver label is the escape. With findings, the threads prove the
+   review (review-once).
 2. Every inline thread the reviewer STARTED (a comment by the reviewer with no `in_reply_to_id`)
    has at least one reply by a non-bot account (`user.type == "User"`). A reply that says nothing
    counts; that limitation is known and accepted (the decision on #4299).
@@ -51,7 +53,7 @@ through the REST issue-events API to the account that applied it, and honoured o
 account's `role_name` on this repository is `admin` or `maintain`. Threads the reviewer DID open
 still need replies under a waiver. The waiver is never automatic.
 
-THE REVIEWER-UNAVAILABLE DEGRADATION — RETIRED for this gate (policy review-evidence-current-head)
+THE REVIEWER-UNAVAILABLE DEGRADATION — RETIRED for this gate (policy review-evidence-any-head)
 ------------------------------------------------------------------------------------------
 🚨 Since #4730 the degradation run no longer releases condition 1 of the MERGE gate: it says the
 reviewer did NOT review, and "never reviewed" is exactly what the gate exists to refuse. The stage
@@ -106,7 +108,8 @@ ONE REVIEW PER PULL REQUEST — policy `review-once-per-pull-request`
 With `review_on_push: true` every push bought a full new review round, and each round's threads
 blocked the merge again until answered. The rule now runs with `review_on_push: false`, and every
 gate in this file counts a landed Copilot review against ANY head of the pull request as "reviewed"
-(`copilot_review_of_pull_request`; the merge gate's condition 1 never looked at the head). Condition
+(`copilot_review_of_pull_request`; the merge gate's condition 1 reads every review on the pull
+request — policy `review-evidence-any-head`). Condition
 2 is unchanged: every reviewer thread on the pull request, whichever head it was opened on, needs a
 person's reply. Doc/Architecture/ReviewFindingsAnswered → "One review per pull request".
 
@@ -297,11 +300,11 @@ class Verdict:
     #: First lines of the reviewer posts that were REFUSALS, when no review landed. Empty when a
     #: review landed, when the reviewer has not posted at all, or when a waiver released the state.
     refused: tuple[str, ...] = ()
-    #: Set when the ONLY review on file found nothing but is not a Copilot review of the CURRENT head
-    #: (policy review-evidence-current-head, #4730) and that state stands (no waiver). A structured
-    #: field for the same reason as `refused`: its remedy is a fresh review of this head, which no
-    #: wait delivers (the ruleset reviews once per pull request), so the wait must not run for it.
-    stale_clean: str = ""
+    #: Set when the ONLY clean review on file is not a Copilot review of this pull request (the
+    #: internal reviewer's; policy review-evidence-any-head, #4730) and that state stands (no
+    #: waiver). A structured field for the same reason as `refused`: its remedy is a Copilot review,
+    #: which no wait delivers (the ruleset requests one at open), so the wait must not run for it.
+    not_copilot: str = ""
 
 
 def is_degradation_app(app: dict | None) -> bool:
@@ -346,30 +349,32 @@ def evaluate(pr: dict, reviews: list, comments: list, waiver: Waiver, as_of: str
             if is_reviewer(r.get("user")) and r.get("state") != "PENDING" and not_after(r.get("submitted_at"), as_of)]
     kinds = [(classify_review_body(r.get("body")), r) for r in mine]
     landed = [r for k, r in kinds if k == "landed"]
-    # Policy `review-evidence-current-head` (#4730): with NO finding on the pull request, the only
+    # Policy `review-evidence-any-head` (#4730): with NO finding on the pull request, the only
     # evidence that separates "reviewed, nothing found" from "never reviewed" is a completed Copilot
-    # review object on the CURRENT head — so a clean review of an earlier head, or the internal
-    # reviewer's clean review, is not that evidence. With findings, the threads themselves prove a
+    # review object on the pull request — on ANY of its heads, so a push after the review (a merge
+    # of main) does not re-open the question; a re-review per push is not required. The internal
+    # reviewer's clean review is not that evidence. With findings, the threads themselves prove a
     # review happened, and condition 2 decides (policy review-once-per-pull-request, unchanged).
     roots, unanswered = reviewer_threads(comments, as_of)
     head = str((pr.get("head") or {}).get("sha") or "")
-    clean_on_head = copilot_review_on(reviews, head, as_of) if head else None
-    stale_clean = ""
-    if landed and not roots and clean_on_head is None:
+    clean_copilot = copilot_review_of_pull_request(reviews, head, as_of)
+    not_copilot = ""
+    if landed and not roots and clean_copilot is None:
         r = landed[-1]
-        who = "Copilot" if (r.get("user") or {}).get("id") == REVIEWER_ACCOUNT_ID else f"@{(r.get('user') or {}).get('login')}"
-        stale_clean = (f"review {r.get('id')} by {who} at {r.get('submitted_at')} on {str(r.get('commit_id'))[:10]} "
-                       f"found nothing, but it is not a Copilot review of the CURRENT head {head[:10] or '(unknown)'}")
+        not_copilot = (f"review {r.get('id')} by @{(r.get('user') or {}).get('login')} at {r.get('submitted_at')} "
+                       f"on {str(r.get('commit_id'))[:10]} found nothing, but it is not a Copilot review")
         landed = []
     if landed:
-        r = clean_on_head if (clean_on_head is not None and not roots) else landed[-1]
-        notes.append(f"automatic review landed: review {r.get('id')} at {r.get('submitted_at')} on {str(r.get('commit_id'))[:10]}"
-                     + (" — reviewed, nothing found: a Copilot review of the current head with zero findings "
-                        "(policy review-evidence-current-head)" if not roots else ""))
+        r = clean_copilot if (clean_copilot is not None and not roots) else landed[-1]
+        on = str(r.get("commit_id") or "")[:10]
+        notes.append(f"automatic review landed: review {r.get('id')} at {r.get('submitted_at')} on {on}"
+                     + ((" — reviewed, nothing found: a Copilot review with zero findings"
+                         + ("" if head and on == head[:10] else f" (of an earlier head; current head {head[:10] or '(unknown)'})")
+                         + " (policy review-evidence-any-head)") if not roots else ""))
     else:
-        if stale_clean:
-            why = ("no evidence of a review of this head — \"reviewed, nothing found\" is ONLY a completed Copilot review "
-                   f"on the current head with zero findings (policy review-evidence-current-head): {stale_clean}")
+        if not_copilot:
+            why = ("no Copilot review of this pull request — \"reviewed, nothing found\" is ONLY a completed Copilot review "
+                   f"with zero findings, on any head (policy review-evidence-any-head): {not_copilot}")
         elif not mine:
             why = "the automatic review has not landed — no review by the automatic reviewer on this pull request"
         else:
@@ -390,28 +395,28 @@ def evaluate(pr: dict, reviews: list, comments: list, waiver: Waiver, as_of: str
         # requests (measured 2026-10-08: settle #3191 had no requested reviewer and no review 20 minutes in,
         # so a refusal-only rule held it forever). This is NOT OWED, decided on provenance (every file
         # generated, every commit the App's) — it never claims the pull request was reviewed, so it sits
-        # outside policy review-evidence-current-head, which governs what counts as "reviewed".
+        # outside policy review-evidence-any-head, which governs what counts as "reviewed".
         # The internal reviewer's "Reviewer unavailable" degradation, by contrast, released condition 1
         # for a person's pull request that NOBODY reviewed — it read "never reviewed" as enough, so it
         # no longer releases this gate (#4730); the `review-waived` label is the escape.
         generated, generated_why = generated_only(pr, files, commits) if is_generated_bot(pr.get("user")) else (False, "")
         # The no-request signal applies only when the reviewer has posted NOTHING: an unrecognised response
         # (an empty body) also removes the pending request, and must stay "not a review" (#6336 review).
-        # A generated-only head whose earlier head Copilot reviewed clean is NOT OWED for the same reason:
-        # the settle job rewrites the head on every main merge, and there is still nothing to review.
-        if generated and (stale_clean or any(k == "refused" for k, _ in kinds) or (not mine and no_review_coming(pr, as_of))):
+        # A generated-only head with only the internal reviewer's clean review is NOT OWED for the same
+        # reason: there is still nothing to review.
+        if generated and (not_copilot or any(k == "refused" for k, _ in kinds) or (not mine and no_review_coming(pr, as_of))):
             notes.append(f"NOT OWED: {why}. {generated_why} — nothing to review (generated_only)")
         elif granted:
             notes.append(f"WAIVED: {why}. {message}")
         else:
             reasons.append(why + (f". {message}" if message else ""))
-            stale_reported = stale_clean
+            stale_reported = not_copilot
             # Only when the state actually STANDS: a waived refusal is not an unreviewable pull
             # request, it is a reviewed-enough one, and saying otherwise would re-create the
             # confusion in the other direction.
-            # A review DID land (stale_clean), so an older refusal is history, not this state: the
-            # reader must be told "no review of this head", never "unreviewable" (#6371 review).
-            if not stale_clean:
+            # A review DID land (not_copilot), so an older refusal is history, not this state: the
+            # reader must be told "no Copilot review", never "unreviewable" (#6371 review).
+            if not not_copilot:
                 refused += [first_line(r.get("body")) for k, r in kinds if k == "refused"]
 
     # 2 — is every thread the reviewer started answered? (`roots`/`unanswered` were read above)
@@ -420,7 +425,7 @@ def evaluate(pr: dict, reviews: list, comments: list, waiver: Waiver, as_of: str
         reasons.append(f"{len(unanswered)} of {len(roots)} thread(s) opened by the automatic reviewer have no reply from a person")
 
     return Verdict(green=not reasons, reasons=tuple(reasons), notes=tuple(notes), unanswered=unanswered,
-                   refused=tuple(refused), stale_clean=stale_reported)
+                   refused=tuple(refused), not_copilot=stale_reported)
 
 
 def listing_incomplete(pr: dict, comments: list) -> str | None:
@@ -495,7 +500,7 @@ def waiting_would_help(verdict: Verdict) -> bool:
     """
     return (not verdict.green
             and not verdict.refused
-            and not verdict.stale_clean
+            and not verdict.not_copilot
             and len(verdict.reasons) == 1
             and "has not landed" in verdict.reasons[0])
 
@@ -1056,6 +1061,79 @@ def generated_only(pr: dict, files: list | None, commits: list | None) -> tuple[
             continue
         return False, f"{name} is not a generated file"
     return True, f"{len(files)} generated file(s) by {pr['user'].get('login')}, every commit the App's"
+
+
+# 🚨 ARMING A GENERATED-ONLY PULL REQUEST (`--arm-generated`, called by auto-arm.yml's second job).
+# The control plane's PR steward used to be the only thing that armed the settle/stamp pull requests,
+# and it is switched off fleet-wide (it spent the model budget); Plugins #3236 then sat green and
+# unarmed for ~10.5 h and Plugins published nothing for ~13.5 h. A generated-only pull request owes no
+# review (`generated_only`, above — the same provenance rule the stage gate and the required verdict
+# apply), so arming one decides nothing a review would have decided; the required checks still gate
+# the merge. Everything else stays the control plane's decision: this verdict is FALSE for any pull
+# request the rule does not positively prove generated, and for every doubt about the reads.
+def arm_generated_verdict(pr: dict, files: list | None, commits: list | None,
+                          head_after: str | None) -> tuple[bool, str]:
+    """(True, why) only when a pull request may be armed with no review: generated-only by the App,
+    open, not a draft, from a branch of this repository, onto the default branch, and its head did not
+    move while its files and commits were read. Pure; fails closed."""
+    if not is_generated_bot(pr.get("user")):
+        return False, "not authored by the generated-files App — arming stays the control plane's decision"
+    if pr.get("state") != "open":
+        return False, f"it is {pr.get('state')!r}, not open"
+    if pr.get("draft") is not False:
+        return False, "it is a draft (or its draft flag is unread) — a draft is the author's own hold"
+    head, base = pr.get("head") or {}, pr.get("base") or {}
+    head_repo = (head.get("repo") or {}).get("full_name")
+    base_repo = (base.get("repo") or {}).get("full_name")
+    if not head_repo or head_repo != base_repo:
+        return False, f"its head is not a branch of this repository ({head_repo!r} vs {base_repo!r})"
+    default = (base.get("repo") or {}).get("default_branch")
+    if not default or base.get("ref") != default:
+        return False, f"it targets {base.get('ref')!r}, not the default branch {default!r}"
+    sha = str(head.get("sha") or "")
+    if not re.fullmatch(r"[0-9a-f]{40}", sha):
+        return False, "it reported no head sha"
+    # Completeness is PROVEN here, not inferred: `generated_only` reads a missing count as zero, so a
+    # partial listing of a payload without `changed_files`/`commits` would pass it (#6412 review).
+    for field, listing in (("changed_files", files), ("commits", commits)):
+        count = pr.get(field)
+        if not isinstance(count, int) or isinstance(count, bool) or count <= 0:
+            return False, f"its `{field}` count is {count!r}, not a positive number — the listing cannot be shown complete"
+        if not isinstance(listing, list) or len(listing) != count:
+            return False, f"the {field} listing returned {len(listing) if isinstance(listing, list) else None} of {count}"
+    ok, why = generated_only(pr, files, commits)
+    if not ok:
+        return False, why
+    if head_after != sha:
+        return False, f"its head moved from {sha[:10]} to {str(head_after)[:10]} while its files were read"
+    return True, why
+
+
+def run_arm_generated(repo: str, number: int) -> int:
+    """Exit 0 with `arm=true|false` (+ `head=`) on $GITHUB_OUTPUT; exit 1 (RED, nothing armed) when an
+    App pull request's reads fail. A person's pull request is decided `false` without further reads."""
+    head = ""
+    try:
+        gh = Gh(repo)
+        pr = gh.api(f"pulls/{number}")
+        if not isinstance(pr, dict) or pr.get("number") != number:
+            raise ReadError(f"pulls/{number} did not return pull request #{number}")
+        files = commits = None
+        head_after = None
+        if is_generated_bot(pr.get("user")):
+            files = gh.api(f"pulls/{number}/files?per_page=100", paginate=True)
+            commits = gh.api(f"pulls/{number}/commits?per_page=100", paginate=True)
+            head_after = str(((gh.api(f"pulls/{number}") or {}).get("head") or {}).get("sha") or "")
+        arm, why = arm_generated_verdict(pr, files, commits, head_after)
+        head = str((pr.get("head") or {}).get("sha") or "") if arm else ""
+    except (ReadError, KeyError, TypeError, ValueError) as e:
+        print(f"::error::cannot read #{number}, so it is NOT armed: {e}")
+        _append("GITHUB_OUTPUT", "arm=false\nhead=\n")
+        return 1
+    print(f"{'ARM' if arm else 'not armed'} #{number}: {why}")
+    _append("GITHUB_OUTPUT", f"arm={'true' if arm else 'false'}\nhead={head}\n")
+    _append("GITHUB_STEP_SUMMARY", f"{'✅ arming' if arm else 'ℹ️ not arming'} #{number}: {why}\n")
+    return 0
 
 
 def stage_readiness(pr: dict, comments: list, check_runs, now: str, since: str,
@@ -1712,8 +1790,8 @@ def render(number: int, pr: dict, verdict: Verdict, author_role: str | None, as_
     head = f"#{number} ({'draft' if pr.get('draft') else pr.get('state')}) head {str((pr.get('head') or {}).get('sha'))[:10]}"
     state = ("GREEN" if verdict.green else
              "RED — UNREVIEWABLE (the reviewer REFUSED to review this pull request)" if verdict.refused else
-             "RED — NO REVIEW OF THIS HEAD (the clean review on file is not a Copilot review of the current head)"
-             if verdict.stale_clean else "RED")
+             "RED — NO COPILOT REVIEW (the clean review on file is not a Copilot review of this pull request)"
+             if verdict.not_copilot else "RED")
     lines = [f"check-review-answered: {head}{' as of ' + as_of if as_of else ''} — {state}"]
     if author_role is not None:
         lines.append(f"  waiver path readable: author @{(pr.get('user') or {}).get('login')} holds `{author_role or 'none'}`")
@@ -1745,20 +1823,18 @@ def guidance(verdict: Verdict) -> list[str]:
                    "answer; pushing, re-running this check and replying to threads all leave it exactly here. It "
                    "clears when the reviewer can review again — a maintainer re-requests the review then, or applies "
                    f"the `{WAIVER_LABEL}` label — never an agent, and never automatically.")
-    elif verdict.stale_clean:
-        # 🚨 Policy review-evidence-current-head (#4730). The ruleset reviews ONCE per pull request
-        # (`review_on_push: false`), so waiting delivers nothing here, and the clean review on file
-        # says nothing about the commits pushed after it — there are no threads to show it read them.
-        out.append("a Copilot review of THIS head — \"reviewed, nothing found\" is only ever a completed Copilot review "
-                   "of the current head with zero findings, never a clean review of an earlier head, the internal "
-                   "reviewer's, or elapsed time. Waiting does not deliver one (the ruleset reviews once per pull "
-                   "request): a maintainer re-requests the Copilot review, or applies the "
-                   f"`{WAIVER_LABEL}` label — never an agent, and never automatically.")
+    elif verdict.not_copilot:
+        # 🚨 Policy review-evidence-any-head (#4730). The internal reviewer's clean review is not
+        # Copilot's, and the ruleset requests Copilot once, at open — waiting delivers nothing here.
+        out.append("a Copilot review of this pull request — \"reviewed, nothing found\" is only ever a completed Copilot "
+                   "review with zero findings (on any head), never the internal reviewer's clean review or elapsed time. "
+                   "Waiting does not deliver one (the ruleset reviews once per pull request): a maintainer re-requests the "
+                   f"Copilot review, or applies the `{WAIVER_LABEL}` label — never an agent, and never automatically.")
     elif "has not landed" in text:
         out.append("the automatic review must land. It usually arrives minutes after the pull request opens; if the "
                    "reviewer refused (quota) or cannot review this change, a maintainer re-requests the review, or applies "
                    f"the `{WAIVER_LABEL}` label to waive it — never an agent, and never automatically. Elapsed time and "
-                   "a \"Reviewer unavailable\" run release nothing (policy review-evidence-current-head).")
+                   "a \"Reviewer unavailable\" run release nothing (policy review-evidence-any-head).")
     if verdict.unanswered:
         out.append("reply to each unanswered thread (fixed, or why not). Resolving a thread is not a reply, and a waiver "
                    "does not release a finding the reviewer did post.")
@@ -1772,8 +1848,8 @@ def summary_markdown(number: int, verdict: Verdict) -> str:
     state = ("✅ green" if verdict.green
              else "❌ red — **unreviewable right now**: the reviewer refused to review this pull request"
              if verdict.refused
-             else "❌ red — **no review of this head**: the clean review on file is not a Copilot review of the current head"
-             if verdict.stale_clean else "❌ red")
+             else "❌ red — **no Copilot review**: the clean review on file is not a Copilot review of this pull request"
+             if verdict.not_copilot else "❌ red")
     out = [f"### Automatic review answered — #{number}: {state}", ""]
     out += [f"- {r}" for r in verdict.reasons] + [f"- {n}" for n in verdict.notes]
     guide = guidance(verdict)
@@ -1982,10 +2058,10 @@ def self_test() -> int:
          [_review(user={"login": "Copilot", "type": "User", "id": 1})], [])
 
     # The internal GLM-5.3 reviewer (systemorph-com[bot]) — accepted alongside Copilot (policy `internal-code-review`).
-    # …but with NO finding it is not "reviewed, nothing found" (policy review-evidence-current-head, #4730).
-    case("the internal reviewer's clean review alone is not the evidence", ("no evidence of a review of this head",), _pr(0),
+    # …but with NO finding it is not "reviewed, nothing found" (policy review-evidence-any-head, #4730).
+    case("the internal reviewer's clean review alone is not the evidence", ("no Copilot review of this pull request",), _pr(0),
          [_review("**Internal review (GLM-5.3)** — no blocking findings.", user=INTERNAL_REVIEWER_USER)], [])
-    case("the internal reviewer at CHANGES_REQUESTED with no thread is not the evidence either", ("no evidence of a review of this head",), _pr(0),
+    case("the internal reviewer at CHANGES_REQUESTED with no thread is not the evidence either", ("no Copilot review of this pull request",), _pr(0),
          [_review("**Internal review (GLM-5.3)** — 1 blocking finding.", user=INTERNAL_REVIEWER_USER, state="CHANGES_REQUESTED")], [])
     case("an internal-reviewer thread with no reply is unanswered", (UNANSWERED,), _pr(1),
          [_review(user=INTERNAL_REVIEWER_USER)], [_comment(1, INTERNAL_REVIEWER_USER)], mention=("1 of 1",))
@@ -1997,35 +2073,44 @@ def self_test() -> int:
     case("a User account named systemorph-com[bot] is not the reviewer", (NOT_LANDED,), _pr(0),
          [_review(user={"login": "systemorph-com[bot]", "type": "User", "id": 7})], [])
 
-    # 🚨 Policy review-evidence-current-head (#4730): "reviewed, nothing found" is ONLY a completed
-    # Copilot review object on the CURRENT head with zero findings. The internal reviewer's
-    # "Reviewer unavailable" degradation (MeshWeaver.Feedback#86) used to release condition 1 — it
-    # read "never reviewed" as enough — and a clean review of an EARLIER head said nothing about the
-    # commits pushed after it. Each case below pins one of those, with a positive control beside it
-    # that differs in exactly the field under test.
-    EVIDENCE = "review-evidence-current-head"
+    # 🚨 Policy review-evidence-any-head (#4730): "reviewed, nothing found" is ONLY a completed
+    # Copilot review object on the pull request with zero findings — on ANY of its heads, because a
+    # re-review per push is not required (a merge of main after a clean review stays reviewed). The
+    # internal reviewer's "Reviewer unavailable" degradation (MeshWeaver.Feedback#86) used to release
+    # condition 1 — it read "never reviewed" as enough. Each case below pins one of those, with a
+    # control beside it that differs in exactly the field under test.
+    EVIDENCE = "review-evidence-any-head"
     older_clean = dict(_review(rid=61), commit_id="b" * 40)
     case("EVIDENCE: a clean Copilot review of the CURRENT head -> green, and named as such", GREEN, _pr(0), [_review()], [],
-         mention=("reviewed, nothing found", EVIDENCE), never_says=("NO REVIEW OF THIS HEAD",))
-    case("EVIDENCE NEG: a clean Copilot review of an EARLIER head -> red, no review of this head", ("no evidence of a review of this head",),
-         _pr(0), [older_clean], [], mention=("bbbbbbbbbb", EVIDENCE),
-         says=("RED — NO REVIEW OF THIS HEAD", "no review of this head", "re-requests the Copilot review"),
-         never_says=("usually arrives minutes after", "RED — UNREVIEWABLE"))
-    case("EVIDENCE NEG: refusal, then a clean review of an EARLIER head -> 'no review of this head', not 'unreviewable'",
-         ("no evidence of a review of this head",), _pr(0),
+         mention=("reviewed, nothing found", EVIDENCE), never_says=("NO COPILOT REVIEW", "earlier head"))
+    case("EVIDENCE: a clean Copilot review of an EARLIER head, then a push -> green (no re-review per push)", GREEN,
+         _pr(0), [older_clean], [], mention=("reviewed, nothing found", "earlier head", "bbbbbbbbbb", EVIDENCE),
+         never_says=("NO COPILOT REVIEW", "NO REVIEW OF THIS HEAD", "re-requests the Copilot review"))
+    case("EVIDENCE NEG: no review EVER (no review object at all) -> red", (NOT_LANDED,), _pr(0), [], [],
+         never_says=("reviewed, nothing found",))
+    case("EVIDENCE NEG: a REFUSAL on an earlier head, then a push -> still red (a refusal is no review)", (NOT_LANDED,),
+         _pr(0), [dict(_review(REFUSAL_QUOTA, rid=66), commit_id="b" * 40)], [], says=("RED — UNREVIEWABLE",))
+    case("EVIDENCE: refusal, then a clean review of an EARLIER head -> green, the refusal is history", GREEN, _pr(0),
          [_review(REFUSAL_QUOTA, rid=64, at="2026-09-14T11:00:00Z"), dict(_review(rid=65), commit_id="b" * 40)], [],
-         says=("RED — NO REVIEW OF THIS HEAD", "re-requests the Copilot review"),
          never_says=("RED — UNREVIEWABLE", "unreviewable right now", "REFUSED to review it"))
-    case("EVIDENCE: an earlier clean review AND one of the current head -> green", GREEN, _pr(0),
-         [older_clean, _review(rid=62, at="2026-09-14T14:00:00Z")], [], mention=("reviewed, nothing found",))
-    case("EVIDENCE NEG: the internal reviewer's clean review of the head is not Copilot's -> red", ("no evidence of a review of this head",),
+    case("EVIDENCE: an earlier clean review AND one of the current head -> green, the current one named", GREEN, _pr(0),
+         [older_clean, _review(rid=62, at="2026-09-14T14:00:00Z")], [], mention=("reviewed, nothing found", "review 62"),
+         never_says=("earlier head",))
+    case("EVIDENCE NEG: the internal reviewer's clean review is not Copilot's -> red", ("no Copilot review of this pull request",),
          _pr(0), [_review("**Internal review (GLM-5.3)** — no blocking findings.", user=INTERNAL_REVIEWER_USER)], [],
-         mention=("@systemorph-com[bot]",))
-    case("EVIDENCE NEG: a pull request with no head sha read fails closed", ("no evidence of a review of this head",),
-         dict(_pr(0), head={}), [_review()], [])
-    case("EVIDENCE: the waiver still releases a stale clean review, and it is not called stale", GREEN, _pr(0, [WAIVER_LABEL]),
-         [older_clean], [], Waiver(True, (_labeled(PERSON),), {"rbuergi": "admin"}), mention=("WAIVED",),
-         never_says=("NO REVIEW OF THIS HEAD", "no review of this head"))
+         mention=("@systemorph-com[bot]",), says=("RED — NO COPILOT REVIEW", "re-requests the Copilot review"),
+         never_says=("usually arrives minutes after", "RED — UNREVIEWABLE"))
+    case("EVIDENCE NEG: the internal reviewer's clean review of an EARLIER head is not Copilot's either -> red",
+         ("no Copilot review of this pull request",), _pr(0),
+         [dict(_review("**Internal review (GLM-5.3)** — no blocking findings.", user=INTERNAL_REVIEWER_USER), commit_id="b" * 40)], [])
+    case("EVIDENCE NEG: refusal, then the internal reviewer's clean review -> 'no Copilot review', not 'unreviewable'",
+         ("no Copilot review of this pull request",), _pr(0),
+         [_review(REFUSAL_QUOTA, rid=64, at="2026-09-14T11:00:00Z"),
+          _review("**Internal review (GLM-5.3)** — no blocking findings.", user=INTERNAL_REVIEWER_USER, rid=65)], [],
+         says=("RED — NO COPILOT REVIEW",), never_says=("RED — UNREVIEWABLE", "REFUSED to review it"))
+    case("EVIDENCE: the waiver still releases an internal-only clean review", GREEN, _pr(0, [WAIVER_LABEL]),
+         [_review("**Internal review (GLM-5.3)** — no blocking findings.", user=INTERNAL_REVIEWER_USER)], [],
+         Waiver(True, (_labeled(PERSON),), {"rbuergi": "admin"}), mention=("WAIVED",), never_says=("NO COPILOT REVIEW",))
     case("EVIDENCE: WITH findings, an earlier head's review + every thread answered -> green (review-once)", GREEN, _pr(2),
          [older_clean], [_comment(1), _comment(11, PERSON, 1)])
     case("EVIDENCE NEG: the 'Reviewer unavailable' degradation no longer releases condition 1", (NOT_LANDED,), _pr(0), [], [],
@@ -2385,6 +2470,48 @@ def self_test() -> int:
     ok = v.mode == "fallback"
     failures += 0 if ok else 1
     print(f"self-test {'ok' if ok else 'FAIL':4} stage: {'an App PR falls back on the PR clock, not the head clock':53} got={v.mode}")
+    # ── arming a generated-only App PR with no review (`--arm-generated`): ARM only on positive proof.
+    SHA = "a" * 40
+    def apr(**kw):
+        repo = {"full_name": "Systemorph/MeshWeaver.Plugins", "default_branch": "main"}
+        base = dict(gpr(), state="open", draft=False, commits=1, head={"sha": SHA, "repo": repo},
+                    base={"ref": "main", "repo": repo})
+        base.update(kw)
+        return base
+    def arm_case(name, expect, pr, files, commits, head_after=SHA):
+        nonlocal failures
+        got, why = arm_generated_verdict(pr, files, commits, head_after)
+        ok = got is expect
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} arm: {name:55} expected={expect} got={got} ({why})")
+    arm_case("settle PR (App, locks only) -> ARM", True, apr(), LOCKS, BOT_COMMITS)
+    arm_case("floor stamp (App, floor lines only) -> ARM", True, apr(), FLOOR, BOT_COMMITS)
+    arm_case("a PERSON's PR touching only locks -> never", False, apr(user=HUMAN), LOCKS, [{"author": HUMAN}])
+    arm_case("another bot's PR (systemorph-com) -> never", False,
+             apr(user={"login": "systemorph-com[bot]", "type": "Bot", "id": 1}), LOCKS, BOT_COMMITS)
+    arm_case("App PR with one hand-written file (mixed) -> never", False, apr(),
+             LOCKS[:1] + [{"filename": "Hosting/X.cs", "patch": "+x"}], BOT_COMMITS)
+    arm_case("App PR with a person's commit -> never", False, apr(commits=2), LOCKS, BOT_COMMITS + [{"author": HUMAN}])
+    arm_case("changed_files count missing, partial list -> never", False,
+             {k: v for k, v in apr().items() if k != "changed_files"}, LOCKS[:1], BOT_COMMITS)
+    arm_case("commits count missing -> never", False, {k: v for k, v in apr().items() if k != "commits"}, LOCKS, BOT_COMMITS)
+    arm_case("more files listed than reported -> never", False, apr(changed_files=1), LOCKS, BOT_COMMITS)
+    arm_case("unreadable file list (None) -> never", False, apr(), None, BOT_COMMITS)
+    arm_case("empty file list -> never", False, apr(), [], BOT_COMMITS)
+    arm_case("short file list (2 of 3) -> never", False, apr(changed_files=3), LOCKS, BOT_COMMITS)
+    arm_case("unreadable commit list -> never", False, apr(), LOCKS, None)
+    arm_case("index.json with no patch (too large to diff) -> never", False, apr(changed_files=1),
+             [{"filename": "AI/index.json"}], BOT_COMMITS)
+    arm_case("draft -> never", False, apr(draft=True), LOCKS, BOT_COMMITS)
+    arm_case("draft flag missing -> never", False, {k: v for k, v in apr().items() if k != "draft"}, LOCKS, BOT_COMMITS)
+    arm_case("closed -> never", False, apr(state="closed"), LOCKS, BOT_COMMITS)
+    arm_case("head from a fork -> never", False,
+             apr(head={"sha": SHA, "repo": {"full_name": "someone/MeshWeaver.Plugins"}}), LOCKS, BOT_COMMITS)
+    arm_case("base is not the default branch -> never", False,
+             apr(base={"ref": "release", "repo": {"full_name": "Systemorph/MeshWeaver.Plugins", "default_branch": "main"}}),
+             LOCKS, BOT_COMMITS)
+    arm_case("head moved while the files were read -> never", False, apr(), LOCKS, BOT_COMMITS, head_after="b" * 40)
+    arm_case("head unread after the files -> never", False, apr(), LOCKS, BOT_COMMITS, head_after=None)
     # ── the REQUIRED verdict (`evaluate`) agrees with the stage gate on generated-only App PRs (Plugins #3044):
     # the reviewer refuses a lock-only pull request, and without this the settle/stamp PRs sat red until a
     # person waived them — main published nothing in between. NEGATIVE CONTROLS: the same refusal on a
@@ -2420,8 +2547,11 @@ def self_test() -> int:
     stale = [dict(_review(rid=63), commit_id="b" * 40)]
     verdict_case("settle PR rewritten after a clean review of an EARLIER head -> GREEN (not owed)", True, gpr(), LOCKS, BOT_COMMITS,
                  want_refused=False, reviews=stale)
-    verdict_case("NEGATIVE CONTROL: a person's lock PR after a clean earlier-head review -> RED", False, gpr(user=HUMAN), LOCKS,
+    verdict_case("a person's lock PR after a clean earlier-head review -> GREEN (review-evidence-any-head)", True, gpr(user=HUMAN), LOCKS,
                  [{"author": HUMAN}], want_refused=False, reviews=stale)
+    verdict_case("NEGATIVE CONTROL: a person's lock PR, only the internal reviewer's clean review -> RED", False, gpr(user=HUMAN), LOCKS,
+                 [{"author": HUMAN}], want_refused=False,
+                 reviews=[_review("**Internal review (GLM-5.3)** — no blocking findings.", user=INTERNAL_REVIEWER_USER)])
     verdict_case("NEGATIVE CONTROL: settle PR, payload without requested_reviewers -> RED (not proven empty)", False,
                  gpr(created="2026-10-04T08:00:00Z"), LOCKS, BOT_COMMITS, reviews=[])
     v_replay = evaluate(dict(gpr(created="2026-10-04T08:00:00Z"), requested_reviewers=[]), [], [], NO_WAIVER, "2026-10-04T09:00:00Z", (), LOCKS, BOT_COMMITS)
@@ -2796,6 +2926,9 @@ def main(argv=None) -> int:
                     help="while the ONLY thing missing is the reviewer's review, re-read for up to this "
                          "many minutes (its own event cannot start a run here — see waiting_would_help), "
                          "then answer RED")
+    ap.add_argument("--arm-generated", action="store_true",
+                    help="decide whether --pr is a generated-only App pull request that may be armed with no review; "
+                         "writes arm=true|false and head=<sha> to $GITHUB_OUTPUT")
     ap.add_argument("--stage-gate", action="store_true",
                     help="the staged pipeline's stage-1 gate: may stage 2 start for this head (stage_readiness)? "
                          "exit 0 = yes, 1 = held (RED, named); takes --repo, --pr, --since, --fallback-minutes")
@@ -2858,6 +2991,11 @@ def main(argv=None) -> int:
         return run_stage_advance(args.repo, args.workflow, pr=int(args.pr) if args.pr else None, head_sha=args.head_sha,
                                  sweep=args.sweep, fallback_minutes=args.fallback_minutes,
                                  wait_minutes=max(0, min(args.wait_minutes, 30)))
+    if args.arm_generated:
+        if not args.pr or args.merge_group_ref or not re.fullmatch(r"[1-9]\d*", args.pr):
+            print("::error::--arm-generated takes --repo and --pr <number> only")
+            return 2
+        return run_arm_generated(args.repo, int(args.pr))
     if args.stage_gate:
         if not args.pr or args.merge_group_ref or not re.fullmatch(r"[1-9]\d*", args.pr):
             print("::error::--stage-gate takes --repo, --pr <number>, --since and --fallback-minutes")

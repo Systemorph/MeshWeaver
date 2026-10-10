@@ -2,6 +2,7 @@ using System.Net.Http;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Plugin.Packaging;
@@ -37,6 +38,14 @@ public sealed class PluginBundleClient
     /// <summary>The bundle route prefix on the registry instance.</summary>
     public const string RoutePrefix = "/api/plugins/bundles";
 
+    /// <summary>
+    /// The registry-side configuration key naming the OCI host this registry pushes its bundle
+    /// artifacts to — served as the index's <see cref="BundleIndex.ArtifactRegistry"/>
+    /// (MeshWeaver#4123). The chart renders it from the instance's own <c>registry.host</c> when the
+    /// instance hosts a registry, so the declaration is the registry record's, made once.
+    /// </summary>
+    public const string ArtifactRegistryConfigKey = "PluginBundles:ArtifactRegistry";
+
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
     // Shared fallback when no IHttpClientFactory is registered — HttpClient is designed to be
@@ -59,6 +68,11 @@ public sealed class PluginBundleClient
     // ledger loses the counting, never the fetching.
     private readonly BundleAdoptionLedger? _ledger;
     private readonly bool _requirePrebuilt;
+
+    // A CLOSED type set (Doc/Architecture/ClosedTypeSet) adopts no database NodeType and compiles
+    // none in its place, so a NodeType bundle has nothing to do here. Resolved once, like
+    // _requirePrebuilt — both are image/deployment policy, not per-call state.
+    private readonly bool _closedTypeSet;
 
     // ONE index read per client, shared by every package the install pass covers. PromiseSlot, not
     // a plain cached field: concurrent first callers share the single run, and a fault EVICTS so
@@ -108,6 +122,7 @@ public sealed class PluginBundleClient
         // Deployment policy, resolved once: a require-prebuilt mesh turns every miss below into a
         // named early failure instead of a compile fallback. See RequirePrebuiltConfigKey.
         _requirePrebuilt = PrebuiltAssemblySeeder.RequirePrebuilt(hub.ServiceProvider);
+        _closedTypeSet = hub.ServiceProvider.IsClosedTypeSet();
     }
 
     /// <summary>What the registry advertises: the framework its assemblies were built against, and
@@ -121,7 +136,21 @@ public sealed class PluginBundleClient
     /// exists so a decline can name the lane: without it an arm64 install can only be told "not
     /// adoptable" and #1728 stays invisible, which is precisely how it stayed invisible.</param>
     public sealed record BundleIndex(
-        string? FrameworkMvid, IReadOnlyList<BundleRef> Bundles, string? Architecture = null);
+        string? FrameworkMvid, IReadOnlyList<BundleRef> Bundles, string? Architecture = null)
+    {
+        /// <summary>
+        /// 🚨 The OCI registry host THIS registry declares as its artifact registry — the one host,
+        /// besides its own, to which a consumer presents the instance key it holds for this
+        /// registry (MeshWeaver#4123, <see cref="ArtifactKeyTarget"/>). Index-level and written by
+        /// the registry itself (its own <c>registry.host</c>, rendered into its config), never by a
+        /// publisher: a bundle entry's <see cref="BundleRef.Artifact"/> names where the bytes ARE,
+        /// and that alone never earns the key. Null from a registry that declares none — every
+        /// artifact on another host then takes the HTTP bundle route instead, keyless toward it.
+        /// An INIT property, not a fourth primary-constructor parameter: adding one replaces a
+        /// public record's constructor signature and is a binary break across the fleet.
+        /// </summary>
+        public string? ArtifactRegistry { get; init; }
+    }
 
     /// <summary>One servable bundle.</summary>
     /// <param name="Plugin">The plugin/package id.</param>
@@ -246,6 +275,34 @@ public sealed class PluginBundleClient
     /// the caller should compile. Cold: nothing is fetched until Subscribe.</para>
     /// </summary>
     public IObservable<int> Adopt(string pluginId) =>
+        _closedTypeSet ? AdoptNothingOnAClosedTypeSet(pluginId) : AdoptFromRegistry(pluginId);
+
+    /// <summary>
+    /// 🚨 <b>A closed type set has nothing to adopt, and that is not a miss.</b> The seeder already
+    /// refuses every NodeType on such a process (<c>PrebuiltAssemblySeeder.SeedDetailed</c> answers
+    /// <c>NotSeeded</c>), and the activation path compiles none in its place — the type set is the
+    /// image's. Fetching the bundle anyway and counting "adopted 0/N" made every NodeType package a
+    /// MISS, so <c>bundle_adoption</c> on the control instance read Degraded for ever ("Edu: adopted
+    /// only 0/12 — the rest compile here") while nothing was compiled there at all. The attempt is
+    /// recorded as <see cref="BundleAdoptionKind.NotApplicable"/>, naming the policy — never as
+    /// <see cref="BundleAdoptionKind.NothingToAdopt"/>, since nothing was read and nothing may be
+    /// claimed about what the package carries — and nothing is downloaded: the bytes could only ever
+    /// be declined.
+    /// </summary>
+    private IObservable<int> AdoptNothingOnAClosedTypeSet(string pluginId) =>
+        Observable.Defer(() =>
+        {
+            _logger?.LogInformation(
+                "Bundle for {Plugin}: not fetched — {Key}=true, so this process adopts no database "
+                + "NodeType and compiles none in its place", pluginId, ClosedTypeSet.ConfigKey);
+            _ledger?.Record(new BundleAdoptionOutcome(
+                pluginId, BundleAdoptionKind.NotApplicable, _registryUrl,
+                Reason: $"{ClosedTypeSet.ConfigKey}=true — this process adopts no database NodeType "
+                        + "and compiles none in its place"));
+            return Observable.Return(0);
+        });
+
+    private IObservable<int> AdoptFromRegistry(string pluginId) =>
         SharedIndex()
             .Take(1)
             .SelectMany(index =>
@@ -299,7 +356,7 @@ public sealed class PluginBundleClient
                         + "instance, and this is not one of them");
                 }
 
-                return Download(pluginId, bundle)
+                return Download(pluginId, bundle, index)
                     .SelectMany(result => result.Bytes is null
                         ? Miss(pluginId, result.Kind, result.Reason)
                         : SeedAll(pluginId, result.Bytes));
@@ -340,7 +397,7 @@ public sealed class PluginBundleClient
                     return Observable.Return<IReadOnlyList<ShippedBuild>>([]);
                 }
                 var origin = $"{_registryUrl} {pluginId}@{bundle.Version}";
-                return Download(pluginId, bundle)
+                return Download(pluginId, bundle, index)
                     .SelectMany(result => result.Bytes is null
                         ? Observable.Return<IReadOnlyList<ShippedBuild>>([])
                         : _httpPool.InvokeBlocking(_ => ShippedBuildsOf(BundleReader.Read(result.Bytes), origin, _logger)));
@@ -561,7 +618,7 @@ public sealed class PluginBundleClient
                             "Module '{Module}' of {Plugin}: {Reason}",
                             moduleName, pluginId, verdict.Reason);
                         var advertised = bundle!;
-                        return Download(pluginId, advertised)
+                        return Download(pluginId, advertised, index)
                             .SelectMany(result => result.Bytes is null
                                 ? Miss(pluginId, result.Kind, result.Reason)
                                     .Select(_ => decided with
@@ -812,10 +869,61 @@ public sealed class PluginBundleClient
     /// index names an <see cref="BundleRef.Artifact"/>, from the registry's HTTP bundle route
     /// otherwise — the pre-artifact path, byte for byte.
     /// </summary>
-    private IObservable<FetchResult> Download(string pluginId, BundleRef bundle) =>
-        bundle.Artifact is { Length: > 0 } artifact
-            ? DownloadArtifact(pluginId, bundle.Version, artifact)
-            : DownloadOverHttp(pluginId, bundle.Version);
+    private IObservable<FetchResult> Download(string pluginId, BundleRef bundle, BundleIndex index)
+    {
+        if (bundle.Artifact is not { Length: > 0 } artifact)
+            return DownloadOverHttp(pluginId, bundle.Version);
+        if (ArtifactKeyTarget(_registryUrl, index.ArtifactRegistry, artifact) is { } refusal)
+        {
+            // Decided BEFORE any request: the instance key never travels to a host this registry
+            // did not declare. The bytes are still the registry's to serve, over its own HTTP route
+            // — which is where they came from before artifacts existed — so nothing that adopts
+            // today stops adopting.
+            _logger?.LogInformation(
+                "Bundle for {Plugin}@{Version}: {Refusal} — taking {Registry}'s HTTP bundle route instead",
+                pluginId, bundle.Version, refusal, _registryUrl);
+            return DownloadOverHttp(pluginId, bundle.Version);
+        }
+        return DownloadArtifact(pluginId, bundle.Version, artifact);
+    }
+
+    /// <summary>
+    /// 🚨 ONE TRUST RULE for the instance key (MeshWeaver#4123): the key held for registry mount
+    /// <paramref name="registryUrl"/> is presented to an artifact's OCI host only when that host IS
+    /// the mount's own host, or the mount's index DECLARES it (<paramref name="declaredArtifactRegistry"/>,
+    /// <see cref="BundleIndex.ArtifactRegistry"/>). The declaration is the registry's — the party
+    /// whose key it is — never the bundle entry's, which a publisher writes: before this, the
+    /// client presented the key to whatever host a catalog entry named. The self-updater already
+    /// refused an undeclared validator (#4094); this brings the bundle client to the same rule.
+    /// Whole-host, case-insensitive; a reference that does not parse is not a target. Returns null
+    /// when the key may go, else the sentence naming why not. Pure.
+    /// </summary>
+    internal static string? ArtifactKeyTarget(string registryUrl, string? declaredArtifactRegistry, string artifact)
+    {
+        if (!OciReference.TryParse(artifact, out var reference) || reference is null)
+            return $"the advertised artifact '{artifact}' is not an OCI reference";
+        var host = BareHost(reference.Registry);
+        var own = Uri.TryCreate(registryUrl, UriKind.Absolute, out var mount) ? mount.Authority : null;
+        if (host.Length > 0 && string.Equals(host, own, StringComparison.OrdinalIgnoreCase))
+            return null;
+        var declared = BareHost(declaredArtifactRegistry);
+        if (host.Length > 0 && declared.Length > 0 && string.Equals(host, declared, StringComparison.OrdinalIgnoreCase))
+            return null;
+        return declared.Length == 0
+            ? $"the artifact is on '{host}', which is not {registryUrl}'s own host and that registry declares no artifact registry, so this instance's key is not presented there"
+            : $"the artifact is on '{host}', but {registryUrl} declares '{declared}' as its artifact registry, so this instance's key is not presented there";
+    }
+
+    /// <summary>A registry host as written in a reference or a declaration — scheme and path dropped, never userinfo-stripped (a host carrying userinfo matches nothing). Pure.</summary>
+    private static string BareHost(string? value)
+    {
+        var v = (value ?? "").Trim();
+        var scheme = v.IndexOf("://", StringComparison.Ordinal);
+        if (scheme >= 0) v = v[(scheme + 3)..];
+        var slash = v.IndexOf('/');
+        if (slash >= 0) v = v[..slash];
+        return v;
+    }
 
     /// <summary>
     /// The artifact path (<c>Doc/Architecture/PluginBundlesInTheRegistry</c>): the manifest by

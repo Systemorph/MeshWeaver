@@ -99,13 +99,15 @@ if [ -n "${AZURE_FEDERATED_TOKEN_FILE:-}" ]; then
     || hosting::die "AZURE_FEDERATED_TOKEN_FILE=${AZURE_FEDERATED_TOKEN_FILE} is not readable — the workload-identity webhook set the variable but the projected token is missing"
   hosting::need_env AZURE_CLIENT_ID "the operator identity's client id (Hosting:Operator:Environment or the record's operator.environment; the webhook also sets it)"
   hosting::need_env AZURE_TENANT_ID "set by the workload-identity webhook from the ServiceAccount's azure.workload.identity/tenant-id annotation or the webhook default"
-  if az login --service-principal --username "$AZURE_CLIENT_ID" --tenant "$AZURE_TENANT_ID" \
-       --federated-token "$(cat "$AZURE_FEDERATED_TOKEN_FILE")" --allow-no-subscriptions --output none 2>/tmp/az-login.err; then
+  # From a FRESH assertion (hosting::az_assertion), and again before every step below: the
+  # assertion is short-lived, so a session opened here cannot carry a step that works for longer.
+  if hosting::az_signin; then
     az_sub="$(az account show --query id -o tsv 2>/dev/null || true)"
     hosting::log "azure     signed in as ${AZURE_CLIENT_ID} (subscription ${az_sub:-none})"
     hosting::say az_login true
+    export HOSTING_AZ_SESSION=1
   else
-    hosting::die "az login as workload identity ${AZURE_CLIENT_ID} failed: $(tr -d '\n' < /tmp/az-login.err). Check the federated credential on the operator identity (subject system:serviceaccount:memex-ops:hosting-operator, issuer AZ_OIDC_ISSUER) — a subject/issuer mismatch fails here and nowhere else."
+    hosting::die "az login as workload identity ${AZURE_CLIENT_ID} failed: ${HOSTING_AZ_ERR}. Check the federated credential on the operator identity (subject system:serviceaccount:memex-ops:hosting-operator, issuer AZ_OIDC_ISSUER) — a subject/issuer mismatch fails here and nowhere else."
   fi
 else
   # Not a refusal: a Reconcile/Roll/Restart is kubectl+helm only and needs no Azure session. A step
@@ -191,6 +193,7 @@ while IFS=$'\t' read -r name command; do
       echo
       continue
     fi
+    hosting::az_refresh "before step ${index}/${total} '${ilk_name}'"
     if bash -c "$ilk_cmd"; then
       echo
     else
@@ -239,6 +242,7 @@ while IFS=$'\t' read -r name command; do
   # `bash -c` because a step legitimately contains quotes, pipes and $VAR references that the mesh
   # wrote deliberately — re-splitting it into an argv here is exactly where an escaping bug becomes
   # an arbitrary-command bug, which is why the plan arrives as one opaque string per step.
+  hosting::az_refresh "before step ${index}/${total} '${name}'"
   if bash -c "$command"; then
     echo
   else

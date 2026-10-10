@@ -379,6 +379,37 @@ The NodeType's own `NodeTypeDefinition.CompilationStatus` reflects the terminal
 outcome: `Compiling` while in flight, then `Ok` or `Error` (with
 `CompilationError` carrying the formatted diagnostics).
 
+### Compile history is bounded: the newest N plus the last failure
+
+Every Roslyn compile writes a NEW `{nodeTypePath}/_Activity/compile-*` record. Before retention,
+nothing ever removed one. Measured on memex.systemorph.com on 2026-10-09: 325 records under
+`Crm/Interaction` (six weeks), more than 200 under `Store/Installer`, and 79 under
+`Hosting/InstanceAction` in nine days. Deleting the retired `Crm/Client` then took more than 60 s,
+because the recursive delete paid for every record.
+
+The owner now prunes its own history at the moment it writes the newest record. Right after the
+terminal write of a compile's activity, `CompileActivityRetention.Prune` lists the type's
+`_Activity` children through the query index (a children listing, where a stale answer is
+harmless). It removes, through `IMeshService.DeleteNode` and as System, every compile activity
+except these:
+
+- the newest `KeepLast` (default 10),
+- the newest one whose status is `Failed`,
+- the one this compile just wrote (the one `LastCompilationActivityPath` points at),
+- anything that is not a compile activity: neither the `compile` id prefix nor the `Compilation`
+  category, or no timestamp.
+
+One prune removes at most `MaxDeletionsPerRun` (default 50), oldest first, so a backlog drains
+over successive compiles. A failed removal is logged per row and retried by the next compile. It
+never fails the compile. The bounds are declared in configuration:
+`Compilation:ActivityRetention:Enabled`, `:KeepLast` (clamped to at least 1) and
+`:MaxDeletionsPerRun`. Releases older than the retained window keep their
+`CompilationActivityPath`, but the activity it names may be gone.
+
+Pinned by `CompileActivityRetentionTest` (Graph.Test). It checks the selection as a pure rule, a
+prune through a real mesh that leaves exactly the newest 10, the last failure and another writer's
+activity, idempotence, and the negative control: a disabled policy removes nothing.
+
 ---
 
 ## Every stage is bounded — a compile can never park at `Compiling`

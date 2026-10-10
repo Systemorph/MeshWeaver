@@ -57,6 +57,16 @@ single probe target the deploy does. A placeholder host would render two.
 FAILS naming that input — the same answer the chart gives, for the same reason. A drift check that
 manufactured a host would be the #3780 defect wearing a checker's colours.
 
+THE VALUES HALF'S DECLARED SHAPE (policy `one-values-half-per-release`, MeshWeaver#4685). A deploy's
+third source is ONE Key Vault secret per release holding EXACTLY the keys the record declares in
+`vaultValuesKeys` — hosting-deploy refuses any other half. So when `--record` names the record's facts
+(chart-drift-record.py), the placeholder half is built in THAT shape: a placeholder for every declared
+key under `secrets.memex_portal` (the chart alias `MEMEX_PASSWORD` ← `memex_postgres_password`),
+except the two connection strings, whose credential-only placeholder above keeps the render
+shape-identical to the deploy's. The independence proof then runs over the deploy's own key set — so
+"the withheld half cannot move a compared object" is MEASURED for exactly the keys the half may hold,
+which is Systemorph/Memex#295's discriminator answered by construction instead of by a later reading.
+
 WHAT THIS SCRIPT DOES NOT PROVE. That the WITHHELD Key Vault half does not itself influence the
 compared objects. That is a property of how the fleet splits its values, not of this render, and it
 is tracked as Systemorph/Memex#295 / #352 — see
@@ -64,7 +74,7 @@ src/MeshWeaver.Documentation/Data/Architecture/ChartDriftRenderWithoutSecrets.md
 what was measured about it and how to re-measure. This script is deliberately silent about it
 rather than implying a coverage it does not have.
 
-  usage: chart-drift-render.py --chart DIR --namespace NS --release NAME --out FILE -f VALUES...
+  usage: chart-drift-render.py --chart DIR --namespace NS --release NAME --out FILE [--record FACTS] -f VALUES...
   exit 0 = FILE holds the render, and the compared objects are independent of the placeholder
   exit 1 = the chart could not be rendered, or the placeholder reaches the comparison
 """
@@ -115,6 +125,13 @@ PLACEHOLDERS = ("RENDER-ONLY-PLACEHOLDER-NOT-A-CREDENTIAL-A",
 IN_CLUSTER_DB_SERVICE = "memex-postgres-service"
 
 HALVES = ("memex_portal", "memex_migration")
+
+# Declared keys the placeholder half does NOT carry as plain placeholders: the connection strings are
+# shaped above (real host, placeholder credentials) because a placeholder HOST would change the
+# rendered probe targets — a different render, not a proof.
+SHAPED_BY_HOST = {"ConnectionStrings__memex", "ConnectionStrings__orleans"}
+# The one chart alias between a values-half leaf and the Secret key it renders.
+LEAF_FOR_KEY = {"MEMEX_PASSWORD": "memex_postgres_password"}
 
 
 def err(*lines):
@@ -192,8 +209,9 @@ def database_endpoint(values, half):
     return host, port
 
 
-def build_placeholder_values(values, placeholder):
-    """The render-only third `-f`: connection strings for the halves that need one, nothing else."""
+def build_placeholder_values(values, placeholder, declared=()):
+    """The render-only third `-f`: connection strings for the halves that need one, plus — when the
+    record's facts were given — a placeholder for every other DECLARED values-half key."""
     secrets = {}
     for half in HALVES:
         if not needs_placeholder(values, half):
@@ -207,7 +225,26 @@ def build_placeholder_values(values, placeholder):
                 f"Host={host};Port={port};Database={placeholder};"
                 f"Username={placeholder};Password={placeholder}"
         }
+    for key in sorted(set(declared) - SHAPED_BY_HOST):
+        leaf = LEAF_FOR_KEY.get(key, key)
+        if dig(values, "secrets", "memex_portal", leaf):
+            continue  # a committed value already renders it; the placeholder never overrides one
+        secrets.setdefault("memex_portal", {})[leaf] = placeholder
     return {"secrets": secrets} if secrets else {}
+
+
+def declared_keys(record_path):
+    """The record's `vaultValuesKeys` NAMES from chart-drift-record.py's facts, or None (refusal)."""
+    try:
+        facts = json.load(open(record_path))
+        keys = facts.get("vaultValuesKeys") or []
+        if not isinstance(keys, list):
+            raise ValueError("vaultValuesKeys is not a list")
+        return [str(k).strip() for k in keys if str(k).strip()]
+    except Exception as e:  # noqa: BLE001 — named, fatal
+        err(f"the record facts '{record_path}' are unreadable ({e}) — the values half's declared "
+            f"shape cannot be rendered. Treating as FAILURE.")
+        return None
 
 
 def render(chart, namespace, release, values_files, extra, out_path):
@@ -355,10 +392,16 @@ def main():
     parser.add_argument("--release", required=True)
     parser.add_argument("--out", required=True)
     parser.add_argument("-f", "--values", action="append", default=[])
+    parser.add_argument("--record", default="")
     args = parser.parse_args()
 
     values = merged_values(args.chart, args.values)
-    stub = build_placeholder_values(values, PLACEHOLDERS[0])
+    declared = []
+    if args.record:
+        declared = declared_keys(args.record)
+        if declared is None:
+            return 1
+    stub = build_placeholder_values(values, PLACEHOLDERS[0], declared)
     if stub is None:
         return 1
 
@@ -372,17 +415,20 @@ def main():
               "connection string the chart requires, so this render uses committed values only.")
         return 0 if render(args.chart, args.namespace, args.release, args.values, None, args.out) else 1
 
-    injected = ", ".join(f"secrets.{half}.ConnectionStrings__orleans" for half in sorted(stub["secrets"]))
+    injected = ", ".join(f"secrets.{half}.{leaf}" for half in sorted(stub["secrets"])
+                         for leaf in sorted(stub["secrets"][half]))
     print(f"Injecting a render-only placeholder for {injected} — the chart refuses to render "
-          f"without it (MeshWeaver#3780) and this check may not hold the real value. Its host comes "
-          f"from config.<half>.MEMEX_HOST, not from an invention.")
+          f"without the connection string (MeshWeaver#3780), the record declares the rest as its "
+          f"values half (policy one-values-half-per-release), and this check may hold none of their "
+          f"values. A connection string's host comes from config.<half>.MEMEX_HOST, not from an "
+          f"invention.")
 
     with tempfile.TemporaryDirectory() as work:
         renders = []
         for i, placeholder in enumerate(PLACEHOLDERS):
             stub_path = os.path.join(work, f"placeholder-{i}.yaml")
             with open(stub_path, "w") as fh:
-                yaml.safe_dump(build_placeholder_values(values, placeholder), fh)
+                yaml.safe_dump(build_placeholder_values(values, placeholder, declared), fh)
             out = args.out if i == 0 else os.path.join(work, "desired-b.yaml")
             if not render(args.chart, args.namespace, args.release, args.values, stub_path, out):
                 return 1

@@ -181,6 +181,7 @@ resolves this column against `DeploymentRecordExtensions` alone — it asserts n
 | `WithMinRollInterval(interval)` | `MinRollInterval` | `config.memex_portal.SelfUpdate__MinRollInterval` | `SelfUpdate__MinRollInterval` |
 | `WithAutoRecycleOnStaleBuild(enabled)` | `AutoRecycleOnStaleBuild` | `config.memex_portal.Modules__AutoRecycleOnStaleBuild` | `Modules__AutoRecycleOnStaleBuild` |
 | `WithDenyAnonymous(enabled)` | `DenyAnonymous` | `config.memex_portal.Access__DenyAnonymous` | `Access__DenyAnonymous` |
+| `WithApprovalStepUp(enabled, entraAuthenticationContext, entraTenantId)` | `ApprovalStepUp` | `config.memex_portal.Authentication__StepUp__*` | `Authentication__StepUp__Enabled`, `Authentication__StepUp__Entra__AuthenticationContext`, `Authentication__StepUp__Entra__TenantId` |
 | `WithSelfPatch(enabled)` | `SelfPatch` | `selfUpdate.canPatch` (one value for the self-patch Role and `SelfUpdate__CanPatch`, rendered by the chart — the control instance's own declaration, [SelfUpdateControlLane](../SelfUpdateControlLane)) | — |
 | `WithPluginRepo(name, url, gitRef, isRegistrySource, secretName)` | `PluginRepos[].Name`, `PluginRepos[].Url`, `PluginRepos[].Ref`, `PluginRepos[].IsRegistrySource`, `PluginRepos[].SecretName` | `pluginCatalog.sources` (the operator's catalog file) | `PluginCatalog__*` (Aspire only) |
 | `ClearPluginRepos()` | `PluginRepos` | `pluginCatalog.sources` | — |
@@ -327,6 +328,7 @@ in-mesh `[Translation]` texts, preserved here until the catalog follow-up above)
 | `DeploymentContent` | `MinRollInterval` | Minimum interval between self-update rolls | Mindestabstand zwischen Selbst-Update-Rollouts |
 | `DeploymentContent` | `AutoRecycleOnStaleBuild` | Auto-recycle on a stale NodeType build | Bei veraltetem NodeType-Build automatisch neu laden |
 | `DeploymentContent` | `DenyAnonymous` | Deny all anonymous (logged-out) access | Jeden anonymen (nicht angemeldeten) Zugriff verweigern |
+| `DeploymentContent` | `ApprovalStepUp` | Approval step-up | Step-up für Genehmigungen |
 | `DeploymentContent` | `SelfPatch` | Self-patch the portal Deployment on a detected release (renders selfUpdate.canPatch) | Portal-Deployment bei erkanntem Release selbst patchen (rendert selfUpdate.canPatch) |
 | `DeploymentContent` | `RequiredModuleSlots` | Boot modules at explicit slots (by-index override) | Boot-Module an expliziten Slots (Überschreiben nach Index) |
 | `DeploymentContent` | `RequiredModulesAuthoritative` | The required-module list is the complete set (the image's own list does not apply) | Die Liste der erforderlichen Module ist der vollständige Satz (die Liste des Images gilt nicht) |
@@ -422,6 +424,14 @@ in-mesh `[Translation]` texts, preserved here until the catalog follow-up above)
 | `SignInSpec` | `GoogleClientId` | Google client id — empty turns the scheme off | Google-Client-ID — leer schaltet das Schema ab |
 | `SignInSpec` | `LinkedInClientId` | LinkedIn client id — empty turns the scheme off | LinkedIn-Client-ID — leer schaltet das Schema ab |
 | `SignInSpec` | `AppleClientId` | Apple client id | Apple-Client-ID |
+| `StepUpSpec` | `Enabled` | Require step-up on every approval | Step-up bei jeder Genehmigung verlangen |
+| `StepUpSpec` | `EntraAuthenticationContext` | Entra authentication context id (c1–c99) | Entra-Authentifizierungskontext-ID (c1–c99) |
+| `StepUpSpec` | `EntraTenantId` | Entra step-up tenant id — blank means the sign-in tenant | Entra-Step-up-Mandanten-ID — leer heißt der Anmelde-Mandant |
+| `StepUpSpec` | `EntraRequireAmr` | Require an amr claim | amr-Claim verlangen |
+| `StepUpSpec` | `EntraPhishingResistantAmr` | Phishing-resistant amr values (comma-separated) | Phishing-resistente amr-Werte (kommagetrennt) |
+| `StepUpSpec` | `MaxAuthAgeSeconds` | Maximum authentication age, seconds | Maximales Alter der Authentifizierung, Sekunden |
+| `StepUpSpec` | `ReceiptLifetimeSeconds` | Receipt lifetime, seconds | Gültigkeit der Quittung, Sekunden |
+| `StepUpSpec` | `AllowTotpFallback` | Allow the TOTP fallback | TOTP-Ausweichweg erlauben |
 | `EmailSpec` | `Enabled` | Enable system email | System-E-Mail aktivieren |
 | `EmailSpec` | `ClientId` | Sender app client id | Client-ID der Absender-App |
 | `EmailSpec` | `TenantId` | Tenant id | Mandanten-ID |
@@ -442,6 +452,7 @@ in-mesh `[Translation]` texts, preserved here until the catalog follow-up above)
 | `HostingOperatorSpec` | `Environment` | Job environment (KEY=VALUE) | Job-Umgebung (KEY=VALUE) |
 | `HostingOperatorSpec` | `Executor` | Executor: Job (in-cluster operator Job) or Actions (aks-ops.yml through the GitHub App) | Ausführung: Job (Operator-Job im Cluster) oder Actions (aks-ops.yml über die GitHub-App) |
 | `HostingOperatorSpec` | `Maintainer` | Maintainer: the one user id that may approve its own request | Maintainer: die eine Benutzer-ID, die den eigenen Antrag genehmigen darf |
+| `HostingOperatorSpec` | `CustomerGoverned` | Customer-governed: the instance's own global administrators approve the actions it requests | Kundengesteuert: die globalen Administratoren der Instanz genehmigen die Aktionen, die sie beantragt |
 | `InClusterDatabaseSpec` | `Release` | Database release name — blank derives {namespace}-db | Name des Datenbank-Releases — leer leitet {namespace}-db ab |
 | `InClusterDatabaseSpec` | `Instances` | Instances (primary + standbys, one per zone) | Instanzen (Primär + Standby, eine pro Zone) |
 | `InClusterDatabaseSpec` | `Size` | Volume size per instance | Volume-Größe pro Instanz |

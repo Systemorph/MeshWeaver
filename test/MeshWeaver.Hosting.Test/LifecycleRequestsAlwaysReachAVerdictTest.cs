@@ -76,6 +76,9 @@ public class LifecycleRequestsAlwaysReachAVerdictTest(ITestOutputHelper output) 
         response.Error.Should().Contain(path);
         response.Error.Should().Contain("validators",
             "the verdict names the stage that went silent, which is what the trail could not say");
+        response.Error.Should().Contain($"validators: {nameof(SilentCreationValidator)} (",
+            "the verdict names the VALIDATOR the chain was waiting on — 'validators' alone named "
+            + "every registered validator at once (#6391)");
         silent.Asked.Should().Contain(path, "the stall really was the armed validator");
         (await StoredAt(path, ct)).Should().BeNull("the stall came before the write");
     }
