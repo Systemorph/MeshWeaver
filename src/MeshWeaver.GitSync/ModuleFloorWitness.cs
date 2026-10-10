@@ -114,6 +114,46 @@ public static class ModuleFloorWitness
         return ModuleVersion(files);
     }
 
+    /// <summary>
+    /// 🚨 <b>The <c>moduleVersion</c> a settled <c>manifest.lock</c> WOULD state for an incoming module
+    /// root</b> — <c>gen-manifests.py module_version</c> recomputed over the tree's own bytes — or null
+    /// when it cannot be computed. This is what the per-module sync decision judges
+    /// (<see cref="ModuleReading.TreeVersion"/>): the lock is settled by a LATER commit than the one
+    /// that changes the sources, so between the two the lock states the hash of the PREVIOUS sources.
+    ///
+    /// <para>Every file under the root by raw-byte sha256 (all but <c>manifest.lock</c> and
+    /// <c>.DS_Store</c> — the witness and <c>index.json</c> included, verbatim, exactly as the lock
+    /// lists them), plus the out-of-folder entries the lock records (a Space never carries those, so
+    /// the lock is the only reading of them there is). Measured against MeshWeaver.Plugins: at the
+    /// settle commit <c>ae2701acf</c> it reproduces the stated hash of every lock read (Store
+    /// <c>ced036bab6750e5f</c>, Hosting, Governance, AI); at the merge before it, <c>f719406d8</c>, the
+    /// Store lock still states <c>1942f49ee488ee8d</c> while the tree already hashes to
+    /// <c>ced036bab6750e5f</c>.</para>
+    /// </summary>
+    /// <param name="filesUnderRoot">The module root's files: path RELATIVE to the module root, and the
+    /// raw bytes.</param>
+    /// <param name="manifestJson">The module root's <c>manifest.lock</c> text — it names the package
+    /// folder and records the out-of-folder entries.</param>
+    public static string? TreeVersion(
+        IEnumerable<(string Path, byte[] Bytes)> filesUnderRoot, string manifestJson)
+    {
+        ArgumentNullException.ThrowIfNull(filesUnderRoot);
+        if (ManifestFiles(manifestJson) is not { } recorded || PackageFolder(recorded) is not { } folder)
+            return null;
+
+        var files = new SortedDictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (path, bytes) in filesUnderRoot)
+        {
+            if (ExcludedNames.Contains(path[(path.LastIndexOf('/') + 1)..]))
+                continue;
+            files[$"{folder}/{path}"] = Sha256Hex(bytes);
+        }
+        foreach (var (path, hash) in recorded)
+            if (!path.StartsWith(folder + "/", StringComparison.Ordinal))
+                files[path] = hash;
+        return ModuleVersion(files);
+    }
+
     /// <summary><c>gen-manifests.py module_version</c>: sha256 over the ordinal-sorted
     /// <c>path\nhash\n</c> pairs, truncated to 16 hex.</summary>
     internal static string ModuleVersion(IEnumerable<KeyValuePair<string, string>> files)
