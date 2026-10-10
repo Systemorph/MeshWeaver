@@ -735,7 +735,15 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
         // and re-invoking per child would let the answer drift mid-teardown.
         var originatingCause = ReadOwnerCause();
 
-        var childCompletions = hubs.Select(h =>
+        // 🚨 TWO WAVES, in dependency order (#6078). A hub declared WithTeardownAfterSiblings SERVES
+        // its siblings (the node-stream cache's hub: its ShutDown ends every held read), so it is
+        // disposed only once every other leg of this join has answered. One wave raced them: a
+        // sibling still mid-turn or mid-quiesce received the cache's disposal terminal for its own
+        // teardown. The second wave starts below, after the first wave's join.
+        var dependencies = hubs.Where(TearsDownAfterSiblings).ToArray();
+        var siblings = hubs.Where(h => !TearsDownAfterSiblings(h)).ToArray();
+
+        IObservable<Unit> DisposeAndJoin(IMessageHub h)
         {
             var address = h.Address;
             try
@@ -766,7 +774,9 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
                     logger.LogError(ex, "Hub {address} disposal faulted", address);
                     return Observable.Return(Unit.Default);
                 });
-        }).ToArray();
+        }
+
+        var childCompletions = siblings.Select(DisposeAndJoin).ToArray();
 
         // 🚨 FINISH in-flight constructions, don't race them. The snapshot above cannot see a
         // hub that is mid-Build (it lands in messageHubs only after construction), so without
@@ -828,10 +838,22 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
                 }));
 
         var completionLegs = childCompletions.Concat(retiredCompletions).Append(inflightDrain).ToArray();
-        IObservable<Unit> all = Observable
+        IObservable<Unit> siblingsDone = Observable
             .CombineLatest(completionLegs)
             .Select(_ => Unit.Default)
             .Take(1);
+        // The second wave: the hubs the first wave depended on, disposed once nothing that reads
+        // through them is still tearing down. Inside SelectMany, so their Dispose() runs only then.
+        IObservable<Unit> all = dependencies.Length == 0
+            ? siblingsDone
+            : siblingsDone.SelectMany(_ =>
+            {
+                logger.LogDebug("Siblings of {count} dependency hub(s) disposed; disposing [{addresses}]",
+                    dependencies.Length, string.Join(", ", dependencies.Select(h => h.Address.ToString())));
+                return Observable.CombineLatest(dependencies.Select(DisposeAndJoin).ToArray())
+                    .Select(_ => Unit.Default)
+                    .Take(1);
+            });
 
         // No Timeout — see the remarks on this method. Every leg answers from its own terminal
         // state, so there is nothing left for a deadline here to rescue; the owning hub's disposal
@@ -851,6 +873,12 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
                     SignalDone();
                 });
     }
+
+    /// <summary>
+    /// True for a hosted hub declared <see cref="MessageHubConfiguration.WithTeardownAfterSiblings"/>.
+    /// Read off the hub's immutable configuration, so it answers the same at any point of a teardown.
+    /// </summary>
+    private static bool TearsDownAfterSiblings(IMessageHub hub) => hub.Configuration.TearsDownAfterSiblings;
 
     /// <summary>
     /// The owner's own teardown attribution, or <c>null</c> when nobody installed one. Best-effort
