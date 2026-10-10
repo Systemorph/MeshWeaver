@@ -6,7 +6,7 @@ what you see first is what you *use*, not everything the mesh can show you. The 
 | Tab | Present when | Contents | Default order |
 |---|---|---|---|
 | **Pinned** | the caller has pins | the owner's content shortcuts (`User.PinnedPaths`) | last modified |
-| **Apps** | always | the viewer's OWN `{owner}/_App` records — every app exactly once, as an ICON grid | last used |
+| **Apps** | always | the APP DIRECTORY (the apps the viewer can see through access, `{owner}/_Apps`) — every app exactly once, as an ICON grid; the viewer's own `{owner}/_App` records only under the explicit `Home:AppSource = Records` compatibility path | last used |
 | **Spaces** | always | the catalog **without** store items | last accessed |
 | **All** | always | everything the viewer can read, at every depth | last accessed |
 
@@ -22,7 +22,11 @@ and the ordering controls share one header row. The whole surface is built by
 `UserActivityLayoutAreas.BuildHome` (`src/MeshWeaver.Graph`), pure and unit-tested
 (`HomeTabsTest`); the reactive shell is `CatalogAreaView`.
 
-## Installed apps — `{user}/_App/{appId}` records, the grid's default data source
+## Installed apps — `{user}/_App/{appId}` records, the `Records` compatibility path
+
+> **Compatibility path.** Since MeshWeaver#6448 the Apps grid's default source is the app directory
+> (below). Everything in this section describes the `Home:AppSource = Records` escape hatch, which
+> reads these records while they still exist.
 
 One node per icon, nodeType **`InstalledApp`**, stored at `{user}/_App/{appId}` as an ordinary
 `mesh_nodes` row: deliberately **not a satellite** (no `IsSatelliteType`, no `SatelliteTableMapping`
