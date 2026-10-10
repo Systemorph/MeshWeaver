@@ -297,6 +297,10 @@ hostingOperator:
   # The ONE user id that may approve its own request on the Actions path (a single-admin
   # installation). Empty renders no key, and then the approver must differ from the requester.
   maintainer: ""
+  # Whether that maintainer SIGNS ALONE: their one valid signature satisfies a governed activity's
+  # Signatures gate of any count (policy sole-maintainer-approval). A single-person installation
+  # only. false renders no key, and every signature count stands.
+  maintainerSignsAlone: false
   # The ops namespace and the Job's (powerful) ServiceAccount. Both appear VERBATIM in the
   # federated credential's subject, which Azure matches as a string — rename either and the token
   # exchange fails at run time with an error naming neither.

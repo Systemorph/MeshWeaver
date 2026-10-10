@@ -236,21 +236,22 @@ executor_evidence=0
 if [ -f "$actions_render" ] \
    && grep -q '^  Hosting__Operator__Executor: "Actions"$' "$actions_render" \
    && grep -q '^  Hosting__Operator__Enabled: "false"$' "$actions_render" \
-   && grep -q '^  Hosting__Operator__Maintainer: "maintainer-id"$' "$actions_render"; then
+   && grep -q '^  Hosting__Operator__Maintainer: "maintainer-id"$' "$actions_render" \
+   && grep -q '^  Hosting__Operator__MaintainerSignsAlone: "true"$' "$actions_render"; then
   executor_evidence=$((executor_evidence + 1))
 else
-  report "the Actions fixture did not render Executor=\"Actions\", Enabled=\"false\" and the trimmed Maintainer=\"maintainer-id\" — the executor switch or its maintainer does not reach a pod that disabled the operator Job"
+  report "the Actions fixture did not render Executor=\"Actions\", Enabled=\"false\", the trimmed Maintainer=\"maintainer-id\" and MaintainerSignsAlone=\"true\" — the executor switch, its maintainer or the sole-signer flag does not reach a pod that disabled the operator Job"
 fi
 for combo in "a whitespace-only operator maintainer (fixture)" "self-host (neutral chart defaults)"; do
   r="$(render_of "$combo")"
-  if [ -f "$r" ] && ! grep -q '^  Hosting__Operator__Maintainer:' "$r"; then
+  if [ -f "$r" ] && ! grep -q '^  Hosting__Operator__Maintainer:' "$r" && ! grep -q '^  Hosting__Operator__MaintainerSignsAlone:' "$r"; then
     executor_evidence=$((executor_evidence + 1))
   else
-    report "'$combo' renders a Hosting__Operator__Maintainer key, or did not render at all — an unset or blank maintainer must render NO key"
+    report "'$combo' renders a Hosting__Operator__Maintainer or Hosting__Operator__MaintainerSignsAlone key, or did not render at all — an unset or blank maintainer, and an unset sole-signer flag, must render NO key"
   fi
 done
 if [ "$executor_evidence" -eq 3 ]; then
-  ok "the executor reaches the ConfigMap with the operator Job off; the maintainer renders trimmed, and only when set"
+  ok "the executor reaches the ConfigMap with the operator Job off; the maintainer renders trimmed, and only when set; MaintainerSignsAlone renders only when true"
 fi
 
 # The Auth:GlobalAdmins evidence (MeshWeaver#5217). Read by NAME: the fixture renders exactly the
@@ -342,6 +343,8 @@ REFUSALS=(
   "a database release AND the bundled Postgres (two answers to which database)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.db-release-with-bundled-postgres.yaml|exclusive with postgres.enabled"
   # Plugins#1738: an executor the portal would silently read as Job must fail the render.
   "a misspelled operator executor|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.operator-executor-misspelled.yaml|must be Job or Actions"
+  "a config.memex_portal entry switching maintainerSignsAlone on behind a false flag|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.operator-signs-alone-shadowed.yaml|is set while hostingOperator.maintainerSignsAlone is not true"
+  "a quoted maintainerSignsAlone (a string is truthy, so \"false\" would read as true)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.operator-signs-alone-quoted.yaml|must be a boolean"
   # MeshWeaver#6052: two replicas on per-pod emptyDir /data — each pod's assembly cache is its own,
   # and the shared NodeType records name bytes only the compiling pod holds.
   "two replicas with a pod-local /data (the #6052 estate)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.two-replicas-pod-local-data.yaml|needs a SHARED /data"

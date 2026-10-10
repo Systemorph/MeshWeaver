@@ -365,6 +365,26 @@ data:
 {{- if $operatorMaintainer }}
   Hosting__Operator__Maintainer: {{ $operatorMaintainer | quote }}
 {{- end }}
+{{- /* Whether that maintainer SIGNS ALONE (policy sole-maintainer-approval): their one valid signature
+  satisfies a governed activity's Signatures gate of any count. Rendered only when true; false or
+  unset renders NO key, and then every count stands. The value must be a YAML BOOLEAN: a string such
+  as "false" is truthy to a template, so anything else is REFUSED rather than read as true. */}}
+{{- $signsAlone := (.Values.hostingOperator).maintainerSignsAlone }}
+{{- if and (not (kindIs "invalid" $signsAlone)) (not (kindIs "bool" $signsAlone)) }}
+{{- fail (printf "hostingOperator.maintainerSignsAlone is %q, and it must be a boolean (true or false, unquoted). A string is truthy to the chart, so \"false\" would render the key as true and let the maintainer sign alone against the declared value." (toString $signsAlone)) }}
+{{- end }}
+{{- /* ONE declaration: hostingOperator.maintainerSignsAlone. The same key in config.memex_portal (any
+  case) would otherwise reach the pod through the pass-through whenever the flag is false, so it is
+  REFUSED unless the flag itself says true (where the literal below renders it and the pass-through
+  skips it). */}}
+{{- range $k, $v := ((.Values.config).memex_portal | default dict) }}
+{{- if and (eq (lower $k) "hosting__operator__maintainersignsalone") (not (and (kindIs "bool" $signsAlone) $signsAlone)) }}
+{{- fail (printf "config.memex_portal.%s is set while hostingOperator.maintainerSignsAlone is not true. The flag has ONE declaration, hostingOperator.maintainerSignsAlone (the record's operator.maintainerSignsAlone); a portal-config entry must not switch it on behind a false one." $k) }}
+{{- end }}
+{{- end }}
+{{- if and (kindIs "bool" $signsAlone) $signsAlone }}
+  Hosting__Operator__MaintainerSignsAlone: "true"
+{{- end }}
 {{- if (.Values.hostingOperator).enabled }}
 {{- if not (.Values.hostingOperator).image }}
 {{- fail "hostingOperator.enabled is true but hostingOperator.image is unset. The operator runs every lifecycle action as a Job from that image; without it HostingOperator.Resolve refuses with 'no operator image configured' and every action on this installation fails at the point of use rather than here. Set hostingOperator.image to the hosting-operator build this fleet runs." }}
