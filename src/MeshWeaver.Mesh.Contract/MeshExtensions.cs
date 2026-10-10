@@ -6364,6 +6364,43 @@ public static class MeshExtensions
         && allowed.Contains(facts.StandardId);
 
     /// <summary>
+    /// ONE creation validator's verdict, made TOTAL (#6391): exactly one result, whatever the
+    /// validator's observable does.
+    /// <list type="bullet">
+    /// <item>Its FIRST emission, and nothing after it. A validator built on a live fold may emit its
+    /// verdict and stay subscribed; <c>Concat</c> waited on such a validator for ever, so the
+    /// validators after it never ran and the stage never answered.</item>
+    /// <item><see cref="NodeRejectionReason.Unavailable"/>, naming the validator, when it COMPLETES
+    /// without emitting. "Completed without emitting" is the third terminal (#2742): the check
+    /// decided nothing, so it is never a pass.</item>
+    /// <item><see cref="NodeRejectionReason.Unavailable"/>, naming the validator, when it gives no
+    /// verdict within <paramref name="budget"/>: rung 2 of <see cref="MeshOperationOptions"/>
+    /// (<see cref="MeshOperationOptions.NestedTimeout"/>), so it fires strictly inside the create's
+    /// own deadline, which stays the backstop. Before this bound the only terminal was that
+    /// deadline, which names the stage ('validators') but never the validator: the platform-startup
+    /// boot recording stalled there for 30 s with nothing saying which check was not armed yet.</item>
+    /// </list>
+    /// <para>A fault still travels as a fault. Both refusals are built here from strings, so the
+    /// fallback a cancelled deadline keeps holds nothing of the handler (#6307).</para>
+    /// </summary>
+    private static IObservable<NodeValidationResult> BoundedCreationVerdict(
+        INodeValidator validator, NodeValidationContext context, string path, TimeSpan budget)
+    {
+        var name = validator.GetType().Name;
+        var seconds = budget.TotalSeconds.ToString("0", System.Globalization.CultureInfo.InvariantCulture);
+        var noVerdict = NodeValidationResult.Unavailable(
+            $"CreateNode of '{path}' could not be validated: the creation validator '{name}' gave no "
+            + $"verdict within {seconds}s at stage 'validators'. Nothing was written; the create may be retried.");
+        var completedEmpty = NodeValidationResult.Unavailable(
+            $"CreateNode of '{path}' could not be validated: the creation validator '{name}' completed "
+            + "without a verdict at stage 'validators'. Nothing was written; the create may be retried.");
+        return Observable.Defer(() => validator.Validate(context))
+            .Take(1)
+            .Timeout(budget, Observable.Return(noVerdict))
+            .DefaultIfEmpty(completedEmpty);
+    }
+
+    /// <summary>
     /// Sync-friendly observable variant of the creation-validator runner. Iterates
     /// validators sequentially via <c>Concat</c> (preserves short-circuit semantics —
     /// stops at the first failure), emits the first failure as a tuple or <c>null</c>
@@ -6392,8 +6429,12 @@ public static class MeshExtensions
         if (validators.Count == 0)
             return Observable.Return<(LocalizableText?, NodeCreationRejectionReason)?>(null);
 
+        // #6391: each validator answers exactly once, inside its own rung-2 bound; silence and an
+        // empty completion are Unavailable refusals that name the validator (BoundedCreationVerdict).
+        var validatorBudget = (hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions()).NestedTimeout;
+
         return validators
-            .Select(v => v.Validate(context))
+            .Select(v => BoundedCreationVerdict(v, context, node.Path, validatorBudget))
             .Concat()
             .Where(result => !result.IsValid)
             .Select(result =>
@@ -9123,6 +9164,17 @@ public static class MeshExtensions
                                     ("path", $"{sourcePath} -> {targetPath}"), ("stage", stalled.Stage),
                                     ("seconds", stalled.BudgetSeconds)),
                                 NodeCopyRejectionReason.Unknown),
+                            o => o.ResponseFor(request));
+                        return;
+                    }
+                    // #6391: a create leg refused UNAVAILABLE decided nothing. Say so in the copy's own
+                    // availability vocabulary, so a move reads it as 'retry' (MoveReasonForCopy keys on
+                    // CopyUnavailablePrefix) rather than as a failure it cannot name.
+                    if (ex.Data[NodeCreationFailure.RejectionReasonKey] is NodeCreationRejectionReason.Unavailable)
+                    {
+                        logger.LogWarning(ex, "[CopyNode] {Source} -> {Target}: a create leg could not be validated now",
+                            sourcePath, targetPath);
+                        hub.Post(CopyNodeResponse.Fail($"{CopyUnavailablePrefix} {ex.Message}", NodeCopyRejectionReason.Unknown),
                             o => o.ResponseFor(request));
                         return;
                     }
