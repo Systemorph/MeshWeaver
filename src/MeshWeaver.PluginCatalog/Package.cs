@@ -396,12 +396,17 @@ public record PackageManifest
 
     /// <summary>
     /// The principal that AUTHORIZED this install — the global admin who clicked Install on a
-    /// commercial package (<see cref="PackageEntitlement.IsCommercial"/>). Null on a free package
-    /// and on anything installed unattended (boot-time provisioning has no principal).
+    /// commercial package (<see cref="PackageEntitlement.IsCommercial"/>), or the governed
+    /// <c>package.provision</c> activity (<c>Governance/Activities/{id}</c>) whose verified
+    /// signatures authorized it: the install record names WHICH activity, which is the audit. Null
+    /// on a free package and on anything installed unattended (boot-time provisioning has no
+    /// principal).
     ///
     /// <para>It exists so an UNATTENDED update can be authorized the same way the install was
-    /// (#830): <see cref="PluginUpdateWatcher"/> re-verifies this principal is STILL a global admin
-    /// before applying a commercial package's delta, so revoking the admin stops the syncing too. A
+    /// (#830): <see cref="PluginUpdateWatcher"/> re-verifies this principal before applying a
+    /// commercial package's delta — a person must STILL be a global admin, so revoking the admin
+    /// stops the syncing too; an activity must still verify for this package
+    /// (<see cref="PackageEntitlement.WhyNotAuthorizingActivity"/>). A
     /// re-stamp carries the existing value forward (<c>PackageInstaller.SeedAuthorizedBy</c>) — the
     /// record built on an update starts from the catalog manifest, which never carries it.</para>
     /// </summary>

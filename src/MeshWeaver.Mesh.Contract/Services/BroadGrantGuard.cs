@@ -356,6 +356,23 @@ public sealed record GovernedActivityFacts(
                               || string.Equals(State, Done, StringComparison.OrdinalIgnoreCase)
                               || string.Equals(State, Failed, StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// The activity node's own <see cref="MeshNode.NodeType"/> (the Governance package writes
+    /// <c>Governance/Activity</c>), or null when the facts were built without one. A reader that
+    /// grants authority on the strength of these facts checks it, so a node of another type that
+    /// happens to carry a <c>standard</c> field is never read as an activity.
+    /// </summary>
+    public string? NodeType { get; init; }
+
+    /// <summary>
+    /// How many of the activity's signatures were CONSUMED — stamped <c>consumedAt</c> by the
+    /// control plane in the same write that made the activity ready, after the own-write check
+    /// admitted them. Zero means no signature authorised this activity's execution. How MANY a
+    /// standard requires is the standard's gate, judged by the Governance package; this count is
+    /// the floor a reader outside that package can still check: at least one person signed.
+    /// </summary>
+    public int ConsumedSignatures { get; init; }
+
     /// <summary>The signed input <paramref name="name"/>, trimmed, or null.</summary>
     public string? Input(string name) =>
         Inputs.TryGetValue(name, out var value) && !string.IsNullOrWhiteSpace(value) ? value.Trim() : null;
@@ -393,7 +410,19 @@ public sealed record GovernedActivityFacts(
                 inputs = inputs.AddRange(i.EnumerateObject()
                     .Where(p => p.Value.ValueKind == System.Text.Json.JsonValueKind.String)
                     .Select(p => KeyValuePair.Create(p.Name, p.Value.GetString() ?? "")));
-            return new GovernedActivityFacts(activity.Path, standardText, state, inputs);
+            var consumed = element.TryGetProperty("signatures", out var signatures)
+                           && signatures.ValueKind == System.Text.Json.JsonValueKind.Array
+                ? signatures.EnumerateArray().Count(sig =>
+                    sig.ValueKind == System.Text.Json.JsonValueKind.Object
+                    && sig.TryGetProperty("consumedAt", out var at)
+                    && at.ValueKind == System.Text.Json.JsonValueKind.String
+                    && !string.IsNullOrWhiteSpace(at.GetString()))
+                : 0;
+            return new GovernedActivityFacts(activity.Path, standardText, state, inputs)
+            {
+                NodeType = activity.NodeType,
+                ConsumedSignatures = consumed,
+            };
         }
         catch (Exception e) when (e is System.Text.Json.JsonException or NotSupportedException or InvalidOperationException)
         {

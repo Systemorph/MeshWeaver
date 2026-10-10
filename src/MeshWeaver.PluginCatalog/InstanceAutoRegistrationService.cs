@@ -1205,26 +1205,6 @@ public sealed class InstanceAutoRegistrationService(
     }
 
     /// <summary>
-    /// Whether this installation has NO install records yet — the gate on the operator's
-    /// <see cref="PluginCatalogOptions.InstallByDefault"/> seed. Read as System: the
-    /// <c>Plugins</c> partition is written only under System, and this runs on startup with no user
-    /// identity in scope.
-    /// </summary>
-    private IObservable<bool> IsFreshInstallation()
-    {
-        var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
-        var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
-        return Observable.Using(
-                () => accessService.ImpersonateAsSystem(),
-                _ => meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
-                    $"path:{PackageInstaller.InstalledPartition} scope:children "
-                    + $"nodeType:{PackageInstaller.PackageNodeType}")))
-            .Take(1)
-            .Timeout(TimeSpan.FromSeconds(30))
-            .Select(installed => installed.Items.Count == 0);
-    }
-
-    /// <summary>
     /// Every package the default install should carry, from every source, deduplicated by id
     /// (first source wins — the same precedence the registry's merged catalog uses) and ordered by
     /// DEPENDENCY. A source that cannot be listed is logged and skipped: one unreachable repo must
@@ -1740,7 +1720,8 @@ public sealed class InstanceAutoRegistrationService(
             logger?.LogWarning(
                 "[DefaultInstall] {Count} required package(s) are COMMERCIAL and were not installed: "
                 + "[{Priced}]. A paid or contact-sales dependency has to be acquired deliberately — "
-                + "install it from the catalog as a global admin.",
+                + "install it from the catalog as a global admin, or provision it through a "
+                + "governed package.provision activity.",
                 priced.Count, string.Join(", ", priced));
 
         if (missing.Count > 0)
@@ -1838,8 +1819,9 @@ public sealed class InstanceAutoRegistrationService(
                 "[DefaultInstall] {Count} declared package(s) require an authorization this "
                 + "unattended install can never obtain and are SKIPPED, not failed: [{Skipped}]. "
                 + "They are recorded with their reasons on {Ledger} and no boot re-attempts them — "
-                + "a Global Admin installing them from the catalog, or the package ceasing to be "
-                + "commercial, is what changes this.",
+                + "a Global Admin installing them from the catalog, a governed package.provision "
+                + "activity signed for them, or the package ceasing to be commercial, is what "
+                + "changes this.",
                 skipped.Count(x => candidates.Any(c => c.Package.Id == x.Package && !c.Package.IsRefused)),
                 string.Join(", ", skipped
                     .Where(x => candidates.Any(c => c.Package.Id == x.Package && !c.Package.IsRefused))
