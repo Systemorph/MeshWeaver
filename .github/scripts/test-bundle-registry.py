@@ -210,6 +210,9 @@ def through_dockerhub_mirror(image: str) -> str:
     if not on_docker_hub or os.environ.get("GITHUB_ACTIONS") != "true":
         return image
     name, _, digest = image.removeprefix("docker.io/").partition("@")
+    if not digest:
+        raise SystemExit(f"::error::the chart names {image} without a digest — pin it (@sha256:…) so the mirror "
+                         f"can prove the bytes this check executes are the bytes the chart deploys")
     r = run(["bash", str(HERE / "dockerhub-mirror.sh"), "ref", name])
     if r.returncode != 0:
         print(r.stderr.strip())
