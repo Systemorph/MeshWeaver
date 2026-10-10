@@ -49,8 +49,10 @@
     <PackageReference Include="ClaudeAgentSdk" />
     <!-- MeshWeaver.AI.Copilot -->
     <PackageReference Include="GitHub.Copilot.SDK" />
-    <!-- MeshWeaver.Mail.MicrosoftGraph -->
+    <!-- MeshWeaver.Mail.MicrosoftGraph (MailKit: the "Other email" connection's IMAP/SMTP sign-in
+         test, pinned centrally by #6444) -->
     <PackageReference Include="Microsoft.Graph" />
+    <PackageReference Include="MailKit" />
     <!-- MeshWeaver.Blazor.Radzen -->
     <PackageReference Include="Radzen.Blazor" />
   </ItemGroup>
