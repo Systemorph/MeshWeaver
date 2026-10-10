@@ -710,7 +710,7 @@ RequestTimeout").
 | Handler | Bound | What the stalled verdict says |
 |---|---|---|
 | Create | `Timeout` from handler entry, over the chain up to the written row | `Unavailable`, naming the stage: `authorship-source`, `existence-read`, `partition-bootstrap`, `write-guards`, `validators: <validator> (i/n)` (or `validators: resolving`), `nodetype-resolution`, `write` |
-| Create, after the write | the same deadline, as a VERDICT only — a post-creation handler still running is neither cancelled nor rolled back, because it may yet land its own writes | `Unavailable`: "written, a post-creation step had not finished, the outcome is unknown", naming what the leg was waiting at: `post-creation-handlers: resolving`, `… matching <handler> (i/n)`, `… <handler> (i/n)` or `… <handler> (i/n): additional nodes` — a later completion or compensation is not answered twice |
+| Create, after the write | the same deadline, as a VERDICT only — a post-creation handler still running is neither cancelled nor rolled back, because it may yet land its own writes | `Unavailable`: "written, a post-creation step had not finished, the outcome is unknown", naming what the leg was waiting at: `post-creation-handlers: resolving`, `… matching <handler> (i/n)`, `… <handler> (i/n)`, `… <handler> (i/n): discovering additional nodes` or `… <handler> (i/n): additional nodes` — a later completion or compensation is not answered twice |
 | Copy | `Timeout` from handler entry | `Unknown` with the `Copy reached no verdict:` prefix, naming the stage and, for the create leg, the TARGET paths still outstanding |
 | Move | ONE move-wide deadline, `Timeout` from entry; its delete pre-flight's ladder moved one rung inside it (`NestedTimeout` stage, then leg, then absence probe) so the pre-flight can still name the silent descendant first | `Unavailable` naming the stage (`delete-preflight`, `copy`) when nothing at the source was touched; `Unknown` with "the copy had already landed" when it stalls in `delete-source`; a copy that ANSWERED a failure carries the copy's own reason and transcript, never re-derived from the wording |
 
@@ -760,6 +760,7 @@ trail (`CREATE_STAGE post-creation-handlers: …`):
 | `resolving` | DI construction of the handler registrations |
 | `matching <handler> (i/n)` | asking registration *i* of *n* whether it applies (`Matches`) |
 | `<handler> (i/n)` | running handler *i* of the *n* that apply (`Handle`) |
+| `<handler> (i/n): discovering additional nodes` | asking that handler for its `GetAdditionalNodes` and enumerating them, before `Handle` is subscribed |
 | `<handler> (i/n): additional nodes` | persisting that handler's `GetAdditionalNodes` |
 
 `<handler>` is the type name, or for a module's proxy
@@ -773,8 +774,9 @@ reads its type name in the verdict. `ACreateWaitsOnAModuleContainerUnderConstruc
 (MeshWeaver.Compiler.Pipeline.Test) loads a real module into its own container, parks the
 construction of one of its singletons, and creates a node of an unrelated type: the row is written,
 the verdict reads `post-creation-handlers: matching INodePostCreationHandler [module …,
-registration …]`, the module's handler was never built, and after the release the same create is
-answered `Ok`. Its control, with nothing under construction, succeeds on the first create and
+registration …]`, and the module's handler was never built. After the release the reply to that
+create carries the SAME `Unavailable` verdict (it was claimed at the deadline and is not answered
+twice); only the next create is answered `Ok`. Its control, with nothing under construction, succeeds on the first create and
 shows the dependency from the other side: that create built the module's handler.
 
 **Two things the repro corrected on the way.** Both come from the leg running INSIDE the chain's
@@ -791,7 +793,9 @@ shows the dependency from the other side: that create built the module's handler
 - **The 'outcome unknown' line could be written for a create answered `Ok`.** The deadline read the
   once-only gate, wrote the line, and only then claimed the answer; a leg finishing in between
   answered `Ok` under it. The deadline now claims first, so the line exists only for a verdict that
-  is the create's answer.
+  is the create's answer. `PostCreationVerdictIsSaidOnceTest` makes the window deterministic: it
+  releases a parked leg from inside the write of the line and gives it time to answer; the reply is
+  the line's verdict, and with the old order it is `Ok`.
 
 **What this does not establish.** The naming and the mechanism are pinned; what holds a module's
 container during those boots is not. That the production wait is this one is an inference by

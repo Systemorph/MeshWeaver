@@ -166,9 +166,11 @@ by partition. The doomed process also never logs `Application started`: on the p
 (2026-10-10 18:10Z), the last hosted service to log its start did so 5 ms before that `CreateNode`
 was written, and the process that replaced it logged `Application started` 40 ms after the same
 point. From the image that carries MeshWeaver#6391's refinement on, that `CreateNode` line also
-says what the leg was waiting at (`post-creation-handlers: resolving`, or `… matching <handler>
-[module <name>, registration <i>]`), which names the module container the create could not get an
-answer from ([Write Verdict Totality](../WriteVerdictTotality)). Measured: 3 of 3 evicted pods carried it. None of the healthy new pods in the same
+says what the leg was waiting at ([Write Verdict Totality](../WriteVerdictTotality)). Only the
+`… matching <handler> [module <name>, registration <i>]` form names a module container the create
+could not get an answer from. `post-creation-handlers: resolving` names none: it says the handler
+registrations were still being constructed, which narrows the wait to that construction and no
+further. Measured: 3 of 3 evicted pods carried it. None of the healthy new pods in the same
 rolls did; they created their import manifest within 3 s. The query is
 `did not arrive on time.*_Activity/import-` over the roll window.
 

@@ -1546,7 +1546,8 @@ public static class MeshExtensions
                     // leg does only two things: it RESOLVES the handlers and asks each one's
                     // Matches, and for a handler a module registered both go through a forwarding
                     // proxy into that module's own container. So the stage is refined to
-                    // `resolving`, `matching <handler> (i/n)`, `<handler> (i/n)` and
+                    // `resolving`, `matching <handler> (i/n)`, `<handler> (i/n)`,
+                    // `<handler> (i/n): discovering additional nodes` and
                     // `<handler> (i/n): additional nodes`, set as the leg enters each.
                     var postCreationStage = new PostCreationStage();
                     void EnterPostCreationStage(string detail)
@@ -6847,10 +6848,15 @@ public static class MeshExtensions
                         return Observable.Return(System.Reactive.Unit.Default);
                     });
 
-                IEnumerable<MeshNode> additional;
+                // DISCOVERED here, before Handle is subscribed, so it is its own stage: a handler
+                // that parks in GetAdditionalNodes (or in enumerating what it returned) must not
+                // read as a stalled Handle. Materialised ONCE, inside the try — the sequence may be
+                // lazy, and its enumeration is the handler's code as much as the call is.
+                onStage?.Invoke($"{handlerStage}: discovering additional nodes");
+                IReadOnlyCollection<MeshNode> additional;
                 try
                 {
-                    additional = handler.GetAdditionalNodes(node) ?? Array.Empty<MeshNode>();
+                    additional = (handler.GetAdditionalNodes(node) ?? Array.Empty<MeshNode>()).ToArray();
                 }
                 catch (Exception ex)
                 {
@@ -6860,7 +6866,15 @@ public static class MeshExtensions
                     additional = Array.Empty<MeshNode>();
                 }
 
-                if (persistence == null || !additional.Any())
+                // Back to the handler's own stage at the moment Handle is SUBSCRIBED.
+                var handle = handleObs;
+                handleObs = Observable.Defer(() =>
+                {
+                    onStage?.Invoke(handlerStage);
+                    return handle;
+                });
+
+                if (persistence == null || additional.Count == 0)
                     return handleObs;
 
                 var saveExtras = additional
