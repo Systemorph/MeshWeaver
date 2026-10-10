@@ -4143,11 +4143,16 @@ public static class MeshExtensions
                                         // the SNAPSHOT belongs here, because it is a point-in-time
                                         // reading taken as the stage opens.
                                         var poolsAtStageStart = ioPools?.Snapshot();
+                                        // A leaf QUEUED behind a write lane that is still granting slots to others is waiting
+                                        // its turn, not stuck: credit the watchdog for exactly that (#1198).
+                                        var queueCredit = QueueWaitCredit(ioPools, budget);
 
                                         var drainProgress = new Subject<string>();
                                         return drainProgress
                                             // Every removal is progress the caller is told about.
                                             .Do(removed => requestProgress.OnNext($"removed {removed}"))
+                                            .Select(_ => (IReadOnlyList<string>?)null)
+                                            .Merge(queueCredit)
                                             .Select(_ => (IReadOnlyList<string>?)null)
                                             .Merge(DeleteSubtreeUntilDrained(
                                                     meshHub, issuingHub, storage, path, collected.ToDelete,
@@ -4679,6 +4684,97 @@ public static class MeshExtensions
     /// over live descendants.
     /// </summary>
     private const int MaxDeleteDrainPasses = 5;
+
+    /// <summary>
+    /// How many stage budgets of queue wait a commit may be credited in total. The credit is what keeps the
+    /// no-progress watchdog honest about WHAT it measures, so it must also be bounded: a drain that is
+    /// queued for longer than this still fails, naming the pools (IoPoolQueueReport).
+    /// </summary>
+    private const int QueueCreditBudgets = 4;
+
+    /// <summary>
+    /// Ticks for the commit stage's no-progress watchdog while its work is QUEUED behind a write lane that is
+    /// still moving (#1198). The watchdog measures the gap between this delete's own removals, but a leaf's
+    /// removal ends in ONE write on a cap-1 pg:/sf: pool, and a write that is queued behind other writers
+    /// cannot remove anything until its turn - the wait is not a stall.
+    ///
+    /// <para>A sample earns credit only when BOTH hold since the previous sample: some lane that holds queued
+    /// work GRANTED slots (the lane is advancing, so whoever is queued is served in order), and NO cap-1 write
+    /// lane that held work (in flight or waiting) stood still. The second condition is what ties the credit to
+    /// this delete without attributing pool admissions to callers: a cap-1 lane admits one writer at a time,
+    /// so a leaf that was ADMITTED and then hung holds its lane's only slot and that lane cannot admit anyone
+    /// else. Whichever lane the leaf is in, the sample sees a lane with work that did not advance, and no
+    /// unrelated advancing lane can reset the watchdog for it - an admitted stuck leaf still fails at one
+    /// budget. The rule errs only toward the old behaviour: an unrelated lane that stalls denies credit, so a
+    /// queued leaf may fail at one budget as it did before #1198.</para>
+    ///
+    /// <para>What it cannot see is a leaf stuck OUTSIDE every pool while the lanes advance for others. That
+    /// is why total credit is capped at QueueCreditBudgets budgets: past it the watchdog fails as before,
+    /// naming the pools (IoPoolQueueReport). Read-only: lock-free counters from IoPoolRegistry.Snapshot,
+    /// which mints nothing.</para>
+    /// </summary>
+    private static IObservable<IReadOnlyList<string>?> QueueWaitCredit(IoPoolRegistry? ioPools, TimeSpan budget)
+    {
+        if (ioPools is null)
+            return Observable.Never<IReadOnlyList<string>?>();
+
+        var interval = TimeSpan.FromTicks(Math.Max(TimeSpan.FromMilliseconds(100).Ticks, budget.Ticks / 10));
+        var ceiling = TimeSpan.FromTicks(budget.Ticks * QueueCreditBudgets);
+
+        return Observable.Interval(interval)
+            .Select(_ => WriteLaneAdmissions(ioPools))
+            .Scan(
+                (Previous: (ImmutableDictionary<string, (long Admitted, bool Busy, bool Queued)>?)null,
+                 Current: ImmutableDictionary<string, (long Admitted, bool Busy, bool Queued)>.Empty),
+                (acc, current) => (acc.Current, current))
+            .Select(pair => pair.Previous is { } previous && EarnsQueueCredit(previous, pair.Current))
+            .Scan(
+                (Credited: TimeSpan.Zero, Tick: false),
+                (acc, earned) => earned && acc.Credited + interval <= ceiling
+                    ? (acc.Credited + interval, true)
+                    : (acc.Credited, false))
+            .Where(state => state.Tick)
+            .Select(_ => (IReadOnlyList<string>?)null);
+    }
+
+    /// <summary>
+    /// The cap-1 pg:/sf: write lanes as one point-in-time reading: per lane, the admissions granted so far,
+    /// whether it holds work (in flight or waiting), and whether work is queued on it.
+    /// </summary>
+    private static ImmutableDictionary<string, (long Admitted, bool Busy, bool Queued)> WriteLaneAdmissions(
+        IoPoolRegistry ioPools) =>
+        ioPools.Snapshot()
+            .Where(reading => reading.MaxConcurrency == 1
+                              && (reading.Name.StartsWith(IoPoolNames.PostgresAdapterPrefix, StringComparison.Ordinal)
+                                  || reading.Name.StartsWith(IoPoolNames.SnowflakeAdapterPrefix, StringComparison.Ordinal)))
+            .ToImmutableDictionary(
+                reading => reading.Name,
+                reading => ((long)reading.QueueWait.Samples,
+                    reading.InFlight > 0 || reading.Waiting > 0,
+                    reading.Waiting > 0),
+                StringComparer.Ordinal);
+
+    /// <summary>
+    /// Whether the interval between two write-lane readings earns queue credit: a lane with queued work
+    /// advanced, and no lane that held work at the start of the interval stood still (see QueueWaitCredit).
+    /// </summary>
+    private static bool EarnsQueueCredit(
+        ImmutableDictionary<string, (long Admitted, bool Busy, bool Queued)> previous,
+        ImmutableDictionary<string, (long Admitted, bool Busy, bool Queued)> current)
+    {
+        var advanced = false;
+        foreach (var (name, now) in current)
+        {
+            if (!previous.TryGetValue(name, out var was))
+                continue;
+            var moved = now.Admitted > was.Admitted;
+            if (was.Busy && now.Busy && !moved)
+                return false;
+            if (now.Queued && moved)
+                advanced = true;
+        }
+        return advanced;
+    }
 
     /// <summary>
     /// How often a running delete tells its caller it is still advancing (<see cref="RequestProgress"/>),
