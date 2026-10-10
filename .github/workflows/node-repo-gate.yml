@@ -2068,6 +2068,9 @@ jobs:
           SHARD: ${{ needs.plan.outputs.shards != '1' && format('{0}/{1}', matrix.shard, needs.plan.outputs.shards) || '' }}
           # Empty unless upstream-seed fetched a publication — then the tester consumes it.
           SEED_DIR: ${{ steps.seed.outputs.dir }}
+          # The sealed set the volume served (volume mode only; empty in container mode). It is the
+          # platform's release version, and in volume mode the tester learns it from here alone.
+          VOLUME_SET: ${{ steps.platform-source.outputs.set }}
         # Allow entries whose module is not mounted on a narrowed run are "unverifiable" —
         # warned, never failed — so narrowing cannot trip the ratchet. On a narrowed run the
         # affected closure is STAGED into its own tree and gated as the repo root — the tester
@@ -2082,6 +2085,22 @@ jobs:
           if [ "$MODE" = volume ]; then
             P_APP="$PORTAL_APP"                       # the portal's /app, read off the share
             P_SHARED="$RUNNER_SHARED_FRAMEWORKS"      # the runner's <dotnet root>/shared
+            # 🚨 THE RUNNING PLATFORM VERSION. A running portal identifies itself by
+            # MESHWEAVER_PLATFORM_VERSION, which rides the portal IMAGE CONFIG — so container mode
+            # (`docker run "$PLATFORM_REF"`) inherits it, and volume mode, which starts the composed
+            # host with the runner's `dotnet`, did NOT. The tester then fell back to the assembly's
+            # informational version, which under SemVer carries no run number (`3.1.0+<sha>`), and
+            # every package whose minMeshVersion floor names the set it was verified on
+            # (`3.1.10365`) was refused as "needs platform ≥ 3.1.10365, this instance runs 3.1.0"
+            # — the floor gate judging a platform that is not the one under test. The set name IS
+            # that image's version (the same name the floor stamp records as verifiedOn), so the
+            # volume host is given it here, in the shapes the pipeline mints, and RED otherwise.
+            [[ "${VOLUME_SET:-}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-([0-9A-Za-z]+\.)?(ci|edge)\.[0-9]+)?$ ]] || {
+              echo "::error::volume mode served set '${VOLUME_SET:-}', which is not a platform release version — the composed host cannot be told which platform it runs, and every minMeshVersion floor would be judged against the assembly's run-less version instead."
+              exit 1
+            }
+            export MESHWEAVER_PLATFORM_VERSION="$VOLUME_SET"
+            echo "volume host runs as platform $MESHWEAVER_PLATFORM_VERSION (the set the volume served)"
           else
             P_APP=/app                                # the portal IMAGE's own /app
             P_SHARED=/usr/share/dotnet/shared         # the portal IMAGE's implementation frameworks
