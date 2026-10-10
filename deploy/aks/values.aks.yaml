@@ -341,6 +341,9 @@ config:
     # while still Ready (2026-08-25, MeshWeaver#2194). Applies fleet-wide: every AKS
     # portal self-updates its catalog, so every one needs the convergence policy.
     Modules__AutoRecycleOnStaleBuild: "true"
+    # Apps live on the instance (maintainer 2026-10-10): the home lists the apps a viewer can
+    # see through access, from the live app directory, not from per-user _App copies.
+    Home__AppSource: "Directory"
     Mcp__BaseUrl: "http://memex-portal-service:8080"
     # ---- AI model providers (templated by the chart) ------------------------
     # These seed the system model catalog on deploy (BuiltInLanguageModelProvider
