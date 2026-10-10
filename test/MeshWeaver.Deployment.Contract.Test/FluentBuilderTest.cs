@@ -214,6 +214,47 @@ public class FluentBuilderTest
     }
 
     [Fact]
+    public void MaintainerSignsAloneRendersOnlyWhenTrue_OnBothRenderers_AndSurvivesTheContract()
+    {
+        // Policy sole-maintainer-approval: the record declares that the maintainer's one signature
+        // satisfies a signature gate of any count. It must survive the JSON contract, render the
+        // literal "true" on both renderers, and default to false with NO key.
+        var alone = new DeploymentContent
+        {
+            Operator = new HostingOperatorSpec { Executor = "Actions", Maintainer = "rbuergi", MaintainerSignsAlone = true },
+        };
+        var json = DeploymentRecordJson.Write(alone);
+        Assert.Contains("\"maintainerSignsAlone\":true", json);
+        Assert.True(DeploymentRecordJson.Read(json)!.Operator!.MaintainerSignsAlone);
+        foreach (var options in new[] { PortalConfigOptions.Helm, PortalConfigOptions.Aspire("http://localhost:8080") })
+        {
+            var config = DeploymentPortalConfig.PortalConfig(alone, options);
+            Assert.Equal("true", config["Hosting__Operator__MaintainerSignsAlone"]);
+            Assert.Equal("rbuergi", config["Hosting__Operator__Maintainer"]);
+        }
+
+        // Negative controls: a record that does not name it reads false and renders no key, before
+        // and after a round trip, and switching it off removes the key.
+        var plain = DeploymentRecordJson.Read("{\"operator\":{\"executor\":\"Actions\",\"maintainer\":\"rbuergi\"}}")!;
+        Assert.False(plain.Operator!.MaintainerSignsAlone);
+        Assert.False(DeploymentPortalConfig.PortalConfig(plain, PortalConfigOptions.Helm).ContainsKey("Hosting__Operator__MaintainerSignsAlone"));
+        var off = alone with { Operator = alone.Operator with { MaintainerSignsAlone = false } };
+        Assert.False(DeploymentPortalConfig.PortalConfig(off, PortalConfigOptions.Helm).ContainsKey("Hosting__Operator__MaintainerSignsAlone"));
+
+        // The key is RESERVED for the typed field: an extra naming it, in any case, never re-enables it
+        // behind a record that says false — on either renderer.
+        var shadowed = off with
+        {
+            ExtraPortalConfig = off.ExtraPortalConfig
+                .SetItem("Hosting__Operator__MaintainerSignsAlone", "true")
+                .SetItem("HOSTING__OPERATOR__MAINTAINERSIGNSALONE", "true"),
+        };
+        foreach (var options in new[] { PortalConfigOptions.Helm, PortalConfigOptions.Aspire("http://localhost:8080") })
+            Assert.DoesNotContain(DeploymentPortalConfig.PortalConfig(shadowed, options).Keys,
+                k => string.Equals(k, "Hosting__Operator__MaintainerSignsAlone", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void ACustomerGovernedRecordSurvivesTheContractAndRendersNothingIntoThePortal()
     {
         // Policy customer-instance-governance (Plugins#2495): the record DECLARES that the instance's
