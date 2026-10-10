@@ -54,10 +54,13 @@ public sealed class GitProtocolRepoClient(
     {
         var branch = string.IsNullOrWhiteSpace(request.Branch) ? "main" : request.Branch.Trim();
         var prefix = NormalizePrefix(request.Subdirectory);
+        // Provider-aware credential (MeshWeaver#5248): Azure Repos takes the Entra token as a
+        // bearer header, every other remote the existing credential helper.
+        var auth = GitCredentials.ForRemote(request.RepositoryUrl, request.AccessToken);
         return EnsureRepo(request)
             .SelectMany(repoCreated => WithTempDir(tmp =>
-                Clone(request.RepositoryUrl, request.AccessToken, tmp)
-                    .SelectMany(_ => CheckoutTargetBranch(tmp, branch, request))
+                Clone(request.RepositoryUrl, auth, tmp)
+                    .SelectMany(_ => CheckoutTargetBranch(tmp, branch, request, auth))
                     .SelectMany(refExists => TrackedFilesUnder(tmp, prefix)
                         .SelectMany(existing =>
                         {
@@ -68,9 +71,8 @@ public sealed class GitProtocolRepoClient(
                             return MirrorWorktree(tmp, prefix, request.Files)
                                 .SelectMany(_ => Commit(tmp, request))
                                 .SelectMany(_ => Expect(git.Run(tmp,
-                                    [.. GitCredentials.AuthArgs(request.AccessToken),
-                                        "push", "-q", "origin", $"HEAD:refs/heads/{branch}"],
-                                    GitCredentials.AuthEnv(request.AccessToken))))
+                                    [.. auth.Args, "push", "-q", "origin", $"HEAD:refs/heads/{branch}"],
+                                    auth.Env)))
                                 .SelectMany(_ => Expect(git.Run(tmp, ["rev-parse", "HEAD"])))
                                 .Select(sha => new GitHubPushResult(
                                     sha.StdOut.Trim(), request.RepositoryUrl,
@@ -448,9 +450,12 @@ public sealed class GitProtocolRepoClient(
     // ── push internals ───────────────────────────────────────────────────────
 
     /// <summary>Repo existence/creation is REST-only (git cannot create a GitHub repo) — and only
-    /// meaningful for a GitHub remote; a local/file remote (tests) is taken as existing.</summary>
+    /// meaningful for a GitHub remote; a local/file remote (tests) is taken as existing. An Azure
+    /// Repos remote (MeshWeaver#5248) is taken as existing too: the GitHub REST surface does not
+    /// apply to it, and creating an Azure Repos repository is out of scope — a missing one fails
+    /// the clone with git's own message.</summary>
     private IObservable<bool> EnsureRepo(GitHubPushRequest request)
-        => IsGitHubUrl(request.RepositoryUrl)
+        => IsGitHubUrl(request.RepositoryUrl) && !GitRepositoryProvider.IsAzureRepos(request.RepositoryUrl)
             ? octokit.EnsureRepoExists(
                 request.RepositoryUrl, request.AccessToken, request.CreatePrivateIfMissing)
             : Observable.Return(false);
@@ -459,10 +464,11 @@ public sealed class GitProtocolRepoClient(
     /// Shallow clone of the remote's DEFAULT branch. Tolerates an EMPTY repo (git exits 0 with an
     /// unborn HEAD — the first commit then initializes it; no Contents-API seeding needed).
     /// </summary>
-    private IObservable<GitCommandResult> Clone(string url, string token, string tmp)
+    private IObservable<GitCommandResult> Clone(
+        string url, (IReadOnlyList<string> Args, IReadOnlyDictionary<string, string>? Env) auth, string tmp)
         => Expect(git.Run(tmp,
-            [.. GitCredentials.AuthArgs(token), "clone", "-q", "--depth", "1", url, "."],
-            GitCredentials.AuthEnv(token)));
+            [.. auth.Args, "clone", "-q", "--depth", "1", url, "."],
+            auth.Env));
 
     /// <summary>
     /// Puts the worktree on the TARGET branch and reports whether it existed on the remote:
@@ -475,18 +481,19 @@ public sealed class GitProtocolRepoClient(
     ///   <item>missing + auto-create disabled → error.</item>
     /// </list>
     /// </summary>
-    private IObservable<bool> CheckoutTargetBranch(string tmp, string branch, GitHubPushRequest request)
+    private IObservable<bool> CheckoutTargetBranch(
+        string tmp, string branch, GitHubPushRequest request,
+        (IReadOnlyList<string> Args, IReadOnlyDictionary<string, string>? Env) auth)
         => Expect(git.Run(tmp,
-                [.. GitCredentials.AuthArgs(request.AccessToken), "ls-remote", "--heads", "origin", branch],
-                GitCredentials.AuthEnv(request.AccessToken)))
+                [.. auth.Args, "ls-remote", "--heads", "origin", branch],
+                auth.Env))
             .SelectMany(remote =>
             {
                 var refExists = remote.StdOut.Trim().Length > 0;
                 if (refExists)
                     return Expect(git.Run(tmp,
-                            [.. GitCredentials.AuthArgs(request.AccessToken),
-                                "fetch", "-q", "--depth", "1", "origin", branch],
-                            GitCredentials.AuthEnv(request.AccessToken)))
+                            [.. auth.Args, "fetch", "-q", "--depth", "1", "origin", branch],
+                            auth.Env))
                         .SelectMany(_ => Expect(git.Run(tmp, ["checkout", "-q", "-B", branch, "FETCH_HEAD"])))
                         .Select(_ => true);
                 if (!request.CreateBranchIfMissing)

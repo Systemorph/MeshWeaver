@@ -1058,6 +1058,79 @@ def generated_only(pr: dict, files: list | None, commits: list | None) -> tuple[
     return True, f"{len(files)} generated file(s) by {pr['user'].get('login')}, every commit the App's"
 
 
+# 🚨 ARMING A GENERATED-ONLY PULL REQUEST (`--arm-generated`, called by auto-arm.yml's second job).
+# The control plane's PR steward used to be the only thing that armed the settle/stamp pull requests,
+# and it is switched off fleet-wide (it spent the model budget); Plugins #3236 then sat green and
+# unarmed for ~10.5 h and Plugins published nothing for ~13.5 h. A generated-only pull request owes no
+# review (`generated_only`, above — the same provenance rule the stage gate and the required verdict
+# apply), so arming one decides nothing a review would have decided; the required checks still gate
+# the merge. Everything else stays the control plane's decision: this verdict is FALSE for any pull
+# request the rule does not positively prove generated, and for every doubt about the reads.
+def arm_generated_verdict(pr: dict, files: list | None, commits: list | None,
+                          head_after: str | None) -> tuple[bool, str]:
+    """(True, why) only when a pull request may be armed with no review: generated-only by the App,
+    open, not a draft, from a branch of this repository, onto the default branch, and its head did not
+    move while its files and commits were read. Pure; fails closed."""
+    if not is_generated_bot(pr.get("user")):
+        return False, "not authored by the generated-files App — arming stays the control plane's decision"
+    if pr.get("state") != "open":
+        return False, f"it is {pr.get('state')!r}, not open"
+    if pr.get("draft") is not False:
+        return False, "it is a draft (or its draft flag is unread) — a draft is the author's own hold"
+    head, base = pr.get("head") or {}, pr.get("base") or {}
+    head_repo = (head.get("repo") or {}).get("full_name")
+    base_repo = (base.get("repo") or {}).get("full_name")
+    if not head_repo or head_repo != base_repo:
+        return False, f"its head is not a branch of this repository ({head_repo!r} vs {base_repo!r})"
+    default = (base.get("repo") or {}).get("default_branch")
+    if not default or base.get("ref") != default:
+        return False, f"it targets {base.get('ref')!r}, not the default branch {default!r}"
+    sha = str(head.get("sha") or "")
+    if not re.fullmatch(r"[0-9a-f]{40}", sha):
+        return False, "it reported no head sha"
+    # Completeness is PROVEN here, not inferred: `generated_only` reads a missing count as zero, so a
+    # partial listing of a payload without `changed_files`/`commits` would pass it (#6412 review).
+    for field, listing in (("changed_files", files), ("commits", commits)):
+        count = pr.get(field)
+        if not isinstance(count, int) or isinstance(count, bool) or count <= 0:
+            return False, f"its `{field}` count is {count!r}, not a positive number — the listing cannot be shown complete"
+        if not isinstance(listing, list) or len(listing) != count:
+            return False, f"the {field} listing returned {len(listing) if isinstance(listing, list) else None} of {count}"
+    ok, why = generated_only(pr, files, commits)
+    if not ok:
+        return False, why
+    if head_after != sha:
+        return False, f"its head moved from {sha[:10]} to {str(head_after)[:10]} while its files were read"
+    return True, why
+
+
+def run_arm_generated(repo: str, number: int) -> int:
+    """Exit 0 with `arm=true|false` (+ `head=`) on $GITHUB_OUTPUT; exit 1 (RED, nothing armed) when an
+    App pull request's reads fail. A person's pull request is decided `false` without further reads."""
+    head = ""
+    try:
+        gh = Gh(repo)
+        pr = gh.api(f"pulls/{number}")
+        if not isinstance(pr, dict) or pr.get("number") != number:
+            raise ReadError(f"pulls/{number} did not return pull request #{number}")
+        files = commits = None
+        head_after = None
+        if is_generated_bot(pr.get("user")):
+            files = gh.api(f"pulls/{number}/files?per_page=100", paginate=True)
+            commits = gh.api(f"pulls/{number}/commits?per_page=100", paginate=True)
+            head_after = str(((gh.api(f"pulls/{number}") or {}).get("head") or {}).get("sha") or "")
+        arm, why = arm_generated_verdict(pr, files, commits, head_after)
+        head = str((pr.get("head") or {}).get("sha") or "") if arm else ""
+    except (ReadError, KeyError, TypeError, ValueError) as e:
+        print(f"::error::cannot read #{number}, so it is NOT armed: {e}")
+        _append("GITHUB_OUTPUT", "arm=false\nhead=\n")
+        return 1
+    print(f"{'ARM' if arm else 'not armed'} #{number}: {why}")
+    _append("GITHUB_OUTPUT", f"arm={'true' if arm else 'false'}\nhead={head}\n")
+    _append("GITHUB_STEP_SUMMARY", f"{'✅ arming' if arm else 'ℹ️ not arming'} #{number}: {why}\n")
+    return 0
+
+
 def stage_readiness(pr: dict, comments: list, check_runs, now: str, since: str,
                     fallback_minutes: int = STAGE_FALLBACK_MINUTES,
                     files: list | None = None, commits: list | None = None, carry: Carry | None = None,
@@ -2385,6 +2458,48 @@ def self_test() -> int:
     ok = v.mode == "fallback"
     failures += 0 if ok else 1
     print(f"self-test {'ok' if ok else 'FAIL':4} stage: {'an App PR falls back on the PR clock, not the head clock':53} got={v.mode}")
+    # ── arming a generated-only App PR with no review (`--arm-generated`): ARM only on positive proof.
+    SHA = "a" * 40
+    def apr(**kw):
+        repo = {"full_name": "Systemorph/MeshWeaver.Plugins", "default_branch": "main"}
+        base = dict(gpr(), state="open", draft=False, commits=1, head={"sha": SHA, "repo": repo},
+                    base={"ref": "main", "repo": repo})
+        base.update(kw)
+        return base
+    def arm_case(name, expect, pr, files, commits, head_after=SHA):
+        nonlocal failures
+        got, why = arm_generated_verdict(pr, files, commits, head_after)
+        ok = got is expect
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} arm: {name:55} expected={expect} got={got} ({why})")
+    arm_case("settle PR (App, locks only) -> ARM", True, apr(), LOCKS, BOT_COMMITS)
+    arm_case("floor stamp (App, floor lines only) -> ARM", True, apr(), FLOOR, BOT_COMMITS)
+    arm_case("a PERSON's PR touching only locks -> never", False, apr(user=HUMAN), LOCKS, [{"author": HUMAN}])
+    arm_case("another bot's PR (systemorph-com) -> never", False,
+             apr(user={"login": "systemorph-com[bot]", "type": "Bot", "id": 1}), LOCKS, BOT_COMMITS)
+    arm_case("App PR with one hand-written file (mixed) -> never", False, apr(),
+             LOCKS[:1] + [{"filename": "Hosting/X.cs", "patch": "+x"}], BOT_COMMITS)
+    arm_case("App PR with a person's commit -> never", False, apr(commits=2), LOCKS, BOT_COMMITS + [{"author": HUMAN}])
+    arm_case("changed_files count missing, partial list -> never", False,
+             {k: v for k, v in apr().items() if k != "changed_files"}, LOCKS[:1], BOT_COMMITS)
+    arm_case("commits count missing -> never", False, {k: v for k, v in apr().items() if k != "commits"}, LOCKS, BOT_COMMITS)
+    arm_case("more files listed than reported -> never", False, apr(changed_files=1), LOCKS, BOT_COMMITS)
+    arm_case("unreadable file list (None) -> never", False, apr(), None, BOT_COMMITS)
+    arm_case("empty file list -> never", False, apr(), [], BOT_COMMITS)
+    arm_case("short file list (2 of 3) -> never", False, apr(changed_files=3), LOCKS, BOT_COMMITS)
+    arm_case("unreadable commit list -> never", False, apr(), LOCKS, None)
+    arm_case("index.json with no patch (too large to diff) -> never", False, apr(changed_files=1),
+             [{"filename": "AI/index.json"}], BOT_COMMITS)
+    arm_case("draft -> never", False, apr(draft=True), LOCKS, BOT_COMMITS)
+    arm_case("draft flag missing -> never", False, {k: v for k, v in apr().items() if k != "draft"}, LOCKS, BOT_COMMITS)
+    arm_case("closed -> never", False, apr(state="closed"), LOCKS, BOT_COMMITS)
+    arm_case("head from a fork -> never", False,
+             apr(head={"sha": SHA, "repo": {"full_name": "someone/MeshWeaver.Plugins"}}), LOCKS, BOT_COMMITS)
+    arm_case("base is not the default branch -> never", False,
+             apr(base={"ref": "release", "repo": {"full_name": "Systemorph/MeshWeaver.Plugins", "default_branch": "main"}}),
+             LOCKS, BOT_COMMITS)
+    arm_case("head moved while the files were read -> never", False, apr(), LOCKS, BOT_COMMITS, head_after="b" * 40)
+    arm_case("head unread after the files -> never", False, apr(), LOCKS, BOT_COMMITS, head_after=None)
     # ── the REQUIRED verdict (`evaluate`) agrees with the stage gate on generated-only App PRs (Plugins #3044):
     # the reviewer refuses a lock-only pull request, and without this the settle/stamp PRs sat red until a
     # person waived them — main published nothing in between. NEGATIVE CONTROLS: the same refusal on a
@@ -2796,6 +2911,9 @@ def main(argv=None) -> int:
                     help="while the ONLY thing missing is the reviewer's review, re-read for up to this "
                          "many minutes (its own event cannot start a run here — see waiting_would_help), "
                          "then answer RED")
+    ap.add_argument("--arm-generated", action="store_true",
+                    help="decide whether --pr is a generated-only App pull request that may be armed with no review; "
+                         "writes arm=true|false and head=<sha> to $GITHUB_OUTPUT")
     ap.add_argument("--stage-gate", action="store_true",
                     help="the staged pipeline's stage-1 gate: may stage 2 start for this head (stage_readiness)? "
                          "exit 0 = yes, 1 = held (RED, named); takes --repo, --pr, --since, --fallback-minutes")
@@ -2858,6 +2976,11 @@ def main(argv=None) -> int:
         return run_stage_advance(args.repo, args.workflow, pr=int(args.pr) if args.pr else None, head_sha=args.head_sha,
                                  sweep=args.sweep, fallback_minutes=args.fallback_minutes,
                                  wait_minutes=max(0, min(args.wait_minutes, 30)))
+    if args.arm_generated:
+        if not args.pr or args.merge_group_ref or not re.fullmatch(r"[1-9]\d*", args.pr):
+            print("::error::--arm-generated takes --repo and --pr <number> only")
+            return 2
+        return run_arm_generated(args.repo, int(args.pr))
     if args.stage_gate:
         if not args.pr or args.merge_group_ref or not re.fullmatch(r"[1-9]\d*", args.pr):
             print("::error::--stage-gate takes --repo, --pr <number>, --since and --fallback-minutes")
