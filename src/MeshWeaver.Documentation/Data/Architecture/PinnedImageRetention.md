@@ -379,6 +379,22 @@ scanner over a real tree: the operator-only record keeps `build` out of scope. I
 tree with the record's portal in this registry, is still *half covered*. With the old join, ARM 20c
 reproduces the production line verbatim.
 
+🚨 **The overlay has an operator pin of its own, and the same rule applies to it.** The run on that
+fix's merge (`38054665690`) was still red, on two of the three: the client estate's control/test
+pair. The record was only one of the two files that describe an installation. An overlay configures
+the operator under the chart's `hostingOperator.image`, and the overlay half of the join still took
+every in-registry image the overlay's text mentions. Both installations pin their operator in the
+overlay, in the registry this lane locks (one on a fixed tag, one floating on `main`), while their
+portal and migration images live in their own registry. So `hosting-operator` was still their whole
+running set, and *half covered* fired on both. `pearl` went green because its overlay names no
+operator image. The scanner now records a repository an overlay pins **only** under its top-level
+`hostingOperator:` block (`OverlayScan.overlay_operators`), and the join leaves it out. A repository
+the overlay also pins outside that block stays in the set. AXIS 2 is unchanged: the operator is still
+locked by the tag the overlay pins. Self-test ARM 20d drives both tag shapes through the production
+scanner. Its two controls are the same image under a key that is not the operator's, and the same
+repository pinned both inside and outside the block; both are still *half covered*. With the old
+join, ARM 20d reproduces the production line verbatim.
+
 ## The retention half — the deletion is stopped, not reported
 
 🚨 **The purge task definitions are CLOUD-ONLY.** Established three ways rather than assumed:
