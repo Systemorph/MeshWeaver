@@ -1,4 +1,5 @@
-﻿using System.ComponentModel;
+﻿using System.Collections.Immutable;
+using System.ComponentModel;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
@@ -155,6 +156,30 @@ public record PartitionAccessPolicy
     [Translation("de", "Gesperrte Seiten hier dürfen sich in Link-Vorschauen selbst beschreiben "
                        + "(Name, Kurzbeschreibung, Symbol)")]
     public bool? PublicPreview { get; init; }
+
+    /// <summary>
+    /// OPTIONAL AUDIENCE of a package or app partition: the user ids or group paths a GRANT the
+    /// partition's owner derives (for example the Store's plan coverage) is narrowed to.
+    /// <c>null</c> or empty = no narrowing, which is what every policy has today.
+    ///
+    /// <para><b>It is DATA, not a rule of this evaluator.</b> The permission fold does not read it:
+    /// it neither grants nor denies anything by itself, and an <see cref="AccessAssignment"/> keeps
+    /// working exactly as before whatever this list says (grants only add). The owner of the
+    /// partition reads it and materialises the grants it decides (the Store writes one Viewer
+    /// assignment per audience id instead of opening the partition to every signed-in user), so
+    /// the read check and the search projection see the same rows.</para>
+    ///
+    /// <para>It lives here, on the policy node, because the policy is the partition's own access
+    /// satellite: it is never overwritten by a repository sync, and an administrator edits it
+    /// where the other switches of the partition already are. Declared on the record so a typed
+    /// round-trip of the policy keeps it.</para>
+    ///
+    /// <para>Users and groups only — the subjects an <see cref="AccessAssignment"/> can name. A role
+    /// id is not a subject the evaluator matches, so it would grant nobody.</para>
+    /// </summary>
+    [Description("Who a derived grant (e.g. plan coverage) is narrowed to — user ids or group paths; empty = everyone it covers")]
+    [Translation("de", "Für wen eine abgeleitete Freigabe (z. B. durch das Abo) gilt — Benutzer-IDs oder Gruppenpfade; leer = alle")]
+    public ImmutableList<string>? Audience { get; init; }
 
     /// <summary>
     /// Computes the permission cap mask from individual switches.
