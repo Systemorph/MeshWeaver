@@ -215,8 +215,11 @@ pluginCatalog:
   instanceId: ""
   # CONSUMER: this install's public URL recorded on the instance node; defaults to the ingress host.
   homeUrl: ""
-  # CONSUMER: what a FRESH install installs by itself on first startup, in the same Source/Package
-  # notation as the grants. "Plugins/*" = the whole platform plugin repo (which carries the Store),
+  # CONSUMER: what this install installs by itself at startup, in the same Source/Package
+  # notation as the grants. Runs on every boot, gated PER PACKAGE by Plugins/_DefaultInstallLedger:
+  # a package the seed delivered once is never re-installed (an operator removed it); a package
+  # newly listed under a whole-source pattern is HELD for a governed package.provision activity;
+  # a commercial package is never installed unattended and is recorded under `skipped`. "Plugins/*" = the whole platform plugin repo (which carries the Store),
   # so a new deployment comes up usable instead of with an empty-but-authorized catalog. Deliberately
   # source-scoped: an install also granted paid course content must NOT auto-install it. Empty =
   # install nothing (the platform default; an admin installs by hand).
@@ -230,8 +233,8 @@ pluginCatalog:
 
 # ---- Per-environment composition: FEATURE FLAGS ------------------------------
 # A named switch this environment turns on or off, optionally carrying the packages the environment
-# ALWAYS has — reconciled on every boot, unlike pluginCatalog.installByDefault, which seeds once and
-# is therefore a no-op on an already-populated portal.
+# ALWAYS has — reconciled on every boot, unlike pluginCatalog.installByDefault, which seeds each
+# package at most once (ledger-gated) and so never re-asserts a package an operator removed.
 #
 #   • an ENABLED flag INSTALLS the packages it names
 #   • a declared-but-DISABLED flag EXCLUDES them, and the exclusion wins over every other signal

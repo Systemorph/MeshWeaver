@@ -88,9 +88,17 @@ and they are independent:
   a self-update. On an up-to-date instance the content-identity gate turns it into one catalog
   listing and no writes. It is also the only mechanism that can heal an instance whose baseline
   partition was lost.
-- **`PluginCatalog:InstallByDefault`** (default empty) *seeds* a fresh deployment once: on startup an
-  installation with **no install records yet** installs every catalog entry matching its
-  `Source/Package` patterns, through the same path the Install button uses. Our deployments set
+- **`PluginCatalog:InstallByDefault`** (default empty) *seeds* each matching package once. The pass
+  runs on **every** boot and is gated **per package** by the default-install ledger
+  (`Plugins/_DefaultInstallLedger`): a catalog entry matching the `Source/Package` patterns that the
+  seed never delivered is installed, through the same path the Install button uses; one it delivered
+  before is left alone forever, even if it is gone now — only an operator removes a package, and the
+  seed does not fight an operator. That is also what repairs a bad first config or a failed install
+  on the next boot. A package **newly listed** in a source this instance already seeded from, and
+  covered only by a whole-source pattern such as `Plugins/*`, is **held**: it lands through a
+  governed `package.provision` activity, or by being named exactly. A **commercial** package (a
+  price or a sales contact) is never installed by this unattended pass — it has no authorizing
+  principal — and is recorded under `skipped` on the ledger with its reason. Our deployments set
   `["Plugins/*"]`, so a new portal comes up with the platform plugins — the Store included — already
   present and (per `AutoUpdateByDefault`) tracking their repo. 🚨 Over a **local checkout** — a
   `PluginCatalog:Sources:N:RepoPath` that is a directory on the host, which is what a self-registry
@@ -101,17 +109,16 @@ and they are independent:
   nothing when nothing changed, and a disabled feature flag still excludes.
 - **`Features:Flags:{name}:Packages`** *asserts* a per-environment policy, reconciled on **every**
   boot: what THIS deployment always has, with a declared-but-disabled flag EXCLUDING what it names.
-  🚨 Use this, not `InstallByDefault`, whenever the portal already has install records — the seed is
-  ledger-gated and can say nothing about an already-populated installation, which is every live
-  portal. Full treatment: [Environment Composition](/Doc/Architecture/EnvironmentComposition).
+  🚨 Use this, not `InstallByDefault`, to ASSERT what a portal always has — the seed is
+  ledger-gated, so it never re-installs a package it delivered once and an operator removed. Full treatment: [Environment Composition](/Doc/Architecture/EnvironmentComposition).
 
 > 🚨 The selection is **source-scoped, and that is a security property, not a convenience**. An
 > instance is routinely granted the platform repo *and* paid course content; "install everything I'm
 > entitled to" would auto-install the paid content. Matching is against the catalog entry's
 > `Source` — stamped by the registry as it merges its sources — so `Plugins/*` can never reach an
 > `Education` package. A registry too old to stamp `Source` matches nothing and installs nothing,
-> failing closed. The default install runs only while the installation has no packages at all, so it
-> seeds a new deployment rather than re-asserting itself against an admin who uninstalled something.
+> failing closed. The default install seeds each package at most once (the ledger), so it never
+> re-asserts itself against an admin who uninstalled something.
 
 What a registered instance can then read is **curated plugins** only:
 by default the node-native repos the [`MeshWeaver.Plugins`](/Doc/Architecture/Plugins) repo ships —
@@ -603,7 +610,7 @@ lists image tags with, so an installation speaks to the fleet's registry through
 one credential, for images and bundles alike. The design is
 [Plugin Bundles in the Registry](../PluginBundlesInTheRegistry).
 
-## Free syncs freely, commercial needs a Global Admin
+## Free syncs freely, commercial needs a Global Admin or a governed activity
 
 Who may bring a package onto an installation is decided by its **price**, and the decision is made on
 the **action**, not on the screen that triggered it:
@@ -611,7 +618,7 @@ the **action**, not on the screen that triggered it:
 | Package | Access / sync |
 |---|---|
 | **Free** — `price` null or `0` | Installs and auto-updates with **no special permission**. This is what lets a fresh installation pick up the platform baseline unattended. |
-| **Commercial** — a non-zero `price` (positive = purchasable, negative = coupon-only) | Requires **Global Admin** on the installing instance to install or update. |
+| **Commercial** — a non-zero `price` (positive = purchasable, negative = coupon-only), or a sales contact (`contactEmail`) | Requires **Global Admin** on the installing instance, or a **verified governed `package.provision` activity** signed for the package, to install or update. |
 
 `PackageEntitlement.Authorize` is the single rule, and it runs inside `PackageInstaller.Install` /
 `InstallNodeRepoDelta` — so the machine paths are gated exactly like a click:
@@ -621,8 +628,31 @@ the **action**, not on the screen that triggered it:
 - **The install record remembers the authorizer** (`Package.authorizedBy`), and the
   [update watcher](/Doc/Architecture/PluginUpdateOnGreenBuild) re-verifies that principal is *still* a
   global admin before applying a commercial delta. Revoking the admin stops the syncing.
+- **A governed activity is an authorizing principal.** Installing a package on an instance goes
+  through a governed `package.provision` activity signed by people, not through a person's standing
+  rights, so the Store's provision control plane hands the activity (`Governance/Activities/{id}`)
+  over as the principal once it has verified the request. The gate does not take the path on trust:
+  it reads the activity **authoritatively from storage** (`ReadGovernedActivity` — the same
+  identity-independent read the broad-grant guard uses, so core needs no reference to the Governance
+  package) and admits only when all of these hold (`PackageEntitlement.WhyNotAuthorizingActivity`):
+
+  | check | refused when |
+  |---|---|
+  | the path | it is not exactly `Governance/Activities/{id}`, or nothing readable is stored there |
+  | the node type | it is not a `Governance/Activity` |
+  | the standard | it is not `package.provision` |
+  | the state | it has not started — `Executing`, `Done` or `Failed` are started (gates green, signatures consumed; monotone, so a later update re-check gives the same answer) |
+  | the signatures | none is consumed |
+  | the package | the signed `package` input is not this package's id (ordinal) |
+
+  A refusal names which check failed. An admission is logged as
+  `[PackageEntitlement] commercial package X AUTHORIZED by governed activity Governance/Activities/…`,
+  and the activity is stamped on the install record as `authorizedBy` — the record says which
+  activity authorized it, and the unattended update re-verifies that same activity. Only WHO may
+  authorize widens: the registry still serves only what the instance's plan tier covers, and the
+  licence and parameter gates still run.
 - **Unattended paths carry no principal**, so a commercial package cannot ride in on the boot-time
-  default install — it fails closed.
+  default install — it fails closed, and the ledger records it under `skipped`.
 - **A refusal is never silent**: it logs a speaking reason and, on the auto-update path, raises a
   notification on the install record. The manual Update button stays.
 

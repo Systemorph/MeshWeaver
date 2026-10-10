@@ -1,6 +1,7 @@
 using System.Reactive;
 using System.Reactive.Linq;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 
@@ -36,6 +37,25 @@ namespace MeshWeaver.PluginCatalog;
 /// principal is still an admin. No principal (a boot-time default install, a webhook reaction) means
 /// nobody authorized it: free packages proceed, commercial ones are refused.</para>
 ///
+/// <para><b>The second authority: a verified governed activity.</b> Installing a package on an
+/// instance is decided by a governed <c>package.provision</c> activity signed by people, never by a
+/// person's standing rights. So the authorizing
+/// principal may also be the activity itself — <c>Governance/Activities/{id}</c>, which the Store's
+/// provision control plane hands over once it has verified the request. The gate does not take that
+/// on trust: it reads the activity AUTHORITATIVELY from storage
+/// (<see cref="MeshExtensions.ReadGovernedActivity"/>, the same identity-independent read the
+/// broad-grant guard verifies with, so core takes no dependency on the Governance package) and
+/// admits the commercial package only when the activity is a <c>Governance/Activity</c> node that
+/// runs the <c>package.provision</c> standard, has started (its signatures consumed — monotone, so
+/// an unattended update re-checking the stamped principal later gets the same answer), carries at
+/// least one consumed signature, and was signed for THIS package id
+/// (<see cref="WhyNotAuthorizingActivity"/>). Anything else — a forged or absent path, an unsigned
+/// or unstarted activity, another standard, another package — is refused exactly like a non-admin,
+/// with the reason in the sentence. The activity is stamped on the install record as
+/// <see cref="PackageManifest.AuthorizedBy"/> and named in the log. This widens WHO may authorize,
+/// nothing else: the registry still serves only what the instance's plan tier covers, and the
+/// licence and parameter gates still run.</para>
+///
 /// <para>A refusal is never silent — it logs and it FAULTS the install observable with a
 /// <see cref="PackageAuthorizationException"/> carrying the reason, so the caller surfaces it
 /// (the catalog logs it; the update watcher turns it into a notification on the install record).</para>
@@ -51,6 +71,24 @@ public static class PackageEntitlement
     /// answer, not a retry budget — nothing is re-subscribed and nothing is polled.
     /// </summary>
     private static readonly TimeSpan AdminConfirmationWindow = TimeSpan.FromSeconds(15);
+
+    /// <summary>
+    /// How long the gate waits for the authoritative read of a governed activity. One storage read,
+    /// not a retry budget; no answer within it is a refusal (fail closed).
+    /// </summary>
+    private static readonly TimeSpan ActivityReadWindow = TimeSpan.FromSeconds(15);
+
+    /// <summary>Where governed activities live: <c>Governance/Activities/{id}</c>.</summary>
+    public const string GovernedActivitiesNamespace = "Governance/Activities";
+
+    /// <summary>The node type the Governance package writes an activity as.</summary>
+    public const string GovernedActivityNodeType = "Governance/Activity";
+
+    /// <summary>The ONE governed standard whose activity may authorize installing a package.</summary>
+    public const string PackageProvisionStandard = "package.provision";
+
+    /// <summary>The activity input that names the package two people signed for.</summary>
+    public const string PackageInput = "package";
 
     /// <summary>
     /// True when the package is COMMERCIAL — it carries a non-zero
@@ -81,7 +119,8 @@ public static class PackageEntitlement
     /// <param name="hub">The installing hub.</param>
     /// <param name="manifest">The package being installed or updated.</param>
     /// <param name="authorizingUserId">The principal that authorized the action — the clicking user
-    /// for a catalog install, the install record's <see cref="PackageManifest.AuthorizedBy"/> for an
+    /// for a catalog install, a verified governed activity (<c>Governance/Activities/{id}</c>) for a
+    /// governed provision, the install record's <see cref="PackageManifest.AuthorizedBy"/> for an
     /// unattended update, null when nobody authorized it (boot-time provisioning).</param>
     /// <param name="logger">Diagnostics; a refusal is logged here as a warning.</param>
     /// <returns>A cold observable that emits <see cref="Unit"/> on allow and faults on refusal.</returns>
@@ -97,6 +136,11 @@ public static class PackageEntitlement
 
         if (string.IsNullOrWhiteSpace(authorizingUserId))
             return Refuse(manifest, null, logger);
+
+        // A governed activity is verified, never trusted by its path — and never asked whether it
+        // is a global admin: it is not a person, and its authority is its signatures.
+        if (IsGovernedActivityPrincipal(authorizingUserId))
+            return AuthorizeByActivity(hub, manifest, authorizingUserId!.Trim(), logger);
 
         // Wait for the POSITIVE confirmation, not the first emission (see AdminConfirmationWindow).
         // TakeDecisionOutsideGate leaves the evaluator's Rx gate before the install's real work
@@ -115,11 +159,91 @@ public static class PackageEntitlement
                 exception is TimeoutException ? null : exception));
     }
 
+    /// <summary>
+    /// Whether <paramref name="principal"/> names a governed activity — exactly
+    /// <c>Governance/Activities/{id}</c>, one segment, nothing below it. Pure. Says nothing about
+    /// whether the activity exists or authorizes anything; that is
+    /// <see cref="WhyNotAuthorizingActivity"/>'s question.
+    /// </summary>
+    /// <param name="principal">The authorizing principal as handed to the gate.</param>
+    /// <returns><c>true</c> for an activity path.</returns>
+    public static bool IsGovernedActivityPrincipal(string? principal)
+    {
+        var trimmed = principal?.Trim();
+        const string prefix = GovernedActivitiesNamespace + "/";
+        if (trimmed is null || !trimmed.StartsWith(prefix, StringComparison.Ordinal))
+            return false;
+        var id = trimmed[prefix.Length..];
+        return id.Length > 0 && !id.Contains('/');
+    }
+
+    /// <summary>
+    /// Why the governed activity read at <paramref name="activityPath"/> does NOT authorize
+    /// installing <paramref name="manifest"/>, or null when it does. The activity must be a
+    /// <c>Governance/Activity</c> node at that very path, run the <c>package.provision</c> standard,
+    /// have STARTED (<see cref="GovernedActivityFacts.HasStarted"/> — its gates were green and its
+    /// signatures consumed; monotone, so the answer does not depend on when it is asked), carry at
+    /// least one consumed signature, and have been signed for THIS package id (ordinal). Pure.
+    /// </summary>
+    /// <param name="facts">The activity as read from storage, or null when nothing readable is there.</param>
+    /// <param name="activityPath">The path the principal named.</param>
+    /// <param name="manifest">The package being installed or updated.</param>
+    /// <returns>The reason it does not authorize, or null.</returns>
+    public static string? WhyNotAuthorizingActivity(
+        GovernedActivityFacts? facts, string activityPath, PackageManifest manifest)
+    {
+        ArgumentNullException.ThrowIfNull(manifest);
+        if (facts is null)
+            return $"no readable governed activity exists at '{activityPath}'";
+        if (!string.Equals(facts.Path, activityPath, StringComparison.Ordinal))
+            return $"'{activityPath}' resolved to '{facts.Path}', not to itself";
+        if (!string.Equals(facts.NodeType, GovernedActivityNodeType, StringComparison.Ordinal))
+            return $"'{activityPath}' is a {facts.NodeType ?? "(untyped)"} node, not a {GovernedActivityNodeType}";
+        if (!string.Equals(facts.StandardId, PackageProvisionStandard, StringComparison.Ordinal))
+            return $"'{activityPath}' runs {facts.StandardId}, not {PackageProvisionStandard}";
+        if (!facts.HasStarted)
+            return $"'{activityPath}' is {(facts.State.Length == 0 ? "(no state)" : facts.State)} — it has not started, so its signatures were never consumed";
+        if (facts.ConsumedSignatures < 1)
+            return $"'{activityPath}' carries no consumed signature";
+        var signedFor = facts.Input(PackageInput);
+        if (!string.Equals(signedFor, manifest.Id?.Trim(), StringComparison.Ordinal))
+            return $"'{activityPath}' was signed for package '{signedFor ?? "(none)"}', not '{manifest.Id}'";
+        return null;
+    }
+
+    /// <summary>
+    /// The governed half of <see cref="Authorize"/>: reads the activity authoritatively and admits
+    /// on <see cref="WhyNotAuthorizingActivity"/> == null, logging which activity authorized the
+    /// package; refuses otherwise with that reason in the sentence. A read that faults or does not
+    /// answer within <see cref="ActivityReadWindow"/> is a refusal that keeps its cause.
+    /// </summary>
+    private static IObservable<Unit> AuthorizeByActivity(
+        IMessageHub hub, PackageManifest manifest, string activityPath, ILogger? logger) =>
+        hub.ReadGovernedActivity(activityPath)
+            .Take(1)
+            .Timeout(ActivityReadWindow)
+            .SelectMany(facts =>
+            {
+                if (WhyNotAuthorizingActivity(facts, activityPath, manifest) is { } why)
+                    return Refuse(manifest, activityPath, logger, detail: why);
+                logger?.LogInformation(
+                    "[PackageEntitlement] commercial package {Package} AUTHORIZED by governed activity {Activity} "
+                    + "({Standard}, {State}, {Signatures} consumed signature(s), signed for {SignedFor})",
+                    manifest.Id, activityPath, facts!.StandardId, facts.State, facts.ConsumedSignatures,
+                    facts.Input(PackageInput));
+                return Observable.Return(Unit.Default);
+            })
+            .Catch<Unit, Exception>(exception => exception is PackageAuthorizationException
+                ? Observable.Throw<Unit>(exception)
+                : Refuse(manifest, activityPath, logger,
+                    exception is TimeoutException ? null : exception,
+                    detail: $"the activity at '{activityPath}' could not be read"));
+
     private static IObservable<Unit> Refuse(
-        PackageManifest manifest, string? userId, ILogger? logger, Exception? cause = null) =>
+        PackageManifest manifest, string? userId, ILogger? logger, Exception? cause = null, string? detail = null) =>
         Observable.Defer(() =>
         {
-            var reason = Reason(manifest, userId);
+            var reason = RefusalReason(manifest, userId, detail);
             if (cause is null)
                 logger?.LogWarning("[PackageEntitlement] {Reason}", reason);
             else
@@ -136,7 +260,17 @@ public static class PackageEntitlement
     /// <param name="manifest">The refused package.</param>
     /// <param name="userId">The principal that authorized the action, or null when there was none.</param>
     /// <returns>The human-readable reason.</returns>
-    public static string Reason(PackageManifest manifest, string? userId)
+    public static string Reason(PackageManifest manifest, string? userId) => RefusalReason(manifest, userId, null);
+
+    /// <summary>
+    /// <see cref="Reason"/> with the specific <paramref name="detail"/>
+    /// of why the principal does not authorize — for a governed activity, which check it failed.
+    /// </summary>
+    /// <param name="manifest">The refused package.</param>
+    /// <param name="userId">The principal that authorized the action, or null when there was none.</param>
+    /// <param name="detail">Why that principal does not authorize it, or null.</param>
+    /// <returns>The human-readable reason.</returns>
+    public static string RefusalReason(PackageManifest manifest, string? userId, string? detail)
     {
         ArgumentNullException.ThrowIfNull(manifest);
         // Name what made it commercial — a price, or the sales contact. A contact-sales package has
@@ -151,8 +285,10 @@ public static class PackageEntitlement
             ? "no authorizing principal (unattended install)"
             : $"'{userId}'";
         return $"Package '{manifest.Id}' is commercial ({terms}) — installing or auto-updating "
-               + $"it requires Global Admin on this instance, and {who} is not one. "
-               + "Free packages (no price and no sales contact, or price 0) need no special "
+               + "it requires Global Admin on this instance or a verified governed "
+               + $"{PackageProvisionStandard} activity signed for it, and {who} is neither"
+               + (string.IsNullOrWhiteSpace(detail) ? "" : $" ({detail})")
+               + ". Free packages (no price and no sales contact, or price 0) need no special "
                + "permission.";
     }
 }

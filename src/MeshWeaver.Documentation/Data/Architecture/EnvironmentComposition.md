@@ -103,12 +103,13 @@ install:
 |---|---|---|---|
 | `preInstalled` on the package manifest | the **package author** | **every boot** | the platform's own baseline (the Agents and Skills libraries, Essentials). Suppressed by `PluginCatalog:InstallPreInstalledPackages=false`. It is what heals an instance whose baseline partition was lost. |
 | **`Features:Flags:{name}:Packages`** | the **environment** | **every boot** | "this environment always has X". |
-| `PluginCatalog:InstallByDefault` | the operator | **once**, ledger-gated | seeds a *fresh* deployment. |
+| `PluginCatalog:InstallByDefault` | the operator | every boot, **once per package** (ledger-gated) | seeds what it has never delivered; a commercial package is recorded as `skipped`, never installed. |
 
 🚨 **`InstallByDefault` cannot express a per-environment policy, and that is by design, not an
 oversight.** It seeds — the ledger records what it has delivered and it never re-asserts — so an
 admin who later uninstalls a package is not fought by the next restart. The consequence is that on an
-already-populated portal (both of ours) setting it changes nothing at all. A composition policy wants
+already-populated portal it re-asserts nothing: it can add a package it has never delivered, but it
+cannot keep one present. A composition policy wants
 the opposite, so it is a **separate** lane with **reconciled** semantics; the seed's meaning is
 untouched, and the two coexist.
 

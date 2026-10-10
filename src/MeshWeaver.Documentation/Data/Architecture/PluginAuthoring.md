@@ -125,7 +125,9 @@ POST {registry}/api/plugins/files {id}  → a package's files { files:[…] } (B
 
 A fresh installation does not need the click at all: `PluginCatalog:InstallPreInstalledPackages`
 (default **true**) reconciles the platform baseline on every boot, and `PluginCatalog:InstallByDefault`
-(e.g. `["Plugins/*"]`) seeds an installation that has no install records yet.
+(e.g. `["Plugins/*"]`) seeds each matching package once — on every boot, gated per package by the
+`Plugins/_DefaultInstallLedger` (commercial packages are recorded there as `skipped`, never installed
+unattended).
 
 The types compile on first import; re-running is an upsert. See [Plugin
 Registry](/Doc/Architecture/PluginRegistry) for the payload shapes and the install flow.
