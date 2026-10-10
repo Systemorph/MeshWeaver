@@ -284,14 +284,21 @@ GRANT_REMEDY = ("the build's service user needs the namecheck.caller.grant on th
                 "(Governance ClientNameGate → 'Granting a caller')")
 
 
+# Anchored refusal formats, matched at the START of the instance's answer only — the rest of a refusal
+# may echo the submitted (user-written) text, so a substring anywhere proves nothing (#6409 review).
+UNKNOWN_MEMBER = re.compile(r"^(?:Error: )?refused (?:create|patch) of [^\s:]+: unknown content member\(s\) ((?:'[^'\n]*'(?:, )?)+) for type ")
+ACCESS_DENIED = re.compile(r"^(?:Error: )?Access denied: Create permission required")
+
+
 def refusal_reason(text: str) -> str:
-    """Why a create was refused, CLASSIFIED — never the instance's text itself, which this public log
-    must not carry (a refusal can echo the request). Pure."""
-    t = (text or "").lower()
-    if "unknown content member" in t or "source" in t and "member" in t:
+    """Why a create was refused, CLASSIFIED by an anchored prefix — never the instance's text itself,
+    which this public log must not carry (a refusal can echo the request). Pure."""
+    t = (text or "").strip()
+    m = UNKNOWN_MEMBER.match(t)
+    if m and "'source'" in m.group(1):
         return ("the instance does not know the issue-text request shape — its Governance package predates "
                 "0.11 (MeshWeaver.Plugins#3257); it reaches the instance with the next Governance publication")
-    if "access denied" in t or "permission" in t or "not authorized" in t or "forbidden" in t:
+    if ACCESS_DENIED.match(t):
         return "the instance refused it for access — " + GRANT_REMEDY
     return "the instance refused it for a reason this script does not classify (the instance's log names it); " + GRANT_REMEDY
 
@@ -464,8 +471,11 @@ def self_test() -> int:
           verdict(submit_and_wait(mesh, "o/r", 45, "1", parts))[0] == 1)
     check("node ids share a run key, so the instance files ONE triage item per run",
           node_id("Systemorph/MeshWeaver", 9, "2", 0).rsplit("-", 1)[0] == node_id("Systemorph/MeshWeaver", 9, "2", 3).rsplit("-", 1)[0])
-    check("refusal: an unknown content member names the Governance version, not the grant",
-          "predates" in refusal_reason("Error: refused create: unknown content member(s) 'source' for type NameCheckContent"))
+    check("refusal: an unknown 'source' member names the Governance version, not the grant",
+          "predates" in refusal_reason("Error: refused create of Governance/NameChecks/x-0: unknown content member(s) 'source' for type NameCheckContent (NodeType 'Governance/NameCheck')."))
+    check("🚨 refusal: 'member' or 'permission' echoed from issue text classifies as NOTHING",
+          "does not classify" in refusal_reason("Error: create failed: line 'source member of permission' rejected")
+          and "does not classify" in refusal_reason("Error: refused create of x: unknown content member(s) 'other' for type T"))
     check("refusal: an access refusal names the grant", "namecheck.caller.grant" in refusal_reason("Access denied: Create permission required"))
     check("🚨 refusal: the instance's text is never echoed", "SECRETWORD" not in refusal_reason("Error: SECRETWORD rejected"))
     saved = {k: os.environ.pop(k, None) for k in ("NAME_CHECK_URL", "NAME_CHECK_TOKEN")}
