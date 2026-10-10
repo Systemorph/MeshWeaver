@@ -4,7 +4,7 @@
     python3 .github/scripts/image-closure-record.py build \
         --repository memex-portal-ai --digest sha256:<64 hex> --tag <staging> [--tag …] \
         --platform-commit <sha> --platform-version <version> --run-url <url> \
-        <publish-dir> [<publish-dir> …]                 > image-closure.json
+        [--image-index index.json] <publish-dir> [<publish-dir> …]   > image-closure.json
     python3 .github/scripts/image-closure-record.py --self-test
 
 WHY (policy `image-closure-as-mesh-data`, Doc/Architecture/ImageClosureAsMeshData)
@@ -27,6 +27,12 @@ FAIL CLOSED, NAMING WHY — never a partial record
     `meshweaver-surface.manifest` (not the bytes that become /app) ⇒ refused
   * a directory whose RID cannot be read off its path, or two directories with one RID ⇒ refused
   * framework identity files that disagree across platforms ⇒ refused (one image, one identity)
+  * with --image-index (the image's own manifest list, `docker buildx imagetools inspect --raw`):
+    the directories are SELECTED BY THE IMAGE — exactly one per platform the index names, and a
+    platform with no directory (or two) is refused. A directory the image does not carry is not
+    recorded: a multi-RID `PublishContainer` also lays down a RID-less outer
+    `bin/Release/<tfm>/publish`, which holds the surface manifest but is in no image layer (main-cd
+    run 38023872356 refused on exactly that directory, #6402).
   * a body over the inbox cap (1 MiB, WebhookInbox.MaxBodyBytes) ⇒ refused — the inbox would 413
     it, so saying so here names the cause instead of an HTTP status three steps later.
 """
@@ -69,6 +75,53 @@ def rid_of(directory: Path) -> str:
             f"cannot read a runtime identifier off '{directory}' — a closure record is per platform, "
             "and a directory whose platform is unknown cannot be filed under one")
     return m.group(1)
+
+
+# OCI / Docker platform (os/arch) → .NET runtime identifier. An entry not listed here is refused,
+# never guessed: a record filed under the wrong platform is worse than no record.
+OCI_TO_RID = {
+    ("linux", "amd64"): "linux-x64",
+    ("linux", "arm64"): "linux-arm64",
+    ("windows", "amd64"): "win-x64",
+    ("windows", "arm64"): "win-arm64",
+}
+
+
+def image_rids(index: dict) -> set[str]:
+    """The platforms an image index carries, as RIDs. Attestation entries (`unknown/unknown`) are not
+    platforms and are skipped; anything else unmappable is refused."""
+    manifests = index.get("manifests") if isinstance(index, dict) else None
+    if not isinstance(manifests, list) or not manifests:
+        raise Refused("--image-index is not a manifest list (no `manifests`) — cannot read the image's platforms")
+    rids: set[str] = set()
+    for m in manifests:
+        plat = (m or {}).get("platform") or {}
+        os_, arch = plat.get("os"), plat.get("architecture")
+        if os_ == "unknown" or arch == "unknown":
+            continue
+        rid = OCI_TO_RID.get((os_, arch))
+        if rid is None:
+            raise Refused(f"the image carries platform {os_}/{arch}, which maps to no known runtime identifier")
+        rids.add(rid)
+    if not rids:
+        raise Refused("--image-index names no platform (only attestations) — nothing to record")
+    return rids
+
+
+def select_for_image(rids: set[str], directories: list[Path]) -> list[Path]:
+    """Exactly one publish directory per platform the image carries; directories the image does not
+    carry (the RID-less outer publish, a stale RID) are left out."""
+    chosen: dict[str, list[Path]] = {r: [] for r in rids}
+    for d in directories:
+        m = RID.search(d.as_posix())
+        if m and m.group(1) in chosen:
+            chosen[m.group(1)].append(d)
+    for rid in sorted(rids):
+        if len(chosen[rid]) != 1:
+            raise Refused(
+                f"the image carries {rid} but {len(chosen[rid])} publish directories resolve to it "
+                f"({', '.join(str(p) for p in chosen[rid]) or 'none'}) — one platform, one closure")
+    return [chosen[r][0] for r in sorted(rids)]
 
 
 def platform_of(directory: Path) -> tuple[dict, str | None]:
@@ -218,6 +271,32 @@ def _self_test() -> int:
         check("disagreeing framework identities are refused",
               refused(lambda: build("r", digest, [], "c", "v", "u", [x64, arm])) is not None)
         (arm / IDENTITY_FILE).write_text("c003e001\n")
+
+        print("selection by the image's own index (#6402):")
+        index = {"manifests": [
+            {"platform": {"os": "linux", "architecture": "amd64"}},
+            {"platform": {"os": "linux", "architecture": "arm64"}},
+            {"platform": {"os": "unknown", "architecture": "unknown"}},
+        ]}
+        outer = root / "bin/Release/net10.0/publish"
+        outer.mkdir(parents=True)
+        (outer / SURFACE_MANIFEST).write_text("x")
+        (outer / "a.dll").write_bytes(b"a")
+        check("negative control: the RID-less outer publish refuses an unselected build",
+              refused(lambda: build("r", digest, [], "c", "v", "u", [arm, x64, outer])) is not None)
+        picked = select_for_image(image_rids(index), [arm, x64, outer])
+        check("the outer publish is left out, one directory per image platform", picked == [arm, x64])
+        check("…and the selected set builds",
+              refused(lambda: build("r", digest, [], "c", "v", "u", picked)) is None)
+        check("an image platform with no publish directory is refused",
+              refused(lambda: select_for_image(image_rids(index), [x64, outer])) is not None)
+        check("an unmappable image platform is refused",
+              refused(lambda: image_rids({"manifests": [{"platform": {"os": "linux", "architecture": "s390x"}}]})) is not None)
+        check("a single manifest (no list) is refused",
+              refused(lambda: image_rids({"layers": []})) is not None)
+        check("an index of attestations only is refused",
+              refused(lambda: image_rids({"manifests": [{"platform": {"os": "unknown", "architecture": "unknown"}}]})) is not None)
+
         big = root / "big/linux-x64/publish"
         big.mkdir(parents=True)
         (big / SURFACE_MANIFEST).write_text("x")
@@ -244,11 +323,20 @@ def main(argv: list[str]) -> int:
     b.add_argument("--platform-commit", required=True)
     b.add_argument("--platform-version", required=True)
     b.add_argument("--run-url", required=True)
+    b.add_argument("--image-index", type=Path, default=None,
+                   help="the image's manifest list (imagetools inspect --raw); selects one directory per platform")
     b.add_argument("directories", nargs="+", type=Path)
     args = ap.parse_args(argv)
     try:
+        directories = args.directories
+        if args.image_index is not None:
+            try:
+                index = json.loads(args.image_index.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as e:
+                raise Refused(f"cannot read --image-index '{args.image_index}': {e}") from e
+            directories = select_for_image(image_rids(index), directories)
         sys.stdout.write(build(args.repository, args.digest, args.tag, args.platform_commit,
-                               args.platform_version, args.run_url, args.directories))
+                               args.platform_version, args.run_url, directories))
     except Refused as e:
         print(f"::error::image-closure record refused: {e}", file=sys.stderr)
         return 1
