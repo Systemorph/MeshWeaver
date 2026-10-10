@@ -14,6 +14,14 @@ case "${1:-}" in
       [ -f "$fixture/supplied-values.json" ] && cat "$fixture/supplied-values.json" || echo '{}'
       exit 0
     fi
+    # The RECORD-ONLY probe (the record-owned manifest, without the vault half): answered from
+    # $FIXTURE/record-values.json, else the same as the full probe.
+    if [ "${2:-}" = "record-probe" ]; then
+      if [ -f "$fixture/record-values.json" ]; then cat "$fixture/record-values.json"
+      elif [ -f "$fixture/supplied-values.json" ]; then cat "$fixture/supplied-values.json"
+      else echo '{}'; fi
+      exit 0
+    fi
     cat "$fixture/rendered.yaml"
     # A render that FAILS after writing the manifest to stdout, on demand (Memex#626): the error path
     # must name helm's stderr line and never fold the manifest it already printed into the log.
