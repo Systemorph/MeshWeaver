@@ -151,6 +151,7 @@ sweep re-fed exactly what the sender lost.
 | 1 | Write during a pod roll (#5873) | `AWriteDuringAPodRollIsReDrivenTest` | `Linger` | #5873's two `ShuttingDown` arms reverted → red: `MeshNode Unknown … is shutting down … Rejecting now` |
 | 4 | Steward's first write after its create (Plugins#2530, #6045, #6046) | `ARoutedWriteRightAfterItsCreateTest` (6 cases) | `HidePath`, `Relay.Hold`, a real pre-create probe | `MeshNodeStreamCache.ResetFailureState` made a no-op → the probe case red: `No node found at '…/Item'`; the read-window write fast-fail restored in `UpdateRaw` → the cross-replica case red with the same line; the cached-remainder route restored in `PathResolutionService` → the existing-parent case red: `… Closest ancestor is '…' (remainder='Item')` |
 | 6 | Fleet watch freeze (#5011) | `AHeldReadSurvivesItsSourceSilo{BeingKilled,Draining}Test`, `AHeldReadOnAThirdSilo…`, `AHeldReadFollowsItsOwnersHandOffTest`, `AHeldReadFollowsItsOwnersHandOffWithoutTheChangeFeedTest` | `Kill`, `Drain`, `Linger`, `HoldChangeFeed`, `HandOffTarget` | held-stream heartbeat pushed beyond the budget → all four kill/drain cases red (the owner never re-activates); the owner's answer to a heartbeat for a stream it does not serve removed (`MeshExtensions.HandleHeartBeat`) → the withheld-feed hand-off case red: the held read emits nothing |
+| 7 | Resumer hold without a heartbeat (Plugins#2403, #6048), core half | `AHeldReadUnderAShortIdleWindowSurvivesItsOwnerSiloBeingKilledTest`, `AHandleHeldReadUnderAShortIdleWindow…`, `AReadThenHoldAcrossTheIdleRelease…` | `Kill`, idle sweep 500 ms / 100 ms (`ShortIdleSiloConfigurator`) | `Entry.IsIdleCandidate`/`TryMarkIdleEvicted` ignoring the subscriber count → red after 36 s: the owner never re-activates, "emitted nothing at all" |
 
 Cases 2, 3, 5, 7 and 8 exercise code that lives in MeshWeaver.Plugins, which reaches this harness by
 `ProjectReference` through its platform checkout (`Requires-platform: MeshWeaver#5879`):
@@ -161,7 +162,7 @@ Cases 2, 3, 5, 7 and 8 exercise code that lives in MeshWeaver.Plugins, which rea
 | 3 | Index grace too early (Plugins#2511) | `ASlowFirstFrameResolvesTheRecordTest` (Fleet.Control.Test) | `HeldFirstFrameQueryProvider`, held `IndexGrace + 2 s` | grace started with the reads → red: `Unseen` after 10.0 s |
 | 5 | Stale plan approve (Plugins#2542) | `AStalePlanApproveAcrossReplicasTest` (Fleet.Control.Test) | two silos, page and owner apart, `HoldChangeFeed` | page frozen on its first render → red; any digest accepted → red |
 | 8 | Webhook 500 during a roll (Plugins#2530) | `ALostWebhookIsReFedByTheSweepTest` (Fleet.Control.Test) | `FaultInjectingInbox.Refuse` | the sweep not kicking an unrecorded head → red |
-| 7 | Stuck Roll Verify (Plugins#2403) | not landed — see below | `Kill` | — |
+| 7 | Stuck Roll Verify (Plugins#2403) | not landed — see below (core half above) | `Kill` | — |
 
 Each test file names what it compiles from the in-mesh sources (the Hosting package's `Source/*.cs`
 reach a test through `MeshWeaver.Fleet.Control`, which links them) and what, if anything, it supplies
@@ -223,6 +224,21 @@ That is the #5011 shape again — a held read attached to nothing. Why the heart
 established**; it is filed to triage with the traces. A core probe of the same hold that passed was
 also green with the idle sweep ignoring live subscribers, so it did not discriminate and was not
 kept.
+
+**#6048 — the core half now discriminates, and does not reproduce.** The three case-7 tests in this
+project hold the read under the 500 ms idle window and then kill the owner's silo. They hold it
+through the cache's shared read, through `hub.GetMeshNodeStream(path)` (the resumer's shape), and,
+for sixteen nodes, after a completed one-shot read at gaps of 0–750 ms (the read-then-hold race
+against the sweep's release of the first entry). With the sweep made to ignore live subscribers, the
+first case goes red with exactly the #6048 symptom: the owner never re-activates. That is the control
+the earlier probe lacked. With production code unmodified — the change that added these tests touches
+only the test project and this page — all three are green (8/8, 6/6 and 3/3 runs, the last covering
+48 gap-holds). The first two, applied to the core of 2026-09-29 (the day the Plugins red was
+recorded), are green there too (4/4 each). So the core hold, heartbeat and idle sweep keep a held read heart-beating in
+every shape modelled. Whatever left the Plugins case without a heartbeat lies in what that case adds:
+the action NodeType's hub, the resumer's listing and precondition reads, or its seeding through
+`AddMeshNodes`. **Not established:** which of those it is. The Plugins case run against current core
+is the next reading.
 
 ## See also
 

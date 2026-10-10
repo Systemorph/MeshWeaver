@@ -49,9 +49,15 @@ internal sealed class HeldRead : IDisposable
     /// <summary>
     /// Creates <c>{prefix}-{guid}/Status</c> named <c>v1</c> on silo <paramref name="owner"/>, proves it
     /// is activated THERE, and holds its stream from silo <paramref name="holder"/> until it delivers v1.
+    /// <paramref name="throughHandle"/> holds it the way production code does — the holder hub's
+    /// <c>GetMeshNodeStream(path)</c> handle — instead of the cache's raw <c>GetStream</c>.
+    /// <paramref name="priorReadGap"/>, when set, first makes ONE completed read of the node from the
+    /// holder and waits that long before holding it — the read-then-hold sequence of a process that
+    /// lists or checks a node before it holds it, racing the idle sweep's release of the first read.
     /// </summary>
     public static async Task<HeldRead> Arrange(FaultInjectionCluster mesh, int owner, int holder, string prefix,
-        CancellationToken ct, Func<string, bool>? choosePath = null)
+        CancellationToken ct, Func<string, bool>? choosePath = null, bool throughHandle = false,
+        TimeSpan? priorReadGap = null)
     {
         var ownerServices = mesh.Silo(owner);
         var ownerHub = mesh.Hub(owner);
@@ -76,8 +82,19 @@ internal sealed class HeldRead : IDisposable
         var holderHub = mesh.Hub(holder);
         var access = holderServices.GetRequiredService<AccessService>();
         var cache = holderServices.GetRequiredService<IMeshNodeStreamCache>();
+        IObservable<MeshNode> Read() => throughHandle
+            ? access.RunAsSystem(() => (IObservable<MeshNode>)holderHub.GetMeshNodeStream(path))
+            : access.RunAsSystem(() => cache.GetStream(path, holderHub.JsonSerializerOptions));
+        if (priorReadGap is { } gap)
+        {
+            await Read().Where(n => n.Name == "v1").Take(1).Should().Within(TestTimeouts.Convergence)
+                .Emit($"silo {holder}'s one-shot read receives the owner's node", ct);
+            // The gap IS the subject: it places the hold at a chosen point of the idle sweep's release
+            // of the one-shot read's entry. Nothing is waited for to propagate.
+            await Task.Delay(gap, ct);
+        }
         var held = new HeldRead(path,
-            access.RunAsSystem(() => cache.GetStream(path, holderHub.JsonSerializerOptions)).Replay(),
+            Read().Replay(),
             cache, access, holderHub);
         await held.Stream.Where(n => n.Name == "v1").Should().Within(TestTimeouts.Convergence)
             .Emit($"silo {holder}'s held stream receives the owner's node", ct);

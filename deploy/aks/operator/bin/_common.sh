@@ -395,3 +395,15 @@ hosting::registry_call() {
 hosting::registry_field() {
   printf '%s' "$REGISTRY_BODY" | jq -r --arg f "$1" 'if type == "object" then (.[$f] // empty | tostring) else empty end' 2>/dev/null
 }
+
+# hosting::values_half <check|filter> <args…> — run the values-half key check / filter
+# (_values_half.py, policy `one-values-half-per-release`). It needs python3 with PyYAML, which the
+# operator image installs (Dockerfile: tdnf PyYAML). Missing either is a named refusal, never a skip:
+# a half whose keys cannot be read is not a half whose keys are right.
+hosting::values_half() {
+  local helper
+  helper="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_values_half.py"
+  command -v python3 >/dev/null 2>&1 \
+    || hosting::die "python3 is not on PATH — the values-half key check needs it (operator image: tdnf python3 PyYAML)"
+  python3 "$helper" "$@"
+}

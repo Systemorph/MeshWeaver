@@ -1292,7 +1292,13 @@ public static class MeshExtensions
                             return Observable.Return<(LocalizableText? Refusal, NodeCreationRejectionReason Reason)?>(
                                 (grantRejection, NodeCreationRejectionReason.ValidationFailed));
                         EnterCreateStage(CreateStageValidators);
-                        return RunCreationValidatorsObs(hub, node, capturedRequest);
+                        // 🚨 The stage is refined per validator (#6391): "validators" alone named
+                        // every registered validator, and the core ones all answer synchronously
+                        // for a System write, so a stalled verdict could not say which one — or whether the
+                        // chain stalled before ANY validator was asked (resolving them).
+                        return RunCreationValidatorsObs(
+                            hub, node, capturedRequest,
+                            onStage: detail => EnterCreateStage($"{CreateStageValidators}: {detail}"));
                     })
                     .SelectMany(validationError =>
                     {
@@ -4143,11 +4149,16 @@ public static class MeshExtensions
                                         // the SNAPSHOT belongs here, because it is a point-in-time
                                         // reading taken as the stage opens.
                                         var poolsAtStageStart = ioPools?.Snapshot();
+                                        // A leaf QUEUED behind a write lane that is still granting slots to others is waiting
+                                        // its turn, not stuck: credit the watchdog for exactly that (#1198).
+                                        var queueCredit = QueueWaitCredit(ioPools, budget);
 
                                         var drainProgress = new Subject<string>();
                                         return drainProgress
                                             // Every removal is progress the caller is told about.
                                             .Do(removed => requestProgress.OnNext($"removed {removed}"))
+                                            .Select(_ => (IReadOnlyList<string>?)null)
+                                            .Merge(queueCredit)
                                             .Select(_ => (IReadOnlyList<string>?)null)
                                             .Merge(DeleteSubtreeUntilDrained(
                                                     meshHub, issuingHub, storage, path, collected.ToDelete,
@@ -4553,6 +4564,22 @@ public static class MeshExtensions
                                     ("path", path), ("count", partial.Count))
                             : new LogMessage(ex.Message, LogLevel.Error);
                     var failMsgs = collectedMessages.ToImmutable().Add(failMsg);
+                    // A delete that failed AFTER removing nodes has left a torn subtree. The caller is told so
+                    // in so many words, with the one fact it needs next: the delete is idempotent, so asking
+                    // again is meaningful and removes the rest (#6351).
+                    var tornSubtreeNote = partial.Count > 0
+                        ? $" {partial.Count} node(s) under '{path}' were already removed before this failure, "
+                          + "so the subtree is partially deleted; the delete is idempotent - retrying it is "
+                          + "meaningful and removes what is left."
+                        : string.Empty;
+                    var tornLeafNote = leafReason == NodeDeletionRejectionReason.Unavailable
+                        ? tornSubtreeNote
+                        : string.Empty;
+                    if ((isTimeout && tornSubtreeNote.Length > 0) || tornLeafNote.Length > 0)
+                        failMsgs = failMsgs.Add(
+                            new LogMessage(tornSubtreeNote.Trim(), LogLevel.Warning)
+                                .WithKey("activity.delete.partialRetriable",
+                                    ("path", path), ("count", partial.Count)));
                     PostFailed(
                         isTimeout
                             // The stage detail rides along so the CALLER sees it too — the response
@@ -4560,6 +4587,7 @@ public static class MeshExtensions
                             // exactly as unreadable there as it was in the log.
                             ? $"Delete of '{path}' exceeded {budget.TotalSeconds:0}s timeout "
                               + $"in stage '{stage}': {ex.Message}"
+                              + tornSubtreeNote
                             : (isCancelled
                                 ? cancelledMessage
                                 : (isNotFound
@@ -4570,7 +4598,7 @@ public static class MeshExtensions
                                         // leaf's own classified refusal) — no "Unexpected error:"
                                         // prefix, which would misdescribe a classified outcome.
                                         ? ex.Message
-                                        : $"Unexpected error: {ex.Message}"))),
+                                        : $"Unexpected error: {ex.Message}"))) + tornLeafNote,
                         isTimeout || isCancelled
                             // 🚨 A stage that ran out of time DECIDED nothing — it is an
                             // availability failure, and Unknown said neither that nor anything
@@ -4679,6 +4707,97 @@ public static class MeshExtensions
     /// over live descendants.
     /// </summary>
     private const int MaxDeleteDrainPasses = 5;
+
+    /// <summary>
+    /// How many stage budgets of queue wait a commit may be credited in total. The credit is what keeps the
+    /// no-progress watchdog honest about WHAT it measures, so it must also be bounded: a drain that is
+    /// queued for longer than this still fails, naming the pools (IoPoolQueueReport).
+    /// </summary>
+    private const int QueueCreditBudgets = 4;
+
+    /// <summary>
+    /// Ticks for the commit stage's no-progress watchdog while its work is QUEUED behind a write lane that is
+    /// still moving (#1198). The watchdog measures the gap between this delete's own removals, but a leaf's
+    /// removal ends in ONE write on a cap-1 pg:/sf: pool, and a write that is queued behind other writers
+    /// cannot remove anything until its turn - the wait is not a stall.
+    ///
+    /// <para>A sample earns credit only when BOTH hold since the previous sample: some lane that holds queued
+    /// work GRANTED slots (the lane is advancing, so whoever is queued is served in order), and NO cap-1 write
+    /// lane that held work (in flight or waiting) stood still. The second condition is what ties the credit to
+    /// this delete without attributing pool admissions to callers: a cap-1 lane admits one writer at a time,
+    /// so a leaf that was ADMITTED and then hung holds its lane's only slot and that lane cannot admit anyone
+    /// else. Whichever lane the leaf is in, the sample sees a lane with work that did not advance, and no
+    /// unrelated advancing lane can reset the watchdog for it - an admitted stuck leaf still fails at one
+    /// budget. The rule errs only toward the old behaviour: an unrelated lane that stalls denies credit, so a
+    /// queued leaf may fail at one budget as it did before #1198.</para>
+    ///
+    /// <para>What it cannot see is a leaf stuck OUTSIDE every pool while the lanes advance for others. That
+    /// is why total credit is capped at QueueCreditBudgets budgets: past it the watchdog fails as before,
+    /// naming the pools (IoPoolQueueReport). Read-only: lock-free counters from IoPoolRegistry.Snapshot,
+    /// which mints nothing.</para>
+    /// </summary>
+    private static IObservable<IReadOnlyList<string>?> QueueWaitCredit(IoPoolRegistry? ioPools, TimeSpan budget)
+    {
+        if (ioPools is null)
+            return Observable.Never<IReadOnlyList<string>?>();
+
+        var interval = TimeSpan.FromTicks(Math.Max(TimeSpan.FromMilliseconds(100).Ticks, budget.Ticks / 10));
+        var ceiling = TimeSpan.FromTicks(budget.Ticks * QueueCreditBudgets);
+
+        return Observable.Interval(interval)
+            .Select(_ => WriteLaneAdmissions(ioPools))
+            .Scan(
+                (Previous: (ImmutableDictionary<string, (long Admitted, bool Busy, bool Queued)>?)null,
+                 Current: ImmutableDictionary<string, (long Admitted, bool Busy, bool Queued)>.Empty),
+                (acc, current) => (acc.Current, current))
+            .Select(pair => pair.Previous is { } previous && EarnsQueueCredit(previous, pair.Current))
+            .Scan(
+                (Credited: TimeSpan.Zero, Tick: false),
+                (acc, earned) => earned && acc.Credited + interval <= ceiling
+                    ? (acc.Credited + interval, true)
+                    : (acc.Credited, false))
+            .Where(state => state.Tick)
+            .Select(_ => (IReadOnlyList<string>?)null);
+    }
+
+    /// <summary>
+    /// The cap-1 pg:/sf: write lanes as one point-in-time reading: per lane, the admissions granted so far,
+    /// whether it holds work (in flight or waiting), and whether work is queued on it.
+    /// </summary>
+    private static ImmutableDictionary<string, (long Admitted, bool Busy, bool Queued)> WriteLaneAdmissions(
+        IoPoolRegistry ioPools) =>
+        ioPools.Snapshot()
+            .Where(reading => reading.MaxConcurrency == 1
+                              && (reading.Name.StartsWith(IoPoolNames.PostgresAdapterPrefix, StringComparison.Ordinal)
+                                  || reading.Name.StartsWith(IoPoolNames.SnowflakeAdapterPrefix, StringComparison.Ordinal)))
+            .ToImmutableDictionary(
+                reading => reading.Name,
+                reading => ((long)reading.QueueWait.Samples,
+                    reading.InFlight > 0 || reading.Waiting > 0,
+                    reading.Waiting > 0),
+                StringComparer.Ordinal);
+
+    /// <summary>
+    /// Whether the interval between two write-lane readings earns queue credit: a lane with queued work
+    /// advanced, and no lane that held work at the start of the interval stood still (see QueueWaitCredit).
+    /// </summary>
+    private static bool EarnsQueueCredit(
+        ImmutableDictionary<string, (long Admitted, bool Busy, bool Queued)> previous,
+        ImmutableDictionary<string, (long Admitted, bool Busy, bool Queued)> current)
+    {
+        var advanced = false;
+        foreach (var (name, now) in current)
+        {
+            if (!previous.TryGetValue(name, out var was))
+                continue;
+            var moved = now.Admitted > was.Admitted;
+            if (was.Busy && now.Busy && !moved)
+                return false;
+            if (now.Queued && moved)
+                advanced = true;
+        }
+        return advanced;
+    }
 
     /// <summary>
     /// How often a running delete tells its caller it is still advancing (<see cref="RequestProgress"/>),
@@ -6373,8 +6492,12 @@ public static class MeshExtensions
         IMessageHub hub,
         MeshNode node,
         CreateNodeRequest request,
-        AccessContext? accessContext = null)
+        AccessContext? accessContext = null,
+        Action<string>? onStage = null)
     {
+        // Named BEFORE the validators are resolved: resolving is DI construction of every scoped
+        // validator, and a construction that blocks would otherwise read as a silent validator.
+        onStage?.Invoke("resolving");
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var context = new NodeValidationContext
         {
@@ -6392,8 +6515,17 @@ public static class MeshExtensions
         if (validators.Count == 0)
             return Observable.Return<(LocalizableText?, NodeCreationRejectionReason)?>(null);
 
+        // Each validator is named at the moment Concat SUBSCRIBES to it (Defer), i.e. when it is
+        // the one the chain is waiting on — so a stalled verdict reads
+        // "validators: RlsNodeValidator (i/n)", never a bare stage name (#6391).
         return validators
-            .Select(v => v.Validate(context))
+            .Select((v, i) => onStage is null
+                ? v.Validate(context)
+                : Observable.Defer(() =>
+                {
+                    onStage($"{v.GetType().Name} ({i + 1}/{validators.Count})");
+                    return v.Validate(context);
+                }))
             .Concat()
             .Where(result => !result.IsValid)
             .Select(result =>
