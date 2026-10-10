@@ -365,6 +365,12 @@ data:
 {{- if $operatorMaintainer }}
   Hosting__Operator__Maintainer: {{ $operatorMaintainer | quote }}
 {{- end }}
+{{- /* Whether that maintainer SIGNS ALONE (policy sole-maintainer-approval): their one valid signature
+  satisfies a governed activity's Signatures gate of any count. Rendered only when true; false or
+  unset renders NO key, and then every count stands. */}}
+{{- if (.Values.hostingOperator).maintainerSignsAlone }}
+  Hosting__Operator__MaintainerSignsAlone: "true"
+{{- end }}
 {{- if (.Values.hostingOperator).enabled }}
 {{- if not (.Values.hostingOperator).image }}
 {{- fail "hostingOperator.enabled is true but hostingOperator.image is unset. The operator runs every lifecycle action as a Job from that image; without it HostingOperator.Resolve refuses with 'no operator image configured' and every action on this installation fails at the point of use rather than here. Set hostingOperator.image to the hosting-operator build this fleet runs." }}

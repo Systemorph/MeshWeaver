@@ -15,3 +15,6 @@ hostingOperator:
   enabled: false
   executor: "actions"
   maintainer: "  maintainer-id  "
+  # The maintainer signs alone (policy sole-maintainer-approval): the evidence check asserts
+  # `Hosting__Operator__MaintainerSignsAlone: "true"` here and NO such key under the chart defaults.
+  maintainerSignsAlone: true

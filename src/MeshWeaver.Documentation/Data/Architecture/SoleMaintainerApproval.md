@@ -63,6 +63,35 @@ exists to prevent. Changing the record is itself a governed Reconcile that someo
 Governance standard may name a narrower maintainer for that standard alone (`authority.maintainer`,
 committed content); the decision is the same function either way.
 
+## Signing alone — a count-of-signers gate on a one-person installation
+
+Self-approval decides WHO may approve; it does not change HOW MANY must. A governed activity's
+`Signatures` gate counts distinct signers, so a `count: 2` gate (`package.provision` on a standard
+installation) can never go green where only one person exists — the maintainer's own signature counts
+as one. A second, separately declared key lets that ONE signature satisfy the gate:
+
+| | |
+|---|---|
+| configuration key | `Hosting:Operator:MaintainerSignsAlone` (`true`; absent, blank or anything else is false) |
+| deployment record | `operator.maintainerSignsAlone` (`HostingOperatorSpec.MaintainerSignsAlone`), rendered as `Hosting__Operator__MaintainerSignsAlone: "true"` only when true — by the chart (`hostingOperator.maintainerSignsAlone`) and the Aspire renderer alike |
+| who | the installation's declared maintainer (`Hosting:Operator:Maintainer`) and nobody else — and not on a standard that names its own, DIFFERENT `authority.maintainer` |
+| where | the `Governance/Activity` `Signatures` gate only (`ActivityGates.SoleSignerFor` / `SignedAloneBy`). Instance actions and operation requests take ONE approver and have no count, so the key does not touch them |
+
+It is declared for the same reason the maintainer is: a node or a standard field an administrator
+can write would let them make a two-person rule a one-person rule for themselves. Nothing else
+loosens — the maintainer's signature must still be their own write, eligible under the standard's
+`signers`, bound to the current content, younger than the acceptance and the signature lifetime, and
+unconsumed; every other signer counts as before. Meant for a single-person installation with no
+confidential data (a test instance).
+
+It is audited like a self-approval: the gate's detail reads `1/2 — <id> (signed alone as sole
+maintainer, policy sole-maintainer-approval, Hosting:Operator:MaintainerSignsAlone)`; the write that
+makes the activity ready stamps `signedAloneBy` / `signedAloneAt` and logs `SIGNED ALONE BY MAINTAINER:
+'<id>' signed the activity '<standard>', and that one signature satisfied a gate asking for N signer(s)
+…; no second person signed`; and the activity page shows **Signed alone by maintainer** (German:
+*Allein von der verantwortlichen Person unterschrieben*) through `SoleMaintainerApproval.AloneLabel` /
+`AloneExplanation`.
+
 ## Audited, never silent
 
 | gate | on the node | in the log | on the page |

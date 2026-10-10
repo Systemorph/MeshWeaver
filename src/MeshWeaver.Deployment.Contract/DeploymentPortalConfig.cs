@@ -869,6 +869,9 @@ public static class DeploymentPortalConfig
                 throw new InvalidOperationException($"operator executor '{operatorSpec.Executor}' is neither Job nor Actions. The portal reads every other value as Job, so it would silently keep the in-cluster operator Job.");
             Set("Hosting__Operator__Executor", operatorExecutor);
             Set("Hosting__Operator__Maintainer", string.IsNullOrWhiteSpace(operatorSpec.Maintainer) ? null : operatorSpec.Maintainer.Trim());
+            // Policy sole-maintainer-approval: rendered only when true, so an absent key keeps every
+            // signature count as it is. The portal reads it only beside a declared maintainer.
+            Set("Hosting__Operator__MaintainerSignsAlone", operatorSpec.MaintainerSignsAlone ? "true" : null);
         }
 
         foreach (var (key, value) in d.ExtraPortalConfig)
