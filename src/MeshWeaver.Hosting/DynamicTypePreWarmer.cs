@@ -543,12 +543,14 @@ public static class DynamicTypePreWarmer
 
     /// <summary>
     /// The I/O pool a bake probe's per-type store read runs in: the mesh's <c>FileSystem</c> pool,
-    /// the one the registration-only pass reads the same assembly files through. Null when the mesh
-    /// registered no pool registry — the probe then reads inline, as it always did.
+    /// the one the registration-only pass reads the same assembly files through. Never null, so an
+    /// in-process probe never reads the share on the thread that delivered the enumeration: a mesh
+    /// with no pool registry gets <see cref="IoPool.Unbounded"/>, the same fallback the
+    /// registration pass and the shipped-build refetch use for these files.
     /// </summary>
     /// <param name="mesh">The mesh hub.</param>
-    internal static IIoPool? StoreProbePool(IMessageHub mesh) =>
-        mesh.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem);
+    internal static IIoPool StoreProbePool(IMessageHub mesh) =>
+        mesh.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded;
 
     /// <summary>
     /// The DYNAMIC NodeTypes of an enumeration snapshot: the active nodes that carry compilable

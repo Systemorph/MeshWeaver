@@ -114,8 +114,10 @@ public sealed record NodeTypeBakeEntry(string TypePath, BakeState State, string?
     public string? ProducedByPlatformBuild { get; init; }
 
     /// <summary>
-    /// 🚨 The store holds A build under the record's version, but not the one the record NAMES: a
-    /// different MVID (Systemorph/MeshWeaver.Plugins#2799). The entry is
+    /// 🚨 The file AT THE RECORD'S OWN PATH is not the build the record names: it carries a different
+    /// MVID (Systemorph/MeshWeaver.Plugins#2799) — the first-write-wins residue. A record whose path
+    /// is simply gone, with a sibling of the version still in the store, is NOT this state: it named
+    /// a working build and lost it, and it stays an ordinary store miss. The entry is
     /// <see cref="BakeState.BytesMissing"/> and is rebuilt like any store miss.
     ///
     /// <para><b>It is never a regression baseline</b> (<see cref="IsRegressionBaselineFor"/>). A
@@ -716,17 +718,35 @@ public static class NodeTypeBakeStatus
                         ClassifyDetailed(
                             definition, !string.IsNullOrEmpty(path) && foreign is null, framework,
                             liveDependencyIdOf, liveToolchainId));
-                    return foreign is not null && entry.State is BakeState.BytesMissing
+                    if (foreign is null || entry.State is not BakeState.BytesMissing)
+                        return entry;
+                    // 🚨 TWO different states answer with a foreign sibling, and only one of them
+                    // is "this record never named a build the store held":
+                    //   • the file AT THE RECORD'S OWN PATH carries another MVID — the
+                    //     first-write-wins residue: the store handed back the standing file's path
+                    //     and the record was stamped with the identity of bytes that never landed;
+                    //   • the record's path is GONE and a sibling of the version answered instead —
+                    //     the record did name a working build, and it has since been lost.
+                    // The second is an ordinary store miss: it keeps its regression baseline, so an
+                    // image that cannot rebuild a type that WAS working is still refused.
+                    return IsTheRecordsOwnPath(path!, definition.LatestAssemblyPath!)
                         ? entry with
                         {
                             RecordNamesABuildTheStoreLacks = true,
                             Detail =
                                 $"record names build MVID {definition.LatestAssemblyMvid} at "
                                 + $"{definition.LatestAssemblyCollection}/{definition.LatestAssemblyPath}, "
-                                + $"but the store's build under that version is MVID {foreign} — "
-                                + "the build the record names is not in the store",
+                                + $"but the file at that path is MVID {foreign} — "
+                                + "the build the record names never reached the store",
                         }
-                        : entry;
+                        : entry with
+                        {
+                            Detail =
+                                $"record names build MVID {definition.LatestAssemblyMvid} at "
+                                + $"{definition.LatestAssemblyCollection}/{definition.LatestAssemblyPath}, "
+                                + $"and that file is gone; a sibling of the version (MVID {foreign}) "
+                                + "is not the build the record names",
+                        };
                 })
                 // Fail SAFE, never fail OPEN: an unreadable store must mean "bake it", not "trust
                 // the record and serve bytes that may not exist".
@@ -750,6 +770,12 @@ public static class NodeTypeBakeStatus
         && !string.Equals(found, recordedMvid, StringComparison.OrdinalIgnoreCase)
             ? found
             : null;
+
+    /// <summary>Whether the file the store answered with IS the one the record's content path names
+    /// (the record's path is relative to the store's root, so it is the tail of the local path).</summary>
+    private static bool IsTheRecordsOwnPath(string resolvedPath, string recordContentPath) =>
+        resolvedPath.Replace('\\', '/').EndsWith(
+            "/" + recordContentPath.Replace('\\', '/').TrimStart('/'), StringComparison.Ordinal);
 
     private static NodeTypeBakeEntry Describe(
         string typePath,

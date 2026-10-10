@@ -300,6 +300,11 @@ public sealed class MeshContentTypeRegistry(ILogger<MeshContentTypeRegistry>? lo
         // inside — the announcement below stays outside it.
         lock (_gate)
         {
+            // Subscribed BEFORE any strong claim is published. An unload that begins after this
+            // line reaches Evict, which waits for this section and then sweeps the claims made
+            // below; subscribed afterwards, a context's FIRST registration could lose the one-shot
+            // event between its inserts and the subscription.
+            TrackCollectible(contentType);
             if (IsUnloading(contentType))
             {
                 // A LATE registration: this generation's Unloading already fired and will not fire
@@ -323,7 +328,6 @@ public sealed class MeshContentTypeRegistry(ILogger<MeshContentTypeRegistry>? lo
                     // The successor holds the claim now; the superseded generation's shadow entry is done.
                     _demotedByNodeType.TryRemove(nodeTypePath, out _);
                 }
-                TrackCollectible(contentType);
             }
         }
 
