@@ -265,6 +265,30 @@ Tests: `RegistryAnswersOrRefusesTest` runs the real mesh and the real bundle rou
 
 **The deadline itself must not touch a request whose client has gone.** It fires on a timer thread. The registry logged `ObjectDisposedException: IFeatureCollection has been disposed` at `DefaultHttpRequest.get_Method()` (20:03:29Z and 20:03:32Z): the refusal had read `http.Request` after the host disposed the request. It now reads the method, the path and `RequestAborted` when it is subscribed, while the request is alive. `Retry-After` is written when the result executes, against the context the host hands it. A refusal for a client that has already disconnected logs at Information and says so; it does not claim a 503 was answered. Two tests cover this. `TheDeadlineFiringAfterTheClientLeft_…` reproduced the production exception against the previous code. `ATornDownRequest_ThrowsOnRead_…` is its negative control.
 
+## After the held snapshots: the files route, and the sync wave it queued behind
+
+**What the held snapshots changed, measured 2026-10-10.** Read-only, through governed `Logs` actions on the control instance, from 07:03Z to 12:13Z. Every portal ran a build that contains #6389 for that whole window.
+- **Registry** (`Ops/Actions/w11b-4963-cloud-noanswer-since-0716`): **9** "produced no answer within" lines in 310 minutes, all on one replica, `…85587f8869-5j9gx`, between 08:33Z and 08:35Z. All of them name the five source listings. None names the package origin anchor. On 2026-10-09 the same filter returned **124** lines in 110 minutes.
+- **Consumers:** control (`Ops/Actions/w11b-4804-control-client-503-since-0716`) had 4 lines, and memex (`…-memex-client-503-since-0716`) had 16. **None of them is a 503.** Every one is a `plugin-registry-standard` attempt that the client cut at **30 s**. They come in bursts on single pods: memex at 07:44–07:47Z and 08:55–08:58Z, control at 11:45Z. Over the same window memex logged **0** `[DefaultInstall] … failed` lines.
+
+A cut at 30 s, with no 503 from the registry, means the request went to a route that has **no answer deadline**. `plugin-registry-standard` reads two routes. The catalog has had a deadline since #6253; it would have answered 503 at 25 s. The other route is `POST /api/plugins/files`, the per-package read that a booting consumer's default install makes for each package in turn. That route was the one #6253 did not cover.
+
+**What the files route was waiting behind.** The registry's own log for one of those windows is `Ops/Actions/w11b-5825-cloud-files-failure-detail`: replica `…65688cbcc7-zdghl`, 07:49–07:51Z. That replica was shut down at 07:50:02Z. Seven files requests (`Governance` ×6, `Hosting` ×1) then failed in the same millisecond. Beside them, the replica logged **48 or more** `Temp clone cleanup failed for /tmp/mw-gitsync-…` lines. Each of those is a git clone that was still in flight when the I/O pool was disposed, and the reading was cut at 200 lines, so 48 is a floor. All of those clones share the process pool, which has **four** slots. The same log has GitSync streams giving up on a dozen plugin partitions' `_GitSync` owners.
+
+**The cause.** GitSync imports each plugin partition from its own folder of `MeshWeaver.Plugins`. It does that with the unfiltered `IGitHubRepoClient.Fetch(repo, ref, subdirectory, token)`. For a subdirectory, `GitProtocolRepoClient` did a shallow fetch of the **whole repository**, checked out the whole tree, and then dropped everything outside the folder. One such clone moves 47.8 MB and takes 13 s (measured for #4222). So a sync wave made one whole-repository clone per partition, all on four slots. A files request or a listing revalidation that arrived during a wave waited behind it, with nothing written to the consumer.
+
+**The fix has two halves.**
+- **The subtree read moves only the subtree.** An unfiltered fetch with a subdirectory now takes the narrow path: `--filter=blob:none`, then a sparse checkout with **one** root-anchored directory pattern, `/<subdirectory>/`. The answer is byte-identical; only that folder's blobs are transferred. A single directory pattern needs no tree listing and is not subject to the 2,000-path cap, so a large plugin folder also stays narrow. A remote that refuses partial clones falls back to the whole fetch and logs that it did, as the filtered fetch already does.
+- **The files route answers or refuses within the deadline.** `POST /api/plugins/files` now runs under `RegistryAnswerDeadline`, with the same **25 s** budget as the catalog, because the same 30 s client attempt reads it. The ledger names each source listing and `package files '<id>' from '<source>'`. If a folder fetch is held again, the consumer gets a 503 with `Retry-After`, the registry logs which stage held it, and the consumer no longer sees an unexplained 30 s cut.
+
+Tests:
+- `GitProtocolNarrowFetchTest.AnUnfilteredFetch_OfASubdirectory_MovesOnlyThatSubtree` runs against a real git origin on disk. It asserts the line that a restricted checkout emits; before the fix, the answer was identical but no restricted checkout ran. `…_WithoutPartialClone_AnswersTheSame` covers the fallback.
+- `RegistryFilesRouteAnswersOrRefusesTest` runs the real mesh, a configured node-repo URL source, a registered instance and the registry routes on a TestServer. The git transport answers the listing and never answers the folder fetch. The route answers 503 within its 2 s test budget, with `waitingOn: ["package files 'FilesDeadlinePkg' from 'Plugins'"]`. Negative control: with the deadline out of reach, no status line comes back in 5 s.
+
+**What is not established.**
+- Which of the 48 clones belonged to GitSync and which to request-path reads. The temp directories carry no owner.
+- That the nine 08:33–08:35Z listing refusals on `5j9gx` were a wave and not that replica's first listing read. Either is consistent with the log.
+
 ## The second defect: exhaustion leaves no readable mark
 
 When the attempts do exhaust, nothing an operator can see records it:

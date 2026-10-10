@@ -186,6 +186,161 @@ public class ApprovalStepUpReceiptTest(ITestOutputHelper output) : MonolithMeshT
         Assert.False(await Run(rule.HasAccess(null!, Alice), ct));
         Assert.True(await Run(rule.HasAccess(null!, WellKnownUsers.System), ct));
     }
+
+    // ── The core Approval record carries the receipts map (generic Approvals/Approval satellite) ──
+
+    private static Approval PendingApproval() => new()
+    {
+        Id = "appr-1",
+        PrimaryNodePath = "stepup/Doc1",
+        Requester = Alice,
+        Approver = Bob,
+        Purpose = "publish the report",
+        CreatedAt = new DateTimeOffset(2026, 10, 9, 11, 0, 0, TimeSpan.Zero),
+    };
+
+    /// <summary>A record shaped like <see cref="Approval"/> BEFORE it declared the map — the negative control.</summary>
+    public sealed record ApprovalWithoutReceipts(string Id, string Purpose);
+
+    /// <summary>
+    /// The step-up endpoint stamps through <see cref="StepUpPaths.Stamp"/> with the HUB's serializer
+    /// options (StepUpController.MintAndStamp). On a typed core <see cref="Approval"/> the stamp must
+    /// survive — and survive a store round trip — or the approval's control plane never sees a receipt.
+    /// Negative control: a record that does not declare the map drops the stamp (the pre-change shape).
+    /// </summary>
+    [Fact]
+    public void TheEndpointStamp_SurvivesOnTheCoreApproval_AndItsRoundTrip()
+    {
+        var options = Mesh.JsonSerializerOptions;
+        var decided = PendingApproval() with { Status = ApprovalStatus.Approved };
+
+        var stamped = Assert.IsType<Approval>(StepUpPaths.Stamp(decided, Bob, "r-bob", options));
+        Assert.Equal("r-bob", StepUpPaths.ReceiptFor(stamped.StepUpReceipts, Bob));
+        Assert.Equal(ApprovalStatus.Approved, stamped.Status);
+
+        var stampedTwice = Assert.IsType<Approval>(StepUpPaths.Stamp(stamped, "carol", "r-carol", options));
+        Assert.Equal("r-bob", StepUpPaths.ReceiptFor(stampedTwice.StepUpReceipts, Bob));
+        Assert.Equal("r-carol", StepUpPaths.ReceiptFor(stampedTwice.StepUpReceipts, "carol"));
+
+        var stored = JsonSerializer.Serialize<object>(stamped, options);
+        var reread = Assert.IsType<Approval>(JsonSerializer.Deserialize<object>(stored, options));
+        Assert.Equal("r-bob", StepUpPaths.ReceiptFor(reread.StepUpReceipts, Bob));
+        Assert.Equal(stamped, reread);
+
+        var legacy = new ApprovalWithoutReceipts("appr-1", "publish the report");
+        var legacyStamped = Assert.IsType<ApprovalWithoutReceipts>(StepUpPaths.Stamp(legacy, Bob, "r-bob", options));
+        Assert.DoesNotContain("r-bob", JsonSerializer.Serialize(legacyStamped, options));
+    }
+
+    /// <summary>
+    /// Two reads of one stored approval are EQUAL once a receipt is stamped — the map compares by its
+    /// entries, not by reference. Negative controls: a different receipt, a missing map, other terms.
+    /// </summary>
+    [Fact]
+    public void ApprovalEquality_ComparesTheReceiptMapByItsEntries()
+    {
+        var a = PendingApproval() with { StepUpReceipts = ImmutableDictionary<string, string>.Empty.Add(Bob, "r-1") };
+        var b = PendingApproval() with { StepUpReceipts = ImmutableDictionary<string, string>.Empty.Add(Bob, "r-1") };
+        Assert.Equal(a, b);
+        Assert.Equal(a.GetHashCode(), b.GetHashCode());
+
+        Assert.NotEqual(a, b with { StepUpReceipts = ImmutableDictionary<string, string>.Empty.Add(Bob, "r-2") });
+        Assert.NotEqual(a, b with { StepUpReceipts = null });
+        Assert.NotEqual(a, b with { Purpose = "something else" });
+        Assert.Equal(PendingApproval(), PendingApproval());
+
+        // One negative control per field the hand-written Equals owns — dropping any of them from
+        // Equals would let the control plane's "still the revision I judged" guard accept another approval.
+        var at = new DateTimeOffset(2026, 10, 10, 9, 0, 0, TimeSpan.Zero);
+        foreach (var (other, field) in new (Approval, string)[]
+        {
+            (a with { Id = "appr-2" }, nameof(Approval.Id)),
+            (a with { PrimaryNodePath = "stepup/Doc2" }, nameof(Approval.PrimaryNodePath)),
+            (a with { Requester = "carol" }, nameof(Approval.Requester)),
+            (a with { Approver = "carol" }, nameof(Approval.Approver)),
+            (a with { Purpose = "other" }, nameof(Approval.Purpose)),
+            (a with { DueDate = at }, nameof(Approval.DueDate)),
+            (a with { ApprovalDate = at }, nameof(Approval.ApprovalDate)),
+            (a with { CreatedAt = at }, nameof(Approval.CreatedAt)),
+            (a with { Status = ApprovalStatus.Approved }, nameof(Approval.Status)),
+        })
+        {
+            Assert.False(a.Equals(other), $"{field} must take part in equality");
+            Assert.False(other.Equals(a), $"{field} must take part in equality (reverse)");
+        }
+
+        // Symmetric whatever the maps' key comparers: "BOB" in an ordinal map and "bob" in a
+        // case-insensitive one differ in BOTH directions (each map's own lookup would disagree).
+        var ordinalUpper = PendingApproval() with { StepUpReceipts = ImmutableDictionary<string, string>.Empty.Add("BOB", "r-1") };
+        var ignoreCaseLower = PendingApproval() with
+        {
+            StepUpReceipts = ImmutableDictionary.Create<string, string>(StringComparer.OrdinalIgnoreCase).Add("bob", "r-1"),
+        };
+        Assert.False(ordinalUpper.Equals(ignoreCaseLower));
+        Assert.False(ignoreCaseLower.Equals(ordinalUpper));
+        Assert.True((PendingApproval() with
+        {
+            StepUpReceipts = ImmutableDictionary.Create<string, string>(StringComparer.OrdinalIgnoreCase).Add("BOB", "r-1"),
+        }).Equals(ordinalUpper), "same ordinal entries are equal across comparers");
+    }
+
+    /// <summary>
+    /// The binding covers the terms and the decision — never the receipts, the decision date or the
+    /// creation time, which change without the approver deciding anything new.
+    /// </summary>
+    [Fact]
+    public void TheApprovalBinding_CoversTheTermsAndTheDecision_NotTheReceipts()
+    {
+        var approve = PendingApproval() with { Status = ApprovalStatus.Approved };
+        var binding = approve.StepUpBinding();
+        Assert.StartsWith("approval:sha256:", binding);
+
+        Assert.Equal(binding, (approve with
+        {
+            StepUpReceipts = ImmutableDictionary<string, string>.Empty.Add(Bob, "r-1"),
+            ApprovalDate = DateTimeOffset.UnixEpoch,
+            CreatedAt = DateTimeOffset.UnixEpoch,
+        }).StepUpBinding());
+
+        Assert.NotEqual(binding, (approve with { Status = ApprovalStatus.Rejected }).StepUpBinding());
+        Assert.NotEqual(binding, (approve with { Purpose = "publish another report" }).StepUpBinding());
+        Assert.NotEqual(binding, (approve with { Approver = "carol" }).StepUpBinding());
+        Assert.NotEqual(binding, (approve with { Requester = "carol" }).StepUpBinding());
+        Assert.NotEqual(binding, (approve with { PrimaryNodePath = "stepup/Doc2" }).StepUpBinding());
+        Assert.NotEqual(binding, (approve with { DueDate = DateTimeOffset.UnixEpoch }).StepUpBinding());
+        Assert.NotEqual(binding, (approve with { Id = "appr-2" }).StepUpBinding());
+        // Length-prefixed: moving characters between adjacent fields is a different binding.
+        Assert.NotEqual((approve with { Requester = "ab", Approver = "c" }).StepUpBinding(),
+            (approve with { Requester = "a", Approver = "bc" }).StepUpBinding());
+    }
+
+    /// <summary>
+    /// End to end on the real service: a receipt minted for an approval's path and binding — what the
+    /// step-up endpoint stamps — is accepted for that decision, and refused when it is bound to
+    /// different content (other terms, or the opposite decision).
+    /// </summary>
+    [Fact(Timeout = 90000)]
+    public async Task AnApprovalReceipt_ConfirmsThatDecisionOnly()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var service = Service();
+        const string path = "stepup/Doc1/_Approval/appr-1";
+        var approve = PendingApproval() with { Status = ApprovalStatus.Approved };
+
+        var forOtherContent = await MintFor(service, Bob, ct,
+            new StepUpTarget { ActionPath = path, Binding = (approve with { Purpose = "something else" }).StepUpBinding() });
+        Assert.Equal(StepUpOutcome.WrongBinding, (await Run(service.Consume(forOtherContent.Id, Bob, path, approve.StepUpBinding()), ct)).Outcome);
+
+        var forReject = await MintFor(service, Bob, ct,
+            new StepUpTarget { ActionPath = path, Binding = (approve with { Status = ApprovalStatus.Rejected }).StepUpBinding() });
+        Assert.Equal(StepUpOutcome.WrongBinding, (await Run(service.Consume(forReject.Id, Bob, path, approve.StepUpBinding()), ct)).Outcome);
+
+        var receipt = await MintFor(service, Bob, ct, new StepUpTarget { ActionPath = path, Binding = approve.StepUpBinding() });
+        var stamped = Assert.IsType<Approval>(StepUpPaths.Stamp(approve, Bob, receipt.Id, Mesh.JsonSerializerOptions));
+        var verdict = await Run(service.Consume(StepUpPaths.ReceiptFor(stamped.StepUpReceipts, Bob), Bob, path, stamped.StepUpBinding()), ct);
+        Assert.Equal(StepUpOutcome.Accepted, verdict.Outcome);
+    }
+
 }
 
 /// <summary>The pure halves: the seal, the stamp, the options.</summary>

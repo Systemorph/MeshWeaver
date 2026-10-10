@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# A stand-in `kubectl` for hosting-dump-analyze's behaviour tests. Not a mock of kubectl: what is
+# tested is what the SCRIPT does with the answers — where it decides the dumps live, which Job it
+# creates (read-only claim, no secret, no token), whether it waits for the Job's verdict, reads its
+# log, deletes it, and what it reports.
+#
+#   HOSTING_DA_STATE         directory: kubectl.log (one argv per call), manifest.json (what `create -f -` got)
+#   HOSTING_DA_DEPLOYMENTS   the file `get deployments -o json` answers with
+#   HOSTING_DA_LOG           the file `logs job/<name>` answers with (the pod's output)
+#   HOSTING_DA_JOB           succeeded (default) | failed — the Job's verdict
+#   HOSTING_DA_FORBID=1      `get deployments` answers Forbidden (REFUSED is not ABSENT, #4722)
+set -uo pipefail
+state="${HOSTING_DA_STATE:?the kubectl stub needs HOSTING_DA_STATE}"
+printf '%s\n' "$*" >> "$state/kubectl.log"
+case "$*" in
+  *"get deployments -o json"*)
+    if [ "${HOSTING_DA_FORBID:-0}" = 1 ]; then
+      echo 'Error from server (Forbidden): deployments.apps is forbidden: User "system:serviceaccount:memex-ops:hosting-operator" cannot list resource "deployments" in API group "apps" in the namespace "memex-cloud"' >&2
+      exit 1
+    fi
+    cat "${HOSTING_DA_DEPLOYMENTS:?}" ;;
+  *" create -f -"*)
+    cat > "$state/manifest.json"
+    echo "job.batch/stub created" ;;
+  *" get job "*)
+    case "${HOSTING_DA_JOB:-succeeded}" in
+      failed) echo '{"status":{"failed":1,"conditions":[{"type":"Failed","status":"True","reason":"DeadlineExceeded"}]}}' ;;
+      *) echo '{"status":{"succeeded":1,"conditions":[{"type":"Complete","status":"True"}]}}' ;;
+    esac ;;
+  *" logs job/"*)
+    cat "${HOSTING_DA_LOG:?}" ;;
+  *" delete job "*)
+    echo "job.batch deleted" ;;
+  *)
+    echo "kubectl stub: unexpected call: $*" >&2
+    exit 9 ;;
+esac

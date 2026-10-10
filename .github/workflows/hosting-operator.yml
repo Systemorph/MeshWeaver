@@ -221,6 +221,13 @@ jobs:
           # which merges after this image is on hosting-operator:main, for the same reason as
           # hosting-migrate above; the line moves up into the plan list once it has.
           hosting-inventory          Inventory — ships and is behaviour-tested; the plan half is the Plugins Inventory action
+          #
+          # hosting-dump-analyze is the governed dump read (MeshWeaver#6432, the Plugins `AnalyzeDump`
+          # InstanceAction): it ships with its in-pod half (bin/_dump_analyze_pod.sh) and both are
+          # behaviour-tested against test/stubs/dump-analyze (a stub kubectl, and a stub dotnet-dump the
+          # real pod script runs). Its plan step is the Plugins half, which merges after this image is on
+          # hosting-operator:main, for the same reason as hosting-migrate above.
+          hosting-dump-analyze       #6432 — ships and is behaviour-tested; the plan half is the Plugins AnalyzeDump action
           EOF
           unclaimed=()
           for path in deploy/aks/operator/bin/hosting-*; do
@@ -240,6 +247,8 @@ jobs:
           # hosting-audit is two files: the command and the jq program beside it. A command that
           # ships without its detection dies at "the detection program … is missing" inside a Job.
           [ -f deploy/aks/operator/bin/_audit.jq ] || { echo "::error::bin/_audit.jq is missing — hosting-audit cannot compute anything without it"; exit 1; }
+          # hosting-dump-analyze is two files as well: the in-pod half it hands the analysis Job.
+          [ -f deploy/aks/operator/bin/_dump_analyze_pod.sh ] || { echo "::error::bin/_dump_analyze_pod.sh is missing — hosting-dump-analyze has nothing to run in the analysis Job"; exit 1; }
           # Parse-check the program. jq exits 3 on a PROGRAM error and 5 on a runtime error();
           # empty inputs legitimately reach the error() refusal, so only exit 3 is a failure here —
           # the behaviour tests below exercise the real detection against fixtures.

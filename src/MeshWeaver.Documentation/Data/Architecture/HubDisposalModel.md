@@ -218,12 +218,46 @@ hostedHubsDisposalSubscription = hostedHubs.DisposalCompleted
 
 `HostedHubsCollection` itself is reactive (`DisposeHubsReactive`): it disposes each
 child, then joins their `DisposalCompleted` streams with `Observable.CombineLatest`
-(per-child `Catch` so one wedged child can't stall the join) under a **5 s** `Timeout`,
-and completes its own `ReplaySubject`. It joins one extra leg — an **in-flight-creation
+(per-child `Catch`, so a child whose disposal FAULTS still answers the join), and
+completes its own `ReplaySubject`. It joins one extra leg — an **in-flight-creation
 drain** that waits for `inflightCreations` to reach zero and then disposes whatever a
 late construction produced, so a hub built during the teardown window is never leaked
-outside the snapshot. On completion **or** the cap, the owner advances to ShutDown — a
-hung child never blocks the parent.
+outside the snapshot. **The join carries no deadline of its own** (#1317): it used to
+cap the wait at a flat 5 s `Timeout` and advance the owner on expiry, which tore the
+container down under children still mid-disposal. Every leg answers from its own
+terminal state, so the owner advances to ShutDown only once every leg has answered. A
+child whose teardown genuinely stops moving is NAMED by the owner's disposal stall
+detector (below), and the bound that ENDS a wedged teardown is the caller's — the test
+base's dispose deadline, the host's shutdown budget — which reports the hang instead of
+a completion that is not true.
+
+A hub that finishes construction after its owner's teardown began also inherits the
+owner's creation freeze when it registers: it was absent from the snapshot that
+`CloseCreation` walked, so without that it would be the one hub in the subtree whose
+`IsShuttingDown` reads false and whose own hosted collection still accepts new children.
+
+#### A hub its siblings depend on goes in a second wave (#6078)
+
+A hosted hub declared `WithTeardownAfterSiblings()` is not disposed with the others. The
+collection disposes every other child first, joins them (and the retired and in-flight legs), and
+only then disposes the declared hubs and joins those. The owner still waits for both waves.
+
+A declared hub whose construction finishes AFTER the teardown began is a dependency all the same.
+The in-flight leg disposes the late ordinary hubs inside the first wave and carries the late declared
+ones over to the second, so a first-time cache resolution that overlaps a teardown cannot race its
+siblings either. Pinned by `InflightHubCreationDrainTest.ALateDependency_IsDisposedOnlyAfterItsSiblings`:
+the sibling's teardown is held by a construction parked in its own hosted collection, the declared
+hub is parked in its configuration function (before its constructor registers it, so the teardown
+snapshot cannot see it), and it must not be disposing when it is released while the sibling is still
+held.
+
+The node-stream cache's hub is declared this way. It sits beside every hub the mesh hosts, and its
+ShutDown ends every held read with the disposal terminal. In one wave it raced the readers: a
+sibling still mid-turn or mid-quiesce received a fault for its own teardown, and the outgoing pod of
+every roll logged it at Error. Pinned by `AHubHeldReadEndsBeforeTheCacheItReadsTest`: its reader is
+mid-turn when the mesh tears down, and it fails on one wave because the cache is disposed before the
+reader lets go. Its negative control holds a read no hub owns and requires the disposal terminal, so
+the order is not bought by the cache no longer telling its readers.
 
 ### ShutDown — tear down and signal
 

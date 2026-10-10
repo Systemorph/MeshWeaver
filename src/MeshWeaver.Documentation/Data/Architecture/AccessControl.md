@@ -1487,6 +1487,20 @@ was `f67ad347c579f8bd483906fe7bcb4276d4fdd5f258491758154ab376ed35ad9b`. The SQL 
 projection both apply same-prefix public grants after policy denies. These are source receipts;
 the core regression does not execute PostgreSQL.
 
+## Audience — a policy field the fold does not read
+
+`PartitionAccessPolicy.Audience` (optional list of user ids or group paths — the subjects an
+`AccessAssignment` can name; a role id matches nobody and is not supported) narrows a grant that
+the OWNER of a partition derives — the Store's plan coverage is the first: an app whose tier the
+instance's plan covers is open to every signed-in user, unless its root `_Policy` names an audience,
+in which case the Store writes one Viewer `AccessAssignment` per audience id instead. The fold never
+reads the field: it grants nothing and denies nothing by itself, and explicit assignments keep
+working whatever it says (grants only add). Because the owner materialises its decision as ordinary
+assignments, `PermissionEvaluator` and the PostgreSQL projection (`partition_access`, the search
+filter) read the same rows and cannot disagree. The field lives on the policy record so a typed
+round-trip of the `_Policy` node keeps it; an absent or empty list is the behaviour every partition
+had before it existed.
+
 ## AI tool call identity
 
 When AI agents execute tool calls (Get, Update, Create, etc.) during thread streaming, the user's `AsyncLocal` access context doesn't flow through the AI framework's async tool invocation chain. All tools are wrapped with `AccessContextAIFunction` (a `DelegatingAIFunction`) that restores the user's identity from `ThreadExecutionContext.UserAccessContext` before each invocation.

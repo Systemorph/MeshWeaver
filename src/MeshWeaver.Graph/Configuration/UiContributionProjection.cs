@@ -147,12 +147,28 @@ internal static class UiContributionProjection
         var items = new List<SettingsMenuItemDefinition>();
         foreach (var (node, contribution) in contributions)
         {
-            if (contribution.Context != UiContribution.NodeSettingsContext)
+            // An AppSettings tab belongs to ONE host app: it joins this page only when the page IS
+            // that host. Any other context but NodeSettings is not this lane's.
+            var isAppSettings = contribution.Context == UiContribution.AppSettingsContext;
+            if (isAppSettings)
+            {
+                if (!IsHost(contribution.Host, menuPath))
+                    continue;
+            }
+            else if (contribution.Context != UiContribution.NodeSettingsContext)
                 continue;
             if (contribution.Area is not { Length: > 0 } area)
                 continue;
             if (!PassesNodeGates(contribution.Gates, menuPath, menuNode, isAdmin, viewerId))
                 continue;
+            // An app-settings tab may embed its module's own hub — inside its partition only.
+            string? address = null;
+            if (isAppSettings && contribution.Address is { Length: > 0 })
+            {
+                address = AppSettingsAddress(contribution, node.Path, menuPath);
+                if (address is null)
+                    continue;
+            }
 
             items.Add(new SettingsMenuItemDefinition(
                 // The node id (= the trailing path segment) keeps the tab's /Settings/{Id} deep
@@ -163,7 +179,8 @@ internal static class UiContributionProjection
                 // padding/scroll container every compiled tab renders in. The node argument is
                 // deliberately unused: the area renders on the anchoring node's OWN hub, so it
                 // resolves that node the same way every other layout area does.
-                ContentBuilder: (h, stack, _) => stack.WithView(Controls.LayoutArea(h.Hub.Address, area)),
+                ContentBuilder: (h, stack, _) => stack.WithView(Controls.LayoutArea(
+                    address is null ? h.Hub.Address : (object)(Address)address, area)),
                 Group: contribution.Group,
                 // Icon.Parse is the platform's TOTAL string→Icon conversion (Fluent name, SVG,
                 // URL, emoji→text) — the NavMenu renderer expects Icon objects here.
@@ -287,6 +304,29 @@ internal static class UiContributionProjection
             tabs.Add((tab, contribution.Gates?.RequireAddressAccess == true ? address : null));
         }
         return tabs;
+    }
+
+    /// <summary>
+    /// True when an <see cref="UiContribution.AppSettingsContext"/> tab's <paramref name="host"/>
+    /// names the settings page's node <paramref name="menuPath"/> (slashes trimmed, case-insensitive).
+    /// A tab with no host belongs to no page.
+    /// </summary>
+    internal static bool IsHost(string? host, string menuPath)
+        => (host?.Trim().Trim('/') ?? "") is { Length: > 0 } normalized
+           && string.Equals(normalized, menuPath.Trim().Trim('/'), StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The hub an <see cref="UiContribution.AppSettingsContext"/> tab embeds: its declared
+    /// <see cref="UiContribution.Address"/> (trimmed) when that lies inside the contribution's own
+    /// partition, <paramref name="hostAddress"/> when none is declared, and null when the declared one
+    /// is foreign — the tab is then dropped. Pure; the projection's ContentBuilder renders exactly this.
+    /// </summary>
+    internal static string? AppSettingsAddress(UiContribution contribution, string? contributionPath, string hostAddress)
+    {
+        if (contribution.Address is not { Length: > 0 } declared)
+            return hostAddress;
+        var address = declared.Trim('/');
+        return IsInContributorsPartition(address, contributionPath) ? address : null;
     }
 
     /// <summary>
