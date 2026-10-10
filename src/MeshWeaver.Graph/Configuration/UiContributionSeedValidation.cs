@@ -55,6 +55,7 @@ public static class UiContributionSeedValidation
         UiContribution.TopBarContext,
         UiContribution.ProfileContext,
         UiContribution.PersonAppContext,
+        UiContribution.AppSettingsContext,
         NodeMenuItemsExtensions.AiMenuContext,
         NodeMenuItemsExtensions.GitHubMenuContext,
     ];
@@ -131,7 +132,10 @@ public static class UiContributionSeedValidation
 
             // An embedding contribution may only render an address inside its OWN partition; the
             // projection drops any other one, silently.
-            if (content.Context is UiContribution.ProfileContext or UiContribution.PersonAppContext
+            if (content.Context is UiContribution.AppSettingsContext && content.Host is not { Length: > 0 })
+                problems.Add($"{path}: Context 'AppSettings' without a Host — the tab belongs to no app's settings page and renders NOWHERE, silently");
+
+            if (content.Context is UiContribution.ProfileContext or UiContribution.PersonAppContext or UiContribution.AppSettingsContext
                 && content.Address is { Length: > 0 } embedded
                 && !UiContributionProjection.IsInContributorsPartition(embedded.Trim('/'), path))
                 problems.Add($"{path}: Address '{embedded}' lies outside the contribution's own partition — the projection drops the entry, silently");

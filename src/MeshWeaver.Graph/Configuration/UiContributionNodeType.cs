@@ -133,6 +133,23 @@ public record UiContribution
     public const string PersonAppContext = "PersonApp";
 
     /// <summary>
+    /// The APP-SETTINGS context (<c>AppSettings</c>): a contribution here adds a TAB to the settings
+    /// page of ONE host app — the node named by <see cref="Host"/> (<c>/{host}/Settings/{Id}</c>). It
+    /// is how an app's own configuration (Threads › Models, Signature › Providers) and an instance
+    /// app's section (Administration › Manage apps, <c>Host = "Admin"</c>) are contributed as DATA by
+    /// a module compiled from mesh content, which cannot reach the host hub's configuration.
+    ///
+    /// <para>The tab's body EMBEDS <see cref="Area"/> of the hub at <see cref="Address"/> (unset ⇒ the
+    /// host app's own hub) through the platform's <c>LayoutAreaControl</c>, exactly like a
+    /// <see cref="PersonAppContext"/> tab, and the address obeys the same partition rule (it must lie
+    /// inside the contribution node's own partition). It shows ONLY on the host's settings page —
+    /// never on any other node's — and every gate of the closed vocabulary still narrows it
+    /// (<c>AdminOnly</c> for an instance-app section; <see cref="RequiredPermission"/> against the
+    /// viewer's permissions on the host node).</para>
+    /// </summary>
+    public const string AppSettingsContext = "AppSettings";
+
+    /// <summary>
     /// Which menu the entry contributes to: <c>Node</c>, <c>Mesh</c>, <c>Settings</c> (the GLOBAL
     /// settings page), <c>NodeSettings</c> (the PER-NODE settings page), <c>TopBar</c>, <c>AI</c>,
     /// <c>Profile</c>, <c>PersonApp</c> or any key a <c>TopBar</c> declaration introduces. Unset ⇒ <c>Node</c>.
@@ -173,6 +190,13 @@ public record UiContribution
     /// <see cref="Area"/> on the anchoring node, or navigate to <see cref="Href"/>.
     /// </summary>
     public string? Address { get; init; }
+
+    /// <summary>
+    /// The host app an <see cref="AppSettingsContext"/> tab belongs to — the path of the app node
+    /// whose settings page carries it (<c>"Admin"</c>, <c>"AI/AiThreads"</c>). Matched
+    /// case-insensitively against the settings page's node path; ignored by every other context.
+    /// </summary>
+    public string? Host { get; init; }
 
     /// <summary>
     /// Optional explicit navigation URL, overriding the URL derived from <see cref="Area"/> on the
