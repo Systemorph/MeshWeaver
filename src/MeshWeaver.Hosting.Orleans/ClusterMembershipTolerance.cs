@@ -11,10 +11,18 @@ namespace MeshWeaver.Hosting.Orleans;
 /// healthy silo Dead after it missed their direct probes; the silo read the verdict at its next
 /// table refresh and killed itself (MembershipTableManager.KillMyselfLocally). Its IAmAlive row
 /// was still being written (20:44:06Z, after the votes): the process was alive, only its probe
-/// answers were late. Until this class the repository configured no ClusterMembershipOptions
-/// outside test fixtures, so production ran Orleans' defaults (ProbeTimeout 5 s, suspicion after
-/// NumMissedProbesLimit 3 misses, death on NumVotesForDeathDeclaration 2 votes): about 15 s of
-/// unanswered probes killed a silo.</para>
+/// answers were late. Until this class THIS repository configured no ClusterMembershipOptions
+/// outside test fixtures, so a host that set none ran Orleans' defaults (ProbeTimeout 5 s,
+/// suspicion after NumMissedProbesLimit 3 misses, death on NumVotesForDeathDeclaration 2 votes):
+/// about 15 s of unanswered probes killed a silo.</para>
+///
+/// <para><b>What that incident was not.</b> The portal host that silo ran in
+/// (Memex.Portal.Distributed, MeshWeaver.Plugins) configures its own ProbeTimeout 15 s ×
+/// NumMissedProbesLimit 5 with indirect probes, and an explicit configuration wins over this
+/// baseline (last paragraph). So the 2026-10-09 eviction happened under about 75 s of tolerance,
+/// not under the defaults, and this baseline does not change that deployment. The incident is
+/// read in Doc/Architecture/ReadingASiloEviction ("a silo wedged from boot"): a silo that
+/// answered nothing, correctly evicted. The baseline below is for hosts that configure nothing.</para>
 ///
 /// <para><b>What this changes.</b> ProbeTimeout — both the probe period and each probe's timeout —
 /// is raised to 10 s, so a silo must leave probes unanswered for about 30 s before it is

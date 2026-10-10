@@ -33,11 +33,15 @@ process that stopped answering — and the process that stopped answering is sti
 
 ## Why a live heartbeat proves nothing
 
-`IAmAliveTime` is refreshed by a **single cheap row upsert on its own timer**. Answering
-`IMembershipService.Ping` is a **grain call**: it needs a thread-pool thread and a turn. A process
-deep in GC-stall territory does the first and not the second, so during a stall the membership row
-keeps looking fresh while every probe times out. That is not a contradiction — it is the *signature*
-of a stalled host.
+`IAmAliveTime` is refreshed by a **single cheap row upsert on its own timer**, and one gap between
+pauses is enough for it. A probe (`IMembershipService.Ping`) has to be **answered inside its timeout,
+several times in a row**. Orleans 10 answers it in the connection's receive loop
+(`SiloConnection.HandlePingMessage`), not in a grain turn (the second shape below turns on exactly
+that), but the receive loop is ordinary managed code on thread-pool threads: it does not run while
+the GC has the process suspended, and under pool delays it waits for a worker like everything else.
+A process deep in GC-stall territory therefore does the first and not the second, so during a stall
+the membership row keeps looking fresh while every probe times out. That is not a contradiction — it
+is the *signature* of a stalled host.
 
 The victim's own log is where this is decided, and on 2026-09-02 it settled the question in one line.
 The heartbeat cited as proof of liveness — `IAmAliveTime=03:12:40.984` — carries the **same
@@ -182,6 +186,14 @@ the membership table normally, and logs no connection error. The measured evicti
 15 and 20 minutes. A silo failing probes from the start would be gone in about 2 to 3 minutes
 under the deployed `ProbeTimeout` of 15 s and `NumMissedProbesLimit` of 5.
 
+Those two values are the portal host's own (`Memex.Portal.Distributed`, MeshWeaver.Plugins, with
+indirect probes enabled), in its code since before any of the three incidents, #6395 included; the
+running options were not read back from the pods. Core's
+`ClusterMembershipTolerance` baseline (10 s × 3, added for #6395) is inserted first so that a host's
+explicit configuration wins, so it changes nothing on these deployments; it applies to a host that
+configures no membership options. #6395 was therefore not a silo evicted after 15 s of Orleans
+defaults. It was this shape, evicted under the wider vote, and no tolerance setting addresses it.
+
 So "requests reach it, nothing comes back" is **not**, by itself, evidence of a broken pod network
 path. Check the thread trend first.
 
@@ -195,11 +207,15 @@ received a response and failed to dispatch it. Count them as the same failure on
 dump or the remote silo's own log shows the same path.
 
 **What is still open.** Which call blocks is not in any log. The instrument is the `FailFast` heap
-dump the self-kill writes (step 4). Open it with `dotnet-dump analyze` and look for receive-loop
-threads (`SiloConnection`, `MessageCenter.ReceiveMessage`) or activation threads parked on one
-lock or one `Wait`: `clrstack -all`, `syncblk`, `dumpasync`. Reading the dump needs cluster
-access, since there is no governed dump action. Until it has been read, any tolerance change or
-watchdog is a band-aid over a blocking call nobody has seen.
+dump the self-kill writes (step 4). Read it with the governed `AnalyzeDump` action
+([Debugging Native Crashes](../DebuggingNativeCrashes), "Reading a production dump"): filed on the
+control instance against `Deployments/<id>` with `dumpPod` or `dumpAround` naming the evicted pod, it
+runs `threadpool`, `syncblk`, `clrthreads`, `clrstack -all` and `dumpasync` in the cluster and lands
+the grouped stacks at `Ops/Dumps/<action id>`. No direct cluster access is needed. It reads only a
+dump that outlived the pod, so an instance whose dump root is still an `emptyDir` has nothing to
+read until its next Reconcile. In the result, look for receive-loop threads (`SiloConnection`,
+`MessageCenter.ReceiveMessage`) or activation threads parked on one lock or one `Wait`. Until it has
+been read, any tolerance change or watchdog is a band-aid over a blocking call nobody has seen.
 
 ## Procedure
 
@@ -218,8 +234,8 @@ watchdog is a band-aid over a blocking call nobody has seen.
    "could not reproduce".
 6. **No stall and no memory pressure? Look for the boot fingerprint** (above): unanswered
    `_Activity/import-*` deliveries to the silo's own grains in its first minute, and `poolThreads`
-   climbing while throughput falls. Then read the `FailFast` dump for the blocked threads before
-   touching membership options.
+   climbing while throughput falls. Then read the `FailFast` dump (`AnalyzeDump`) for the blocked
+   threads before touching membership options.
 
 ## See also
 
