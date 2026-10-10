@@ -280,6 +280,22 @@ class Mesh:
         return text
 
 
+GRANT_REMEDY = ("the build's service user needs the namecheck.caller.grant on the CRM-owning instance "
+                "(Governance ClientNameGate → 'Granting a caller')")
+
+
+def refusal_reason(text: str) -> str:
+    """Why a create was refused, CLASSIFIED — never the instance's text itself, which this public log
+    must not carry (a refusal can echo the request). Pure."""
+    t = (text or "").lower()
+    if "unknown content member" in t or "source" in t and "member" in t:
+        return ("the instance does not know the issue-text request shape — its Governance package predates "
+                "0.11 (MeshWeaver.Plugins#3257); it reaches the instance with the next Governance publication")
+    if "access denied" in t or "permission" in t or "not authorized" in t or "forbidden" in t:
+        return "the instance refused it for access — " + GRANT_REMEDY
+    return "the instance refused it for a reason this script does not classify (the instance's log names it); " + GRANT_REMEDY
+
+
 def submit_and_wait(mesh: Mesh, repo: str, run_id: int, attempt: str, parts: list[list[dict]]) -> list[dict]:
     ids = []
     for i, part in enumerate(parts):
@@ -289,8 +305,7 @@ def submit_and_wait(mesh: Mesh, repo: str, run_id: int, attempt: str, parts: lis
                 "content": {"$type": CONTENT_TYPE, "repo": repo, "source": SOURCE, "runId": run_id, "lines": part}}
         text = mesh.call("create", {"node": json.dumps(node)}).strip()
         if not text.startswith("Created"):
-            raise NotChecked("the check request was not created — the build's service user needs the "
-                             "namecheck.caller.grant on the CRM-owning instance (Governance ClientNameGate → 'Granting a caller')")
+            raise NotChecked("the check request was not created — " + refusal_reason(text))
         ids.append(nid)
     answers: dict[str, dict] = {}
     deadline = time.monotonic() + ANSWER_TIMEOUT_S
@@ -449,9 +464,18 @@ def self_test() -> int:
           verdict(submit_and_wait(mesh, "o/r", 45, "1", parts))[0] == 1)
     check("node ids share a run key, so the instance files ONE triage item per run",
           node_id("Systemorph/MeshWeaver", 9, "2", 0).rsplit("-", 1)[0] == node_id("Systemorph/MeshWeaver", 9, "2", 3).rsplit("-", 1)[0])
+    check("refusal: an unknown content member names the Governance version, not the grant",
+          "predates" in refusal_reason("Error: refused create: unknown content member(s) 'source' for type NameCheckContent"))
+    check("refusal: an access refusal names the grant", "namecheck.caller.grant" in refusal_reason("Access denied: Create permission required"))
+    check("🚨 refusal: the instance's text is never echoed", "SECRETWORD" not in refusal_reason("Error: SECRETWORD rejected"))
     saved = {k: os.environ.pop(k, None) for k in ("NAME_CHECK_URL", "NAME_CHECK_TOKEN")}
     try:
-        check("🚨 no URL/token FAILS closed", run("o/r", 1) == 1)
+        # The fail-closed path prints a real ::error:: annotation; swallow it here so a GREEN self-test
+        # does not paint a red annotation on the run that executes it.
+        import contextlib, io
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc = run("o/r", 1)
+        check("🚨 no URL/token FAILS closed", rc == 1)
     finally:
         for k, v in saved.items():
             if v is not None:
