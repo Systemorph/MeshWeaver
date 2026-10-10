@@ -929,11 +929,18 @@ if "Hosting__Operator__Maintainer" in cfg_data and not str(cfg_data["Hosting__Op
         "a blank maintainer reads as 'nobody may self-approve', which is the absent case wearing a "
         "key. Render the key only when a maintainer is set.",
     )
+if "Hosting__Operator__MaintainerSignsAlone" in cfg_data and str(cfg_data["Hosting__Operator__MaintainerSignsAlone"]) != "true":
+    finding(
+        f"Hosting__Operator__MaintainerSignsAlone renders {cfg_data['Hosting__Operator__MaintainerSignsAlone']!r}",
+        "the key widens who may satisfy a signature gate alone; it renders only as the literal "
+        "'true', and false or unset must render NO key.",
+    )
 if str(cfg_data.get("Hosting__Operator__Enabled", "false")) != "true":
     _job_keys = sorted(
         k for k in cfg_data
         if k.startswith("Hosting__Operator__")
-        and k not in ("Hosting__Operator__Enabled", "Hosting__Operator__Executor", "Hosting__Operator__Maintainer")
+        and k not in ("Hosting__Operator__Enabled", "Hosting__Operator__Executor", "Hosting__Operator__Maintainer",
+                      "Hosting__Operator__MaintainerSignsAlone")
     )
     if _job_keys:
         finding(

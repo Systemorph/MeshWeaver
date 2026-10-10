@@ -1,0 +1,9 @@
+# FIXTURE for check-chart-invariants.sh (a REFUSAL) — maintainerSignsAlone given as a QUOTED string.
+# A string is truthy to a Helm template, so "false" would render Hosting__Operator__MaintainerSignsAlone
+# as true and let the maintainer sign alone against the declared value (policy
+# sole-maintainer-approval). The chart must refuse the render and say "must be a boolean".
+hostingOperator:
+  enabled: false
+  executor: "Actions"
+  maintainer: "maintainer-id"
+  maintainerSignsAlone: "false"

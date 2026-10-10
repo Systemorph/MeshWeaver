@@ -863,6 +863,21 @@ public sealed record HostingOperatorSpec
     public string? Maintainer { get; init; }
 
     /// <summary>
+    /// Whether the declared <see cref="Maintainer"/> SIGNS ALONE: their one valid signature satisfies
+    /// a governed activity's <c>Signatures</c> gate of any <c>count</c> (policy
+    /// <c>sole-maintainer-approval</c>; MeshWeaver.Plugins <c>SoleMaintainerApproval.SignsAloneKey</c>).
+    /// For a single-person installation, such as a test instance with no confidential data, where a
+    /// count-2 gate could otherwise never go green. False, the default, renders no key and keeps
+    /// every count as it is. Declared HERE and only here, for the reason <see cref="Maintainer"/> is:
+    /// a node or a standard an administrator can write would let them turn a two-person rule into a
+    /// one-person rule for themselves. It changes nothing without a maintainer, and the signature must
+    /// still be valid (eligible, own write, bound, fresh). Renders
+    /// <c>Hosting__Operator__MaintainerSignsAlone</c> (<c>Hosting:Operator:MaintainerSignsAlone</c>).
+    /// </summary>
+    [Description("Maintainer signs alone: the maintainer's one signature satisfies a signature gate of any count")]
+    public bool MaintainerSignsAlone { get; init; }
+
+    /// <summary>
     /// Whether this is a CUSTOMER instance that governs itself (policy <c>customer-instance-governance</c>).
     /// When true, the governed actions the instance REQUESTS from its control instance are approved by
     /// the instance's OWN global administrators, attested by the instance over its signed lane, under

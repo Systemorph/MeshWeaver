@@ -1,0 +1,12 @@
+# FIXTURE for check-chart-invariants.sh (a REFUSAL) — hostingOperator.maintainerSignsAlone is false,
+# but config.memex_portal carries the key. Without the refusal the pass-through would render it, and
+# the maintainer would sign alone behind a declaration that says false (policy
+# sole-maintainer-approval). The chart must refuse and say "is set while hostingOperator.maintainerSignsAlone is not true".
+hostingOperator:
+  enabled: false
+  executor: "Actions"
+  maintainer: "maintainer-id"
+  maintainerSignsAlone: false
+config:
+  memex_portal:
+    HOSTING__OPERATOR__MAINTAINERSIGNSALONE: "true"
