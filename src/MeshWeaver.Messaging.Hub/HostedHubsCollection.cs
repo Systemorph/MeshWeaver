@@ -216,6 +216,7 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
                 // Track re-arms the removal: on a hub whose disposal has begun, RegisterForDisposal
                 // disposes the registrant immediately, so the corpse comes straight back out.
                 Track(created.Hub);
+                InheritCreationFreeze(created.Hub);
                 try { _hubAdded.OnNext(created.Hub); } catch { /* never throw on notification */ }
             }
             return created;
@@ -649,7 +650,34 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
     public void CloseCreation()
     {
         creationClosed = true;
+        // Full fence, paired with the one in InheritCreationFreeze: the flag is published before
+        // the registry is walked, so a construction that registers concurrently is either seen by
+        // this walk or reads the flag itself — never neither (store→load needs a full barrier;
+        // `volatile` alone does not order a write before a later read).
+        Interlocked.MemoryBarrier();
         foreach (var hub in messageHubs.Values)
+            (hub as MessageHub)?.CloseHostedHubCreation();
+    }
+
+    /// <summary>
+    /// A hub whose construction FINISHED after this collection's creation was frozen joins the
+    /// freeze. <see cref="CloseCreation"/> cascades over the hubs registered when it ran; a
+    /// construction already in flight then (#613's straggler, a first-time cache resolution)
+    /// registers afterwards, and without this it would be the one hub in a shutting-down subtree
+    /// whose <c>IsShuttingDown</c> reads false and whose own hosted collection still accepts new
+    /// children. A late SIBLING is disposed at once by the in-flight leg, so that window was a
+    /// breath; a late DEPENDENCY (<see cref="MessageHubConfiguration.WithTeardownAfterSiblings"/>,
+    /// #6078) waits for the whole first wave, so it is not.
+    ///
+    /// <para>Applied once construction has RETURNED, never from inside <c>Build</c>: freezing
+    /// mid-build would refuse the sub-hubs a hub's synchronous initialization creates, which is a
+    /// different contract from the one every snapshotted hub gets.</para>
+    /// </summary>
+    /// <param name="hub">The hub this collection just registered.</param>
+    private void InheritCreationFreeze(IMessageHub hub)
+    {
+        Interlocked.MemoryBarrier();
+        if (IsCreationFrozen)
             (hub as MessageHub)?.CloseHostedHubCreation();
     }
 
@@ -735,7 +763,15 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
         // and re-invoking per child would let the answer drift mid-teardown.
         var originatingCause = ReadOwnerCause();
 
-        var childCompletions = hubs.Select(h =>
+        // 🚨 TWO WAVES, in dependency order (#6078). A hub declared WithTeardownAfterSiblings SERVES
+        // its siblings (the node-stream cache's hub: its ShutDown ends every held read), so it is
+        // disposed only once every other leg of this join has answered. One wave raced them: a
+        // sibling still mid-turn or mid-quiesce received the cache's disposal terminal for its own
+        // teardown. The second wave starts below, after the first wave's join.
+        var dependencies = hubs.Where(TearsDownAfterSiblings).ToArray();
+        var siblings = hubs.Where(h => !TearsDownAfterSiblings(h)).ToArray();
+
+        IObservable<Unit> DisposeAndJoin(IMessageHub h)
         {
             var address = h.Address;
             try
@@ -766,7 +802,9 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
                     logger.LogError(ex, "Hub {address} disposal faulted", address);
                     return Observable.Return(Unit.Default);
                 });
-        }).ToArray();
+        }
+
+        var childCompletions = siblings.Select(DisposeAndJoin).ToArray();
 
         // 🚨 FINISH in-flight constructions, don't race them. The snapshot above cannot see a
         // hub that is mid-Build (it lands in messageHubs only after construction), so without
@@ -777,8 +815,11 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
         // properly finish the ones already started. Merge order matters: inflightChanged is
         // subscribed FIRST, then the immediate probe — so a decrement between the snapshot and
         // this subscription is caught by the probe, and one after it by the ping. Whatever a
-        // late construction produced is then disposed here, inside the join, so it is never a
-        // zombie outside the disposal snapshot.
+        // late construction produced is then disposed inside the join, so it is never a zombie
+        // outside the disposal snapshot. The leg emits the late hubs it did NOT dispose: a late
+        // construction that declared WithTeardownAfterSiblings (#6078) is a dependency like any
+        // other and joins the SECOND wave below, so a first-time cache resolution overlapping the
+        // teardown cannot bring back the race the two waves exist to prevent.
         var inflightDrain = Observable
             .Merge(inflightChanged, Observable.Return(Unit.Default))
             .Where(_ => Volatile.Read(ref inflightCreations) == 0)
@@ -789,33 +830,20 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
                 // the two snapshots is joined as retired and is not a late construction.
                 var late = messageHubs.Values.Except(registered).Where(h => !retiredSet.Contains(h)).ToArray();
                 if (late.Length == 0)
-                    return Observable.Return(Unit.Default);
+                    return Observable.Return(Array.Empty<IMessageHub>());
+                var lateDependencies = late.Where(TearsDownAfterSiblings).ToArray();
+                var lateSiblings = late.Where(h => !TearsDownAfterSiblings(h)).ToArray();
                 logger.LogInformation(
-                    "Disposing {count} hub(s) whose construction completed after disposal began: [{addresses}]",
-                    late.Length, string.Join(", ", late.Select(h => h.Address.ToString())));
-                var lateCompletions = late.Select(h =>
-                {
-                    try
-                    {
-                        // Attributed too: a hub that finished constructing after disposal began
-                        // still goes down BECAUSE its owner did, and a line that says otherwise
-                        // would be the one unattributed cascade in the tree.
-                        AttributeCascade(h, originatingCause);
-                        h.Dispose();
-                    }
-                    catch (Exception ex)
-                    {
-                        logger.LogError(ex, "Error during disposal of late-constructed hub {address}", h.Address);
-                    }
-                    return h.DisposalCompleted
-                        .Take(1)
-                        .Catch<Unit, Exception>(ex =>
-                        {
-                            logger.LogError(ex, "Late-constructed hub {address} disposal faulted", h.Address);
-                            return Observable.Return(Unit.Default);
-                        });
-                }).ToArray();
-                return Observable.CombineLatest(lateCompletions).Select(_ => Unit.Default).Take(1);
+                    "Disposing {count} hub(s) whose construction completed after disposal began: [{addresses}]; "
+                    + "{dependencies} of them after their siblings",
+                    late.Length, string.Join(", ", late.Select(h => h.Address.ToString())), lateDependencies.Length);
+                if (lateSiblings.Length == 0)
+                    return Observable.Return(lateDependencies);
+                // Attributed too, inside DisposeAndJoin: a hub that finished constructing after
+                // disposal began still goes down BECAUSE its owner did.
+                return Observable.CombineLatest(lateSiblings.Select(DisposeAndJoin).ToArray())
+                    .Select(_ => lateDependencies)
+                    .Take(1);
             });
 
         var retiredCompletions = retired.Select(h =>
@@ -827,11 +855,29 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
                     return Observable.Return(Unit.Default);
                 }));
 
-        var completionLegs = childCompletions.Concat(retiredCompletions).Append(inflightDrain).ToArray();
-        IObservable<Unit> all = Observable
+        // The first wave answers with the late dependencies the in-flight leg carried over.
+        var completionLegs = childCompletions.Concat(retiredCompletions)
+            .Select(leg => leg.Select(_ => Array.Empty<IMessageHub>()))
+            .Append(inflightDrain)
+            .ToArray();
+        var siblingsDone = Observable
             .CombineLatest(completionLegs)
-            .Select(_ => Unit.Default)
+            .Select(carried => carried.SelectMany(h => h).ToArray())
             .Take(1);
+        // The second wave: the hubs the first wave depended on — snapshotted ones and late ones
+        // alike — disposed once nothing that reads through them is still tearing down. Inside
+        // SelectMany, so their Dispose() runs only then.
+        IObservable<Unit> all = siblingsDone.SelectMany(lateDependencies =>
+        {
+            var wave = dependencies.Concat(lateDependencies).ToArray();
+            if (wave.Length == 0)
+                return Observable.Return(Unit.Default);
+            logger.LogDebug("Siblings of {count} dependency hub(s) disposed; disposing [{addresses}]",
+                wave.Length, string.Join(", ", wave.Select(h => h.Address.ToString())));
+            return Observable.CombineLatest(wave.Select(DisposeAndJoin).ToArray())
+                .Select(_ => Unit.Default)
+                .Take(1);
+        });
 
         // No Timeout — see the remarks on this method. Every leg answers from its own terminal
         // state, so there is nothing left for a deadline here to rescue; the owning hub's disposal
@@ -851,6 +897,12 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
                     SignalDone();
                 });
     }
+
+    /// <summary>
+    /// True for a hosted hub declared <see cref="MessageHubConfiguration.WithTeardownAfterSiblings"/>.
+    /// Read off the hub's immutable configuration, so it answers the same at any point of a teardown.
+    /// </summary>
+    private static bool TearsDownAfterSiblings(IMessageHub hub) => hub.Configuration.TearsDownAfterSiblings;
 
     /// <summary>
     /// The owner's own teardown attribution, or <c>null</c> when nobody installed one. Best-effort
