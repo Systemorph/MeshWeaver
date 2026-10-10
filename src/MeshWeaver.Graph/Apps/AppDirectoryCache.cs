@@ -3,6 +3,7 @@ using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Graph.Apps;
 
@@ -29,6 +30,9 @@ public sealed class AppDirectoryCache : IDisposable
     private readonly IScheduler scheduler;
     private readonly TimeSpan lifetime;
     private readonly object gate = new();
+    // The OWNER of every connection this cache makes (RootedRxConnectionRatchetGuard): each slot's
+    // handle is registered here on connect and released with the cache, whatever path a slot left by.
+    private readonly CompositeDisposable connections = new();
     private ImmutableDictionary<string, Slot> slots =
         ImmutableDictionary.Create<string, Slot>(StringComparer.OrdinalIgnoreCase);
     private bool disposed;
@@ -99,7 +103,7 @@ public sealed class AppDirectoryCache : IDisposable
             }
             if (connect)
             {
-                var connection = slot.Shared.Connect();
+                var connection = slot.Shared.ConnectOwnedBy(connections);
                 lock (gate)
                 {
                     if (slot.Released)
@@ -189,6 +193,7 @@ public sealed class AppDirectoryCache : IDisposable
             }
             connection?.Dispose();
         }
+        connections.Dispose();
     }
 
     /// <summary>One viewer's held computation. Mutated only under the cache's gate.</summary>

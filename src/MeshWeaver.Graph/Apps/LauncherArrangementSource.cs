@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Reactive;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Graph.Configuration;
@@ -30,6 +31,9 @@ public sealed class LauncherArrangementSource
     private readonly IMessageHub hub;
     private readonly ILogger<LauncherArrangementSource>? logger;
     private readonly object gate = new();
+    // The OWNER of every seed connection (RootedRxConnectionRatchetGuard), released with the mesh hub.
+    private readonly CompositeDisposable owned = new();
+    private readonly ReleaseLane lane;
     private ImmutableHashSet<string> seeded = ImmutableHashSet.Create<string>(StringComparer.OrdinalIgnoreCase);
     private ImmutableDictionary<string, IObservable<Unit>> inFlight =
         ImmutableDictionary.Create<string, IObservable<Unit>>(StringComparer.OrdinalIgnoreCase);
@@ -39,6 +43,8 @@ public sealed class LauncherArrangementSource
     {
         this.hub = hub;
         logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger<LauncherArrangementSource>();
+        lane = hub.ServiceProvider.GetRequiredService<ReleaseLane>();
+        hub.RegisterForDisposal(owned);
     }
 
     /// <summary>The query listing <paramref name="owner"/>'s arrangement node (its settings namespace,
@@ -121,7 +127,7 @@ public sealed class LauncherArrangementSource
                         }
                     })
                 .Replay(1)
-                .AutoConnect(1);
+                .AutoConnectOwnedBy(owned, lane, nameof(LauncherArrangementSource));
             inFlight = inFlight.SetItem(owner, seed);
             return seed;
         }

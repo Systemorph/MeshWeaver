@@ -151,13 +151,17 @@ public sealed class AppDirectory
     {
         if (roots.Count == 0)
             return Observable.Return(ImmutableList<AppRoot>.Empty);
-        var checks = roots.Select(root => hub.CheckPermission(root.ProbePath, viewer, Permission.Read)
-            .Catch<bool, Exception>(exception =>
+        var checks = roots.Select(root => hub.CheckPermissionOutcome(root.ProbePath, viewer, Permission.Read)
+            .Select(outcome =>
             {
-                // A check that cannot be answered is NOT a grant: the tile stays off, loudly.
-                logger?.LogWarning(exception,
-                    "[AppDirectory] read check on {Probe} failed for {Viewer}", root.ProbePath, viewer);
-                return Observable.Return(false);
+                // A fold that reached NO verdict is not a denial — but a launcher can only show or
+                // hide a tile, so the tile stays off for now and the reason is logged by name; the
+                // live check re-emits once the fold answers.
+                if (outcome.IsUndetermined)
+                    logger?.LogWarning(
+                        "[AppDirectory] read check on {Probe} for {Viewer} reached no verdict: {Reason}",
+                        root.ProbePath, viewer, outcome.UndeterminedReason);
+                return outcome.IsGranted;
             })
             .DistinctUntilChanged()
             .Select(allowed => (root, allowed)));
