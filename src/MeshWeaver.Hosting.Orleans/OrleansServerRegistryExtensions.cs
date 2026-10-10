@@ -212,7 +212,7 @@ public static class OrleansServerRegistryExtensions
         // scope. RoutingQuiescence counts that work; its participant holds the silo stop at stage
         // Active (BEFORE membership announces ShuttingDown and BEFORE any grain deactivates) until
         // the count is zero, bounded, so each leg lands or is NACK'd over a live transport.
-        services.AddRoutingQuiescence();
+        services.AddRoutingQuiescence().AddSiloStopTimeline(); // #6392: timestamps every silo stop stage (SiloStopTimeline) so a departing silo's own log shows where its stop spent its time
         // The root mesh hub's cross-silo REPLY stream (core#694 layer 2) — see
         // RootMeshHubReplyStreamService for the full story.
         services.AddRootMeshHubReplyStream();
