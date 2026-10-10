@@ -352,14 +352,22 @@ jobs:
           : "${INSTANCE_NAME:?the slot step resolved no installation name}"
           : "${BASE_URL:?the slot step resolved no base URL}"
           : "${SOURCES:?the slot step resolved no registry sources}"
+          : "${INSTANCE_PRIVATE:?the slot step did not say whether this row is a private one}"
           # 🚨 No credential is passed: the lander mints this run's own OIDC token per call
           # (the workflow holds `id-token: write`), audience = BASE_URL.
           bash .github/scripts/combo-verify-instance.sh
 
       # 🚨 NAMED BY SLOT, files included (#3848): an artifact's name and the file names inside it
       # are not masked, and a public repository's artifacts can be downloaded.
+      #
+      # 🚨 AND NEVER FOR A PRIVATE ROW. `combo.json` is an installation's module list — a client
+      # estate's inventory — and this repository is public. The slot step writes INSTANCE_PRIVATE,
+      # and the upload happens only when it is literally `false`: unset, empty or anything else
+      # uploads nothing, so the condition fails CLOSED. This is not an input-shaped `if:` on a
+      # gate — it withholds a diagnostic, and the job's verdict is decided before it. For a private
+      # row the lander prints the verdict and counts only; the full verdict is on the instance.
       - name: Keep the work root of a failed verification
-        if: failure()
+        if: failure() && env.INSTANCE_PRIVATE == 'false'
         uses: actions/upload-artifact@v7
         with:
           name: combo-work-slot-${{ matrix.slot }}

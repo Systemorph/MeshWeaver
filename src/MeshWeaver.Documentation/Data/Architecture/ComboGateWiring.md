@@ -417,6 +417,16 @@ masked. For the same reason the per-instance job is named by its slot
 it. Which installation a slot is can be read in that job's own log, where a private name prints
 masked.
 
+**A private row's module list never leaves the run.** The slot step also says whether its row is one
+the private roster names — by instance id, by host, or by the repository that declares it, the same
+identifiers the log masks are built from — and writes that as `INSTANCE_PRIVATE`. For such a row the
+lander prints the verdict and counts only: no name, no host, no response body, no module id, and the
+verifier's own output goes to a file that is never uploaded. The failed-verification artifact
+(`combo.json`, an installation's module list) is uploaded only when `INSTANCE_PRIVATE` is literally
+`false`, so an unset or unexpected value uploads nothing. The verdict is still landed on the
+instance in full, which is where its owner reads it. This is the safe default for a public
+repository; what a client estate's diagnostics should look like beyond it is the estate owner's call.
+
 **And the verdict counts jobs.** `needs.verify.result` is one word for the whole matrix: it cannot
 tell "six jobs ran and one failed" from "the matrix never expanded", and it reads `success` over
 however many jobs the matrix happened to create. So the `verdict` job asks the run which

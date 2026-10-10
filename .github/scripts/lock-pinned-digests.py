@@ -1159,16 +1159,15 @@ def merge_roster(committed: dict, private: dict) -> dict:
     return merged
 
 
-def mask_private_roster() -> list[str]:
-    """Register every identifier the PRIVATE roster carries as a GitHub Actions log mask.
+def private_roster_values() -> list[str]:
+    """Every identifier the PRIVATE roster carries — its repositories, registries and instances.
 
-    This repository's run logs are public, and the lane's diagnostics name repositories,
-    registries and installations verbatim — so an identifier that is private in the secret must
-    not reappear in plain text on a red run. Called once from `main()` (never from the
-    self-test, whose fixtures would mask ordinary words); a no-op outside GitHub Actions or
-    without the secret. Returns the masked values so the caller can say how many."""
+    ONE reader, two consumers: `mask_private_roster` registers these as log masks, and
+    `derive-combo-instances.py` uses the same set to decide whether a roster row is a private
+    one (whose module list must not leave the run). Empty without the secret or when it does not
+    parse — the roster readers refuse a malformed one by name."""
     extra = os.environ.get(PRIVATE_ROSTER_ENV, "").strip()
-    if not extra or os.environ.get("GITHUB_ACTIONS") != "true":
+    if not extra:
         return []
     try:
         private = json.loads(extra)
@@ -1182,7 +1181,20 @@ def mask_private_roster() -> list[str]:
         for entry in private.get("instances") or []:
             if isinstance(entry, dict):
                 values.update(str(entry.get(k, "")) for k in ("id", "repo", "host"))
-    masked = sorted(v.strip() for v in values if len(v.strip()) >= 4)
+    return sorted(v.strip() for v in values if len(v.strip()) >= 4)
+
+
+def mask_private_roster() -> list[str]:
+    """Register every identifier the PRIVATE roster carries as a GitHub Actions log mask.
+
+    This repository's run logs are public, and the lane's diagnostics name repositories,
+    registries and installations verbatim — so an identifier that is private in the secret must
+    not reappear in plain text on a red run. Called once from `main()` (never from the
+    self-test, whose fixtures would mask ordinary words); a no-op outside GitHub Actions or
+    without the secret. Returns the masked values so the caller can say how many."""
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        return []
+    masked = private_roster_values()
     for value in masked:
         print(f"::add-mask::{value}")
         if "/" in value:       # an owner/name repository also appears as its bare name

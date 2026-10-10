@@ -156,6 +156,8 @@ SENTINELS = {"assert": "missing=()",
 # The verdict step lives in its own job; same rule — by id, with a sentinel.
 VERDICT_SENTINEL = "the preflight was SKIPPED although the triggering CD concluded"
 VERIFY_JOB_NAME = "Verify instance slot ${{ matrix.slot }} against its roll target"
+# The ONLY condition under which a verify job may upload anything (see handover_problems).
+UPLOAD_CONDITION = "failure() && env.INSTANCE_PRIVATE == 'false'"
 # What the preflight may hand to another job. Anything else is a value that can carry a name.
 PREFLIGHT_OUTPUTS = {"slots": "${{ steps.roster.outputs.slots }}",
                      "count": "${{ steps.roster.outputs.count }}",
@@ -326,12 +328,17 @@ LANDER_REQUIRED = {
     "the verdict is landed through the recording route": '-X POST "$BASE_URL/api/plugins/combo-verification"',
     "the landing is confirmed, not assumed": "jq -e '.recorded == true'",
     "a 401 names both provisioning halves": "Admin/_BuildPrincipal/systemorph--meshweaver",
+    "a row is private unless told otherwise (fails closed)":
+        'PRIVATE=true\n[ "${INSTANCE_PRIVATE:-}" = "false" ] && PRIVATE=false',
+    "a private row's verifier output is withheld": '>"$WORK_ROOT/verifier-$tag.log" 2>&1',
+    "a private row's summary carries no module id": "Module ids, failures and caveat text are withheld",
 }
 LANDER_FORBIDDEN = {
     "an mwi_ instance key": "INSTANCE_KEY",
     "a global admin's mw_ token": "ADMIN_TOKEN",
     "a raw mesh patch of Admin/UpdatePolicy": "/api/mesh/patch",
     "a client-side copy of the verdict merge": "--slurpfile p",
+    "an unconditional print of a response body (a private row's names its modules)": '$(head -c',
 }
 
 
@@ -390,6 +397,13 @@ def check_lander(text: str, run_it: bool = True) -> int:
         out = proc.stdout + proc.stderr
         ok = proc.returncode != 0 and "id-token: write" in out
         print(f"[{'PASS' if ok else 'FAIL'}] lander without an OIDC request URL stops red naming id-token: write")
+        # …and that run had INSTANCE_PRIVATE unset, i.e. a PRIVATE row: nothing it printed may
+        # carry the installation's name or URL.
+        quiet = "probe" not in out and "127.0.0.1" not in out
+        print(f"[{'PASS' if quiet else 'FAIL'}] lander prints neither name nor URL when the row is not declared public")
+        if not quiet:
+            failures += 1
+            print(f"::error::the lander printed a private row's name or URL: {out}")
         if not ok:
             failures += 1
             print(f"::error::the lander did not refuse a run with no OIDC identity: exit={proc.returncode}\n  {out}")
@@ -528,11 +542,21 @@ def handover_problems(doc: dict) -> list[str]:
         if lander.get("env", {}).get("ARTIFACT_TAG") != "slot-${{ matrix.slot }}":
             problems.append("the lander must name its files by slot (ARTIFACT_TAG: slot-N): an "
                             "artifact's name and file names are not masked.")
-        for needle in ("${INSTANCE_NAME:?", "${BASE_URL:?", "${SOURCES:?"):
+        for needle in ("${INSTANCE_NAME:?", "${BASE_URL:?", "${SOURCES:?", "${INSTANCE_PRIVATE:?"):
             if needle not in lander.get("run", ""):
                 problems.append(f"the lander step must assert {needle}…}} before it runs, so a "
                                 "slot step that stops writing one is a red naming it.")
 
+    # 🚨 A private row's module list never leaves the run: this repository is public, and
+    # `combo.json` is a client estate's inventory. Every upload in the verify job must be
+    # conditional on INSTANCE_PRIVATE being literally 'false' (fail closed).
+    uploads = [step for step in verify_steps if "upload-artifact" in str(step.get("uses", ""))]
+    for step in uploads:
+        if step.get("if") != UPLOAD_CONDITION:
+            problems.append(
+                f"the verify job uploads an artifact under `if: {step.get('if')}`; it must be "
+                f"exactly `{UPLOAD_CONDITION}`. Anything looser uploads a client estate's module "
+                "list (combo.json) from a public repository.")
     verdict_steps = [step for step in verdict.get("steps", []) if isinstance(step, dict)]
     counter = next((step for step in verdict_steps if step.get("id") == "jobs"), None)
     verdict_step = next((step for step in verdict_steps if step.get("id") == "verdict"), {})
@@ -772,6 +796,16 @@ def self_test(root: Path) -> int:
                           if "--slot" in str(step.get("run", ""))],
         "the artifact named after the installation":
             lambda jobs: [step["env"].pop("ARTIFACT_TAG") for step in jobs["verify"]["steps"]
+                          if "combo-verify-instance.sh" in str(step.get("run", ""))],
+        "the failed-verification upload re-enabled for a private row":
+            lambda jobs: [step.update({"if": "failure()"}) for step in jobs["verify"]["steps"]
+                          if "upload-artifact" in str(step.get("uses", ""))],
+        "the upload made unconditional":
+            lambda jobs: [step.pop("if") for step in jobs["verify"]["steps"]
+                          if "upload-artifact" in str(step.get("uses", ""))],
+        "the lander no longer told whether the row is private":
+            lambda jobs: [step.update(run=step["run"].replace("${INSTANCE_PRIVATE:?", "${X:-"))
+                          for step in jobs["verify"]["steps"]
                           if "combo-verify-instance.sh" in str(step.get("run", ""))],
         "the verdict no longer counting jobs":
             lambda jobs: jobs["verdict"].update(steps=[
