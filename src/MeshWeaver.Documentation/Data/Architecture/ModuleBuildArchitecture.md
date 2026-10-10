@@ -198,6 +198,18 @@ verifies.
 > (servicing freezes the public API within a band). Closing it exactly is a Memex change, not a lane
 > change: `ci-platform-refresh.py` extracting the portal image's `/usr/share/dotnet` into
 > `<set>/dotnet/` (+114 MB per set) and this lane preferring it.
+>
+> **Nor does the volume carry the image's ENVIRONMENT — and one variable in it is load-bearing.**
+> A running portal identifies itself by `MESHWEAVER_PLATFORM_VERSION`, which rides the portal
+> image config. `docker run` inherits it; a process started with the runner's `dotnet` does not,
+> and falls back to the assembly's informational version, which under SemVer carries no run number
+> (`3.1.0+<sha>`). Every package whose `minMeshVersion` floor names the set it was verified on was
+> then refused by the gate's install ("needs platform ≥ 3.1.10365, this instance runs 3.1.0",
+> measured on MeshWeaver.Plugins#3237, run 38021386573) — the floor judged against a platform that
+> was not the one under test. In volume mode the gate therefore exports the served SET NAME as
+> `MESHWEAVER_PLATFORM_VERSION` before the first tester call, and goes RED when that name is not
+> a release version the pipeline mints. The set name is the image's version and the same name
+> the floor stamp records as `verifiedOn`.
 
 ### Where a module's own suite runs — and why `publish` decides
 
