@@ -199,28 +199,92 @@ Then the receipt is minted, each target stamped, and the browser returned to `re
 
 ## The passkey rung (non-Microsoft accounts)
 
-- **Enrolment** from *Settings → Security*: `navigator.credentials.create` against
-  `/auth/step-up/passkey/register`; the server verifies the attestation with the maintained
-  FIDO2 library (`Fido2NetLib`) and stores `{user}/_Passkey/{credentialId}` — credential id, public
-  key, sign counter, AAGUID, created-at. Never a secret. The first passkey may be enrolled only
-  within ten minutes of a sign-in; every further one needs a step-up with an existing one, so a
-  stolen session cannot add its own authenticator.
-- **Assertion** at step-up: the challenge is derived from the pending step-up (user, targets,
-  nonce), `userVerification=required`; the server verifies the signature, the origin and RP id,
-  the UV flag, and a sign counter that moved forward, then mints the same receipt with
-  `method=passkey`.
+Where a factor lives: ONE System-only node per account, `Auth/_StepUpFactors/{user}/factors`
+(`StepUpFactors`) — the passkeys (credential id, COSE public key, user handle, signature counter,
+AAGUID, created/last-used) and, if any, the TOTP enrolment. Never a private key, never a plaintext
+secret. Whether it exists is learned from a `scope:children` listing of `Auth/_StepUpFactors/{user}`
+— never a point read of a path that may be absent. The FIRST factor is a CREATE that refuses a node
+already there (and reads the stored node back to see whether its own write landed); every further
+factor is a `GetMeshNodeStream(path).Update(fold)` onto the existing node. The two never fall back
+into each other, because WHICH one is allowed is an authorization decision: a stale "no factors"
+listing, or two enrolments at once, must not turn a first-factor create into adding a second factor
+without the step-up that adding one requires. The passkeys are a JSON OBJECT keyed by credential
+id, never an array: a cross-hub update ships an RFC 7396 merge patch, which replaces an array
+WHOLE, so two replicas folding stale copies of a list could drop a newly enrolled credential or move
+another one's counter back. Keyed, each credential (and each of its fields) is patched on its own.
+
+- **Enrolment** at `/auth/step-up/enroll`, reached from *Settings → Security* (a person-app tab of
+  framework controls with one button; the ceremony itself must run in the page that asks for it).
+  `navigator.credentials.create` against `/auth/step-up/passkey/register/options` and `…/register`;
+  the server verifies the attestation with the maintained FIDO2 library (`Fido2NetLib`), user
+  verification required, attestation `none`, existing credentials excluded.
+  **Who may enrol:** the FIRST factor only within ten minutes of a sign-in (the session's
+  `mw_auth_time`); every further one only after a step-up WITH an existing factor — a receipt for the
+  target `Auth/_StepUpFactors/{user}/factors`, binding `enroll`, checked when the options are issued
+  and CONSUMED at the write — so a stolen session cannot add its own authenticator. **A Microsoft
+  account enrols nothing here** — nor does a session that predates the provider claim: every
+  enrolment endpoint refuses it, and the enrolment page tells a Microsoft account that Microsoft's
+  own sign-in confirms its approvals. A portal factor on a Microsoft account would be a second way
+  in around Entra's phishing-resistant prompt.
+- **Assertion** at step-up: `/auth/step-up` renders one button; `navigator.credentials.get` with a
+  challenge DERIVED from the pending step-up — SHA-256 over the user, every target and the nonce —
+  so an assertion made for one approval can never confirm another. `userVerification=required`.
+  The library verifies signature, origin, RP id, challenge, the UV flag and the signature counter;
+  then the counter is stored and the same receipt minted with `method=passkey`. **The counter
+  policy:** a NON-ZERO counter must move forward (a counter that did not is refused as a possible
+  clone), and each non-zero value is CLAIMED in the store before the receipt is minted (marker
+  `Auth/_StepUpUse/pk-{user}-{credential}-{count}`), so two assertions carrying the same counter —
+  a cloned authenticator used in two ceremonies at once — yield one receipt, not two. **Zero is the
+  WebAuthn "this authenticator keeps no counter" value** (synced passkeys report it on every
+  assertion, so `0 → 0` is accepted): clone detection cannot apply to such an authenticator, and
+  each of its assertions is bounded by the single-use pending step-up its challenge is derived from.
+
+### What every completing endpoint re-checks
+
+The page decides nothing; each endpoint that can yield a proof — the Entra callback, the passkey
+verification, the TOTP verification — checks, in this order:
+
+1. **The pending step-up is TAKEN, not read.** It is claimed with the same store primitive the
+   receipt consumption uses: a marker node `Auth/_StepUpUse/pending-{handle}` carrying a fresh
+   nonce, read back, and the claimant goes on only when the stored nonce is its own. Two requests
+   carrying the same cookie at once yield at most one proof. The pending node is deleted afterwards
+   as tidying; the claim, not the delete, is the guarantee.
+2. **The rung the server recorded matches.** `StepUpPending.Rung` holds the rung decided at the
+   start, and `StepUpLadder.MayComplete` requires it to be this endpoint's method AND the ladder,
+   decided again now on the session's provider and the account's current factors, to land on it
+   too. A ceremony started for Entra can therefore never be finished with a portal passkey or TOTP
+   code, whatever factors the account holds; a record written before the field existed completes
+   nothing.
+3. **A TOTP step or recovery code is CLAIMED before the receipt is minted** — markers
+   `Auth/_StepUpUse/totp-{user}-{step}` and `…/rc-{user}-{hash}` — because validating the code
+   against a snapshot and folding the counter afterwards lets two concurrent confirmations both pass.
+   A non-zero passkey counter is claimed the same way (above).
+4. **A TOTP or recovery-code attempt spends the user's attempt budget first** — before the code is
+   even looked at. Taking the pending step-up allows one guess per ceremony, but ceremonies are free
+   to start, so without a budget a stolen session could keep guessing six digits. Each attempt claims
+   one of five slots of the current 15-minute window (`Auth/_StepUpUse/totp-try-{user}-{window}-{slot}`,
+   `StepUpSingleUse.ClaimTotpAttempt`): atomic per slot, durable across restarts and replicas, and
+   counted across ceremonies. With no slot left the attempt is refused (`locked`) until the next window.
 
 ## The TOTP rung (only where no passkey is possible)
 
-Offered only when the account has **no** passkey AND the browser reports neither a platform
-authenticator (`PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()`) nor
-WebAuthn at all. The server enforces the half it can see: an account with a passkey is never
-offered, and never accepts, TOTP — so the fallback cannot be used to downgrade.
+The ladder offers TOTP only to an account with **no** passkey and an authenticator app enrolled,
+and the enrolment page offers to SET UP an authenticator app only when the browser reports no
+platform authenticator (`PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()`) or
+no WebAuthn at all. The server enforces the half it can see, at every endpoint: an account with a
+passkey is never offered TOTP, cannot enrol it, and a code is refused for it (`downgrade`) — so the
+fallback cannot be used to step around a passkey. `Authentication:StepUp:AllowTotpFallback = false`
+removes the rung entirely.
 
-- Enrolment from *Settings → Security*: a QR code of the `otpauth://` URI; the secret is stored
-  encrypted with `IProviderKeyProtector`, never in configuration; ten one-time recovery codes are
-  shown once and stored as hashes.
-- Verification: RFC 6238 (SHA-1, 30 s, 6 digits, ±1 step), each time step accepted once.
+- Enrolment: a QR code of the `otpauth://` URI (rendered server-side as SVG) plus the base32 key;
+  the secret waits in a sealed cookie until the first valid code confirms it, then is stored
+  encrypted with `IProviderKeyProtector` (the instance master key) — never in configuration. Ten
+  one-time recovery codes are shown ONCE and stored as SHA-256 hashes.
+- Verification: RFC 6238 (HMAC-SHA1, 30 s, 6 digits, ±1 step), compared in constant time; each
+  time step is accepted once and a recovery code once — decided by the single-use claim above, with
+  `LastTotpStep` moved forward and the code's hash removed afterwards. **One
+  attempt per confirmation** — a wrong code ends the pending step-up, so codes cannot be guessed
+  inside one.
 
 ## Consumers
 
@@ -238,10 +302,9 @@ receipt is required on top of it, never instead of it.
 
 | Piece | State |
 |---|---|
-| receipt, seal, consumption, verdict, node types | core — this design's first change |
+| receipt, seal, consumption, verdict, node types | core — first change |
 | Entra rung, `mw_idp`/`mw_oid`/`mw_tid`/`mw_auth_time` on the session cookie, record keys | core — first change |
-| passkey rung | core — second change |
-| TOTP rung | core — third change |
+| passkey rung, TOTP rung, Settings → Security | core — second change |
 | consumers | MeshWeaver.Plugins — after the core contract is in a sealed set |
 | public links (`link.publish`) consuming the receipt | Refs #4306, after the consumers |
 

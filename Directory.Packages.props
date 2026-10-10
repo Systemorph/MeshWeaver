@@ -163,6 +163,11 @@
     <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="10.0.12" />
     <PackageVersion Include="Microsoft.Identity.Web" Version="4.16.0" />
     <PackageVersion Include="Microsoft.Identity.Web.Ui" Version="4.16.0" />
+    <!-- The portal's own passkey rung of the approval step-up (Doc/Architecture/ApprovalStepUp):
+         attestation and assertion verification by the maintained FIDO2 library, never by hand. -->
+    <PackageVersion Include="Fido2" Version="4.2.0" />
+    <!-- The TOTP rung's enrolment QR code — a dependency-free QR encoder that writes SVG. -->
+    <PackageVersion Include="Net.Codecrete.QrCodeGenerator" Version="3.2.1" />
     <PackageVersion Include="Microsoft.Orleans.Core.Abstractions" Version="10.4.0" />
     <PackageVersion Include="Microsoft.Orleans.Runtime" Version="10.4.0" />
     <!-- 1.17.0 is where the agent-store abstractions MeshWeaver.AI.Stores implements over mesh

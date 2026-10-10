@@ -117,6 +117,80 @@ public sealed record StepUpConsumption
 }
 
 /// <summary>
+/// One passkey a user enrolled for the portal's own step-up — public material only: the credential
+/// id, the COSE public key, the signature counter, the authenticator model. Never a secret.
+/// </summary>
+public sealed record PasskeyCredential
+{
+    /// <summary>The credential id, base64url.</summary>
+    public string CredentialId { get; init; } = "";
+
+    /// <summary>The COSE-encoded public key, base64.</summary>
+    public string PublicKey { get; init; } = "";
+
+    /// <summary>The WebAuthn user handle the credential was created for, base64url.</summary>
+    public string UserHandle { get; init; } = "";
+
+    /// <summary>
+    /// The last signature counter seen. A NON-ZERO counter must move forward, and each value is
+    /// accepted once (claimed in the store), so a cloned authenticator replaying a counter is
+    /// refused. Zero is the WebAuthn "this authenticator keeps no counter" value (synced passkeys
+    /// report it on every assertion): clone detection cannot apply to it, and each assertion is
+    /// then bounded by the single-use pending step-up its challenge is bound to.
+    /// </summary>
+    public uint SignCount { get; init; }
+
+    /// <summary>The authenticator model (AAGUID).</summary>
+    public Guid AaGuid { get; init; }
+
+    /// <summary>When it was enrolled.</summary>
+    public DateTimeOffset CreatedAt { get; init; }
+
+    /// <summary>When it last confirmed a step-up.</summary>
+    public DateTimeOffset? LastUsedAt { get; init; }
+}
+
+/// <summary>
+/// A user's portal-held step-up factors, at <c>Auth/_StepUpFactors/{user}/factors</c> — written as
+/// System only. Entra accounts do not need one (Entra holds their passkeys); every other account
+/// steps up with a passkey from here, or — only where no passkey is possible — with TOTP.
+/// </summary>
+public sealed record StepUpFactors
+{
+    /// <summary>Always <see cref="StepUpPaths.FactorsId"/>.</summary>
+    [Key]
+    [Browsable(false)]
+    public string Id { get; init; } = StepUpPaths.FactorsId;
+
+    /// <summary>The owner's mesh user id.</summary>
+    public string UserId { get; init; } = "";
+
+    /// <summary>
+    /// Enrolled passkeys, keyed by <see cref="PasskeyCredential.CredentialId"/>. A JSON OBJECT, not an
+    /// array, on purpose: a cross-hub <c>stream.Update</c> ships an RFC 7396 merge patch, which
+    /// replaces an array WHOLE, so two replicas folding stale copies of a list could drop a newly
+    /// enrolled credential or move another one's counter back. Keyed, each credential (and each of
+    /// its fields) is patched on its own.
+    /// </summary>
+    public ImmutableDictionary<string, PasskeyCredential> Passkeys { get; init; } = ImmutableDictionary<string, PasskeyCredential>.Empty;
+
+    /// <summary>The TOTP secret, protected by <c>IProviderKeyProtector</c> — never stored in the clear.</summary>
+    [Browsable(false)]
+    public string? TotpSecretProtected { get; init; }
+
+    /// <summary>When TOTP was confirmed with a first valid code; null ⇒ not enrolled.</summary>
+    public DateTimeOffset? TotpConfirmedAt { get; init; }
+
+    /// <summary>The last TOTP time step accepted — each step is accepted once.</summary>
+    [Browsable(false)]
+    public long LastTotpStep { get; init; }
+
+    /// <summary>SHA-256 hashes (hex) of the unused one-time recovery codes.</summary>
+    [Browsable(false)]
+    public ImmutableList<string> RecoveryCodeHashes { get; init; } = [];
+}
+
+/// <summary>
 /// A step-up in progress, held SERVER-side at <c>Auth/_StepUpPending/{Id}</c> between the moment the
 /// approver is sent to authenticate and the moment the proof comes back — the browser carries only
 /// the handle and the state (a bulk approval's targets would not fit a cookie). System-only;
@@ -139,6 +213,14 @@ public sealed record StepUpPending
 
     /// <summary>The approver.</summary>
     public string UserId { get; init; } = "";
+
+    /// <summary>
+    /// The rung the SERVER decided when the step-up started (a <see cref="StepUpMethod"/> value) —
+    /// the only rung that may complete it. Every completing endpoint re-checks it, so a ceremony
+    /// started for one method can never be finished with another (an Entra step-up with a portal
+    /// passkey, say). Empty on a record written before the field existed — and empty completes nothing.
+    /// </summary>
+    public string Rung { get; init; } = "";
 
     /// <summary>What is being stepped up for.</summary>
     public ImmutableList<StepUpTarget> Targets { get; init; } = [];
@@ -417,6 +499,28 @@ public static class StepUpPaths
     /// <summary>Namespace of pending step-ups.</summary>
     public const string PendingNamespace = "Auth/_StepUpPending";
 
+    /// <summary>NodeType of a user's portal-held step-up factors (passkeys, TOTP).</summary>
+    public const string FactorsNodeType = "StepUpFactors";
+
+    /// <summary>Namespace of factor nodes; each user has their own sub-namespace holding ONE node.</summary>
+    public const string FactorsNamespace = "Auth/_StepUpFactors";
+
+    /// <summary>Id of the one factors node in a user's factor namespace.</summary>
+    public const string FactorsId = "factors";
+
+    /// <summary>The binding a step-up for ENROLLING another factor carries.</summary>
+    public const string EnrollBinding = "enroll";
+
+    /// <summary>The namespace holding <paramref name="userId"/>'s factors node — listed (<c>scope:children</c>) to learn whether it exists.</summary>
+    /// <param name="userId">The user.</param>
+    /// <returns>The namespace.</returns>
+    public static string FactorsNamespaceOf(string userId) => FactorsNamespace + "/" + userId;
+
+    /// <summary>The path of <paramref name="userId"/>'s factors node.</summary>
+    /// <param name="userId">The user.</param>
+    /// <returns>The node path.</returns>
+    public static string Factors(string userId) => FactorsNamespaceOf(userId) + "/" + FactorsId;
+
     /// <summary>Path of a pending step-up.</summary>
     /// <param name="handle">The handle.</param>
     /// <returns>The node path.</returns>
@@ -464,6 +568,15 @@ public static class StepUpPaths
     /// <param name="targetKey">The target key.</param>
     /// <returns>The node path.</returns>
     public static string Consumption(string receiptId, string targetKey) => ConsumptionNamespace + "/" + receiptId + "-" + targetKey;
+
+    /// <summary>
+    /// Path of a single-use marker that is not a receipt's — a pending step-up taken, a TOTP step or
+    /// a recovery code spent. Same namespace and node type as a consumption marker, same rule: its
+    /// CREATION is the use, and the stored nonce says who won.
+    /// </summary>
+    /// <param name="markerId">The marker id (lowercase hex and hyphens).</param>
+    /// <returns>The node path.</returns>
+    public static string SingleUse(string markerId) => ConsumptionNamespace + "/" + markerId;
 
     /// <summary>True when <paramref name="receiptId"/> is shaped like a receipt id (32 lowercase hex) — anything else is never read.</summary>
     /// <param name="receiptId">The candidate.</param>

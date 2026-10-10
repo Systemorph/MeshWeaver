@@ -47,6 +47,23 @@ internal sealed class StepUpPendingStore(IMessageHub hub)
             .Select(n => n?.ContentAs<StepUpPending>(hub.JsonSerializerOptions))
             .DefaultIfEmpty(null);
 
+    /// <summary>
+    /// TAKES a pending step-up — at most one caller ever gets it. Reads it, lets
+    /// <paramref name="admits"/> check it belongs to the request (user, state, expiry), then claims it
+    /// through <see cref="StepUpSingleUse.ClaimPending"/>: of two concurrent requests carrying the
+    /// same cookie, only the store's winner receives the record; the other gets null. The node is
+    /// deleted afterwards as tidying — the claim, not the delete, is what makes it single use.
+    /// Cold, single emission.
+    /// </summary>
+    /// <param name="handle">The handle.</param>
+    /// <param name="admits">The request's own checks; a record it refuses is never claimed.</param>
+    /// <returns>The pending step-up for the winner; null otherwise.</returns>
+    public IObservable<StepUpPending?> Take(string handle, Func<StepUpPending, bool> admits) =>
+        Read(handle).SelectMany(pending => pending is null || !admits(pending)
+            ? Observable.Return<StepUpPending?>(null)
+            : new StepUpSingleUse(hub).ClaimPending(handle, pending.UserId)
+                .Select(won => won ? pending : null));
+
     /// <summary>Deletes a pending step-up once it produced its proof. Cold.</summary>
     /// <param name="handle">The handle.</param>
     /// <returns>Whether it was deleted.</returns>
