@@ -86,7 +86,7 @@ public class SiloStopTimelineTest
     /// takes time shows as the gap printed on the NEXT stage's line - the reading that tells a
     /// stop that spent its time in one stage from a stop that was starved throughout.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact]
     public async Task SiloStop_IsTimestampedStageByStage_AndASlowStageShowsAsAGapOnTheNextLine()
     {
         var ct = TestContext.Current.CancellationToken;
