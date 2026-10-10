@@ -54,7 +54,12 @@ public class UiContributionSeedValidationTest
         // drifted empty would make the previous test pass for the wrong reason.
         Assert.All(UiContributionSeedValidation.PlatformContexts, context =>
             Assert.Empty(UiContributionSeedValidation.Validate(
-                [Seed("C", WellFormed with { Context = context })])));
+                [Seed("C", WellFormed with
+                {
+                    Context = context,
+                    // An AppSettings tab must name its host app (a hostless one renders nowhere).
+                    Host = context == UiContribution.AppSettingsContext ? "Admin" : null,
+                })])));
         Assert.Contains(UiContribution.SettingsContext, UiContributionSeedValidation.PlatformContexts);
         Assert.Contains(UiContribution.NodeSettingsContext, UiContributionSeedValidation.PlatformContexts);
     }
