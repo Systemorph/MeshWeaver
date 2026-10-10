@@ -221,22 +221,32 @@ boot line has the same three states: validated at `{host}`, SET but unreadable, 
 declared. `SelfUpdateOptions.RegistryValidatorDeclared` is the predicate; `RegistryValidatorHost` is
 the reading.
 
-### The alternative: derive it on the control instance — recorded, not done
+### One declaration, derived on the control instance (policy `registry-trust-one-declaration`)
 
-The pairing could be **derived at render time** instead of hand-copied: `HelmValues` already derives
-`selfUpdate.registry` from the image host, and the hosting record whose `registry.host` equals it
-carries the `validationUrl`. One declaration on the registry's own record, no per-consumer copies,
-still no network in the update path — the consumer-side key stays the wire; only who writes it
-changes. It would also give `PluginBundleClient.DownloadArtifact`, which today presents the same key
-to whatever host the catalog advertises with no declaration at all, the same rule as the self-updater
-— one key/host pair currently lives under two trust rules. That is a real alternative to this page's
-design, and it is deliberately NOT part of #4094: it moves where a trust rule lives.
-[#4123](https://github.com/Systemorph/MeshWeaver/issues/4123) carries it, ordered after the
-config-repo declaration that closes #4093. The design — the render-time derivation in `HelmValues`,
-the bundle-client rule keyed on the registry's OWN declaration rather than on `SelfUpdate:Registry`
-(the control instance pulls from ACR and adopts bundles sealed on `cr.meshweaver.cloud`), and the
-alternative of moving detection to the control plane altogether — is written down in
-[Self-Update on the Control Lane](../SelfUpdateControlLane) → "#4093 and #4123".
+The pairing is **derived at render time**, never hand-copied
+([#4123](https://github.com/Systemorph/MeshWeaver/issues/4123); the decision and its date live in the
+[register](../PolicyNotProse)). Two consumers read ONE declaration — the registry's own hosting record:
+
+| consumer | the rule | where |
+|---|---|---|
+| the self-updater | the control instance renders `selfUpdate.registryValidationUrl` from the hosting record whose `registry.host` equals the consumer's image host (`validationUrl`, its default resolved exactly as the registry's own render resolves it). A hand-written `SelfUpdate__RegistryValidationUrl` extra keeps winning — nothing derived renders over it, and the chart reads the extra. No pairing, or two records pairing one host with DIFFERENT validators, renders nothing: the consumer then refuses, as #4094 pins | MeshWeaver.Plugins `HelmValues.DerivedRegistryValidationUrl`; the records are listed by the action's `ReadRecord` phase (`ReadRegistryPairings`, siblings of the deployment record, read as System and taken from a complete frame) |
+| the bundle client | the key held for registry mount **M** goes to an artifact's OCI host **H** only when H is M's own host, or M's bundle index DECLARES H (`artifactRegistry`). An undeclared H is never contacted: the bytes come over M's own HTTP bundle route, so an install keeps adopting | `PluginBundleClient.ArtifactKeyTarget`; the index field from `PluginBundles:ArtifactRegistry`, which the chart renders from the hosted registry's own `registry.host` |
+
+Still no network in the update path — the running portal reads rendered config, exactly as before;
+only who writes the value changed. 🚨 The bundle-client rule is keyed on the MOUNT's declaration, never
+on `SelfUpdate:Registry`: the control instance pulls its image from ACR and adopts bundles sealed on
+`cr.meshweaver.cloud`, so a rule tied to the image registry would refuse its every artifact. And the
+declaration is the REGISTRY's, never a publisher's: a bundle entry's `artifact` says where the bytes
+are, which alone never earns the key — the hole the previous "present the key to whatever host the
+catalog advertises" left open.
+
+What it takes to be live: a re-render of each consumer (a `Reconcile`, not a `Roll`, renders values),
+after the control instance's `Hosting/Deployment` and `Hosting/InstanceAction` NodeTypes run the new
+source; and, for the bundle half, the registry instance re-rendered on a chart carrying the
+`PluginBundles__ArtifactRegistry` key and an image serving `artifactRegistry`. Until the registry
+declares it, consumers on the new client fetch off-host artifacts over the HTTP route — slower,
+never broken, and keyless toward the undeclared host. A change to a registry's `validationUrl` reaches
+a consumer on that consumer's next render; it is not part of the consumer's own record-change digest.
 
 Since MeshWeaver#4098 the key this page selects is presented for **detection only**: a fleet
 instance lists the registry with it and hands the selected release to the control instance; it no

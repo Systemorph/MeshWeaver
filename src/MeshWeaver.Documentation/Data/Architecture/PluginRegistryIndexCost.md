@@ -261,6 +261,10 @@ Tests: `RegistryAnswersOrRefusesTest` runs the real mesh and the real bundle rou
 - Negative control: the same request with the deadline out of reach gets no status line in 5 s. That is the defect, reproduced.
 - The operator's own cases: a never-answering stage, an answer inside the budget, a budget already spent before the handler ran, and the stage without a deadline.
 
+**What the deadline named, once it ran on the registry (2026-10-09).** Every refusal over 110 minutes named one of two holders. The catalog's refusals named the **source listings**: 123 lines, all five sources "running 24.9 s". The index's and bundles' refusals named the **package origin anchor**: 124 lines. Authentication, the installed-packages query and the activation list had finished in under a second. Both holders were re-reads of data the registry already held: an expired listing, and an anchor snapshot past its 60 s window. The requests waited for those re-reads. Both now answer from what they hold while one re-read runs behind them; see [The Registry Listing Cache](../RegistryListingCache).
+
+**The deadline itself must not touch a request whose client has gone.** It fires on a timer thread. The registry logged `ObjectDisposedException: IFeatureCollection has been disposed` at `DefaultHttpRequest.get_Method()` (20:03:29Z and 20:03:32Z): the refusal had read `http.Request` after the host disposed the request. It now reads the method, the path and `RequestAborted` when it is subscribed, while the request is alive. `Retry-After` is written when the result executes, against the context the host hands it. A refusal for a client that has already disconnected logs at Information and says so; it does not claim a 503 was answered. Two tests cover this. `TheDeadlineFiringAfterTheClientLeft_…` reproduced the production exception against the previous code. `ATornDownRequest_ThrowsOnRead_…` is its negative control.
+
 ## The second defect: exhaustion leaves no readable mark
 
 When the attempts do exhaust, nothing an operator can see records it:

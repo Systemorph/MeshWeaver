@@ -1,0 +1,78 @@
+name: Docker Hub mirror
+
+# Copies every image .github/dockerhub-mirror.list declares, BY DIGEST, to
+# ghcr.io/systemorph/dockerhub/<name>:<tag> — the route by which CI reaches a Docker Hub image
+# (Doc/Architecture/DockerHubInCi).
+#
+# WHY. GitHub-hosted runners pull from Docker Hub anonymously, against a limit counted per egress
+# IP and shared with every other tenant of the runner pool. Measured 2026-10-09: `toomanyrequests`
+# took down all six test shards and the Chart Gate of core pull requests (#6381 among them) — a
+# red no code change could cause or cure. Retrying is not a fix (the limit is a window, not a
+# blip); the fix is to stop asking Docker Hub from pull requests for the runtime images a job
+# runs. For every image DECLARED in the list, this workflow is the only place CI touches docker.io,
+# once per new digest, from main or the schedule. Not in scope: base layers of images core builds
+# (path-filtered `FROM` lines) — the page lists them. The Chart Gate moves onto the mirror in the
+# follow-up to the change that introduced this workflow.
+#
+# Consumers: `bash .github/scripts/dockerhub-mirror.sh ref <name>:<tag>` and a ghcr.io login with
+# the job's GITHUB_TOKEN (`packages: read`). No stored credential — so forks and Dependabot pull
+# the same way, and there is no second secret store to provision.
+#
+# 🛡️ NO SKIP-TRAPDOOR. The self-test runs on every trigger. The sync job's only condition is the
+# EVENT (a pull request cannot write packages, and must not); it asserts its own input — a list
+# that declares nothing is red — and reads every digest back.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/dockerhub-mirror.list
+      - .github/scripts/dockerhub-mirror.sh
+      - .github/workflows/dockerhub-mirror.yml
+  pull_request:
+    paths:
+      - .github/dockerhub-mirror.list
+      - .github/scripts/dockerhub-mirror.sh
+      - .github/workflows/dockerhub-mirror.yml
+  schedule:
+    # Daily: a deleted package or a manifest retention dropped is RESTORED the same day (sync copies
+    # any declared digest the mirror lacks); the run is red only when it cannot restore it.
+    - cron: "40 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dockerhub-mirror-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  self-test:
+    name: Mirror list parses, refusals hold
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Self-test
+        run: bash .github/scripts/dockerhub-mirror.sh --self-test
+
+  sync:
+    name: Every declared digest is on the mirror (read back)
+    needs: [self-test]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Sync
+        run: bash .github/scripts/dockerhub-mirror.sh sync
