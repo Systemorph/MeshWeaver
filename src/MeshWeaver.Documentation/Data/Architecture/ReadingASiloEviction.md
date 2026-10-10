@@ -166,7 +166,11 @@ rolls did; they created their import manifest within 3 s. The query is
 flat GC, so it shows no pause and no thread-pool stall, and `LocalSiloHealthMonitor` stays quiet.
 But `poolThreads` climbs steadily (20 → 55 over 16 minutes on 5j9gx) while the work completed per
 10 s collapses (about 500 against about 47 000 on a healthy pod in the same roll, which ran on 16
-threads). Threads block one at a time and do not return.
+threads). That is what the counters establish: workers stay blocked long enough for the pool to
+keep injecting new ones. It is **not** established that any individual thread never returns.
+`poolThreads` is the number of workers the pool retains, so it stays high after a worker comes
+back, and the completed count never reaches zero, so some work does finish. Whether the blocking
+is permanent, and on what, is the question the heap dump below answers.
 
 **Why it takes minutes, not seconds, to be evicted.** Orleans 10 answers a membership ping
 **inside the connection's receive loop** (`SiloConnection.HandlePingMessage`). Every other message
