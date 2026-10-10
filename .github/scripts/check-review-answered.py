@@ -108,7 +108,8 @@ ONE REVIEW PER PULL REQUEST — policy `review-once-per-pull-request`
 With `review_on_push: true` every push bought a full new review round, and each round's threads
 blocked the merge again until answered. The rule now runs with `review_on_push: false`, and every
 gate in this file counts a landed Copilot review against ANY head of the pull request as "reviewed"
-(`copilot_review_of_pull_request`; the merge gate's condition 1 never looked at the head). Condition
+(`copilot_review_of_pull_request`; the merge gate's condition 1 reads every review on the pull
+request — policy `review-evidence-any-head`). Condition
 2 is unchanged: every reviewer thread on the pull request, whichever head it was opened on, needs a
 person's reply. Doc/Architecture/ReviewFindingsAnswered → "One review per pull request".
 
