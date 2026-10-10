@@ -88,10 +88,12 @@ public sealed class ContentDegradationRegistry
     /// were written at 19:48:37.3, half a second BEFORE the pre-warmer even started (19:48:37.8),
     /// by boot-time readers (standing watches on <c>Ops/Status/*</c>, a <c>Posts</c> query) of
     /// dynamic types whose assemblies were all on the replica (<c>alreadyBaked=414</c>,
-    /// <c>compiled=0</c>). Those types register on this replica only when the registration-only
-    /// pass reaches them (<see cref="DynamicContentTypeRegistrar"/>), and every reader then
-    /// re-types on its own (the late re-type). So the line asserted "consumers will fail" for reads
-    /// that were about to be cured, and the burst was one per roll on every portal.</para>
+    /// <c>compiled=0</c>). Those types registered on this replica only when the registration-only
+    /// pass reached them (<see cref="DynamicContentTypeRegistrar"/>). So the line asserted
+    /// "consumers will fail" before that was decidable, and the burst was one per roll on every
+    /// portal. The reads themselves are now typed by <see cref="ContentTypeOnDemandRegistration"/>
+    /// before they answer; this window remains the diagnostic for whatever that route and the pass
+    /// could not register.</para>
     ///
     /// <para>Called by <see cref="DynamicContentTypeRegistrationHostedService"/> — and only on a
     /// host that runs that pass: a host without it never opens the window, so every read there

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
@@ -246,6 +247,10 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     private readonly MeshWeaver.Mesh.Services.IMeshContentTypeRegistry? contentTypeRegistry;
     // What this cache could not TYPE, kept for /health (2026-09-08) — see ContentDegradationRegistry.
     private readonly ContentDegradationRegistry? degradations;
+    // 🚨 Plugins#2799 — a read of a type that is built but not registered here WAITS for its
+    // (non-compiling) registration instead of answering untyped. Null on a host without
+    // ContentTypeOnDemandRegistration: the seams then degrade exactly as before.
+    private readonly Func<string, IObservable<ContentTypeRegistrationOutcome>>? ensureRegistered;
 
     /// <summary>
     /// The address types that route to a POD-PROCESS hub (<c>portal</c>, <c>cache</c>, <c>mesh</c>,
@@ -669,6 +674,8 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         this.logger = logger;
         contentTypeRegistry = meshHub.ServiceProvider.GetService<MeshWeaver.Mesh.Services.IMeshContentTypeRegistry>();
         degradations = meshHub.ServiceProvider.GetService<ContentDegradationRegistry>();
+        var onDemand = meshHub.ServiceProvider.GetService<ContentTypeOnDemandRegistration>();
+        ensureRegistered = onDemand is null ? null : nodeType => onDemand.EnsureRegistered(meshHub, nodeType);
         podHubAddressTypes = meshHub.ServiceProvider.GetService<MeshConfiguration>()?.StreamRoutedAddressTypes
             ?? MeshConfiguration.DefaultStreamRoutedAddressTypes;
         _releaseLane = meshHub.ServiceProvider.GetRequiredService<ReleaseLane>();
@@ -2790,7 +2797,63 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     /// <see cref="IMeshNodeStreamCache.GetStream(string, JsonSerializerOptions)"/>.
     /// </summary>
     public IObservable<MeshNode> GetStream(string path, JsonSerializerOptions options) =>
-        GetStreamRaw(path).Select(node => ConvertContentJsonElementToTyped(node, options, logger, contentTypeRegistry, degradations));
+        TypeStream(GetStreamRaw(path), options, logger, contentTypeRegistry, degradations, ensureRegistered);
+
+    /// <summary>
+    /// The body of <see cref="GetStream(string, JsonSerializerOptions)"/>: each raw emission typed
+    /// through <paramref name="options"/>. 🚨 Plugins#2799 — when the content's type is BUILT but not
+    /// yet registered on this replica, the emission waits for
+    /// <paramref name="ensureRegistered"/> (the non-compiling registration,
+    /// <see cref="ContentTypeOnDemandRegistration"/>) and is typed after it, so a read at boot gets
+    /// typed content instead of an untyped element and a late re-type. Order is preserved
+    /// (<c>Concat</c>): an emission never overtakes one that is waiting. Only content that is still
+    /// untyped after the registration reaches the degradation record and its warning.
+    /// </summary>
+    internal static IObservable<MeshNode> TypeStream(
+        IObservable<MeshNode> raw,
+        JsonSerializerOptions options,
+        ILogger logger,
+        MeshWeaver.Mesh.Services.IMeshContentTypeRegistry? contentTypeRegistry,
+        ContentDegradationRegistry? degradations,
+        Func<string, IObservable<ContentTypeRegistrationOutcome>>? ensureRegistered)
+    {
+        if (ensureRegistered is null)
+            return raw.Select(node => ConvertContentJsonElementToTyped(node, options, logger, contentTypeRegistry, degradations));
+        return raw
+            .Select(node => string.IsNullOrEmpty(node.NodeType)
+                ? Observable.Return(ConvertContentJsonElementToTyped(node, options, logger, contentTypeRegistry, degradations))
+                : TypedWithoutDegrading(node, options, contentTypeRegistry, degradations) is { } typed
+                ? Observable.Return(typed)
+                : ensureRegistered(node.NodeType!)
+                    .Take(1)
+                    .Select(_ => ConvertContentJsonElementToTyped(node, options, logger, contentTypeRegistry, degradations)))
+            .Concat();
+    }
+
+    /// <summary>
+    /// The GetStream seam's conversion with the degrade branch removed: the typed node, or
+    /// <c>null</c> when the content stays untyped (the caller then waits for the registration and
+    /// converts again through <see cref="ConvertContentJsonElementToTyped"/>, which records and
+    /// warns if it is still untyped).
+    /// </summary>
+    private static MeshNode? TypedWithoutDegrading(
+        MeshNode node, JsonSerializerOptions options,
+        MeshWeaver.Mesh.Services.IMeshContentTypeRegistry? contentTypeRegistry,
+        ContentDegradationRegistry? degradations)
+    {
+        if (node.Content is not JsonElement je)
+            return node;
+        var deserialized = je.Deserialize<object>(options);
+        if (deserialized is not JsonElement degraded)
+            return node with { Content = deserialized };
+        var recovered = contentTypeRegistry?.TryRecoverForNodeType(node.NodeType, degraded, options);
+        if (recovered is not null)
+        {
+            degradations?.Clear(node.NodeType);
+            return node with { Content = recovered };
+        }
+        return null;
+    }
 
     /// <summary>
     /// Caller-typed write: deserialises the current MeshNode's <c>Content</c>
@@ -3587,25 +3650,102 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         // been evicted (its own GetQueryRaw would have returned the replacement).
         return _optionsWrappedQueries.AddOrUpdate(
             (id, signature, options),
-            static (_, state) => (state.raw, WrapWithOptions(state.raw, state.options, state.logger, state.registry, state.degradations)),
+            static (_, state) => (state.raw, WrapWithOptions(state.raw, state.options, state.logger, state.registry, state.degradations, state.ensureRegistered)),
             static (_, existing, state) => ReferenceEquals(existing.Raw, state.raw)
                 ? existing
-                : (state.raw, WrapWithOptions(state.raw, state.options, state.logger, state.registry, state.degradations)),
-            (raw, options, logger, registry: contentTypeRegistry, degradations)).Wrapper;
+                : (state.raw, WrapWithOptions(state.raw, state.options, state.logger, state.registry, state.degradations, state.ensureRegistered)),
+            (raw, options, logger, registry: contentTypeRegistry, degradations, ensureRegistered)).Wrapper;
     }
 
     /// <summary>
     /// Round-trips each emitted node's Content through the caller's options — the body of the
     /// memoised wrapper built by <see cref="GetQuery(object, JsonSerializerOptions, string[])"/>.
+    ///
+    /// <para>🚨 Plugins#2799 — when an emission holds content of types that are BUILT but not yet
+    /// registered on this replica, the emission waits for those registrations
+    /// (<paramref name="ensureRegistered"/>, one per distinct NodeType, non-compiling — see
+    /// <see cref="ContentTypeOnDemandRegistration"/>) and is typed after them. A query has no late
+    /// re-type: before this, a result set read at boot stayed untyped until the next change to it.
+    /// Order is preserved (<c>Concat</c>); an emission that types cleanly is answered at once.</para>
     /// </summary>
-    private static IObservable<IEnumerable<MeshNode>> WrapWithOptions(
+    internal static IObservable<IEnumerable<MeshNode>> WrapWithOptions(
         IObservable<IEnumerable<MeshNode>> raw,
         JsonSerializerOptions options,
         ILogger logger,
         MeshWeaver.Mesh.Services.IMeshContentTypeRegistry? registry,
-        ContentDegradationRegistry? degradations = null)
-        => System.Reactive.Linq.Observable.Select(raw, items =>
-            (IEnumerable<MeshNode>)items.Select(node => DeserializeContent(node, options, logger, registry, degradations)).ToArray());
+        ContentDegradationRegistry? degradations = null,
+        Func<string, IObservable<ContentTypeRegistrationOutcome>>? ensureRegistered = null)
+    {
+        if (ensureRegistered is null)
+            return raw.Select(items =>
+                (IEnumerable<MeshNode>)items.Select(node => DeserializeContent(node, options, logger, registry, degradations)).ToArray());
+        return raw
+            .Select(items =>
+            {
+                var nodes = items.ToImmutableArray();
+                // Typed where it types; null where the content waits on a registration.
+                var typed = nodes
+                    .Select(node => QueryTypedWithoutDegrading(node, options, logger, registry, degradations))
+                    .ToImmutableArray();
+                var awaited = nodes
+                    .Where((_, i) => typed[i] is null)
+                    .Select(node => node.NodeType!)
+                    .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+                IEnumerable<MeshNode> Final() => nodes
+                    .Select((node, i) => typed[i] ?? DeserializeContent(node, options, logger, registry, degradations))
+                    .ToArray();
+                return awaited.IsEmpty
+                    ? Observable.Return(Final())
+                    : awaited.Select(nodeType => ensureRegistered(nodeType).Take(1))
+                        .Merge()
+                        .ToList()
+                        .Select(_ => Final());
+            })
+            .Concat();
+    }
+
+    /// <summary>
+    /// The GetQuery seam's conversion with the degrade branch removed: the final node, or
+    /// <c>null</c> when the content stays untyped AND names a NodeType a registration could resolve
+    /// it under. Every other shape — no NodeType, a parse fault — goes through
+    /// <see cref="DeserializeContent"/> unchanged, which records and warns as before.
+    /// </summary>
+    private static MeshNode? QueryTypedWithoutDegrading(
+        MeshNode node, JsonSerializerOptions options, ILogger logger,
+        MeshWeaver.Mesh.Services.IMeshContentTypeRegistry? registry,
+        ContentDegradationRegistry? degradations)
+    {
+        if (string.IsNullOrEmpty(node.NodeType)
+            || node.Content is not JsonElement { ValueKind: JsonValueKind.Object }
+                and not System.Text.Json.Nodes.JsonObject)
+            return DeserializeContent(node, options, logger, registry, degradations);
+        object? deserialized;
+        try
+        {
+            deserialized = node.Content switch
+            {
+                JsonElement el => el.Deserialize<object>(options),
+                System.Text.Json.Nodes.JsonObject jo => jo.Deserialize<object>(options),
+                _ => null,
+            };
+        }
+        catch (Exception)
+        {
+            // Not a missing registration — the parse itself failed. DeserializeContent, the
+            // production seam, parses again and reports the fault with the degradation marker
+            // (and keeps the query alive, as it always did); nothing is swallowed here.
+            return DeserializeContent(node, options, logger, registry, degradations);
+        }
+        if (deserialized is null)
+            return node;
+        if (deserialized is not JsonElement degraded)
+            return node with { Content = deserialized };
+        var recovered = registry?.TryRecoverForNodeType(node.NodeType, degraded, options);
+        if (recovered is null)
+            return null;
+        degradations?.Clear(node.NodeType);
+        return node with { Content = recovered };
+    }
 
     // internal for the same reason as ConvertContentJsonElementToTyped above (#3625).
     internal static MeshNode DeserializeContent(
