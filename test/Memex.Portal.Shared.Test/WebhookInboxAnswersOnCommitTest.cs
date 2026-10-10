@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
 using System.Reactive;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Text;
@@ -155,6 +156,71 @@ public class WebhookInboxAnswersOnCommitTest(ITestOutputHelper output) : Monolit
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         await handler.EnteredSignal.Should().Within(TestTimeouts.Quick).Emit(
             "the delivery was stored, so its post-creation step ran");
+    }
+
+    /// <summary>
+    /// THE LIFETIME: once the commit has answered, nothing waits for the reply any more. The
+    /// create's reply is held, so the only thing that can end the reply subscription is the answer
+    /// itself. Without that, every delivery whose reply is never routed back would leave one
+    /// pending callback on the issuing hub for as long as the process lives.
+    ///
+    /// <para><b>Negative control.</b> With <c>AnswerOnCommit</c> keeping the reply subscription
+    /// after the commit's answer, the disposal signal never fires while the handler is held, and
+    /// this case goes red.</para>
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task AnAnswerOnTheCommit_DropsTheReplySubscription()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedTarget(ct);
+        var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var feed = Mesh.ServiceProvider.GetRequiredService<IMeshInvalidationFeed>();
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var id = Guid.NewGuid().ToString("N");
+        var node = new MeshNode(id, $"{Target}/{WebhookInbox.InboxContainer}")
+        {
+            Name = $"Webhook {id}",
+            NodeType = WebhookInbox.NodeType,
+            MainNode = Target,
+            Content = new WebhookEvent
+            {
+                ReceivedAt = DateTimeOffset.UtcNow,
+                ContentType = "application/json",
+                Body = "{\"action\":\"closed\"}",
+            },
+        };
+
+        var replyDropped = new AsyncSubject<Unit>();
+        handler.Holding = true;
+        try
+        {
+            var path = await access.RunAsSystem(() =>
+                {
+                    var create = mesh.CreateNode(node);
+                    var tracked = Observable.Create<MeshNode>(o =>
+                    {
+                        var inner = create.Subscribe(o);
+                        return Disposable.Create(() =>
+                        {
+                            inner.Dispose();
+                            replyDropped.OnNext(Unit.Default);
+                            replyDropped.OnCompleted();
+                        });
+                    });
+                    return tracked.AnswerOnCommit(feed, node.Path);
+                })
+                .Timeout(TestTimeouts.Convergence).Await(ct);
+
+            path.Should().Be(node.Path, "the answer names the committed path on either signal");
+            handler.StillHeld.Should().BeTrue("the reply is held, so the commit gave the answer");
+            await replyDropped.Should().Within(TestTimeouts.Quick).Emit(
+                "an answer on the commit ends the caller's wait for the reply; a subscription kept "
+                + "past it is a callback that stays registered until a reply that may never come");
+        }
+        finally
+        {
+            handler.Release();
+        }
     }
 
     /// <summary>

@@ -1,7 +1,6 @@
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Mesh.Services;
 
@@ -23,8 +22,14 @@ namespace MeshWeaver.Mesh.Services;
 /// that only after the storage write emitted. The second signal is the ordinary reply. A failure
 /// BEFORE the commit still reaches the caller as an error, because no commit was announced and the
 /// reply carries the refusal. A failure AFTER the commit, such as a post-creation handler that
-/// faults or a reply that never comes, cannot change an answer that has already been given. It is
-/// logged at Warning, never dropped, and the create's own chain runs on untouched.</para>
+/// faults, cannot change an answer that has already been given. The owning hub logs it where it
+/// happens (<c>RunPostCreationHandlersObs</c>), so the caller does not wait for it.</para>
+///
+/// <para>Once the commit has answered, the caller's interest in the reply ENDS and the reply
+/// subscription is disposed at once. The create was already posted and runs on at its owner, but
+/// no callback stays registered on the issuing hub for a reply that may never be routed back.
+/// Keeping one per call would turn the very failure this primitive tolerates, a reply that never
+/// arrives, into an unbounded accumulation of pending callbacks.</para>
 ///
 /// <para>🚨 <b>Use it only for a node type whose create contract ends at the row.</b> A type with
 /// a post-creation handler that declares <see cref="INodePostCreationHandler.FailsCreateOnError"/>
@@ -34,22 +39,23 @@ namespace MeshWeaver.Mesh.Services;
 /// that consumers pick up from their own inbox query, and no handler is part of its contract.</para>
 ///
 /// <para>Without an <see cref="IMeshInvalidationFeed"/> registered, the call is exactly
-/// <see cref="IMeshService.CreateNode"/>.</para>
+/// <see cref="IMeshService.CreateNode"/>, answered with the node's path.</para>
 /// </summary>
 public static class CreateAnsweredOnCommit
 {
     /// <summary>
-    /// Creates <paramref name="node"/> and emits once, as soon as the store has committed the row or
-    /// the create's reply arrived, whichever is first. Cold: nothing is posted until Subscribe.
+    /// Creates <paramref name="node"/> and emits its path once, as soon as the store has committed
+    /// the row or the create's reply arrived, whichever is first. Cold: nothing is posted until
+    /// Subscribe.
     /// </summary>
     /// <param name="mesh">The mesh service that issues the create.</param>
     /// <param name="services">The service provider that holds the mesh's invalidation feed.</param>
     /// <param name="node">The node to create. Its path is the commit signal's key, so it must be
     /// fresh. A path that already has a row would match that row's commit.</param>
-    /// <returns>The created node. On the commit signal this is <paramref name="node"/> as submitted,
-    /// because the feed carries the path and not the stamped node. On the reply it is the stored
-    /// node.</returns>
-    public static IObservable<MeshNode> CreateNodeAnsweredOnCommit(
+    /// <returns>The committed node's path. It is the same value whichever signal answered: the feed
+    /// carries the path and not the stamped node, so a caller that needs the stored node reads it
+    /// from <c>GetMeshNodeStream(path)</c>.</returns>
+    public static IObservable<string> CreateNodeAnsweredOnCommit(
         this IMeshService mesh, IServiceProvider services, MeshNode node)
     {
         // Built EAGERLY, as the caller would have built it: CreateNode captures the caller's
@@ -57,47 +63,58 @@ public static class CreateAnsweredOnCommit
         var create = mesh.CreateNode(node);
         var feed = services.GetService<IMeshInvalidationFeed>();
         if (feed is null)
-            return create.Take(1);
-        var logger = services.GetService<ILoggerFactory>()?.CreateLogger(typeof(CreateAnsweredOnCommit));
+            return create.Take(1).Select(_ => node.Path);
+        return create.AnswerOnCommit(feed, node.Path);
+    }
 
-        return Observable.Create<MeshNode>(observer =>
+    /// <summary>
+    /// Answers a create on whichever comes first: <paramref name="feed"/> announcing a
+    /// <see cref="MeshChangeKind.Created"/> for <paramref name="path"/>, or <paramref name="create"/>
+    /// emitting. Emits <paramref name="path"/> once. A fault of <paramref name="create"/> before the
+    /// commit is the caller's error. Once the commit has answered, the subscription to
+    /// <paramref name="create"/> is disposed, so no reply callback outlives the answer.
+    /// </summary>
+    /// <param name="create">The cold create whose reply is the second signal.</param>
+    /// <param name="feed">The process's invalidation feed.</param>
+    /// <param name="path">The path of the node being created.</param>
+    /// <returns>The path, once.</returns>
+    public static IObservable<string> AnswerOnCommit(
+        this IObservable<MeshNode> create, IMeshInvalidationFeed feed, string path)
+        => Observable.Create<string>(observer =>
         {
             var answered = 0;
             bool Claim() => Interlocked.Exchange(ref answered, 1) == 0;
+            // The commit can fire before the reply subscription is assigned (the create posts during
+            // Subscribe). A SingleAssignmentDisposable disposed first disposes what is assigned later.
+            var reply = new SingleAssignmentDisposable();
 
             // Subscribed BEFORE the create is posted, so a commit cannot slip past unseen.
             var commit = feed.Subscribe(change =>
             {
-                if (!string.Equals(change.Path, node.Path, StringComparison.OrdinalIgnoreCase)
+                if (!string.Equals(change.Path, path, StringComparison.OrdinalIgnoreCase)
                     || !Claim())
                     return;
-                observer.OnNext(node);
+                // The answer is given, so the reply is no longer owed to anyone here.
+                reply.Dispose();
+                observer.OnNext(path);
                 observer.OnCompleted();
             }, MeshChangeKind.Created);
 
-            // 🚨 NOT disposed with the caller's subscription. The reply is still owed after an answer
-            // on commit, and a late failure must be SEEN: it is logged, never left with nowhere to go.
-            create.Take(1).Subscribe(
-                stored =>
+            reply.Disposable = create.Take(1).Subscribe(
+                _ =>
                 {
                     if (!Claim())
                         return;
-                    observer.OnNext(stored);
+                    observer.OnNext(path);
                     observer.OnCompleted();
                 },
                 ex =>
                 {
                     if (Claim())
-                    {
                         observer.OnError(ex);
-                        return;
-                    }
-                    logger?.LogWarning(ex,
-                        "Create of {Path} was answered on its commit; its reply later reported a failure",
-                        node.Path);
                 });
 
-            return Disposable.Create(commit.Dispose);
+            // Both ended together: by the caller's dispose, and by Observable.Create on the answer.
+            return new CompositeDisposable(commit, reply);
         });
-    }
 }

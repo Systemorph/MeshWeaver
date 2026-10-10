@@ -266,9 +266,15 @@ first:
 | the `CreateNodeResponse` | after the handlers, through the block | 200 on success, or the refusal |
 
 A refusal before the commit still reaches the sender, because no commit was announced and the reply
-carries the refusal. A failure after the commit cannot change an answer already given. It is logged
-at Warning, and the create's own chain runs on unchanged. The handlers still run, just no longer on
-the request.
+carries the refusal. A failure after the commit cannot change an answer already given. The owning
+hub logs a faulting post-creation handler where it runs (`RunPostCreationHandlersObs`). The handlers
+still run, just no longer on the request.
+
+Once the commit has answered, the endpoint stops waiting for the reply: the reply subscription is
+disposed at once, and the create continues at its owner. No callback stays registered on the issuing
+hub for a reply that may never be routed back, so a reply that never arrives costs nothing per
+delivery. Both signals answer with the same value, the node's path. The feed carries the path and
+not the stored node, so a caller that needs the stored node reads it from `GetMeshNodeStream(path)`.
 
 🚨 **Only a node type whose create contract ends at the row may answer on commit.** A type with a
 post-creation handler that declares `FailsCreateOnError`, such as a Space and its creator grant, can
