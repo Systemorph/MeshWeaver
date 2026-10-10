@@ -84,6 +84,29 @@ resolver's `SocketException` in an `HttpRequestException` and a handler pipeline
 It is pure, and `NonexistentHostIsNotRetriedTest` asserts it directly — a predicate that can only be
 exercised through a real failed connection is a predicate nobody checks.
 
+## A rejected certificate is the second deterministic failure
+
+[#5910](https://github.com/Systemorph/MeshWeaver/issues/5910): an agent fetch of a site whose
+certificate had expired (`NotTimeValid`) was attempted three times. No retry makes an expired or
+untrusted certificate valid, and one site's certificate says nothing about any other host the client
+calls, so it is excluded from the retry and the breaker on the same two grounds as a dead name.
+
+🚨 **The signal is raised where the verdict is made, never parsed afterwards.** A bare
+`AuthenticationException` is not it: `SslStream` raises other handshake failures in exactly that
+shape — the peer closing the transport stream mid-handshake is one — and those are transient. A first
+attempt keyed on "an `AuthenticationException` with no inner exception" was withdrawn for that reason.
+Instead the defaults install a certificate validation callback on every primary handler that has none
+of its own. It keeps the runtime's verdict (accept exactly when `SslPolicyErrors` is `None`) and
+reports a rejection by throwing `RemoteCertificateRejectedException` (in `MeshWeaver.Mesh.Contract`),
+which reaches the caller as the inner exception of the `HttpRequestException` and carries the
+policy errors and the chain status. `ServiceDefaults.IsDeterministicTransportFailure` is the one
+predicate both the retry and the breaker read.
+
+A client that installs its own validation callback or its own primary handler keeps it, and gets no
+marker — its rejections are retried as before. `RejectedCertificateIsNotRetriedTest` runs the real
+defaults against a loopback TLS listener: an expired certificate is contacted once and arrives typed,
+and the control — a server that drops the handshake — is still retried.
+
 ## The half this does not reach
 
 **The caller is still not told in words it can act on.** `FetchWebPageCore` already draws the right
