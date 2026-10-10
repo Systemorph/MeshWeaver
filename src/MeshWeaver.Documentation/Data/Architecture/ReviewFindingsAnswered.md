@@ -1211,7 +1211,9 @@ after every push (#2791 twice in an hour).
 **Arming is a decision, so it moved to the control plane** (policy
 [`review-then-suites`](../PolicyNotProse)). The control instance's PR steward (MeshWeaver.Plugins
 `PrArming`, App `systemorph-com`) already reads every fleet pull request's review state and
-answered-findings verdict; it is the one place that arms a reviewed pull request. **No workflow
+answered-findings verdict; when it is enabled, it is the one place that arms a reviewed pull request.
+While it is switched off (`Hosting:PrBabysitter:Enabled`, currently off fleet-wide), nothing arms a
+reviewed pull request, and a person merges it once it is green and answered. **No workflow
 arms auto-merge** except for generated-only App pull requests, which owe no review (see *The one arm
 a workflow takes* below) — `ArmedMergeMustTriggerMainsPushLanesGuard.NoWorkflowArmsAutoMerge` fails
 the build on any other.

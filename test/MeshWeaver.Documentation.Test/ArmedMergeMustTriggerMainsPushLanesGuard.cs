@@ -504,12 +504,27 @@ public class ArmedMergeMustTriggerMainsPushLanesGuard
     /// </summary>
     private static bool IsTheGeneratedOnlyArm(string? fileName, string fileText, string stepBlock)
     {
+        if (fileName != "auto-arm.yml")
+            return false;
+        // The step with `id: classify` must be UNIQUE and must itself be the predicate's invocation —
+        // a file-wide `--arm-generated` would let `classify` be swapped for an unconditional producer.
+        var classify = StepBlocks(fileText)
+            .Where(b => ExecutableLines(b).Contains("id: classify", StringComparer.Ordinal))
+            .ToArray();
+        if (classify.Length != 1)
+            return false;
+        var classifyLines = ExecutableLines(classify[0]);
+        if (!classifyLines.Any(l => l.StartsWith("run: python3 ", StringComparison.Ordinal)
+                                     && l.Contains("check-review-answered.py", StringComparison.Ordinal)
+                                     && l.Contains("--arm-generated", StringComparison.Ordinal))
+            || classifyLines.Any(l => l.Contains("GITHUB_OUTPUT", StringComparison.Ordinal)))
+            return false;
+        // The arm is gated on that verdict and pinned to the head THAT step read.
         var lines = ExecutableLines(stepBlock);
-        return fileName == "auto-arm.yml"
-               && ExecutableLines(fileText).Any(l => l.Contains("--arm-generated", StringComparison.Ordinal))
-               && lines.Contains("if: steps.classify.outputs.arm == 'true'", StringComparer.Ordinal)
+        return lines.Contains("if: steps.classify.outputs.arm == 'true'", StringComparer.Ordinal)
+               && lines.Contains("HEAD_SHA: ${{ steps.classify.outputs.head }}", StringComparer.Ordinal)
                && lines.Any(l => l.Contains("gh pr merge", StringComparison.Ordinal)
-                                 && l.Contains("--match-head-commit", StringComparison.Ordinal));
+                                 && l.Contains("--match-head-commit \"$HEAD_SHA\"", StringComparison.Ordinal));
     }
 
     /// <summary>

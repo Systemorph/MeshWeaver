@@ -1088,6 +1088,14 @@ def arm_generated_verdict(pr: dict, files: list | None, commits: list | None,
     sha = str(head.get("sha") or "")
     if not re.fullmatch(r"[0-9a-f]{40}", sha):
         return False, "it reported no head sha"
+    # Completeness is PROVEN here, not inferred: `generated_only` reads a missing count as zero, so a
+    # partial listing of a payload without `changed_files`/`commits` would pass it (#6412 review).
+    for field, listing in (("changed_files", files), ("commits", commits)):
+        count = pr.get(field)
+        if not isinstance(count, int) or isinstance(count, bool) or count <= 0:
+            return False, f"its `{field}` count is {count!r}, not a positive number — the listing cannot be shown complete"
+        if not isinstance(listing, list) or len(listing) != count:
+            return False, f"the {field} listing returned {len(listing) if isinstance(listing, list) else None} of {count}"
     ok, why = generated_only(pr, files, commits)
     if not ok:
         return False, why
@@ -2454,7 +2462,8 @@ def self_test() -> int:
     SHA = "a" * 40
     def apr(**kw):
         repo = {"full_name": "Systemorph/MeshWeaver.Plugins", "default_branch": "main"}
-        base = dict(gpr(), state="open", draft=False, head={"sha": SHA, "repo": repo}, base={"ref": "main", "repo": repo})
+        base = dict(gpr(), state="open", draft=False, commits=1, head={"sha": SHA, "repo": repo},
+                    base={"ref": "main", "repo": repo})
         base.update(kw)
         return base
     def arm_case(name, expect, pr, files, commits, head_after=SHA):
@@ -2470,7 +2479,11 @@ def self_test() -> int:
              apr(user={"login": "systemorph-com[bot]", "type": "Bot", "id": 1}), LOCKS, BOT_COMMITS)
     arm_case("App PR with one hand-written file (mixed) -> never", False, apr(),
              LOCKS[:1] + [{"filename": "Hosting/X.cs", "patch": "+x"}], BOT_COMMITS)
-    arm_case("App PR with a person's commit -> never", False, apr(), LOCKS, BOT_COMMITS + [{"author": HUMAN}])
+    arm_case("App PR with a person's commit -> never", False, apr(commits=2), LOCKS, BOT_COMMITS + [{"author": HUMAN}])
+    arm_case("changed_files count missing, partial list -> never", False,
+             {k: v for k, v in apr().items() if k != "changed_files"}, LOCKS[:1], BOT_COMMITS)
+    arm_case("commits count missing -> never", False, {k: v for k, v in apr().items() if k != "commits"}, LOCKS, BOT_COMMITS)
+    arm_case("more files listed than reported -> never", False, apr(changed_files=1), LOCKS, BOT_COMMITS)
     arm_case("unreadable file list (None) -> never", False, apr(), None, BOT_COMMITS)
     arm_case("empty file list -> never", False, apr(), [], BOT_COMMITS)
     arm_case("short file list (2 of 3) -> never", False, apr(changed_files=3), LOCKS, BOT_COMMITS)
