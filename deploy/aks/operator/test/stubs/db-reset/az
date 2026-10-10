@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# A stand-in `az` for hosting-db-reset's tests: the one read the script makes is the server's admin
+# password BY NAME (hosting::pg_password). Records every argv in $HOSTING_DBR_STATE/az.log and answers
+# the object memex-postgres-password with an obviously fake value; anything else is unexpected.
+set -uo pipefail
+state="${HOSTING_DBR_STATE:?the az stub needs HOSTING_DBR_STATE}"
+printf 'az %s\n' "$*" >> "$state/az.log"
+case "${1:-} ${2:-} ${3:-}" in
+  "keyvault secret show")
+    name=""
+    while [ $# -gt 0 ]; do case "$1" in --name) name="${2:-}"; shift 2 ;; *) shift ;; esac; done
+    [ "$name" = "memex-postgres-password" ] && { echo "fake-server-password-NEVER-PRINTED"; exit 0; }
+    echo "ERROR: (SecretNotFound) A secret with (name/id) ${name} was not found in this key vault." >&2; exit 3 ;;
+esac
+echo "az stub: unexpected invocation: $*" >&2
+exit 1

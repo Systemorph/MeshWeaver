@@ -85,6 +85,13 @@ Two other choices were considered and rejected:
   MeshWeaver.SocialMedia derive their AssemblyVersion from the platform's PlatformVersion, so they
   follow without a change of their own. (Pinning it per major was tried in review and rejected: it
   changes the expression those repositories verify, turning a version bump into a paired change.)
+- **CD targets the newest VOUCHED commit, not main's tip.** main-cd's workflow file is main's, but
+  the tree it builds is the gate's target, which can predate the minter for a tick or two after it
+  merges. Such a run mints the retired `<line>-ci.<run>` with THIS run's number — still one lineage —
+  and main-cd's shape assertion accepts exactly that, never a `-dev` or another run's number.
+  Measured on the cut-over: main-cd #10351 targeted `c6310ff` (the minter's tip `118dd05` had no
+  completed required check yet), composed `3.0.0-ci.10351`, and the first version of the assertion
+  refused it.
 - **The release.** `release.yml` promotes a `<major>.<minor>.<run>` build by adding `<major>.<minor>.0`,
   moves no pointer for it, and still promotes a retired-notation set the old way.
 
