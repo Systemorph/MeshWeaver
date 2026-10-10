@@ -94,7 +94,7 @@ for pair in "${copies[@]}"; do
   fi
   umask 077
   copy_file="$(mktemp)"
-  trap 'rm -f "$copy_file"' EXIT
+  trap 'hosting::on_exit; rm -f "$copy_file"' EXIT
   printf '%s' "$source_value" > "$copy_file"
   unset source_value
   az keyvault secret set --vault-name "$vault" --name "$target" --file "$copy_file" --output none \

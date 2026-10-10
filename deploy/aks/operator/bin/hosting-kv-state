@@ -52,7 +52,7 @@ if hosting::dry; then
 fi
 
 work="$(mktemp -d)" || hosting::die "could not create a working directory"
-trap 'rm -rf "$work"' EXIT
+trap 'hosting::on_exit; rm -rf "$work"' EXIT
 
 done_count=0
 for object in "${objects[@]}"; do

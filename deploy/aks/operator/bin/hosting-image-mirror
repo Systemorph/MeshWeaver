@@ -89,7 +89,7 @@ command -v crane >/dev/null 2>&1 || hosting::die "crane is not installed in this
 # and it goes with the process.
 umask 077
 DOCKER_CONFIG="$(mktemp -d)"; export DOCKER_CONFIG
-trap 'rm -rf "$DOCKER_CONFIG"' EXIT
+trap 'hosting::on_exit; rm -rf "$DOCKER_CONFIG"' EXIT
 
 # ── the fleet registry, as its publisher ─────────────────────────────────────────────────────
 hosting::step "Sign in to the fleet registry as its publisher"

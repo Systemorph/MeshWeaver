@@ -85,7 +85,7 @@ quantity_bytes() {
 }
 
 err="$(mktemp)"
-trap 'rm -f "$err"' EXIT
+trap 'hosting::on_exit; rm -f "$err"' EXIT
 
 # ── the claim as it is ─────────────────────────────────────────────────────────────────────────
 pvc="$(hosting::read kubectl -n "$namespace" get pvc "$claim" -o json 2>"$err")" \

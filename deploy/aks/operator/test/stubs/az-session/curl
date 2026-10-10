@@ -2,9 +2,18 @@
 # A stand-in for the GitHub Actions OIDC token endpoint: every request mints a NEW token
 # (gh-token-<n>), recording the URL it was asked (the audience rides on it) and whether the bearer
 # request token was presented.
+#
+#   HOSTING_AZS_OIDC_FAIL_FROM=<n>   the n-th request and every later one is REFUSED the way
+#                                    `curl -f` reports a 503 (exit 22, the message on stderr) — the
+#                                    endpoint that answered the opening sign-in and not the refresh.
 set -uo pipefail
 state="${HOSTING_AZS_STATE:?the az-session stub needs HOSTING_AZS_STATE}"
 n=$(( $(cat "$state/minted" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$state/minted"
+if [ -n "${HOSTING_AZS_OIDC_FAIL_FROM:-}" ] && [ "$n" -ge "$HOSTING_AZS_OIDC_FAIL_FROM" ]; then
+  printf 'curl refused request %s\n' "$n" >> "$state/log"
+  echo "curl: (22) The requested URL returned error: 503" >&2
+  exit 22
+fi
 url="" bearer=no
 while [ $# -gt 0 ]; do
   case "$1" in
