@@ -121,6 +121,9 @@
     <PackageReference Include="ModelContextProtocol.AspNetCore" />
     <PackageReference Include="Microsoft.Identity.Web" />
     <PackageReference Include="Microsoft.Identity.Web.UI" />
+    <!-- Approval step-up: the passkey rung (WebAuthn verification) and the TOTP rung's QR code. -->
+    <PackageReference Include="Fido2" />
+    <PackageReference Include="Net.Codecrete.QrCodeGenerator" />
     <PackageReference Include="SkiaSharp" />
     <!-- The Linux natives are a RUNTIME dependency of the published image, so they must be
          referenced here rather than only where the renderer is called. NoDependencies = no
