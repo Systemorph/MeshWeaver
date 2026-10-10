@@ -448,7 +448,13 @@ public static class WebhookInbox
                                 Body = body,
                             },
                         };
-                        return mesh.CreateNode(node).Take(1)
+                        // 🚨 Answered on the COMMIT, not on the create's reply (#6039). The sender
+                        // needs to know the delivery is durable. The reply additionally waits for
+                        // the post-creation handlers and for its turn on the node-operation hub's
+                        // block, and GitHub recorded such a wait as "no response in 10 s" for a
+                        // delivery committed in 200 ms. No handler is part of a WebhookEvent's
+                        // contract: consumers pick events up from their own inbox query.
+                        return mesh.CreateNodeAnsweredOnCommit(hub.ServiceProvider, node)
                             .Select(_ => new DeliveryResult(DeliveryStatus.Accepted, node.Path)
                             {
                                 SignatureVerified = signatureVerified,
