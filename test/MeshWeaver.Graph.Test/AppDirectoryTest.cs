@@ -398,11 +398,10 @@ public class AppDirectoryPureTest
 
     // ── Home:AppSource ───────────────────────────────────────────────────────────────────────
 
-    /// <summary>With the default (<c>Records</c>) the band's query is EXACTLY what it was.</summary>
+    /// <summary>With an explicit <c>Records</c> the band's query is EXACTLY what it was.</summary>
     [Theory]
-    [InlineData(null)]
     [InlineData("Records")]
-    [InlineData("bogus")]
+    [InlineData(" records ")]
     public void RecordsSource_KeepsTheBandUnchanged(string? configured)
     {
         HomeAppSource.IsDirectory(configured).Should().BeFalse();
@@ -411,11 +410,21 @@ public class AppDirectoryPureTest
         band.ScopeTabs![0].Query.Should().Be((string?)band.HiddenQuery);
     }
 
+    /// <summary>The directory is the DEFAULT: absent, empty, Directory and an unknown value all
+    /// select it — only an explicit Records keeps the legacy band (MeshWeaver#6448: the
+    /// record-driven fleet renders no Home__AppSource, so the image default is what it runs).</summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("Directory")]
+    [InlineData(" directory ")]
+    [InlineData("bogus")]
+    public void DirectoryIsTheDefault(string? configured)
+        => HomeAppSource.IsDirectory(configured).Should().BeTrue();
+
     [Fact]
     public void DirectorySource_ReadsTheVirtualNamespace()
     {
-        HomeAppSource.IsDirectory("Directory").Should().BeTrue();
-        HomeAppSource.IsDirectory(" directory ").Should().BeTrue();
         var band = UserActivityLayoutAreas.BuildAppsBand("alice", null, fromDirectory: true);
         band.HiddenQuery.Should().Be("path:alice/_Apps scope:children nodeType:InstalledApp sort:Name-asc");
         band.ScopeTabs![0].Query.Should().Be((string?)band.HiddenQuery);
