@@ -488,36 +488,134 @@ esac
 # overlay, and a record-driven render would have re-enabled fleet ops on it with nothing in any log.
 # So before anything changes, compare the LEAF PATHS of the live release's user-supplied values
 # (`helm get values`) with the leaf paths of what this upgrade supplies (both values layers plus the
-# --set flags, merged by helm itself through a one-template probe chart — this image has no yq), and
-# REFUSE naming every path that would vanish. A path counts as kept when the new values carry it, a
-# prefix of it, or a path under it (a flag re-expressed as `name: true` ↔ `name.enabled`). Remedy:
-# express the key on the record (features, extraPortalConfig, …) — or drop it from the live release on
-# purpose with a governed HelmRelease action. Never a silent drop.
+# --set flags, merged by helm itself through a one-template probe chart — this image has no yq). A path
+# counts as kept when the new values carry it, a prefix of it, or a path under it (a flag re-expressed
+# as `name: true` ↔ `name.enabled`).
+#
+# 🚨 BUT A KEY THE RECORD ITSELF STOPPED RENDERING IS A DELIBERATE CHANGE, NOT A SILENT DROP. The guard
+# above used to refuse it too, and since the governed HelmRelease removal exists for only two instances,
+# removing a key from a Deployment record BRICKED every later deploy of that instance — measured
+# 2026-10-09/10: build's rolls (selfupdate-roll-build-3-1-10352-88e8bc9b) refused on the four keys
+# Memex#713 removed from its record, and memex-cloud earlier on `WebhookInbox__Targets__1`. The guard
+# exists for hand-applied, live-only values; a key the record rendered is not one. So the two are told
+# apart by a DECLARATION, never a guess (policy declared-not-derived): every deploy writes the leaf
+# paths the RECORD renders (the record's file plus this script's own --set flags; never the vault
+# half, whose leaves were captured from whatever was live) into the release itself, at
+# `hostingDeploy.recordOwned`, and the next deploy reads it back with `helm get values`. A dropped path
+# is then one of three things:
+#   record-owned   the previous deploy's record rendered EXACTLY this leaf path → dropped, and each one
+#                  is LOGGED by name. Exact, never "under": a manifest leaf `a.b` says nothing about a
+#                  hand-applied `a.b.c` that replaced it;
+#   retired        the record declares its removal in operator.environment
+#                  HOSTING_RETIRE_VALUES=<path>[,<path>…] (the path or a parent of it; a key may carry
+#                  `/`, e.g. an ingress annotation) → dropped and logged. This is the bootstrap for
+#                  a release last deployed before the manifest existed, where nothing else can tell;
+#   live-only      neither → REFUSED, as before (Memex#376), naming every path.
+# A release with no manifest (deployed before this, or last applied by the config repo's lane, which
+# replaces the values and so drops the manifest) falls back to today's behaviour: every drop is refused
+# unless the record retires it. Never a silent drop.
 leaf_paths_jq='[paths(type != "object") as $p | select(getpath($p) != null) | select(all($p[]; type == "string")) | $p | join(".")] | unique'
+manifest_key="hostingDeploy"
+# probe_values <name> <helm args…> — the values helm itself merges from these layers, as one JSON
+# object on stdout. The values are DATA (the vault half rides in them): never logged, and a failure
+# names one line of helm's stderr only.
+probe_values() {
+  local name="$1" probe_chart probe_err out why
+  shift
+  probe_chart="$(mktemp -d)"
+  mkdir -p "${probe_chart}/templates"
+  printf 'apiVersion: v2\nname: values-probe\nversion: 0.0.0\n' > "${probe_chart}/Chart.yaml"
+  printf '{{ toJson .Values }}\n' > "${probe_chart}/templates/values.json"
+  probe_err="$(mktemp)"
+  if ! out="$(hosting::read helm template "$name" "$probe_chart" "$@" 2>"$probe_err" | grep -v '^---' | grep -v '^# Source:')"; then
+    why="$(grep -m1 . "$probe_err" | cut -c1-300)"; rm -rf "$probe_chart" "$probe_err"
+    printf '%s' "$why" >&2
+    return 1
+  fi
+  rm -rf "$probe_chart" "$probe_err"
+  printf '%s' "$out"
+}
+supplied=""
+if [ -n "$release_state" ]; then
+  supplied="$(probe_values values-probe "${files[@]}" "${sets[@]}" 2>&1)" \
+    || hosting::die "could not merge this upgrade's values to compare them with the live release (${supplied}) — refused rather than risking a silent drop (Memex#376)"
+fi
+# What the RECORD renders, without the vault half. With no half the two merges are the same and the
+# first is reused; otherwise helm merges the record's layer alone.
+if [ -z "$vault_values" ] && [ -n "$supplied" ]; then
+  record_supplied="$supplied"
+else
+  record_supplied="$(probe_values record-probe -f "$values" "${sets[@]}" 2>&1)" \
+    || hosting::die "could not merge the record's values to write the record-owned manifest (${record_supplied}) — refused: a release without it cannot later tell a key the record removed from a hand-applied one"
+fi
+record_owned="$(jq -cn --argjson v "${record_supplied:-null}" --arg m "$manifest_key" \
+    "\$v // {} | ${leaf_paths_jq} | map(select(. != \$m and (startswith(\$m + \".\") | not)))" 2>/dev/null)" \
+  || hosting::die "could not list the leaf paths the record renders (jq) — refused: the record-owned manifest would be wrong"
+sets+=( --set-json "${manifest_key}={\"recordOwned\":${record_owned}}" )
+hosting::log "values    record-owned manifest: $(jq -r 'length' <<< "$record_owned") leaf path(s) the record renders, written into the release at ${manifest_key}.recordOwned"
+
 if [ -n "$release_state" ]; then
   live_err="$(mktemp)"
   live_values="$(hosting::read helm get values "$release" --namespace "$namespace" -o json 2>"$live_err")" \
     || { why="$(grep -m1 . "$live_err" | cut -c1-300)"; rm -f "$live_err"
          hosting::die "could not read the user-supplied values of the live release ${release} (${why}) — whether this upgrade would DROP a key the release carries is then unknown, and it is refused rather than guessed (Memex#376)"; }
   rm -f "$live_err"
-  probe_chart="$(mktemp -d)"
-  mkdir -p "${probe_chart}/templates"
-  printf 'apiVersion: v2\nname: values-probe\nversion: 0.0.0\n' > "${probe_chart}/Chart.yaml"
-  printf '{{ toJson .Values }}\n' > "${probe_chart}/templates/values.json"
-  probe_err="$(mktemp)"
-  supplied="$(hosting::read helm template values-probe "$probe_chart" "${files[@]}" "${sets[@]}" 2>"$probe_err" | grep -v '^---' | grep -v '^# Source:')" \
-    || { why="$(grep -m1 . "$probe_err" | cut -c1-300)"; rm -rf "$probe_chart" "$probe_err"
-         hosting::die "could not merge this upgrade's values to compare them with the live release (${why}) — refused rather than risking a silent drop (Memex#376)"; }
-  rm -rf "$probe_chart" "$probe_err"
-  dropped="$(jq -rn --argjson live "${live_values:-null}" --argjson next "${supplied:-null}" "
-      (\$live // {} | ${leaf_paths_jq}) as \$l | (\$next // {} | ${leaf_paths_jq}) as \$n
+  # HOSTING_RETIRE_VALUES — the record's own declaration that these paths go (operator.environment).
+  retire_json="$(printf '%s' "${HOSTING_RETIRE_VALUES:-}" | tr ',;' '\n' | tr -d ' \t\r' | grep -v '^$' \
+                 | jq -Rsc 'split("\n") | map(select(length > 0))' 2>/dev/null)" || retire_json='[]'
+  [ -n "$retire_json" ] || retire_json='[]'
+  bad_retire="$(jq -r '.[] | select(test("^[A-Za-z0-9_][A-Za-z0-9_./-]*$") | not)' <<< "$retire_json" 2>/dev/null)"
+  [ -z "$bad_retire" ] \
+    || hosting::die "HOSTING_RETIRE_VALUES names something that is not a dotted values path: $(printf '%s' "$bad_retire" | tr '\n' ' ')— refused rather than guessing which value the record meant to retire"
+  # One line per dropped path: `<class>\t<path>`, class ∈ owned | retired | refused. The manifest's own
+  # key is the bookkeeping, never a value: it is rewritten on every deploy and never compared.
+  classified="$(jq -rn --argjson live "${live_values:-null}" --argjson next "${supplied:-null}" \
+      --argjson retire "$retire_json" --arg m "$manifest_key" "
+      def covers(\$a; \$b): \$a == \$b or (\$a | startswith(\$b + \".\")) or (\$b | startswith(\$a + \".\"));
+      def under(\$a; \$b): \$a == \$b or (\$a | startswith(\$b + \".\"));
+      (\$live // {}) as \$lv
+      | (\$lv[\$m].recordOwned // null | if type == \"array\" then map(select(type == \"string\")) else null end) as \$owned
+      | (\$lv | ${leaf_paths_jq} | map(select(. != \$m and (startswith(\$m + \".\") | not)))) as \$l
+      | (\$next // {} | ${leaf_paths_jq}) as \$n
       | \$l[] | . as \$path
-      | select([\$n[] | . as \$kept | \$kept == \$path or (\$kept | startswith(\$path + \".\")) or (\$path | startswith(\$kept + \".\"))] | any | not)" 2>/dev/null)" \
+      | select([\$n[] | covers(.; \$path)] | any | not)
+      | if \$owned != null and ([\$owned[] | . == \$path] | any) then \"owned\t\" + \$path
+        elif ([\$retire[] | under(\$path; .)] | any) then \"retired\t\" + \$path
+        else \"refused\t\" + \$path end" 2>/dev/null)" \
     || hosting::die "the live and the supplied values of ${release} could not be compared (jq) — refused rather than risking a silent drop (Memex#376)"
-  if [ -n "$dropped" ]; then
-    hosting::die "this upgrade would DROP $(printf '%s\n' "$dropped" | grep -c .) value(s) the live release ${release} carries and the record does not express: $(printf '%s' "$dropped" | tr '\n' ' ')— helm replaces the user-supplied values, so each would silently fall back to the chart default (Memex#376: memex-cloud's features.fleetops). Nothing was changed. Express them on the Deployment record (features, extraPortalConfig, …), or remove them from the live release deliberately with a governed HelmRelease action, then re-request."
+  has_manifest="$(jq -r --arg m "$manifest_key" '(.[$m].recordOwned // null) | type == "array"' <<< "${live_values:-null}" 2>/dev/null || echo false)"
+  tab=$'\t'
+  refused="$(printf '%s\n' "$classified" | sed -n "s/^refused${tab}//p")"
+  if [ -n "$refused" ]; then
+    if [ "$has_manifest" = "true" ]; then
+      provenance="The release's record-owned manifest (${manifest_key}.recordOwned) shows the record never rendered them, so they were applied by hand."
+    else
+      provenance="The release carries no record-owned manifest yet (it was last deployed before hosting-deploy wrote one, or by a lane that replaces the values), so a key the record STOPPED rendering cannot be told from a hand-applied one. If the record removed them on purpose, declare it on the record — operator.environment HOSTING_RETIRE_VALUES=<path>[,<path>…] — and re-request; the deploy then writes the manifest and the next removal needs no declaration."
+    fi
+    hosting::die "this upgrade would DROP $(printf '%s\n' "$refused" | grep -c .) value(s) the live release ${release} carries and the record does not express: $(printf '%s' "$refused" | tr '\n' ' ')— helm replaces the user-supplied values, so each would silently fall back to the chart default (Memex#376: memex-cloud's features.fleetops). ${provenance} Nothing was changed. Express them on the Deployment record (features, extraPortalConfig, …), or retire them deliberately, then re-request."
   fi
-  hosting::log "values    nothing the live release carries is dropped by this upgrade"
+  dropped_any=false
+  while IFS="$tab" read -r class path; do
+    [ -n "$path" ] || continue
+    dropped_any=true
+    case "$class" in
+      owned)   hosting::log "values    DROPPING ${path} — the record rendered it on the previous deploy and no longer does: a deliberate removal from the record" ;;
+      retired) hosting::log "values    DROPPING ${path} — the record retires it (HOSTING_RETIRE_VALUES)" ;;
+    esac
+    hosting::say dropped_value "${class}:${path}"
+  done <<< "$classified"
+  # A retire entry that matched nothing is spent — say so, so the declaration can leave the record.
+  retired_paths="$(printf '%s\n' "$classified" | sed -n "s/^retired${tab}//p")"
+  while IFS= read -r entry; do
+    [ -n "$entry" ] || continue
+    spent=true
+    while IFS= read -r path; do
+      case "$path" in "$entry"|"$entry".*) spent=false; break ;; esac
+    done <<< "$retired_paths"
+    ! $spent \
+      || hosting::log "values    HOSTING_RETIRE_VALUES entry ${entry} matches nothing this upgrade drops — the release no longer carries it (or the record still renders it); once the release no longer carries it the declaration can leave the record"
+  done < <(jq -r '.[]' <<< "$retire_json")
+  $dropped_any || hosting::log "values    nothing the live release carries is dropped by this upgrade"
 fi
 
 # ── migrate BEFORE the image moves (policy roll-migrates-first) ─────────────────────────────────
