@@ -248,7 +248,10 @@ end to end (memex-cloud pod `884964bb7-6gv59`, 2026-10-09, read through governed
 So the burst had nothing to do with compiling, and registering each type "as the pre-warmer finds it
 already built" cannot remove it either: the reads come before the pre-warmer starts. What the line
 asserted at the read — *"consumers will fail"* — was not yet decidable. The pass registered those
-types minutes later and every reader re-typed by itself.
+types minutes later. A `GetMeshNodeStream` reader then re-typed by itself (the late re-type), but a
+**query** reader did not: a query has no late re-type, so a result set read in the window stayed
+untyped until something changed it. Deferring the warning (below) only re-timed the verdict; the
+read itself is fixed in the section "A read never waits for the pass" below.
 
 **The window.** `DynamicContentTypeRegistrationHostedService` opens it when it is constructed. The
 host resolves every hosted service before it starts any, so the window is open before the first
@@ -276,6 +279,64 @@ negative control is the same read with no window, which warns at the read.
 `|~ "(?i)stayed an untyped JsonElement"` per replica drops to the types the pass could not register,
 which are the ones its own Warning names. The pre-change count was ≈130 per boot on memex-cloud and
 the same shape on memex.
+
+## A read never waits for the pass
+
+The window above stops the warning from claiming a verdict too early. It does not change what the
+reader gets. The readers in the burst are the process's **own** boot work: a `Posts` query, the
+standing watches on `Ops/Status/*`, the install records (`*/_Install/*`) read by the default-install
+pass. They run before `ApplicationStarted`, so holding readiness back cannot help them: readiness
+gates traffic, not hosted services. The pass, for its part, cannot move ahead of the bake barrier
+without becoming a 414-type boot cost again (#1660). So the read seams register the ONE type they
+are reading, on demand.
+
+**`ContentTypeOnDemandRegistration`** (MeshWeaver.Hosting, registered by `AddDynamicTypePreWarming`).
+When `MeshNodeStreamCache.GetStream(path, options)` or `GetQuery(id, options, …)` meets content that
+stays untyped and names a NodeType, the emission **waits** for `EnsureRegistered(nodeType)` and is
+typed after it:
+
+1. read the NodeType's record from the STORE, the authority (never a query, whose stale or incomplete snapshot would be cached as a verdict; as system: infrastructure, not a user read; bounded by
+   `RecordReadBudget`, the same 30 s budget as the pass's enumeration);
+2. run `DynamicContentTypeRegistrar.RegisterType`, which is the pass's own route for one type:
+   `AlreadyRegistered` / `NotBaked` from the record, the identity-checked bytes from the store
+   (`ShippedBuildRefetch` when this replica lacks them), `GetConfigurationsFromExistingAssembly`,
+   one transient `ProbeRegister`.
+
+**No compile and no record write.** That is why it may run on a read where the enrichment path
+must not (the section "Closing it" above still holds word for word).
+A type with no usable build answers `NotBaked` at once and the read degrades exactly as before:
+compiling stays the first activation's job.
+
+**Why the barrier is not needed here.** The pass waited for the barrier so that no probe would meet
+an adopted-but-not-yet-loadable file and trip the loader's bad-image delete. Store writes are now
+atomic (temp file + rename, MeshWeaver#1387), and the probe loads only bytes whose MVID **is** the
+record's published build. Anything else is `StaleBytes` or `BytesMissing`, and nothing is loaded.
+
+**Bounded.** One attempt per type per process, shared by every concurrent reader through an instance
+`PromiseCache`. The load and the probe run on the `FileSystem` IO pool. A verdict is kept for the
+process; the other two routes (activation, the pass) still register a type this one could not.
+Only `Faulted` is released, because it is a failure of this replica rather than a verdict about the
+type, so the next read asks again. Order is preserved (`Concat`): an emission never overtakes one
+that is waiting, and content that types cleanly is answered at once. Each attempt logs one line
+(Information, or Warning when it faulted) with its outcome and elapsed time.
+
+A host without the service (every test host that does not add it) keeps the old behaviour: the seam
+degrades, and `GetMeshNodeStream`'s late re-type waits for a registration. The deferred warning above
+stays as the diagnostic for whatever is still untyped after this route and the pass.
+
+**Pinned by** `AReadAtBootIsTypedNotUntypedTest` (MeshWeaver.Hosting.Test). A type is baked without
+activating a hub, and its instance is written straight to the store, so nothing registers it as a
+side effect. The negative control is the same read without the service (current `main` before this
+change): it answers an untyped `JsonElement`. With the service, the real cache's query and the
+stream seam answer typed on the **first** emission, and the record's build stamp has not moved. A
+type with no build answers `NotBaked` and compiles nothing. With the seam's wiring removed, the query
+case fails with *"Did not expect value to be of type JsonElement"*.
+
+**Acceptance on a portal:** after the roll that carries this, the boot-window count of
+`|~ "(?i)stayed an untyped JsonElement"` per replica is about 0. What remains is the types this route
+could not register, which its own Warning lines name, plus the deferred settle lines for the same
+types. Each boot also logs one `ContentTypeOnDemandRegistration: <type> → Registered` line per type a
+boot reader needed.
 
 ## What this does not establish
 
