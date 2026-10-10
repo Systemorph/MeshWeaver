@@ -85,10 +85,24 @@ public sealed class GitProtocolRepoClient(
     /// (one negotiated pack transfer instead of a REST call per file), then read the worktree.
     /// A SHORT commit SHA cannot travel over the wire protocol (only refs and full SHAs can) —
     /// that one case delegates to the REST client.
+    ///
+    /// <para>🚨 <b>With a <paramref name="subdirectory"/> only that subtree's blobs move</b>
+    /// (MeshWeaver#5825). Every file outside it is discarded by the read anyway, so transferring
+    /// the whole repository first only made the caller wait. That is what GitSync's per-partition
+    /// import asks for — one plugin folder of <c>MeshWeaver.Plugins</c> — and it used to clone the
+    /// whole repository (47.8 MB / 13 s, measured for #4222) once PER PARTITION. On the fleet
+    /// registry the sync wave of every plugin partition therefore queued dozens of whole-repository
+    /// clones on the process pool's four slots (one replica held 48+ temp clones in flight at its
+    /// shutdown, memex-cloud 2026-10-10 07:50:02Z), and every request-path read the registry
+    /// serves — a package's <c>/api/plugins/files</c>, a catalog listing — waited behind the wave
+    /// with nothing written to the consumer. The answer is byte-identical: the same subtree, read
+    /// through the same prefix.</para>
     /// </summary>
     public IObservable<RepoSnapshot> Fetch(
         string repositoryUrl, string commitish, string? subdirectory, string accessToken)
-        => Wire(repositoryUrl, commitish, subdirectory, accessToken, _ => true, narrow: false);
+        => NormalizePrefix(subdirectory).Length == 0
+            ? Wire(repositoryUrl, commitish, subdirectory, accessToken, _ => true, narrow: false)
+            : Wire(repositoryUrl, commitish, subdirectory, accessToken, _ => true, narrow: true, wholeSubtree: true);
 
     /// <summary>
     /// Filtered fetch — and, unlike the unfiltered one above, it transfers ONLY the blobs the
@@ -129,16 +143,18 @@ public sealed class GitProtocolRepoClient(
 
     /// <summary>
     /// The shared shape of both fetches: one temp clone, the short-SHA REST fallback around it.
-    /// <paramref name="narrow"/> picks whether the blobs are selected before or after transfer.
+    /// <paramref name="narrow"/> picks whether the blobs are selected before or after transfer;
+    /// <paramref name="wholeSubtree"/> says the selection is "everything under the subdirectory",
+    /// which a single directory pattern expresses without listing the tree.
     /// </summary>
     private IObservable<RepoSnapshot> Wire(
         string repositoryUrl, string commitish, string? subdirectory, string accessToken,
-        Func<string, bool> pathFilter, bool narrow)
+        Func<string, bool> pathFilter, bool narrow, bool wholeSubtree = false)
     {
         var commitRef = string.IsNullOrWhiteSpace(commitish) ? "main" : commitish.Trim();
         var prefix = NormalizePrefix(subdirectory);
         var wire = WithTempDir(tmp => narrow
-            ? NarrowSnapshot(tmp, repositoryUrl, commitRef, accessToken, prefix, pathFilter)
+            ? NarrowSnapshot(tmp, repositoryUrl, commitRef, accessToken, prefix, pathFilter, wholeSubtree)
             : WholeSnapshot(tmp, repositoryUrl, commitRef, accessToken, prefix, pathFilter));
         // A hex-looking name is tried over the wire FIRST — "deadbee" may be a legitimate
         // branch/tag, and the whole point of this client is to avoid per-file REST. Only when
@@ -161,9 +177,10 @@ public sealed class GitProtocolRepoClient(
             : wire;
     }
 
-    /// <summary>Today's transfer: the whole (shallow) pack, then read the worktree through the
-    /// filter. What the UNFILTERED fetch wants — every file is the answer, so selecting paths
-    /// before the transfer would only add round trips.</summary>
+    /// <summary>The whole (shallow) pack, then read the worktree through the filter. What the
+    /// UNFILTERED fetch of the whole repository wants — every file is the answer, so selecting
+    /// paths before the transfer would only add round trips. (An unfiltered fetch of a SUBDIRECTORY
+    /// takes the narrow path instead — see <see cref="MaterializeSubtree"/>.)</summary>
     private IObservable<RepoSnapshot> WholeSnapshot(
         string tmp, string repositoryUrl, string commitRef, string accessToken,
         string prefix, Func<string, bool> pathFilter)
@@ -181,7 +198,7 @@ public sealed class GitProtocolRepoClient(
     /// </summary>
     private IObservable<RepoSnapshot> NarrowSnapshot(
         string tmp, string repositoryUrl, string commitRef, string accessToken,
-        string prefix, Func<string, bool> pathFilter)
+        string prefix, Func<string, bool> pathFilter, bool wholeSubtree = false)
         => InitRemote(tmp, repositoryUrl)
             .SelectMany(_ => Expect(git.Run(tmp,
                     [.. GitCredentials.AuthArgs(accessToken),
@@ -220,10 +237,28 @@ public sealed class GitProtocolRepoClient(
                             GitCredentials.AuthEnv(accessToken)))
                         .Select(_ => false);
                 }))
-            .SelectMany(partial => partial
-                ? MaterializeMatching(tmp, accessToken, prefix, pathFilter)
-                : CheckoutEverything(tmp, accessToken))
+            .SelectMany(partial => !partial
+                ? CheckoutEverything(tmp, accessToken)
+                : wholeSubtree && !HasPatternMetacharacter(prefix)
+                    ? MaterializeSubtree(tmp, accessToken, prefix)
+                    : MaterializeMatching(tmp, accessToken, prefix, pathFilter))
             .SelectMany(_ => Snapshot(tmp, prefix, pathFilter));
+
+    /// <summary>
+    /// Checks out ONLY the subtree under <paramref name="prefix"/>, with ONE directory pattern —
+    /// the selection an unfiltered fetch of a subdirectory needs (MeshWeaver#5825). No tree listing
+    /// is needed to express it, and no path cap applies: a plugin folder with more files than
+    /// <see cref="MaxNarrowPaths"/> stays narrow instead of falling back to the whole tree.
+    /// </summary>
+    private IObservable<System.Reactive.Unit> MaterializeSubtree(string tmp, string accessToken, string prefix)
+        // `prefix` is normalized to "seg/…/seg/", so "/seg/…/seg/" is a root-anchored DIRECTORY
+        // pattern: --no-cone matches everything beneath it and nothing beside it.
+        => Expect(git.Run(tmp, ["sparse-checkout", "set", "--no-cone", "--", "/" + prefix]))
+            // Emitted only AFTER the sparse set succeeded — the line a test reads to tell a
+            // subtree checkout from a whole one.
+            .Do(_ => logger?.LogDebug(
+                "Narrow fetch: sparse-checkout restricted the worktree to the subtree {Prefix}.", prefix))
+            .SelectMany(_ => CheckoutEverything(tmp, accessToken));
 
     /// <summary>
     /// Selects the matching paths off the (blobless) tree and checks out ONLY those, so the lazy

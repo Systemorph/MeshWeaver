@@ -53,7 +53,9 @@ internal static class RegistryAnswerDeadline
     /// <summary>Configuration key overriding every route's budget, in seconds (a test's short clock).</summary>
     public const string BudgetSecondsConfigKey = "PluginCatalog:RegistryAnswerBudgetSeconds";
 
-    /// <summary>The index's and the catalog's budget: 25 s, between 19.4 s and 30 s (class remarks).</summary>
+    /// <summary>The index's, the catalog's and the package-files route's budget: 25 s, between 19.4 s
+    /// and 30 s (class remarks). <c>POST /api/plugins/files</c> is read by the same
+    /// <c>plugin-registry-standard</c> client, with the same 30 s attempt (MeshWeaver#5825).</summary>
     public static readonly TimeSpan AnswerBudget = TimeSpan.FromSeconds(25);
 
     /// <summary>A bundle download's budget: 60 s, between ~16 s and 120 s (class remarks).</summary>
