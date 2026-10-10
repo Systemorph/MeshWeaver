@@ -225,6 +225,20 @@ late construction produced, so a hub built during the teardown window is never l
 outside the snapshot. On completion **or** the cap, the owner advances to ShutDown — a
 hung child never blocks the parent.
 
+#### A hub its siblings depend on goes in a second wave (#6078)
+
+A hosted hub declared `WithTeardownAfterSiblings()` is not disposed with the others. The
+collection disposes every other child first, joins them (and the retired and in-flight legs), and
+only then disposes the declared hubs and joins those. The owner still waits for both waves.
+
+The node-stream cache's hub is declared this way. It sits beside every hub the mesh hosts, and its
+ShutDown ends every held read with the disposal terminal. In one wave it raced the readers: a
+sibling still mid-turn or mid-quiesce received a fault for its own teardown, and the outgoing pod of
+every roll logged it at Error. Pinned by `AHubHeldReadEndsBeforeTheCacheItReadsTest`: its reader is
+mid-turn when the mesh tears down, and it fails on one wave because the cache is disposed before the
+reader lets go. Its negative control holds a read no hub owns and requires the disposal terminal, so
+the order is not bought by the cache no longer telling its readers.
+
 ### ShutDown — tear down and signal
 
 Runs on the action block, fully synchronous: `CancelCallbacks()` (push

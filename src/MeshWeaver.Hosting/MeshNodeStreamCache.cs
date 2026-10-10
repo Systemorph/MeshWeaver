@@ -74,6 +74,10 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     // teardown idempotent so the second caller is a no-op.
     private int _disposed;
 
+    /// <summary>True once <see cref="Dispose"/> has begun. Read by the teardown-order pin
+    /// (#6078) to tell whether a hub-owned reader let go of its read while the cache was alive.</summary>
+    internal bool IsDisposed => System.Threading.Volatile.Read(ref _disposed) != 0;
+
     /// <summary>One cache entry: the updatable handle, the raw replay-cached read
     /// view over the hydration subject (<see cref="Replay"/> — per-user access
     /// gating is applied in <c>GetStream</c> before each subscriber consumes it),
@@ -720,6 +724,13 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 // ImpersonateAsSystem()`), so per-user RLS is unaffected. Same infra identity storage
                 // declares (DataSourceWithStorage: WithPostingIdentity(PostingIdentity.System)).
                 .WithPostingIdentity(PostingIdentity.System)
+                // 🚨 Torn down AFTER every sibling the mesh hosts (#6078). Every per-node hub and
+                // every other reader the mesh hosts sits beside this hub, and its ShutDown ends each
+                // held read with the disposal terminal (#5011). Disposed in the same wave as them,
+                // it raced readers still mid-turn or mid-quiesce and handed each a fault for its own
+                // teardown — the outgoing pod of every roll logged it at Error. Readers first, then
+                // the cache they read.
+                .WithTeardownAfterSiblings()
                 // 🚨 Cache hub is domain-type-agnostic by design: its TypeRegistry
                 // knows ONLY framework types (MeshNode, MeshNodeReference inherited
                 // from the parent mesh hub) and treats MeshNode.Content as

@@ -510,6 +510,20 @@ surfaces as one. Pinned by `ANodeEditorOpenAcrossProcessShutdownTest`. Its leavi
 the production exception when the classification is removed, and its negative control disposes the
 cache under a process that is not leaving and requires the error.
 
+### A hub-owned read ends with its hub, before the cache is torn down (#6078)
+
+The editor rule above classifies the terminal at one consumer. The cause is the teardown order, and
+it is fixed there. Long-lived readers on `Hosting/PlatformBuilds` (the PR sweep's review-slot watcher
+and the fleet coordinator's ledger wakes) received the same disposal terminal on the outgoing pod of
+four rolls. Their hub and the cache's hub are both hosted by the mesh, and the mesh disposed its
+hosted hubs as one wave, so the cache hub's ShutDown raced the readers' own.
+
+The cache hub is now declared `WithTeardownAfterSiblings()` (see
+[Hub Disposal Model](../HubDisposalModel)). The mesh disposes every other hosted hub first, waits for
+them to finish, and then disposes the cache hub. A read that a hub registered for disposal is
+released by that hub's ShutDown while the cache is still alive. A read that no hub owns is still
+ended with the `ObjectDisposedException`, and so is a read issued after the cache is gone.
+
 ## A delete tombstone is superseded at the recreate's commit — before `Created` is published
 
 The one read failure a reader is *designed not to retry* is the delete tombstone's verdict: `No node found at '…' — the node was deleted, so this address will not reactivate`. A hub that is going down because its node was **deleted** NACKs an abandoned delivery with that authoritative `NotFound` (instead of the transient `ShuttingDown` a recycling hub answers), and the classifier here turns it into a definitive absence — the stream terminates, the negative entry is recorded, and by contract the caller stops. The verdict is read off `RecentlyDeletedRegistry` (`IAddressTombstones`), which the **delete marks synchronously** before its response returns.
