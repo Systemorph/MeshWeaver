@@ -24,4 +24,28 @@ internal static class GitCredentials
             ? null
             : System.Collections.Immutable.ImmutableDictionary<string, string>.Empty
                 .Add("GW_TOKEN", token);
+
+    /// <summary>
+    /// The git args + environment that authenticate against <paramref name="remoteUrl"/>.
+    /// <list type="bullet">
+    ///   <item>Azure Repos (MeshWeaver#5248): the Entra token travels as an
+    ///     <c>Authorization: Bearer</c> header — the form Azure DevOps documents for Entra tokens —
+    ///     set through git's <c>GIT_CONFIG_COUNT</c>/<c>GIT_CONFIG_KEY_n</c>/<c>GIT_CONFIG_VALUE_n</c>
+    ///     environment, so it is neither in argv nor written to <c>.git/config</c>. The inherited
+    ///     credential helper is cleared so git never falls back to a stored credential.</item>
+    ///   <item>every other remote: the existing <c>$GW_TOKEN</c> credential helper, unchanged.</item>
+    /// </list>
+    /// </summary>
+    public static (IReadOnlyList<string> Args, IReadOnlyDictionary<string, string>? Env) ForRemote(
+        string remoteUrl, string? token)
+    {
+        if (string.IsNullOrEmpty(token) || !GitRepositoryProvider.IsAzureRepos(remoteUrl))
+            return (AuthArgs(token), AuthEnv(token));
+        return (
+            ["-c", "credential.helper="],
+            System.Collections.Immutable.ImmutableDictionary<string, string>.Empty
+                .Add("GIT_CONFIG_COUNT", "1")
+                .Add("GIT_CONFIG_KEY_0", "http.extraHeader")
+                .Add("GIT_CONFIG_VALUE_0", "Authorization: Bearer " + token));
+    }
 }

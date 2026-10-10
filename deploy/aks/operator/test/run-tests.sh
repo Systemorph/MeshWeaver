@@ -3528,6 +3528,65 @@ fi
 rm -rf "$_dbr_state"
 
 echo
+echo "── hosting-inventory: node counts per partition schema, READ-ONLY by the server's own rule ──"
+# The Inventory action's one step (MeshWeaver.Plugins Hosting/InstanceAction, kind Inventory). It may run
+# unattended on the read lane only because it cannot write: asserted here that the session is opened
+# read-only (PGOPTIONS default_transaction_read_only=on) AND the statement runs in BEGIN TRANSACTION READ
+# ONLY, that the SQL carries no DDL/DML verb at all, that the password is read by NAME and never printed,
+# and that a failed or SILENT query refuses rather than reporting an empty database.
+INV_STUBS="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/stubs/inventory" && pwd)"
+inv() {  # inv [env…] -- <args…>; sets $_inv_out $_inv_rc $_inv_az $_inv_log $_inv_sql
+  local envs=() st
+  while [ "$1" != "--" ]; do envs+=("$1"); shift; done; shift
+  st="$(mktemp -d)"
+  _inv_out="$(env -u PGPASSWORD "${envs[@]}" PATH="$INV_STUBS:$PG_STUBS:$PATH" HOSTING_PG_STATE="$st" \
+    HOSTING_PG_PASSWORD_OBJECT=memex-postgres-password hosting-inventory "$@" 2>&1)"; _inv_rc=$?
+  _inv_az="$(cat "$st/az.log" 2>/dev/null || true)"
+  _inv_log="$(cat "$st/pg.log" 2>/dev/null || true)"
+  _inv_sql="$(cat "$st/inventory.sql" 2>/dev/null || true)"
+  rm -rf "$st"
+}
+INV=(--database acmedb --server pg.test --user acmeowner --vault Systemorph --password-secret memex-postgres-password)
+
+inv -- "${INV[@]}"
+[ "$_inv_rc" -eq 0 ] && ok "inventory counts the database" || bad "inventory happy path" "exited ${_inv_rc}: ${_inv_out}"
+case "$_inv_out" in *"::hosting:: inventory=eyJ"*) ok "…reporting ONE base64 JSON inventory fact" ;; *) bad "reports the inventory fact" "said: ${_inv_out}" ;; esac
+_inv_fact="$(printf '%s\n' "$_inv_out" | sed -n 's/^::hosting:: inventory=//p' | head -1 | base64 -d 2>/dev/null)"
+case "$_inv_fact" in *'"schemaCount" : 2'*'"schema" : "acme"'*'"schema" : "public"'*) ok "…whose JSON names every schema read (the denominator)" ;; *) bad "fact carries the schemas" "decoded: ${_inv_fact}" ;; esac
+case "$_inv_out" in *"::hosting:: inventory_schemas=2"*"::hosting:: inventory_nodes=6"*) ok "…plus the schema count and the TOTAL node count (not one schema's)" ;; *) bad "reports schema and node totals" "said: ${_inv_out}" ;; esac
+case "$_inv_log" in *"PGOPTIONS=-c default_transaction_read_only=on"*) ok "the session is opened READ-ONLY (default_transaction_read_only=on)" ;; *) bad "session is read-only" "psql saw: ${_inv_log}" ;; esac
+case "$_inv_sql" in *"BEGIN TRANSACTION READ ONLY;"*) ok "…and the statement runs inside BEGIN TRANSACTION READ ONLY" ;; *) bad "read-only transaction" "sql: ${_inv_sql}" ;; esac
+if printf '%s' "$_inv_sql" | grep -Eiq '\b(insert|update|delete|drop|create|alter|truncate|grant|revoke|vacuum|reindex|cluster|copy)\b'; then
+  bad "the SQL carries no write verb" "found one in: $(printf '%s' "$_inv_sql" | grep -Ei '\b(insert|update|delete|drop|create|alter|truncate|grant|revoke|vacuum|reindex|cluster|copy)\b')"
+else ok "the SQL carries no DDL or DML verb at all"; fi
+case "$_inv_sql" in *"relname IN"*) bad "every table of a partition schema is counted, not a list of satellite names" "sql: ${_inv_sql}" ;;
+  *"NOT c.relispartition"*) ok "every table of a partition schema is counted (no name list), a partitioned table once at its parent" ;;
+  *) bad "partitions are skipped so a partitioned table counts once" "sql: ${_inv_sql}" ;; esac
+case "$_inv_log" in *"psql PGPASSWORD=set"*"-U acmeowner"*"-d acmedb"*) ok "psql logs in as the --user the plan passed, with the password from the vault" ;; *) bad "psql login" "psql saw: ${_inv_log}" ;; esac
+case "$_inv_az" in *"keyvault secret show --vault-name Systemorph --name memex-postgres-password --query value"*) ok "…read by NAME from the named vault" ;; *) bad "vault read by name" "az saw: ${_inv_az}" ;; esac
+case "$_inv_out$_inv_log$_inv_az" in *NEVER-PRINTED*) bad "the password is never printed or on an argv" "seen: ${_inv_out}" ;; *) ok "the password is never printed or on an argv" ;; esac
+
+inv HOSTING_DRY_RUN=true -- "${INV[@]}"
+[ "$_inv_rc" -eq 0 ] && [ -z "$_inv_log" ] && [ -z "$_inv_az" ] && ok "a dry run narrates and reads neither the vault nor the database" \
+  || bad "dry run reads nothing" "rc ${_inv_rc}; az: ${_inv_az}; psql: ${_inv_log}"
+case "$_inv_out" in *"::hosting:: inventory=dry-run"*) ok "…saying it was a dry run" ;; *) bad "dry run says so" "said: ${_inv_out}" ;; esac
+
+inv HOSTING_INV_FAIL=1 -- "${INV[@]}"
+[ "$_inv_rc" -ne 0 ] && ok "a refused query FAILS the inventory (a partial census is never reported as whole)" || bad "refused query fails" "exited 0: ${_inv_out}"
+case "$_inv_out" in *"permission denied for table mesh_nodes"*) ok "…carrying Postgres's own message" ;; *) bad "names the refusal" "said: ${_inv_out}" ;; esac
+case "$_inv_out" in *"::hosting:: inventory="*) bad "…and reports no inventory" "said: ${_inv_out}" ;; *) ok "…and reports no inventory" ;; esac
+
+inv HOSTING_INV_EMPTY=1 -- "${INV[@]}"
+[ "$_inv_rc" -ne 0 ] && ok "a SILENT query refuses — silence is never an empty database" || bad "silent query refuses" "exited 0: ${_inv_out}"
+case "$_inv_out" in *"no inventory object"*) ok "…saying so" ;; *) bad "silent query says why" "said: ${_inv_out}" ;; esac
+
+refuses_hard "inventory refuses a database that is not a plain name" "not a plain name" hosting-inventory --database 'd;id' --server pg.test --user u
+refuses_hard "inventory refuses a server that is not a hostname" "not a hostname" hosting-inventory --database d --server 'pg.test;id' --user u
+refuses_hard "inventory refuses an EMPTY --user" "given EMPTY" hosting-inventory --database d --server pg.test --user ''
+refuses_hard "inventory refuses an unknown argument" "unknown argument" hosting-inventory --database d --server pg.test --user u --write yes
+unset _inv_out _inv_rc _inv_az _inv_log _inv_sql _inv_fact
+
+echo
 echo "─────────────────────────────────────────────────────────────────"
 echo "${pass} passed, ${fail} failed"
 [ "$fail" -eq 0 ] || exit 1

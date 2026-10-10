@@ -79,6 +79,27 @@ outside any completion check by construction — that is the tombstone's job
 (`RecentlyDeletedRegistry`), not the drain's. The drain's contract is narrower and now true: at the
 moment it answered, storage held nothing at or under the root.
 
+### Every write route an owner uses honours the tombstone — the post-commit flush included
+
+A per-node hub keeps holding the pre-delete node until its `DisposeRequest` lands, so a write that
+reaches it in that window commits against a node the store no longer has. Three routes make such a
+commit durable, and all three must drop it while the tombstone is live: the persistence sampler's
+`SaveMeshNodeRequest` handler, the dispose-flush, and `StoragePostCommitFlush` — the durable write
+behind every `GetMeshNodeStream(p).Update`. The last one used to skip the check. Its storage write
+is an upsert, and `UpdateRemote` answers the writer optimistically, so an update that committed at
+the owner after the delete removed the row wrote the row straight back, after the delete had
+answered `removed=true`. Measured: an update racing the delete of a live install record left the
+record in storage in 7 of 40 rounds. In CI that showed up as `Plugins/{id}` outliving its deleted
+partition (`InstallRecordFollowsItsPartitionTest`) and outliving a confirmed uninstall
+(`PackageUninstallTest`). In both, the boot repair pass's install-record migration was updating the
+record the delete removed.
+
+The flush now refuses such a write. It checks when the write is issued, not when the flush is
+built: the delete marks its tombstones before it removes a row (`RunDeletePass`), so a write issued
+after the removal always sees the mark. The refusal is a fault, which NACKs the patch, so the writer
+learns that its update did not land. A node created again after its delete supersedes the tombstone
+(`RecentlyDeletedRegistry.Supersede`), so updates of the new node flush as usual.
+
 ## 3. The stage bound is a NO-PROGRESS watchdog, not a duration cap
 
 Every stage of the delete is bounded by `TimeoutAtStage`, which is `Observable.Timeout` — an
@@ -355,12 +376,61 @@ latency an operator reads it as covering. The reading it changes is the pool's, 
 innocent. Pinned by `IoPoolQueueReadingCoversAcceptedWorkTest`, whose fourth case is `InvokeBlocking`
 — green before and after, because it is the precedent the other three now follow.
 
+## 5. Record satellites leave in batches, not one leaf round-trip each
+
+Every planned descendant used to cost two activations of its own per-node hub: one to answer the
+pre-flight `ValidateDeleteRequest`, and one to commit its own `DeleteNodeRequest`. On
+memex.systemorph.com on 2026-10-09, deleting the retired NodeType `Crm/Client` took more than 60 s.
+It held several hundred `_Activity/compile-*` records, and each one paid both activations. The
+bounded lane from §4 keeps that from failing, but it does not make it cheap.
+
+A row whose first satellite segment is declared in `MeshOperationOptions.RecordSatelliteSegments`
+(default `_Activity`) is a RECORD. Nothing registered on its own hub is needed to delete it: it has
+no type-specific validator and no post-deletion handler. When its path-derived owner is the
+delete's root, or a node in the delete's own plan, the row:
+
+- is validated IN-PROCESS instead of at its own hub. The pre-flight reads the row from storage
+  and runs the same delete-validator chain on it under the caller's identity. That chain includes
+  the RLS validator, which walks the row's own access rule against its STORED `MainNode` (for an
+  activity, `SatelliteAccessRule` requires Update on it). The verdict is therefore the row's own,
+  and no hub is activated;
+- is removed in the commit through `IStorageAdapter.DeleteMany`, `RecordSatelliteBatchSize` rows
+  per call (default 100), children first, BEFORE the per-node walk removes the owners.
+
+Each removed row still gets every per-node side effect that does not need a hub: the
+change-feed `Deleted` event in children-first order, the stream-cache invalidation, disposal of an
+activated per-node hub, the "delete wins" tombstone and the subtree write guard (both set before
+the commit), and one tick of the no-progress watchdog per row. A row the batch did not actually
+remove is not reported as removed.
+
+A satellite whose owner is NOT in the plan, such as `{root}/Ghost/_Activity/x` with no node at
+`{root}/Ghost`, keeps the per-node lane. A
+segment whose rows gain per-node delete semantics must leave the declared set in the same change.
+An empty set restores the per-node lane for everything.
+
+**Pinned by** `RecordSatellitesLeaveInBatchesTest` (Graph.Test): 120 activity records under a
+deleted root leave in three `DeleteMany` calls with no one-row delete, while the orphan-owned
+satellite takes the per-node lane. `RecordSatellitePreflightStillDeniesTest` shows the in-process
+validation is not a bypass: one record that a delete validator refuses refuses the whole delete,
+by that record's name, before anything is removed. Its negative control, `RecordSatellitesPerNodeWhenUndeclaredTest`,
+clears the declaration, and every record then pays its own leaf delete, as production did.
+
+The other half of the fix is upstream: a NodeType no longer accumulates those records without
+bound. See [Node Type Compilation](../NodeTypeCompilation), "Compile history is bounded".
+
 ## Where this is pinned
 
 `test/MeshWeaver.Graph.Test/DeleteDrainCompletionTest.cs` drives both symptoms on a real Monolith
 mesh: a delete that removes plan + 1 while outliving its operation budget must SUCCEED, a root put
 back once must be drained by a follow-up pass so that success means it is gone, and a root that
 survives every pass must FAIL naming itself.
+
+`UpdateNeverResurrectsADeletedNodeTest` (MeshWeaver.Graph.Test) pins the post-commit flush
+deterministically. A flush that arrives after the delete is refused and the node stays gone, while
+a flush of a live node and a flush of a node created again after its delete both persist. Reverted,
+the first case fails. `InstallRecordUpdateRacingDeleteTest` (Memex.Portal.Shared.Test) races the
+install-record migration's update against the record's delete for 40 rounds and allows no record
+to survive. Reverted, it fails with survivors.
 
 `DeleteCommitTimeoutNamesWhatIsStuckTest` pins what a stalled commit SAYS — the paths the plan still
 owes, by name. `DeletePreflightNamesTheSilentDescendantTest` pins §4: a subtree whose middle

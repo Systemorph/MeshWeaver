@@ -65,6 +65,17 @@ public enum BundleAdoptionKind
     /// archive" is a real defect that an inference from emptiness would silence.</para>
     /// </summary>
     NothingToAdopt,
+
+    /// <summary>
+    /// 🚨 The attempt was NOT MADE because this process runs a closed type set
+    /// (<c>Mesh:ClosedTypeSet=true</c>, <c>Doc/Architecture/ClosedTypeSet</c>): it adopts no database
+    /// NodeType and compiles none in its place, so nothing was fetched. <b>Not a miss</b> — and
+    /// deliberately not <see cref="NothingToAdopt"/> either, which is a statement about a bundle that
+    /// WAS read and declared no NodeTypes. This one says nothing about the package's contents (it
+    /// may carry many NodeTypes); it says the policy made the question moot, and the ledger renders
+    /// it as such rather than folding it into "carried no NodeTypes".
+    /// </summary>
+    NotApplicable,
 }
 
 /// <summary>
@@ -152,7 +163,8 @@ public sealed record BundleAdoptionOutcome(
     /// reading as misses on 2026-09-12 while every one of them had landed correctly.</para>
     /// </summary>
     public bool IsMiss =>
-        Kind is not (BundleAdoptionKind.Adopted or BundleAdoptionKind.NothingToAdopt)
+        Kind is not (BundleAdoptionKind.Adopted or BundleAdoptionKind.NothingToAdopt
+            or BundleAdoptionKind.NotApplicable)
         || Adopted < Offered;
 
     /// <summary>One line, for a log or a health payload.</summary>
@@ -164,6 +176,9 @@ public sealed record BundleAdoptionOutcome(
             $"{PluginId}: adopted only {Adopted}/{Offered} — the rest compile here",
         BundleAdoptionKind.NothingToAdopt =>
             $"{PluginId}: no NodeTypes to adopt"
+            + (string.IsNullOrWhiteSpace(Reason) ? string.Empty : $" ({Reason})"),
+        BundleAdoptionKind.NotApplicable =>
+            $"{PluginId}: not attempted"
             + (string.IsNullOrWhiteSpace(Reason) ? string.Empty : $" ({Reason})"),
         _ => $"{PluginId}: {Kind}"
              + (string.IsNullOrWhiteSpace(Reason) ? string.Empty : $" ({Reason})"),
@@ -240,9 +255,15 @@ public sealed class BundleAdoptionLedger
         // no NodeTypes invites the reader to conclude 25 packages were served; saying how many had
         // nothing to serve is what makes the remaining number readable.
         var nothing = all.Count(o => o.Kind is BundleAdoptionKind.NothingToAdopt);
-        var nothingSuffix = nothing == 0
-            ? string.Empty
-            : $" ({nothing} carried no NodeTypes to adopt)";
+        // The policy-skipped attempts are named APART: they fetched nothing, so they say nothing
+        // about what the packages carry — folding them into "carried no NodeTypes" would state a
+        // denominator nobody measured.
+        var notApplicable = all.Where(o => o.Kind is BundleAdoptionKind.NotApplicable).ToArray();
+        var nothingSuffix = (nothing == 0 ? string.Empty : $" ({nothing} carried no NodeTypes to adopt)")
+            + (notApplicable.Length == 0
+                ? string.Empty
+                : $" ({notApplicable.Length} not attempted: "
+                  + $"{notApplicable[0].Reason ?? "adoption does not apply to this process"})");
         if (misses.Length == 0)
             return $"{all.Count} adoption attempt(s), {adopted} assembly/assemblies adopted, "
                 + $"no misses{nothingSuffix}";

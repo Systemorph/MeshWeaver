@@ -5,6 +5,8 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Azure Repos push (MeshWeaver#5248): WorkloadIdentityCredential mints the Entra token. -->
+    <PackageReference Include="Azure.Identity" />
     <PackageReference Include="Octokit" />
     <PackageReference Include="Octokit.Reactive" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />

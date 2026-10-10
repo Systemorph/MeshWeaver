@@ -755,6 +755,17 @@ public static class DeploymentPortalConfig
         Set("PluginCatalog__DefaultUpdatePolicy", string.IsNullOrWhiteSpace(d.ModuleUpdatePolicy) ? null : d.ModuleUpdatePolicy!.Trim());
         SetBool("Modules__AutoRecycleOnStaleBuild", d.AutoRecycleOnStaleBuild);
         SetBool("Access__DenyAnonymous", d.DenyAnonymous);
+        if (d.ApprovalStepUp is { } stepUp)
+        {
+            SetBool("Authentication__StepUp__Enabled", stepUp.Enabled);
+            Set("Authentication__StepUp__Entra__AuthenticationContext", stepUp.EntraAuthenticationContext);
+            Set("Authentication__StepUp__Entra__TenantId", stepUp.EntraTenantId);
+            SetBool("Authentication__StepUp__Entra__RequireAmr", stepUp.EntraRequireAmr);
+            Set("Authentication__StepUp__Entra__PhishingResistantAmr", stepUp.EntraPhishingResistantAmr);
+            Set("Authentication__StepUp__MaxAuthAgeSeconds", stepUp.MaxAuthAgeSeconds?.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            Set("Authentication__StepUp__ReceiptLifetimeSeconds", stepUp.ReceiptLifetimeSeconds?.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            SetBool("Authentication__StepUp__AllowTotpFallback", stepUp.AllowTotpFallback);
+        }
         foreach (var (slot, assembly) in ModuleSlots(d))
             Set($"Modules__Required__{slot}", assembly);
         // 🚨 Rendered only when the record CLAIMS it, and never as "false": the reader takes an

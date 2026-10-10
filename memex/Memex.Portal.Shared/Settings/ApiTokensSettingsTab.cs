@@ -117,6 +117,12 @@ public static class ApiTokensSettingsTab
                             ctx.Host.UpdateData(resultDataId, host.Localize("apiTokens.needLabel"));
                             return;
                         }
+                        // Reserved for tokens the OAuth sign-in issues (OAuthTokenLifetime).
+                        if (OAuthTokenLifetime.IsReservedLabel(label))
+                        {
+                            ctx.Host.UpdateData(resultDataId, host.Localize("apiTokens.reservedLabel"));
+                            return;
+                        }
 
                         DateTimeOffset? expiresAt = expiryDays > 0
                             ? DateTimeOffset.UtcNow.AddDays(expiryDays)

@@ -108,32 +108,73 @@ internal static class RegistryAnswerDeadline
         var clock = scheduler ?? DefaultScheduler.Instance;
         return Observable.Defer(() =>
         {
+            // 🚨 Everything the refusal needs from the REQUEST is read HERE, at subscribe — while the
+            // request is alive — and never inside the timeout. The timeout fires on a timer thread,
+            // possibly after the client has hung up and the host has disposed the request's feature
+            // collection; reading `http.Request.Method` there threw `ObjectDisposedException:
+            // IFeatureCollection has been disposed` (fleet registry, 2026-10-09 20:03:29Z/20:03:32Z),
+            // the late-fault shape of #5999 in the deadline's own write path.
+            var request = new RefusedRequest(http.Request.Method, http.Request.Path.ToString(), http.RequestAborted);
             var remaining = budget - stages.Elapsed;
             if (remaining < TimeSpan.Zero)
                 remaining = TimeSpan.Zero;
             return answer.Take(1).Timeout(remaining,
-                Observable.Defer(() => Observable.Return(Unanswered(http, stages, budget, retryAfterSeconds, logger))),
+                Observable.Defer(() => Observable.Return(Unanswered(request, stages, budget, retryAfterSeconds, logger))),
                 clock);
         });
     }
 
     private static IResult Unanswered(
-        HttpContext http, RegistryRequestStages stages, TimeSpan budget, int retryAfterSeconds, ILogger? logger)
+        RefusedRequest request, RegistryRequestStages stages, TimeSpan budget, int retryAfterSeconds, ILogger? logger)
     {
         var account = stages.Describe();
-        logger?.LogWarning(
-            "Plugin registry: {Method} {Path} produced no answer within {Budget:F1} s of arriving — answering "
-            + "503 + Retry-After instead of holding the connection open with nothing written. {Account}",
-            http.Request.Method, http.Request.Path, budget.TotalSeconds, account);
-        http.Response.Headers.RetryAfter = retryAfterSeconds.ToString(CultureInfo.InvariantCulture);
-        return Results.Json(
-            new
-            {
-                error = $"The registry could not answer within {budget.TotalSeconds:F1} s — retry shortly. "
-                    + "This says nothing about your key, your grant or the package.",
-                waitingOn = stages.Pending(),
-            },
-            statusCode: StatusCodes.Status503ServiceUnavailable);
+        if (request.Aborted.IsCancellationRequested)
+            // The client is already gone: nothing will be written, so this is not a refusal anybody
+            // receives — but the stage account is still the reading the incident needs.
+            logger?.LogInformation(
+                "Plugin registry: {Method} {Path} produced no answer within {Budget:F1} s of arriving, and the "
+                + "client had already disconnected — nothing is written. {Account}",
+                request.Method, request.Path, budget.TotalSeconds, account);
+        else
+            logger?.LogWarning(
+                "Plugin registry: {Method} {Path} produced no answer within {Budget:F1} s of arriving — answering "
+                + "503 + Retry-After instead of holding the connection open with nothing written. {Account}",
+                request.Method, request.Path, budget.TotalSeconds, account);
+        // The Retry-After header is written when the result EXECUTES, against the context the host
+        // hands it — so a refusal whose client has gone never touches a disposed response.
+        return new RetryAfterResult(
+            Results.Json(
+                new
+                {
+                    error = $"The registry could not answer within {budget.TotalSeconds:F1} s — retry shortly. "
+                        + "This says nothing about your key, your grant or the package.",
+                    waitingOn = stages.Pending(),
+                },
+                statusCode: StatusCodes.Status503ServiceUnavailable),
+            retryAfterSeconds);
+    }
+
+    /// <summary>What the refusal needs from the request, captured while the request was alive.</summary>
+    private sealed record RefusedRequest(string Method, string Path, CancellationToken Aborted);
+}
+
+/// <summary>
+/// A refusal that carries its <c>Retry-After</c> to the moment it is written: the header goes on the
+/// response the host executes it against, never on a context captured earlier (#4963).
+/// </summary>
+internal sealed class RetryAfterResult(IResult inner, int retryAfterSeconds) : IResult, IStatusCodeHttpResult
+{
+    /// <summary>The seconds the client is told to wait before asking again.</summary>
+    public int RetryAfterSeconds { get; } = retryAfterSeconds;
+
+    /// <inheritdoc />
+    public int? StatusCode => (inner as IStatusCodeHttpResult)?.StatusCode;
+
+    /// <inheritdoc />
+    public Task ExecuteAsync(HttpContext httpContext)
+    {
+        httpContext.Response.Headers.RetryAfter = RetryAfterSeconds.ToString(CultureInfo.InvariantCulture);
+        return inner.ExecuteAsync(httpContext);
     }
 }
 

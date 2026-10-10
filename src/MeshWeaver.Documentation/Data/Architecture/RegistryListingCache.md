@@ -88,6 +88,44 @@ up — it bounds the staleness of a cache; it is not a bound placed over anythin
 malformed value falls back to the default rather than to "off": a typo must not silently restore the
 per-request read.
 
+## An expired listing is still the answer — the re-read runs behind it (#4963)
+
+🚨 **A request never waits for a re-read of a listing the registry already holds.** Past the window,
+or after a green build of its repository, the held listing answers at once and ONE revalidating read
+is started behind it; its answer replaces the held one when it lands. Only a key that has never been
+read makes its caller wait, and concurrent first callers share that read.
+
+**What forced it, measured on the fleet registry on 2026-10-09** (governed `Logs` on the control
+instance, `Ops/Actions/sevm-20261009-sourcelisting`, `Ops/Actions/sevm-20261009-2006-cloud-registry-deadline-105m`):
+the answer deadline refused **123** `GET /api/plugins` requests in 110 minutes with every source
+listing still running, for example *"Still waiting on: source listing 'Plugins' (running 24.9 s);
+source listing 'Education' (running 24.9 s); … 'SocialMedia' (running 24.9 s)"*, and **124** index and
+bundle requests with *"Still waiting on: package origin anchor (running 25.0 s)"*. In both cases
+authentication and every other stage had finished in well under a second. Each expired listing had
+been dropped, so the request that found it waited for the re-read. A re-read of all five sources
+queues its `git` processes on the shared `Process` pool beside GitSync, and that wait outlasted the
+25 s budget. The data was there the whole time.
+
+The **entitlement anchor** (`PackageOriginAnchor`), which the bundle index decides grants against, had
+the same shape one layer up. Every read past its 60 s window listed every source with the request
+waiting, and a non-authoritative snapshot was never reused at all. It now answers from the snapshot it
+holds the same way: one shared re-listing, released when it settles. A window of `0` still means no
+reuse.
+
+**What it does not loosen.** The window says how long a read may be reused before the source is asked
+again. It never meant that a caller must wait for the source. The worst staleness is unchanged in
+kind: the window plus one read's duration, which a waiting caller also got, minus the wait. Three
+behaviours hold it to that:
+
+- A read that started **before** a green build lands as stale, so the next request reads again.
+- A **failed** re-read keeps the held listing in service and is logged with the listing's age. The
+  entry stays expired, so the next request asks again.
+- A re-read still in flight after a whole window is named in the log, and a new one starts beside it.
+
+`PackageListingCacheTest` and `PackageOriginAnchorAnswersFromItsSnapshotTest` pin this behaviour. Both
+are red against the previous code ("emitted nothing at all" in 12 s). Their negative controls show
+that a key with nothing held does wait for its source.
+
 ## Where it lives
 
 **A mesh-scoped singleton**, registered by `AddPluginCatalog` — never static
@@ -102,8 +140,9 @@ cache and gets the source unchanged.
 
 ## The other half — what ONE read costs
 
-A cache changes **how often** the repository is read. It does not change what a read costs, and the
-first request after every eviction or window expiry still pays it in full, on a page-facing request.
+A cache changes **how often** the repository is read. It does not change what a read costs. Before
+#4963 the first request after every eviction or window expiry paid that cost in full, on a page-facing
+request; now only the first read of a key does, and every re-read pays it in the background.
 So the same issue has a second half, and it is the one the 2026-08-26 comment did not name.
 
 **The listing was transferring the whole repository to read its manifests.** `ListPackages` asked
