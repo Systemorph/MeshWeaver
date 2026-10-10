@@ -911,60 +911,20 @@ jobs:
         tar -I 'zstd --long=27' -xf "build-output-${{ matrix.shard }}.tar.zst"
         rm -f "build-output-${{ matrix.shard }}.tar.zst"
         df -h / | tail -1 | awk '{print "disk after extract: " $4 " free of " $2}'
-    # ── Acquire the Testcontainers images BEFORE the tests, as infrastructure ──
-    # 🚨 This step exists so a Docker Hub outage can never again masquerade as a
-    # mass TEST failure. Every PostgreSql fixture is a COLLECTION fixture, so when
-    # the image cannot be pulled, `InitializeAsync` throws and xUnit reports the
-    # failure against every test in the collection: run 31137723323 shard 5 logged
-    # 412 [FAIL]s, all of them the identical
-    #   DockerApiException: Get "https://registry-1.docker.io/v2/": context deadline exceeded
-    # and NOT ONE a real defect. That shape is actively harmful — it reds the merge
-    # gate with a plausible-looking access-control failure list that cannot be
-    # reproduced locally (where the image is already in the local store), and it
-    # cost a full debugging session chasing tests that were never broken.
+    # ── No container image is pulled here — on purpose ────────────────────────
+    # 🚨 This job used to pre-pull `pgvector/pgvector:pg17` from Docker Hub, anonymously, on every
+    # shard. Since the Postgres suites left core (the test-move tranches, #2847 and its successors)
+    # NO core suite starts a container: nothing references Testcontainers.PostgreSql, and the one
+    # project naming MeshWeaver.Testcontainers (Memex.Portal.Shared.Test) exercises readiness logic
+    # against an in-process host. So the pull fetched an image nothing used — and on 2026-10-09 it
+    # was the ONLY red of six shards × several PRs (#6381 among them), Docker Hub answering
+    # `toomanyrequests` to the runner pool's shared egress IP. Retrying a per-IP window is not a
+    # fix; not asking is.
     #
-    # Pulling here instead makes the dependency explicit and the diagnosis instant:
-    # the registry is a THIRD-PARTY fetch, so it gets bounded retries with backoff
-    # (a transient blip is not a code defect and must not be reported as one), and
-    # if it still cannot be fetched the shard fails HERE with an unambiguous infra
-    # error instead of 412 phantom test results.
-    #
-    # Testcontainers then finds the image in the local store and starts it without
-    # touching the network. Keep this list in sync with the fixtures — grep for
-    # `new PostgreSqlBuilder(` / `.WithImage(`.
-    - name: "Pre-pull Testcontainers images (infra, not a test)"
-      run: |
-        set -uo pipefail
-        # Only the images the fixtures name explicitly. Testcontainers' OTHER
-        # implicit Docker Hub pull — the ryuk resource reaper — is not listed
-        # because it is DISABLED for CI instead (see TESTCONTAINERS_RYUK_DISABLED
-        # on the next step): the runner VM is discarded wholesale after the job,
-        # so there is nothing for a reaper to reap, and not pulling it removes a
-        # second registry dependency rather than adding a second thing to retry.
-        # Its tag is also a function of the Testcontainers package version, so
-        # pinning it here would silently rot.
-        images="pgvector/pgvector:pg17"
-        rc=0
-        for img in $images; do
-          ok=0
-          for attempt in 1 2 3 4 5; do
-            if docker image inspect "$img" >/dev/null 2>&1; then
-              echo "$img: already in the local store"; ok=1; break
-            fi
-            if docker pull --quiet "$img"; then
-              echo "$img: pulled on attempt $attempt"; ok=1; break
-            fi
-            # Backoff: 5s, 10s, 20s, 40s. Docker Hub blips are seconds-to-minutes.
-            delay=$((5 * 2 ** (attempt - 1)))
-            echo "$img: pull attempt $attempt failed; retrying in ${delay}s" >&2
-            sleep $delay
-          done
-          if [ $ok -eq 0 ]; then
-            echo "::error::could not pull $img after 5 attempts — this is a REGISTRY/INFRA failure, not a test failure. Do not chase the tests that would have reported it."
-            rc=1
-          fi
-        done
-        exit $rc
+    # A suite that needs a Docker Hub image again does NOT restore an anonymous pull: it declares
+    # the image in .github/dockerhub-mirror.list, resolves it with
+    # `.github/scripts/dockerhub-mirror.sh ref <name>:<tag>` and logs in to ghcr.io with the job's
+    # GITHUB_TOKEN (`packages: read`) — Doc/Architecture/DockerHubInCi.
     # ── Acquire the headless browser BEFORE the tests, as infrastructure ──────
     # 🚨 Since #1230 the PDF export IS a headless browser: the document model was replaced
     # by CSS Paged Media printed by Chromium, so every PDF test — the renderer's own, and the
@@ -2341,6 +2301,24 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/ci-fresh-merge.py --self-test
 
+    # main-cd's core image-relevance classifier (policy image-rebuild-own-inputs, #4688) runs on
+    # main only, so its first execution would be in production. Proven both ways here: tests /
+    # agent config / root prose / standalone clients skip, and src, .github, root build files,
+    # samples, an unknown top-level entry, a rename out of src, a truncated compare and an empty
+    # list all rebuild.
+    - name: "A core change rebuilds images only when it touches an image input (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/core-image-relevance.py --self-test
+
+    # The publish-bake lane's previous-epoch leg (policy bake-per-live-identity, #3583) reads the
+    # platform-compatibility declaration to decide whether a second live identity exists. No break
+    # is declared today, so the leg's real path would first run in a satellite after a break —
+    # proven here instead: no break / retired ⇒ nothing to bake; a break ⇒ its ceiling; a break
+    # with no ceiling ⇒ an error, never "nothing to bake".
+    - name: "The previous-epoch bake leg reads the declared break, and refuses a malformed one (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/previous-epoch-ceiling.py --self-test
+
     # The doc-gate job's "every Test/ folder ran" check (check-tests-area-verdicts.py) reads the
     # gate's stdout, so a changed log format would make it see nothing. Its self-test pins both
     # directions — inputs that must PASS, and inputs that must FAIL (skipped, failed, no count,
@@ -2435,6 +2413,15 @@ jobs:
     - name: "The host-crash recorder writes a dead host into its trx, directory and all (self-test)"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/record-host-crash.py --self-test
+
+    # The writer of an image's closure as mesh data (#4066, policy `image-closure-as-mesh-data`):
+    # main-cd runs it over the publish directories the reference-set assertion just accepted. Both
+    # directions offline — the record's denominator and per-file hashes, and every refusal (a
+    # tag-shaped digest, no surface manifest, an unknown platform, disagreeing identities, a body
+    # over the inbox cap) with the accepted control beside it.
+    - name: "An image's closure record carries its denominator and refuses what it cannot vouch for (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/image-closure-record.py --self-test
 
     # The lookup a standing tracking issue is found by (chart-drift.yml). It scanned the 200 newest
     # issues, so the long-lived sentinel aged out of the window and the workflow opened a fresh one
@@ -2578,6 +2565,14 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/ci-failure-ledger.py --self-test
 
+    # The fleet-unarmed alert main-cd's `arm` job runs (MeshWeaver#6042): stale opens ONE issue,
+    # fresh closes it, refused and waiting sets are named apart, the threshold is a bound and not a
+    # default, and it only ever touches an issue it opened. Proven here so a PR that breaks it is red
+    # before the first production `arm` run reads it.
+    - name: "The fleet-unarmed alert can say no (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/fleet-unarmed-alert.py --self-test
+
     # 🚨 The CI object store (ci-artifact-store.py) — the seam that lets a module bundle's DURABLE
     # copy live on our own infra instead of in GitHub Actions storage (maintainer, 2026-09-17: "we
     # still incur cost for github actions … please see that it goes to 0"). Core owns the script and
@@ -2677,6 +2672,13 @@ jobs:
     - name: "An unanswered or unreviewed pull request goes red — the check can say no (self-test)"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-review-answered.py --self-test
+
+    # issue-text-names.yml runs only on a schedule, so a pull request that breaks the scanner (a Pass
+    # read as green, a NotChecked swallowed) would go red a day later on nobody's change. Proving it
+    # here puts that red on the pull request that caused it (MeshWeaver.Plugins#2845). No network.
+    - name: "An unchecked issue-text scan goes red — only Filed is green (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}
+      run: python3 .github/scripts/scan-issue-text-names.py --self-test
 
     # 🚨 THE TWO SCRIPTS THAT DECIDE WHAT A SATELLITE'S PULL REQUEST DOES *NOT* REBUILD, proven
     # here because core is the repo that OWNS them — every satellite gets them fetched at its

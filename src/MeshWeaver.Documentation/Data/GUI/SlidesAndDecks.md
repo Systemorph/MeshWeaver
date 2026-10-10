@@ -75,6 +75,17 @@ The Deck's views are automatic:
 
 Presenting is standard navigation — no bespoke messaging. The stage is a click-to-advance surface: a click renders a `RedirectControl` to the next slide (staying in Present mode when presenting), the same href/redirect mechanism every other area uses. Prev/Next buttons in the presenter bar navigate the same way.
 
+**Keyboard.** Both views bind the keys through one control, `SlideShowControl`, in two modes:
+
+| | Present | Content (the normal page view) |
+|---|---|---|
+| Next slide | → ↓ PageDown Space Enter | → ↓ PageDown |
+| Previous slide | ← ↑ PageUp | ← ↑ PageUp |
+| First / last | Home / End | not bound — they scroll the page |
+| Leave | Esc → the deck | not bound |
+
+The Content view sets `PageMode = true`, and a page-mode driver yields to the page: a key pressed while focus is in an input, textarea, select, contenteditable, a Monaco editor or an arrow-key widget (tree, menu, listbox, grid, tablist, slider) is never taken, nor is a key pressed with Alt, Ctrl or Meta (Alt+← is the browser's Back) or one another control already handled. Present mode keeps its full key set unchanged.
+
 # Course usage — a Deck can sequence module pages too
 
 The manifest is not limited to slides. A Deck can order **any** child pages — the Markdown module pages of a course, for instance — giving the course a side-nav and a linear sequence from a single node, without touching each page. List the module-page ids in the deck's `Slides`, in teaching order, and the deck's side-nav becomes the course TOC + walk-through. (Slide-to-slide click-to-advance is a Slide-view feature; module pages get the side-nav and ordered sequence.)

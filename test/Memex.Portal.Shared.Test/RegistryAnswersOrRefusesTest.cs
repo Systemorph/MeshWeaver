@@ -72,7 +72,10 @@ public class RegistryAnswersOrRefusesTest(ITestOutputHelper output) : MonolithMe
 
         var status = Assert.IsAssignableFrom<IStatusCodeHttpResult>(result);
         Assert.Equal(StatusCodes.Status503ServiceUnavailable, status.StatusCode);
+        // The header is written when the refusal EXECUTES, against the context the host hands it.
+        await Execute(result, http);
         Assert.Equal("30", http.Response.Headers.RetryAfter.ToString());
+        Assert.Equal(StatusCodes.Status503ServiceUnavailable, http.Response.StatusCode);
         var line = Assert.Single(log.Lines);
         Assert.Contains("produced no answer within", line, StringComparison.Ordinal);
         Assert.Contains("Still waiting on: module activation list (module records on the share)", line, StringComparison.Ordinal);
@@ -97,6 +100,60 @@ public class RegistryAnswersOrRefusesTest(ITestOutputHelper output) : MonolithMe
         Assert.Same(answer, result);
         Assert.Empty(log.Lines);
         Assert.True(string.IsNullOrEmpty(http.Response.Headers.RetryAfter.ToString()));
+    }
+
+    /// <summary>
+    /// 🚨 The deadline firing AFTER the client hung up must not touch the request (#4963's incidental
+    /// defect, fleet registry 2026-10-09 20:03:29Z/20:03:32Z: <c>ObjectDisposedException:
+    /// IFeatureCollection has been disposed</c> at <c>DefaultHttpRequest.get_Method()</c>). The repro is
+    /// the production order: the request is subscribed while alive, the client aborts, the host
+    /// disposes the context's features, THEN the timer fires. The refusal must still be composed, and
+    /// the line must say the client had gone instead of claiming a 503 was answered.
+    /// </summary>
+    [Fact]
+    public async Task TheDeadlineFiringAfterTheClientLeft_TouchesNoDisposedRequest_AndSaysTheClientHadGone()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        using var abort = new CancellationTokenSource();
+        var http = new DefaultHttpContext { RequestAborted = abort.Token };
+        http.Request.Method = "GET";
+        http.Request.Path = "/api/plugins/bundles/index.json";
+        var stages = RegistryAnswerDeadline.Stages(http);
+        var log = new CapturingLogger();
+
+        var refusal = Observable.Never<IResult>()
+            .InStage(stages, "package origin anchor")
+            .AnsweredWithin(http, TimeSpan.FromMilliseconds(400), 30, log)
+            .Replay(1);
+        using var connection = refusal.Connect();
+
+        // The client goes, and the host tears the request down — before the budget runs out.
+        abort.Cancel();
+        http.Uninitialize();
+
+        var result = await refusal.Should().Within(TestTimeouts.Quick)
+            .Emit("the deadline must still compose its refusal after the request is gone", cancellationToken: ct);
+
+        Assert.Equal(StatusCodes.Status503ServiceUnavailable, Assert.IsAssignableFrom<IStatusCodeHttpResult>(result).StatusCode);
+        Assert.Empty(log.Lines);
+        var line = Assert.Single(log.Information);
+        Assert.Contains("GET /api/plugins/bundles/index.json", line, StringComparison.Ordinal);
+        Assert.Contains("client had already disconnected", line, StringComparison.Ordinal);
+        Assert.Contains("Still waiting on: package origin anchor", line, StringComparison.Ordinal);
+    }
+
+    /// <summary>Negative control for the test above: the torn-down context it builds really is the
+    /// production shape — reading the request off it throws exactly what the registry logged, so the
+    /// green above is the capture's and not a context that was never disposed.</summary>
+    [Fact]
+    public void ATornDownRequest_ThrowsOnRead_TheShapeTheRegistryLogged()
+    {
+        var http = new DefaultHttpContext();
+        http.Request.Method = "GET";
+        http.Uninitialize();
+
+        var thrown = Assert.Throws<ObjectDisposedException>(() => http.Request.Method);
+        Assert.Contains("IFeatureCollection", thrown.Message, StringComparison.Ordinal);
     }
 
     /// <summary>The budget runs from the request's ARRIVAL (the auth filter started the ledger), so a
@@ -271,7 +328,11 @@ public class RegistryAnswersOrRefusesTest(ITestOutputHelper output) : MonolithMe
     private sealed class CapturingLogger : ILogger
     {
         private readonly ConcurrentQueue<string> lines = new();
+        private readonly ConcurrentQueue<string> information = new();
+        /// <summary>Warning and above.</summary>
         public IReadOnlyList<string> Lines => lines.ToArray();
+        /// <summary>Information only.</summary>
+        public IReadOnlyList<string> Information => information.ToArray();
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
         public bool IsEnabled(LogLevel logLevel) => true;
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
@@ -279,6 +340,17 @@ public class RegistryAnswersOrRefusesTest(ITestOutputHelper output) : MonolithMe
         {
             if (logLevel >= LogLevel.Warning)
                 lines.Enqueue(formatter(state, exception));
+            else if (logLevel == LogLevel.Information)
+                information.Enqueue(formatter(state, exception));
         }
+    }
+
+    /// <summary>Executes <paramref name="result"/> against <paramref name="http"/> the way the host
+    /// would: with request services and a body to write into.</summary>
+    private static Task Execute(IResult result, DefaultHttpContext http)
+    {
+        http.RequestServices = new ServiceCollection().AddLogging().BuildServiceProvider();
+        http.Response.Body = new System.IO.MemoryStream();
+        return result.ExecuteAsync(http);
     }
 }

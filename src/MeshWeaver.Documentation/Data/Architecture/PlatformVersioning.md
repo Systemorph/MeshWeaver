@@ -1,27 +1,30 @@
 ---
 Name: Platform Versioning (SemVer)
 Category: Architecture
-Description: How platform builds and images are versioned — the move from the 3.0.0-ci.<run> pre-release notation to plain SemVer 3.<minor>.<run> with floating 3-latest / 3.<minor>-latest tags; the one lineage both notations share, every place the old notation is produced or parsed, the migration order, and what a floating tag means for a deployment record.
+Description: How platform builds and images are versioned — every main CD build is a plain SemVer release 3.<minor>.<run> (no channel word), unpublished builds are 3.<minor>.0-dev, with floating 3-latest / 3.<minor>-latest tags; the one lineage shared with the retired 3.0.0-ci.<run> notation, every place a version is produced or parsed, the migration order and the cut-over, and what a floating tag means for a deployment record.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41 13.42 20.58a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><circle cx="7" cy="7" r="1.5"/></svg>
 ---
 
 # Platform Versioning (SemVer)
 
-> **Policy [`platform-semver-versioning`](../PolicyNotProse).** Continuous platform builds are
-> versioned as plain SemVer `<major>.<minor>.<run>`. The patch is the monotonic CD run number. The minor
-> changes only when someone bumps it on purpose, and the major changes only on a declared break. Main
-> builds carry no pre-release label. Images also carry the floating tags `<major>-latest` and
-> `<major>.<minor>-latest`, which the arm step moves forward and never backward. A deployment record
-> follows a version **pattern** resolved against the registry. It never names a floating tag.
+> **Policy [`platform-semver-versioning`](../PolicyNotProse).** Every platform build CD publishes from
+> main is a plain SemVer release `<major>.<minor>.<run>`. The patch is the monotonic CD run number. The
+> minor changes only when someone bumps it on purpose, and the major changes only on a declared break.
+> No version carries a channel word: no `ci`, no `rc`. A build that publishes nothing (pull request,
+> local, a satellite lane compiling core) is `<major>.<minor>.0-dev`. Images also carry the floating
+> tags `<major>-latest` and `<major>.<minor>-latest`, which the arm step moves forward and never
+> backward. A deployment record follows a version **pattern** resolved against the registry. It never
+> names a floating tag.
 
 ## 1. The scheme
 
 | shape | example | what it is | run number (`BuildOrdinal`) |
 |---|---|---|---|
-| `<major>.<minor>.<run>` | `3.1.10050` | a continuous build, the new notation, line ≥ 3.1 | `10050`, the patch |
-| `<major>.<minor>.<run>-edge.<n>` | `3.1.311-edge.311` | an unverified edge build (`edge-images.yml`) | `311`, as before |
-| `<major>.<minor>.0-ci.0` | `3.1.0-ci.0` | a LOCAL source build of the new notation | `0`, never ordered against a publication |
-| `X.Y.Z-ci.<run>` | `3.0.0-ci.9999` | a continuous build, the old notation | `9999` |
+| `<major>.<minor>.<run>` | `3.1.10050` | a main CD build, line ≥ 3.1 (`Directory.Build.props` with `-p:PlatformBuildNumber`, passed only by `main-cd.yml`) | `10050`, the patch |
+| `<major>.<minor>.0-edge.<run>` | `3.1.0-edge.311` | an unverified edge build (`edge-images.yml`, manual) | `311`, the edge lane's own run |
+| `<major>.<minor>.0-dev` | `3.1.0-dev` | any build that publishes nothing: a pull-request run, a local build, a satellite lane compiling core | `0`, never ordered against a publication |
+| `X.Y.Z-ci.0` | `3.0.0-ci.0` | the retired local stamp, read only | `0` |
+| `X.Y.Z-ci.<run>` | `3.0.0-ci.9999` | a continuous build of the retired notation, read only | `9999` |
 | `X.Y.Z-rcN.ci.<run>` | `3.0.0-rc9.ci.7824` | retired labelled line | `7824` |
 | `X.Y.0` / a clean `3.0.x` | `3.1.0`, `4.0.0`, `3.0.0` | a floor or a deliberately cut release | none; compared by its numeric core |
 | `<major>-latest`, `<major>.<minor>-latest` | `3-latest`, `3.1-latest` | floating pointers | never a candidate |
@@ -45,6 +48,52 @@ core, so a floor that says "needs the 3.1 line" holds a `3.0.0-ci.*` portal and 
 it is as "clean" as a release. `VersionSelect.PickTargets` therefore keeps any tag with a run number out
 of `Stable`, so Stable keeps following exactly what it follows today: deliberately cut releases
 (`3.0.0`, `3.1.0`, …), which `release.yml` promotes. See decision 1 in §6.
+
+### Why the line is 3.1, and why the patch continues the run number
+
+The first build of the minter is `3.1.<run>` with `<run>` the next main-cd run (≈ 10330 at the cut-over).
+Two other choices were considered and rejected:
+
+- **`3.0.<run>`.** Every deployed reader already reads a clean `3.0.x` as a PROMOTION with no run
+  number, so `3.0.10331` would land in the promotion band and lose to every `3.0.0-ci.*` set. Moving
+  the boundary would need a second fleet-wide roll of the readers before the minter could flip.
+- **Restarting the patch at 1** (`3.1.1`, `3.1.2`, …). SemVer would still order `3.1.1` above
+  `3.0.0-ci.10330`, but the self-updater, retention, floors and the never-backwards guards rank by RUN
+  NUMBER (one lineage, #3542), and `1 < 10330`: every Continuous install would freeze on its last
+  `3.0.0-ci` set. Continuing the run number keeps SemVer and the lineage in agreement, so no reader has
+  to choose between them.
+
+### The cut-over: what keeps working
+
+- **Existing images and floors.** `3.0.0-ci.<n>` tags stay in the registries and keep their order:
+  `3.0.0-ci.10330 < 3.1.10331` by run number and by SemVer. A floor stamped `3.0.0-ci.10317` is met by
+  every `3.1.<run>`; a floor `3.1.<run>` holds a portal still on the old notation until it rolls.
+- **Patterns.** `3.*` (every Systemorph record, Memex step 3) admits both notations. A record still on
+  `3.0.0-ci*` admits NO new build and freezes silently — the PartnerRe estate's records
+  (`Systemorph/PartnerRe.Memex`) are widened in their own repository.
+- **Mixed fleets.** A portal decides WHICH tag through its own `VersionSelect` and hands it to the
+  control lane. A portal whose image predates the step-1 readers (merged 2026-10-07 15:01Z) ranks
+  `3.1.<run>` below every `3.0.0-ci.*` set, so it takes TWO hops: first the newest old-notation set
+  (which carries the readers), then the new notation. Measured at the cut-over: control and memex had
+  the readers; memex-cloud (`3.0.0-ci.10148`) and pearl did not, and were already not rolling for an
+  unrelated reason. The control lane's own lag check (`SelfUpdateRouting.RollInsteadOfRestart`, Plugins
+  step 2) reads both notations and opens a roll to control's newest seen tag on a restart-pending.
+- **Binding identity.** `AssemblyVersion` moves `3.0.0.0` → `3.1.0.0` with the line, as designed
+  (`PlatformBinding.MayBind`): every module compiled against `3.0.0.0` binds on a 3.1 portal by
+  roll-forward, and a module compiled on a 3.1 build meeting a lagging 3.0 portal is declined loudly
+  as a binding conflict — the same answer its floor gives. MeshWeaver.Plugins and
+  MeshWeaver.SocialMedia derive their AssemblyVersion from the platform's PlatformVersion, so they
+  follow without a change of their own. (Pinning it per major was tried in review and rejected: it
+  changes the expression those repositories verify, turning a version bump into a paired change.)
+- **CD targets the newest VOUCHED commit, not main's tip.** main-cd's workflow file is main's, but
+  the tree it builds is the gate's target, which can predate the minter for a tick or two after it
+  merges. Such a run mints the retired `<line>-ci.<run>` with THIS run's number — still one lineage —
+  and main-cd's shape assertion accepts exactly that, never a `-dev` or another run's number.
+  Measured on the cut-over: main-cd #10351 targeted `c6310ff` (the minter's tip `118dd05` had no
+  completed required check yet), composed `3.0.0-ci.10351`, and the first version of the assertion
+  refused it.
+- **The release.** `release.yml` promotes a `<major>.<minor>.<run>` build by adding `<major>.<minor>.0`,
+  moves no pointer for it, and still promotes a retired-notation set the old way.
 
 ## 2. What `3-latest` means for consumers
 
@@ -73,8 +122,10 @@ this change teaches the place both notations. "Owed" means a later step of the m
 
 | place | role | status |
 |---|---|---|
-| `Directory.Build.props:122` `PlatformVersion` = `3.0.0`; `:319` `Version = $(PlatformVersion)-ci.$(_CiBuildNumber)` | **P**: the minter. Every image tag, `MESHWEAVER_PLATFORM_VERSION` and package version comes from here (`main-cd.yml` reads it with `-getProperty:Version`) | owed: minter step (§4 step 4) |
-| `test/MeshWeaver.Documentation.Test/PlatformVersionSchemeGuard.cs` | **R**: the "two shapes" guard (`X.Y.Z-ci.<n>` / `X.Y.Z`) | owed, together with the minter |
+| `Directory.Build.props` `PlatformVersion` = `3.1.0`; `Version` = `<major>.<minor>.$(PlatformBuildNumber)` / `<major>.<minor>.0-dev` | **P**: the minter. Every image tag, `MESHWEAVER_PLATFORM_VERSION` and package version comes from here | **handled** (step 4) |
+| `.github/workflows/main-cd.yml` (4 × `-getProperty:Version`) | **P**: passes `-p:PlatformBuildNumber=$GITHUB_RUN_NUMBER` and asserts `<major>.<minor>.<run>` before tagging | **handled** (step 4) |
+| `test/MeshWeaver.Documentation.Test/PlatformVersionSchemeGuard.cs` | **R**: the scheme guard: line, main build, release, `-dev`, binding identity | **handled** (step 4) |
+| `src/MeshWeaver.Plugin.Packaging/PlatformReleaseOrder.cs` `SourceBuildLabel` | **R**: `-dev` reads as run 0 (the retired `-ci.0` did) | **handled** (step 4) |
 | `src/MeshWeaver.Plugin.Packaging/PlatformReleaseOrder.cs:68,92,122` | **R**: `BuildOrdinal`, `Compare`, `Newest`, the ONE order every C# caller uses (`VersionSelect`, `PlatformFloor`, `PlatformCompatibility.ProducerIsNewer`, `TargetSet`, `SealedPublicationIndex`, `ShippedPrebuiltBundles`, `PrebuiltBundleRetention`) | **handled**: `SemVerEraStart`, `IsSemVerBuild` |
 | `memex/Memex.Portal.Shared/SelfUpdate/VersionSelect.cs:211` | **R**: Stable must not admit a run-numbered clean tag | **handled** |
 | `memex/Memex.Portal.Shared/SelfUpdate/VersionSelect.cs` `ResolveChannel` advisory | **R/P**: tells the operator which pattern to set | **handled**: names `3.*` |
@@ -90,8 +141,8 @@ this change teaches the place both notations. "Owed" means a later step of the m
 | `.github/scripts/assert-bake-floor.py` `parse` | **R**: the seal-time floor gate (`node-repo-publish-bake.yml`) orders a bundle's floor against the platform version | **handled**: SemVer-era patch is the ordinal; mixed-era pairs self-tested |
 | `.github/workflows/node-repo-gate.yml:844-847` | **R**: `platform-set` input shape | **handled**, executed by `test-gate-lane-forwards-the-callers-set.py` |
 | `.github/workflows/node-repo-publish-bake.yml:2106` | **R**: released-version shape | already accepts `X.Y.Z` |
-| `.github/workflows/edge-images.yml:74-76` | **P**: edge tag; for the new notation it falls through to `<v>-edge.<run>` | already correct |
-| `.github/workflows/release.yml:197` | **R**: a `v*` tag promotes the newest `X.Y.Z-ci.<n>` of its line | owed, together with the minter: decision 2 in §6 |
+| `.github/workflows/edge-images.yml` | **P**: edge tag `<major>.<minor>.0-edge.<run>`, spelled from the line | **handled** (step 4) |
+| `.github/workflows/release.yml` | **R/P**: a `v*` tag promotes the build of its line in either notation; no pointer move for the new one | **handled** (step 4): decision 2 in §6 |
 | `.github/acr-retention/*`, comments across `main-cd.yml` | prose and fixtures | history; no change |
 
 ### MeshWeaver.Plugins
@@ -140,25 +191,26 @@ Memex `docs/*`) is updated in the step that changes the behaviour it describes.
 
 Readers go first, then the data, then the minter. Each step is safe on its own. The tests in §5 show it.
 
-1. **Core readers** (this change): `PlatformReleaseOrder`, `VersionSelect` (Stable), the resolver,
+1. **Core readers** (done, MeshWeaver#6208): `PlatformReleaseOrder`, `VersionSelect` (Stable), the resolver,
    `arm-promoted-set.py`, `platform-version.py`, `main-cd.yml`'s readers, the gate lane. It merges
    and **rolls to every portal, the control instance included**. Until a portal runs this reader it
    ranks `3.1.N` below every `3.0.0-ci.*`, because a clean tag without a run number used to fall into
    the promotion band.
-2. **Plugins readers**: `SelfUpdateRouting.BuildOrder`, `RollGates`, `ImageLine`,
+2. **Plugins readers** (done, MeshWeaver.Plugins#3091): `SelfUpdateRouting.BuildOrder`, `RollGates`, `ImageLine`,
    `ModuleInventoryContent`, `DeploymentStatus` delegate to `PlatformReleaseOrder`.
    `InstanceComposition` seeds `3.*` / `3-latest`. The freeze regexes, `platform-requirement.py`,
    `mesh-floors.py`, `ceiling-adoption.py` and the `ci.yml` floor-stamp gate accept both notations.
    Rolled to the control instance (it hosts the operator and the roll lane).
-3. **Memex data**: every record's `updatePattern` → `3.*`, overlays' `SelfUpdate__DefaultPattern` →
+3. **Memex data** (done, Memex#676): every record's `updatePattern` → `3.*`, overlays' `SelfUpdate__DefaultPattern` →
    `3.*`, seeds → `3-latest`, `check-no-pins.py`, `resolve-line-pointer.sh`,
    `resolve-portal-image.py`, `image-contains.py`, `ci-platform-refresh.py`, `preflight-provision.py`.
    Widening a pattern to `3.*` before any `3.1.N` exists changes nothing. The withdrawn
    `3.1.0-ci.7841` matches the glob but is ranked 7841. The record change goes through the governed
    record path. Nobody edits live records by hand.
-4. **Core minter**: `PlatformVersion` → `3.1.0`, `Version` → `<major>.<minor>.<run>` under CI and
-   `<major>.<minor>.0-ci.0` locally, with the scheme guard rewritten to the new shapes. From this
-   merge on, CD mints `3.1.<run>`, arm moves `3-latest`/`3.1-latest`, and `3.0.0-latest` freezes.
+4. **Core minter**: `PlatformVersion` → `3.1.0`, `Version` → `<major>.<minor>.<run>` for a main CD
+   build (`-p:PlatformBuildNumber`, passed only by main-cd) and `<major>.<minor>.0-dev` for every
+   other build, with the scheme guard rewritten to the new shapes. From this merge on, CD mints
+   `3.1.<run>`, arm moves `3-latest`/`3.1-latest`, and `3.0.0-latest` freezes.
 5. **Plugins minter**: `portal-ai-image.yml` mints the new notation. Floors are stamped as
    `3.<minor>.<run>`.
 6. **Retire** the `3.0.0-ci*` examples in docs, skills and AGENTS files. Leave `3.0.0-latest` frozen
@@ -182,6 +234,19 @@ that verdict is easy to misread.
 - `VersionSelectTest.Stable_NeverSelectsANewNotationBuild`: decision 1 in §6, as implemented.
 - `AFloor_IsOrderedAcrossTheCutOver`: a floor in either notation is ordered against a build in the
   other.
+- `PlatformVersionSchemeGuard` (step 4), through real MSBuild: the line is `<major>.<minor>.0`; a
+  main CD build composes `<major>.<minor>.<run>`; `-p:PublicRelease=true` composes the line; a CIRun
+  build WITHOUT `-p:PlatformBuildNumber` (a pull-request run) and a local build compose
+  `<major>.<minor>.0-dev`; an invalid build number never mints a release version; no composition
+  contains `ci`. Its control arm reintroduces a labelled line
+  and a non-zero patch and requires both to be rejected.
+- `PlatformReleaseOrderTest.TheFirstSemVerBuild_OutranksEveryOldNotationSet` (step 4): the real
+  boundary pair `3.0.0-ci.10330` / `3.1.10331` for `IsNewer`, `Newest`, SemVer, `PlatformFloor` in
+  both directions, and `IsSourceBuild`. `-dev` reads as run 0 and is advisory against every floor.
+- `FailureFromOlderPlatformRedriveTest.AFailureFromTheLastOldNotationBuild_IsRetriedOnce_OnTheFirstSemVerBuild`
+  (step 4): a compile failure stamped on the last old-notation build (`FailedPlatformVersion`, #6349)
+  is retried once on the first new build and never by an older replica; a `-dev` live build never
+  retries.
 - The script self-tests (`platform-version.py`, `arm-promoted-set.py`, `resolve-platform.py`,
   `test-gate-lane-forwards-the-callers-set.py`) check the same table. A negative control on the
   resolver (moving its boundary to 9.9) fails exactly the new-notation cases.

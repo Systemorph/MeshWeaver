@@ -3644,6 +3644,43 @@ public static class MeshExtensions
         var path = capturedRequest.Path;
         var startedAt = DateTime.UtcNow;
 
+        // 🚨 THE CALLER HEARS THAT THE DELETE IS ADVANCING. A recursive delete is sized by the
+        // subtree, and its own bounds already measure the gap between removals rather than the
+        // whole operation (#3392) — but the CALLER's RequestTimeout was still a total-duration cap,
+        // so a delete that outlived it finished, posted its reply, and nobody was waiting: measured
+        // 2026-10-09 on memex, deleting the retired NodeType Crm/Client (hundreds of
+        // `_Activity/compile-*` satellites) failed its governed request at 60 s with "No response
+        // received … DeleteNodeRequest → portal/nodeops-…" and Crm/Client was gone a few seconds
+        // later. Every answered pre-flight leg and every removal is real progress; reported
+        // (sampled, so a wide fan-out costs one message per interval, not one per leaf) as a
+        // RequestProgress, it restarts the caller's deadline, which then fires on silence only.
+        // Posted from the node-operation hub: the root's own per-node hub is disposed by the
+        // commit, and the router must not originate it.
+        var requestProgress = new Subject<string>();
+        // Long-lived until the operation terminates, so a fault is handled INSIDE onNext: Sample
+        // delivers on a timer thread, where a throw would be unhandled, and a failed report must
+        // never fail the delete — the caller's deadline is then simply not restarted.
+        var progressRelay = requestProgress
+            .Sample(DeleteProgressReportInterval)
+            .Subscribe(
+                stage =>
+                {
+                    try
+                    {
+                        issuingHub.ReportRequestProgress(request, stage);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogWarning(ex,
+                            "[DeleteNode] {Path}: could not report progress to the caller {Sender} — "
+                            + "its deadline is not restarted by this report",
+                            path, request.Sender);
+                    }
+                },
+                ex => logger.LogWarning(ex,
+                    "[DeleteNode] {Path}: the progress relay faulted — the caller hears no further "
+                    + "progress", path));
+
         // 🚨 A CASCADE LEG IS NESTED BY CONSTRUCTION, AND ITS BUDGET MUST SAY SO — issue #1198.
         // The recursive delete's commit stage fans one DeleteNodeRequest out per leaf, and every
         // leaf re-enters THIS handler and bounds its own six stages. With one shared constant that
@@ -3973,7 +4010,8 @@ public static class MeshExtensions
                                         var preValidate = capturedRequest.Recursive
                                             ? PreValidateDescendantsObs(
                                                 issuingHub, path, collected.ToDelete, request.AccessContext,
-                                                budget, legBudget, storage, absenceProbeBudget, logger)
+                                                budget, legBudget, storage, absenceProbeBudget, logger,
+                                                progress: requestProgress)
                                             : Observable.Return<(string Path, string Error, NodeDeletionRejectionReason Reason)?>(null);
 
                                         return preValidate.SelectMany(failure =>
@@ -4085,6 +4123,8 @@ public static class MeshExtensions
 
                                         var drainProgress = new Subject<string>();
                                         return drainProgress
+                                            // Every removal is progress the caller is told about.
+                                            .Do(removed => requestProgress.OnNext($"removed {removed}"))
                                             .Select(_ => (IReadOnlyList<string>?)null)
                                             .Merge(DeleteSubtreeUntilDrained(
                                                     meshHub, issuingHub, storage, path, collected.ToDelete,
@@ -4274,6 +4314,8 @@ public static class MeshExtensions
                             });
                     });
             })
+            // The operation has answered (or is about to, from the error arm) — no more progress.
+            .Finally(progressRelay.Dispose)
             .Subscribe(
                 _ => { },
                 ex =>
@@ -4614,6 +4656,15 @@ public static class MeshExtensions
     /// over live descendants.
     /// </summary>
     private const int MaxDeleteDrainPasses = 5;
+
+    /// <summary>
+    /// How often a running delete tells its caller it is still advancing (<see cref="RequestProgress"/>),
+    /// at most. One report per interval in which something advanced — never one per leaf, so a
+    /// 1,400-node cascade costs a handful of messages. Any value well inside the caller's
+    /// <c>RequestTimeout</c> works; it only has to keep the caller's silence clock from reaching it
+    /// while removals continue.
+    /// </summary>
+    private static readonly TimeSpan DeleteProgressReportInterval = TimeSpan.FromSeconds(1);
 
     /// <summary>
     /// Runs <see cref="FanOutDeleteSubtree"/> passes until storage VERIFIES the subtree is
@@ -5251,7 +5302,8 @@ public static class MeshExtensions
         IStorageAdapter storage,
         TimeSpan absenceProbeBudget,
         ILogger logger,
-        bool includeRoot = false)
+        bool includeRoot = false,
+        IObserver<string>? progress = null)
     {
         var descendants = (includeRoot ? allPaths.Add(rootPath) : allPaths)
             .Where(p => includeRoot || !string.Equals(p, rootPath, StringComparison.OrdinalIgnoreCase))
@@ -5339,6 +5391,9 @@ public static class MeshExtensions
             })
             .SelectMany(d =>
             {
+                // An answered leg is progress, whatever it says — the caller is told (see
+                // HandleDeleteNodeRequest's requestProgress).
+                progress?.OnNext($"pre-flight answered {p}");
                 var resp = d.Message as ValidateDeleteResponse;
                 if (resp is null || resp.IsValid)
                     return Observable.Return<(string, string, NodeDeletionRejectionReason)?>(null);

@@ -39,9 +39,12 @@ public class OciRegistryClientTest(ITestOutputHelper output) : MonolithMeshTestB
 
     private readonly FakeOciRegistry registry = new(Host, Key, Repository, BundleBytes);
 
+    /// <summary>A host that would accept the key if it ever got it — the witness that it never does.</summary>
+    private readonly FakeOciRegistry hostile = new("evil.example", Key, Repository, BundleBytes);
+
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
-            .ConfigureServices(s => s.AddSingleton<IHttpClientFactory>(new HostRoutingClientFactory(registry)));
+            .ConfigureServices(s => s.AddSingleton<IHttpClientFactory>(new HostRoutingClientFactory(registry, hostile)));
 
     private OciRegistryClient Client(string key = Key) => new(
         Mesh, Host, Observable.Return(key),
@@ -118,6 +121,33 @@ public class OciRegistryClientTest(ITestOutputHelper output) : MonolithMeshTestB
                 .FirstAsync().Timeout(Budget).Await(ct));
 
         fault.Expected.Should().Be(registry.ManifestDigest);
+    }
+
+    /// <summary>
+    /// 🚨 MeshWeaver#4123 — the token realm is named by the registry's own 401, so a registry approved
+    /// for the key could otherwise send <c>Basic instance:&lt;key&gt;</c> to any host it names. The key
+    /// goes ONLY to the registry's own authority and scheme: a realm on another host, or the same host
+    /// downgraded to http, is refused BEFORE anything is sent there. The positive control is every
+    /// other case in this class, whose realm is the registry's own <c>https://{Host}/v2/token</c>.
+    /// </summary>
+    [Theory(Timeout = 120_000)]
+    [InlineData("https://evil.example/v2/token")]
+    [InlineData("https://cr.example.test.evil.example/v2/token")]
+    [InlineData("http://cr.example.test/v2/token")]
+    public async Task ATokenRealmOffTheRegistrysOwnAuthority_NeverReceivesTheKey(string realm)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        registry.Realm = realm;
+
+        var fault = await Assert.ThrowsAsync<RegistryRefusedException>(() =>
+            Client().GetManifest(Repository, registry.ManifestDigest)
+                .FirstAsync().Timeout(Budget).Await(ct));
+
+        fault.Message.Should().Contain("not sent there");
+        hostile.Requests.Should().BeEmpty("the key is never presented at a realm the registry merely names");
+        hostile.PresentedSecret.Should().BeNull();
+        registry.TokenRequests.Should().Be(0, "a downgraded realm on the same host is refused too");
+        registry.PresentedSecret.Should().BeNull("the key was presented nowhere");
     }
 
     [Fact(Timeout = 120_000)]
