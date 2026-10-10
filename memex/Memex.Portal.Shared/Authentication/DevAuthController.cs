@@ -166,6 +166,9 @@ public class DevAuthController : ControllerBase
             claims.Add(new Claim(ClaimTypes.Role, person.Role));
         }
 
+        // The step-up ladder reads the provider off the session (Doc/Architecture/ApprovalStepUp).
+        claims.AddRange(StepUpClaims.ForSession("Dev", Array.Empty<Claim>(), DateTimeOffset.UtcNow));
+
         var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
         var principal = new ClaimsPrincipal(identity);
 

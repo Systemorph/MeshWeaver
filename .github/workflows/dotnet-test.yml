@@ -911,60 +911,20 @@ jobs:
         tar -I 'zstd --long=27' -xf "build-output-${{ matrix.shard }}.tar.zst"
         rm -f "build-output-${{ matrix.shard }}.tar.zst"
         df -h / | tail -1 | awk '{print "disk after extract: " $4 " free of " $2}'
-    # ── Acquire the Testcontainers images BEFORE the tests, as infrastructure ──
-    # 🚨 This step exists so a Docker Hub outage can never again masquerade as a
-    # mass TEST failure. Every PostgreSql fixture is a COLLECTION fixture, so when
-    # the image cannot be pulled, `InitializeAsync` throws and xUnit reports the
-    # failure against every test in the collection: run 31137723323 shard 5 logged
-    # 412 [FAIL]s, all of them the identical
-    #   DockerApiException: Get "https://registry-1.docker.io/v2/": context deadline exceeded
-    # and NOT ONE a real defect. That shape is actively harmful — it reds the merge
-    # gate with a plausible-looking access-control failure list that cannot be
-    # reproduced locally (where the image is already in the local store), and it
-    # cost a full debugging session chasing tests that were never broken.
+    # ── No container image is pulled here — on purpose ────────────────────────
+    # 🚨 This job used to pre-pull `pgvector/pgvector:pg17` from Docker Hub, anonymously, on every
+    # shard. Since the Postgres suites left core (the test-move tranches, #2847 and its successors)
+    # NO core suite starts a container: nothing references Testcontainers.PostgreSql, and the one
+    # project naming MeshWeaver.Testcontainers (Memex.Portal.Shared.Test) exercises readiness logic
+    # against an in-process host. So the pull fetched an image nothing used — and on 2026-10-09 it
+    # was the ONLY red of six shards × several PRs (#6381 among them), Docker Hub answering
+    # `toomanyrequests` to the runner pool's shared egress IP. Retrying a per-IP window is not a
+    # fix; not asking is.
     #
-    # Pulling here instead makes the dependency explicit and the diagnosis instant:
-    # the registry is a THIRD-PARTY fetch, so it gets bounded retries with backoff
-    # (a transient blip is not a code defect and must not be reported as one), and
-    # if it still cannot be fetched the shard fails HERE with an unambiguous infra
-    # error instead of 412 phantom test results.
-    #
-    # Testcontainers then finds the image in the local store and starts it without
-    # touching the network. Keep this list in sync with the fixtures — grep for
-    # `new PostgreSqlBuilder(` / `.WithImage(`.
-    - name: "Pre-pull Testcontainers images (infra, not a test)"
-      run: |
-        set -uo pipefail
-        # Only the images the fixtures name explicitly. Testcontainers' OTHER
-        # implicit Docker Hub pull — the ryuk resource reaper — is not listed
-        # because it is DISABLED for CI instead (see TESTCONTAINERS_RYUK_DISABLED
-        # on the next step): the runner VM is discarded wholesale after the job,
-        # so there is nothing for a reaper to reap, and not pulling it removes a
-        # second registry dependency rather than adding a second thing to retry.
-        # Its tag is also a function of the Testcontainers package version, so
-        # pinning it here would silently rot.
-        images="pgvector/pgvector:pg17"
-        rc=0
-        for img in $images; do
-          ok=0
-          for attempt in 1 2 3 4 5; do
-            if docker image inspect "$img" >/dev/null 2>&1; then
-              echo "$img: already in the local store"; ok=1; break
-            fi
-            if docker pull --quiet "$img"; then
-              echo "$img: pulled on attempt $attempt"; ok=1; break
-            fi
-            # Backoff: 5s, 10s, 20s, 40s. Docker Hub blips are seconds-to-minutes.
-            delay=$((5 * 2 ** (attempt - 1)))
-            echo "$img: pull attempt $attempt failed; retrying in ${delay}s" >&2
-            sleep $delay
-          done
-          if [ $ok -eq 0 ]; then
-            echo "::error::could not pull $img after 5 attempts — this is a REGISTRY/INFRA failure, not a test failure. Do not chase the tests that would have reported it."
-            rc=1
-          fi
-        done
-        exit $rc
+    # A suite that needs a Docker Hub image again does NOT restore an anonymous pull: it declares
+    # the image in .github/dockerhub-mirror.list, resolves it with
+    # `.github/scripts/dockerhub-mirror.sh ref <name>:<tag>` and logs in to ghcr.io with the job's
+    # GITHUB_TOKEN (`packages: read`) — Doc/Architecture/DockerHubInCi.
     # ── Acquire the headless browser BEFORE the tests, as infrastructure ──────
     # 🚨 Since #1230 the PDF export IS a headless browser: the document model was replaced
     # by CSS Paged Media printed by Chromium, so every PDF test — the renderer's own, and the
@@ -2822,6 +2782,14 @@ jobs:
     - name: "Every pinned manifest gets locked, and nothing gets unlocked — the gate can fail (self-test)"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/lock-pinned-digests.py --self-test
+
+    # The re-enable interlock's MEASURED half (MeshWeaver#3438): `acr-retention-tasks.sh apply`
+    # refuses to switch a purge on unless the newest lock-lane run on main is green and recent. Its
+    # verdict is a pure function over GitHub's answer, so every refusing shape (red, cancelled,
+    # stale, undated, empty, not JSON) and the one allowing shape are driven offline here.
+    - name: "…and a purge cannot be switched on behind a red or stale protection run (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/acr-retention-protection.py --self-test
 
     # The premise the lock rests on, asserted with NO credential: a lock protects only because
     # `acr purge` skips locked manifests unless `--include-locked` is passed. The purge tasks are

@@ -592,6 +592,15 @@ public record DeploymentContent
     public bool? DenyAnonymous { get; init; }
 
     /// <summary>
+    /// Approval step-up — every approval needs a fresh, phishing-resistant authentication — rendered to
+    /// <c>Authentication__StepUp__*</c>. Null renders nothing and step-up stays OFF. See
+    /// <c>Doc/Architecture/ApprovalStepUp</c> for the tenant admin's half (the authentication context
+    /// and its Conditional Access policy), which must exist before this is switched on.
+    /// </summary>
+    [Description("Approval step-up")]
+    public StepUpSpec? ApprovalStepUp { get; init; }
+
+    /// <summary>
     /// 🚨 May this instance PATCH ITS OWN portal Deployment when it detects a newer release — the
     /// chart's <c>selfUpdate.canPatch</c>, which renders the self-patch Role AND
     /// <c>SelfUpdate__CanPatch</c> from one value. The fleet default is <c>false</c>: an instance

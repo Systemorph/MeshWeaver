@@ -177,6 +177,28 @@ than denied** — so reading them as the user would silently disable the whole f
 the users it exists to serve. `ReadDeclaredActions` therefore uses `RunAsSystem`, and it is a read of
 platform configuration, never a write and never a touch of user data.
 
+### The second exception: restoring a missing self-grant
+
+`RestoreSelfGrantLogonAction` (`platform.restore-self-grant`, `EveryLogon`, runs first) puts back a
+user's own `Admin` grant on their home (`{user}/_Access/{user}_Access`) when it is MISSING. Policy
+[`self-grant-restored-at-logon`](/Doc/Architecture/PolicyNotProse). It cannot run as the user: a
+user without that grant has no right to write it back, which is exactly why an account whose grant
+write was lost stayed broken for good (MeshWeaver#5225). So it follows
+[Authorize as Caller, Execute as System](/Doc/Architecture/AuthorizeAsCallerExecuteAsSystem):
+
+- **Authorize, explicitly, fail closed:** the logging-on identity is a real person (never
+  Anonymous/Public, System, or a `svc-…` service principal), and the home is a `User` node whose
+  path IS that identity's id. Nothing else is ever touched.
+- **Execute as System on behalf of that one user** (`RunAsSystemFor(onBehalfOf: user)`), so the
+  broad-grant guard sees a write for its own subject.
+- **Never widen, never override:** it writes exactly the shape account creation writes, as a
+  create, never an upsert, and only when the home holds NO assignment naming the user. An existing
+  assignment, a DENIED one included, is somebody's decision and is left alone.
+- **Audited:** every restore logs `[RestoreSelfGrant] Restored the missing self-grant of '{user}'
+  at {path} …` at Warning, and the grant row's `createdBy` is `system-security`.
+
+Its cheap check is one listing of the user's own `_Access` namespace, read from the **authoritative store**, never the query index: a deny written seconds ago must still stop it. A deny landing between that read and the create cannot widen access either, because the permission fold subtracts a scope's denied roles from its granted ones. It holds the **reserved first slot** (`int.MinValue`): a data-declared action's order is clamped above it, so nothing that writes into the home as the user can run before the grant is back.
+
 ---
 
 ## How to contribute one

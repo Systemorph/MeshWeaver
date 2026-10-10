@@ -109,7 +109,7 @@ public static class GitHubActionArea
             .StartWith((UiControl?)BuildStarting(title!, backHref))
             .Catch((Exception ex) => Observable.Return<UiControl?>(Message(
                 "GitHub operation failed",
-                System.Net.WebUtility.HtmlEncode(ex.Message),
+                System.Net.WebUtility.HtmlEncode(GitSyncRefusalException.Localize(ex, host.ViewerLocale())),
                 backHref)));
     }
 

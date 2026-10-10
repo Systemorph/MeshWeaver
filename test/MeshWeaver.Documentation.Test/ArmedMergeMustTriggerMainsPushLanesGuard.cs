@@ -494,6 +494,40 @@ public class ArmedMergeMustTriggerMainsPushLanesGuard
             || l.Contains("enablePullRequestAutoMerge", StringComparison.Ordinal));
 
     /// <summary>
+    /// The ONE arm a workflow may take: <c>auto-arm.yml</c>'s <c>arm-generated</c> job, on a pull request
+    /// the platform predicate (<c>check-review-answered.py --arm-generated</c>, the <c>generated_only</c>
+    /// rule) proved to be a generated-only proposal by the generated-files App — which owes no review,
+    /// so arming it decides nothing a review would have decided. The exemption holds only while the arm
+    /// step is gated on that predicate's verdict and pinned to the head it read; drop either and the step
+    /// is an ordinary offender again. The control plane's model-driven steward, which used to arm these,
+    /// is switched off, and MeshWeaver.Plugins #3236 sat green and unarmed for ~10.5 h without it.
+    /// </summary>
+    private static bool IsTheGeneratedOnlyArm(string? fileName, string fileText, string stepBlock)
+    {
+        if (fileName != "auto-arm.yml")
+            return false;
+        // The step with `id: classify` must be UNIQUE and must itself be the predicate's invocation —
+        // a file-wide `--arm-generated` would let `classify` be swapped for an unconditional producer.
+        var classify = StepBlocks(fileText)
+            .Where(b => ExecutableLines(b).Contains("id: classify", StringComparer.Ordinal))
+            .ToArray();
+        if (classify.Length != 1)
+            return false;
+        var classifyLines = ExecutableLines(classify[0]);
+        if (!classifyLines.Any(l => l.StartsWith("run: python3 ", StringComparison.Ordinal)
+                                     && l.Contains("check-review-answered.py", StringComparison.Ordinal)
+                                     && l.Contains("--arm-generated", StringComparison.Ordinal))
+            || classifyLines.Any(l => l.Contains("GITHUB_OUTPUT", StringComparison.Ordinal)))
+            return false;
+        // The arm is gated on that verdict and pinned to the head THAT step read.
+        var lines = ExecutableLines(stepBlock);
+        return lines.Contains("if: steps.classify.outputs.arm == 'true'", StringComparer.Ordinal)
+               && lines.Contains("HEAD_SHA: ${{ steps.classify.outputs.head }}", StringComparer.Ordinal)
+               && lines.Any(l => l.Contains("gh pr merge", StringComparison.Ordinal)
+                                 && l.Contains("--match-head-commit \"$HEAD_SHA\"", StringComparison.Ordinal));
+    }
+
+    /// <summary>
     /// 🚨🚨 NO WORKFLOW ARMS AUTO-MERGE — arming is the control plane's decision (policy review-then-suites).
     ///
     /// <para>Arming says "this head was reviewed and every finding answered, so let it land when
@@ -516,7 +550,11 @@ public class ArmedMergeMustTriggerMainsPushLanesGuard
     {
         var offenders = Directory
             .EnumerateFiles(WorkflowsDir(), "*.yml")
-            .Where(path => StepBlocks(File.ReadAllText(path)).Any(ArmsAutoMerge))
+            .Where(path =>
+            {
+                var text = File.ReadAllText(path);
+                return StepBlocks(text).Any(b => ArmsAutoMerge(b) && !IsTheGeneratedOnlyArm(Path.GetFileName(path), text, b));
+            })
             .Select(Path.GetFileName)
             .OrderBy(n => n, StringComparer.Ordinal)
             .ToArray();

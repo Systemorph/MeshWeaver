@@ -39,6 +39,15 @@ public sealed record ContentDegradation(
     /// <summary>The opening of the count's window: <see cref="FirstAt"/>, or <see cref="LastAt"/>
     /// when the entry carries no first-seen instant.</summary>
     public DateTimeOffset WindowStart => FirstAt ?? LastAt;
+
+    /// <summary>
+    /// The read seam of the MOST RECENT counted read — the seam that observed <see cref="LastPath"/>.
+    /// <see cref="Seam"/> stays the first seam; a type degraded first through one seam and later
+    /// through another must not be reported as the first seam having read the last path. <c>null</c>
+    /// on an entry built by the 5-argument constructor; then <see cref="Seam"/> applies. An
+    /// <c>init</c> property for the same binary-compatibility reason as <see cref="Discriminator"/>.
+    /// </summary>
+    public string? LastSeam { get; init; }
 }
 
 /// <summary>
@@ -58,6 +67,100 @@ public sealed class ContentDegradationRegistry
     private readonly ConcurrentDictionary<string, ContentDegradation> byNodeType =
         new(StringComparer.Ordinal);
 
+    // 1 while this replica's boot registration window is open — see DeferWarningsUntilRegistrationSettles.
+    // Read and written ONLY under windowGate, together with the record it decides about.
+    private int warningsDeferred;
+
+    // 🚨 Makes "record this read, and is its warning deferred?" and "close the window, and which
+    // records does the settle own?" ONE decision each: every read lands on exactly one side, so its
+    // warning is written exactly once (review on #6405). A plain monitor around in-memory work —
+    // never held across an await or a subscription; degradations are rare, so it is uncontended.
+    private readonly object windowGate = new();
+
+    /// <summary>
+    /// 🚨 <b>Opens the boot registration window (Systemorph/MeshWeaver.Plugins#2799).</b> Until
+    /// <see cref="SettleDeferredWarnings"/> is called, a read seam that degrades still RECORDS the
+    /// degradation here — so <c>/health</c>'s <c>content-types</c> names it exactly as before — but
+    /// does not log the "stayed an untyped JsonElement" warning at the read: that sentence is a
+    /// verdict, and during the window it cannot be decided yet.
+    ///
+    /// <para>Measured on memex-cloud (pod <c>884964bb7-6gv59</c>, 2026-10-09): 132 of 134 such lines
+    /// were written at 19:48:37.3, half a second BEFORE the pre-warmer even started (19:48:37.8),
+    /// by boot-time readers (standing watches on <c>Ops/Status/*</c>, a <c>Posts</c> query) of
+    /// dynamic types whose assemblies were all on the replica (<c>alreadyBaked=414</c>,
+    /// <c>compiled=0</c>). Those types registered on this replica only when the registration-only
+    /// pass reached them (<see cref="DynamicContentTypeRegistrar"/>). So the line asserted
+    /// "consumers will fail" before that was decidable, and the burst was one per roll on every
+    /// portal. The reads themselves are now typed by <see cref="ContentTypeOnDemandRegistration"/>
+    /// before they answer; this window remains the diagnostic for whatever that route and the pass
+    /// could not register.</para>
+    ///
+    /// <para>Called by <see cref="DynamicContentTypeRegistrationHostedService"/> — and only on a
+    /// host that runs that pass: a host without it never opens the window, so every read there
+    /// warns at the read, as it always did (every test host included).</para>
+    /// </summary>
+    public void DeferWarningsUntilRegistrationSettles()
+    {
+        lock (windowGate)
+            warningsDeferred = 1;
+    }
+
+    /// <summary>Whether the boot registration window is open. Informational — a read seam decides
+    /// with <see cref="RecordDeferringWarning"/>, which records and answers in one step.</summary>
+    public bool WarningsDeferred
+    {
+        get
+        {
+            lock (windowGate)
+                return warningsDeferred != 0;
+        }
+    }
+
+    /// <summary>
+    /// Records one degraded read (as <see cref="Record"/>) and answers, in the SAME step, whether
+    /// its warning is deferred to <see cref="SettleDeferredWarnings"/> (<c>true</c>) or must be
+    /// written by the caller now (<c>false</c>). Atomic with the settle: a read answered
+    /// <c>true</c> is in the settle's snapshot, a read answered <c>false</c> is not — so a read that
+    /// races the close is warned exactly once.
+    /// </summary>
+    /// <param name="nodeType">The node's NodeType.</param>
+    /// <param name="nodePath">The node path.</param>
+    /// <param name="seam">The read seam that observed it.</param>
+    /// <param name="discriminator">The content's stored <c>$type</c>, when it carried one.</param>
+    public bool RecordDeferringWarning(string? nodeType, string? nodePath, string seam, string? discriminator = null)
+    {
+        lock (windowGate)
+        {
+            Record(nodeType, nodePath, seam, discriminator);
+            return warningsDeferred != 0;
+        }
+    }
+
+    /// <summary>
+    /// Closes the boot registration window and returns the degradations whose warning must now be
+    /// written: every recorded one whose content type is STILL unresolvable
+    /// (<see cref="Unresolved"/>). A type the pass registered is dropped — its readers were re-typed
+    /// — and nothing that stayed untyped is: a deferred warning is re-timed to the moment the
+    /// verdict is decidable, never dropped. Returns empty when the window was not open, so a second
+    /// call cannot repeat the warnings.
+    ///
+    /// <para>Atomic with <see cref="RecordDeferringWarning"/>: the close and the snapshot happen
+    /// under the same gate as a read's record-and-answer, so a read deferred before the close is in
+    /// this snapshot and a read after it is answered "warn now" — never both, never neither.</para>
+    /// </summary>
+    /// <param name="contentTypes">The mesh-wide content-type registry, or <c>null</c> (then every
+    /// recorded degradation is unresolved — see <see cref="Unresolved"/>).</param>
+    public ImmutableList<ContentDegradation> SettleDeferredWarnings(IMeshContentTypeRegistry? contentTypes)
+    {
+        lock (windowGate)
+        {
+            if (warningsDeferred == 0)
+                return ImmutableList<ContentDegradation>.Empty;
+            warningsDeferred = 0;
+            return Unresolved(contentTypes);
+        }
+    }
+
     /// <summary>Records one degraded read.</summary>
     /// <param name="nodeType">The node's NodeType.</param>
     /// <param name="nodePath">The node path.</param>
@@ -71,11 +174,15 @@ public sealed class ContentDegradationRegistry
         var now = DateTimeOffset.UtcNow;
         byNodeType.AddOrUpdate(
             key,
-            _ => new ContentDegradation(key, seam, 1, nodePath, now) { Discriminator = discriminator, FirstAt = now },
+            _ => new ContentDegradation(key, seam, 1, nodePath, now)
+            {
+                Discriminator = discriminator, FirstAt = now, LastSeam = seam,
+            },
             (_, existing) => existing with
             {
                 Count = existing.Count + 1,
                 LastPath = nodePath,
+                LastSeam = seam,
                 LastAt = now,
                 // First-seen wins: a later read of the same NodeType whose element happens to carry
                 // no $type must not erase the name the FIRST one gave us to re-ask under.

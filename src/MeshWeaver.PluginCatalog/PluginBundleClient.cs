@@ -2,6 +2,7 @@ using System.Net.Http;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Plugin.Packaging;
@@ -68,6 +69,11 @@ public sealed class PluginBundleClient
     private readonly BundleAdoptionLedger? _ledger;
     private readonly bool _requirePrebuilt;
 
+    // A CLOSED type set (Doc/Architecture/ClosedTypeSet) adopts no database NodeType and compiles
+    // none in its place, so a NodeType bundle has nothing to do here. Resolved once, like
+    // _requirePrebuilt — both are image/deployment policy, not per-call state.
+    private readonly bool _closedTypeSet;
+
     // ONE index read per client, shared by every package the install pass covers. PromiseSlot, not
     // a plain cached field: concurrent first callers share the single run, and a fault EVICTS so
     // the next caller retries rather than replaying a transient failure forever (#1369).
@@ -116,6 +122,7 @@ public sealed class PluginBundleClient
         // Deployment policy, resolved once: a require-prebuilt mesh turns every miss below into a
         // named early failure instead of a compile fallback. See RequirePrebuiltConfigKey.
         _requirePrebuilt = PrebuiltAssemblySeeder.RequirePrebuilt(hub.ServiceProvider);
+        _closedTypeSet = hub.ServiceProvider.IsClosedTypeSet();
     }
 
     /// <summary>What the registry advertises: the framework its assemblies were built against, and
@@ -268,6 +275,34 @@ public sealed class PluginBundleClient
     /// the caller should compile. Cold: nothing is fetched until Subscribe.</para>
     /// </summary>
     public IObservable<int> Adopt(string pluginId) =>
+        _closedTypeSet ? AdoptNothingOnAClosedTypeSet(pluginId) : AdoptFromRegistry(pluginId);
+
+    /// <summary>
+    /// 🚨 <b>A closed type set has nothing to adopt, and that is not a miss.</b> The seeder already
+    /// refuses every NodeType on such a process (<c>PrebuiltAssemblySeeder.SeedDetailed</c> answers
+    /// <c>NotSeeded</c>), and the activation path compiles none in its place — the type set is the
+    /// image's. Fetching the bundle anyway and counting "adopted 0/N" made every NodeType package a
+    /// MISS, so <c>bundle_adoption</c> on the control instance read Degraded for ever ("Edu: adopted
+    /// only 0/12 — the rest compile here") while nothing was compiled there at all. The attempt is
+    /// recorded as <see cref="BundleAdoptionKind.NotApplicable"/>, naming the policy — never as
+    /// <see cref="BundleAdoptionKind.NothingToAdopt"/>, since nothing was read and nothing may be
+    /// claimed about what the package carries — and nothing is downloaded: the bytes could only ever
+    /// be declined.
+    /// </summary>
+    private IObservable<int> AdoptNothingOnAClosedTypeSet(string pluginId) =>
+        Observable.Defer(() =>
+        {
+            _logger?.LogInformation(
+                "Bundle for {Plugin}: not fetched — {Key}=true, so this process adopts no database "
+                + "NodeType and compiles none in its place", pluginId, ClosedTypeSet.ConfigKey);
+            _ledger?.Record(new BundleAdoptionOutcome(
+                pluginId, BundleAdoptionKind.NotApplicable, _registryUrl,
+                Reason: $"{ClosedTypeSet.ConfigKey}=true — this process adopts no database NodeType "
+                        + "and compiles none in its place"));
+            return Observable.Return(0);
+        });
+
+    private IObservable<int> AdoptFromRegistry(string pluginId) =>
         SharedIndex()
             .Take(1)
             .SelectMany(index =>
