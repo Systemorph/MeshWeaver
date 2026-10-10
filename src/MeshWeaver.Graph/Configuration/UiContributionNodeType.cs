@@ -143,9 +143,12 @@ public record UiContribution
     /// host app's own hub) through the platform's <c>LayoutAreaControl</c>, exactly like a
     /// <see cref="PersonAppContext"/> tab, and the address obeys the same partition rule (it must lie
     /// inside the contribution node's own partition). It shows ONLY on the host's settings page —
-    /// never on any other node's — and every gate of the closed vocabulary still narrows it
-    /// (<c>AdminOnly</c> for an instance-app section; <see cref="RequiredPermission"/> against the
-    /// viewer's permissions on the host node).</para>
+    /// never on any other node's — and the node-shape gates still narrow it (<c>AdminOnly</c> for an
+    /// instance-app section, <c>NodeTypes</c>, …; <see cref="RequiredPermission"/> against the
+    /// viewer's permissions on the host node). <see cref="UiContributionGates.RequireAddressAccess"/>
+    /// is NOT folded on this lane (only the PersonApp lane probes the address live), so it is inert
+    /// here and <c>UiContributionSeedValidation</c> reports it as such; the embedded area still runs
+    /// its own access checks.</para>
     /// </summary>
     public const string AppSettingsContext = "AppSettings";
 
