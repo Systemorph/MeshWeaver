@@ -142,6 +142,33 @@ advancing for the whole budget still fails — and now says what it measured
 against a plan taken before it started. Total time stays bounded by `MaxDeleteDrainPasses`, and a
 genuinely stuck subtree still fails with `could not drain the subtree after N pass(es)`.
 
+### A leaf QUEUED behind a moving write lane earns credit, bounded (#1198)
+
+Removals are not the only reset source. A leaf's removal ends in ONE write on a cap-1 `pg:`/`sf:`
+write pool, and that pool is one process-wide gate: a leaf queued behind other writers cannot remove
+anything until its turn, and before this credit the watchdog read the wait as a stall
+(`0 of 1 planned … pg:Postgres(cap 1) 219 waiting, 1 in flight`, memex 2026-10-09). So the commit
+stage also merges **queue credits**: the pool registry is sampled every tenth of the budget (at least
+100 ms), and a sample resets the clock when BOTH hold since the previous one:
+
+- a cap-1 write lane that holds QUEUED work granted slots — it is advancing, so whoever is queued is
+  served in order; and
+- **no cap-1 write lane that held work (in flight or waiting) stood still.**
+
+The second condition is the attribution. Admissions are not tied to callers, but a cap-1 lane admits
+one writer at a time, so a leaf that was ADMITTED and then hung holds its lane's only slot, and that
+lane cannot admit anyone else. Whichever lane the leaf is in, the sample sees a lane with work that
+did not move, and no unrelated advancing lane can reset the watchdog for it: **an admitted stuck leaf
+still fails at one budget.** The rule errs only toward the old behaviour — an unrelated lane that
+stalls denies credit, so a queued leaf may fail at one budget, as it did before.
+
+What the credit cannot see is a leaf stuck OUTSIDE every pool while the lanes advance for others. So
+the total credit is capped at **four budgets** (`QueueCreditBudgets`); past that, the watchdog fails
+as before, and the line names the pools (`IoPoolQueueReport`). Pinned by
+`DeleteCommitQueuedBehindAMovingLaneTest`: a leaf queued behind twelve 600 ms writers on a 4 s budget
+completes in its turn, and a leaf admitted and hung in its own lane fails inside two budgets while an
+unrelated lane keeps advancing. With the stalled-lane condition removed, the second case ran to 27 s.
+
 🚨 **Raising the budget is not a fix for either half** — the question is never "how much headroom
 does this need", it is "is the bound measuring the right quantity, and does the check look at the
 whole subtree".
