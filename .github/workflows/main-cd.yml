@@ -1648,9 +1648,17 @@ jobs:
           [ "${#dirs[@]}" -gt 0 ] || { echo "::error::no publish output to record — the assertion above found some, so the layout changed between two steps"; exit 1; }
           digest=$(docker buildx imagetools inspect "${{ env.ACR }}/memex-portal-ai:$STAGING" --format '{{json .Manifest.Digest}}' | tr -d '"')
           mkdir -p "$RUNNER_TEMP/image-closure"
+          # 🚨 The IMAGE selects the directories, never the find above alone (#6402): a multi-RID
+          # PublishContainer also lays down a RID-less outer `net10.0/publish` that carries the
+          # surface manifest but is in no image layer, and recording it refused every publishing run
+          # (38020659588, 38021975367, 38023872356). The manifest list names the platforms the
+          # image actually carries; the script takes exactly one directory per platform and refuses
+          # a platform with none, by digest so it is the bytes just pushed.
+          docker buildx imagetools inspect "${{ env.ACR }}/memex-portal-ai@$digest" --raw > "$RUNNER_TEMP/image-index.json"
           python3 .github/scripts/image-closure-record.py build \
             --repository memex-portal-ai --digest "$digest" --tag "$STAGING" \
             --platform-commit "$CORE_SHA" --platform-version "$VERSION" --run-url "$RUN_URL" \
+            --image-index "$RUNNER_TEMP/image-index.json" \
             "${dirs[@]}" > "$RUNNER_TEMP/image-closure/image-closure.json"
           python3 - "$RUNNER_TEMP/image-closure/image-closure.json" <<'PY'
           import json, sys
