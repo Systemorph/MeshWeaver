@@ -38,10 +38,10 @@ public class UpdateNeverResurrectsADeletedNodeTest(ITestOutputHelper output) : M
     private async Task<MeshNode> Seed(string id) =>
         await NodeFactory.CreateNode(
                 new MeshNode(id, TestPartition) { Name = id, NodeType = "Markdown" })
-            .Should().Within(30.Seconds()).Emit(cancellationToken: TestContext.Current.CancellationToken);
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
 
     private async Task<bool> Exists(string path) =>
-        await Storage.Exists(path).Should().Within(10.Seconds()).Emit(
+        await Storage.Exists(path).Should().Within(TestTimeouts.Convergence).Emit(
             cancellationToken: TestContext.Current.CancellationToken);
 
     /// <summary>
@@ -53,7 +53,7 @@ public class UpdateNeverResurrectsADeletedNodeTest(ITestOutputHelper output) : M
     {
         var node = await Seed("flush-after-delete");
 
-        (await NodeFactory.DeleteNode(node.Path).Should().Within(30.Seconds()).Emit())
+        (await NodeFactory.DeleteNode(node.Path).Should().Within(TestTimeouts.Convergence).Emit())
             .Should().BeTrue("the premise: the delete removed the node");
 
         var late = node with { Name = "late update", Version = node.Version + 1 };
@@ -67,7 +67,7 @@ public class UpdateNeverResurrectsADeletedNodeTest(ITestOutputHelper output) : M
                 failure.OnNext(ex);
                 failure.OnCompleted();
             });
-        var refusal = await failure.Should().Within(10.Seconds()).Emit(
+        var refusal = await failure.Should().Within(TestTimeouts.Convergence).Emit(
             "a flush of a node deleted after the update committed must be refused, so the writer "
             + "hears its update did not land");
         refusal.Should().BeOfType<NodeDeletedUpdateRefusedException>(
@@ -86,10 +86,10 @@ public class UpdateNeverResurrectsADeletedNodeTest(ITestOutputHelper output) : M
         var node = await Seed("flush-live");
 
         var updated = node with { Name = "updated", Version = node.Version + 1 };
-        await Flush.Flush(updated).Should().Within(10.Seconds()).Emit();
+        await Flush.Flush(updated).Should().Within(TestTimeouts.Convergence).Emit();
 
         var stored = await Storage.Read(node.Path, Mesh.JsonSerializerOptions)
-            .Should().Within(10.Seconds()).Emit(cancellationToken: TestContext.Current.CancellationToken);
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
         stored!.Name.Should().Be("updated");
     }
 
@@ -99,14 +99,14 @@ public class UpdateNeverResurrectsADeletedNodeTest(ITestOutputHelper output) : M
     public async Task APostCommitFlushOfARecreatedNode_Persists()
     {
         var node = await Seed("flush-recreated");
-        (await NodeFactory.DeleteNode(node.Path).Should().Within(30.Seconds()).Emit()).Should().BeTrue();
+        (await NodeFactory.DeleteNode(node.Path).Should().Within(TestTimeouts.Convergence).Emit()).Should().BeTrue();
         var recreated = await Seed("flush-recreated");
 
         var updated = recreated with { Name = "after re-create", Version = recreated.Version + 1 };
-        await Flush.Flush(updated).Should().Within(10.Seconds()).Emit();
+        await Flush.Flush(updated).Should().Within(TestTimeouts.Convergence).Emit();
 
         var stored = await Storage.Read(node.Path, Mesh.JsonSerializerOptions)
-            .Should().Within(10.Seconds()).Emit(cancellationToken: TestContext.Current.CancellationToken);
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
         stored!.Name.Should().Be("after re-create");
     }
 }
