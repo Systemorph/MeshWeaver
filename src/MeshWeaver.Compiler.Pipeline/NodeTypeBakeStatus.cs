@@ -114,6 +114,20 @@ public sealed record NodeTypeBakeEntry(string TypePath, BakeState State, string?
     public string? ProducedByPlatformBuild { get; init; }
 
     /// <summary>
+    /// 🚨 The store holds A build under the record's version, but not the one the record NAMES: a
+    /// different MVID (Systemorph/MeshWeaver.Plugins#2799). The entry is
+    /// <see cref="BakeState.BytesMissing"/> and is rebuilt like any store miss.
+    ///
+    /// <para><b>It is never a regression baseline</b> (<see cref="IsRegressionBaselineFor"/>). A
+    /// regression needs a working build to regress FROM, and the build this record names was not
+    /// available to any replica — every binder was already refusing the bytes in its place. If the
+    /// rebuild fails, this image has taken nothing away, and refusing readiness for it would let a
+    /// handful of long-incoherent records stall the first roll that looks at them. The failure is
+    /// reported and stamped like any other; it does not gate.</para>
+    /// </summary>
+    public bool RecordNamesABuildTheStoreLacks { get; init; }
+
+    /// <summary>
     /// 🚨 Whether a WORKING BUILD of this type is on record at all — the thing a regression
     /// regresses FROM (#5544).
     ///
@@ -148,6 +162,7 @@ public sealed record NodeTypeBakeEntry(string TypePath, BakeState State, string?
     /// <param name="livePlatformVersion">The running platform build, or <c>null</c> when unknown.</param>
     public bool IsRegressionBaselineFor(string? livePlatformVersion)
         => HadWorkingBuild
+           && !RecordNamesABuildTheStoreLacks
            && !(ProducedByPlatformBuild is { Length: > 0 } producer
                 && !string.IsNullOrWhiteSpace(livePlatformVersion)
                 && (string.Equals(producer, livePlatformVersion, StringComparison.Ordinal)
@@ -625,14 +640,58 @@ public static class NodeTypeBakeStatus
                     ClassifyDetailed(
                         definition, false, framework, liveDependencyIdOf, liveToolchainId)));
 
-            return store
-                .TryGetAssemblyPath(typePath, definition.LastCompiledVersion!.Value)
+            // 🚨 BY IDENTITY when the record claims a build for THIS framework and names its MVID
+            // (Systemorph/MeshWeaver.Plugins#2799). The version key is not an identity: several
+            // builds can share it, and a record can name one the store does not hold — the standing
+            // residue of the first-write-wins store (before the store became content-addressed, a
+            // recompile at an unchanged node version kept build N's file while the record was
+            // stamped with N+1's MVID). Asked by key alone, that type is "Baked" here on every
+            // boot, while every binder refuses the very bytes this probe counted: activation's
+            // bind-time check recompiles per instance, and the registration-only pass reports
+            // StaleBytes and leaves the type untypeable on this replica. Nothing ever rebuilt it,
+            // because the one pass that rebuilds takes its work list from this probe. So the probe
+            // asks the question the binders ask — "does the store hold the build the record
+            // NAMES?" — and a no is BytesMissing, which the sweep re-fetches or rebuilds on the
+            // owner, re-stamping one coherent (version, path, MVID) triple.
+            //
+            // A record naming ANOTHER framework keeps the key-only question: "bytes win over the
+            // record" (ClassifyAgainst) is about a live-framework build sitting under a record
+            // whose write-back lagged, and that build is by construction not the one such a
+            // record names. An MVID that cannot be read (a store that hands out no local file) is
+            // "I do not know" and never a mismatch, exactly as ServedBuildIdentity treats it.
+            var namesLiveBuild =
+                string.Equals(definition.CompiledFrameworkVersion, framework, StringComparison.Ordinal)
+                && !string.IsNullOrEmpty(definition.LatestAssemblyMvid);
+            var lookup = namesLiveBuild
+                ? store.TryGetBuildPath(
+                    typePath, definition.LastCompiledVersion!.Value,
+                    definition.LatestAssemblyPath, definition.LatestAssemblyMvid)
+                : store.TryGetAssemblyPath(typePath, definition.LastCompiledVersion!.Value);
+
+            return lookup
                 .Take(1)
-                .Select(path => Describe(
-                    typePath, definition,
-                    ClassifyDetailed(
-                        definition, !string.IsNullOrEmpty(path), framework,
-                        liveDependencyIdOf, liveToolchainId)))
+                .Select(path =>
+                {
+                    var foreign = namesLiveBuild && !string.IsNullOrEmpty(path)
+                        ? ForeignBuildAtTheRecordsKey(definition.LatestAssemblyMvid!, path)
+                        : null;
+                    var entry = Describe(
+                        typePath, definition,
+                        ClassifyDetailed(
+                            definition, !string.IsNullOrEmpty(path) && foreign is null, framework,
+                            liveDependencyIdOf, liveToolchainId));
+                    return foreign is not null && entry.State is BakeState.BytesMissing
+                        ? entry with
+                        {
+                            RecordNamesABuildTheStoreLacks = true,
+                            Detail =
+                                $"record names build MVID {definition.LatestAssemblyMvid} at "
+                                + $"{definition.LatestAssemblyCollection}/{definition.LatestAssemblyPath}, "
+                                + $"but the store's build under that version is MVID {foreign} — "
+                                + "the build the record names is not in the store",
+                        }
+                        : entry;
+                })
                 // Fail SAFE, never fail OPEN: an unreadable store must mean "bake it", not "trust
                 // the record and serve bytes that may not exist".
                 .Catch<NodeTypeBakeEntry, Exception>(ex =>
@@ -644,6 +703,17 @@ public static class NodeTypeBakeStatus
                         typePath, BakeState.BytesMissing, $"store probe failed: {ex.Message}"));
                 });
         });
+
+    /// <summary>
+    /// The MVID of the file the store answered with, when it is readable and is NOT the build the
+    /// record names; null when it is that build or cannot be read. Metadata only — nothing is
+    /// loaded (<see cref="ServedBuildIdentity.OfFile"/>).
+    /// </summary>
+    private static string? ForeignBuildAtTheRecordsKey(string recordedMvid, string resolvedPath) =>
+        ServedBuildIdentity.OfFile(resolvedPath) is { } found
+        && !string.Equals(found, recordedMvid, StringComparison.OrdinalIgnoreCase)
+            ? found
+            : null;
 
     private static NodeTypeBakeEntry Describe(
         string typePath,

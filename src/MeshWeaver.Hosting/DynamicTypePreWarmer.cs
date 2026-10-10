@@ -1155,9 +1155,10 @@ public static class DynamicTypePreWarmer
             logger?.LogWarning(
                 "DynamicTypePreWarmer: {Count} NodeType(s) claim a usable build for the live "
                 + "framework but the assembly store has NO bytes for them — the shared cache was "
-                + "cleared or replaced. Rebuilding: {Types}",
+                + "cleared or replaced, or a record names a build that never reached the store "
+                + "(Plugins#2799; each entry says which). Rebuilding: {Types}",
                 report.BytesMissing.Count,
-                string.Join(", ", report.BytesMissing.Select(e => e.TypePath)));
+                string.Join(", ", report.BytesMissing.Select(e => $"{e.TypePath} ({e.Detail})")));
 
         // 🚨 DEPENDENCIES FIRST, ONE AT A TIME. A NodeType can compile ANOTHER type's
         // Code into its own assembly (Store/Plugin declares shared=@Store/Coupon/Source,

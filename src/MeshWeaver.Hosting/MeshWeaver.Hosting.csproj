@@ -16,6 +16,11 @@
          (IsStormWindowOpen) on a two-silo cluster, so the negative control measures a missing gap
          signal rather than a window that expired on the clock (Plugins#3000). -->
     <InternalsVisibleTo Include="MeshWeaver.FaultInjection.Test" />
+    <!-- RecordNamesABuildTheStoreLacksTest drives the registration-only pass over the enumeration it
+         just waited on (DynamicContentTypeRegistrar.RegisterTypes / DynamicTypesOf), so the outcome
+         it asserts is about the record under test and not a listing that had not caught up
+         (Plugins#2799). -->
+    <InternalsVisibleTo Include="MeshWeaver.Updates.Test" />
   </ItemGroup>
   <PropertyGroup>
     <ProjectGuid>{93595120-3ccf-45c6-8783-4829a1120166}</ProjectGuid>
