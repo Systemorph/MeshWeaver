@@ -4553,6 +4553,22 @@ public static class MeshExtensions
                                     ("path", path), ("count", partial.Count))
                             : new LogMessage(ex.Message, LogLevel.Error);
                     var failMsgs = collectedMessages.ToImmutable().Add(failMsg);
+                    // A delete that failed AFTER removing nodes has left a torn subtree. The caller is told so
+                    // in so many words, with the one fact it needs next: the delete is idempotent, so asking
+                    // again is meaningful and removes the rest (#6351).
+                    var tornSubtreeNote = partial.Count > 0
+                        ? $" {partial.Count} node(s) under '{path}' were already removed before this failure, "
+                          + "so the subtree is partially deleted; the delete is idempotent - retrying it is "
+                          + "meaningful and removes what is left."
+                        : string.Empty;
+                    var tornLeafNote = leafReason == NodeDeletionRejectionReason.Unavailable
+                        ? tornSubtreeNote
+                        : string.Empty;
+                    if ((isTimeout && tornSubtreeNote.Length > 0) || tornLeafNote.Length > 0)
+                        failMsgs = failMsgs.Add(
+                            new LogMessage(tornSubtreeNote.Trim(), LogLevel.Warning)
+                                .WithKey("activity.delete.partialRetriable",
+                                    ("path", path), ("count", partial.Count)));
                     PostFailed(
                         isTimeout
                             // The stage detail rides along so the CALLER sees it too — the response
@@ -4560,6 +4576,7 @@ public static class MeshExtensions
                             // exactly as unreadable there as it was in the log.
                             ? $"Delete of '{path}' exceeded {budget.TotalSeconds:0}s timeout "
                               + $"in stage '{stage}': {ex.Message}"
+                              + tornSubtreeNote
                             : (isCancelled
                                 ? cancelledMessage
                                 : (isNotFound
@@ -4570,7 +4587,7 @@ public static class MeshExtensions
                                         // leaf's own classified refusal) — no "Unexpected error:"
                                         // prefix, which would misdescribe a classified outcome.
                                         ? ex.Message
-                                        : $"Unexpected error: {ex.Message}"))),
+                                        : $"Unexpected error: {ex.Message}"))) + tornLeafNote,
                         isTimeout || isCancelled
                             // 🚨 A stage that ran out of time DECIDED nothing — it is an
                             // availability failure, and Unknown said neither that nor anything

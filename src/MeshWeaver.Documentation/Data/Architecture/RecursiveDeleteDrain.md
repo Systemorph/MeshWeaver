@@ -376,6 +376,26 @@ latency an operator reads it as covering. The reading it changes is the pool's, 
 innocent. Pinned by `IoPoolQueueReadingCoversAcceptedWorkTest`, whose fourth case is `InvokeBlocking`
 — green before and after, because it is the precedent the other three now follow.
 
+### A failure after removals says the subtree is partial, and that a retry is meaningful (#6351)
+
+A recursive delete that fails AFTER it removed nodes has left a torn subtree, and the leaf's own
+sentence says nothing about that. Measured in production: `[DeleteNode] unexpected path=Marketing
+partial-deleted=1383` — the operation had removed 1,383 paths when one leaf's commit watchdog
+fired, and the caller read only the leaf's watchdog line.
+
+So when the removals before the failure are non-zero and the failure is an **availability** one —
+the stage's own timeout, or a leaf refused as `Unavailable` — the failure the caller reads keeps its
+cause unchanged and appends one sentence: how many nodes were already removed, that the subtree is
+partially deleted, and that the delete is idempotent, so retrying it is meaningful and removes what
+is left. The same sentence is added to the response's `Log` as a Warning, keyed
+`activity.delete.partialRetriable`, so the activity a user opens carries it in their language.
+
+🚨 **Only availability failures get the retry advice.** A permission denial or a validator's refusal
+is a decision, and asking again changes nothing — those arms keep their own sentence with no retry
+note, and an availability failure never reaches the caller as a permission denial.
+`PartialDeleteIsReportedAsRetriableTest` holds the lane after 40 of 160 removals and pins both the
+sentence and the retry: once the lane serves again, a second delete removes everything left.
+
 ## 5. Record satellites leave in batches, not one leaf round-trip each
 
 Every planned descendant used to cost two activations of its own per-node hub: one to answer the
