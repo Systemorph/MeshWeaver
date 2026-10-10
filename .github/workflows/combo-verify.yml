@@ -104,8 +104,9 @@ jobs:
     # 🚨 THREE VALUES, NONE OF WHICH CAN CONTAIN A NAME (#3848) — and that is the whole property.
     # The runner drops any job output containing a masked value, and the roster and the source map
     # both contain names the private roster masks. `slots` is `[0,1,…,count-1]`, `count` is a
-    # number, `digest` is a salted sha256 written as decimal digits (an alphabet no name is drawn
-    # from). `check-combo-verify.py` refuses any other output here.
+    # number, `digest` is a salted sha256 written as single digits joined by underscores — a shape
+    # no identifier and no numeric secret can be a substring of. `check-combo-verify.py` refuses
+    # any other output here.
     outputs:
       slots: ${{ steps.roster.outputs.slots }}
       count: ${{ steps.roster.outputs.count }}
@@ -243,7 +244,7 @@ jobs:
             exit 1
           fi
 
-          if ! [[ "${DIGEST:-}" =~ ^[0-9]{78}$ ]]; then
+          if ! [[ "${DIGEST:-}" =~ ^[0-9](_[0-9]){77}$ ]]; then
             echo "::error::the derivation emitted no roster digest. Each verify job re-derives the" >&2
             echo "  roster and is held to this value; without it a verify job could land its verdict" >&2
             echo "  on a different installation than the one counted here. Refusing to hand over." >&2

@@ -67,6 +67,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -288,15 +289,35 @@ def roster_digest(rows: list[dict[str, str]], sources: str) -> str:
     guess at a private name: without the secret document the digest cannot be recomputed. Absent
     (a fork, a local run) there is nothing private in the roster to protect.
 
-    🚨 DECIMAL DIGITS, NOT HEX — for the very reason this function exists. A job output is dropped
-    when it CONTAINS a masked value, and a hex digest is drawn from an alphabet that spells words
-    (`cafe`, `beef`, `added`…): a private identifier that happens to be one would, about once in a
-    thousand runs, appear inside the digest and take the hand-over down with it. An installation
-    id, a host or a repository name made only of digits is not a shape the fleet has."""
+    🚨 ONE DIGIT, ONE SEPARATOR, ALTERNATING — for the very reason this function exists. A job
+    output is dropped when it CONTAINS a masked value, and no plain alphabet is safe from that: hex
+    spells words (`cafe`, `beef`), and decimal digits collide with an all-digit installation id or
+    a numeric secret such as a GitHub App id (a 4-digit value sits inside a 78-digit number about
+    once in 130 runs). So the digest is written `d_d_d_…`: every two adjacent characters are one
+    digit and one underscore, which means a value can only occur inside it if that value ITSELF
+    alternates single digits with underscores. No identifier and no credential has that shape, and
+    `digest_can_contain` states the rule so the self-test can hold it."""
     salt = os.environ.get(lock.PRIVATE_ROSTER_ENV, "").strip()
     body = json.dumps({"instances": rows, "sources": sources}, separators=(",", ":"), sort_keys=True)
     digest = hashlib.sha256(f"{salt}\n{body}".encode("utf-8")).hexdigest()
-    return f"{int(digest, 16):0{DIGEST_DIGITS}d}"
+    return "_".join(f"{int(digest, 16):0{DIGEST_DIGITS}d}")
+
+
+def is_digest(value: str) -> bool:
+    """Whether `value` has the digest's exact shape: 78 single digits joined by underscores."""
+    return re.fullmatch(r"[0-9](?:_[0-9]){%d}" % (DIGEST_DIGITS - 1), value or "") is not None
+
+
+def digest_can_contain(value: str) -> bool:
+    """Whether `value` COULD be a substring of some digest — i.e. could get the output dropped.
+
+    True only for a value of two or more characters that alternates single digits with
+    underscores (`4_2`, `_7_`), or a single digit or underscore. Everything else — every word,
+    every number of two or more digits, every host, every token — can never occur."""
+    if len(value) < 2:
+        return value.isdigit() or value == "_"
+    return all((a.isdigit() and b == "_") or (a == "_" and b.isdigit())
+               for a, b in zip(value, value[1:]))
 
 
 def is_private_row(row: dict[str, str], declared_in: str) -> bool:
@@ -335,7 +356,7 @@ def resolve_slot(rows: list[dict[str, str]], sources: str, slot: str,
             f"the preflight's instance count arrived as {expect_count!r}, not a positive integer. "
             "The job output that carries the denominator was lost between the jobs; refusing to "
             "verify against a roster nobody counted.")
-    if len(expect_digest or "") != DIGEST_DIGITS or not expect_digest.isdigit():
+    if not is_digest(expect_digest):
         return refuse(
             "the preflight's roster digest did not arrive (the runner drops a job output that "
             "contains a masked value, #3848). Without it this job cannot show that the roster it "
@@ -689,7 +710,7 @@ def self_test() -> int:
         ("a zero count", ("0", "0", digest)),
         ("a digest the preflight never delivered (the dropped-output shape)", ("0", "2", "")),
         ("a roster that changed size between the jobs", ("0", "3", digest)),
-        ("a roster of the same size and different content", ("0", "2", "0" * DIGEST_DIGITS)),
+        ("a roster of the same size and different content", ("0", "2", "_".join("0" * DIGEST_DIGITS))),
     ):
         code, env_text = slot_run(*args)
         check(code == 1 and env_text == "",
@@ -707,10 +728,37 @@ def self_test() -> int:
         salted = roster_digest(rows, derived_sources)
     finally:
         del os.environ[lock.PRIVATE_ROSTER_ENV]
-    check(salted != digest and len(salted) == DIGEST_DIGITS and salted.isdigit()
-          and len(digest) == DIGEST_DIGITS and digest.isdigit(),
+    check(salted != digest and is_digest(salted) and is_digest(digest),
           "the digest is salted with the private roster — the public value cannot confirm a "
-          "guessed name — and is decimal digits of constant length, which no masked name is")
+          "guessed name — and has the digest's exact shape")
+
+    # 🚨 THE DIGEST CANNOT CONTAIN A MASKED VALUE, whatever the value is. A plain decimal digest
+    # could: an all-digit installation id or a numeric secret (a GitHub App id) is a substring of
+    # a 78-digit number often enough to matter, and a job output containing a masked value is
+    # dropped. Hold the property two ways: the rule, and a brute-force search for a counterexample.
+    hostile = ["1234", "0000", "4242", "12", "987654", "cafe", "beef", "memex", "globex-test",
+               "portal.globex.example", "Systemorph/Umbrella.Memex", "1.2.3.4", "a_b", "12_34"]
+    check(not any(digest_can_contain(value) for value in hostile),
+          "no identifier, host, repository, word or multi-digit number can occur inside a digest")
+    check(digest_can_contain("4_2") and digest_can_contain("_7_") and not digest_can_contain("42"),
+          "the containment rule is not vacuous: only a digit/underscore alternation can occur")
+    found = 0
+    for variant in range(400):
+        candidate = roster_digest(rows, f"{derived_sources} Probe{variant}=https://x.example")
+        if not is_digest(candidate):
+            found += 1
+        found += sum(1 for width in (2, 3, 4)
+                     for number in ("12", "123", "1234", "00", "000", "0000", "99", "4242")
+                     if len(number) == width and number in candidate)
+    check(found == 0,
+          "400 different digests: none contains any 2-, 3- or 4-digit number (a plain decimal "
+          "digest contains `1234` within a few hundred)")
+    plain = sum(1 for variant in range(400)
+                if "1234" in roster_digest(rows, f"{derived_sources} P{variant}=https://x.example")
+                .replace("_", ""))
+    check(plain > 0,
+          "…and the control: the SAME 400 digests with the separators removed do contain `1234`, "
+          "so the search above can find what it is looking for")
 
     if failures:
         print(f"::error::--self-test: {failures} arm(s) did not behave as documented.")

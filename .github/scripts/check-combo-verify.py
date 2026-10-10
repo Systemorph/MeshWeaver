@@ -158,6 +158,10 @@ VERDICT_SENTINEL = "the preflight was SKIPPED although the triggering CD conclud
 VERIFY_JOB_NAME = "Verify instance slot ${{ matrix.slot }} against its roll target"
 # The ONLY condition under which a verify job may upload anything (see handover_problems).
 UPLOAD_CONDITION = "failure() && env.INSTANCE_PRIVATE == 'false'"
+# …and what it may be called and may contain: the slot, never a name. An artifact's name and the
+# file names inside it are not masked.
+UPLOAD_NAME = "combo-work-slot-${{ matrix.slot }}"
+UPLOAD_PATHS = ["combo-slot-${{ matrix.slot }}.json", "combo-verdict-slot-${{ matrix.slot }}.json"]
 # What the preflight may hand to another job. Anything else is a value that can carry a name.
 PREFLIGHT_OUTPUTS = {"slots": "${{ steps.roster.outputs.slots }}",
                      "count": "${{ steps.roster.outputs.count }}",
@@ -170,7 +174,7 @@ FULLY_PROVISIONED = {
     "FLEET_READER_APP_ID": "app",
     "FLEET_READER_APP_PRIVATE_KEY": "pem",
     "SOURCES": "Plugins=https://github.com/Systemorph/MeshWeaver.Plugins",
-    "DIGEST": "5" * 78,       # the derivation's digest: 78 decimal digits
+    "DIGEST": "_".join("5" * 78),   # the derivation's digest: 78 single digits, `_`-joined
 }
 
 # What the derivation step hands the roster step on a healthy fleet.
@@ -557,6 +561,20 @@ def handover_problems(doc: dict) -> list[str]:
                 f"the verify job uploads an artifact under `if: {step.get('if')}`; it must be "
                 f"exactly `{UPLOAD_CONDITION}`. Anything looser uploads a client estate's module "
                 "list (combo.json) from a public repository.")
+        with_ = step.get("with") or {}
+        if with_.get("name") != UPLOAD_NAME:
+            problems.append(
+                f"the verify job's artifact is named {with_.get('name')!r}; it must be exactly "
+                f"{UPLOAD_NAME!r}. An artifact's NAME is not masked, so it carries the slot and "
+                "nothing an installation could be recognised by.")
+        paths = [line.strip() for line in str(with_.get("path", "")).splitlines() if line.strip()]
+        if paths != UPLOAD_PATHS:
+            problems.append(
+                f"the verify job uploads {paths}; it must upload exactly {UPLOAD_PATHS}. A file "
+                "name inside an artifact is not masked either, and a wider path (a directory, a "
+                "glob) can sweep in files this guard never looked at.")
+    if len(uploads) > 1:
+        problems.append(f"the verify job has {len(uploads)} upload steps; this guard knows one.")
     verdict_steps = [step for step in verdict.get("steps", []) if isinstance(step, dict)]
     counter = next((step for step in verdict_steps if step.get("id") == "jobs"), None)
     verdict_step = next((step for step in verdict_steps if step.get("id") == "verdict"), {})
@@ -800,6 +818,23 @@ def self_test(root: Path) -> int:
         "the failed-verification upload re-enabled for a private row":
             lambda jobs: [step.update({"if": "failure()"}) for step in jobs["verify"]["steps"]
                           if "upload-artifact" in str(step.get("uses", ""))],
+        "the artifact itself named after the installation":
+            lambda jobs: [step["with"].update(name="combo-work-${{ env.INSTANCE_NAME }}")
+                          for step in jobs["verify"]["steps"]
+                          if "upload-artifact" in str(step.get("uses", ""))],
+        "the artifact's files named after the installation":
+            lambda jobs: [step["with"].update(
+                path="combo-${{ env.INSTANCE_NAME }}.json\ncombo-verdict-${{ env.INSTANCE_NAME }}.json\n")
+                          for step in jobs["verify"]["steps"]
+                          if "upload-artifact" in str(step.get("uses", ""))],
+        "the artifact widened to a glob":
+            lambda jobs: [step["with"].update(path="combo-*.json\n")
+                          for step in jobs["verify"]["steps"]
+                          if "upload-artifact" in str(step.get("uses", ""))],
+        "a second upload step added":
+            lambda jobs: jobs["verify"]["steps"].append(
+                {"uses": "actions/upload-artifact@v7", "if": UPLOAD_CONDITION,
+                 "with": {"name": UPLOAD_NAME, "path": "\n".join(UPLOAD_PATHS)}}),
         "the upload made unconditional":
             lambda jobs: [step.pop("if") for step in jobs["verify"]["steps"]
                           if "upload-artifact" in str(step.get("uses", ""))],

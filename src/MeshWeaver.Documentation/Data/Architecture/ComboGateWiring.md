@@ -401,7 +401,7 @@ name:
 |---|---|---|
 | `slots` | `[0,1,…,count-1]` | one opaque position per instance; the matrix is built from this |
 | `count` | the number of live installations | the denominator |
-| `digest` | sha256 over the roster and the source map, salted with the private roster, written as decimal digits | lets a verify job prove it derived the *same* roster; without the secret it cannot be recomputed, so the public value confirms no guessed name. Digits rather than hex because a hex string can spell a masked word, and an output containing one is dropped |
+| `digest` | sha256 over the roster and the source map, salted with the private roster, written as single digits joined by underscores (`4_0_7_…`) | lets a verify job prove it derived the *same* roster; without the secret it cannot be recomputed, so the public value confirms no guessed name. The shape is the point: a hex string can spell a masked word and a plain decimal one can contain an all-digit id or a numeric secret, and an output containing either is dropped. A value can occur inside this one only if it itself alternates single digits with underscores |
 
 Each `verify` job then runs the **same** derivation the preflight ran
 (`derive-combo-instances.py --discover --slot N --expect-count … --expect-digest …`), takes the row at
@@ -414,8 +414,8 @@ Re-deriving was chosen over handing the roster across as an artifact for one rea
 repository's artifacts are public, and an artifact's name and the file names inside it are not
 masked. For the same reason the per-instance job is named by its slot
 (`Verify instance slot 3 against its roll target`) and so are its work-root artifact and the files in
-it. Which installation a slot is can be read in that job's own log, where a private name prints
-masked.
+it. Naming by slot hides the *name* only — what the files contain is the next paragraph's subject.
+Which installation a public slot is can be read in that job's own log.
 
 **A private row's module list never leaves the run.** The slot step also says whether its row is one
 the private roster names — by instance id, by host, or by the repository that declares it, the same
