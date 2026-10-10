@@ -1764,6 +1764,44 @@ def classify_foreign_registries(plan: Plan, dispositions: dict[str, tuple[str, s
                 "and declare what protects it. Doc/Architecture/FleetRegistryRetention.")
 
 
+def running_repositories_of(axis2: list[OverlayScan],
+                            instances: list[Instance]) -> dict[str, list[str]]:
+    """The repositories, in the registry this run locks, where each installation's RUNNING set may live.
+
+    🚨 TWO FILES DESCRIBE ONE INSTALLATION, AND THE PORTAL'S OWN REPOSITORY IS IN THE SECOND ONE
+    (MeshWeaver#3438, measured 2026-10-09). The overlay that names the installation
+    (`Hosting__Deployment`) pins the side images — `memex-portal-next`, the gates — while the portal
+    itself comes from the installation's `Hosting/Deployment` RECORD (`…/Deployments/<id>.json`,
+    `imageRepository`). Keyed on the overlay's path alone, the record's repository never joined
+    the set, and once the fleet stopped pinning records (policy: never pin an image tag in a
+    deployment record — `pinnedImageTag` is empty, so the record reports its repository as
+    FLOATING) AXIS 3 looked for `memex`'s and `memex-cloud`'s running core commit in
+    `memex-portal-next` only. Every nightly run from 2026-10-03 on was red with *"NO manifest in
+    memex-portal-next … carries a tag for it"* — about two portals running `memex-portal-ai`, and
+    the red is `pause.reEnableWhen`, so the purge could not be re-enabled on a false reading.
+
+    So the set is the union of what the overlay pins and what the installation's own record names,
+    pinned OR floating: a floating repository is still where the running manifest lives, and this
+    axis matches by the running COMMIT's tags, never by the pinned tag. Widening the set only adds
+    candidates — a lock destroys nothing — and a repository that holds no tag for the commit adds
+    nothing. Pure."""
+    def record_of(instance: Instance, where: str) -> bool:
+        return (is_deployment_record_path(where)
+                and where.split("/")[-1] == f"{instance.id}.json")
+
+    result: dict[str, list[str]] = {}
+    for instance in instances:
+        repos: set[str] = set()
+        for scan in axis2:
+            for repo, _tag, where in list(scan.pins) + list(scan.floating):
+                if f"{scan.gh_repo} {where}" == instance.source:
+                    repos.add(repo)
+                elif scan.gh_repo == instance.gh_repo and record_of(instance, where):
+                    repos.add(repo)
+        result[instance.key] = sorted(repos)
+    return result
+
+
 def resolve_running_sets(plan: Plan, inventory: dict[str, list[Manifest]],
                          repositories_of: dict[str, list[str]]) -> None:
     """Protect the closure of every image set each live installation is running.
@@ -2656,11 +2694,7 @@ def run(repos: list[str], registry_name: str, apply: bool, release_enabled: bool
             "on 2026-09-12 (memex, memex-cloud, fabrikam), so zero means the overlay reader stopped "
             "finding `Hosting__Deployment` — never that the fleet has no installations. "
             "Run --self-test.")
-    repositories_of = {
-        instance.key: sorted({repo for scan in axis2 for repo, _tag, where in scan.pins
-                              if f"{scan.gh_repo} {where}" == instance.source})
-        for instance in plan.instances
-    }
+    repositories_of = running_repositories_of(axis2, plan.instances)
 
     # 🚨 AXIS 3 FIRST. `resolve_and_classify` is what splits `plan.wanted` into already-protected
     # and to-lock, so anything added to `wanted` after it runs is wanted by nobody who locks.
@@ -4537,11 +4571,7 @@ def _drive(axis1, axis2, registry: FakeRegistry, apply: bool = True,
         plan.blockers.extend(instance_blockers)
         if not plan.instances and not any(scan.unreadable for scan in axis2):
             plan.blockers.append("AXIS 3 found ZERO installations across the whole fleet.")
-        repositories_of = {
-            instance.key: sorted({repo for scan in axis2 for repo, _tag, where in scan.pins
-                                  if f"{scan.gh_repo} {where}" == instance.source})
-            for instance in plan.instances
-        }
+        repositories_of = running_repositories_of(axis2, plan.instances)
         # Read the same way `run()` reads it — from a root — so ARM 29's parity check is answered
         # by the harness doing the step, not by the harness declaring it did.
         classify_foreign_registries(
@@ -5007,6 +5037,55 @@ def self_test() -> int:
     check(("memex-portal-ai", "3.0.0-ci.7926", False) in registry.tag_writes,
           "ARM 21: a manifest that is already locked left its TAG unlocked — that is the live "
           "state measured on 2026-09-12 and it is what breaks the pin")
+
+    # ── ARM 20b: the installation's RECORD names the portal repository, pinned or FLOATING ──────
+    # MeshWeaver#3438, measured 2026-10-03 → 2026-10-09: every nightly run red with *"installation
+    # `memex-cloud` reports core 57a6e5f and NO manifest in memex-portal-next carries a tag for
+    # it"*. The overlay naming the installation pins only side images; the portal comes from
+    # `mesh/Deployments/<id>.json` → `imageRepository`, whose `pinnedImageTag` is EMPTY (records are
+    # never pinned), so the record reports it FLOATING — and the running-set axis read neither the
+    # record's file nor floating repositories. Here the overlay pins whisper only, and the record
+    # floats `memex-portal-ai`, where the running manifest is.
+    side_overlay = """
+config:
+  memex_portal:
+    Hosting__Deployment: "memex-cloud"
+ingress:
+  enabled: true
+  host: "memex.example.cloud"
+whisper:
+  image:
+    repository: meshweaver.azurecr.io/whisper-swiss-german
+    tag: "1.7.4"
+"""
+    floating_record = json.dumps({"content": {
+        "imageRepository": "meshweaver.azurecr.io/memex-portal-ai", "pinnedImageTag": ""}})
+
+    def _with_record(record_where: str) -> list[OverlayScan]:
+        scan = _scan2("Systemorph/Memex", side_overlay)
+        record_pins, record_floating = extract_record_pins(floating_record, "meshweaver")
+        scan.files += 1
+        scan.pins += [(repo, tag, record_where) for repo, tag in record_pins]
+        scan.floating += [(repo, tag, record_where) for repo, tag in record_floating]
+        return [scan]
+
+    plan, fails, registry = _drive(clean1, _with_record("mesh/Deployments/memex-cloud.json"),
+                                   FakeRegistry(_inventory(), FAKE_TAGS))
+    locked = {(repo, digest) for repo, digest, enabled in registry.writes if enabled is False}
+    check(not any("NO manifest" in b for b in plan.blockers),
+          f"ARM 20b: the installation's own record floats memex-portal-ai, where its running set "
+          f"is, and AXIS 3 still found nothing: {plan.blockers}")
+    check(("memex-portal-ai", RUNNING) in locked,
+          "ARM 20b: the manifest the installation RUNS, in the repository its RECORD names, was "
+          "not locked")
+    # 🚨 NEGATIVE CONTROL: the same record under ANOTHER installation's name is not this
+    # installation's record, so the axis must still say it found nothing — which proves the arm
+    # above passed because the record was JOINED, not because the inventory is matched anywhere.
+    plan, fails, registry = _drive(clean1, _with_record("mesh/Deployments/someone-else.json"),
+                                   FakeRegistry(_inventory(), FAKE_TAGS))
+    check(any("NO manifest" in b and "memex-cloud" in b for b in plan.blockers),
+          f"ARM 20b (control): a record belonging to another installation was joined to "
+          f"`memex-cloud`: {plan.blockers}")
 
     # ── ARM 22: an installation that will not answer is INCOMPLETE, never zero consumers ────────
     plan, fails, registry = _drive(clean1, clean2, FakeRegistry(_inventory(), FAKE_TAGS),
@@ -6860,7 +6939,7 @@ env:
                 # step `run()` has stopped taking.
                 "check_registry_roster", "publish_targets",
                 "build_instances", "classify_foreign_registries",
-                "resolve_running_sets", "resolve_and_classify", "classify_tags",
+                "running_repositories_of", "resolve_running_sets", "resolve_and_classify", "classify_tags",
                 "read_inventory", "build_plan", "apply_locks", "apply_tag_locks"}
     # expand_platform_closure is called from inside resolve_and_classify, so it is asserted here
     # by name rather than through run()'s own call list.
