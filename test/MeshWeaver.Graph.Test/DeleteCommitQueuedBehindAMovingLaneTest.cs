@@ -1,5 +1,6 @@
 using System;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
@@ -95,6 +96,83 @@ public class DeleteCommitQueuedBehindAMovingLaneTest(ITestOutputHelper output)
             (await storage.Inner.Exists(path).Should().Within(TestTimeouts.Convergence).Emit(
                     cancellationToken: TestContext.Current.CancellationToken))
                 .Should().BeFalse("the node must be gone");
+        }
+        finally
+        {
+            foreach (var holder in holders)
+                holder.Dispose();
+        }
+    }
+
+    /// <summary>A second cap-1 pg: lane, unrelated to the delete, that keeps advancing with queued work.</summary>
+    private const string UnrelatedLaneName = "pg:1198-unrelated-lane";
+
+    /// <summary>The delete's own lane, in which its leaf is admitted and then hangs.</summary>
+    private const string StuckLaneName = "pg:1198-stuck-lane";
+
+    /// <summary>
+    /// The other half of the credit's contract (Copilot review on #6403): a leaf that was ADMITTED to its write
+    /// lane and then hung is stuck, not queued, and an UNRELATED lane that keeps advancing must not reset its
+    /// watchdog. The leaf holds its cap-1 lane's only slot, so that lane stands still with work in it, and the
+    /// delete still fails at one budget. Against the first version of the credit - any advancing cap-1 lane
+    /// counted - the unrelated lane kept the watchdog alive for up to four budgets.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task ALeafAdmittedAndHungInItsLane_IsNotCreditedByAnUnrelatedLaneThatAdvances()
+    {
+        var registry = Mesh.ServiceProvider.GetRequiredService<IoPoolRegistry>();
+        var stuckLane = registry.Get(StuckLaneName);
+        var unrelatedLane = registry.Get(UnrelatedLaneName);
+
+        const string id = "commit-admitted-hung";
+        await NodeFactory.CreateNode(
+                new MeshNode(id, TestPartition) { Name = id, NodeType = "Markdown" })
+            .Should().Within(TestTimeouts.Convergence).Emit(
+                cancellationToken: TestContext.Current.CancellationToken);
+        var path = $"{TestPartition}/{id}";
+        storage.LatencyRoot = path;
+        storage.DeleteLane = stuckLane;
+        storage.HangInsideLane = true;
+
+        // The unrelated lane: queued work granted a slot every HoldEach for far longer than four budgets.
+        const int unrelatedHolders = 40;
+        var holders = new IDisposable[unrelatedHolders];
+        for (var i = 0; i < unrelatedHolders; i++)
+            holders[i] = unrelatedLane
+                .InvokeObservable(ct => Observable.Timer(HoldEach).Select(tick => 0))
+                .Subscribe(_ => { }, _ => { });
+        try
+        {
+            SpinWait.SpinUntil(() => unrelatedLane.CurrentlyWaiting >= unrelatedHolders - 1, TimeSpan.FromSeconds(10));
+            unrelatedLane.CurrentlyWaiting.Should().BeGreaterThanOrEqualTo(unrelatedHolders - 1,
+                "the unrelated lane must hold queued work, or nothing could have credited the watchdog");
+
+            var startedAt = DateTime.UtcNow;
+            var failure = new AsyncSubject<Exception>();
+            using var deleting = NodeFactory.DeleteNode(path).Subscribe(
+                _ => { },
+                ex =>
+                {
+                    failure.OnNext(ex);
+                    failure.OnCompleted();
+                });
+            // POSITIVE CONTROL: the leaf really is admitted and holds the stuck lane's only slot - otherwise this
+            // would measure a queued leaf, which the credit is allowed to cover.
+            SpinWait.SpinUntil(() => stuckLane.CurrentInFlight == 1, Budget);
+            stuckLane.CurrentInFlight.Should().Be(1,
+                "the leaf must be admitted to its lane and holding it before the watchdog fires");
+
+            var stuck = await failure.Should().Within(TestTimeouts.WriteConvergence).Emit(
+                "a leaf admitted to its lane and then silent must end the delete with the watchdog",
+                cancellationToken: TestContext.Current.CancellationToken);
+            var elapsed = DateTime.UtcNow - startedAt;
+            Output.WriteLine($"STUCK after {elapsed.TotalSeconds:0.0}s: {stuck.Message}");
+
+            stuck.Message.Should().Contain("made no progress for",
+                "this must be the commit stage's no-progress watchdog");
+            elapsed.Should().BeLessThan(Budget * 2,
+                "an unrelated lane advancing must not credit a leaf that is stuck inside its own lane - "
+                + $"it took {elapsed.TotalSeconds:0.0}s against a {Budget.TotalSeconds:0}s budget");
         }
         finally
         {

@@ -73,6 +73,13 @@ internal sealed class LatentDeleteStorageAdapter(InMemoryStorageAdapter inner) :
     /// </summary>
     public IIoPool? DeleteLane { get; set; }
 
+    /// <summary>
+    /// When set together with <see cref="DeleteLane"/>, a delete under <see cref="LatencyRoot"/> is ADMITTED
+    /// through the lane and then never answers - it holds the lane's slot, the way a leaf write that entered the
+    /// cap-1 pg: pool and hung would (#1198).
+    /// </summary>
+    public bool HangInsideLane { get; set; }
+
     private IObservable<T> WithLane<T>(IObservable<T> served)
         => DeleteLane is { } lane ? lane.InvokeObservable(ct => served) : served;
 
@@ -93,6 +100,9 @@ internal sealed class LatentDeleteStorageAdapter(InMemoryStorageAdapter inner) :
             if (StallAfterDeletes is { } stallAfter
                 && Interlocked.Increment(ref _deletesServed) > stallAfter)
                 return Observable.Never<T>();
+
+            if (HangInsideLane && DeleteLane is not null)
+                return WithLane(Observable.Never<T>());
 
             if (InjectOnFirstDelete is { } node && Interlocked.Exchange(ref _injected, 1) == 0)
                 // Straight into the store of record: the guard decorators above this adapter refuse

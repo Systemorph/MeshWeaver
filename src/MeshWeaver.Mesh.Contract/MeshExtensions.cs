@@ -4696,12 +4696,22 @@ public static class MeshExtensions
     /// Ticks for the commit stage's no-progress watchdog while its work is QUEUED behind a write lane that is
     /// still moving (#1198). The watchdog measures the gap between this delete's own removals, but a leaf's
     /// removal ends in ONE write on a cap-1 pg:/sf: pool, and a write that is queued behind other writers
-    /// cannot remove anything until its turn - the wait is not a stall. Credit is given only when a lane that
-    /// holds queued work GRANTED slots since the previous sample (the lane is advancing, so whoever is queued
-    /// is served in order). A lane that is not advancing - the store took our write and went silent, or the
-    /// lane is wedged - earns nothing, so a real stall still fails at one budget. Total credit is capped at
-    /// QueueCreditBudgets budgets. Read-only: lock-free counters from IoPoolRegistry.Snapshot, which mints
-    /// nothing.
+    /// cannot remove anything until its turn - the wait is not a stall.
+    ///
+    /// <para>A sample earns credit only when BOTH hold since the previous sample: some lane that holds queued
+    /// work GRANTED slots (the lane is advancing, so whoever is queued is served in order), and NO cap-1 write
+    /// lane that held work (in flight or waiting) stood still. The second condition is what ties the credit to
+    /// this delete without attributing pool admissions to callers: a cap-1 lane admits one writer at a time,
+    /// so a leaf that was ADMITTED and then hung holds its lane's only slot and that lane cannot admit anyone
+    /// else. Whichever lane the leaf is in, the sample sees a lane with work that did not advance, and no
+    /// unrelated advancing lane can reset the watchdog for it - an admitted stuck leaf still fails at one
+    /// budget. The rule errs only toward the old behaviour: an unrelated lane that stalls denies credit, so a
+    /// queued leaf may fail at one budget as it did before #1198.</para>
+    ///
+    /// <para>What it cannot see is a leaf stuck OUTSIDE every pool while the lanes advance for others. That
+    /// is why total credit is capped at QueueCreditBudgets budgets: past it the watchdog fails as before,
+    /// naming the pools (IoPoolQueueReport). Read-only: lock-free counters from IoPoolRegistry.Snapshot,
+    /// which mints nothing.</para>
     /// </summary>
     private static IObservable<IReadOnlyList<string>?> QueueWaitCredit(IoPoolRegistry? ioPools, TimeSpan budget)
     {
@@ -4711,32 +4721,59 @@ public static class MeshExtensions
         var interval = TimeSpan.FromTicks(Math.Max(TimeSpan.FromMilliseconds(100).Ticks, budget.Ticks / 10));
         var ceiling = TimeSpan.FromTicks(budget.Ticks * QueueCreditBudgets);
 
-        return Observable.Defer(() =>
+        return Observable.Interval(interval)
+            .Select(_ => WriteLaneAdmissions(ioPools))
+            .Scan(
+                (Previous: (ImmutableDictionary<string, (long Admitted, bool Busy, bool Queued)>?)null,
+                 Current: ImmutableDictionary<string, (long Admitted, bool Busy, bool Queued)>.Empty),
+                (acc, current) => (acc.Current, current))
+            .Select(pair => pair.Previous is { } previous && EarnsQueueCredit(previous, pair.Current))
+            .Scan(
+                (Credited: TimeSpan.Zero, Tick: false),
+                (acc, earned) => earned && acc.Credited + interval <= ceiling
+                    ? (acc.Credited + interval, true)
+                    : (acc.Credited, false))
+            .Where(state => state.Tick)
+            .Select(_ => (IReadOnlyList<string>?)null);
+    }
+
+    /// <summary>
+    /// The cap-1 pg:/sf: write lanes as one point-in-time reading: per lane, the admissions granted so far,
+    /// whether it holds work (in flight or waiting), and whether work is queued on it.
+    /// </summary>
+    private static ImmutableDictionary<string, (long Admitted, bool Busy, bool Queued)> WriteLaneAdmissions(
+        IoPoolRegistry ioPools) =>
+        ioPools.Snapshot()
+            .Where(reading => reading.MaxConcurrency == 1
+                              && (reading.Name.StartsWith(IoPoolNames.PostgresAdapterPrefix, StringComparison.Ordinal)
+                                  || reading.Name.StartsWith(IoPoolNames.SnowflakeAdapterPrefix, StringComparison.Ordinal)))
+            .ToImmutableDictionary(
+                reading => reading.Name,
+                reading => ((long)reading.QueueWait.Samples,
+                    reading.InFlight > 0 || reading.Waiting > 0,
+                    reading.Waiting > 0),
+                StringComparer.Ordinal);
+
+    /// <summary>
+    /// Whether the interval between two write-lane readings earns queue credit: a lane with queued work
+    /// advanced, and no lane that held work at the start of the interval stood still (see QueueWaitCredit).
+    /// </summary>
+    private static bool EarnsQueueCredit(
+        ImmutableDictionary<string, (long Admitted, bool Busy, bool Queued)> previous,
+        ImmutableDictionary<string, (long Admitted, bool Busy, bool Queued)> current)
+    {
+        var advanced = false;
+        foreach (var (name, now) in current)
         {
-            var lastAdmitted = new Dictionary<string, long>(StringComparer.Ordinal);
-            var credited = TimeSpan.Zero;
-            return Observable.Interval(interval)
-                .Select(_ =>
-                {
-                    var advanced = false;
-                    foreach (var reading in ioPools.Snapshot())
-                    {
-                        if (reading.MaxConcurrency != 1
-                            || !(reading.Name.StartsWith("pg:", StringComparison.Ordinal)
-                                 || reading.Name.StartsWith("sf:", StringComparison.Ordinal)))
-                            continue;
-                        var admitted = (long)reading.QueueWait.Samples;
-                        if (lastAdmitted.TryGetValue(reading.Name, out var was)
-                            && reading.Waiting > 0
-                            && admitted > was)
-                            advanced = true;
-                        lastAdmitted[reading.Name] = admitted;
-                    }
-                    return advanced;
-                })
-                .Where(advanced => advanced && (credited += interval) <= ceiling)
-                .Select(_ => (IReadOnlyList<string>?)null);
-        });
+            if (!previous.TryGetValue(name, out var was))
+                continue;
+            var moved = now.Admitted > was.Admitted;
+            if (was.Busy && now.Busy && !moved)
+                return false;
+            if (now.Queued && moved)
+                advanced = true;
+        }
+        return advanced;
     }
 
     /// <summary>
