@@ -373,6 +373,15 @@ data:
 {{- if and (not (kindIs "invalid" $signsAlone)) (not (kindIs "bool" $signsAlone)) }}
 {{- fail (printf "hostingOperator.maintainerSignsAlone is %q, and it must be a boolean (true or false, unquoted). A string is truthy to the chart, so \"false\" would render the key as true and let the maintainer sign alone against the declared value." (toString $signsAlone)) }}
 {{- end }}
+{{- /* ONE declaration: hostingOperator.maintainerSignsAlone. The same key in config.memex_portal (any
+  case) would otherwise reach the pod through the pass-through whenever the flag is false, so it is
+  REFUSED unless the flag itself says true (where the literal below renders it and the pass-through
+  skips it). */}}
+{{- range $k, $v := ((.Values.config).memex_portal | default dict) }}
+{{- if and (eq (lower $k) "hosting__operator__maintainersignsalone") (not (and (kindIs "bool" $signsAlone) $signsAlone)) }}
+{{- fail (printf "config.memex_portal.%s is set while hostingOperator.maintainerSignsAlone is not true. The flag has ONE declaration, hostingOperator.maintainerSignsAlone (the record's operator.maintainerSignsAlone); a portal-config entry must not switch it on behind a false one." $k) }}
+{{- end }}
+{{- end }}
 {{- if and (kindIs "bool" $signsAlone) $signsAlone }}
   Hosting__Operator__MaintainerSignsAlone: "true"
 {{- end }}
