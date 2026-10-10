@@ -116,11 +116,45 @@ internal sealed class LatentDeleteStorageAdapter(InMemoryStorageAdapter inner) :
         });
     }
 
-    /// <inheritdoc />
-    public IObservable<string> Delete(string path) => Slow(path, inner.Delete(path));
+    private System.Collections.Immutable.ImmutableList<string> _singleDeletes =
+        System.Collections.Immutable.ImmutableList<string>.Empty;
+
+    private System.Collections.Immutable.ImmutableList<IReadOnlyCollection<string>> _batchDeletes =
+        System.Collections.Immutable.ImmutableList<IReadOnlyCollection<string>>.Empty;
+
+    /// <summary>Every path a ONE-ROW delete (<see cref="Delete"/> / <see cref="DeleteIfExists"/>) was asked for.</summary>
+    public IReadOnlyList<string> SingleDeletes => _singleDeletes;
+
+    /// <summary>Every <see cref="DeleteMany"/> call, with the paths it was handed.</summary>
+    public IReadOnlyList<IReadOnlyCollection<string>> BatchDeletes => _batchDeletes;
 
     /// <inheritdoc />
-    public IObservable<bool> DeleteIfExists(string path) => Slow(path, inner.DeleteIfExists(path));
+    public IObservable<string> Delete(string path)
+    {
+        System.Collections.Immutable.ImmutableInterlocked.Update(ref _singleDeletes, l => l.Add(path));
+        return Slow(path, inner.Delete(path));
+    }
+
+    /// <inheritdoc />
+    public IObservable<bool> DeleteIfExists(string path)
+    {
+        System.Collections.Immutable.ImmutableInterlocked.Update(ref _singleDeletes, l => l.Add(path));
+        return Slow(path, inner.DeleteIfExists(path));
+    }
+
+    /// <summary>
+    /// One call, one statement: the backing store removes the rows in-process, and the call pays
+    /// <see cref="DeleteLatency"/> ONCE (when its first path is under <see cref="LatencyRoot"/>),
+    /// which is how a Postgres window costs one round-trip whatever its size.
+    /// </summary>
+    public IObservable<IReadOnlyList<string>> DeleteMany(IReadOnlyCollection<string> paths)
+    {
+        System.Collections.Immutable.ImmutableInterlocked.Update(ref _batchDeletes, l => l.Add(paths.ToArray()));
+        // The backing store's own DeleteMany, never this adapter's one-row deletes, so the
+        // counters above tell the two lanes apart.
+        var removed = ((IStorageAdapter)inner).DeleteMany(paths);
+        return paths.Count == 0 ? removed : Slow(paths.First(), removed);
+    }
 
     /// <inheritdoc />
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)

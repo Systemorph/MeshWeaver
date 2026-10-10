@@ -91,6 +91,32 @@ the second line of defence that makes the ACR's version survivable does not exis
 
 ## 3. The rule
 
+### The decided rule — bounded, and never at the cost of a reference
+
+Policy [`fleet-registry-bounded`](../PolicyNotProse) answers §7's item 2: **unbounded growth is NOT
+accepted.** `cr.meshweaver.cloud` gets a lifecycle rule, and the rule never deletes anything that a
+lock, a committed pin, a sealed set, an active build or a live installation references. Three
+consequences fix its shape before a line of it is written:
+
+1. **The protected set comes first and is derived every run.** `distribution` has no lock (§2), so
+   there is no object a protected set can be written into ahead of the deleter. The cleanup must
+   read the whole consumer inventory — R2's references, the running set of every live installation,
+   the sealed sets and the active builds — and **refuse to delete anything** when any part of it
+   cannot be read. "Could not read a consumer" is never "that consumer references nothing".
+2. **It runs through the governed infrastructure path**: an InstanceAction on the control instance,
+   **what-if first** (the run lists what it would delete and against which protected set, and
+   deletes nothing), then the real run under a mesh approval that binds that what-if. Never a hand
+   `DELETE` and never a blob lifecycle policy on the storage account: a lifecycle rule over a
+   content-addressed store cannot see references at all (§1's last row).
+3. **R0 stays the recorded state until the cleanup exists.** The record keeps `rule:
+   nothing-deletes` and `cleanupAuthorized: false`; the gate (§6) refuses `true` while the lifecycle
+   row is unverified. The first governed step is therefore the READ that answers that row — the
+   registry storage account's management policy — taken by the same action kind in its read-only
+   mode, not a person's `az` call.
+
+The ACR's half of the same decision is policy `registry-retention` (#3438): a 30-day window by age,
+no build-count quota, and the purge changed only through the governed `RegistryRetention` action.
+
 ### R0 — Nothing deletes from `cr.meshweaver.cloud`, and that is a DECLARED state
 
 §1 is its evidence and `.github/acr-retention/instances.json` is its record: the `registries` table
@@ -208,6 +234,12 @@ would have a complete protected set for images and an empty one for bundles, and
 bundle in the registry while reporting a full inventory.
 
 ## 5. What is missing to derive this from mesh data — [#4066](https://github.com/Systemorph/MeshWeaver/issues/4066)'s half, precisely
+
+🗂️ **What the CD build PUBLISHES is now mesh data** (policy `image-closure-as-mesh-data`): every
+`memex-portal-ai` image it builds is recorded as an `ImageClosure` node keyed by its digest, read
+through a coverage statement in which an absent record is NOT MEASURED —
+[An Image's Closure, as Mesh Data](../ImageClosureAsMeshData). That is one input to §5.1, not its
+answer: it records what this CD built, not what the registry holds.
 
 ### 5.1 Nothing enumerates what the registry HOLDS — and this is the largest gap
 
@@ -347,10 +379,13 @@ because of what the first live run found** ([run 34852827116](https://github.com
    or container carry an Azure management policy? A lifecycle rule deleting blobs under a
    *content-addressed* store is not "old data expiring" — it is deleting a layer that a current
    manifest still names, and the image reads as present until something pulls it. This needs one
-   read on the account named by `registry.storage.accountName`.
-2. **Whether unbounded growth is accepted.** §1 says nothing deletes. If that stands as the policy,
-   it wants a measured storage bound and a threshold that would change the answer — the ACR's is
-   measured (2,936 manifests on 2026-09-13) and this one is not.
+   read on the account named by `registry.storage.accountName` — taken through the governed
+   `RegistryRetention` action's read-only mode (`registryMode: verify`), which runs it as the
+   operator identity on the estate's lane. What stays the maintainer's is the identity's READ grant
+   on that account.
+2. ~~**Whether unbounded growth is accepted.**~~ **Decided: it is not** — policy
+   `fleet-registry-bounded`, §3 → *The decided rule*. A lifecycle rule that never deletes a
+   referenced artifact, derived protected set first, through the governed path.
 3. **Whether to build §5.2's receiver.** The socket is wired and costs nothing until a URL is set.
    It is the difference between a cleanup that can ever be safe and one that cannot.
 4. ~~**#4066 item 1** — map `MapContainerImages` in a host, or delete the assembly.~~ **Decided

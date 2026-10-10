@@ -143,6 +143,10 @@ public sealed class PullRequestService
         return ReadSpace(spacePath).SelectMany(space =>
             sync.ReadConfig(spacePath).Take(1).SelectMany(config =>
             {
+                // Policy azure-repos-push-only: no pull request is drafted for an Azure Repos source.
+                if (AzureReposPushPolicy.RefuseInbound(config?.RepositoryUrl,
+                        AzureReposPushPolicy.InboundOperation.PullRequest) is { } refusal)
+                    return Observable.Throw<MeshNode>(refusal.ToException());
                 var head = !string.IsNullOrWhiteSpace(headBranch) ? headBranch!
                     : !string.IsNullOrWhiteSpace(config?.Branch) ? config!.Branch : "main";
                 var @base = string.IsNullOrWhiteSpace(baseBranch) ? "main" : baseBranch.Trim();
@@ -355,6 +359,10 @@ public sealed class PullRequestService
             if (config?.RepositoryUrl is not { Length: > 0 } repoUrl)
                 return Observable.Throw<T>(new InvalidOperationException(
                     "No repository URL is set for this Space. Set one in the Repository section, then try again."));
+            // Policy azure-repos-push-only (MeshWeaver#5248): no pull-request operation is offered on an
+            // Azure Repos source — a GitHub token against an Azure URL could never work.
+            if (AzureReposPushPolicy.RefuseInbound(repoUrl, AzureReposPushPolicy.InboundOperation.PullRequest) is { } refusal)
+                return Observable.Throw<T>(refusal.ToException());
             return credentials.Get(userId).Take(1).SelectMany(cred =>
             {
                 if (cred?.AccessToken is not { Length: > 0 } token)

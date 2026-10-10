@@ -164,6 +164,12 @@ public static class GitHubSyncSettingsTab
             .StartWith((UiControl?)Controls.Html(
                 "<p style=\"font-size:0.85rem;color:var(--neutral-foreground-hint);\">Loading repository settings…</p>")));
 
+        // Which hosting service the URL names (MeshWeaver#5248) — derived from the URL, live, so the
+        // line follows an edit of the Repository URL above.
+        stack = stack.WithView((h, _) => sync.WatchConfig(spacePath)
+            .Select(cfg => (UiControl?)ProviderLine(h, cfg))
+            .StartWith((UiControl?)Controls.Stack.WithWidth("100%")));
+
         // ── 3. Sync + re-import ───────────────────────────────────────────────
         // Every long-running GitHub op runs as an ACTIVITY (Doc/Architecture/ActivityControlPlane):
         // the click calls the unified hub extension, which creates an activity + returns its path;
@@ -220,27 +226,19 @@ public static class GitHubSyncSettingsTab
 
         // ── 5. Pull request (AI-drafted → user edits the bound node → submit) ──
         stack = stack.WithView(Section("Pull request"));
-        stack = stack.WithView(Controls.Html(
-            "<p style=\"font-size:0.85rem;color:var(--neutral-foreground-hint);margin:0 0 8px 0;\">" +
-            "Draft a pull request with AI, edit the title and body, then submit it to GitHub. " +
-            "The draft is a mesh node bound directly to the editor below — your edits save as you type.</p>"));
-
-        // "Draft pull request" — AI drafts title+body and creates a draft PR node, then we point
-        // the editor at that node by stashing its path in the PrPathId data id.
-        stack = stack.WithView(Controls.Button(host.Localize("ui.draftPrWithAi"))
-            .WithAppearance(Appearance.Accent)
-            .WithClickAction(ctx =>
-            {
-                ctx.Host.UpdateData(ResultId, Pending("Asking the agent to draft a pull request…"));
-                prService.CreateDraft(spacePath, headBranch: null, baseBranch: "main").Subscribe(
-                    prNode =>
-                    {
-                        ctx.Host.UpdateData(PrPathId, prNode.Path);
-                        ctx.Host.UpdateData(ResultId, Ok("Draft created — edit the title and body below, then Submit."));
-                    },
-                    ex => ctx.Host.UpdateData(ResultId, Err(ex.Message)));
-                return Task.CompletedTask;
-            }));
+        // The draft row stays a STATIC part of the tab, exactly as it rendered before Azure Repos
+        // existed: the GitHub path's render shape is unchanged (MeshWeaver.Plugins' settings-tab suite
+        // pins it). Policy azure-repos-push-only (MeshWeaver#5248) is enforced where it cannot be
+        // bypassed — PullRequestService refuses every pull-request operation on an Azure Repos source,
+        // in the viewer's language — and the live notice below tells an Azure source's viewer so
+        // before they click.
+        foreach (var control in BuildDraftPullRequest(host, prService, spacePath))
+            stack = stack.WithView(control);
+        stack = stack.WithView((h, _) => sync.WatchConfig(spacePath)
+            .Select(cfg => GitRepositoryProvider.IsAzureRepos(cfg?.RepositoryUrl)
+                ? (UiControl?)Controls.Markdown(h.Localize("ui.gitSync.pullRequestsNotOffered"))
+                : (UiControl?)Controls.Stack.WithWidth("100%"))
+            .StartWith((UiControl?)Controls.Stack.WithWidth("100%")));
 
         // The PR editor + status, bound to the draft path the button stashes. Re-renders whenever
         // PrPathId changes (a new draft) — the node-content editor itself live-binds to the node
@@ -257,6 +255,33 @@ public static class GitHubSyncSettingsTab
             .StartWith((UiControl?)Controls.Stack.WithWidth("100%")));
 
         return stack;
+    }
+
+    /// <summary>The pull-request draft row (description + "Draft pull request" button), added as
+    /// direct children of the tab's stack — the shape it has always had.</summary>
+    private static IEnumerable<UiControl> BuildDraftPullRequest(LayoutAreaHost host, PullRequestService prService, string spacePath)
+    {
+        yield return Controls.Html(
+            "<p style=\"font-size:0.85rem;color:var(--neutral-foreground-hint);margin:0 0 8px 0;\">" +
+            "Draft a pull request with AI, edit the title and body, then submit it to GitHub. " +
+            "The draft is a mesh node bound directly to the editor below — your edits save as you type.</p>");
+
+        // "Draft pull request" — AI drafts title+body and creates a draft PR node, then we point
+        // the editor at that node by stashing its path in the PrPathId data id.
+        yield return Controls.Button(host.Localize("ui.draftPrWithAi"))
+            .WithAppearance(Appearance.Accent)
+            .WithClickAction(ctx =>
+            {
+                ctx.Host.UpdateData(ResultId, Pending("Asking the agent to draft a pull request…"));
+                prService.CreateDraft(spacePath, headBranch: null, baseBranch: "main").Subscribe(
+                    prNode =>
+                    {
+                        ctx.Host.UpdateData(PrPathId, prNode.Path);
+                        ctx.Host.UpdateData(ResultId, Ok("Draft created — edit the title and body below, then Submit."));
+                    },
+                    ex => ctx.Host.UpdateData(ResultId, Err(GitSyncRefusalException.Localize(ex, ctx.Host.ViewerLocale()))));
+                return Task.CompletedTask;
+            });
     }
 
     // ── Connect (OAuth authorization-code / callback flow) ─────────────────────
@@ -278,7 +303,7 @@ public static class GitHubSyncSettingsTab
                     // credential re-emits null and the body flips to "Not connected" on its own.
                     creds.Delete(userId).Subscribe(
                         _ => { },
-                        ex => ctx.Host.UpdateData(ResultId, Err(ex.Message)));
+                        ex => ctx.Host.UpdateData(ResultId, Err(GitSyncRefusalException.Localize(ex, ctx.Host.ViewerLocale()))));
                     return Task.CompletedTask;
                 }));
             return body;
@@ -307,6 +332,28 @@ public static class GitHubSyncSettingsTab
             "style=\"color:var(--accent-fill-rest);font-weight:600;\">Connect GitHub →</a>" +
             " (one-time browser approval; authorize for the org whose repos you'll sync).</span></div>");
     }
+
+    // ── Provider (MeshWeaver#5248) ──
+
+    /// <summary>
+    /// One line naming the hosting service a source syncs with, derived from its repository URL
+    /// (<see cref="GitRepositoryProvider.Classify"/>). An Azure Repos source says it is push-only
+    /// (policy <c>azure-repos-push-only</c>). Nothing when no URL is set yet.
+    /// </summary>
+    internal static UiControl ProviderLine(LayoutAreaHost host, GitHubSyncConfig? config)
+    {
+        if (config?.RepositoryUrl is not { Length: > 0 } url)
+            return Controls.Stack.WithWidth("100%");
+        return Controls.Markdown(host.Localize(ProviderKey(url)));
+    }
+
+    /// <summary>The localization key of <see cref="ProviderLine"/> for a repository URL.</summary>
+    internal static string ProviderKey(string repositoryUrl) => GitRepositoryProvider.Classify(repositoryUrl) switch
+    {
+        GitRepositoryProvider.AzureRepos => "ui.gitSync.provider.AzureRepos",
+        GitRepositoryProvider.GitHub => "ui.gitSync.provider.GitHub",
+        _ => "ui.gitSync.provider.Git",
+    };
 
     // ── Sync buttons (direction-aware, shared by the primary + additional sources) ──
 
@@ -356,6 +403,7 @@ public static class GitHubSyncSettingsTab
                 $"<div style=\"font-weight:600;\">{Esc(node.Name ?? sourceId)}</div>"));
             source = source.WithView(
                 MeshNodeContentEditorControl.ForType(node.Path, typeof(GitHubSyncConfig)));
+            source = source.WithView(ProviderLine(host, config));
             source = source.WithView(BuildSyncButtons(
                 spacePath, userId, sourceId, config?.Direction ?? SyncDirection.Bidirectional));
             source = source.WithView(Controls.Button(host.Localize("ui.removeSource"))
@@ -366,7 +414,7 @@ public static class GitHubSyncSettingsTab
                     // and the removed source disappears on its own.
                     sync.RemoveSyncSource(spacePath, sourceId).Subscribe(
                         _ => { },
-                        ex => ctx.Host.UpdateData(ResultId, Err(ex.Message)));
+                        ex => ctx.Host.UpdateData(ResultId, Err(GitSyncRefusalException.Localize(ex, ctx.Host.ViewerLocale()))));
                     return Task.CompletedTask;
                 }));
             stack = stack.WithView(source);
@@ -401,7 +449,7 @@ public static class GitHubSyncSettingsTab
                     sync.AddSyncSource(spacePath, name).Subscribe(
                         node => ctx.Host.UpdateData(ResultId,
                             Ok($"Sync source '{name}' added — configure its repository and direction above.")),
-                        ex => ctx.Host.UpdateData(ResultId, Err(ex.Message)));
+                        ex => ctx.Host.UpdateData(ResultId, Err(GitSyncRefusalException.Localize(ex, ctx.Host.ViewerLocale()))));
                 }).Select(_ => System.Reactive.Unit.Default);
             }));
         return row;
@@ -433,7 +481,7 @@ public static class GitHubSyncSettingsTab
                     // Runs as an activity (progress + cancel via the panel above).
                     ctx.Host.Hub.ReimportFromGitHub(spacePath, commit, userId,
                             onActivityCreated: path => ctx.Host.UpdateData(ActivityPathId, path))
-                        .Subscribe(_ => { }, ex => ctx.Host.UpdateData(ResultId, Err(ex.Message)));
+                        .Subscribe(_ => { }, ex => ctx.Host.UpdateData(ResultId, Err(GitSyncRefusalException.Localize(ex, ctx.Host.ViewerLocale()))));
                 }).Select(_ => System.Reactive.Unit.Default);
             }));
         return row;
@@ -494,7 +542,7 @@ public static class GitHubSyncSettingsTab
                 // Runs as an activity (progress + cancel shown in the Sync section's activity panel).
                 ctx.Host.Hub.OpenPullRequestOnGitHub(spacePath, prPath, userId,
                         onActivityCreated: path => ctx.Host.UpdateData(ActivityPathId, path))
-                    .Subscribe(_ => { }, ex => ctx.Host.UpdateData(ResultId, Err(ex.Message)));
+                    .Subscribe(_ => { }, ex => ctx.Host.UpdateData(ResultId, Err(GitSyncRefusalException.Localize(ex, ctx.Host.ViewerLocale()))));
                 return Task.CompletedTask;
             }));
         // Status is GitHub-owned: we ASK GitHub live, never store/replicate it.
@@ -505,7 +553,7 @@ public static class GitHubSyncSettingsTab
                 ctx.Host.UpdateData(ResultId, Pending("Asking GitHub for the pull-request status…"));
                 prService.AskStatus(spacePath, prPath, userId).Subscribe(
                     info => ctx.Host.UpdateData(ResultId, Ok($"GitHub reports this pull request is {info.Status}.")),
-                    ex => ctx.Host.UpdateData(ResultId, Err(ex.Message)));
+                    ex => ctx.Host.UpdateData(ResultId, Err(GitSyncRefusalException.Localize(ex, ctx.Host.ViewerLocale()))));
                 return Task.CompletedTask;
             }));
         stack = stack.WithView(actions);
