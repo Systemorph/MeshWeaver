@@ -1,4 +1,5 @@
 ﻿using System.Reactive.Linq;
+using MeshWeaver.Graph.Apps;
 using MeshWeaver.Graph.Storage;
 using MeshWeaver.Mesh.Storage;
 using MeshWeaver.AI;   // IProviderKeyProtector & co keep their ORIGINAL namespace in MeshWeaver.Mesh.Contract (#2398 forwarders)
@@ -102,6 +103,9 @@ public static class GraphConfigurationExtensions
                 .AddHomeTabType()
                 .AddHomeConfigType()
                 .AddAppType()
+                // The app directory ({user}/_Apps) + the per-viewer launcher arrangement —
+                // MeshWeaver.Plugins Store/AppsOnTheInstance §4. What the home reads: Home:AppSource.
+                .AddAppDirectory()
                 // Per-user work at logon — the sibling of INodePostCreationHandler for users who
                 // already exist. See Doc/Architecture/LogonActions.
                 .AddLogonActionType()
