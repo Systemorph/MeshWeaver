@@ -88,6 +88,13 @@ repos:
         job: publish-bake
         lane: node-repo-publish-bake.yml
         grants: {contents: read, id-token: write}
+      # ── The previous compatibility epoch's leg (policy bake-per-live-identity, MeshWeaver#3583) — ARRIVING.
+      # A second call of the same lane with `epoch-leg: previous`, granted exactly what `publish-bake` is.
+      - workflow: ci.yml
+        job: publish-bake-previous-epoch
+        lane: node-repo-publish-bake.yml
+        grants: {contents: read, id-token: write}
+        pending: lands with Systemorph/MeshWeaver.Plugins#3264, the caller half of bake-per-live-identity (the lane's epoch-leg input merged in MeshWeaver#6375)
       - workflow: ci.yml
         job: test-repos
         lane: node-repo-gate.yml
