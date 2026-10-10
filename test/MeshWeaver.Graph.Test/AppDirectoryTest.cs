@@ -306,7 +306,8 @@ public class AppDirectoryPureTest
 
     [Theory]
     [InlineData("alice/_Apps/Crm", true, "alice", "Crm")]
-    [InlineData("alice/_Apps/Edu~Courses", true, "alice", "Edu/Courses")]
+    [InlineData("alice/_Apps/Edu~2FCourses", true, "alice", "Edu/Courses")]
+    [InlineData("alice/_Apps/A~7EB", true, "alice", "A~B")]
     [InlineData("alice/_App/Crm", false, "", "")]
     [InlineData("alice/_Apps", false, "", "")]
     [InlineData("alice/_Apps/Crm/x", false, "", "")]
@@ -327,9 +328,26 @@ public class AppDirectoryPureTest
         AppDirectory.RootsQuery.Should().Contain("content.app:true");
     }
 
+    [Theory]
+    [InlineData("Edu/Courses")]
+    [InlineData("A~B")]
+    [InlineData("A~2FB")]
+    [InlineData("A/~7E/B~")]
+    [InlineData("~")]
+    [InlineData("Plain")]
+    public void AnAppId_RoundTripsThroughItsRowId(string appId)
+    {
+        var row = LauncherArrangementPaths.RowIdFor(appId);
+        row.Should().NotContain("/", "a row id is one path segment");
+        LauncherArrangementPaths.AppIdOfRow(row).Should().Be(appId);
+    }
+
     [Fact]
-    public void ANestedAppId_RoundTripsThroughItsRowId()
-        => LauncherArrangementPaths.AppIdOfRow(LauncherArrangementPaths.RowIdFor("Edu/Courses")).Should().Be("Edu/Courses");
+    public void DistinctAppIds_NeverShareARow()
+    {
+        string[] ids = ["A/B", "A~B", "A~2FB", "A~7EB", "A~~B", "A/~B"];
+        ids.Select(LauncherArrangementPaths.RowIdFor).Should().OnlyHaveUniqueItems();
+    }
 
     // ── Home:AppSource ───────────────────────────────────────────────────────────────────────
 
@@ -472,8 +490,12 @@ public class AppDirectoryTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         await CreateUserAsync(Seeded, ct);
-        await Mesh.GetWorkspace().GetMeshNodeStream($"{Seeded}/_Access/{Seeded}_Access")
-            .Where(n => n is not null).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        // The owner's self-grant is written after the user exists: wait for it through the _Access
+        // LISTING (never a point read of a path that may not exist yet).
+        await mesh.Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{Seeded}/_Access nodeType:AccessAssignment"))
+            .Scan(0, (seen, change) => seen + change.Items.Count(n => n.Id == $"{Seeded}_Access"))
+            .Where(seen => seen > 0)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
         // A legacy record the viewer arranged.
         await access.RunAsSystem(() => mesh.CreateNode(new MeshNode("Inbox", $"{Seeded}/{AppNodeType.UserNamespace}")
         {

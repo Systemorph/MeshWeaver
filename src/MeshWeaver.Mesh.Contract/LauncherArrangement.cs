@@ -83,13 +83,31 @@ public static class LauncherArrangementPaths
     public static string DirectoryNamespaceFor(string userId) => $"{userId}/{DirectoryNamespace}";
 
     /// <summary>
-    /// A directory row's id for an app — the app id with <c>/</c> made path-safe, so a nested app
-    /// root still yields exactly one row under <c>{user}/_Apps</c>. Pure.
+    /// A directory row's id for an app — an INJECTIVE path-segment encoding, so a nested app root
+    /// still yields exactly one row under <c>{user}/_Apps</c> and no two app ids share a row:
+    /// <c>~</c> becomes <c>~7E</c> first, then <c>/</c> becomes <c>~2F</c>. Pure.
     /// </summary>
-    public static string RowIdFor(string appId) => appId.Replace('/', '~');
+    public static string RowIdFor(string appId) => appId.Replace("~", "~7E").Replace("/", "~2F");
 
-    /// <summary>The app id a row id stands for (the inverse of <see cref="RowIdFor"/>). Pure.</summary>
-    public static string AppIdOfRow(string rowId) => rowId.Replace('~', '/');
+    /// <summary>The app id a row id stands for — the exact inverse of <see cref="RowIdFor"/>,
+    /// decoded in one left-to-right scan. Pure.</summary>
+    public static string AppIdOfRow(string rowId)
+    {
+        if (!rowId.Contains('~'))
+            return rowId;
+        var result = new System.Text.StringBuilder(rowId.Length);
+        for (var i = 0; i < rowId.Length; i++)
+        {
+            if (rowId[i] == '~' && i + 2 < rowId.Length)
+            {
+                var code = rowId.Substring(i + 1, 2);
+                if (code == "7E") { result.Append('~'); i += 2; continue; }
+                if (code == "2F") { result.Append('/'); i += 2; continue; }
+            }
+            result.Append(rowId[i]);
+        }
+        return result.ToString();
+    }
 
     /// <summary>
     /// Whether <paramref name="path"/> is a directory row (<c>{user}/_Apps/{rowId}</c>), and whose
