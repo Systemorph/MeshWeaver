@@ -1,4 +1,6 @@
-# Auto-merge lane — it no longer ARMS anything; it DISARMS on a push (policy review-then-suites).
+# Auto-merge lane — it DISARMS on a push (policy review-then-suites), and ARMS exactly one kind of
+# pull request: a GENERATED-ONLY one by the generated-files App, which owes no review (the second job,
+# `arm-generated`, at the bottom of this file). Every other arm is the control plane's decision.
 #
 # 🚨🚨 ARMING MOVED TO THE CONTROL PLANE. Arming auto-merge is a DECISION — "this head was reviewed
 # and every finding answered, and the required checks are green" — and the decision belongs to the
@@ -146,3 +148,107 @@ jobs:
           fi
           echo "Disarmed #$PR: the new head has not been reviewed yet; the control plane re-arms it once it is reviewed and every finding is answered." >> "$GITHUB_STEP_SUMMARY"
           echo "disarmed #$PR"
+
+  # 🚨 THE ONE ARM A WORKFLOW MAY TAKE: a GENERATED-ONLY pull request by the generated-files App
+  # (`settle-locks`' manifest.lock settles, `stamp-floors`' floor stamps). Such a pull request owes NO
+  # review — `check-review-answered.py`'s `generated_only` rule, the same one the stage gate and the
+  # required `Automatic review answered` verdict already apply — so arming it decides nothing a review
+  # would have decided, and the required checks still gate the merge. It used to be armed only by the
+  # control plane's model-driven PR steward (`Hosting:PrBabysitter:Enabled`), which is switched off
+  # fleet-wide; MeshWeaver.Plugins #3236 then sat green and unarmed for ~10.5 h and Plugins published
+  # nothing for ~13.5 h until a person merged it. This job is the deterministic, non-model executor.
+  #
+  # Every other pull request stays the control plane's decision. The predicate decides on PROVENANCE
+  # (author and every commit the App, every changed file a lock or a floor-only `index.json` line, the
+  # file and commit listings read IN FULL, the head unmoved across the reads, open, not a draft, a
+  # branch of this repository, onto the default branch) and answers `false` on any doubt; a failed
+  # read is a RED run that armed nothing. The job-level `if:` is only a pre-filter so a person's pull
+  # request never even starts it — the predicate is what decides.
+  #
+  # It runs AFTER the disarm (`needs: arm`): on a push the arm comes off first, then — only if the NEW
+  # head is still generated-only — goes back on, pinned to that head (`--match-head-commit`), so an
+  # arm can never carry over onto a head the predicate did not see.
+  arm-generated:
+    name: Arm a generated-only pull request (no review owed)
+    needs: arm
+    runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
+    concurrency:
+      group: auto-arm-generated-${{ github.repository }}-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    timeout-minutes: 10
+    if: ${{ !cancelled() && needs.arm.result != 'failure' && github.event.pull_request.user.login == 'meshweaver-cloud[bot]' }}
+    steps:
+      - name: The App credential, or a red run naming what to provision
+        env:
+          MESHWEAVER_APP_ID: ${{ secrets.MESHWEAVER_APP_ID }}
+          MESHWEAVER_APP_PRIVATE_KEY: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+        run: |
+          missing=()
+          [ -n "$MESHWEAVER_APP_ID" ]          || missing+=("secrets.MESHWEAVER_APP_ID           app id of the org's meshweaver-cloud GitHub App, installed on every repo in the fleet")
+          [ -n "$MESHWEAVER_APP_PRIVATE_KEY" ] || missing+=("secrets.MESHWEAVER_APP_PRIVATE_KEY  that App's private key (PEM); source of truth is Key Vault Systemorph/github-app-privatekey")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::the generated-only arm cannot run — provision the following, then re-run:"
+            for m in "${missing[@]}"; do echo "  • $m"; done
+            exit 1
+          fi
+          echo "App credential present."
+
+      # The App token, never GITHUB_TOKEN: GitHub performs an auto-merge as the identity that ARMED it,
+      # and a merge made with GITHUB_TOKEN starts no push-event run on the default branch (#2916).
+      - name: Mint an installation token that may arm
+        id: arm-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.MESHWEAVER_APP_ID }}
+          private-key: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      # The predicate is the platform's, read from the platform's default branch over anonymous git
+      # (no REST budget) — never a copy, and never a file from the pull request's own tree.
+      - name: Fetch the platform's review-answered predicate
+        run: |
+          set -euo pipefail
+          git clone --quiet --depth 1 --filter=blob:none --no-checkout https://github.com/Systemorph/MeshWeaver.git "$RUNNER_TEMP/mw-core"
+          git -C "$RUNNER_TEMP/mw-core" show HEAD:.github/scripts/check-review-answered.py > "$RUNNER_TEMP/check-review-answered.py"
+          head -c 400 "$RUNNER_TEMP/check-review-answered.py" | grep -q "check-review-answered" \
+            || { echo "::error::the fetched check-review-answered.py does not look like the predicate"; exit 1; }
+          python3 "$RUNNER_TEMP/check-review-answered.py" --self-test > "$RUNNER_TEMP/self-test.log" \
+            || { cat "$RUNNER_TEMP/self-test.log"; echo "::error::the predicate's self-test failed — nothing is armed on an unproven predicate"; exit 1; }
+          echo "predicate: $(git -C "$RUNNER_TEMP/mw-core" rev-parse HEAD), self-test green"
+
+      - name: Is this head generated-only?
+        id: classify
+        env:
+          GH_TOKEN: ${{ steps.arm-token.outputs.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: python3 "$RUNNER_TEMP/check-review-answered.py" --repo "$REPO" --pr "$PR" --arm-generated
+
+      # Read back afterwards: the pull request's `auto_merge` (or `merged`) field is the evidence, not
+      # the command's exit code. `--match-head-commit` makes GitHub refuse an arm onto any other head.
+      - name: Arm it, pinned to the head the predicate read
+        if: steps.classify.outputs.arm == 'true'
+        env:
+          GH_TOKEN: ${{ steps.arm-token.outputs.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ steps.classify.outputs.head }}
+        run: |
+          set -euo pipefail
+          [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::the predicate said arm but named no head sha"; exit 1; }
+          gh pr merge "$PR" --repo "$REPO" --auto --merge --match-head-commit "$HEAD_SHA"
+          state=$(gh api "repos/$REPO/pulls/$PR" --jq '"\(.auto_merge != null) \(.merged) \(.head.sha)"')
+          read -r armed merged head <<< "$state"
+          if [ "$merged" != "true" ] && { [ "$armed" != "true" ] || [ "$head" != "$HEAD_SHA" ]; }; then
+            echo "::error::#$PR is not armed on $HEAD_SHA after the arm (auto_merge armed=$armed, head=$head)"
+            exit 1
+          fi
+          echo "Armed #$PR on ${HEAD_SHA:0:10} (generated-only; the required checks gate the merge)." >> "$GITHUB_STEP_SUMMARY"
+          echo "armed=$armed merged=$merged head=${head:0:10}"

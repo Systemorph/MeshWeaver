@@ -1211,8 +1211,10 @@ after every push (#2791 twice in an hour).
 **Arming is a decision, so it moved to the control plane** (policy
 [`review-then-suites`](../PolicyNotProse)). The control instance's PR steward (MeshWeaver.Plugins
 `PrArming`, App `systemorph-com`) already reads every fleet pull request's review state and
-answered-findings verdict; it is the one place that arms. **No workflow arms auto-merge any more** —
-`ArmedMergeMustTriggerMainsPushLanesGuard.NoWorkflowArmsAutoMerge` fails the build if one does.
+answered-findings verdict; it is the one place that arms a reviewed pull request. **No workflow
+arms auto-merge** except for generated-only App pull requests, which owe no review (see *The one arm
+a workflow takes* below) — `ArmedMergeMustTriggerMainsPushLanesGuard.NoWorkflowArmsAutoMerge` fails
+the build on any other.
 
 ### What the control plane arms on
 
@@ -1261,6 +1263,36 @@ one thing: on `synchronize`, if the pull request is armed, it takes the arm off 
 outrun it, and it tolerates no failed step: a disarm that silently did not happen is the hole
 reopened. It uses the meshweaver-cloud token it always used (`contents: write`,
 `pull-requests: write`) — no `checks` permission, and no change to any caller's grants.
+
+### The one arm a workflow takes: generated-only App pull requests
+
+The control plane's PR steward is model-driven and is switched off fleet-wide
+(`Hosting:PrBabysitter:Enabled`) because it spent the model budget. It was also the only thing that
+armed the **generated** pull requests `main`'s own jobs open on MeshWeaver.Plugins — `settle-locks`
+(every `manifest.lock`) and `stamp-floors` (`mesh-floor.lock` plus each root `index.json`'s
+`minMeshVersion`). Without it, Plugins #3236 sat green and unarmed for about 10.5 hours, and no
+Plugins merge published for about 13.5 hours until a person merged it.
+
+Such a pull request owes **no review**: the `generated_only` rule (author and every commit the
+`meshweaver-cloud` App, every changed file a lock or a floor-only `index.json` line) already releases
+the stage gate and the required verdict. Arming it therefore decides nothing a review would have
+decided, so a deterministic executor arms it: `auto-arm.yml`'s second job, `arm-generated`.
+
+- It runs after the disarm (`needs: arm`) on every forwarded event: open, reopen, undraft and push.
+  On a push the arm comes off first, then goes back on only if the **new** head is still
+  generated-only.
+- The decision is `check-review-answered.py --arm-generated` (`arm_generated_verdict`), fetched from
+  the platform's default branch, never from the pull request's tree. It is `true` only when the pull
+  request is open, not a draft, a branch of the same repository, onto the default branch, and
+  `generated_only` holds over file and commit listings read **in full**, with the head unchanged
+  across the reads. Any doubt answers `false`, and a failed read is a red run that armed nothing.
+- The arm is `gh pr merge --auto --merge --match-head-commit <the head it read>`, made with the App
+  token (never `GITHUB_TOKEN`, see #2916) and read back. The required checks still gate the merge.
+- A person's pull request, another bot's pull request, and a mixed one are never armed here. The
+  self-test cases under `arm:` (generated → arm; mixed or human → never; unreadable or short file
+  list → never; moved head → never) are the test vectors, and
+  `ArmedMergeMustTriggerMainsPushLanesGuard.NoWorkflowArmsAutoMerge` exempts this step only while it
+  is gated on that verdict and pinned to the head.
 
 ## Related
 
