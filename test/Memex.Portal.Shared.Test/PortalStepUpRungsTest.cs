@@ -132,6 +132,35 @@ public class PortalStepUpRungsTest
     }
 
     [Fact]
+    public void ACodeSharedByAdjacentSteps_IsAcceptedOnlyOnce()
+    {
+        // This secret produces the same six digits for steps 1,999,999 and 2,000,000: the match must
+        // record the NEWER step, or the same code is accepted a second time for it.
+        var secret = Convert.FromHexString("0000000000000000000000000000000000127054");
+        Assert.Equal(Totp.Code(secret, 1_999_999), Totp.Code(secret, 2_000_000));
+        var now = DateTimeOffset.FromUnixTimeSeconds(2_000_000L * 30);
+        var code = Totp.Code(secret, 2_000_000);
+        Assert.Equal(2_000_000, Totp.Verify(secret, code, now, lastAcceptedStep: 0));
+        Assert.Null(Totp.Verify(secret, code, now, lastAcceptedStep: 2_000_000));   // replay refused
+        // Negative control: the newer step is still accepted once the older one is spent.
+        Assert.Equal(2_000_000, Totp.Verify(secret, code, now, lastAcceptedStep: 1_999_999));
+    }
+
+    [Fact]
+    public void WithStepUpOff_AStaleSessionIsToldToSignInAgain_NotLoopedThroughAConfirmation()
+    {
+        // Step-up off: no receipt can ever be minted, so a stale session must not be sent to confirm.
+        Assert.Equal(StepUpController.EnrollAuthorization.NeedsFreshSignIn, StepUpController.FurtherFactorWithoutReceipt(enabled: false, signedInRecently: false));
+        Assert.Equal(StepUpController.EnrollAuthorization.AllowedByReceipt, StepUpController.FurtherFactorWithoutReceipt(enabled: false, signedInRecently: true));
+        Assert.Equal(StepUpController.EnrollAuthorization.NeedsFreshSignIn, StepUpController.FurtherFactorFromVerdict(StepUpOutcome.NotRequired, signedInRecently: false));
+        Assert.Equal(StepUpController.EnrollAuthorization.AllowedByReceipt, StepUpController.FurtherFactorFromVerdict(StepUpOutcome.NotRequired, signedInRecently: true));
+        // Step-up on: a fresh sign-in alone is never enough — the existing factor confirms first.
+        Assert.Equal(StepUpController.EnrollAuthorization.NeedsStepUp, StepUpController.FurtherFactorWithoutReceipt(enabled: true, signedInRecently: true));
+        Assert.Equal(StepUpController.EnrollAuthorization.NeedsStepUp, StepUpController.FurtherFactorWithoutReceipt(enabled: true, signedInRecently: false));
+        Assert.Equal(StepUpController.EnrollAuthorization.AllowedByReceipt, StepUpController.FurtherFactorFromVerdict(StepUpOutcome.Accepted, signedInRecently: false));
+    }
+
+    [Fact]
     public void RecoveryCodesAreHashedAndNormalized()
     {
         var codes = Totp.NewRecoveryCodes();

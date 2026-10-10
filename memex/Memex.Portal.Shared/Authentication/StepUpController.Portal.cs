@@ -452,7 +452,7 @@ public sealed partial class StepUpController
         /// <summary>A factor exists — confirm with it first.</summary>
         NeedsStepUp,
 
-        /// <summary>No factor exists and the sign-in is not recent enough to enrol the first one.</summary>
+        /// <summary>The sign-in is not recent enough: to enrol the first factor, or — with step-up off — any further one.</summary>
         NeedsFreshSignIn,
 
         /// <summary>A Microsoft account (or a session that does not name its provider): portal factors are not for it.</summary>
@@ -523,17 +523,43 @@ public sealed partial class StepUpController
             if (!hasFactor)
                 return Observable.Return(signedInRecently ? EnrollAuthorization.AllowedFirst : EnrollAuthorization.NeedsFreshSignIn);
             if (string.IsNullOrEmpty(receiptId))
-                return Observable.Return(enabled || !signedInRecently ? EnrollAuthorization.NeedsStepUp : EnrollAuthorization.AllowedByReceipt);
+                return Observable.Return(FurtherFactorWithoutReceipt(enabled, signedInRecently));
             if (service is null) return Observable.Return(EnrollAuthorization.NeedsStepUp);
             return (consume
                     ? service.Consume(receiptId, userId, StepUpPaths.Factors(userId), StepUpPaths.EnrollBinding)
                     : service.Check(receiptId, userId, StepUpPaths.Factors(userId), StepUpPaths.EnrollBinding))
-                .Select(verdict => verdict.Outcome == StepUpOutcome.Accepted
-                                   || (verdict.Outcome == StepUpOutcome.NotRequired && signedInRecently)
-                    ? EnrollAuthorization.AllowedByReceipt
-                    : EnrollAuthorization.NeedsStepUp);
+                .Select(verdict => FurtherFactorFromVerdict(verdict.Outcome, signedInRecently));
         };
     }
+
+    /// <summary>
+    /// A further factor with no receipt presented. With step-up on, the existing factor confirms it
+    /// first. With step-up off there is no step-up to send the user to (<c>Start</c> answers
+    /// <see cref="StepUpOutcome.NotRequired"/> and mints nothing), so the bar is the fresh sign-in
+    /// alone — a stale session is told to sign in again rather than looped through a confirmation
+    /// that can never produce a receipt.
+    /// </summary>
+    /// <param name="enabled">Whether step-up is on for this instance.</param>
+    /// <param name="signedInRecently">Whether the sign-in is within <see cref="FirstFactorSignInAge"/>.</param>
+    /// <returns>The authorization.</returns>
+    internal static EnrollAuthorization FurtherFactorWithoutReceipt(bool enabled, bool signedInRecently) =>
+        enabled ? EnrollAuthorization.NeedsStepUp
+        : signedInRecently ? EnrollAuthorization.AllowedByReceipt
+        : EnrollAuthorization.NeedsFreshSignIn;
+
+    /// <summary>
+    /// A further factor with a receipt presented: an accepted receipt authorizes it; a
+    /// <see cref="StepUpOutcome.NotRequired"/> verdict (step-up off) falls back to the fresh-sign-in
+    /// bar exactly as <see cref="FurtherFactorWithoutReceipt"/> does; anything else needs the step-up.
+    /// </summary>
+    /// <param name="outcome">The receipt verdict.</param>
+    /// <param name="signedInRecently">Whether the sign-in is within <see cref="FirstFactorSignInAge"/>.</param>
+    /// <returns>The authorization.</returns>
+    internal static EnrollAuthorization FurtherFactorFromVerdict(string? outcome, bool signedInRecently) =>
+        outcome == StepUpOutcome.Accepted ? EnrollAuthorization.AllowedByReceipt
+        : outcome == StepUpOutcome.NotRequired
+            ? signedInRecently ? EnrollAuthorization.AllowedByReceipt : EnrollAuthorization.NeedsFreshSignIn
+        : EnrollAuthorization.NeedsStepUp;
 
     /// <summary>
     /// The completion check of <see cref="StepUpLadder.MayComplete"/>, with the session's provider,

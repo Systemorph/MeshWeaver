@@ -2247,7 +2247,7 @@
   "stepUp.enroll.none": "Noch kein Passkey.",
   "stepUp.enroll.created": "Passkey hinzugefügt am {0}",
   "stepUp.enroll.totpOn": "Eine Authenticator-App ist eingerichtet.",
-  "stepUp.enroll.signInAgain": "Melden Sie sich zum Einrichten Ihrer ersten Methode ab und wieder an, und kehren Sie innerhalb von 10 Minuten hierher zurück.",
+  "stepUp.enroll.signInAgain": "Melden Sie sich zum Einrichten einer Methode ab und wieder an, und kehren Sie innerhalb von 10 Minuten hierher zurück.",
   "stepUp.enroll.confirmFirst": "Bestätigen Sie, dass Sie es sind, bevor Sie eine weitere Methode hinzufügen.",
   "stepUp.enroll.addPasskey": "Passkey hinzufügen",
   "stepUp.enroll.totp": "Authenticator-App",

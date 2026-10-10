@@ -2247,7 +2247,7 @@
   "stepUp.enroll.none": "No passkey yet.",
   "stepUp.enroll.created": "Passkey added {0}",
   "stepUp.enroll.totpOn": "An authenticator app is set up.",
-  "stepUp.enroll.signInAgain": "To set up your first method, sign out and sign in again, then come back here within 10 minutes.",
+  "stepUp.enroll.signInAgain": "To set up a method, sign out and sign in again, then come back here within 10 minutes.",
   "stepUp.enroll.confirmFirst": "Confirm it's you before adding another method.",
   "stepUp.enroll.addPasskey": "Add a passkey",
   "stepUp.enroll.totp": "Authenticator app",

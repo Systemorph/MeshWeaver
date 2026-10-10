@@ -50,8 +50,8 @@ public static class Totp
     }
 
     /// <summary>
-    /// The step a submitted code matches within the drift window and AFTER <paramref name="lastAcceptedStep"/>,
-    /// or null. Compared in constant time.
+    /// The newest step a submitted code matches within the drift window and AFTER
+    /// <paramref name="lastAcceptedStep"/>, or null. Compared in constant time.
     /// </summary>
     /// <param name="secret">The shared secret.</param>
     /// <param name="code">What the user typed (spaces ignored).</param>
@@ -68,7 +68,9 @@ public static class Totp
         {
             if (step <= lastAcceptedStep) continue;
             if (CryptographicOperations.FixedTimeEquals(Encoding.ASCII.GetBytes(Code(secret, step)), Encoding.ASCII.GetBytes(typed)))
-                matched ??= step;
+                // The NEWEST matching step: adjacent steps can share a code, and keeping the older
+                // one would let the same code be accepted again for the newer step (a replay).
+                matched = step;
         }
         return matched;
     }
