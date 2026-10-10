@@ -76,8 +76,10 @@ public static class PackageInstaller
     /// <param name="batchSize">Bounded concurrency for the per-node upsert fan-out.</param>
     /// <param name="authorizingUserId">The principal that AUTHORIZED this install, captured before
     /// the install's system impersonation. Only consulted for a COMMERCIAL package, which requires
-    /// a global admin (#830); null means nobody authorized it (unattended provisioning), which is
-    /// fine for a free package and refuses a priced one. See <see cref="PackageEntitlement"/>.</param>
+    /// a global admin (#830) or a verified governed <c>package.provision</c> activity
+    /// (<c>Governance/Activities/{id}</c>); null means nobody authorized it (unattended
+    /// provisioning), which is fine for a free package and refuses a priced one. See
+    /// <see cref="PackageEntitlement"/>.</param>
     /// <returns>A cold observable of the install outcome; Subscribe to run.</returns>
     public static IObservable<InstallResult> Install(
         IMessageHub hub,
