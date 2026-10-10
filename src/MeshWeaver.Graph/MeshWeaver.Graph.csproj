@@ -49,6 +49,12 @@
          production caller is PluginCatalog's ModuleLiveActivation, which feeds only the pinned
          copy of a generation the landing service landed; its own public surface takes no path. -->
     <InternalsVisibleTo Include="MeshWeaver.PluginCatalog" />
+    <!-- StepUpService.Mint issues approval step-up receipts. Issuing is the step-up ENDPOINTS'
+         job alone (they authenticate the approver first), so the concrete service is internal and
+         only the portal host that carries those endpoints may name it — the public IStepUpService
+         is check-and-consume only (Doc/Architecture/ApprovalStepUp). -->
+    <InternalsVisibleTo Include="Memex.Portal.Shared" />
+    <InternalsVisibleTo Include="Memex.Portal.Shared.Test" />
   </ItemGroup>
 
   <ItemGroup>

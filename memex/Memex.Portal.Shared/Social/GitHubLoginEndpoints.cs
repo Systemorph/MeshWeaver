@@ -145,6 +145,9 @@ public static class GitHubLoginEndpoints
                         new(ClaimTypes.Email, email),
                         new("email", email),
                     };
+                    // The step-up ladder reads the provider off the session (Doc/Architecture/ApprovalStepUp).
+                    claims.AddRange(Memex.Portal.Shared.Authentication.StepUpClaims.ForSession(
+                        "GitHub", Array.Empty<Claim>(), DateTimeOffset.UtcNow));
                     var principal = new ClaimsPrincipal(
                         new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme));
                     await http.SignInAsync(
