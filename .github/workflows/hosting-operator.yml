@@ -65,8 +65,8 @@ jobs:
         run: |
           set -euo pipefail
           tracked=$(git ls-files deploy/aks/operator/bin/ | wc -l | tr -d ' ')
-          if [ "$tracked" -lt 36 ]; then
-            echo "::error::only ${tracked} file(s) tracked under deploy/aks/operator/bin/ — expected 36 (33 commands + run.sh + _common.sh + _audit.jq). The floor is the REAL count — raise it with every command added, or a lost file passes."
+          if [ "$tracked" -lt 37 ]; then
+            echo "::error::only ${tracked} file(s) tracked under deploy/aks/operator/bin/ — expected 37 (34 commands + run.sh + _common.sh + _audit.jq). The floor is the REAL count — raise it with every command added, or a lost file passes."
             echo "::error::Almost certainly .gitignore matching this bin/ again. `git add` on an ignored path exits 0 and does NOTHING, so the loss is silent until a fresh checkout builds an image with no scripts in it."
             git check-ignore -v deploy/aks/operator/bin/run.sh || true
             exit 1
@@ -208,6 +208,12 @@ jobs:
           # shape: the ResetDatabase / PurgeKeptDatabase plan steps that emit it are the Plugins half,
           # which runs only once an operator pin carries this command; the line moves up then.
           hosting-db-reset           Plugins#2781 — ships and is behaviour-tested; the plan half is the Plugins ResetDatabase / PurgeKeptDatabase actions
+          #
+          # hosting-inventory is the read-only node census (the Plugins `Inventory` InstanceAction): it
+          # ships and is behaviour-tested against test/stubs/inventory. Its plan step is the Plugins half,
+          # which merges after this image is on hosting-operator:main, for the same reason as
+          # hosting-migrate above; the line moves up into the plan list once it has.
+          hosting-inventory          Inventory — ships and is behaviour-tested; the plan half is the Plugins Inventory action
           EOF
           unclaimed=()
           for path in deploy/aks/operator/bin/hosting-*; do
@@ -254,7 +260,7 @@ jobs:
         # MeshWeaver#4722 sweep added them with the helm one.
         run: |
           set -euo pipefail
-          for f in deploy/aks/operator/test/stubs/pull-secret/az deploy/aks/operator/test/stubs/pull-secret/kubectl deploy/aks/operator/test/stubs/pv-resize/kubectl deploy/aks/operator/test/stubs/inline-env/kubectl deploy/aks/operator/test/stubs/kv-rotate/az deploy/aks/operator/test/stubs/kv-ensure/az deploy/aks/operator/test/stubs/kv-copy/az deploy/aks/operator/test/stubs/registry-register/az deploy/aks/operator/test/stubs/signin-app/az deploy/aks/operator/test/stubs/image-mirror/az deploy/aks/operator/test/stubs/image-mirror/crane deploy/aks/operator/test/stubs/deploy/az deploy/aks/operator/test/stubs/kv-set/az deploy/aks/operator/test/stubs/kv-set/kubectl deploy/aks/operator/test/stubs/kv-status/az deploy/aks/operator/test/stubs/db-release/kubectl deploy/aks/operator/test/stubs/db-release/helm deploy/aks/operator/test/stubs/pg/az deploy/aks/operator/test/stubs/pg/pg_dump deploy/aks/operator/test/stubs/pg/psql deploy/aks/operator/test/stubs/pg/pg_restore deploy/aks/operator/test/stubs/aks-upgrade/az deploy/aks/operator/test/stubs/aks-upgrade/kubectl deploy/aks/operator/test/stubs/aks-upgrade/curl deploy/aks/operator/test/stubs/db-reset/psql deploy/aks/operator/test/stubs/db-reset/az; do
+          for f in deploy/aks/operator/test/stubs/pull-secret/az deploy/aks/operator/test/stubs/pull-secret/kubectl deploy/aks/operator/test/stubs/pv-resize/kubectl deploy/aks/operator/test/stubs/inline-env/kubectl deploy/aks/operator/test/stubs/kv-rotate/az deploy/aks/operator/test/stubs/kv-ensure/az deploy/aks/operator/test/stubs/kv-copy/az deploy/aks/operator/test/stubs/registry-register/az deploy/aks/operator/test/stubs/signin-app/az deploy/aks/operator/test/stubs/image-mirror/az deploy/aks/operator/test/stubs/image-mirror/crane deploy/aks/operator/test/stubs/deploy/az deploy/aks/operator/test/stubs/kv-set/az deploy/aks/operator/test/stubs/kv-set/kubectl deploy/aks/operator/test/stubs/kv-status/az deploy/aks/operator/test/stubs/db-release/kubectl deploy/aks/operator/test/stubs/db-release/helm deploy/aks/operator/test/stubs/pg/az deploy/aks/operator/test/stubs/pg/pg_dump deploy/aks/operator/test/stubs/pg/psql deploy/aks/operator/test/stubs/pg/pg_restore deploy/aks/operator/test/stubs/inventory/psql deploy/aks/operator/test/stubs/aks-upgrade/az deploy/aks/operator/test/stubs/aks-upgrade/kubectl deploy/aks/operator/test/stubs/aks-upgrade/curl deploy/aks/operator/test/stubs/db-reset/psql deploy/aks/operator/test/stubs/db-reset/az; do
             git ls-files --error-unmatch "$f" >/dev/null 2>&1 || { echo "::error::${f} is not tracked"; git check-ignore -v "$f" || true; exit 1; }
             [ "$(git ls-files -s "$f" | awk '{print $1}')" = "100755" ] || { echo "::error::${f} is not committed executable (mode 100755)"; exit 1; }
           done

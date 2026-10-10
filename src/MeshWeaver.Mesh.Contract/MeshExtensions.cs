@@ -3580,6 +3580,10 @@ public static class MeshExtensions
         // only the lookup path was short-lived; the SNAPSHOT still has to be taken where the stage
         // opens, and it is.
         var ioPools = hub.ServiceProvider.GetService<IoPoolRegistry>();
+        // The delete-validator chain, resolved while this hub is alive (#5064), for the record
+        // satellites the pre-flight validates in-process rather than at their own hubs.
+        var deletionValidators = DeletionValidators(hub);
+        var deletionJsonOptions = hub.JsonSerializerOptions;
         var meshHub = ResolveMeshHub(hub);
         // 🚨 THE HUB THIS DELETE'S TWO FAN-OUTS ARE ISSUED ON — never the router (issue #2477).
         // A recursive delete posts one request PER DESCENDANT twice over: the pre-flight
@@ -4007,11 +4011,30 @@ public static class MeshExtensions
                                         //     rung below it, derived the same way.
                                         var legBudget = opts.Nest(budget);
                                         var absenceProbeBudget = opts.Nest(legBudget);
+                                        // Record satellites (MeshOperationOptions.RecordSatelliteSegments)
+                                        // are not sent to their own hubs: each is read from storage
+                                        // and put through the SAME delete-validator chain, under the
+                                        // caller's identity, in-process. That chain walks the row's
+                                        // own access rule against its STORED MainNode, so the verdict
+                                        // equals the leaf's ValidateDeleteRequest without activating
+                                        // a hub per row. The commit removes them in batches.
+                                        var recordRows = collected.ToDelete
+                                            .Where(p => IsBatchableRecordSatellite(p, path, collected.ToDelete, opts))
+                                            .ToList();
+                                        var askedOneByOne = recordRows.Count == 0
+                                            ? collected.ToDelete
+                                            : collected.ToDelete.Except(recordRows);
                                         var preValidate = capturedRequest.Recursive
                                             ? PreValidateDescendantsObs(
-                                                issuingHub, path, collected.ToDelete, request.AccessContext,
+                                                issuingHub, path, askedOneByOne, request.AccessContext,
                                                 budget, legBudget, storage, absenceProbeBudget, logger,
                                                 progress: requestProgress)
+                                                .SelectMany(perNodeFailure => perNodeFailure is not null
+                                                    ? Observable.Return(perNodeFailure)
+                                                    : PreValidateRecordSatellitesInProcess(
+                                                        deletionValidators, storage, deletionJsonOptions,
+                                                        path, recordRows, request.AccessContext, legBudget,
+                                                        requestProgress))
                                             : Observable.Return<(string Path, string Error, NodeDeletionRejectionReason Reason)?>(null);
 
                                         return preValidate.SelectMany(failure =>
@@ -4908,12 +4931,40 @@ public static class MeshExtensions
         // `pg:{provider}` pool, and the leaves at the back of that self-made queue tripped their own
         // no-progress watchdogs while the cascade was progressing — failing the whole delete
         // (`[DeleteNode] unexpected path=Marketing partial-deleted=1383`, 219 behind the cap).
-        var fanOutConcurrency = (meshHub.ServiceProvider.GetService<MeshOperationOptions>()
-            ?? new MeshOperationOptions()).CascadeFanOutConcurrency;
+        var operationOptions = meshHub.ServiceProvider.GetService<MeshOperationOptions>()
+            ?? new MeshOperationOptions();
+        var fanOutConcurrency = operationOptions.CascadeFanOutConcurrency;
 
-        return HierarchicalPathDeletion.DeleteSubtreeBounded(
+        // 🚨 RECORD SATELLITES LEAVE IN BATCHES, BEFORE THE PER-NODE WALK. A row under a declared
+        // record segment (MeshOperationOptions.RecordSatelliteSegments, `_Activity` by default),
+        // whose owner this delete already validated, needs no hub of its own to be removed. Posting
+        // it a DeleteNodeRequest activated a per-node hub per row, and a NodeType carrying hundreds
+        // of `_Activity/compile-*` records took more than 60 s to delete (memex.systemorph.com,
+        // Crm/Client, 2026-10-09). They go first: they are satellites of nodes the walk removes
+        // later, so children-before-parents holds across the two lanes too.
+        var descendants = descendantPaths.Remove(rootPath);
+        var recordRows = descendants
+            .Where(p => IsBatchableRecordSatellite(p, rootPath, descendants, operationOptions))
+            .ToList();
+        var perNode = recordRows.Count == 0 ? descendants : descendants.Except(recordRows);
+
+        return DeleteRecordSatellitesInBatches(
+                meshHub, storage, recordRows, operationOptions.RecordSatelliteBatchSize,
+                changeFeed, streamCache, RecordDeleted, logger)
+            .SelectMany(batched => PerNodeWalk()
+                .Select(walked => (IReadOnlyList<string>)batched.Concat(walked).ToList())
+                .Catch<IReadOnlyList<string>, Exception>(ex =>
+                {
+                    // The walk's partial list rides on the exception; the batched rows were removed
+                    // too, and the caller's failure report must name every path that left storage.
+                    var walked = ex.Data[DeletedPathsDataKey] as IReadOnlyList<string> ?? [];
+                    ex.Data[DeletedPathsDataKey] = (IReadOnlyList<string>)batched.Concat(walked).ToList();
+                    return Observable.Throw<IReadOnlyList<string>>(ex);
+                }));
+
+        IObservable<IReadOnlyList<string>> PerNodeWalk() => HierarchicalPathDeletion.DeleteSubtreeBounded(
             rootPath,
-            descendantPaths.Remove(rootPath),
+            perNode,
             maxConcurrentDeletes: fanOutConcurrency,
             deleteOne: path =>
             {
@@ -5083,6 +5134,167 @@ public static class MeshExtensions
                             });
                     })
                     .Do(RecordDeleted);
+            });
+    }
+
+    /// <summary>
+    /// Whether <paramref name="path"/> is a RECORD satellite that a recursive delete of
+    /// <paramref name="rootPath"/> may handle without a per-node hub. That holds when its first
+    /// satellite segment is declared in <see cref="MeshOperationOptions.RecordSatelliteSegments"/>,
+    /// it is a row under that container (not the container path itself), and its owner is the
+    /// root or a node in <paramref name="plan"/>, so the row leaves together with what it belongs
+    /// to. A row whose owner is not in the plan takes the ordinary per-node lane.
+    ///
+    /// <para>This predicate grants nothing. Every such row is still validated, under the caller's
+    /// identity and against its stored node, by <see cref="PreValidateRecordSatellitesInProcess"/>
+    /// before anything is removed.</para>
+    /// </summary>
+    /// <param name="path">The candidate descendant.</param>
+    /// <param name="rootPath">The root of the recursive delete.</param>
+    /// <param name="plan">The paths this delete (or this drain pass) removes.</param>
+    /// <param name="options">The mesh's operation options, which declare the record segments.</param>
+    internal static bool IsBatchableRecordSatellite(
+        string path, string rootPath, ImmutableHashSet<string> plan, MeshOperationOptions options)
+    {
+        if (options.RecordSatelliteSegments.IsEmpty || string.IsNullOrEmpty(path))
+            return false;
+        var container = SatelliteTableMapping.SatelliteContainerOf(path);
+        if (container is null || string.Equals(container, path, StringComparison.OrdinalIgnoreCase))
+            return false;
+        var segment = container[(container.LastIndexOf('/') + 1)..];
+        if (!options.RecordSatelliteSegments.Contains(segment))
+            return false;
+        var owner = SatelliteTableMapping.OwnerOfSatellitePath(path);
+        if (string.IsNullOrEmpty(owner))
+            return false;
+        return string.Equals(owner, rootPath, StringComparison.OrdinalIgnoreCase)
+               || plan.Contains(owner);
+    }
+
+    /// <summary>
+    /// The pre-flight for record satellites (<see cref="IsBatchableRecordSatellite"/>), run
+    /// IN-PROCESS instead of at each row's own hub. Each row is read from storage and put through
+    /// the same delete-validator chain <see cref="HandleValidateDeleteRequest"/> runs, under the
+    /// caller's <paramref name="callerAccessContext"/>. That chain includes the RLS validator, which
+    /// walks the row's own type access rule (for an activity, <c>SatelliteAccessRule</c>: Update on
+    /// the STORED <see cref="MeshNode.MainNode"/>). So the verdict is the leaf's own verdict, without
+    /// activating a hub per row. Emits the first refusal as <c>(Path, Error, Reason)</c>, or
+    /// <c>null</c> when every row passes.
+    ///
+    /// <para>A row that is already gone blocks nothing (the #4680 rule). A read or chain that does
+    /// not answer within <paramref name="legTimeout"/> refuses the delete as
+    /// <see cref="NodeDeletionRejectionReason.Unavailable"/>, by the row's name. At most
+    /// <see cref="PreValidateFanOutConcurrency"/> rows are in flight at once, and every answered row
+    /// is reported to <paramref name="progress"/>.</para>
+    /// </summary>
+    private static IObservable<(string Path, string Error, NodeDeletionRejectionReason Reason)?>
+        PreValidateRecordSatellitesInProcess(
+            IReadOnlyList<INodeValidator> validators,
+            IStorageAdapter storage,
+            System.Text.Json.JsonSerializerOptions jsonOptions,
+            string rootPath,
+            IReadOnlyList<string> rows,
+            AccessContext? callerAccessContext,
+            TimeSpan legTimeout,
+            IObserver<string>? progress)
+    {
+        if (rows.Count == 0)
+            return Observable.Return<(string, string, NodeDeletionRejectionReason)?>(null);
+
+        return rows
+            .Select(row => Observable.Defer(() => storage.Read(row, jsonOptions))
+                .Take(1)
+                .SelectMany(node => node is null
+                    ? Observable.Return<(string, string, NodeDeletionRejectionReason)?>(null)
+                    : RunDeletionValidatorsObs(
+                            validators, callerAccessContext, node,
+                            new DeleteNodeRequest(row) { CascadeRootPath = rootPath }, rootPath)
+                        .Select(err => err is { } e
+                            ? ((string, string, NodeDeletionRejectionReason)?)(row, e.ErrorMessage ?? "Validation failed", e.Reason)
+                            : null))
+                .Timeout(legTimeout, Observable.Defer(() => Observable.Return<(string, string, NodeDeletionRejectionReason)?>(
+                    (row,
+                        $"the validation of record satellite '{row}' did not answer within {legTimeout.TotalSeconds:0}s",
+                        NodeDeletionRejectionReason.Unavailable))))
+                .Do(_ => progress?.OnNext(row)))
+            .MergeBounded(PreValidateFanOutConcurrency)
+            .Where(failure => failure is not null)
+            .Take(1)
+            .DefaultIfEmpty(null);
+    }
+
+    /// <summary>
+    /// Removes record satellites (<see cref="IsBatchableRecordSatellite"/>) through
+    /// <see cref="IStorageAdapter.DeleteMany"/>, <paramref name="batchSize"/> rows per call, one
+    /// call after another, CHILDREN FIRST (longest path first, across batches too). Emits once:
+    /// every path a batch actually removed.
+    ///
+    /// <para>Each removed path gets the per-node side effects that do not need the row's own hub.
+    /// It is published as <see cref="MeshChangeEvent.Deleted"/> in that order, and invalidated in
+    /// the process-wide stream cache. A per-node hub that is activated at the path is disposed (the
+    /// same disposal the root's own commit does). The path is reported through
+    /// <paramref name="recordDeleted"/>, which ticks the commit's no-progress watchdog once per
+    /// row. The "delete wins" tombstone and the subtree write guard were set by the caller before
+    /// this runs. A row that was already gone is not in a batch's result. It is not reported as
+    /// removed, which is the same truthfulness the per-node lane keeps.</para>
+    ///
+    /// <para>A failing batch fails the commit like a failing leaf does. The exception carries the
+    /// paths the earlier batches removed.</para>
+    /// </summary>
+    private static IObservable<IReadOnlyList<string>> DeleteRecordSatellitesInBatches(
+        IMessageHub meshHub,
+        IStorageAdapter storage,
+        IReadOnlyList<string> paths,
+        int batchSize,
+        IMeshChangeFeed? changeFeed,
+        IMeshNodeStreamCache? streamCache,
+        Action<string> recordDeleted,
+        ILogger logger)
+    {
+        if (paths.Count == 0)
+            return Observable.Return<IReadOnlyList<string>>([]);
+
+        var ordered = paths
+            .OrderByDescending(p => p.Length)
+            .ThenBy(p => p, StringComparer.Ordinal)
+            .ToList();
+        logger.LogDebug(
+            "[DeleteNode] removing {Count} record satellite(s) in batches of {BatchSize}",
+            ordered.Count, batchSize);
+
+        var removedSoFar = ImmutableList<string>.Empty;
+        return ordered
+            .Chunk(batchSize)
+            .Select(batch => Observable.Defer(() => storage.DeleteMany(batch)).Take(1)
+                .Do(removed =>
+                {
+                    foreach (var p in removed)
+                    {
+                        changeFeed?.Publish(MeshChangeEvent.Deleted(p));
+                        streamCache?.Invalidate(p);
+                        try
+                        {
+                            meshHub.GetHostedHub(new Address(p), c => c, HostedHubCreation.Never)?.Dispose();
+                        }
+                        catch (Exception ex)
+                        {
+                            // The same best-effort disposal the root branch performs: the row is
+                            // gone and its cache entry invalidated, so a hub that refuses to dispose
+                            // still re-reads storage on its next activation.
+                            logger.LogDebug(ex,
+                                "[DeleteNode] best-effort hub disposal failed for {Path}", p);
+                        }
+                        removedSoFar = removedSoFar.Add(p);
+                        recordDeleted(p);
+                    }
+                }))
+            .Concat()
+            .Aggregate(ImmutableList<string>.Empty, (all, removed) => all.AddRange(removed))
+            .Select(all => (IReadOnlyList<string>)all)
+            .Catch<IReadOnlyList<string>, Exception>(ex =>
+            {
+                ex.Data[DeletedPathsDataKey] = (IReadOnlyList<string>)removedSoFar;
+                return Observable.Throw<IReadOnlyList<string>>(ex);
             });
     }
 
