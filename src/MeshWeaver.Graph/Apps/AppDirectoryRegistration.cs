@@ -47,11 +47,13 @@ public static class AppDirectoryRegistration
 }
 
 /// <summary>
-/// <c>Home:AppSource</c> — where the home's Apps band reads its tiles from. An open vocabulary
-/// (policy <c>open-vocabulary-string-constants</c>): an unknown value falls back to
-/// <see cref="Directory"/>, the default, and the home's render logs it by name
-/// (<see cref="IsKnown"/>). <see cref="Records"/> stays selectable as an explicit escape hatch
-/// while the per-user <c>_App</c> records still exist (MeshWeaver.Plugins Store/AppsOnTheInstance §8).
+/// <c>Home:AppSource</c> — where the home's Apps band reads its tiles from. A CLOSED two-value
+/// deployment setting, not an extensible vocabulary: nothing can claim a third value. Absent means
+/// the default, <see cref="Directory"/>; <see cref="Records"/> is the explicit escape hatch while the
+/// per-user <c>_App</c> records still exist (MeshWeaver.Plugins Store/AppsOnTheInstance §8). Any
+/// other value is a configuration ERROR (<see cref="IsKnown"/>): the home's render logs it as an
+/// error naming the key and serves the default rather than failing the page — a typo in a
+/// deployment record must not take every home down.
 /// </summary>
 public static class HomeAppSource
 {
@@ -65,12 +67,13 @@ public static class HomeAppSource
     public const string Directory = "Directory";
 
     /// <summary>Whether <paramref name="value"/> selects the directory: everything except an explicit
-    /// <see cref="Records"/> — absent, <see cref="Directory"/>, or an unknown value. Pure.</summary>
+    /// <see cref="Records"/>. Absent and <see cref="Directory"/> select it by definition; an invalid
+    /// value (<see cref="IsKnown"/> false) is an error the caller reports, and gets the default. Pure.</summary>
     public static bool IsDirectory(string? value) =>
         !string.Equals(value?.Trim(), Records, StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>Whether <paramref name="value"/> is absent or one of this vocabulary's values —
-    /// anything else is a configuration the deployment should hear about. Pure.</summary>
+    /// <summary>Whether <paramref name="value"/> is a valid setting: absent, <see cref="Directory"/> or
+    /// <see cref="Records"/>. Anything else is a configuration error. Pure.</summary>
     public static bool IsKnown(string? value) =>
         string.IsNullOrWhiteSpace(value)
         || string.Equals(value.Trim(), Directory, StringComparison.OrdinalIgnoreCase)

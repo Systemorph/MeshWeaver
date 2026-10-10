@@ -145,13 +145,21 @@ select the plain Icons grid uses would drop it).
 > installed or removed. The records already have all three properties: they exist exactly when
 > the tile does, they are per user, and the Store's install/uninstall lifecycle keeps them right.
 
-## The app directory — `Home:AppSource = Directory`
+## The app directory — `Home:AppSource = Directory` (the default)
 
-The second source for the Apps band, and the one the platform is moving to (MeshWeaver.Plugins
-`Store/AppsOnTheInstance`, phase 1a): **the apps a viewer can see, computed from the instance's app
-roots and the access check, with no per-user records.** The deployment chooses with the
-configuration key `Home:AppSource` — `Records` (the default; the band is exactly as above) or
-`Directory`. Any other value keeps `Records`.
+**The Apps band's default source** (MeshWeaver#6448; MeshWeaver.Plugins `Store/AppsOnTheInstance`,
+phase 1a): **the apps a viewer can see, computed from the instance's app roots and the access check,
+with no per-user records.** `Home:AppSource` is a closed two-value deployment setting:
+
+| Value | The Apps band reads |
+|---|---|
+| absent, or `Directory` | **the app directory** (this section) — the image default, so the record-driven fleet, which renders no `Home__AppSource`, runs it with the roll |
+| `Records` | the viewer's own `{user}/_App` records (the section above) — an explicit escape hatch while those records still exist |
+| anything else | a configuration ERROR: the home logs it at error level, naming the key, and serves the default; the page never fails on a typo |
+
+The Store's, Edu's and the AI engine's per-user home writers read the same key with the same rule,
+and follow the RUNNING image's default for an absent value (MeshWeaver.Plugins#3321), so the launcher
+and its writers switch together.
 
 | Piece | Where | What it does |
 |---|---|---|

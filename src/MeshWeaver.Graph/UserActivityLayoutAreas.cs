@@ -573,8 +573,8 @@ public static class UserActivityLayoutAreas
         var homeLogger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Home");
         var catalogLogged = 0;
         if (!HomeAppSource.IsKnown(appSource))
-            homeLogger?.LogWarning(
-                "[Home] {Key}='{Value}' is not a known app source; the Apps band reads {Fallback}",
+            homeLogger?.LogError(
+                "[Home] {Key}='{Value}' is not a valid app source (Directory or Records); the Apps band serves the default, {Fallback}. Fix the deployment configuration.",
                 HomeAppSource.ConfigKey, appSource, HomeAppSource.Directory);
         return HomeConfigNodeType.Observe(host.Workspace, options)
             .CombineLatest(
