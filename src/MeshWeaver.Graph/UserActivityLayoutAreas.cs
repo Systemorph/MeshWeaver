@@ -9,6 +9,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
+using MeshWeaver.Graph.Apps;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
@@ -17,6 +18,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 using MeshWeaver.Utils;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -548,6 +550,10 @@ public static class UserActivityLayoutAreas
         // seeds instead because there the screen only picks a label. See Doc/GUI/PresentationMode
         // rule 2 before "fixing" this to match the menu.
         var screen = host.ViewerScreen();
+        // Where the Apps band reads its tiles: the viewer's own _App records (the default) or the
+        // app directory (Home:AppSource = Directory). Deployment config, read once per render.
+        var appsFromDirectory = HomeAppSource.IsDirectory(
+            host.Hub.ServiceProvider.GetService<IConfiguration>()?[HomeAppSource.ConfigKey]);
         // The home's DISPLAY CONFIG is DATA-DRIVEN: read the admin-editable Admin/HomeConfig platform
         // node reactively (shipped defaults when absent), so an admin's edit updates every open home
         // LIVE — no code change, no image roll. Combined with the owner node (pins AND the home's path
@@ -579,7 +585,8 @@ public static class UserActivityLayoutAreas
                 // It is a run-once LOGON action now (SeedDefaultAppsLogonAction), which says what
                 // the proxy was reaching for: once per user because the ledger says so.
                 (config, user, viewerScreen) =>
-                    (UiControl?)BuildHome(ownerId, config, sharedTargets: null, user, locale, viewerScreen))
+                    (UiControl?)BuildHome(ownerId, config, sharedTargets: null, user, locale, viewerScreen,
+                        appsFromDirectory))
             .Do(_ =>
             {
                 if (System.Threading.Interlocked.Exchange(ref catalogLogged, 1) == 0)
@@ -789,7 +796,7 @@ public static class UserActivityLayoutAreas
     internal static UiControl BuildHome(
         string nodeOwnerId, HomeConfig? config = null, IReadOnlyList<string>? sharedTargets = null,
         User? user = null, string? locale = null,
-        PresentationScreen? screen = null)
+        PresentationScreen? screen = null, bool appsFromDirectory = false)
     {
         var cfg = config ?? HomeConfigNodeType.Defaults;
         // 🚨 The viewer's presentation screen (#1803) is applied to the Shared-with-me band and the
@@ -825,7 +832,8 @@ public static class UserActivityLayoutAreas
             .WithStyle("gap: 24px; width: 100%;")
             // The launcher's Spaces scope needs the invitations too — the same list the content
             // section folds into All, screened the same way.
-            .WithView(BuildAppsBand(nodeOwnerId, locale, privacy.Retain(sharedTargets), spacePaths))
+            .WithView(BuildAppsBand(nodeOwnerId, locale, privacy.Retain(sharedTargets), spacePaths,
+                appsFromDirectory))
             .WithView(BuildContentSection(
                 nodeOwnerId, config, user, locale, screen, privacy.Retain(sharedTargets), spacePaths));
     }
@@ -941,14 +949,16 @@ public static class UserActivityLayoutAreas
     /// since opening an app records a visit to the APP, never to the record pointing at it.</para>
     /// <para>No search box and no view options: this is a launcher, not a search surface — the
     /// content section below is where you search. Pure, exposed for tests.</para>
+    /// <para><paramref name="fromDirectory"/> (<c>Home:AppSource = Directory</c>) reads the APP
+    /// DIRECTORY instead — the virtual <c>{owner}/_Apps</c> namespace, answered by
+    /// <see cref="Apps.AppDirectoryQueryProvider"/> with rows of the same shape — so everything
+    /// below (groups, order, drag and drop) is unchanged.</para>
     /// </summary>
     internal static MeshSearchControl BuildAppsBand(
         string nodeOwnerId, string? locale, IReadOnlyList<string>? sharedTargets = null,
-        IReadOnlyList<string>? spacePaths = null)
+        IReadOnlyList<string>? spacePaths = null, bool fromDirectory = false)
     {
-        var appsQuery =
-            $"path:{nodeOwnerId}/{AppNodeType.UserNamespace} scope:children " +
-            $"nodeType:{AppNodeType.NodeType} {SortSuffixAlphabetical}";
+        var appsQuery = AppsQuery(nodeOwnerId, fromDirectory);
         return Controls.MeshSearch
             .WithTitle(LocalizationCatalog.Get("home.apps", locale))
             .WithHiddenQuery(appsQuery)
@@ -1001,6 +1011,14 @@ public static class UserActivityLayoutAreas
                 ],
             };
     }
+
+    /// <summary>
+    /// The Apps band's query: the viewer's <c>{owner}/_App</c> records, or — from the directory —
+    /// the virtual <c>{owner}/_Apps</c> rows. Both are one partition's children of one type. Pure.
+    /// </summary>
+    internal static string AppsQuery(string ownerId, bool fromDirectory) =>
+        $"path:{ownerId}/{(fromDirectory ? LauncherArrangementPaths.DirectoryNamespace : AppNodeType.UserNamespace)} " +
+        $"scope:children nodeType:{AppNodeType.NodeType} {SortSuffixAlphabetical}";
 
     /// <summary>
     /// The launcher's <b>Spaces</b> scope query: the partition roots the reader can see (the

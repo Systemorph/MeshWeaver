@@ -22,7 +22,7 @@ and the ordering controls share one header row. The whole surface is built by
 `UserActivityLayoutAreas.BuildHome` (`src/MeshWeaver.Graph`), pure and unit-tested
 (`HomeTabsTest`); the reactive shell is `CatalogAreaView`.
 
-## Installed apps — `{user}/_App/{appId}` records, the grid's ONLY data source
+## Installed apps — `{user}/_App/{appId}` records, the grid's default data source
 
 One node per icon, nodeType **`InstalledApp`**, stored at `{user}/_App/{appId}` as an ordinary
 `mesh_nodes` row: deliberately **not a satellite** (no `IsSatelliteType`, no `SatelliteTableMapping`
@@ -144,6 +144,29 @@ select the plain Icons grid uses would drop it).
 > storm-breaker), a seed for every existing user, and a reconciliation pass whenever a tile is
 > installed or removed. The records already have all three properties: they exist exactly when
 > the tile does, they are per user, and the Store's install/uninstall lifecycle keeps them right.
+
+## The app directory — `Home:AppSource = Directory`
+
+The second source for the Apps band, and the one the platform is moving to (MeshWeaver.Plugins
+`Store/AppsOnTheInstance`, phase 1a): **the apps a viewer can see, computed from the instance's app
+roots and the access check, with no per-user records.** The deployment chooses with the
+configuration key `Home:AppSource` — `Records` (the default; the band is exactly as above) or
+`Directory`. Any other value keeps `Records`.
+
+| Piece | Where | What it does |
+|---|---|---|
+| `AppDirectory` | `MeshWeaver.Graph/Apps` | ONE process-wide query, `namespace: is:main content.app:true partitions:all` (an enumeration, id `$app-roots`), shared by every viewer through `IMeshNodeStreamCache` and read as System. Per root, `CheckPermission(viewer, entryPoint, Read)` — the ENTRY POINT, because a gated root is everybody's storefront; an `X/area/Y` entry point is probed at `X`. Plan coverage and audience reach it as ordinary grant/deny rows, so Read is the whole check. Live: a grant, a revoke or an admin change re-emits. |
+| Built-ins | `AppDirectory.BuiltIns` | **Settings** (`{viewer}/Settings`) and **Inbox** (`{viewer}/Inbox`) for everyone, **Administration** (`Admin`) for a global admin. Labels are catalog keys (`common.settings`, `inbox.title`, `adminApp.title`). |
+| `AppDirectoryCache` | `MeshWeaver.Graph/Apps` | Per viewer, the `Replay(1)` of the live stream. Shared by concurrent subscribers; when the last leaves, kept warm for **5 minutes, sliding** (a returning subscriber resets the clock), then disposed. Its own scheduler; no `IMemoryCache`. |
+| `AppDirectoryQueryProvider` | `MeshWeaver.Graph/Apps` | Answers the RESERVED virtual namespace `{user}/_Apps` (`path:{user}/_Apps scope:children nodeType:InstalledApp`) with synthetic rows of the same shape as the `_App` records — content `App` (`Plugin` = app id, `OpenPath` = entry point, `Group`, `Order`), `MainNode` = entry point, name, icon and description from the root. Only the owner is answered. Nothing is stored under `_Apps`. |
+| `LauncherArrangement` | `{user}/_Settings/Launcher` | The viewer's placements, `entries: { appId: { group, order, customGroup } }`. Group comes from here, else the root's `Category`. Seeded ONCE from the viewer's `_App` records the first time the directory renders for them (create-if-absent, at most once per viewer per process, as the viewer), then written only when the viewer rearranges. |
+
+**Rearranging a directory tile** writes the arrangement node, never the virtual row:
+`LauncherArrangementPaths.Place(cache, rowPath, group, order, options)`. The launcher view routes a
+drop on a `{user}/_Apps/…` row there.
+
+The seeders (`SeedDefaultAppsLogonAction`, `SeedInboxAppLogonAction`) still run; the directory does
+not depend on them. Pinned by `AppDirectoryTest` / `AppDirectoryPureTest` (MeshWeaver.Graph.Test).
 
 ## The config — `Admin/HomeConfig`
 
