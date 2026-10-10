@@ -111,6 +111,20 @@ public static class LauncherArrangementPaths
     }
 
     /// <summary>
+    /// The arrangement a write starts from: a fresh one only when the node has NO content; content
+    /// that is present but cannot be read as an arrangement fails LOUDLY — starting fresh there
+    /// would replace every saved placement with the one being written.
+    /// </summary>
+    private static LauncherArrangement Current(MeshNode node, string path, JsonSerializerOptions options)
+    {
+        if (node.Content is null)
+            return new LauncherArrangement();
+        return node.ContentAs<LauncherArrangement>(options)
+            ?? throw new InvalidOperationException(
+                $"The launcher arrangement at '{path}' holds content that is not a {nameof(LauncherArrangement)}; refusing to overwrite it.");
+    }
+
+    /// <summary>
     /// Rearranges one directory tile: the placement is written onto the viewer's arrangement node
     /// (through the one mutation API), never onto the virtual row, which has no store behind it.
     /// Cold — the write happens on Subscribe. Errors when <paramref name="rowPath"/> is not a
@@ -122,10 +136,10 @@ public static class LauncherArrangementPaths
         if (!TryParseRow(rowPath, out var owner, out var appId))
             return System.Reactive.Linq.Observable.Throw<MeshNode>(
                 new ArgumentException($"'{rowPath}' is not an app directory row", nameof(rowPath)));
-        return cache.Update(PathFor(owner), current => current with
+        var path = PathFor(owner);
+        return cache.Update(path, current => current with
         {
-            Content = (current.ContentAs<LauncherArrangement>(options) ?? new LauncherArrangement())
-                .Place(appId, group, order),
+            Content = Current(current, path, options).Place(appId, group, order),
         }, options);
     }
 }

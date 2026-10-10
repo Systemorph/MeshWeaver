@@ -219,6 +219,34 @@ public class AppDirectoryPureTest
         b!.Dispose();
     }
 
+    /// <summary>A faulted computation is evicted at once — never replayed to the warm window's
+    /// subscribers — and the next subscriber recomputes.</summary>
+    [Fact]
+    public void AFaultedComputation_IsEvicted_AndTheNextSubscriberRecomputes()
+    {
+        var built = 0;
+        IObservable<ImmutableList<AppDirectoryEntry>> Source(string viewer)
+        {
+            built++;
+            return built == 1
+                ? Observable.Throw<ImmutableList<AppDirectoryEntry>>(new InvalidOperationException("roots query failed"))
+                : Observable.Return(ImmutableList<AppDirectoryEntry>.Empty).Concat(Observable.Never<ImmutableList<AppDirectoryEntry>>());
+        }
+        using var cache = new AppDirectoryCache(Source, new TestScheduler(), AppDirectoryCache.WarmLifetime);
+
+        Exception? error = null;
+        cache.ForViewer("alice").Subscribe(_ => { }, e => error = e);
+        error.Should().NotBeNull();
+        cache.IsWarm("alice").Should().BeFalse("a fault is not kept warm");
+
+        ImmutableList<AppDirectoryEntry>? painted = null;
+        Exception? second = null;
+        using var again = cache.ForViewer("alice").Subscribe(v => painted = v, e => second = e);
+        built.Should().Be(2, "the next subscriber builds a fresh computation");
+        second.Should().BeNull();
+        painted.Should().NotBeNull();
+    }
+
     [Fact]
     public void Viewers_DoNotShareAComputation()
     {
@@ -290,6 +318,16 @@ public class AppDirectoryPureTest
     }
 
     [Fact]
+    public void TheRootsQuery_IsTheDeclaredPackageRootShape_WithAnExplicitLimit()
+    {
+        var parsed = new QueryParser().Parse(AppDirectory.RootsQuery);
+        parsed.CrossPartition.Should().BeTrue("a query without partitions:all is refused or incomplete");
+        AppDirectory.RootsQuery.Should().Contain("nodeType:(Space OR Store/Plugin)");
+        AppDirectory.RootsQuery.Should().Contain(MeshQueryRequest.CompleteQualifier);
+        AppDirectory.RootsQuery.Should().Contain("content.app:true");
+    }
+
+    [Fact]
     public void ANestedAppId_RoundTripsThroughItsRowId()
         => LauncherArrangementPaths.AppIdOfRow(LauncherArrangementPaths.RowIdFor("Edu/Courses")).Should().Be("Edu/Courses");
 
@@ -348,20 +386,31 @@ public class AppDirectoryTest(ITestOutputHelper output) : MonolithMeshTestBase(o
     private const string Revoked = "dir-revoked";
     private const string Seeded = "dir-seeded";
 
+    /// <summary>A package root's content as a package carries it: its OWN typed record (the Store's
+    /// <c>PluginContent</c> in production), with <c>app</c> and <c>entryPoint</c>.</summary>
+    public sealed record TestPackageContent
+    {
+        /// <summary>Whether the package is an app.</summary>
+        public bool App { get; init; }
+        /// <summary>Where the app opens.</summary>
+        public string? EntryPoint { get; init; }
+    }
+
+    // A package root as a mirror may index it: a Space whose typed content says app.
     private static MeshNode AppRootNode(string id, bool app) => new(id)
     {
-        NodeType = "Markdown",
+        NodeType = "Space",
         Name = id,
         Category = "Business",
         State = MeshNodeState.Active,
-        Content = JsonDocument.Parse(app
-            ? $$"""{"app":true,"entryPoint":"{{id}}/Home"}"""
-            : $$"""{"app":false,"entryPoint":"{{id}}/Home"}""").RootElement,
+        Content = new TestPackageContent { App = app, EntryPoint = $"{id}/Home" },
     };
 
     /// <inheritdoc />
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
-        => ConfigureMeshBase(builder).AddMeshNodes(
+        => ConfigureMeshBase(builder)
+            .ConfigureHub(config => config.WithType<TestPackageContent>(nameof(TestPackageContent)))
+            .AddMeshNodes(
             AppRootNode("DirApp", app: true),
             AppRootNode("DirNotAnApp", app: false),
             // Readable ONLY at its entry point: the probe must be the entry point, not the root.
@@ -450,9 +499,17 @@ public class AppDirectoryTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         arrangement!.NodeType.Should().Be(LauncherArrangementPaths.NodeType);
         arrangement.ContentAs<LauncherArrangement>(Mesh.JsonSerializerOptions)!.For("Inbox")!.Group.Should().Be("Mine");
 
-        // Written ONCE: this process never attempts it again for the viewer.
-        Mesh.ServiceProvider.GetRequiredService<LauncherArrangementSource>()
-            .TrySeed(Seeded, out _).Should().BeFalse("the seed is attempted at most once per viewer per process");
+        // Written ONCE: the seed succeeded, so this process never attempts it again for the viewer —
+        // a second render reads the node and writes nothing.
+        var source = Mesh.ServiceProvider.GetRequiredService<LauncherArrangementSource>();
+        source.IsSeeded(Seeded).Should().BeTrue();
+        var seededVersion = arrangement.Version;
+        await Live(access.RunAs(owner, () => mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(query))))
+            .Where(items => items.Any(r => r.Id == "Inbox"))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        (await Mesh.GetWorkspace().GetMeshNodeStream(arrangementPath).Where(n => n is not null)
+                .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct))!
+            .Version.Should().Be(seededVersion, "a second render does not write the arrangement again");
 
         // A rearrangement goes to the arrangement node, never to the virtual row.
         var cache = Mesh.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();

@@ -81,12 +81,16 @@ public sealed class AppDirectory
     public const string RootsQueryId = "$app-roots";
 
     /// <summary>
-    /// Every partition ROOT whose content declares <c>app: true</c> — mesh-wide by nature and
-    /// therefore declared (<c>partitions:all</c>), and an ENUMERATION (never a truncated page:
-    /// a missing root would silently drop an app from every launcher).
+    /// Every package ROOT whose content declares <c>app: true</c>. The established package-root
+    /// shape: <c>nodeType:(Space OR Store/Plugin)</c>, because a partition root is CREATED as a
+    /// <c>Space</c> and only its content is retyped on import, so a mirror may still index it as
+    /// <c>Space</c> (a bare <c>nodeType:Store/Plugin</c> silently returns nothing there).
+    /// Mesh-wide by nature and therefore declared (<c>partitions:all</c>), with the explicit
+    /// limit <c>limit:all</c> (an ENUMERATION — a truncated page would silently drop an app from
+    /// every launcher). <see cref="ReadRoot"/> re-checks the flag and the root shape in code.
     /// </summary>
-    public static readonly string RootsQuery =
-        SecurityQueries.Enumeration($"namespace: is:main content.app:true {ParsedQuery.CrossPartitionQualifier}");
+    public static readonly string RootsQuery = SecurityQueries.Enumeration(
+        $"namespace: nodeType:(Space OR Store/Plugin) is:main content.app:true {ParsedQuery.CrossPartitionQualifier}");
 
     /// <summary>The Settings built-in's id (the person app at <c>/{viewer}/Settings</c>).</summary>
     public const string SettingsId = "Settings";

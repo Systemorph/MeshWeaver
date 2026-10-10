@@ -6,7 +6,6 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph.Apps;
 
@@ -51,15 +50,9 @@ public sealed class AppDirectoryQueryProvider(IServiceProvider services) : IMesh
 
         var cache = services.GetRequiredService<AppDirectoryCache>();
         var arrangements = services.GetRequiredService<LauncherArrangementSource>();
-        var logger = services.GetService<ILoggerFactory>()?.CreateLogger<AppDirectoryQueryProvider>();
-        var arrangement = arrangements.Observe(owner)
-            .Do(current =>
-            {
-                // First directory render for this viewer: carry their _App arrangement over, once.
-                if (current is null && arrangements.TrySeed(owner, out var seed))
-                    seed.Subscribe(_ => { }, ex => logger?.LogWarning(ex,
-                        "[AppDirectory] arrangement seed for {Owner} failed", owner));
-            });
+        // First directory render for this viewer: the seed of their arrangement is COMPOSED here
+        // — rows wait for it, so a drop always has an arrangement node to write to.
+        var arrangement = arrangements.ObserveSeeded(owner);
 
         return cache.ForViewer(owner)
             .CombineLatest(arrangement, (entries, placed) => Rows(owner, entries, placed, options))

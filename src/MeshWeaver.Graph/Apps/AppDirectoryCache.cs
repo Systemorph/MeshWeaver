@@ -68,7 +68,14 @@ public sealed class AppDirectoryCache : IDisposable
                 }
                 if (!slots.TryGetValue(viewer, out slot!))
                 {
-                    slot = new Slot(source(viewer).Replay(1));
+                    var created = new Slot();
+                    // A FAULTED computation is evicted at once: Replay(1) would otherwise hand the
+                    // same terminal error to every subscriber of the warm window — and each of them
+                    // would reset the clock, keeping the viewer poisoned indefinitely.
+                    created.Shared = source(viewer)
+                        .Do(_ => { }, _ => Evict(viewer, created))
+                        .Replay(1);
+                    slot = created;
                     slots = slots.SetItem(viewer, slot);
                 }
                 slot.Subscribers++;
@@ -124,6 +131,22 @@ public sealed class AppDirectoryCache : IDisposable
             return slots.ContainsKey(viewer);
     }
 
+    private void Evict(string viewer, Slot slot)
+    {
+        IDisposable? connection;
+        lock (gate)
+        {
+            if (slots.TryGetValue(viewer, out var current) && ReferenceEquals(current, slot))
+                slots = slots.Remove(viewer);
+            slot.Released = true;
+            slot.Expiry?.Dispose();
+            slot.Expiry = null;
+            connection = slot.Connection;
+            slot.Connection = null;
+        }
+        connection?.Dispose();
+    }
+
     private void Expire(string viewer, Slot slot)
     {
         IDisposable? connection;
@@ -169,9 +192,9 @@ public sealed class AppDirectoryCache : IDisposable
     }
 
     /// <summary>One viewer's held computation. Mutated only under the cache's gate.</summary>
-    private sealed class Slot(IConnectableObservable<ImmutableList<AppDirectoryEntry>> shared)
+    private sealed class Slot
     {
-        public IConnectableObservable<ImmutableList<AppDirectoryEntry>> Shared { get; } = shared;
+        public IConnectableObservable<ImmutableList<AppDirectoryEntry>> Shared { get; set; } = null!;
         public int Subscribers { get; set; }
         public bool Connecting { get; set; }
         public bool Released { get; set; }
