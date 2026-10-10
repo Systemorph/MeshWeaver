@@ -172,7 +172,7 @@ if [ -n "$db_connection" ]; then
         || hosting::die "vault ${vault} object ${db_password_secret} is EMPTY — a connection string with no password fails at NpgsqlConnector.RawOpen with nothing naming this step. Nothing was written."
       umask 077
       db_file="$(mktemp)"
-      trap 'rm -f "$db_file"' EXIT
+      trap 'hosting::on_exit; rm -f "$db_file"' EXIT
       printf 'Host=%s;Port=%s;Username=%s;Password=%s;Database=%s;SslMode=Require;Trust Server Certificate=true' \
         "$db_host" "$db_port" "$db_user" "$db_password" "$db_name" > "$db_file"
       unset db_password
@@ -224,7 +224,7 @@ if [ -n "$values_half" ]; then
     #                            (never mint over what may seal data) applies to it as to every secret.
     umask 077
     half_cur="$(mktemp)"; half_new="$(mktemp)"
-    trap 'rm -f "${half_cur:-}" "${half_new:-}"' EXIT
+    trap 'hosting::on_exit; rm -f "${half_cur:-}" "${half_new:-}"' EXIT
     az keyvault secret download --vault-name "$vault" --name "$half_name" --file "$half_cur" --overwrite --output none 2>/dev/null \
       || hosting::die "could not read ${half_name} from vault ${vault} to check its keys against the record's vaultValuesKeys. Nothing was written."
     half_diff="$(hosting::values_half check "$half_cur" --keys "$vault_keys")"; half_rc=$?
@@ -265,7 +265,7 @@ if [ -n "$values_half" ]; then
     else
       umask 077
       half_dir="$(mktemp -d)"
-      trap 'rm -rf "$half_dir" "${db_file:-}"' EXIT
+      trap 'hosting::on_exit; rm -rf "$half_dir" "${db_file:-}"' EXIT
       az keyvault secret show --vault-name "$vault" --name "$db_connection" --query value -o tsv > "$half_dir/cs" 2>/dev/null \
         || hosting::die "could not read ${db_connection} from vault ${vault} — the connection string ${half_name} is composed from. Nothing was written."
       az keyvault secret show --vault-name "$vault" --name "$db_password_secret" --query value -o tsv > "$half_dir/pw" 2>/dev/null \

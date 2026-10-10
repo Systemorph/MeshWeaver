@@ -285,7 +285,7 @@ if [ -n "$vault" ]; then
   vault_values="$(mktemp)"
   chmod 600 "$vault_values"
   # shellcheck disable=SC2064  # expand the path NOW: the trap must name this file, not a later $vault_values
-  trap "rm -f '$vault_values'" EXIT
+  trap "hosting::on_exit; rm -f '$vault_values'" EXIT
   hosting::log "vault     ${vault}: reading the values half helm-values-${release}"
   # 🚨 `--overwrite`: the file above is PRE-CREATED (mktemp, 0600) so the secret never lands with
   # the default umask, and `az keyvault secret download` REFUSES an existing --file without it —

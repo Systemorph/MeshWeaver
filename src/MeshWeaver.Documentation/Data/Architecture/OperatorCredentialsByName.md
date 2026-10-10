@@ -156,6 +156,40 @@ an expired assertion (AADSTS700024) and a `pg_dump` that expires it: both routes
 long dump; the controls — no fresh assertion to be had, and a single sign-in for the whole run — fail
 exactly as the measured run did.
 
+### The refusal has to survive the shell it is written in
+
+"Naming where and why" was true of one failure and false of the other. A refresh fails in two
+places: `az login` rejects the assertion, or no assertion can be had at all (the OIDC endpoint does
+not answer, the projected token file is gone). The second was fetched inside a command substitution
+— `assertion="$(hosting::az_assertion)"` — and a command substitution is a subshell, so the cause it
+recorded in `HOSTING_AZ_ERR` never reached the shell that quotes it. Under `set -u` an unset cause is
+not an empty sentence: it ends the script. Measured on Memex run 38038325130, a Roll of
+`memex-cloud`: the migration ran, the chart was applied, and the refresh before step 3/3 died on
+`_common.sh: line 269: HOSTING_AZ_ERR: unbound variable` — the reason no assertion could be had is
+not recoverable from that run.
+
+Two things follow, and both are in `_common.sh`:
+
+- **A helper that reports through a variable sets it IN PLACE.** `hosting::az_assertion` puts the
+  assertion in `HOSTING_AZ_ASSERTION` and prints nothing, exactly as `hosting::safe_name` validates
+  in place for the same reason. `hosting::az_signin` clears it on every path out. Both variables are
+  initialised when the file is sourced.
+- **A script that bash stops still reports a cause.** The control plane quotes the first
+  `<command>: ERROR: …` line of a failed run's log tail as its cause, and `run.sh`'s
+  `step i/n '<name>' failed` line as its step; bash's own `line N: X: unbound variable` is neither,
+  so that run reached the control instance as a verdict with nothing behind it.
+  `hosting::on_exit` is the EXIT trap of every script that sources `_common.sh`: on an exit that is
+  not zero, not a `hosting::die` and not a deliberate `exit N`, it prints the refusal-shaped line —
+  the file and line it stopped at and the command it was running, as source text (never an expanded
+  value) — and, in `run.sh`, the step line. It can be the only trace: a command that dies under a
+  `2>file` redirect takes bash's own message with it.
+
+A script with an EXIT trap of its own replaces that one, so its trap calls `hosting::on_exit` FIRST
+(`trap 'hosting::on_exit; rm -f "$tmp"' EXIT`); `run-tests.sh` refuses a trap under `bin/` that does
+not. The suite fails the fetch on both routes, stops `run.sh` on a shell error mid-step, and checks
+the three exits that must stay silent (a refusal, a deliberate `exit`, success). Against the scripts
+as they were, the two fetch cases reproduce the measured line verbatim.
+
 ## The chart's `secretEnvironment` block, after this
 
 `hostingOperator.secretEnvironment` and `hosting-operator-secrets.yaml` remain in the chart for a
