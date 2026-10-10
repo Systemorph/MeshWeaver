@@ -1,0 +1,36 @@
+@@MW-DUMP listing
+17179869184	1791622450	memex-portal-deployment-8c87bbfc-gvt4n/coredump.1.1791622450
+17179869184	1791621003	memex-portal-deployment-85587f8869-5j9gx.1791621060/coredump.1.1791621003
+@@MW-DUMP selected	memex-portal-deployment-85587f8869-5j9gx.1791621060/coredump.1.1791621003	17179869184	1791621003
+@@MW-DUMP section	eeversion	eeversion
+10.0.1 @Commit: 0123abcd
+@@MW-DUMP end	eeversion	0	26
+@@MW-DUMP section	threadpool	threadpool
+Worker Thread: Total: 55 Running: 55 Idle: 0 MaxLimit: 32767 MinLimit: 4
+Work Request in Queue: 812
+@@MW-DUMP end	threadpool	0	100
+@@MW-DUMP section	syncblk	syncblk
+Index         SyncBlock MonitorHeld Recursion Owning Thread Info          SyncBlock Owner
+    7 00007F12A0001234            3         1 00007F12A0005678 2c  12   00007f12b0009abc System.Object
+@@MW-DUMP end	syncblk	0	180
+@@MW-DUMP section	clrthreads	clrthreads
+ThreadCount:      3
+ConnectionString=Host=pg;Password=hunter2;Username=u
+@@MW-DUMP end	clrthreads	0	70
+@@MW-DUMP section	clrstack	clrstack -all
+OS Thread Id: 0x2c (12)
+        Child SP               IP Call Site
+00007F12C0000010 00007F12D0000010 System.Threading.Monitor.Wait(System.Object, Int32)
+00007F12C0000020 00007F12D0000020 Orleans.Runtime.Catalog.GetOrCreateActivation(Orleans.Runtime.GrainId)
+OS Thread Id: 0x2d (13)
+        Child SP               IP Call Site
+00007F12C0000110 00007F12D0000110 System.Threading.Monitor.Wait(System.Object, Int32)
+00007F12C0000120 00007F12D0000120 Orleans.Runtime.Catalog.GetOrCreateActivation(Orleans.Runtime.GrainId)
+OS Thread Id: 0x2e (14)
+        Child SP               IP Call Site
+00007F12C0000210 00007F12D0000210 System.Threading.SemaphoreSlim.Wait(Int32)
+@@MW-DUMP end	clrstack	0	900
+@@MW-DUMP section	dumpasync	dumpasync --coalesce
+      12 MeshWeaver.Messaging.MessageHub+<DeliverMessage>d__42
+@@MW-DUMP end	dumpasync	0	60
+@@MW-DUMP done

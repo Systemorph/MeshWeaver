@@ -1,0 +1,28 @@
+{
+  "items": [
+    {
+      "metadata": {
+        "name": "memex-portal-deployment"
+      },
+      "spec": {
+        "template": {
+          "spec": {
+            "containers": [
+              {
+                "name": "memex-portal",
+                "env": [
+                  {
+                    "name": "DOTNET_DbgMiniDumpName",
+                    "value": "/tmp/coredumps/x"
+                  }
+                ],
+                "volumeMounts": []
+              }
+            ],
+            "volumes": []
+          }
+        }
+      }
+    }
+  ]
+}
