@@ -72,8 +72,7 @@ internal sealed class SubtreeDeletionGuardStorageAdapter(
                         + "deleted. Nodes must not be created under a subtree while its recursive "
                         + "deletion is in flight.",
                         node.Path, root);
-                    return Observable.Throw<MeshNode?>(new InvalidOperationException(
-                        $"Cannot write '{node.Path}': the subtree '{root}' is currently being deleted."));
+                    return Observable.Throw<MeshNode?>(new SubtreeDeletionInFlightException(node.Path, root));
                 }
                 // Post-commit, pre-publish: the null sentinel means "no adapter owns this path" —
                 // nothing was written, so nothing is superseded.
@@ -100,8 +99,7 @@ internal sealed class SubtreeDeletionGuardStorageAdapter(
                             "[SubtreeDeletionGuard] REFUSED batch write: {Path} lies under the subtree "
                             + "'{Root}' whose deletion is in flight.",
                             node.Path, root);
-                        return Observable.Throw<IReadOnlyList<MeshNode>>(new InvalidOperationException(
-                            $"Cannot write '{node.Path}': the subtree '{root}' is currently being deleted."));
+                        return Observable.Throw<IReadOnlyList<MeshNode>>(new SubtreeDeletionInFlightException(node.Path, root));
                     }
                 }
                 // Only the nodes the adapter reports as written were claimed — same rule as the
@@ -133,8 +131,7 @@ internal sealed class SubtreeDeletionGuardStorageAdapter(
                         "[SubtreeDeletionGuard] REFUSED compare-and-set write to {Path}: the subtree "
                         + "'{Root}' is being deleted.",
                         node.Path, root);
-                    return Observable.Throw<bool?>(new InvalidOperationException(
-                        $"Cannot write '{node.Path}': the subtree '{root}' is currently being deleted."));
+                    return Observable.Throw<bool?>(new SubtreeDeletionInFlightException(node.Path, root));
                 }
                 // `true` is the one outcome that committed; a version mismatch (false) or an
                 // unowned path (null) wrote nothing.

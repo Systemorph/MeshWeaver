@@ -105,6 +105,34 @@ System.TypeLoadException: Unable to resolve type alias "("inv",[Orleans.Runtime.
 
 Removing the production line makes the clean case fail with one rejection; restoring it makes it pass.
 
+## A `Compatible` bundle declined on its fingerprint is usually a bundle that lags the source
+
+A decline line that says `Compatible` reads like a contradiction: the versions agree, yet the
+adoption is refused. It is not one. The version verdict decides whether these bytes **may** serve
+over moved source (the stale-but-serving rule). The fingerprint says **whether** the source moved.
+When a build of the live source resolves on the process, the decline keeps that build, which is
+rule 3 above. Two readings from the same day show which side moved
+(memex-cloud and memex, 2026-10-09, governed `Logs` actions):
+
+| when | portal | bundle | bundle fingerprint | live fingerprint |
+|---|---|---|---|---|
+| 11:54Z | memex | `Hosting` 1.60.24 | `60a19e49d8ee06b5` | `4684a86fed5ff776` |
+| 21:29Z | memex-cloud | `Hosting` 1.60.30 | `4684a86fed5ff776` | `b32985e20cde9ee6` |
+
+`4684a86f…` was memex's **live** source at 11:54. The bundle sealed later carries it, and by then
+the source had moved again: `Hosting/` took about 30 merges on MeshWeaver.Plugins `main` that day.
+The sync takes every push, and a bundle exists only once its commit is sealed, so between two seals
+the newest bundle is behind the live source **by construction**. Declining it and keeping the build
+compiled from the live source is correct. It is neither a normalization difference (the fingerprint
+hashes the exact code text Roslyn is handed, `NodeTypeSourceFingerprint`) nor stale sources on the
+portal.
+
+Two things this reading does **not** cover. First, a fingerprint that stays the same across many
+seals, with the bundle never catching up, would point at the portal's sources (a stuck sync) and
+should be checked against the repository's commit for that type. Second, the stale-adoption bound
+(`Modules:StaleAdoptionMaxMinorVersionsBehind`) refusing a bundle 31 minors behind on a pod of an
+older platform build is the bound working, not a fingerprint fault.
+
 ## Operator notes
 
 - A type that compiles every 15–30 s with alternating `-s…-` tags in its `Release/` artifacts is a **generation overlap**, not a source problem. Read `kubectl get rs` and the pods' `framework identity` log line before touching the type.

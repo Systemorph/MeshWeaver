@@ -313,8 +313,12 @@ public static class ActivityRunner
                                 // it is an upstream exception message (a GitHub API refusal, a parse
                                 // error), not a sentence this platform composes, so no catalog can
                                 // carry it (#3281). The terminal STATUS beside it is what a viewer
-                                // reads language-independently.
-                                : new LogMessage(ex.Message, LogLevel.Error), logger);
+                                // reads language-independently. A refusal GitSync composes ITSELF
+                                // (GitSyncRefusal) is the exception: it carries its catalog key, so
+                                // the entry renders in each viewer's language.
+                                : GitSyncRefusalException.TryGet(ex, out var refusal)
+                                    ? refusal.ToLogMessage(LogLevel.Error)
+                                    : new LogMessage(ex.Message, LogLevel.Error), logger);
                     })
                     .Finally(() =>
                     {

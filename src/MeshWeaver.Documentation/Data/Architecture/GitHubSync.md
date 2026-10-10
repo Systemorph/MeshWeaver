@@ -66,7 +66,7 @@ Under **Repository**:
 
 | Field | Meaning |
 |---|---|
-| **Repository URL** | `https://github.com/owner/repo`. |
+| **Repository URL** | `https://github.com/owner/repo` — or an Azure Repos URL, which is push-only (see **Azure Repos — push-only** below). |
 | **Branch** | The branch to commit to (default `main`). |
 | **Sync direction** | `Bidirectional` (default), `ExportOnly`, or `ImportOnly` — see below. |
 | **Create the branch if it doesn't exist** | When on, a missing branch is created as a fresh snapshot commit. |
@@ -88,6 +88,87 @@ operation (the GUI additionally hides what would be rejected):
 
 Use `ImportOnly` for a Space that mirrors an upstream repository you don't own, and
 `ExportOnly` for a backup/publishing target that must never feed edits back.
+
+### Azure Repos — push-only
+
+A Space can also be **exported to an Azure Repos repository**, for an organisation whose content
+must live on Azure DevOps (policy [`azure-repos-push-only`](../PolicyNotProse), MeshWeaver#5248).
+Put the Azure Repos URL in **Repository URL** — either shape is recognised:
+
+- `https://dev.azure.com/{org}/{project}/_git/{repo}` (also with the `https://{org}@dev.azure.com/…`
+  prefix the clone dialog adds), or
+- the legacy `https://{org}.visualstudio.com/[DefaultCollection/]{project}/_git/{repo}`.
+
+**The provider is read off the URL, never stored** (`GitRepositoryProvider.Classify`). The settings tab
+says under the Repository section which service a source syncs with. The config keeps its name
+(`GitHubSyncConfig`): renaming a type that is persisted on every synced Space, and that in-mesh C# may
+name, would need a migration of every stored `$type` and could break code CI never compiles. A stored
+`Provider` field could also disagree with the URL beside it.
+
+**Push-only, in this version.** An Azure Repos source must be declared **Export-only**:
+
+| Operation | Azure Repos |
+|---|---|
+| Commit ("Sync now") | ✓ — only when the source's Sync direction is `ExportOnly`; any other direction is refused, naming the direction |
+| Import / update to latest / re-import at a commit | ✗ refused by name — nothing is read from the repository |
+| Check branch / branch-head lookup | ✗ refused by name |
+| Webhooks (Azure DevOps service hooks), branch reconcile, sealed-publication reconcile | not consulted — every inbound path already skips `ExportOnly` sources |
+| Pull requests | not offered — every `PullRequestService` operation refuses an Azure Repos source (in the viewer's language), and the settings tab shows a notice under the draft button |
+| Create the repository if missing | not done — the repository must exist; a missing one fails the clone with git's own message |
+
+A refusal is an error with a message, never a silent skip: `AzureReposPushPolicy.RefuseExport` and
+`AzureReposPushPolicy.RefuseInbound` hold the rule, and `GitHubSyncService` applies it on every
+operation.
+
+**The credential is the instance's workload identity, declared per client tenant.** Nothing secret is
+stored: no PAT and no client secret. The push authenticates with an Entra access token for the Azure
+DevOps resource (`499b84ac-1321-427f-aa17-267ca6975798/.default`). `WorkloadIdentityCredential` mints
+it from the instance's workload identity, through a **federated credential on an app registration in
+the client's tenant**. That registration is declared in the instance's deployment record:
+
+```jsonc
+// Deployment record: config.memex_portal.AzureDevOps__TenantId / AzureDevOps__ClientId
+// (delivered verbatim by the portal ConfigMap's pass-through) → configuration section:
+"AzureDevOps": { "TenantId": "<client tenant id>", "ClientId": "<app registration client id>" }
+```
+
+Both values are identifiers, not secrets. On the client's side:
+
+1. Create (or reuse) an app registration in the client tenant.
+2. Add a federated credential for the instance's AKS workload identity: the cluster's OIDC issuer and
+   the portal's service account as subject.
+3. Add that registration to the Azure DevOps organisation as a user, and grant it these **repository
+   permissions** on the target repository. Azure DevOps controls each one separately, and the push
+   needs all of them:
+   - **Read** — the push clones the repository and fetches the target branch before it writes.
+   - **Contribute** — to push the sync commit.
+   - **Create branch** — only when the target branch may not exist yet and *Create the branch if it
+     doesn't exist* is on (the default). To avoid granting it, pre-create the branch and turn that
+     setting off; a missing branch is then refused by name.
+
+   The repository itself must exist: GitSync does not create Azure Repos repositories, whatever
+   *Create the repository* says.
+
+**Prerequisite on the instance: the portal pod must carry a workload-identity token.** The AKS
+workload-identity webhook projects the service-account token (`AZURE_FEDERATED_TOKEN_FILE`) only into a
+pod labelled `azure.workload.identity/use: "true"`. Today the chart sets that label when the deployment
+record declares `selfUpdate.azureClientId`. Declaring only the two `AzureDevOps` keys does not arm it,
+and the export is then refused by name (`gitsync.azure.noWorkloadIdentity`), never with the SDK's
+generic error. The self-update client id the webhook injects does not interfere: the Azure DevOps
+exchange uses the declared tenant and client id, presented with the same projected token.
+
+When either key is absent the export is refused, naming both keys (`AzureReposTokenService`). Every
+refusal on this path is a catalog key rendered in the viewer's language (`GitSyncRefusal`). The
+token travels to `git` as an `Authorization: Bearer` header set through git's `GIT_CONFIG_*`
+environment, so it never appears in argv or in `.git/config` (`GitCredentials.ForRemote`). Commits are
+authored as `MeshWeaver <noreply@meshweaver.cloud>`.
+
+**Not yet:** importing from Azure Repos (it needs service-hook ingestion or a pull schedule), Azure
+DevOps pull requests, and contract tests against a real Azure DevOps organisation. The rule above and
+the credential plumbing are pinned by `AzureReposPushOnlyTest` (MeshWeaver.Documentation.Test). That
+test covers URL recognition, the refusals, the declared-identity binding, the token request and the
+bearer header, each with a GitHub negative control. Azure Pipelines is a separate concern:
+[Hybrid delivery](../HybridGitHubAzureDevOps).
 
 ### Multiple sync sources
 

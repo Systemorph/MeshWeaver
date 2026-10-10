@@ -84,6 +84,12 @@ namespace MeshWeaver.Graph;
 /// the readiness path, it loads each already-baked type's EXISTING bytes and calls
 /// <see cref="ProbeRegister"/> with the configuration found there — no compile, no record write. See
 /// <c>Doc/Architecture/DynamicContentTypeRegistration</c>.</para>
+///
+/// <para>🚨 What a read seam MAY do (Systemorph/MeshWeaver.Plugins#2799) is run that SAME
+/// registration-only route for the one type it is reading — <c>ContentTypeOnDemandRegistration</c>
+/// (MeshWeaver.Hosting): the record's claimed build, identity-checked existing bytes, one probe; never
+/// the enrichment path above. Boot-time readers run before the pass can, so without it their reads
+/// answered untyped.</para>
 /// </summary>
 public static class ContentTypeRegistration
 {

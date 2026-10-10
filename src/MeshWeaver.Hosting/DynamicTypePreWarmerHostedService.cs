@@ -924,6 +924,11 @@ public static class PreWarmServiceCollectionExtensions
         // writing anything — the content type of every already-baked dynamic NodeType this replica
         // has not activated (Systemorph/MeshWeaver.Plugins#2180). Off the readiness path.
         services.AddHostedService<DynamicContentTypeRegistrationHostedService>();
+        // Systemorph/MeshWeaver.Plugins#2799 — and a READ never has to wait for that pass: the
+        // stream cache's read seams register a built-but-unregistered type on demand (same
+        // non-compiling route, one attempt per type) and type the content after it, instead of
+        // answering untyped to the boot-time readers that run before the pass can.
+        services.TryAddSingleton<ContentTypeOnDemandRegistration>();
         return services;
     }
 

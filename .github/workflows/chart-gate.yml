@@ -182,8 +182,20 @@ jobs:
     name: Observability values (rendered + binary-validated)
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: read
     steps:
       - uses: actions/checkout@v7
+      # Docker Hub images come from the fleet's digest-pinned GHCR mirror, read with this job's own
+      # token — never anonymously from docker.io, whose per-IP limit the hosted pool shares
+      # (Doc/Architecture/DockerHubInCi; `toomanyrequests` red this gate on 2026-10-09, #6381).
+      - name: Log in to GHCR (the Docker Hub mirror)
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - name: Install helm
         uses: azure/setup-helm@v5
         with:
@@ -199,8 +211,20 @@ jobs:
     name: Bundle registry scripts (executed)
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: read
     steps:
       - uses: actions/checkout@v7
+      # Docker Hub images come from the fleet's digest-pinned GHCR mirror, read with this job's own
+      # token — never anonymously from docker.io, whose per-IP limit the hosted pool shares
+      # (Doc/Architecture/DockerHubInCi; `toomanyrequests` red this gate on 2026-10-09, #6381).
+      - name: Log in to GHCR (the Docker Hub mirror)
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - name: Install helm
         uses: azure/setup-helm@v5
         with:
