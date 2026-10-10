@@ -152,6 +152,13 @@ public class BroadGrantGuardTest
         ["Ready", "access.grant-broad", false],
         ["Done", "access.grant-broad", false],
         ["Executing", "release.cut", false],
+        // Public links (#4306): the three link standards may write their governed grants…
+        ["Executing", "Governance/Standards/link.publish", true],
+        ["Executing", "link.revoke", true],
+        ["Executing", "group.org-create", true],
+        // …only while executing, and a look-alike id is not on the list.
+        ["Ready", "link.publish", false],
+        ["Executing", "link.publish-anything", false],
     ];
 
     [Theory]
