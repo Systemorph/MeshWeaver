@@ -240,28 +240,48 @@ Pinned by `test/Memex.Portal.Shared.Test/WebhookInboxStalledReadTest.cs`. It has
 stall answers 503, an answered read answers 200, and an ordinary fault still escapes. Without the
 mapping, the stall case fails with the production exception.
 
-## What a slow answer after "Node created" is — and is not (#6039)
+## The answer is the commit, not the create's reply (#6039)
 
 One GitHub delivery was logged `Node created at Hosting/PlatformBuilds/_Inbox/…` about 200 ms after
-GitHub sent it. GitHub still recorded no response within its 10 s limit. Investigated, without a
-code change:
+GitHub sent it. GitHub still recorded no response within its 10 s limit. The endpoint used to answer
+on the `CreateNodeResponse`, and that reply depends on two things the sender does not care about:
 
-- **Not post-creation handlers.** No `INodePostCreationHandler` in core or MeshWeaver.Plugins
-  matches a `WebhookEvent`. So `RunPostCreationHandlersObs` is empty for an inbox node, and
-  `CreateNodeResponse.Ok` is posted synchronously right after the "Node created" line.
-- **What is left is the reply's dispatch.** It needs the `portal/nodeops-{meshId}` action block, and
-  it needs it however the create was issued. The endpoint holds the root hub, so its create runs on
-  that hub. A reply that hub posts is first RECEIVED and ENQUEUED on the hub's *own* block before it
-  is routed (request-fate trail: `RESPONSE_POSTED target=portal/reads-… ↩ reply#1: RECEIVED
-  @portal/nodeops-… → ENQUEUED → QUEUED queue=main`). Issuing the create from
-  `portal/reads-{meshId}` therefore does **not** separate the answer from that block. This was
-  tried and measured: with the block held after the commit, the delivery was still not answered,
-  because the reply sat on the node-CRUD block on its way out. It is unlike the content route's read
-  (#2901), whose responder is a per-node hub.
-- **Not established:** which turn held the node-CRUD block at 18:10:31Z on 2026-09-26. That is the
-  open question of #2543. Cutting the answer's dependence on that block would need one of two
-  changes. Either the commit itself becomes the signal the endpoint waits on, or a responder's
-  outgoing reply stops queueing on its own block. Both are framework changes outside this endpoint.
+- **The post-creation handlers.** The reply is posted only after every matching
+  `INodePostCreationHandler` has finished. None matches a `WebhookEvent` today, but nothing kept one
+  from being added, and each would have held the HTTP answer.
+- **The node-operation hub's own block.** A responder enqueues its outgoing reply on its own action
+  block before routing it (request-fate trail: `RESPONSE_POSTED target=portal/reads-… ↩ reply#1:
+  RECEIVED @portal/nodeops-… → ENQUEUED → QUEUED queue=main`). Anything that kept
+  `portal/nodeops-{meshId}` busy at that moment held the answer for a row already committed. Issuing
+  the create from another hub does not help, because the reply still leaves through that block.
+
+**The fix answers on the commit.** `WebhookInbox` stores through
+`IMeshService.CreateNodeAnsweredOnCommit` (`src/MeshWeaver.Mesh.Contract/Services/CreateAnsweredOnCommit.cs`).
+It subscribes to `IMeshInvalidationFeed` before posting the create, and it answers on whichever comes
+first:
+
+| signal | when it fires | what the sender gets |
+|---|---|---|
+| a `Created` change for the node's path | right after the storage write emitted; `WriteAndPublishCreated` publishes only post-commit | 200, stored |
+| the `CreateNodeResponse` | after the handlers, through the block | 200 on success, or the refusal |
+
+A refusal before the commit still reaches the sender, because no commit was announced and the reply
+carries the refusal. A failure after the commit cannot change an answer already given. It is logged
+at Warning, and the create's own chain runs on unchanged. The handlers still run, just no longer on
+the request.
+
+🚨 **Only a node type whose create contract ends at the row may answer on commit.** A type with a
+post-creation handler that declares `FailsCreateOnError`, such as a Space and its creator grant, can
+still roll itself back after the commit. An answer given on commit would report a success the mesh
+later retracts. A `WebhookEvent` is a verbatim record that consumers pick up from their own inbox
+query, so no handler is part of its contract.
+
+Pinned by `test/Memex.Portal.Shared.Test/WebhookInboxAnswersOnCommitTest.cs`. A post-creation handler
+for `WebhookEvent` holds the reply after the commit until the test releases it, and the client uses
+GitHub's 10 s timeout. With the endpoint answering on the reply again, the held case fails with
+`HttpClient.Timeout of 10 seconds elapsing`, which is the incident. **Not established:** which turn
+held the node-CRUD block at 18:10:31Z on 2026-09-26. That remains the open question of #2543, and
+this change makes the inbox's answer independent of it.
 
 ## Where the code lives
 
@@ -272,6 +292,8 @@ code change:
   allowlist reader (`WebhookInbox.ReadTargets` → `WebhookTarget(Path, SecretConfigKey)`), the HMAC
   check (`VerifyHmacSha256`) and the constants both ends share: `TargetsConfigSection`,
   `SecretConfigKeyName`, `SignatureHeader` and `MaxBodyBytes = 1024 * 1024`.
+- `src/MeshWeaver.Mesh.Contract/Services/CreateAnsweredOnCommit.cs` — the create that answers on
+  the store's commit (#6039).
 - `test/MeshWeaver.Graph.Test/WebhookInboxTest.cs` — the pair that pins the fix:
   `SignedTarget_WithTheRightSecret_IsAccepted` against
   `SignedTarget_WithADriftedSecret_IsRefused_AndStoresNothing`. Both returned `Accepted` before
