@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
@@ -38,7 +39,7 @@ public static class AppDirectoryRegistration
         Name = "Launcher Arrangement",
         Icon = "/static/NodeTypeIcons/layout.svg",
         IsSatelliteType = true,
-        ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
+        ExcludeFromContext = ImmutableHashSet.Create("search", "create", "content"),
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
                 .WithContentType<LauncherArrangement>())
@@ -47,8 +48,9 @@ public static class AppDirectoryRegistration
 
 /// <summary>
 /// <c>Home:AppSource</c> — where the home's Apps band reads its tiles from. An open vocabulary
-/// (policy <c>open-vocabulary-string-constants</c>): an unknown value is logged and falls back to
-/// <see cref="Records"/>, the shipped behaviour.
+/// (policy <c>open-vocabulary-string-constants</c>): an unknown value falls back to
+/// <see cref="Records"/>, the shipped behaviour, and the home's render logs it by name
+/// (<see cref="IsKnown"/>).
 /// </summary>
 public static class HomeAppSource
 {
@@ -65,4 +67,11 @@ public static class HomeAppSource
     /// <see cref="Records"/>, or an unknown value — keeps the records. Pure.</summary>
     public static bool IsDirectory(string? value) =>
         string.Equals(value?.Trim(), Directory, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Whether <paramref name="value"/> is absent or one of this vocabulary's values —
+    /// anything else is a configuration the deployment should hear about. Pure.</summary>
+    public static bool IsKnown(string? value) =>
+        string.IsNullOrWhiteSpace(value)
+        || IsDirectory(value)
+        || string.Equals(value.Trim(), Records, StringComparison.OrdinalIgnoreCase);
 }

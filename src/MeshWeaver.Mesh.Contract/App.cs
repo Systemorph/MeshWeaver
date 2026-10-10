@@ -59,8 +59,9 @@ public record App
     public string? OpenPath { get; init; }
 
     /// <summary>
-    /// How this app landed on the grid: <c>"user"</c> (chosen/installed from the Store) or
-    /// <c>"default"</c> (materialized from the platform default set).
+    /// How this app landed on the grid — an OPEN vocabulary (<see cref="AppSources"/>):
+    /// <c>"user"</c> (chosen/installed from the Store), <c>"default"</c> (materialized from the
+    /// platform default set) or <c>"directory"</c> (a synthetic row of the app directory).
     /// </summary>
     [Browsable(false)]
     public string? Source { get; init; }
@@ -73,4 +74,20 @@ public record App
     /// </summary>
     [Browsable(false)]
     public string? LabelKey { get; init; }
+}
+
+/// <summary>
+/// The platform's values of <see cref="App.Source"/> — an OPEN vocabulary (policy
+/// <c>open-vocabulary-string-constants</c>): a starting set, never the permitted one.
+/// </summary>
+public static class AppSources
+{
+    /// <summary>Chosen or installed from the Store.</summary>
+    public const string User = "user";
+
+    /// <summary>Materialized from the platform default set.</summary>
+    public const string Default = "default";
+
+    /// <summary>A synthetic row of the app directory (<c>{user}/_Apps</c>) — never stored.</summary>
+    public const string Directory = "directory";
 }

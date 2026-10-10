@@ -128,9 +128,10 @@ public sealed class AppDirectoryQueryProvider(IServiceProvider services) : IMesh
                 {
                     Plugin = entry.BuiltIn ? "" : entry.Id,
                     OpenPath = entry.OpenPath,
-                    Group = placed is null ? entry.Category : placed.Group,
+                    // null = never grouped → the app's category; "" = deliberately ungrouped, kept.
+                    Group = placed?.Group ?? entry.Category,
                     Order = placed?.Order ?? 0,
-                    Source = "directory",
+                    Source = AppSources.Directory,
                     LabelKey = entry.LabelKey,
                 },
             };

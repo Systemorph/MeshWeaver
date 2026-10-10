@@ -57,18 +57,25 @@ public sealed class LauncherArrangementSource
         $"path:{owner}/{AppNodeType.UserNamespace} scope:children nodeType:{AppNodeType.NodeType}";
 
     /// <summary>
-    /// The viewer's arrangement — live; <c>null</c> while the node does not exist. Read as System
-    /// (it is the viewer's own data, and the rows it shapes are only served back to the viewer).
+    /// The viewer's arrangement — live; <c>null</c> while the node does not exist. EXISTENCE comes
+    /// from the settings listing (read as System — the viewer's own data, served back only to the
+    /// viewer); CONTENT comes from the authoritative node stream once the listing has seen the
+    /// node, so a rearrangement is painted from the write, never from a stale index row.
     /// </summary>
     public IObservable<LauncherArrangement?> Observe(string owner)
     {
         var core = hub.ServiceProvider.GetRequiredService<IMeshQueryCore>();
+        var cache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
         var options = hub.JsonSerializerOptions;
         var arrangementPath = LauncherArrangementPaths.PathFor(owner);
         return Fold(core.Query<MeshNode>(SystemRequest(ArrangementQuery(owner)), options))
-            .Select(nodes => nodes.TryGetValue(arrangementPath, out var node)
-                ? node.ContentAs<LauncherArrangement>(options) ?? new LauncherArrangement()
-                : null);
+            .Select(nodes => nodes.ContainsKey(arrangementPath))
+            .DistinctUntilChanged()
+            .Select(exists => exists
+                ? cache.GetStream(arrangementPath, options)
+                    .Select(node => (LauncherArrangement?)(node.ContentAs<LauncherArrangement>(options) ?? new LauncherArrangement()))
+                : Observable.Return<LauncherArrangement?>(null))
+            .Switch();
     }
 
     /// <summary>
@@ -152,7 +159,9 @@ public sealed class LauncherArrangementSource
                     .Select(_ => Unit.Default)
                     .Catch((Exception exception) =>
                     {
-                        if (exception.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase))
+                        // The TYPED classifier — never a message match, which would read an
+                        // unrelated failure as a won race and mark the viewer seeded for good.
+                        if (exception.IsNodeAlreadyExists())
                             return Observable.Return(Unit.Default);
                         logger?.LogWarning(exception,
                             "[AppDirectory] seeding the launcher arrangement of {Owner} failed", owner);

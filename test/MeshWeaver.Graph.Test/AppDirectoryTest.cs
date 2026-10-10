@@ -304,6 +304,37 @@ public class AppDirectoryPureTest
         rows[1].ContentAs<App>(Options)!.Order.Should().Be(0);
     }
 
+    /// <summary>An entry that only carries an ORDER keeps the category (<c>null</c> group); a
+    /// deliberately ungrouped tile (<c>""</c>) stays ungrouped.</summary>
+    [Fact]
+    public void ANullGroup_FallsBackToTheCategory_AnEmptyGroupStaysUngrouped()
+    {
+        var entries = ImmutableList.Create(
+            new AppDirectoryEntry("Crm", "CRM", "c.svg", null, "Business", "Crm"),
+            new AppDirectoryEntry("Chess", "Chess", "k.svg", null, "Games", "Chess"));
+        var arrangement = new LauncherArrangement
+        {
+            Entries = ImmutableDictionary.CreateRange(StringComparer.OrdinalIgnoreCase, new[]
+            {
+                KeyValuePair.Create("Crm", new LauncherEntry { Group = null, Order = 3 }),
+                KeyValuePair.Create("Chess", new LauncherEntry { Group = "", Order = 1 }),
+            }),
+        };
+        var rows = AppDirectoryQueryProvider.Rows("alice", entries, arrangement, Options);
+        rows[0].ContentAs<App>(Options)!.Group.Should().Be("Business");
+        rows[0].ContentAs<App>(Options)!.Order.Should().Be(3);
+        rows[1].ContentAs<App>(Options)!.Group.Should().Be("");
+        rows[0].ContentAs<App>(Options)!.Source.Should().Be(AppSources.Directory);
+    }
+
+    [Theory]
+    [InlineData(null, true)]
+    [InlineData("Records", true)]
+    [InlineData("directory", true)]
+    [InlineData("bogus", false)]
+    public void UnknownAppSources_AreReportable(string? value, bool known)
+        => HomeAppSource.IsKnown(value).Should().Be(known);
+
     [Theory]
     [InlineData("alice/_Apps/Crm", true, "alice", "Crm")]
     [InlineData("alice/_Apps/Edu~2FCourses", true, "alice", "Edu/Courses")]

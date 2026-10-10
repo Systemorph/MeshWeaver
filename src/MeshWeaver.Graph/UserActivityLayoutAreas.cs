@@ -552,8 +552,8 @@ public static class UserActivityLayoutAreas
         var screen = host.ViewerScreen();
         // Where the Apps band reads its tiles: the viewer's own _App records (the default) or the
         // app directory (Home:AppSource = Directory). Deployment config, read once per render.
-        var appsFromDirectory = HomeAppSource.IsDirectory(
-            host.Hub.ServiceProvider.GetService<IConfiguration>()?[HomeAppSource.ConfigKey]);
+        var appSource = host.Hub.ServiceProvider.GetService<IConfiguration>()?[HomeAppSource.ConfigKey];
+        var appsFromDirectory = HomeAppSource.IsDirectory(appSource);
         // The home's DISPLAY CONFIG is DATA-DRIVEN: read the admin-editable Admin/HomeConfig platform
         // node reactively (shipped defaults when absent), so an admin's edit updates every open home
         // LIVE — no code change, no image roll. Combined with the owner node (pins AND the home's path
@@ -571,6 +571,10 @@ public static class UserActivityLayoutAreas
         var homeClock = System.Diagnostics.Stopwatch.StartNew();
         var homeLogger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Home");
         var catalogLogged = 0;
+        if (!HomeAppSource.IsKnown(appSource))
+            homeLogger?.LogWarning(
+                "[Home] {Key}='{Value}' is not a known app source; the Apps band reads {Fallback}",
+                HomeAppSource.ConfigKey, appSource, HomeAppSource.Records);
         return HomeConfigNodeType.Observe(host.Workspace, options)
             .CombineLatest(
                 syncStream!.Select(change => change.Value.ContentAs<User>(options)).StartWith((User?)null),
@@ -1206,7 +1210,7 @@ public static class UserActivityLayoutAreas
                     ? known
                     : (segment, GenericAppIcon);
                 specs.Add(new AppRecordSpec(id, name, icon,
-                    Plugin: null, OpenPath: $"{ownerId}/{segment}", Source: "default"));
+                    Plugin: null, OpenPath: $"{ownerId}/{segment}", Source: AppSources.Default));
             }
             else
             {
@@ -1220,7 +1224,7 @@ public static class UserActivityLayoutAreas
                     ? known
                     : (LeafOf(path), GenericAppIcon);
                 specs.Add(new AppRecordSpec(id, name, icon,
-                    Plugin: path, OpenPath: null, Source: "default"));
+                    Plugin: path, OpenPath: null, Source: AppSources.Default));
             }
         }
         return specs;
