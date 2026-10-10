@@ -85,6 +85,16 @@ content property `stepUpReceipts` — a map `{ userId → receiptId }`, so sever
 activity each carry their own. The stamp is an ordinary `GetMeshNodeStream(path).Update(...)`; it
 changes the node, so the owning watcher re-evaluates the approval with the receipt now present.
 
+🚨 **The stamp survives only on a content type that DECLARES the map** as
+`ImmutableDictionary<string,string>? StepUpReceipts`: the endpoint round-trips a typed content
+through its own type, and a type without the property drops the stamp — the approval then has no
+receipt, which fails closed. Every approval content declares it: `InstanceActionContent`,
+`OperationRequestContent`, `ActivityContent`, `InstanceRequestContent` (MeshWeaver.Plugins) and
+the core `Approval` record behind the generic `_Approval` satellite. A type whose generated record
+equality would compare the map by REFERENCE must compare it by entries instead — `Approval`
+overrides `Equals` for exactly that, because its control plane writes only "while the node is still
+the revision it judged", and two reads of one stamped approval must be equal for that to hold.
+
 A consumer never looks a receipt up by a computed id: reading an absent node is a framework
 defect (the routing not-found opens the storm-breaker on that path). The receipt is read only once
 a stamp names it, and by then it exists.
@@ -294,6 +304,15 @@ removes the rung entirely.
 | `Essentials/OperationRequest` *Approve* | `OperationRequestControlPlane.ApproveFlow`, before the claim | `ScriptHash` |
 | `Governance/Activity` signatures | `ActivityGates.SignatureRefusal`, consumed with the signature | the activity `ContentHash` |
 | `Hosting/ApprovalInbox` bulk approve | inherits — one step-up covering every selected target | each row's own hash |
+| `Approvals/Approval` (the generic `_Approval` satellite) *Approve* / *Reject* | `ApprovalControlPlane`, consumed just before the decision is ratified as System | `Approval.StepUpBinding()` — the approval's terms AND the decision |
+| `Hosting/InstanceRequest` *Approve* / *Refuse* | `InstanceRequestControlPlane`, consumed after every other gate, before the decision runs | `InstanceRequestContent.StepUpBinding()` — the request as filed AND the decision |
+| `Governance/Activity` manual-gate answers | the activity control plane, consumed when the answer is admitted | the gate, the answer and the activity `ContentHash` |
+
+A decision whose receipt does not count yet is **held, never refused**: nothing is written back (a
+platform write would move the node past the decider's own revision), so the step-up stamp — the
+decider's next write — re-triggers the judgement with the receipt present. The page that wrote the
+decision leads straight on to `/auth/step-up`; for a decision written by hand (MCP, the edit form)
+the control plane's log line names the step-up URL to open.
 
 `SoleMaintainerApproval` stays what it is — *may this person approve their own request* — and the
 receipt is required on top of it, never instead of it.
@@ -306,6 +325,7 @@ receipt is required on top of it, never instead of it.
 | Entra rung, `mw_idp`/`mw_oid`/`mw_tid`/`mw_auth_time` on the session cookie, record keys | core — first change |
 | passkey rung, TOTP rung, Settings → Security | core — second change |
 | consumers | MeshWeaver.Plugins — after the core contract is in a sealed set |
+| `Approval.StepUpReceipts` + `Approval.StepUpBinding()` (the generic satellite's half) | core — third change |
 | public links (`link.publish`) consuming the receipt | Refs #4306, after the consumers |
 
 ## Related
