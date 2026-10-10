@@ -19,6 +19,20 @@ internal sealed record StepUpPageTexts(string Locale)
     /// <param name="args">Positional arguments.</param>
     /// <returns>The text.</returns>
     public string L(string key, params object?[] args) => MeshWeaver.Messaging.LocalizationCatalog.Get(key, Locale, args);
+
+    /// <summary>
+    /// The culture of <see cref="Locale"/>, for dates and numbers on the page — resolved explicitly
+    /// from the viewer's locale, never from the process culture. A tag .NET does not know formats
+    /// invariant (the text itself still follows the catalog's own fallback).
+    /// </summary>
+    public System.Globalization.CultureInfo Culture
+    {
+        get
+        {
+            try { return System.Globalization.CultureInfo.GetCultureInfo(Locale); }
+            catch (System.Globalization.CultureNotFoundException) { return System.Globalization.CultureInfo.InvariantCulture; }
+        }
+    }
 }
 
 /// <summary>
@@ -48,7 +62,7 @@ internal static class StepUpPages
 
     /// <summary>A refusal or failure — one sentence and a way back.</summary>
     internal static string Message(StepUpPageTexts t, string message, string backUrl) =>
-        Shell(t, P(message) + "<p><a href=\"" + Enc(backUrl) + "\">" + Enc(t.L("stepUp.back")) + "</a></p>");
+        Shell(t, "<p role=\"alert\">" + Enc(message) + "</p><p><a href=\"" + Enc(backUrl) + "\">" + Enc(t.L("stepUp.back")) + "</a></p>");
 
     /// <summary>No factor yet: enrol one before approving.</summary>
     internal static string EnrollNeeded(StepUpPageTexts t, string enrollUrl) =>
@@ -103,9 +117,11 @@ internal static class StepUpPages
         else
         {
             body.Append("<ul>");
-            foreach (var p in passkeys)
-                body.Append("<li>").Append(Enc(string.Format(System.Globalization.CultureInfo.InvariantCulture,
-                    t.L("stepUp.enroll.created"), p.CreatedAt.UtcDateTime.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture))))
+            // Formatted for the VIEWER's locale (never the process culture), oldest first.
+            var culture = t.Culture;
+            foreach (var p in passkeys.Values.OrderBy(p => p.CreatedAt))
+                body.Append("<li>").Append(Enc(string.Format(culture,
+                    t.L("stepUp.enroll.created"), p.CreatedAt.UtcDateTime.ToString("d", culture))))
                     .Append("</li>");
             body.Append("</ul>");
         }

@@ -208,7 +208,10 @@ already there (and reads the stored node back to see whether its own write lande
 factor is a `GetMeshNodeStream(path).Update(fold)` onto the existing node. The two never fall back
 into each other, because WHICH one is allowed is an authorization decision: a stale "no factors"
 listing, or two enrolments at once, must not turn a first-factor create into adding a second factor
-without the step-up that adding one requires.
+without the step-up that adding one requires. The passkeys are a JSON OBJECT keyed by credential
+id, never an array: a cross-hub update ships an RFC 7396 merge patch, which replaces an array
+WHOLE, so two replicas folding stale copies of a list could drop a newly enrolled credential or move
+another one's counter back. Keyed, each credential (and each of its fields) is patched on its own.
 
 - **Enrolment** at `/auth/step-up/enroll`, reached from *Settings → Security* (a person-app tab of
   framework controls with one button; the ceremony itself must run in the page that asks for it).
@@ -226,9 +229,15 @@ without the step-up that adding one requires.
 - **Assertion** at step-up: `/auth/step-up` renders one button; `navigator.credentials.get` with a
   challenge DERIVED from the pending step-up — SHA-256 over the user, every target and the nonce —
   so an assertion made for one approval can never confirm another. `userVerification=required`.
-  The library verifies signature, origin, RP id, challenge, the UV flag and a counter that moved
-  forward (a counter that did not is refused as a possible clone); then the counter is stored and the
-  same receipt minted with `method=passkey`.
+  The library verifies signature, origin, RP id, challenge, the UV flag and the signature counter;
+  then the counter is stored and the same receipt minted with `method=passkey`. **The counter
+  policy:** a NON-ZERO counter must move forward (a counter that did not is refused as a possible
+  clone), and each non-zero value is CLAIMED in the store before the receipt is minted (marker
+  `Auth/_StepUpUse/pk-{user}-{credential}-{count}`), so two assertions carrying the same counter —
+  a cloned authenticator used in two ceremonies at once — yield one receipt, not two. **Zero is the
+  WebAuthn "this authenticator keeps no counter" value** (synced passkeys report it on every
+  assertion, so `0 → 0` is accepted): clone detection cannot apply to such an authenticator, and
+  each of its assertions is bounded by the single-use pending step-up its challenge is derived from.
 
 ### What every completing endpoint re-checks
 
@@ -249,6 +258,13 @@ verification, the TOTP verification — checks, in this order:
 3. **A TOTP step or recovery code is CLAIMED before the receipt is minted** — markers
    `Auth/_StepUpUse/totp-{user}-{step}` and `…/rc-{user}-{hash}` — because validating the code
    against a snapshot and folding the counter afterwards lets two concurrent confirmations both pass.
+   A non-zero passkey counter is claimed the same way (above).
+4. **A TOTP or recovery-code attempt spends the user's attempt budget first** — before the code is
+   even looked at. Taking the pending step-up allows one guess per ceremony, but ceremonies are free
+   to start, so without a budget a stolen session could keep guessing six digits. Each attempt claims
+   one of five slots of the current 15-minute window (`Auth/_StepUpUse/totp-try-{user}-{window}-{slot}`,
+   `StepUpSingleUse.ClaimTotpAttempt`): atomic per slot, durable across restarts and replicas, and
+   counted across ceremonies. With no slot left the attempt is refused (`locked`) until the next window.
 
 ## The TOTP rung (only where no passkey is possible)
 

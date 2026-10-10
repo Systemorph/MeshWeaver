@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Formats.Cbor;
 using System.Security.Cryptography;
 using System.Text;
@@ -24,11 +25,11 @@ public class PortalStepUpRungsTest
 
     private static PasskeyCredential AKey() => new() { CredentialId = "AAAA", PublicKey = "", CreatedAt = DateTimeOffset.UnixEpoch };
 
-    private static StepUpFactors PasskeyOnly() => new() { UserId = "u", Passkeys = [AKey()] };
+    private static StepUpFactors PasskeyOnly() => new() { UserId = "u", Passkeys = ImmutableDictionary<string, PasskeyCredential>.Empty.Add("AAAA", AKey()) };
 
     private static StepUpFactors TotpOnly() => new() { UserId = "u", TotpConfirmedAt = DateTimeOffset.UnixEpoch, TotpSecretProtected = "x" };
 
-    private static StepUpFactors Both() => TotpOnly() with { Passkeys = [AKey()] };
+    private static StepUpFactors Both() => TotpOnly() with { Passkeys = ImmutableDictionary<string, PasskeyCredential>.Empty.Add("AAAA", AKey()) };
 
     // ───────────── the ladder ─────────────
 

@@ -52,6 +52,48 @@ internal sealed class StepUpSingleUse(IMessageHub hub)
         Claim("rc-" + UserKey(userId) + "-" + recoveryHash.ToLowerInvariant()[..Math.Min(32, recoveryHash.Length)],
             StepUpPaths.Factors(userId), userId);
 
+    /// <summary>Claims one non-zero signature counter value of one passkey. Cold; true for the winner only.</summary>
+    /// <param name="userId">The user.</param>
+    /// <param name="credentialId">The credential id (base64url).</param>
+    /// <param name="signCount">The counter the verified assertion carried (non-zero: zero means "no counter").</param>
+    /// <returns>Whether this call won.</returns>
+    public IObservable<bool> ClaimPasskeyCounter(string userId, string credentialId, uint signCount) =>
+        Claim("pk-" + UserKey(userId) + "-" + UserKey(credentialId)[..16] + "-"
+                + signCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            StepUpPaths.Factors(userId), userId);
+
+    /// <summary>How many TOTP/recovery-code attempts one user gets per <see cref="TotpAttemptWindow"/>.</summary>
+    internal const int TotpAttemptsPerWindow = 5;
+
+    /// <summary>The window the TOTP attempt budget is counted in.</summary>
+    internal static readonly TimeSpan TotpAttemptWindow = TimeSpan.FromMinutes(15);
+
+    /// <summary>
+    /// Spends one TOTP/recovery-code attempt of <paramref name="userId"/> in the window that holds
+    /// <paramref name="now"/>: claims the first free one of <see cref="TotpAttemptsPerWindow"/> slots,
+    /// in order, and stops at the first it wins. Atomic per slot (the store decides), durable across
+    /// restarts and replicas, and counted across ceremonies — so a stolen session cannot brute-force
+    /// a six-digit code by starting one ceremony per guess. Cold; true while the budget lasts.
+    /// </summary>
+    /// <param name="userId">The user.</param>
+    /// <param name="now">The clock.</param>
+    /// <returns>Whether an attempt was admitted.</returns>
+    public IObservable<bool> ClaimTotpAttempt(string userId, DateTimeOffset now)
+    {
+        var window = (now.ToUnixTimeSeconds() / (long)TotpAttemptWindow.TotalSeconds)
+            .ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var prefix = "totp-try-" + UserKey(userId) + "-" + window + "-";
+        return Observable.Range(0, TotpAttemptsPerWindow)
+            .Select(slot => Claim(prefix + slot.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                StepUpPaths.Factors(userId), userId))
+            // Concat subscribes one claim at a time, and Take(1) stops at the first win: a slot
+            // already taken costs one create + read-back, a free one ends the walk.
+            .Concat()
+            .Where(won => won)
+            .Take(1)
+            .DefaultIfEmpty(false);
+    }
+
     /// <summary>A path-safe key for a user id (user ids may carry characters a node id may not).</summary>
     internal static string UserKey(string userId) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(userId)))[..32].ToLowerInvariant();

@@ -131,7 +131,13 @@ public sealed record PasskeyCredential
     /// <summary>The WebAuthn user handle the credential was created for, base64url.</summary>
     public string UserHandle { get; init; } = "";
 
-    /// <summary>The last signature counter seen; a counter that does not move forward is refused.</summary>
+    /// <summary>
+    /// The last signature counter seen. A NON-ZERO counter must move forward, and each value is
+    /// accepted once (claimed in the store), so a cloned authenticator replaying a counter is
+    /// refused. Zero is the WebAuthn "this authenticator keeps no counter" value (synced passkeys
+    /// report it on every assertion): clone detection cannot apply to it, and each assertion is
+    /// then bounded by the single-use pending step-up its challenge is bound to.
+    /// </summary>
     public uint SignCount { get; init; }
 
     /// <summary>The authenticator model (AAGUID).</summary>
@@ -159,8 +165,14 @@ public sealed record StepUpFactors
     /// <summary>The owner's mesh user id.</summary>
     public string UserId { get; init; } = "";
 
-    /// <summary>Enrolled passkeys.</summary>
-    public ImmutableList<PasskeyCredential> Passkeys { get; init; } = [];
+    /// <summary>
+    /// Enrolled passkeys, keyed by <see cref="PasskeyCredential.CredentialId"/>. A JSON OBJECT, not an
+    /// array, on purpose: a cross-hub <c>stream.Update</c> ships an RFC 7396 merge patch, which
+    /// replaces an array WHOLE, so two replicas folding stale copies of a list could drop a newly
+    /// enrolled credential or move another one's counter back. Keyed, each credential (and each of
+    /// its fields) is patched on its own.
+    /// </summary>
+    public ImmutableDictionary<string, PasskeyCredential> Passkeys { get; init; } = ImmutableDictionary<string, PasskeyCredential>.Empty;
 
     /// <summary>The TOTP secret, protected by <c>IProviderKeyProtector</c> — never stored in the clear.</summary>
     [Browsable(false)]

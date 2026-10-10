@@ -64,7 +64,7 @@ public sealed partial class StepUpController
                 if (!read.Answered) return Json(Error(t, "unavailable"));
                 if (!rung(pending, StepUpRung.Passkey, read.Factors)) return Json(Error(t, "wrongRung"));
                 if (read.Factors is not { Passkeys.Count: > 0 } factors) return Json(Error(t, "notEnrolled"));
-                var options = rp.AssertionOptions(PasskeyStepUp.ChallengeFor(userId, pending.Targets, pending.Nonce), factors.Passkeys);
+                var options = rp.AssertionOptions(PasskeyStepUp.ChallengeFor(userId, pending.Targets, pending.Nonce), factors.Passkeys.Values);
                 return (IActionResult)Content(options.ToJson(), "application/json");
             }));
         return Edge(flow, () => Json(Error(t, "unavailable")), "passkey options", userId, ct);
@@ -102,30 +102,46 @@ public sealed partial class StepUpController
                 }
                 if (read.Factors is not { Passkeys.Count: > 0 } factors)
                     return Observable.Return<IActionResult>(Json(Error(t, "notEnrolled")));
-                var options = rp.AssertionOptions(PasskeyStepUp.ChallengeFor(userId, pending.Targets, pending.Nonce), factors.Passkeys);
+                var options = rp.AssertionOptions(PasskeyStepUp.ChallengeFor(userId, pending.Targets, pending.Nonce), factors.Passkeys.Values);
                 var now = DateTimeOffset.UtcNow;
-                return rp.Assert(body, options, factors.Passkeys, now).SelectMany(result =>
+                return rp.Assert(body, options, factors.Passkeys.Values, now).SelectMany(result =>
                 {
                     if (!result.Ok || result.Credential is not { } used)
                     {
                         logger.LogWarning("Step-up passkey for {User} refused: {Reason}", userId, result.Reason);
                         return Observable.Return<IActionResult>(Json(Error(t, result.Reason ?? "passkey")));
                     }
-                    return new StepUpFactorStore(hub)
-                        .Update(userId, f => f with
+                    // The snapshot only says the counter COULD be accepted. A non-zero counter value is
+                    // CLAIMED in the store first, so two assertions carrying the same counter (a cloned
+                    // authenticator, run against two ceremonies at once) yield one receipt, not two.
+                    // Zero means "no counter" (WebAuthn): nothing to claim, the single-use pending bounds it.
+                    var claim = used.SignCount > 0
+                        ? new StepUpSingleUse(hub).ClaimPasskeyCounter(userId, used.CredentialId, used.SignCount)
+                        : Observable.Return(true);
+                    return claim.SelectMany(won =>
+                    {
+                        if (!won)
                         {
-                            Passkeys = f.Passkeys.Select(p => p.CredentialId == used.CredentialId
-                                // The counter only ever moves forward, also under a concurrent write.
-                                ? used with { SignCount = Math.Max(used.SignCount, p.SignCount) } : p).ToImmutableList(),
-                        })
-                        .SelectMany(_ => MintAndStamp(hub, caller, StepUpMethod.Passkey, now,
-                            $"credential={used.CredentialId[..Math.Min(12, used.CredentialId.Length)]} aaguid={used.AaGuid}", pending.Targets))
-                        .Select(receipt => (IActionResult)Json(new { redirect = SuccessUrl(pending, receipt) }))
-                        .Catch((Exception ex) =>
-                        {
-                            logger.LogWarning(ex, "Step-up passkey for {User}: recording the receipt failed", userId);
-                            return Observable.Return<IActionResult>(Json(Error(t, "mint")));
-                        });
+                            logger.LogWarning("Step-up passkey for {User} refused: counter {Count} of the credential was already spent", userId, used.SignCount);
+                            return Observable.Return<IActionResult>(Json(Error(t, "counter")));
+                        }
+                        return new StepUpFactorStore(hub)
+                            // Keyed by credential id: the patch touches this credential's fields alone.
+                            .Update(userId, f => f with
+                            {
+                                Passkeys = f.Passkeys.TryGetValue(used.CredentialId, out var current)
+                                    ? f.Passkeys.SetItem(used.CredentialId, used with { SignCount = Math.Max(used.SignCount, current.SignCount) })
+                                    : f.Passkeys,
+                            })
+                            .SelectMany(_ => MintAndStamp(hub, caller, StepUpMethod.Passkey, now,
+                                $"credential={used.CredentialId[..Math.Min(12, used.CredentialId.Length)]} aaguid={used.AaGuid}", pending.Targets))
+                            .Select(receipt => (IActionResult)Json(new { redirect = SuccessUrl(pending, receipt) }))
+                            .Catch((Exception ex) =>
+                            {
+                                logger.LogWarning(ex, "Step-up passkey for {User}: recording the receipt failed", userId);
+                                return Observable.Return<IActionResult>(Json(Error(t, "mint")));
+                            });
+                    });
                 });
             });
         });
@@ -163,45 +179,58 @@ public sealed partial class StepUpController
                     return Observable.Return<IActionResult>(Failure(t, pending.ReturnUrl,
                         read.Factors is { Passkeys.Count: > 0 } ? "downgrade" : "wrongRung"));
                 }
-                var factors = read.Factors!;
-                var protector = hub.ServiceProvider.GetRequiredService<IProviderKeyProtector>();
-                var secretText = protector.Unprotect(factors.TotpSecretProtected);
-                if (string.IsNullOrEmpty(secretText)) return Observable.Return<IActionResult>(Failure(t, pending.ReturnUrl, "totp"));
-                var secret = Convert.FromBase64String(secretText);
-                var now = DateTimeOffset.UtcNow;
-
-                var step = Totp.Verify(secret, code, now, factors.LastTotpStep);
-                var recoveryHash = step is null ? Totp.HashRecoveryCode(code ?? "") : null;
-                if (step is null && (recoveryHash is null || !factors.RecoveryCodeHashes.Contains(recoveryHash)))
+                // A durable, per-user attempt budget ACROSS ceremonies, spent before the code is
+                // even looked at: consuming the pending record allows one guess per ceremony, but
+                // ceremonies are free to start, so without this a stolen session could keep guessing
+                // six digits. Each attempt claims one of TotpAttemptsPerWindow slots of the current
+                // window in the store (atomic, survives restarts and replicas); none left = refused.
+                return new StepUpSingleUse(hub).ClaimTotpAttempt(userId, DateTimeOffset.UtcNow).SelectMany(admitted =>
                 {
-                    logger.LogWarning("Step-up TOTP for {User} refused: no valid code", userId);
-                    return Observable.Return<IActionResult>(Failure(t, pending.ReturnUrl, "totp"));
-                }
-
-                // The snapshot above only says the code COULD be accepted. The claim says it IS —
-                // once: of two concurrent confirmations of the same step or recovery code, only the
-                // store's winner goes on to mint.
-                var singleUse = new StepUpSingleUse(hub);
-                var claim = step is { } s ? singleUse.ClaimTotpStep(userId, s) : singleUse.ClaimRecoveryCode(userId, recoveryHash!);
-                return claim.SelectMany(won =>
-                {
-                    if (!won)
+                    if (!admitted)
                     {
-                        logger.LogWarning("Step-up TOTP for {User} refused: the code was spent by a concurrent confirmation", userId);
+                        logger.LogWarning("Step-up TOTP for {User} refused: the attempt budget of the current window is spent", userId);
+                        return Observable.Return<IActionResult>(Failure(t, pending.ReturnUrl, "locked"));
+                    }
+                    var factors = read.Factors!;
+                    var protector = hub.ServiceProvider.GetRequiredService<IProviderKeyProtector>();
+                    var secretText = protector.Unprotect(factors.TotpSecretProtected);
+                    if (string.IsNullOrEmpty(secretText)) return Observable.Return<IActionResult>(Failure(t, pending.ReturnUrl, "totp"));
+                    var secret = Convert.FromBase64String(secretText);
+                    var now = DateTimeOffset.UtcNow;
+
+                    var step = Totp.Verify(secret, code, now, factors.LastTotpStep);
+                    var recoveryHash = step is null ? Totp.HashRecoveryCode(code ?? "") : null;
+                    if (step is null && (recoveryHash is null || !factors.RecoveryCodeHashes.Contains(recoveryHash)))
+                    {
+                        logger.LogWarning("Step-up TOTP for {User} refused: no valid code", userId);
                         return Observable.Return<IActionResult>(Failure(t, pending.ReturnUrl, "totp"));
                     }
-                    return new StepUpFactorStore(hub)
-                        .Update(userId, f => step is { } s1
-                            ? f with { LastTotpStep = Math.Max(f.LastTotpStep, s1) }
-                            : f with { RecoveryCodeHashes = f.RecoveryCodeHashes.Remove(recoveryHash!) })
-                        .SelectMany(_ => MintAndStamp(hub, caller, StepUpMethod.Totp, now,
-                            step is { } s2 ? $"totp step={s2}" : "totp recovery-code", pending.Targets))
-                        .Select(receipt => (IActionResult)Redirect(SuccessUrl(pending, receipt)))
-                        .Catch((Exception ex) =>
+
+                    // The snapshot above only says the code COULD be accepted. The claim says it IS —
+                    // once: of two concurrent confirmations of the same step or recovery code, only the
+                    // store's winner goes on to mint.
+                    var singleUse = new StepUpSingleUse(hub);
+                    var claim = step is { } s ? singleUse.ClaimTotpStep(userId, s) : singleUse.ClaimRecoveryCode(userId, recoveryHash!);
+                    return claim.SelectMany(won =>
+                    {
+                        if (!won)
                         {
-                            logger.LogWarning(ex, "Step-up TOTP for {User}: recording the receipt failed", userId);
-                            return Observable.Return<IActionResult>(Failure(t, pending.ReturnUrl, "mint"));
-                        });
+                            logger.LogWarning("Step-up TOTP for {User} refused: the code was spent by a concurrent confirmation", userId);
+                            return Observable.Return<IActionResult>(Failure(t, pending.ReturnUrl, "totp"));
+                        }
+                        return new StepUpFactorStore(hub)
+                            .Update(userId, f => step is { } s1
+                                ? f with { LastTotpStep = Math.Max(f.LastTotpStep, s1) }
+                                : f with { RecoveryCodeHashes = f.RecoveryCodeHashes.Remove(recoveryHash!) })
+                            .SelectMany(_ => MintAndStamp(hub, caller, StepUpMethod.Totp, now,
+                                step is { } s2 ? $"totp step={s2}" : "totp recovery-code", pending.Targets))
+                            .Select(receipt => (IActionResult)Redirect(SuccessUrl(pending, receipt)))
+                            .Catch((Exception ex) =>
+                            {
+                                logger.LogWarning(ex, "Step-up TOTP for {User}: recording the receipt failed", userId);
+                                return Observable.Return<IActionResult>(Failure(t, pending.ReturnUrl, "mint"));
+                            });
+                    });
                 });
             });
         });
@@ -275,7 +304,7 @@ public sealed partial class StepUpController
             : gate(read.Factors, request.Receipt, false).Select(authorization =>
             {
                 if (!IsAllowed(authorization)) return Json(Error(t, ReasonFor(authorization)));
-                var options = rp.RegistrationOptions(userId, display, read.Factors?.Passkeys ?? []);
+                var options = rp.RegistrationOptions(userId, display, read.Factors?.Passkeys.Values ?? []);
                 Response.Cookies.Append(RegistrationCookie, protector.Protect(options.ToJson(), DateTimeOffset.UtcNow + PendingLifetime), SealedCookie());
                 return (IActionResult)Content(options.ToJson(), "application/json");
             }));
@@ -306,15 +335,15 @@ public sealed partial class StepUpController
             // The authorization is CONSUMED here, at the write — options alone grant nothing.
             : gate(read.Factors, request.Receipt, true).SelectMany(authorization => !IsAllowed(authorization)
                 ? Observable.Return<IActionResult>(Json(Error(t, ReasonFor(authorization))))
-                : rp.Register(request.Credential ?? "", CredentialCreateOptions.FromJson(optionsJson), read.Factors?.Passkeys ?? [], DateTimeOffset.UtcNow)
+                : rp.Register(request.Credential ?? "", CredentialCreateOptions.FromJson(optionsJson), read.Factors?.Passkeys.Values ?? [], DateTimeOffset.UtcNow)
                     .SelectMany(result =>
                     {
                         if (!result.Ok || result.Credential is not { } credential)
                             return Observable.Return<IActionResult>(Json(Error(t, result.Reason ?? "passkey")));
                         return StoreFactor(store, userId, authorization,
-                                first: new StepUpFactors { Passkeys = [credential] },
-                                fold: f => f.Passkeys.Any(p => p.CredentialId == credential.CredentialId) ? f : f with { Passkeys = f.Passkeys.Add(credential) },
-                                landed: f => f.Passkeys.Any(p => p.CredentialId == credential.CredentialId),
+                                first: new StepUpFactors { Passkeys = ImmutableDictionary<string, PasskeyCredential>.Empty.Add(credential.CredentialId, credential) },
+                                fold: f => f.Passkeys.ContainsKey(credential.CredentialId) ? f : f with { Passkeys = f.Passkeys.Add(credential.CredentialId, credential) },
+                                landed: f => f.Passkeys.ContainsKey(credential.CredentialId),
                                 report: ex => logger.LogWarning(ex, "Passkey enrolment for {User} could not be stored", userId))
                             .Select(outcome =>
                             {

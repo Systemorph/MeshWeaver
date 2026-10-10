@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
@@ -99,12 +100,12 @@ public static class Totp
 
     /// <summary>Ten fresh one-time recovery codes (<c>xxxxx-xxxxx</c>, lowercase base32).</summary>
     /// <returns>The codes.</returns>
-    public static IReadOnlyList<string> NewRecoveryCodes() =>
+    public static ImmutableList<string> NewRecoveryCodes() =>
         Enumerable.Range(0, 10).Select(_ =>
         {
             var raw = Base32(RandomNumberGenerator.GetBytes(7))[..10].ToLowerInvariant();
             return raw[..5] + "-" + raw[5..];
-        }).ToList();
+        }).ToImmutableList();
 
     /// <summary>The stored form of a recovery code: SHA-256 hex of its normalized text.</summary>
     /// <param name="code">The code.</param>

@@ -88,7 +88,7 @@ internal sealed class PasskeyStepUp(string rpId, string origin, string rpName, I
     /// <param name="now">The clock.</param>
     /// <returns>Cold, single emission: the credential to store, or the refusal.</returns>
     public IObservable<PasskeyResult> Register(string responseJson, CredentialCreateOptions options,
-        IReadOnlyCollection<PasskeyCredential> existing, DateTimeOffset now) =>
+        IEnumerable<PasskeyCredential> existing, DateTimeOffset now) =>
         Observable.Defer(() =>
         {
             if (Parse<AuthenticatorAttestationRawResponse>(responseJson) is not { } response)
@@ -128,7 +128,7 @@ internal sealed class PasskeyStepUp(string rpId, string origin, string rpName, I
     /// <param name="now">The clock.</param>
     /// <returns>Cold, single emission: the used credential with its counter moved, or the refusal.</returns>
     public IObservable<PasskeyResult> Assert(string responseJson, AssertionOptions options,
-        IReadOnlyCollection<PasskeyCredential> credentials, DateTimeOffset now) =>
+        IEnumerable<PasskeyCredential> credentials, DateTimeOffset now) =>
         Observable.Defer(() =>
         {
             if (Parse<AuthenticatorAssertionRawResponse>(responseJson) is not { } response)
