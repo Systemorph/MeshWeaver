@@ -97,7 +97,7 @@ def image_rids(index: dict) -> set[str]:
     for m in manifests:
         plat = (m or {}).get("platform") or {}
         os_, arch = plat.get("os"), plat.get("architecture")
-        if os_ == "unknown" or arch == "unknown":
+        if os_ == "unknown" and arch == "unknown":
             continue
         rid = OCI_TO_RID.get((os_, arch))
         if rid is None:
@@ -292,6 +292,10 @@ def _self_test() -> int:
               refused(lambda: select_for_image(image_rids(index), [x64, outer])) is not None)
         check("an unmappable image platform is refused",
               refused(lambda: image_rids({"manifests": [{"platform": {"os": "linux", "architecture": "s390x"}}]})) is not None)
+        check("a half-unknown platform (linux/unknown) is refused, not skipped as an attestation",
+              refused(lambda: image_rids({"manifests": [
+                  {"platform": {"os": "linux", "architecture": "amd64"}},
+                  {"platform": {"os": "linux", "architecture": "unknown"}}]})) is not None)
         check("a single manifest (no list) is refused",
               refused(lambda: image_rids({"layers": []})) is not None)
         check("an index of attestations only is refused",
