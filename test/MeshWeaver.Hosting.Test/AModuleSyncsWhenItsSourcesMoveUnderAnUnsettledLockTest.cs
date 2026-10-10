@@ -103,6 +103,8 @@ public class AModuleSyncsWhenItsSourcesMoveUnderAnUnsettledLockTest(ITestOutputH
                                                       && m.Reason.Contains("not settled"));
         atB.LastSyncCommitSha.Should().Be(CommitB, "the Space holds B once B's sources landed");
         atB.ModuleVersions!["Floor"].Should().Be(settledB, "the Space records the hash of what it holds");
+        atB.ModuleOutcomes!.Single(m => m.Module == "Floor").StatedVersion.Should().Be(settledA,
+            "the record keeps what the lock stated apart from the hash the tree has");
 
         // ── commit C: the lock is settled, nothing else moved — the unchanged case, and it is true ──
         await Sync.ReimportAtCommit(Space, CommitC, UserId).Timeout(TestTimeouts.CrossSilo).Await(ct);
@@ -115,6 +117,41 @@ public class AModuleSyncsWhenItsSourcesMoveUnderAnUnsettledLockTest(ITestOutputH
                                                       && m.IncomingVersion == settledB);
         (await SourceText(ct)).Should().Contain("SignsAloneKey",
             "the settle commit changes the lock alone, and the Space already holds what it states");
+    }
+
+    /// <summary>
+    /// A TRUNCATED listing of a module the Space holds — the lock and the root, the source missing from
+    /// the listing — is not hashed: the module stays unchanged at the hash the Space holds, and the
+    /// source is neither rewritten nor pruned. Hashing the partial set made the module read as
+    /// changed and recorded the hash of a tree that does not exist.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task ATruncatedListingOfAnUnchangedModule_StaysUnchanged_AndRecordsNoFabricatedHash()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        Space = "Truncated" + Guid.NewGuid().ToString("N")[..8];
+        const string code = "class WidgetView { }";
+        var settled = TreeHashOf(code);
+        repoClient.Stage(CommitA, Tree(code, statedHash: settled));
+        repoClient.Stage(CommitB,
+            [.. Tree(code, statedHash: settled).Where(f => !f.Path.StartsWith("Widget/", StringComparison.Ordinal))],
+            listingIsComplete: false);
+
+        await Armed(ct);
+        await Sync.ReimportAtCommit(Space, CommitA, UserId).Timeout(TestTimeouts.CrossSilo).Await(ct);
+        (await SourceTextWhen(t => t.Contains(code), ct)).Should().Contain(code);
+        (await ConfigWhenOrCurrent(c => c.LastSyncCommitSha == CommitA, ct)).ModuleVersions!["Floor"].Should().Be(settled);
+
+        await Sync.ReimportAtCommit(Space, CommitB, UserId).Timeout(TestTimeouts.CrossSilo).Await(ct);
+        var after = await ConfigWhenOrCurrent(
+            c => c.ModuleOutcomes?.Any(m => m.IncomingVersion is not null) == true && c.LastAttemptedCommitSha == CommitB, ct);
+        Output.WriteLine($"after truncated B: commit={after.LastSyncCommitSha} outcome={after.LastSyncOutcome} modules={Describe(after)}");
+        after.LastAttemptedCommitSha.Should().Be(CommitB, "the truncated import was attempted");
+        after.ModuleOutcomes!.Should().ContainSingle(m => m.Module == "Floor"
+                                                        && m.Outcome == ModuleSyncOutcomeKind.Unchanged
+                                                        && m.IncomingVersion == settled);
+        after.ModuleVersions!["Floor"].Should().Be(settled, "no hash of a partial listing is ever recorded");
+        (await SourceText(ct)).Should().Contain(code, "an unchanged module is neither rewritten nor pruned");
     }
 
     private static string Describe(GitHubSyncConfig config)
@@ -200,13 +237,20 @@ public class AModuleSyncsWhenItsSourcesMoveUnderAnUnsettledLockTest(ITestOutputH
         private ImmutableDictionary<string, IReadOnlyList<RepoFile>> trees =
             ImmutableDictionary<string, IReadOnlyList<RepoFile>>.Empty;
 
-        public void Stage(string commit, IReadOnlyList<RepoFile> files)
-            => ImmutableInterlocked.Update(ref trees, map => map.SetItem(commit, files));
+        private ImmutableHashSet<string> truncated = [];
+
+        public void Stage(string commit, IReadOnlyList<RepoFile> files, bool listingIsComplete = true)
+        {
+            ImmutableInterlocked.Update(ref trees, map => map.SetItem(commit, files));
+            if (!listingIsComplete)
+                ImmutableInterlocked.Update(ref truncated, set => set.Add(commit));
+        }
 
         public IObservable<RepoSnapshot> Fetch(
             string repositoryUrl, string commitish, string? subdirectory, string accessToken)
             => trees.TryGetValue(commitish, out var files)
-                ? Observable.Return(new RepoSnapshot(commitish, [.. files]))
+                ? Observable.Return(new RepoSnapshot(commitish, [.. files])
+                    { ListingIsComplete = !truncated.Contains(commitish) })
                 : Observable.Throw<RepoSnapshot>(new NotSupportedException(
                     $"AModuleSyncsWhenItsSourcesMoveUnderAnUnsettledLockTest staged no tree for '{commitish}'."));
 

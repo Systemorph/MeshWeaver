@@ -104,9 +104,36 @@ public class ModuleFloorWitnessTest
             + "the commit as held, and the moved source was in no later diff");
         outcome.IncomingVersion.Should().Be(moved.TreeVersion);
         outcome.Reason.Should().Contain("not settled").And.Contain(settled.ModuleVersion!);
+        outcome.StatedVersion.Should().Be(settled.ModuleVersion,
+            "the stated and the tree hash stay apart on the record while the lock is unsettled");
         ModuleSyncDecision.Recorded([outcome])[moved.Module].Should().Be(moved.TreeVersion,
             "the Space records the hash of what landed, so the settle commit — which states exactly "
             + "this hash — is then the unchanged one");
+    }
+
+    /// <summary>A truncated listing is a partial file set: no tree hash is computed from it, the
+    /// module is judged by the hash its lock states, and no fabricated hash is recorded. NEGATIVE
+    /// CONTROL: the same partial set read as complete hashes to something else and syncs.</summary>
+    [Fact]
+    public void ATruncatedListing_IsNeverHashed_TheStatedHashJudgesIt()
+    {
+        var settled = ModuleSyncDecision.Read(Fixture("Grok")).Single();
+        var partial = Fixture("Grok").Where(f => f.Path != "Harness/Grok.json").ToList();
+        partial.Count.Should().BeLessThan(Fixture("Grok").Count, "the fixture carries the dropped file");
+        var held = new Dictionary<string, string> { [settled.Module] = settled.ModuleVersion! };
+
+        var truncated = ModuleSyncDecision.Read(partial, listingIsComplete: false).Single();
+        truncated.TreeVersion.Should().BeNull("a hash over a partial listing is the hash of no tree");
+        truncated.EffectiveVersion.Should().Be(settled.ModuleVersion);
+        var outcome = ModuleSyncDecision.Decide([truncated], held, Running, reconcile: false).Single();
+        outcome.Outcome.Should().Be(ModuleSyncOutcomeKind.Unchanged);
+        outcome.StatedVersion.Should().BeNull();
+        ModuleSyncDecision.Recorded([outcome])[settled.Module].Should().Be(settled.ModuleVersion);
+
+        var asIfComplete = ModuleSyncDecision.Read(partial, listingIsComplete: true).Single();
+        asIfComplete.TreeVersion.Should().NotBe(settled.ModuleVersion);
+        ModuleSyncDecision.Decide([asIfComplete], held, Running, reconcile: false).Single()
+            .Outcome.Should().Be(ModuleSyncOutcomeKind.Synced);
     }
 
     /// <summary>The floor's own value is NOT part of the hash: the stamp writes it after it hashed.</summary>

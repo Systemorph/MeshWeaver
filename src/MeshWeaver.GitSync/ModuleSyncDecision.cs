@@ -103,8 +103,11 @@ public sealed record ModuleReading(string Module, string Root, string? ModuleVer
 /// </summary>
 /// <param name="Module">The module name.</param>
 /// <param name="Outcome">A <see cref="ModuleSyncOutcomeKind"/> value.</param>
-/// <param name="HeldVersion">The manifest hash this Space held before the import, or null.</param>
-/// <param name="IncomingVersion">The manifest hash the incoming tree carries, or null.</param>
+/// <param name="HeldVersion">The module hash this Space held before the import, or null.</param>
+/// <param name="IncomingVersion">The module hash of the incoming tree (<see cref="ModuleReading.EffectiveVersion"/>):
+/// recomputed from the tree's bytes, which is what a settled <c>manifest.lock</c> states; the lock's
+/// stated hash only when the tree's cannot be computed. Null when neither is known. When the lock
+/// states a different hash, <see cref="StatedVersion"/> carries it.</param>
 /// <param name="Reason">Log copy: why this outcome.</param>
 public sealed record ModuleSyncOutcome(
     string Module, string Outcome, string? HeldVersion, string? IncomingVersion, string Reason)
@@ -128,6 +131,14 @@ public sealed record ModuleSyncOutcome(
     /// DECLARED floor, which such a module does not exceed. False otherwise.
     /// </summary>
     public bool FloorUnverified { get; init; }
+
+    /// <summary>
+    /// The hash the module's <c>manifest.lock</c> STATED when that is not the hash of the tree it sat
+    /// in (<see cref="ModuleReading.ManifestIsSettled"/> false) — the lock had not been settled for
+    /// these sources, and <see cref="IncomingVersion"/> is then the hash the tree has, which a settled
+    /// lock will state. Null when the two agree or cannot be compared.
+    /// </summary>
+    public string? StatedVersion { get; init; }
 
     /// <summary>The newer platform this instance knew of when it held a module on an unverified floor
     /// (<see cref="FloorUnverified"/>); null otherwise.</summary>
@@ -194,6 +205,14 @@ public static class ModuleSyncDecision
     }
 
     private static ModuleSyncOutcome DecideOne(
+        ModuleReading module, IReadOnlyDictionary<string, string>? held,
+        string? runningPlatformVersion, bool reconcile)
+        => DecideUnstated(module, held, runningPlatformVersion, reconcile) with
+        {
+            StatedVersion = module.ManifestIsSettled == false ? module.ModuleVersion : null,
+        };
+
+    private static ModuleSyncOutcome DecideUnstated(
         ModuleReading module, IReadOnlyDictionary<string, string>? held,
         string? runningPlatformVersion, bool reconcile)
     {
@@ -428,6 +447,19 @@ public static class ModuleSyncDecision
     /// <param name="files">The tree's files, Space-relative.</param>
     /// <returns>The modules, ordinal by root.</returns>
     public static ImmutableList<ModuleReading> Read(IEnumerable<RepoFile> files)
+        => Read(files, listingIsComplete: true);
+
+    /// <summary>
+    /// Reads every module an incoming tree states, saying whether the tree's LISTING is complete
+    /// (<c>RepoSnapshot.ListingIsComplete</c>). 🚨 A truncated listing is a partial file set, and a
+    /// hash over it is the hash of no tree at all: <see cref="ModuleReading.TreeVersion"/> is then
+    /// left null, so the module is judged by the hash its lock states — exactly as before the tree
+    /// was hashed — and a fabricated hash is never recorded as what the Space holds.
+    /// </summary>
+    /// <param name="files">The tree's files, Space-relative.</param>
+    /// <param name="listingIsComplete">False when the transport reported a truncated listing.</param>
+    /// <returns>The modules, ordinal by root.</returns>
+    public static ImmutableList<ModuleReading> Read(IEnumerable<RepoFile> files, bool listingIsComplete)
     {
         ArgumentNullException.ThrowIfNull(files);
         var all = files.ToList();
@@ -458,7 +490,9 @@ public static class ModuleSyncDecision
                 {
                     Requires = index is { } requiresJson ? ParseRequires(requiresJson) : [],
                     Witness = witness,
-                    TreeVersion = ModuleFloorWitness.TreeVersion(FilesUnder(all, root), f.Content),
+                    TreeVersion = listingIsComplete
+                        ? ModuleFloorWitness.TreeVersion(FilesUnder(all, root), f.Content)
+                        : null,
                     IncomingContentHash = witness is null
                         ? null
                         : ModuleFloorWitness.ContentHash(FilesUnder(all, root), f.Content),
