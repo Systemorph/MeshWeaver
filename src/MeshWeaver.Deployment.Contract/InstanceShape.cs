@@ -666,13 +666,6 @@ public sealed record SignInSpec
     /// <summary>Apple sign-in client id.</summary>
     [Description("Apple client id")]
     public string? AppleClientId { get; init; }
-
-    /// <summary>
-    /// Approval step-up — every approval needs a fresh, phishing-resistant authentication.
-    /// Null renders nothing and step-up stays OFF (see <c>Doc/Architecture/ApprovalStepUp</c>).
-    /// </summary>
-    [Description("Approval step-up")]
-    public StepUpSpec? StepUp { get; init; }
 }
 
 /// <summary>

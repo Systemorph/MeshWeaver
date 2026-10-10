@@ -114,7 +114,7 @@ an approval some other gate parks.
 
 ## Enablement — declared per deployment record, off until declared
 
-| Portal configuration key | Deployment record field (`SignIn.StepUp`) | Default | Meaning |
+| Portal configuration key | Deployment record field (`ApprovalStepUp`) | Default | Meaning |
 |---|---|---|---|
 | `Authentication:StepUp:Enabled` | `Enabled` | `false` | Every approval requires a receipt. Off ⇒ every consumer answers `NotRequired` |
 | `Authentication:StepUp:Entra:AuthenticationContext` | `EntraAuthenticationContext` | — | The Conditional Access authentication context id (`c1`…`c99`) requested for Microsoft accounts. Enabled without it ⇒ Microsoft accounts are refused with *"step-up is not configured"*, never waved through |
@@ -154,7 +154,7 @@ the portal changes behaviour until the last step.
      **`amr`**. All three are v2.0 *optional* ID-token claims: without `auth_time` every step-up
      fails `auth_time`, and without `amr` it fails `amr` (the default `RequireAmr = true`).
 5. **Declare it on the deployment record** (control instance, `Deployments/<name>`):
-   `SignIn.StepUp.EntraAuthenticationContext = "c1"`, then `SignIn.StepUp.Enabled = true`, and roll.
+   `ApprovalStepUp.EntraAuthenticationContext = "c1"`, then `ApprovalStepUp.Enabled = true` (fluent: `WithApprovalStepUp(true, "c1")`), and roll.
 
 🚨 Without step 3, Entra issues the `acrs` claim for an *unprotected* context to anyone who signs
 in — Microsoft's own table: *"ACRS requested, no policy assigned → ACRS added to claims"*. The

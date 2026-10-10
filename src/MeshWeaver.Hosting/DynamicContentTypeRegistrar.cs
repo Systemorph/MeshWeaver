@@ -173,6 +173,45 @@ public static class DynamicContentTypeRegistrar
             .Concat();
     }
 
+    /// <summary>
+    /// 🚨 <b>One type, on demand (Systemorph/MeshWeaver.Plugins#2799)</b> — the pass's verdicts and
+    /// the pass's non-compiling, non-writing route, for ONE type, with no pacing. This is what
+    /// <see cref="ContentTypeOnDemandRegistration"/> runs when a read on this replica meets content of
+    /// a type that is not registered here yet. A type missing from <paramref name="types"/> (not a
+    /// dynamic NodeType, or no record) is <see cref="ContentTypeRegistrationStatus.NotBaked"/>: there
+    /// is nothing to register from without compiling, and compiling is never done on a read.
+    /// </summary>
+    /// <param name="mesh">The mesh hub.</param>
+    /// <param name="types">An enumeration holding the type's record.</param>
+    /// <param name="path">The NodeType path.</param>
+    /// <param name="logger">Diagnostics.</param>
+    internal static IObservable<ContentTypeRegistrationOutcome> RegisterType(
+        IMessageHub mesh, DynamicTypePreWarmer.DynamicTypes types, string path, ILogger? logger)
+        => Observable.Defer(() =>
+        {
+            var registry = mesh.ServiceProvider.GetService<IMeshContentTypeRegistry>();
+            var compilation = mesh.ServiceProvider.GetService<IMeshNodeCompilationService>();
+            if (registry is null || compilation is null)
+                return Observable.Return(new ContentTypeRegistrationOutcome(
+                    path, ContentTypeRegistrationStatus.NotBaked,
+                    "no content-type registry or compilation service on this mesh"));
+            if (registry.TryResolveByNodeType(path, out _))
+                return Observable.Return(new ContentTypeRegistrationOutcome(
+                    path, ContentTypeRegistrationStatus.AlreadyRegistered));
+            if (!types.Nodes.TryGetValue(path, out var node))
+                return Observable.Return(new ContentTypeRegistrationOutcome(
+                    path, ContentTypeRegistrationStatus.NotBaked,
+                    "no dynamic NodeType record at this path — nothing to register from"));
+            types.Definitions.TryGetValue(path, out var def);
+            if (def is null || !NodeTypeCompilationHelpers.HasUsableBuild(node, def, NodeTypeCompilationHelpers.GuardsOf(mesh)))
+                return Observable.Return(new ContentTypeRegistrationOutcome(
+                    path, ContentTypeRegistrationStatus.NotBaked,
+                    "the record claims no usable build for this framework — the first access compiles it"));
+            var pool = mesh.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem)
+                       ?? IoPool.Unbounded;
+            return RegisterOne(mesh, registry, compilation, pool, path, node, def, logger);
+        });
+
     /// <summary>The pass's order: types a read here already degraded first, then the rest, each
     /// group in path order (ordinal, case-insensitive). Pure.</summary>
     /// <param name="typePaths">The dynamic NodeTypes to register.</param>
