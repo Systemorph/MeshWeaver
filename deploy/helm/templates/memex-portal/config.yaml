@@ -1080,7 +1080,7 @@ data:
   # when a deployment sets it.
   {{- $appSource := .Values.config.memex_portal.Home__AppSource }}
   {{- if and (hasKey .Values.config.memex_portal "Home__AppSource") (not (kindIs "invalid" $appSource)) (ne ($appSource | toString | trim) "") }}
-  Home__AppSource: "{{ $appSource | toString | trim }}"
+  Home__AppSource: {{ $appSource | toString | trim | quote }}
   {{- end }}
   # ---- OpenAI-compatible provider (self-hosted / local: Ollama, vLLM, LM Studio, …) ----
   # Generic OpenAI-wire endpoint. Set Endpoint + Models (+ ApiKey in secrets) to seed a

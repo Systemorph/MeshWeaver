@@ -157,7 +157,7 @@ with no per-user records.** `Home:AppSource` is a closed two-value deployment se
 
 | Value | The Apps band reads |
 |---|---|
-| absent, or `Directory` | **the app directory** (this section) — the image default, so the record-driven fleet, which renders no `Home__AppSource`, runs it with the roll |
+| absent, empty or whitespace-only, or `Directory` | **the app directory** (this section) — the image default, so the record-driven fleet, which renders no `Home__AppSource`, runs it with the roll |
 | `Records` | the viewer's own `{user}/_App` records (the section above) — an explicit escape hatch while those records still exist |
 | anything else | a configuration ERROR: the home logs it at error level, naming the key, and serves the default; the page never fails on a typo |
 
