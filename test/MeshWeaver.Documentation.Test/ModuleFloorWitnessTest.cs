@@ -59,6 +59,83 @@ public class ModuleFloorWitnessTest
             "the sources moved after the stamp, so the witness vouches for other content");
     }
 
+    // ── the tree hash: what a settled lock states, recomputed from the tree's own bytes ────────
+
+    /// <summary>At a settled commit the lock states the hash its tree has — so a hash a Space
+    /// recorded before this rule keeps its meaning, and a settled module still reads as unchanged.</summary>
+    [Theory]
+    [InlineData("AzureBlob")]
+    [InlineData("Grok")]
+    public void TheRecomputedTreeHash_EqualsTheLocksStatedHash_OnRealPackages(string package)
+    {
+        var reading = ModuleSyncDecision.Read(Fixture(package)).Single();
+
+        reading.ModuleVersion.Should().NotBeNullOrEmpty();
+        reading.TreeVersion.Should().Be(reading.ModuleVersion,
+            $"{package} at MeshWeaver.Plugins@0b8f8754 is a settled lock (the commit IS the settle merge), "
+            + "so gen-manifests.py module_version over the tree's bytes must be the hash it states");
+        reading.ManifestIsSettled.Should().BeTrue();
+        ModuleSyncDecision.Decide([reading],
+                new Dictionary<string, string> { [reading.Module] = reading.ModuleVersion! }, Running, reconcile: false)
+            .Single().Outcome.Should().Be(ModuleSyncOutcomeKind.Unchanged,
+                "NEGATIVE CONTROL: a settled module the Space holds is still the unchanged case");
+    }
+
+    /// <summary>THE repro for an unsettled lock: one source byte moved, the lock still states the
+    /// previous sources' hash — the module is NOT unchanged against the hash the Space holds, and the
+    /// hash it records is the tree's, never the stale stated one (memex.systemorph.com, 2026-10-10:
+    /// MeshWeaver.Plugins@f719406d8, Store).</summary>
+    [Fact]
+    public void SourcesMovedUnderAnUnsettledLock_AreNotUnchanged_AndRecordTheTreesHash()
+    {
+        var settled = ModuleSyncDecision.Read(Fixture("Grok")).Single();
+        var moved = ModuleSyncDecision.Read(Fixture("Grok")
+            .Select(f => f.Path == "Harness/Grok.json" ? f with { Content = f.Content.Replace("Grok", "Grak") } : f)
+            .ToList()).Single();
+
+        moved.ModuleVersion.Should().Be(settled.ModuleVersion, "the lock was not touched");
+        moved.TreeVersion.Should().NotBe(settled.TreeVersion, "the tree was");
+        moved.ManifestIsSettled.Should().BeFalse();
+
+        var outcome = ModuleSyncDecision.Decide([moved],
+            new Dictionary<string, string> { [moved.Module] = settled.ModuleVersion! }, Running, reconcile: false).Single();
+        outcome.Outcome.Should().Be(ModuleSyncOutcomeKind.Synced,
+            "judged by the stated hash this module read as unchanged, the import was a no-op that recorded "
+            + "the commit as held, and the moved source was in no later diff");
+        outcome.IncomingVersion.Should().Be(moved.TreeVersion);
+        outcome.Reason.Should().Contain("not settled").And.Contain(settled.ModuleVersion!);
+        outcome.StatedVersion.Should().Be(settled.ModuleVersion,
+            "the stated and the tree hash stay apart on the record while the lock is unsettled");
+        ModuleSyncDecision.Recorded([outcome])[moved.Module].Should().Be(moved.TreeVersion,
+            "the Space records the hash of what landed, so the settle commit — which states exactly "
+            + "this hash — is then the unchanged one");
+    }
+
+    /// <summary>A truncated listing is a partial file set: no tree hash is computed from it, the
+    /// module is judged by the hash its lock states, and no fabricated hash is recorded. NEGATIVE
+    /// CONTROL: the same partial set read as complete hashes to something else and syncs.</summary>
+    [Fact]
+    public void ATruncatedListing_IsNeverHashed_TheStatedHashJudgesIt()
+    {
+        var settled = ModuleSyncDecision.Read(Fixture("Grok")).Single();
+        var partial = Fixture("Grok").Where(f => f.Path != "Harness/Grok.json").ToList();
+        partial.Count.Should().BeLessThan(Fixture("Grok").Count, "the fixture carries the dropped file");
+        var held = new Dictionary<string, string> { [settled.Module] = settled.ModuleVersion! };
+
+        var truncated = ModuleSyncDecision.Read(partial, listingIsComplete: false).Single();
+        truncated.TreeVersion.Should().BeNull("a hash over a partial listing is the hash of no tree");
+        truncated.EffectiveVersion.Should().Be(settled.ModuleVersion);
+        var outcome = ModuleSyncDecision.Decide([truncated], held, Running, reconcile: false).Single();
+        outcome.Outcome.Should().Be(ModuleSyncOutcomeKind.Unchanged);
+        outcome.StatedVersion.Should().BeNull();
+        ModuleSyncDecision.Recorded([outcome])[settled.Module].Should().Be(settled.ModuleVersion);
+
+        var asIfComplete = ModuleSyncDecision.Read(partial, listingIsComplete: true).Single();
+        asIfComplete.TreeVersion.Should().NotBe(settled.ModuleVersion);
+        ModuleSyncDecision.Decide([asIfComplete], held, Running, reconcile: false).Single()
+            .Outcome.Should().Be(ModuleSyncOutcomeKind.Synced);
+    }
+
     /// <summary>The floor's own value is NOT part of the hash: the stamp writes it after it hashed.</summary>
     [Fact]
     public void ChangingOnlyTheFloorValue_KeepsTheFloorVerified()

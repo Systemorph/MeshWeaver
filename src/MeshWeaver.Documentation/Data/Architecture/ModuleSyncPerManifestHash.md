@@ -55,9 +55,65 @@ after the fetch, over each `manifest.lock` in the incoming tree:
 |---|---|---|---|
 | 1 | the module's root `index.json` declares `content.minMeshVersion` **above** the running platform (`PlatformFloor.Evaluate` — the ONE floor decision every package consumer uses, policy `package-min-mesh-version`; unknown, unreadable or unorderable on either side, or a local `-ci.0` build, is accepted) | **Declined** — the reason names both versions | nothing for that module; its siblings sync |
 | 1b | the module's root `index.json` declares a `content.requires` entry (`AI@^1.21.0`) that the dependency's **loaded** module does not satisfy (`ModuleSyncDecision.DeclineUnmetRequirements`, against `ILoadedPackageModules`; an unknown loaded version, an uninstalled dependency or an unreadable range is not judged; the image's OWN copy is judged at the version its `module.seed.json` stamp states — see below) — #6067 | **Declined** — the reason names the requirement, the loaded module and its version; `UnmetRequirement` on the outcome | nothing for that module; its siblings sync |
-| 2 | incoming `moduleVersion` **equals** the one the Space recorded when that module last landed, and the import is not a reconcile or a force | **Unchanged** | nothing |
+| 2 | the hash the incoming **tree** has **equals** the one the Space recorded when that module last landed, and the import is not a reconcile or a force. The hash is recomputed from the tree's own bytes (`ModuleFloorWitness.TreeVersion`, `gen-manifests.py module_version`); the lock's stated `moduleVersion` is read only when it cannot be recomputed — see "A lock that is not settled yet" below | **Unchanged** | nothing |
 | 2b | the module's floor is **not stamped for these sources** — its `mesh-floor.lock` witness records a `contentHash` other than the incoming content's (`ModuleFloorWitness.ContentHash`, the stamp's own rule) — **and** this instance knows a platform newer than it runs (`INewerPlatformReading`, the self-update's newest recorded tag) (`ModuleSyncDecision.HoldUnverifiedFloors`) | **Declined** — `FloorUnverified` on the outcome, `Floor` keeps the declared floor, `AvailablePlatform` names the newer platform, the reason names both hashes, the stale floor and both platforms | nothing for that module; its siblings sync |
 | 3 | anything else: changed, never recorded, or a manifest that states no hash | **Synced** | the module, at the incoming commit |
+
+### A lock that is not settled yet (rule 2)
+
+A package's `manifest.lock` is **settled after** the commit that changes its sources, exactly as its
+floor is stamped after it: the merge lands with the lock of the previous sources, and a follow-up
+commit (`chore: settle manifest locks for main@…`) writes the new hash. Rule 2 used to compare the
+hash the lock **states**. An import that read a commit between the two therefore saw a module whose
+sources had moved and whose stated hash had not, called it unchanged and wrote nothing. A no-op
+records its commit as the one the Space holds, because for an unchanged module that is true. The next
+import, at the settle commit, saw the hash change and synced the module, but only the files in the
+diff from that recorded commit, and the moved sources were on the other side of it. They were in no
+later diff either: the Space held the new hash and none of the content it stood for.
+
+Measured on memex.systemorph.com on 2026-10-10. MeshWeaver.Plugins#3283 merged at `f719406d8`
+(11:06Z) and changed `Store/Core/Source/SoleMaintainerApproval.cs` together with the Hosting tests
+that call its new members; the locks were settled at `ae2701acf` (11:23Z).
+
+| Commit | Store lock states | Store tree hashes to |
+|---|---|---|
+| `0f0cadc84` (before the merge) | `1942f49ee488ee8d` | `1942f49ee488ee8d` |
+| `f719406d8` (the merge) | `1942f49ee488ee8d` | `ced036bab6750e5f` |
+| `ae2701acf` (the settle) | `ced036bab6750e5f` | `ced036bab6750e5f` |
+
+From 12:39Z every boot of that instance, on every image it rolled to that day, failed the compile of
+`Hosting/InstanceAction` with `CS0117: 'SoleMaintainerApproval' does not contain a definition for
+'SignsAloneKey'`: the type takes `shared=@Store/Core/Source`, its own tests carried the change and
+the Store source did not, while `/health` read one module declined (`Edu`) and every other one
+unchanged.
+
+Two things about that instance were **not** established, because its mesh could not be read while
+this was diagnosed: the commit its `Store/_GitSync` records, and why the Hosting tests of the same
+merge did land there. What was read is the compile error on each pod, the two hashes in the table
+above, and the decision code.
+
+The decision now judges the hash the tree **has**. `ModuleSyncDecision.Read` recomputes it for every
+module root by the lock's own rule: every file under the root by raw-byte sha256, all but
+`manifest.lock` and `.DS_Store`, plus the out-of-folder entries the lock records, folded as
+`gen-manifests.py module_version` folds them. At a settled commit that is the stated hash, so a
+recorded hash keeps its meaning and nothing has to be migrated. At the merge commit it is already the
+hash the settle commit will state: the module syncs there, with the sources in the diff, and the
+settle commit is then the unchanged one. The outcome's reason says when the lock was not settled for
+the sources it synced. The same holds for a floor stamp, which rewrites `index.json` and the witness
+without settling the lock: the module syncs at the stamp commit and its root node carries the new
+floor.
+
+What this does **not** do: it does not bring back sources an instance already lost this way. Such a
+Space records the current hash, so it reads as unchanged; a reconciling import of that Space
+(`reconcile`, which measures the mesh against the tree) is what restores them. And a lock this rule
+cannot recompute (no `files` map, or no `<Folder>/index.json` entry naming the package folder) is
+judged by its stated hash, as before. So is every module of a **truncated** listing
+(`RepoSnapshot.ListingIsComplete` false): a hash over a partial file set is the hash of no tree, so
+none is computed and none is recorded. When the lock states a hash other than its tree's, the
+outcome keeps both: `IncomingVersion` is the tree's and `StatedVersion` is the lock's.
+
+`AModuleSyncsWhenItsSourcesMoveUnderAnUnsettledLockTest` drives the three commits through the real
+import.
 
 ### A floor nobody stamped for these sources (rule 2b)
 
