@@ -1010,6 +1010,19 @@ public record LayoutAreaHost : IDisposable
             logger.LogError(ex,
                 "Area {Area} could not render: the data store was unreachable and the query "
                 + "fan-in's bounded transient-connect retry did not recover it", area);
+        else if (AreaErrorClassifier.IsDeadlineMiss(ex))
+            // A DEADLINE MISS (#6394): the owner of what this view reads did not answer within the
+            // transport's deadline - an Orleans grain-placement or response timeout, which the routed
+            // NACK flattens into the DeliveryFailureException's text. The stall is the OWNER's and is
+            // reported where it happens (the placement / routing layer, #5037); this view did nothing
+            // wrong. Warning, for the same reason a denial or a broken reference is: at Error,
+            // "Rendering failed for area X" filed one incident per slow owner and sent its reader
+            // hunting in the view. Ordered AFTER the storage arm on purpose: a database connect timeout
+            // also carries a TimeoutException, and that one stays the store's (#2876).
+            logger.LogWarning(ex,
+                "Area {Area} could not render: the owner it reads from did not answer within the "
+                + "transport deadline (a deadline miss, not a fault in this view): {Reason}",
+                area, ex.Message);
         else
             logger.LogError(ex, "Rendering failed for area {Area}", area);
 
@@ -1109,6 +1122,28 @@ public record LayoutAreaHost : IDisposable
                 $"**{this.Localize("error.storageUnavailable")}**\n\n{this.Localize("error.storageUnavailableHint")}")
             {
                 Id = AreaFrameClassifier.StorageUnavailableId
+            };
+
+        // A DEADLINE MISS (#6394) - the owner of what this view reads did not answer in time (Orleans'
+        // "Grain placement operation timed out for grain messagehub/X" or "Response did not arrive on
+        // time", flattened into the DeliveryFailureException's text). The generic panel below rendered
+        // that banner verbatim and presented a slow owner as a defect in this view. Degrade HONESTLY:
+        // say the owner did not answer in time, say that re-opening the view asks again, and stamp the
+        // well-known id (AreaDeadlineMissFrame.Id) so a consumer can tell this state from the others.
+        //
+        // Ordered AFTER the storage arm: a database connect timeout also carries a TimeoutException
+        // and is the store's (#2876). Every other DeliveryFailure keeps the generic panel -
+        // IsDeadlineMiss refuses unavailable, not-found, init-failure and compilation-in-progress first.
+        //
+        // Deliberately NO retry here, and NOT a transient frame: nothing pushes a replacement on its
+        // own, and re-subscribing from the render path would be an unpaced resubscribe aimed at an
+        // owner that is already slow (the storm shape). What asks again is the viewer re-opening the
+        // view - a fresh stream - never a loop in this host.
+        if (AreaErrorClassifier.IsDeadlineMiss(ex))
+            return new MarkdownControl(
+                $"**{this.Localize("error.areaOwnerTimedOut")}**\n\n{this.Localize("error.areaOwnerTimedOutHint")}")
+            {
+                Id = AreaDeadlineMissFrame.Id
             };
 
         // `error.areaFailed` already existed in both catalogs; this banner was hard-coded English.
