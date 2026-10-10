@@ -83,8 +83,10 @@ THE REVIEWER, MEASURED (2026-09-17, 50 merged pull requests, #4487–#4568)
 The reviewer posts under TWO logins with ONE account id:
   pulls/{n}/reviews    `copilot-pull-request-reviewer[bot]`  type Bot  id 175728472
   pulls/{n}/comments   `Copilot`                             type Bot  id 175728472
-It posted exactly one review per pull request on all 50 (the ruleset carries
-`review_on_push: false`), always at state COMMENTED.
+It posted exactly one review per pull request on all 50 (the ruleset carried
+`review_on_push: false` at the time of that measurement), always at state COMMENTED. The rule runs
+with `review_on_push: true` again now (policy `copilot-code-review`, as amended), so Copilot reviews
+every pushed head of a non-draft pull request.
 
 THE SECOND REVIEWER — the internal one (policy `internal-code-review`)
 ----------------------------------------------------------------------
@@ -103,11 +105,12 @@ context anywhere. The stage gate and the arm gate accept a landed Copilot review
 `internal-review` run, so no head waits for an internal reviewer that has been switched off.
 Doc/Architecture/ReviewFindingsAnswered → "Copilot is the reviewer again".
 
-ONE REVIEW PER PULL REQUEST — policy `review-once-per-pull-request`
+ANY-HEAD REVIEW EVIDENCE — policy `review-once-per-pull-request` (gate half; its ruleset half is reversed)
 -------------------------------------------------------------------
-With `review_on_push: true` every push bought a full new review round, and each round's threads
-blocked the merge again until answered. The rule now runs with `review_on_push: false`, and every
-gate in this file counts a landed Copilot review against ANY head of the pull request as "reviewed"
+The rulesets run `copilot_code_review` with `review_on_push: true` again (policy
+`copilot-code-review`, as amended): every push to a non-draft pull request gets a fresh review. The
+gates did not change with that: every gate in this file counts a landed Copilot review against ANY
+head of the pull request as "reviewed", so a push never waits for its own new review to land
 (`copilot_review_of_pull_request`; the merge gate's condition 1 reads every review on the pull
 request — policy `review-evidence-any-head`). Condition
 2 is unchanged: every reviewer thread on the pull request, whichever head it was opened on, needs a
@@ -652,9 +655,9 @@ def reply_age_seconds(stamp: str, now: str | None = None) -> float | None:
 #      MeshWeaver.Plugins' control-plane `PrArming` ports it one for one.
 #
 # No waiver stands in for (2). 🔁 Policy `copilot-code-review` (Doc/Architecture/PolicyNotProse) puts
-# GitHub Copilot back as the fleet's reviewer, and policy `review-once-per-pull-request` reviews each
-# pull request ONCE: the ruleset rule runs with `review_on_push: false`, so a push does not start a
-# new round. A landed Copilot review of the pull request — against the current head, or failing that
+# GitHub Copilot back as the fleet's reviewer; the ruleset rule runs with `review_on_push: true`, so
+# every push starts a new review round, and the gate half of `review-once-per-pull-request` keeps any
+# head's review valid while the new one lands. A landed Copilot review of the pull request — against the current head, or failing that
 # against ANY earlier head (`copilot_review_of_pull_request`: a landed body, never a refusal) —
 # satisfies (2) exactly as a completed `internal-review` run on the head does. It is checked FIRST,
 # so a head is never held waiting for an internal reviewer that has been switched off. Every thread
@@ -680,9 +683,10 @@ def landed_copilot_reviews(reviews, as_of: str | None = None) -> list:
 
 
 def copilot_review_of_pull_request(reviews, head_sha: str, as_of: str | None = None) -> dict | None:
-    """Policy `review-once-per-pull-request`: the pull request's ONE Copilot review — the newest
-    landed review against `head_sha` when there is one, otherwise the newest landed review against
-    ANY earlier head. `pulls/{n}/reviews` lists only this pull request's reviews, so every review it
+    """Policy `review-once-per-pull-request`, gate half (any-head evidence): the Copilot review that
+    counts — the newest landed review against `head_sha` when there is one, otherwise the newest
+    landed review against ANY earlier head. With `review_on_push: true` every push requests a fresh
+    review, so the earlier head's review is what counts while the current head's own review lands. `pulls/{n}/reviews` lists only this pull request's reviews, so every review it
     returns reviewed this pull request, and a later push does not undo it. Its threads stay under the
     thread condition wherever they were opened, so no finding is skipped by a push."""
     on_head = copilot_review_on(reviews, head_sha, as_of)
@@ -699,7 +703,8 @@ def copilot_note(review: dict, short: str) -> str:
                 f"(\"{first_line(review.get('body'))}\") — policy copilot-code-review")
     return (f"Copilot reviewed this pull request at its earlier head {reviewed} (current head {short}): review "
             f"{review.get('id')} at {review.get('submitted_at')} (\"{first_line(review.get('body'))}\") — "
-            "one review per pull request, policy review-once-per-pull-request")
+            "an earlier head's review counts while this head's own review lands (any-head gate, policy "
+            "review-once-per-pull-request)")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1825,13 +1830,16 @@ def guidance(verdict: Verdict) -> list[str]:
                    f"the `{WAIVER_LABEL}` label — never an agent, and never automatically.")
     elif verdict.not_copilot:
         # 🚨 Policy review-evidence-any-head (#4730). The internal reviewer's clean review is not
-        # Copilot's, and the ruleset requests Copilot once, at open — waiting delivers nothing here.
+        # Copilot's. The ruleset requests a Copilot review on every push (review_on_push: true), so one
+        # may already be pending — re-requesting it on top would only duplicate it.
         out.append("a Copilot review of this pull request — \"reviewed, nothing found\" is only ever a completed Copilot "
                    "review with zero findings (on any head), never the internal reviewer's clean review or elapsed time. "
-                   "Waiting does not deliver one (the ruleset reviews once per pull request): a maintainer re-requests the "
-                   f"Copilot review, or applies the `{WAIVER_LABEL}` label — never an agent, and never automatically.")
+                   "The ruleset requests a Copilot review on every push to a non-draft pull request, so one may already be "
+                   "pending after the latest push — let it land; do not re-request it on top. Only if none arrives (the "
+                   "reviewer refused or cannot review this change), a maintainer then re-requests the Copilot review, or applies "
+                   f"the `{WAIVER_LABEL}` label — never an agent, and never automatically.")
     elif "has not landed" in text:
-        out.append("the automatic review must land. It usually arrives minutes after the pull request opens; if the "
+        out.append("the automatic review must land. It usually arrives minutes after the pull request opens or after each push; if the "
                    "reviewer refused (quota) or cannot review this change, a maintainer re-requests the review, or applies "
                    f"the `{WAIVER_LABEL}` label to waive it — never an agent, and never automatically. Elapsed time and "
                    "a \"Reviewer unavailable\" run release nothing (policy review-evidence-any-head).")

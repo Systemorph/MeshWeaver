@@ -140,7 +140,7 @@ request whose reviewer opened threads on an earlier head is judged by condition 
 thread answered — exactly as [One review per pull request](#one-review-per-pull-request) says.
 
 **Why not the current head only.** For one day the gate required a Copilot review of the CURRENT
-head (policy `review-evidence-current-head`, now superseded). The rulesets review once per pull
+head (policy `review-evidence-current-head`, now superseded). The rulesets then reviewed once per pull
 request (`review_on_push: false`), so every clean pull request pushed again after its review —
 most often by the merge of `main` that the merge-before-push rule requires — went
 `RED — NO REVIEW OF THIS HEAD` until a maintainer re-requested the review by hand. Policy
@@ -169,7 +169,7 @@ uses:
 
 Policy [`copilot-code-review`](../PolicyNotProse) reverses `internal-code-review`. GitHub Copilot reviews every pull request again; the internal reviewer is no longer required and is being switched off.
 
-- **The request.** Every repository's ruleset carries `copilot_code_review`. Under this policy alone it carried `review_on_push: true` (`review_draft_pull_requests: false`), so Copilot reviewed every pushed head; [One review per pull request](#one-review-per-pull-request) below turns that back to one review.
+- **The request.** Every repository's ruleset carries `copilot_code_review` with `review_on_push: true` (`review_draft_pull_requests: false`), so Copilot reviews every pushed head of a non-draft pull request. [One review per pull request](#one-review-per-pull-request) below turned that off for a while; [Every push is reviewed again](#every-push-is-reviewed-again) turns it back on.
 - **What branch protection requires.** `internal-review` is not a required context in any repository. Core still requires `Automatic review answered`.
 - **This merge gate.** It takes a landed Copilot review, as it always did. Every thread Copilot or the internal reviewer opened still needs a person's reply.
 - **The stage gate and the arm gate.** They accept a landed Copilot review of the pull request: not `PENDING`, and a body that reads as a review, never a refusal (`copilot_review_of_pull_request` in `check-review-answered.py` — the head's own review first, otherwise one of an earlier head; see below). They check this before looking for an `internal-review` run, so no head waits out the stage gate's fallback for a reviewer that has been switched off.
@@ -178,22 +178,33 @@ Policy [`copilot-code-review`](../PolicyNotProse) reverses `internal-code-review
 
 ### One review per pull request
 
-Policy [`review-once-per-pull-request`](../PolicyNotProse) narrows `copilot-code-review`: a pull request is reviewed ONCE, not once per push. With `review_on_push: true` every push bought a full new review round, and every round's new threads held the merge again until a person answered them — so a pull request that needed three fix pushes paid for four reviews and four rounds of replies.
+Policy [`review-once-per-pull-request`](../PolicyNotProse) narrowed `copilot-code-review`: a pull request was reviewed ONCE, not once per push. **Its ruleset half is reversed** — see [Every push is reviewed again](#every-push-is-reviewed-again); its gate half below still holds. With `review_on_push: true` every push bought a full new review round, and every round's new threads held the merge again until a person answered them — so a pull request that needed three fix pushes paid for four reviews and four rounds of replies.
 
 - **The gates.** All three — `Automatic review answered` (`evaluate`), the stage gate (`stage_readiness`) and the arm gate (`arm_readiness`) — count a landed Copilot review against ANY head of the pull request as "reviewed". `copilot_review_of_pull_request` returns the newest landed review against the current head when there is one, otherwise the newest landed review against an earlier head, and the verdict's note names which head it was. `pulls/{n}/reviews` lists only this pull request's reviews, so every review it returns reviewed this pull request. The stage and arm gates used to look at the head and now do not. The merge gate's condition 1 did not look at it either, except for the one day the zero-findings case was narrowed to the current head (policy `review-evidence-current-head`, superseded); under `review-evidence-any-head` it again reads every review on the pull request. When the pull request carries NO reviewer thread, `Automatic review answered` requires that review to be Copilot's — on any head (policy [`review-evidence-any-head`](../PolicyNotProse); see [Reviewed, nothing found](#reviewed-nothing-found--the-only-evidence-that-counts)).
 - **What is unchanged.** Every thread a reviewer opened still needs a person's reply, whichever head it was opened on. With zero findings the review must be Copilot's (policy `review-evidence-any-head`). A refusal is still not a review on any head. No review at all is still red.
-- **The ruleset.** The `copilot_code_review` rule runs with `review_on_push: false`; `review_draft_pull_requests` keeps its value. `.github/scripts/set-copilot-review-once.py` applies that to the nine repositories idempotently (dry-run by default; `--apply` PUTs the ruleset with every other field as read, then reads it back and fails unless only that one parameter changed).
+- **The ruleset (reversed).** The `copilot_code_review` rule ran with `review_on_push: false`; it runs with `true` again now. The script that applied `false` is replaced by `.github/scripts/set-copilot-review-on-push.py`, which can only move a ruleset TO the in-force value (see [Every push is reviewed again](#every-push-is-reviewed-again)).
 - **The order.** The gate change merges FIRST, the ruleset flip comes second. Flipped first, every new push would carry no review of its head while the old stage and arm gates still demanded one.
 - **Drafts.** With `review_draft_pull_requests: false` a draft is not reviewed while it is a draft; the one review must then come when it is marked ready. Whether `review_on_push: false` still requests that review on ready-for-review was not measured when the policy was set. Check it on the first pull request opened as a draft after the flip. If no review arrives, the stage gate's fallback and the `review-waived` label are the existing exits, and `review_draft_pull_requests: true` is the remedy — the one review then lands while the pull request is still a draft.
 - **The self-test.** The `ONCE` cases pin it: an older-head review with every thread answered is green on all three gates, an older-head review with an unanswered thread is red, an older-head refusal is red, and no review at all is red. With `copilot_review_of_pull_request` cut back to the head alone, every stage- and arm-gate `ONCE` case that reaches the thread condition turns red.
+
+### Every push is reviewed again
+
+Policy [`copilot-code-review`](../PolicyNotProse), as amended, puts `review_on_push: true` back on the `copilot_code_review` rule in all eight repositories' rulesets (`review_draft_pull_requests` stays `false`). Copilot re-reviews automatically after every code change.
+
+- **Every push to a non-draft pull request triggers a fresh Copilot review**, so every push opens a new review round, and that round's new threads hold the merge until a person answers each one ON the thread. That is why AGENTS.md says to push only for a real defect: a nit or a question is answered on its thread, not with a commit.
+- **Nobody hand-requests a review.** The ruleset requests one on every push, so an author never asks for a review or a re-review, and never withdraws one. The one exception is a review the reviewer REFUSED (below, *A refusal is posted as a review*): once the reviewer can review again, a maintainer's re-request or the `review-waived` label clears it.
+- **The gates do not change.** A landed review of any head still counts as "reviewed" (`review-once-per-pull-request`, gate half; `review-evidence-any-head`). A push therefore never goes red just because its own review has not landed yet. Threads the new round opens still need replies.
+- **The ruleset is reconciled, not hand-edited.** `.github/scripts/set-copilot-review-on-push.py` holds the in-force value in one constant (`REVIEW_ON_PUSH = True`) and applies it to the nine repositories in its `FLEET` idempotently: dry-run by default; `--apply` PUTs the ruleset with every other field as read, then reads it back and fails unless only that one parameter changed. Changing the policy means changing that constant in the same pull request. **The ninth repository is not reconciled yet:** the policy names eight rulesets, while the script's `FLEET` also holds `MeshWeaver.FundReporting`, whose ruleset `23730648` (*Copilot review for default branch*) measured `review_on_push: false` on 2026-10-10 — a dry run names it as `would PUT`. Applying it (`--repo MeshWeaver.FundReporting --apply`) is a maintainer's act; until then a default-fleet `--apply` run changes that ruleset too, so run it only once that is decided.
+- **Drafts** are not reviewed while they are drafts. The review comes on the first push after the pull request is marked ready (or when it is opened ready).
 
 **One account, two logins.** A predicate keyed on either login alone sees half of the reviewer. The
 check matches on the account id or either login, and only for `type: Bot`, so a person who names
 their account `Copilot` is not the reviewer.
 
 **Exactly one review per pull request** on all 50, always `COMMENTED`, usually on the first commit
-rather than the head. The ruleset carries `review_on_push: false` and `review_draft_pull_requests:
-true`: the reviewer reviews once, on open, drafts included, and never again unless someone asks.
+rather than the head. At the time of that measurement the ruleset carried `review_on_push: false` and
+`review_draft_pull_requests: true`: the reviewer reviewed once, on open, drafts included. That is
+no longer the configuration — see [Every push is reviewed again](#every-push-is-reviewed-again).
 
 **A refusal is posted as a review.** On #645–#654 (2026-07-25/26) the reviewer answered every
 pull request with a review, from the same account, whose whole body was:
@@ -943,7 +954,9 @@ The check's own pull request, in order, with the run that did the work:
 
 The review that counts was submitted on the **previous** head (`c496a0bffb`) and the check is green on
 the new one (`bf37e92a09`): condition 1 asks whether the review landed, never whether it landed on the
-head, because the reviewer reviews once. And the 15-minute wait was exercised against #645 — three
+head — the any-head gate (policy `review-once-per-pull-request`, gate half). At the time of this record
+the reviewer also reviewed only once per pull request; it now reviews every push again
+([Every push is reviewed again](#every-push-is-reviewed-again)), and the gate still counts any head's review. And the 15-minute wait was exercised against #645 — three
 polls, then RED naming the quota refusal.
 
 ## Rollout — done; kept as the record
