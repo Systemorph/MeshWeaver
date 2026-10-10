@@ -192,13 +192,34 @@ public sealed class ModuleRootServicesSwapTest : MonolithMeshTestBase
         journal.Entries.Should().Equal(["start v1", "stop v1", "start v2", "start extra v2"]);
     }
 
-    private static string ModuleSource(int version, bool extraGreeter = false, bool classService = false, bool extraHosted = false) => $$"""
+    /// <summary>
+    /// A diagnostic names what a module's proxy forwards to NOW (MeshWeaver#6391). The proxy survives
+    /// a live swap, and a swap keeps route, service type and lifetime but may change the implementing
+    /// class — so the label is read from the current generation's registration, never remembered.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task AProxysLabel_NamesTheCurrentGenerationsImplementation_AfterALiveSwap()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var greeter = Mesh.ServiceProvider.GetRequiredService<ILiveGreeter>();
+        ModuleServiceProxy.Label(greeter).Should().StartWith($"Greeter [module {Module}, registration ");
+
+        var outcome = await Updater.Swap(Write("g2", ModuleSource(2, greeterClass: "RenamedGreeter")), "test: renamed implementation")
+            .Timeout(Budget).Await(ct);
+
+        outcome.Kind.Should().Be(ModuleSwapKind.Live, outcome.Reason);
+        greeter.Greet().Should().Be("hello v2 (options v2)", "the same proxy now forwards to generation 2");
+        ModuleServiceProxy.Label(greeter).Should().StartWith($"RenamedGreeter [module {Module}, registration ",
+            "the label follows the swap; a name taken at boot would still say 'Greeter', the retired class");
+    }
+
+    private static string ModuleSource(int version, bool extraGreeter = false, bool classService = false, bool extraHosted = false, string greeterClass = "Greeter") => $$"""
         using Microsoft.Extensions.DependencyInjection;
         using Microsoft.Extensions.Options;
         [assembly: MeshWeaver.Test.LiveServices.Module]
         namespace MeshWeaver.Test.LiveServices;
         public sealed class GreeterOptions { public string Version { get; set; } = "unset"; }
-        public sealed class Greeter(IOptions<GreeterOptions> options) : MeshWeaver.Graph.Test.ILiveGreeter
+        public sealed class {{greeterClass}}(IOptions<GreeterOptions> options) : MeshWeaver.Graph.Test.ILiveGreeter
         {
             public string Greet() => "hello v{{version}} (options " + options.Value.Version + ")";
         }
@@ -222,10 +243,10 @@ public sealed class ModuleRootServicesSwapTest : MonolithMeshTestBase
                     .WithGlobalServiceRegistry(services =>
                     {
                         services.AddOptions<GreeterOptions>().Configure(o => o.Version = "v{{version}}");
-                        services.AddSingleton<MeshWeaver.Graph.Test.ILiveGreeter, Greeter>();
-                        services.AddKeyedSingleton<MeshWeaver.Graph.Test.ILiveGreeter, Greeter>("keyed-greeter");
+                        services.AddSingleton<MeshWeaver.Graph.Test.ILiveGreeter, {{greeterClass}}>();
+                        services.AddKeyedSingleton<MeshWeaver.Graph.Test.ILiveGreeter, {{greeterClass}}>("keyed-greeter");
                         services.AddKeyedSingleton<IOwnGreeter, OwnGreeter>("own-keyed");
-                        {{(extraGreeter ? "services.AddSingleton<MeshWeaver.Graph.Test.ILiveGreeter, Greeter>();" : "")}}
+                        {{(extraGreeter ? "services.AddSingleton<MeshWeaver.Graph.Test.ILiveGreeter, " + greeterClass + ">();" : "")}}
                         {{(classService ? "services.AddSingleton<MeshWeaver.Graph.Test.HostedServiceJournalBase, Journal2>();" : "")}}
                         services.AddHostedService<Journaling>();
                         {{(extraHosted ? "services.AddHostedService<ExtraJournaling>();" : "")}}

@@ -710,7 +710,7 @@ RequestTimeout").
 | Handler | Bound | What the stalled verdict says |
 |---|---|---|
 | Create | `Timeout` from handler entry, over the chain up to the written row | `Unavailable`, naming the stage: `authorship-source`, `existence-read`, `partition-bootstrap`, `write-guards`, `validators: <validator> (i/n)` (or `validators: resolving`), `nodetype-resolution`, `write` |
-| Create, after the write | the same deadline, as a VERDICT only — a post-creation handler still running is neither cancelled nor rolled back, because it may yet land its own writes | `Unavailable`: "written, a post-creation step had not finished, the outcome is unknown" — a later completion or compensation is not answered twice |
+| Create, after the write | the same deadline, as a VERDICT only — a post-creation handler still running is neither cancelled nor rolled back, because it may yet land its own writes | `Unavailable`: "written, a post-creation step had not finished, the outcome is unknown", naming what the leg was waiting at: `post-creation-handlers: resolving`, `… matching <handler> (i/n)`, `… <handler> (i/n)`, `… <handler> (i/n): discovering additional nodes` or `… <handler> (i/n): additional nodes` — a later completion or compensation is not answered twice |
 | Copy | `Timeout` from handler entry | `Unknown` with the `Copy reached no verdict:` prefix, naming the stage and, for the create leg, the TARGET paths still outstanding |
 | Move | ONE move-wide deadline, `Timeout` from entry; its delete pre-flight's ladder moved one rung inside it (`NestedTimeout` stage, then leg, then absence probe) so the pre-flight can still name the silent descendant first | `Unavailable` naming the stage (`delete-preflight`, `copy`) when nothing at the source was touched; `Unknown` with "the copy had already landed" when it stalls in `delete-source`; a copy that ANSWERED a failure carries the copy's own reason and transcript, never re-derived from the wording |
 
@@ -730,6 +730,83 @@ verdict and the trail. A stall in `resolving` is a blocked construction, not a s
 stall on a named validator is that validator's read. `LifecycleRequestsAlwaysReachAVerdictTest`
 pins it: the silent validator's type name is in the verdict, and the assertion fails on the code
 before the change, which said only `validators`.
+
+**The post-creation leg names what it is waiting on, too** (MeshWeaver#6391). Once #6421 was live,
+the stalls stopped reading `validators` at all. Read on 2026-10-10 over 14 hours: 18 on the public
+instance, on three pods, each in the six minutes after that pod's first process started, every one
+`<path> was written, but its post-creation handlers had not finished within 30s`; none on
+memex.systemorph.com over the same window. The targets were System-written creates again
+(`Admin/PlatformVersion/_Activity/startup-…` first, then `Admin/_Notification/…` about every 70 s).
+The fate trail of one of them ends `CREATE_STAGE write (+311ms) → CREATE_CHAIN_EMITTED (+365ms) →
+CREATE_POST_HANDLERS_START (+365ms)` and then nothing, on a node-operation hub whose pump is idle.
+
+No registered handler applies to those node types — not the four in `src/`, and not the three the
+AI module registers, which are all for `User` — and for a node no handler applies to the leg does
+exactly two things: it **resolves** every `INodePostCreationHandler` registration and it asks each
+one's `Matches`. A handler a MODULE registered is a forwarding proxy at that point
+(`ModuleServiceProxy`, [Live Module Update](../LiveModuleUpdate)), and every call on the proxy —
+`Matches` included — first resolves the module's instance from the module's **own** container. So
+whether an unrelated node's create can be answered depends on every module's container being able
+to build its handler. That holds for every create in the mesh, whatever its type, and only until
+the handler exists: a module container builds its shared instances one at a time, so the handler
+waits behind whichever singleton of that module is under construction, and once built it is served
+without waiting. That is why the stalls are a boot shape.
+
+The stage is therefore refined as the leg enters each step, on the verdict, the log line and the
+trail (`CREATE_STAGE post-creation-handlers: …`):
+
+| Stage detail | What the leg is doing |
+|---|---|
+| `resolving` | DI construction of the handler registrations |
+| `matching <handler> (i/n)` | asking registration *i* of *n* whether it applies (`Matches`) |
+| `<handler> (i/n)` | running handler *i* of the *n* that apply (`Handle`) |
+| `<handler> (i/n): discovering additional nodes` | asking that handler for its `GetAdditionalNodes` and enumerating them, before `Handle` is subscribed |
+| `<handler> (i/n): additional nodes` | persisting that handler's `GetAdditionalNodes` |
+
+`<handler>` is the type name, or for a module's proxy
+`<registered type or interface> [module <name>, registration <index>]`, read from the module's
+CURRENT generation on every call (the proxy outlives a live swap, which may change the implementing
+class). It is taken **without
+resolving** the instance (`ModuleServiceProxy.Label`): the wait is usually that very resolution, and
+a proxy's runtime type is a generated class whose name says nothing. The validators stage uses the
+same label, so a validator a module contributes is named the same way.
+
+Pinned twice. `LifecycleRequestsAlwaysReachAVerdictTest` arms a handler that never completes and
+reads its type name in the verdict. `ACreateWaitsOnAModuleContainerUnderConstructionTest`
+(MeshWeaver.Compiler.Pipeline.Test) loads a real module into its own container, parks the
+construction of one of its singletons, and creates a node of an unrelated type: the row is written,
+the verdict reads `post-creation-handlers: matching INodePostCreationHandler [module …,
+registration …]`, and the module's handler was never built. After the release the reply to that
+create carries the SAME `Unavailable` verdict (it was claimed at the deadline and is not answered
+twice); only the next create is answered `Ok`. Its control, with nothing under construction, succeeds on the first create and
+shows the dependency from the other side: that create built the module's handler.
+
+**Two things the repro corrected on the way.** Both come from the leg running INSIDE the chain's
+`OnNext`, so a leg that parks its thread is still on the chain's stack when the deadline passes:
+
+- **The chain's own deadline spoke a second time.** `Take(1)` completes the chain only when that
+  `OnNext` returns, and Rx's `Timeout` holds an expiry back while an `OnNext` is in flight. So when
+  the parked leg finally returned, the stalled fallback was delivered and logged as `reached no
+  verdict — stalled at stage write`: a second Error line, for a create that was written and already
+  answered, naming a stage that had finished. A stalled fallback after the node was emitted is now
+  recorded on the trail (`CREATE_CHAIN_DEADLINE_AFTER_EMIT`) and is no verdict. This is also why a
+  process that never returns from the leg shows the post-creation line ALONE, which is what all 18
+  production readings show.
+- **The 'outcome unknown' line could be written for a create answered `Ok`.** The deadline read the
+  once-only gate, wrote the line, and only then claimed the answer; a leg finishing in between
+  answered `Ok` under it. The deadline now claims first, so the line exists only for a verdict that
+  is the create's answer. `PostCreationVerdictIsSaidOnceTest` makes the window deterministic: it
+  releases a parked leg from inside the write of the line and gives it time to answer; the reply is
+  the line's verdict, and with the old order it is `Ok`.
+
+**What this does not establish.** The naming and the mechanism are pinned; what holds a module's
+container during those boots is not. That the production wait is this one is an inference by
+elimination (no handler applies, so nothing asynchronous is left to wait for), which the refined
+stage on the next occurrence confirms or refutes in one line. The same three pods are the ones
+[evicted as wedged from boot](../ReadingASiloEviction), their host never logged
+`Application started`, and no log line carries a thread's stack. Until the dump of one of those
+processes is read, a change that lets the create answer without the module's handler would decide
+`Matches` on the handler's behalf, and a wider budget would only say the same thing later.
 
 **Each validator gives EXACTLY ONE verdict, and the runner enforces it** (MeshWeaver#6391). The
 `INodeValidator` contract is "emits exactly one `NodeValidationResult` and completes".

@@ -47,6 +47,7 @@ public class LifecycleRequestsAlwaysReachAVerdictTest(ITestOutputHelper output) 
     private static readonly TimeSpan Window = Budget + TimeSpan.FromSeconds(8);
 
     private readonly SilentCreationValidator silent = new();
+    private readonly SilentPostCreationHandler silentHandler = new();
 
     private IStorageAdapter Storage => Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
 
@@ -54,6 +55,7 @@ public class LifecycleRequestsAlwaysReachAVerdictTest(ITestOutputHelper output) 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder).ConfigureServices(services => services
             .AddSingleton<INodeValidator>(silent)
+            .AddSingleton<INodePostCreationHandler>(silentHandler)
             .AddSingleton(new MeshOperationOptions { Timeout = Budget }));
 
     [Fact(Timeout = 60000)]
@@ -90,6 +92,52 @@ public class LifecycleRequestsAlwaysReachAVerdictTest(ITestOutputHelper output) 
         var ct = TestContext.Current.CancellationToken;
         silent.Silence(NewPath("someone-else"));
         var path = NewPath("healthy-create");
+
+        var response = await ObserveNodeOperation(new CreateNodeRequest(Markdown(path)))
+            .Select(d => d.Message)
+            .Should().Within(Window).Emit(cancellationToken: ct);
+
+        response.Success.Should().BeTrue(response.Error ?? "nothing stalls this create");
+        (await StoredAt(path, ct)).Should().NotBeNull();
+    }
+
+    /// <summary>
+    /// #6391, the leg AFTER the write. "Its post-creation handlers had not finished" named every
+    /// registered handler at once; the verdict now names the one the leg is waiting on, and its
+    /// position among the handlers that apply to the node.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task ACreateWhosePostCreationHandlerNeverCompletes_IsAnswered_NamingTheHandler()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var path = NewPath("held-after-write");
+        silentHandler.Silence(path);
+
+        var response = await ObserveNodeOperation(new CreateNodeRequest(Markdown(path)))
+            .Select(d => d.Message)
+            .Do(r => Output.WriteLine($"CREATE {path}: success={r.Success} reason={r.RejectionReason} error={r.Error}"))
+            .Should().Within(Window).Emit(
+                "a create whose post-creation leg stalls must still be ANSWERED inside the operation budget",
+                cancellationToken: ct);
+
+        response.Success.Should().BeFalse();
+        response.RejectionReason.Should().Be(NodeCreationRejectionReason.Unavailable);
+        response.Error.Should().Contain("outcome is unknown",
+            "the row is written and a handler is still running — neither applied nor refused");
+        response.Error.Should().Contain($"post-creation-handlers: {nameof(SilentPostCreationHandler)} (",
+            "the verdict names the HANDLER the leg was waiting on — 'its post-creation handlers' "
+            + "named every registered handler at once (#6391)");
+        silentHandler.Asked.Should().Contain(path, "the stall really was the armed handler");
+        (await StoredAt(path, ct)).Should().NotBeNull("the stall came after the write");
+    }
+
+    /// <summary>The negative control: the same handler, armed for ANOTHER path, lets a create through.</summary>
+    [Fact(Timeout = 60000)]
+    public async Task ACreateThePostCreationHandlerCompletes_StillSucceeds()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        silentHandler.Silence(NewPath("someone-else"));
+        var path = NewPath("handled-create");
 
         var response = await ObserveNodeOperation(new CreateNodeRequest(Markdown(path)))
             .Select(d => d.Message)
@@ -213,5 +261,34 @@ internal sealed class SilentCreationValidator : INodeValidator
             return Observable.Return(NodeValidationResult.Valid());
         asked.TryAdd(context.Node.Path, 0);
         return Observable.Never<NodeValidationResult>();
+    }
+}
+
+/// <summary>
+/// A post-creation handler that completes at once for every node except the paths it has been told
+/// to silence, where it returns a sequence that never emits, never completes and never errors — a
+/// handler whose own write never lands. Instance state, never static.
+/// </summary>
+internal sealed class SilentPostCreationHandler : INodePostCreationHandler
+{
+    private readonly ConcurrentDictionary<string, byte> silenced = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, byte> asked = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Never complete for creates at <paramref name="path"/> from now on.</summary>
+    public void Silence(string path) => silenced.TryAdd(path, 0);
+
+    /// <summary>Every silenced path this handler was actually run for.</summary>
+    public IReadOnlyCollection<string> Asked => asked.Keys.ToArray();
+
+    /// <inheritdoc />
+    public string NodeType => "Markdown";
+
+    /// <inheritdoc />
+    public IObservable<System.Reactive.Unit> Handle(MeshNode createdNode, string? createdBy)
+    {
+        if (!silenced.ContainsKey(createdNode.Path))
+            return Observable.Empty<System.Reactive.Unit>();
+        asked.TryAdd(createdNode.Path, 0);
+        return Observable.Never<System.Reactive.Unit>();
     }
 }
