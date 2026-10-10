@@ -1292,7 +1292,13 @@ public static class MeshExtensions
                             return Observable.Return<(LocalizableText? Refusal, NodeCreationRejectionReason Reason)?>(
                                 (grantRejection, NodeCreationRejectionReason.ValidationFailed));
                         EnterCreateStage(CreateStageValidators);
-                        return RunCreationValidatorsObs(hub, node, capturedRequest);
+                        // 🚨 The stage is refined per validator (#6391): "validators" alone named
+                        // every registered validator, and the core ones all answer synchronously
+                        // for a System write, so a stalled verdict could not say which one — or whether the
+                        // chain stalled before ANY validator was asked (resolving them).
+                        return RunCreationValidatorsObs(
+                            hub, node, capturedRequest,
+                            onStage: detail => EnterCreateStage($"{CreateStageValidators}: {detail}"));
                     })
                     .SelectMany(validationError =>
                     {
@@ -6373,8 +6379,12 @@ public static class MeshExtensions
         IMessageHub hub,
         MeshNode node,
         CreateNodeRequest request,
-        AccessContext? accessContext = null)
+        AccessContext? accessContext = null,
+        Action<string>? onStage = null)
     {
+        // Named BEFORE the validators are resolved: resolving is DI construction of every scoped
+        // validator, and a construction that blocks would otherwise read as a silent validator.
+        onStage?.Invoke("resolving");
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var context = new NodeValidationContext
         {
@@ -6392,8 +6402,17 @@ public static class MeshExtensions
         if (validators.Count == 0)
             return Observable.Return<(LocalizableText?, NodeCreationRejectionReason)?>(null);
 
+        // Each validator is named at the moment Concat SUBSCRIBES to it (Defer), i.e. when it is
+        // the one the chain is waiting on — so a stalled verdict reads
+        // "validators: RlsNodeValidator (i/n)", never a bare stage name (#6391).
         return validators
-            .Select(v => v.Validate(context))
+            .Select((v, i) => onStage is null
+                ? v.Validate(context)
+                : Observable.Defer(() =>
+                {
+                    onStage($"{v.GetType().Name} ({i + 1}/{validators.Count})");
+                    return v.Validate(context);
+                }))
             .Concat()
             .Where(result => !result.IsValid)
             .Select(result =>
