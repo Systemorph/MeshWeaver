@@ -19,39 +19,46 @@ public sealed record GitSyncRefusal(string Key, ImmutableDictionary<string, obje
 {
     /// <summary>
     /// For a refusal that predates this type: its exact, shipped English message. Such a refusal
-    /// keeps its shipped contract — <see cref="ToException"/> throws a plain
+    /// keeps its shipped THROWN contract — <see cref="ToException"/> throws a plain
     /// <see cref="InvalidOperationException"/> with exactly this message, which callers and the
-    /// dependent suites assert on — and is rendered as that text in every language. Null for every
-    /// localizable refusal.
+    /// dependent suites assert on — while every RENDERED surface (the activity transcript, the
+    /// settings tab) still resolves <see cref="Key"/> for the viewer. The English catalog entry
+    /// is this same sentence. Null for every other refusal.
     /// </summary>
     public string? LegacyMessage { get; init; }
 
     /// <summary>A refusal that keeps its shipped exception type and English message unchanged
-    /// (see <see cref="LegacyMessage"/>); <paramref name="key"/> names it for the guard tests.</summary>
-    public static GitSyncRefusal Legacy(string key, string message)
-        => new(key, ImmutableDictionary<string, object>.Empty) { LegacyMessage = message };
+    /// (see <see cref="LegacyMessage"/>) and is rendered through <paramref name="key"/> with
+    /// <paramref name="args"/> wherever a viewer reads it.</summary>
+    public static GitSyncRefusal Legacy(string key, string message, params (string Name, object Value)[] args)
+        => Of(key, args) with { LegacyMessage = message };
 
     /// <summary>Builds a refusal from a key and named arguments.</summary>
     public static GitSyncRefusal Of(string key, params (string Name, object Value)[] args)
         => new(key, args.ToImmutableDictionary(a => a.Name, a => a.Value, StringComparer.Ordinal));
 
     /// <summary>The refusal in <paramref name="locale"/> (English when null or unknown).</summary>
-    public string Render(string? locale) =>
-        LegacyMessage ?? LocalizationCatalog.GetNamed(Key, locale, Args);
+    public string Render(string? locale) => LocalizationCatalog.GetNamed(Key, locale, Args, LegacyMessage);
 
     /// <summary>The refusal as a localizable activity entry: English text plus the key and its
     /// arguments, resolved at render time for each viewer.</summary>
     public LogMessage ToLogMessage(LogLevel level)
-        => LegacyMessage is not null
-            ? new LogMessage(LegacyMessage, level)
-            : new LogMessage(Render(null), level)
-                .WithKey(Key, Args.Select(a => (a.Key, (object?)a.Value)).ToArray());
+        => new LogMessage(LegacyMessage ?? Render(null), level)
+            .WithKey(Key, Args.Select(a => (a.Key, (object?)a.Value)).ToArray());
 
     /// <summary>The exception that carries this refusal through an observable pipeline: a
     /// <see cref="GitSyncRefusalException"/> for a localizable refusal, the shipped plain
-    /// <see cref="InvalidOperationException"/> for a <see cref="Legacy"/> one.</summary>
+    /// <see cref="InvalidOperationException"/> for a <see cref="Legacy"/> one — whose exact type and
+    /// message are the shipped contract, so the refusal rides along in <see cref="Exception.Data"/>
+    /// (<see cref="GitSyncRefusalException.TryGet"/>) for the surfaces that render it.</summary>
     public Exception ToException()
-        => LegacyMessage is not null ? new InvalidOperationException(LegacyMessage) : new GitSyncRefusalException(this);
+    {
+        if (LegacyMessage is null)
+            return new GitSyncRefusalException(this);
+        var legacy = new InvalidOperationException(LegacyMessage);
+        legacy.Data[GitSyncRefusalException.DataKey] = this;
+        return legacy;
+    }
 }
 
 /// <summary>
@@ -66,10 +73,32 @@ public sealed class GitSyncRefusalException(GitSyncRefusal refusal)
     /// <summary>The key and arguments of the refusal.</summary>
     public GitSyncRefusal Refusal { get; } = refusal;
 
+    /// <summary>The <see cref="Exception.Data"/> key a <see cref="GitSyncRefusal.Legacy"/> refusal's
+    /// plain exception carries its refusal under.</summary>
+    public const string DataKey = "MeshWeaver.GitSync.Refusal";
+
+    /// <summary>The refusal an exception carries — as a <see cref="GitSyncRefusalException"/>, or in
+    /// the <see cref="Exception.Data"/> of a legacy refusal's plain exception.</summary>
+    public static bool TryGet(Exception exception, out GitSyncRefusal refusal)
+    {
+        if (exception is GitSyncRefusalException typed)
+        {
+            refusal = typed.Refusal;
+            return true;
+        }
+        if (exception.Data[DataKey] is GitSyncRefusal carried)
+        {
+            refusal = carried;
+            return true;
+        }
+        refusal = null!;
+        return false;
+    }
+
     /// <summary>
     /// The text to show a viewer in <paramref name="locale"/> for ANY exception: a GitSync refusal
     /// in the viewer's language, every other exception's own message unchanged.
     /// </summary>
     public static string Localize(Exception exception, string? locale)
-        => exception is GitSyncRefusalException refusal ? refusal.Refusal.Render(locale) : exception.Message;
+        => TryGet(exception, out var refusal) ? refusal.Render(locale) : exception.Message;
 }

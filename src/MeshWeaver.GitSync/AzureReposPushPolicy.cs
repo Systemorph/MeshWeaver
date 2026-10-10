@@ -71,9 +71,10 @@ public static class AzureReposPushPolicy
     public static GitSyncRefusal? ExportGuard(GitHubSyncConfig config)
         => RefuseExport(config)
            ?? (config.Direction == SyncDirection.ImportOnly
-               ? GitSyncRefusal.Legacy("gitsync.direction.importOnlyNoExport",
+               ? GitSyncRefusal.Legacy("activity.gitsync.importOnlyNoExport",
                    $"This sync source is import-only (repo → mesh): exporting to {config.RepositoryUrl} is not allowed. " +
-                   "Change the source's Sync direction to Bidirectional or Export-only to commit.")
+                   "Change the source's Sync direction to Bidirectional or Export-only to commit.",
+                   ("url", config.RepositoryUrl ?? ""))
                : null);
 
     /// <summary>
@@ -83,8 +84,9 @@ public static class AzureReposPushPolicy
     public static GitSyncRefusal? ReimportGuard(GitHubSyncConfig config)
         => RefuseInbound(config.RepositoryUrl, InboundOperation.Reimport)
            ?? (config.Direction == SyncDirection.ExportOnly
-               ? GitSyncRefusal.Legacy("gitsync.direction.exportOnlyNoImport",
+               ? GitSyncRefusal.Legacy("activity.gitsync.exportOnlyNoImport",
                    $"This sync source is export-only (mesh → repo): importing from {config.RepositoryUrl} is not allowed. " +
-                   "Change the source's Sync direction to Bidirectional or Import-only to re-import.")
+                   "Change the source's Sync direction to Bidirectional or Import-only to re-import.",
+                   ("url", config.RepositoryUrl ?? ""))
                : null);
 }

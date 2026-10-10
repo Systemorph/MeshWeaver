@@ -124,7 +124,7 @@ public class AzureReposPushOnlyTest
         // Negative control: the generic rule is not lost behind the provider rule.
         AzureReposPushPolicy.ExportGuard(
                 new GitHubSyncConfig { RepositoryUrl = GitHubUrl, Direction = SyncDirection.ImportOnly })!
-            .Key.Should().Be("gitsync.direction.importOnlyNoExport");
+            .Key.Should().Be("activity.gitsync.importOnlyNoExport");
         AzureReposPushPolicy.ExportGuard(
                 new GitHubSyncConfig { RepositoryUrl = GitHubUrl, Direction = SyncDirection.Bidirectional })
             .Should().BeNull();
@@ -151,7 +151,7 @@ public class AzureReposPushOnlyTest
     {
         AzureReposPushPolicy.ReimportGuard(
                 new GitHubSyncConfig { RepositoryUrl = GitHubUrl, Direction = SyncDirection.ExportOnly })!
-            .Key.Should().Be("gitsync.direction.exportOnlyNoImport");
+            .Key.Should().Be("activity.gitsync.exportOnlyNoImport");
         AzureReposPushPolicy.ReimportGuard(
                 new GitHubSyncConfig { RepositoryUrl = GitHubUrl, Direction = SyncDirection.Bidirectional })
             .Should().BeNull();
@@ -193,6 +193,20 @@ public class AzureReposPushOnlyTest
             $"This sync source is export-only (mesh → repo): importing from {GitHubUrl} is not allowed. " +
             "Change the source's Sync direction to Bidirectional or Import-only to re-import.");
 
+        // …while the activity transcript still carries a KEY, so a viewer reads it in their language.
+        var legacy = AzureReposPushPolicy.ExportGuard(
+            new GitHubSyncConfig { RepositoryUrl = GitHubUrl, Direction = SyncDirection.ImportOnly })!;
+        var entry = legacy.ToLogMessage(Microsoft.Extensions.Logging.LogLevel.Error);
+        entry.MessageKey.Should().Be("activity.gitsync.importOnlyNoExport");
+        entry.Message.Should().Be(export.Message);
+        legacy.Render("en").Should().Be(export.Message, "the English catalog entry is the shipped sentence");
+        legacy.Render("de").Should().NotBe(export.Message);
+        GitSyncRefusalException.TryGet(export, out var carried).Should().BeTrue(
+            "the plain exception carries its refusal, so the activity runner can key the transcript line");
+        carried.Key.Should().Be("activity.gitsync.importOnlyNoExport");
+        GitSyncRefusalException.Localize(export, "de").Should().Be(legacy.Render("de"));
+        GitSyncRefusalException.TryGet(new InvalidOperationException("upstream"), out _).Should().BeFalse();
+
         // Negative control: an Azure Repos refusal IS the localizable type.
         AzureReposPushPolicy.ExportGuard(
                 new GitHubSyncConfig { RepositoryUrl = AzureUrl, Direction = SyncDirection.ImportOnly })!
@@ -219,6 +233,8 @@ public class AzureReposPushOnlyTest
     [InlineData("gitsync.azure.identityNotDeclared")]
     [InlineData("gitsync.azure.noWorkloadIdentity")]
     [InlineData("gitsync.azure.notRegistered")]
+    [InlineData("activity.gitsync.importOnlyNoExport")]
+    [InlineData("activity.gitsync.exportOnlyNoImport")]
     [InlineData("ui.gitSync.pullRequestsNotOffered")]
     public void EveryRefusal_RendersInEnglishAndGerman(string key)
     {

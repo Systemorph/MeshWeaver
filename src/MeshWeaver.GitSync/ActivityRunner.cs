@@ -316,8 +316,8 @@ public static class ActivityRunner
                                 // reads language-independently. A refusal GitSync composes ITSELF
                                 // (GitSyncRefusal) is the exception: it carries its catalog key, so
                                 // the entry renders in each viewer's language.
-                                : ex is GitSyncRefusalException refusal
-                                    ? refusal.Refusal.ToLogMessage(LogLevel.Error)
+                                : GitSyncRefusalException.TryGet(ex, out var refusal)
+                                    ? refusal.ToLogMessage(LogLevel.Error)
                                     : new LogMessage(ex.Message, LogLevel.Error), logger);
                     })
                     .Finally(() =>
