@@ -1,0 +1,27 @@
+# Docker Hub images CI uses, mirrored BY DIGEST to ghcr.io/systemorph/dockerhub/<name>:<tag>.
+#
+# Why (Doc/Architecture/DockerHubInCi): GitHub-hosted runners pull from Docker Hub ANONYMOUSLY,
+# and the anonymous limit is per egress IP, shared with every other tenant on that runner pool.
+# Measured 2026-10-09: `toomanyrequests` red every test shard and the Chart Gate of core PR runs
+# (#6381 among them). A CI step that needs one of these images resolves it through
+# .github/scripts/dockerhub-mirror.sh `ref <name>:<tag>` and logs in to ghcr.io with the job's
+# GITHUB_TOKEN (`packages: read`) — no stored credential, so it works on forks and on Dependabot.
+#
+# One line per image: <docker hub name>:<tag>@sha256:<digest>. The digest is the pin; the mirror
+# copies exactly those bytes (`docker buildx imagetools create`, read back and compared), and
+# `ref` hands the consumer `ghcr.io/systemorph/dockerhub/<name>:<tag>@<digest>`. Adding or moving
+# an entry is a main merge: dockerhub-mirror.yml syncs on that push, BEFORE any pull request
+# depends on the new line (a consumer of an un-synced line is red, naming it).
+#
+# Resolve a digest without spending the pull limit (a manifest HEAD is not counted):
+#   tok=$(curl -fsS "https://auth.docker.io/token?service=registry.docker.io&scope=repository:<name>:pull" | jq -r .token)
+#   curl -fsSI -H "Authorization: Bearer $tok" -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json" \
+#     https://registry-1.docker.io/v2/<name>/manifests/<tag> | grep -i docker-content-digest
+
+# The registry's token server — chart-gate `Bundle registry scripts (executed)`; the same digest
+# deploy/helm/values.registry.example.yaml pins (the script refuses a mismatch).
+cesanta/docker_auth:1.14.0@sha256:98e0307e0d2dcbafe10098814a97d248143b78ca478693f78c3c0d67fe776ab4
+
+# The Loki binary that validates the rendered config — chart-gate `Observability values`; the tag
+# is the appVersion of the pinned loki-stack chart (deploy/aks/scripts/check-observability-values.sh).
+grafana/loki:2.9.3@sha256:eb92f1a439171542fd718f929fad38c917b3cad15ec830ba4742e2ba5ab03313
