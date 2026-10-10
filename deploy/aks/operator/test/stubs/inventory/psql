@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# A stand-in psql for hosting-inventory's behaviour tests. Records whether PGPASSWORD reached it
+# (set/unset, never the value), the PGOPTIONS it was started with, its argv, and the SQL it was fed
+# on stdin — which is how the tests prove the session is read-only and the SQL writes nothing — and
+# answers with one inventory object, as a real psql -tA does:
+#
+#   HOSTING_PG_STATE           directory: pg.log (one line per call), inventory.sql (the stdin)
+#   HOSTING_INV_FAIL=1         fail the way a refused query does (exit 3, Postgres's message on stderr)
+#   HOSTING_INV_EMPTY=1        exit 0 having printed nothing (silence must never read as "empty")
+set -uo pipefail
+state="${HOSTING_PG_STATE:?the psql stub needs HOSTING_PG_STATE}"
+printf 'psql PGPASSWORD=%s PGOPTIONS=%s argv=%s\n' "$([ -n "${PGPASSWORD:-}" ] && echo set || echo unset)" "${PGOPTIONS:-}" "$*" >> "$state/pg.log"
+cat > "$state/inventory.sql"
+[ "${HOSTING_INV_FAIL:-0}" = "1" ] && { echo "psql:<stdin>:27: ERROR:  permission denied for table mesh_nodes" >&2; exit 3; }
+[ "${HOSTING_INV_EMPTY:-0}" = "1" ] && exit 0
+echo '{"database" : "acmedb", "server" : "pg.test", "readAt" : "2026-10-09T19:41:45Z", "schemaCount" : 2, "nodes" : 6, "rows" : 8, "schemas" : [{"schema" : "acme", "nodes" : 5, "rows" : 7, "tables" : { "access" : 0, "mesh_nodes" : 5, "threads" : 2 }}, {"schema" : "public", "nodes" : 1, "rows" : 1, "tables" : { "mesh_nodes" : 1 }}]}'
+exit 0
