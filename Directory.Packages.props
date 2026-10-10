@@ -102,6 +102,12 @@
          it is used. -->
     <PackageVersion Include="Humanizer.Core" Version="3.0.10" />
     <PackageVersion Include="Markdig" Version="1.4.0" />
+    <!-- MailKit: the typed IMAP/SMTP client behind the "Other email" connection (Plugins'
+         Mail module, MeshWeaver.Plugins AI/GettingStartedAndConnections). The verify probe connects,
+         authenticates and disconnects through MailKit's ImapClient/SmtpClient only — no hand-rolled
+         protocol. Consumed by MeshWeaver.Plugins through $(MeshWeaverRoot); see that repo's AGENTS.md
+         "Package versions live in ONE file". -->
+    <PackageVersion Include="MailKit" Version="4.18.0" />
     <PackageVersion Include="Azure.Extensions.AspNetCore.DataProtection.Blobs" Version="1.5.3" />
     <!-- 🚨 Microsoft.AspNetCore.DataProtection pinned to override transitive 10.0.0
          (CVE-2026-40372 / GHSA-9mv3-2cwr-p262) — but NOTHING references it directly and
