@@ -764,7 +764,9 @@ trail (`CREATE_STAGE post-creation-handlers: …`):
 | `<handler> (i/n): additional nodes` | persisting that handler's `GetAdditionalNodes` |
 
 `<handler>` is the type name, or for a module's proxy
-`<registered type or interface> [module <name>, registration <index>]`. It is taken **without
+`<registered type or interface> [module <name>, registration <index>]`, read from the module's
+CURRENT generation on every call (the proxy outlives a live swap, which may change the implementing
+class). It is taken **without
 resolving** the instance (`ModuleServiceProxy.Label`): the wait is usually that very resolution, and
 a proxy's runtime type is a generated class whose name says nothing. The validators stage uses the
 same label, so a validator a module contributes is named the same way.

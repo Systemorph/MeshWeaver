@@ -20,38 +20,40 @@ public class ModuleServiceProxy : DispatchProxy
     private ModuleContexts? contexts;
     private string module = "";
     private int index;
-    private string registered = "";
+    private string service = "";
 
     /// <summary>Creates the proxy for <paramref name="serviceType"/>.</summary>
     public static object Create(Type serviceType, ModuleContexts contexts, string module, int index)
-        => Create(serviceType, contexts, module, index, null);
-
-    /// <summary>
-    /// Creates the proxy for <paramref name="serviceType"/>, remembering what the module registered
-    /// (<paramref name="implementation"/>, when the registration names a type) so the proxy can be
-    /// NAMED without resolving the module's instance — see <see cref="Label"/>.
-    /// </summary>
-    /// <param name="serviceType">The platform interface the proxy stands in for.</param>
-    /// <param name="contexts">The mesh's module registry.</param>
-    /// <param name="module">The registering module's name.</param>
-    /// <param name="index">The registration's position among the module's registrations.</param>
-    /// <param name="implementation">The implementation type's name, or null when the registration is a factory.</param>
-    public static object Create(Type serviceType, ModuleContexts contexts, string module, int index, string? implementation)
     {
         ArgumentNullException.ThrowIfNull(serviceType);
         var proxy = (ModuleServiceProxy)DispatchProxy.Create(serviceType, typeof(ModuleServiceProxy));
         proxy.contexts = contexts;
         proxy.module = module;
         proxy.index = index;
-        proxy.registered = implementation ?? serviceType.Name;
+        proxy.service = serviceType.Name;
         return proxy;
     }
 
     /// <summary>
-    /// What this proxy forwards to, without resolving it: the registered implementation (or the
-    /// service interface, for a factory registration), the module and the registration's position.
+    /// What this proxy forwards to RIGHT NOW, without resolving it: the implementation type the
+    /// module's CURRENT generation registered at this position (or the service interface, when that
+    /// registration is a factory, which names no type), the module and the position.
+    ///
+    /// <para>Read from the current generation's registration on every call, never remembered: the
+    /// proxy outlives a live swap, and a swap keeps route, service type and lifetime but may change
+    /// the implementing class — a name taken at boot would go on naming the retired one.</para>
     /// </summary>
-    public override string ToString() => $"{registered} [module {module}, registration {index}]";
+    public override string ToString()
+    {
+        var descriptor = contexts?.Current(module)?.Services?.Registrations
+            .ElementAtOrDefault(index)?.Descriptor;
+        var implementation = descriptor is null
+            ? null
+            : descriptor.IsKeyedService
+                ? descriptor.KeyedImplementationType ?? descriptor.KeyedImplementationInstance?.GetType()
+                : descriptor.ImplementationType ?? descriptor.ImplementationInstance?.GetType();
+        return $"{implementation?.Name ?? service} [module {module}, registration {index}]";
+    }
 
     /// <summary>
     /// The name a diagnostic gives <paramref name="service"/>: its own type name, or — for a
@@ -165,13 +167,6 @@ internal static class ModuleServiceForwarding
         {
             var index = registration.Index;
             var type = registration.Descriptor.ServiceType;
-            // What the module registered, as far as the registration itself says — a factory names
-            // no type. Only the NAME is kept: a Type would pin the module's generation in the root.
-            var implementation = registration.Descriptor.IsKeyedService
-                ? (registration.Descriptor.KeyedImplementationType
-                   ?? registration.Descriptor.KeyedImplementationInstance?.GetType())?.Name
-                : (registration.Descriptor.ImplementationType
-                   ?? registration.Descriptor.ImplementationInstance?.GetType())?.Name;
             if (registration.Descriptor.IsKeyedService)
             {
                 // Forwarded under the module's OWN key, so a consumer asking by key gets the module's.
@@ -180,7 +175,7 @@ internal static class ModuleServiceForwarding
                 {
                     case ModuleServiceRoute.Proxy:
                         root.Add(ServiceDescriptor.KeyedSingleton(type, key, (sp, _) => ModuleServiceProxy.Create(
-                            type, sp.GetRequiredService<ModuleContexts>(), module, index, implementation)));
+                            type, sp.GetRequiredService<ModuleContexts>(), module, index)));
                         break;
                     case ModuleServiceRoute.Current:
                         root.Add(ServiceDescriptor.KeyedTransient(type, key, (sp, _) =>
@@ -200,7 +195,7 @@ internal static class ModuleServiceForwarding
                     // Singleton: ONE stable proxy, so every consumer holds the same forwarder.
                     // Resolving the registry through the container is what attaches it to the root.
                     root.Add(ServiceDescriptor.Singleton(type, sp => ModuleServiceProxy.Create(
-                        type, sp.GetRequiredService<ModuleContexts>(), module, index, implementation)));
+                        type, sp.GetRequiredService<ModuleContexts>(), module, index)));
                     break;
                 case ModuleServiceRoute.Current:
                     root.Add(ServiceDescriptor.Transient(type, sp => sp.GetRequiredService<ModuleContexts>().ResolveModuleService(module, index)));

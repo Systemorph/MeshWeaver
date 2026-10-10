@@ -1562,22 +1562,30 @@ public static class MeshExtensions
                         // in between answered `Ok` under a line that says 'outcome unknown'. The
                         // line is the instrument this failure is read through, so it is written
                         // only for a verdict that IS the create's answer.
-                        if (!TryClaimResponse())
-                            return;
+                        //
+                        // 🚨 And POSTED before it is said. Once the gate is claimed every later
+                        // Respond is refused, so nothing may stand between the claim and the post:
+                        // a logging provider that throws (ILogger rethrows what its providers
+                        // throw) would otherwise leave the request claimed and unanswered — the
+                        // silence this deadline exists to prevent. The verdict is built first,
+                        // posted right after the claim, and only then written to the trail and log.
                         var waitingAt = $"{CreateStagePostCreationHandlers}: {postCreationStage.Current}";
-                        hub.NoteRequestStage(request.Id, $"CREATE_STAGE {CreateStagePostCreationHandlers} deadline");
-                        logger.LogError(
-                            "[CreateNode] {Path} was written, but its post-creation handlers had not finished within {Budget}s (waiting at {Stage}) — answering 'outcome unknown'",
-                            resultNode.Path, createBudget.TotalSeconds, waitingAt);
                         var seconds = createBudget.TotalSeconds.ToString("0", System.Globalization.CultureInfo.InvariantCulture);
-                        PostCreateVerdict(hub, request, CreateNodeResponse.FailWith(
+                        var verdict = CreateNodeResponse.FailWith(
                             LocalizableText.Keyed(
                                 $"'{resultNode.Path}' was written, but a post-creation step had not finished within {seconds}s "
                                 + $"(it was waiting at '{waitingAt}'); "
                                 + "the outcome is unknown — read the node before retrying.",
                                 CreatePostCreationOutcomeUnknownKey,
                                 ("path", resultNode.Path), ("seconds", seconds), ("stage", waitingAt)),
-                            NodeCreationRejectionReason.Unavailable), parentHub, logger);
+                            NodeCreationRejectionReason.Unavailable);
+                        if (!TryClaimResponse())
+                            return;
+                        PostCreateVerdict(hub, request, verdict, parentHub, logger);
+                        hub.NoteRequestStage(request.Id, $"CREATE_STAGE {CreateStagePostCreationHandlers} deadline");
+                        logger.LogError(
+                            "[CreateNode] {Path} was written, but its post-creation handlers had not finished within {Budget}s (waiting at {Stage}) — answering 'outcome unknown'",
+                            resultNode.Path, createBudget.TotalSeconds, waitingAt);
                     },
                     // A ONE-SHOT, so it takes the error arm (SubscribeErrorArmRatchetGuard): a faulting
                     // timer source is logged here rather than left with nowhere to go.
