@@ -320,8 +320,32 @@ def digest_can_contain(value: str) -> bool:
                for a, b in zip(value, value[1:]))
 
 
-def _is_private(name: str, host: str, declared_in: str) -> bool:
-    """Whether the private roster names this installation — by id, by host or by repository.
+def committed_repositories(root: str) -> frozenset[str]:
+    """The repositories the COMMITTED roster declares — the only ones whose rows may be public.
+
+    Read from the file in this (public) repository alone, never merged with the private roster:
+    what is written there is public by construction. Lower-cased. Unreadable means none, which
+    makes every row private — the roster reader reports the unreadable file by name."""
+    path = Path(root) / ".github" / "acr-retention" / lock.ROSTER_PATH
+    try:
+        table = json.loads(path.read_text(encoding="utf-8")).get("repositories")
+    except (OSError, ValueError, AttributeError):
+        return frozenset()
+    return frozenset(str(key).strip().lower() for key in table) if isinstance(table, dict) else frozenset()
+
+
+def _is_private(name: str, host: str, declared_in: str,
+                public_repos: frozenset[str] | None = None) -> bool:
+    """Whether this installation must be treated as a client estate's.
+
+    🚨 PUBLIC IS WHAT MUST BE SHOWN, NOT PRIVATE. An installation is public only when the
+    repository that declares it is in the COMMITTED roster (`committed_repositories`) — a
+    reviewed, public line. Everything else is private: a repository only the private roster
+    declares, a repository nobody declares, an unknown declaring repository, and every row when
+    the committed table is not supplied. So a MISSING `ACR_RETENTION_PRIVATE_ROSTER` secret
+    cannot turn a client's rows public; it leaves them exactly as private as they were.
+
+    Then, for a repository that IS committed, the private roster can still name one installation:
 
     🚨 EXACT MATCH ON THE COMPLETE SET FIRST (`lock.private_roster_entries`, no length floor), so a
     one-character private id is as private as a long one. Then the mask rule: anything the runner
@@ -329,6 +353,8 @@ def _is_private(name: str, host: str, declared_in: str) -> bool:
     host or repository) is private too. Both directions fail CLOSED — more rows private, never
     fewer. Case-insensitive, because a host is."""
     name, host, declared_in = name.lower(), host.rstrip(".").lower(), (declared_in or "").lower()
+    if public_repos is None or declared_in not in public_repos:
+        return True
     entries = lock.private_roster_entries()
     if name in {v.lower() for v in entries["ids"]}:
         return True
@@ -346,13 +372,44 @@ def _is_private(name: str, host: str, declared_in: str) -> bool:
     return False
 
 
-def is_private_row(row: dict[str, str], declared_in: str) -> bool:
+def is_private_row(row: dict[str, str], declared_in: str,
+                   public_repos: frozenset[str] | None = None) -> bool:
     """Whether a roster row belongs to a client estate — i.e. the private roster names it.
 
     🚨 THIS REPOSITORY IS PUBLIC, and a verify job's log, step summary and artifacts are too. For a
     private row the preflight prints no name or host, and the lander prints the verdict and counts
     only and uploads nothing: an installation's module list is the client's inventory."""
-    return _is_private(row["name"], row["baseUrl"].split("//", 1)[-1], declared_in)
+    return _is_private(row["name"], row["baseUrl"].split("//", 1)[-1], declared_in, public_repos)
+
+
+def redactor(instances, repos: list[str], public_repos: frozenset[str] | None):
+    """A function that removes every private identifier from a diagnostic line.
+
+    🚨 FOR THE PATHS A MASK CANNOT COVER. A log mask needs four characters, and a blocker or an
+    `excluded` line is built from an installation's id, host and repository verbatim — so a
+    private installation named `x9` would be printed by the very message that refuses it. This
+    works from the COMPLETE private set (no length floor): each private installation's host,
+    repository and id, and every scanned repository that is not a committed one, is replaced by
+    `<private>` wherever it stands as a whole word (so also inside an overlay path such as
+    `values.x9.yaml`). A private id equal to a public one redacts
+    both, which is the direction to be wrong in."""
+    values: set[str] = set()
+    for instance in instances:
+        if _is_private(instance.id, instance.host or "", instance.gh_repo, public_repos):
+            values.update({instance.id, instance.host or "", instance.gh_repo,
+                           instance.gh_repo.split("/", 1)[-1]})
+    for repo in repos:
+        if public_repos is None or repo.lower() not in public_repos:
+            values.update({repo, repo.split("/", 1)[-1]})
+    values.discard("")
+    ordered = sorted(values, key=len, reverse=True)
+
+    def redact(text: str) -> str:
+        for value in ordered:
+            text = re.sub(r"(?<![A-Za-z0-9_])" + re.escape(value) + r"(?![A-Za-z0-9_])",
+                          "<private>", text, flags=re.IGNORECASE)
+        return text
+    return redact
 
 
 def row_owners(instances) -> dict[tuple[str, str], str]:
@@ -366,7 +423,7 @@ def row_owners(instances) -> dict[tuple[str, str], str]:
             for instance in instances if instance.state == "live" and instance.host}
 
 
-def mask_private_instances(instances) -> int:
+def mask_private_instances(instances, public_repos: frozenset[str] | None = None) -> int:
     """Register every DERIVED identifier of a private installation as a log mask.
 
     The private roster's own strings are masked by `lock.mask_private_roster`. That is not enough:
@@ -377,11 +434,11 @@ def mask_private_instances(instances) -> int:
         return 0
     masked = 0
     for instance in instances:
-        if not _is_private(instance.id, instance.host or "", instance.gh_repo):
+        if not _is_private(instance.id, instance.host or "", instance.gh_repo, public_repos):
             continue
         values = [instance.host or "", f"https://{instance.host}" if instance.host else ""]
-        if len(instance.id) >= 4:       # a shorter mask would shred the log; private rows print
-            values.append(instance.id)  # no name at all (see report / resolve_slot)
+        if len(instance.id) >= 4:       # a shorter mask would shred the log; a short id is kept
+            values.append(instance.id)  # out of the log by `redactor` and by printing no name
         for value in values:
             if value:
                 print(f"::add-mask::{value}")
@@ -391,7 +448,8 @@ def mask_private_instances(instances) -> int:
 
 def resolve_slot(rows: list[dict[str, str]], sources: str, slot: str,
                  expect_count: str, expect_digest: str,
-                 owners: dict[tuple[str, str], str] | None = None) -> int:
+                 owners: dict[tuple[str, str], str] | None = None,
+                 public_repos: frozenset[str] | None = None) -> int:
     """ONE verify job's row of the roster, re-derived inside that job and held to the preflight's.
 
     Writes INSTANCE_NAME / BASE_URL / SOURCES to `$GITHUB_ENV` — within one job, where a masked
@@ -427,7 +485,8 @@ def resolve_slot(rows: list[dict[str, str]], sources: str, slot: str,
     if index >= len(rows):
         return refuse(f"the roster has {len(rows)} row(s); there is no slot {index}.")
     row = rows[index]
-    private = is_private_row(row, (owners or {}).get((row["name"], row["baseUrl"]), ""))
+    private = is_private_row(row, (owners or {}).get((row["name"], row["baseUrl"]), ""),
+                             public_repos)
     if private:
         # No name, no host: the masks would cover them, but a private row's line says nothing a
         # reader of a public log needs beyond its slot.
@@ -448,17 +507,18 @@ def resolve_slot(rows: list[dict[str, str]], sources: str, slot: str,
 
 
 def report(rows, excluded, blockers, repos: list[str], sources: str,
-           private_names: frozenset[str] = frozenset()) -> int:
+           private_names: frozenset[str] = frozenset(), redact=lambda text: text) -> int:
     """Print the derivation. `private_names` are roster rows the private roster names: they are
     COUNTED here and never named — not in the log and not in the step summary, neither of which a
     public repository keeps private."""
+    # `redact` removes private identifiers from the lines built out of them (see `redactor`).
     for identifier, state, reason in excluded:
-        print(f"excluded  {identifier}: declared {state} — {reason[:160]}")
+        print(redact(f"excluded  {identifier}: declared {state} — {reason[:160]}"))
     if blockers:
         print("::error::the combo-verification roster and sources could not be derived:")
         for blocker in blockers:
-            print(f"  • {blocker}")
-        print(f"  Scanned {len(repos)} repository(ies): {', '.join(repos)}")
+            print(redact(f"  • {blocker}"))
+        print(redact(f"  Scanned {len(repos)} repository(ies): {', '.join(repos)}"))
         return 1
     for index, row in enumerate(rows):
         if row["name"] in private_names:
@@ -719,14 +779,19 @@ def self_test() -> int:
     # "derived something else".
     digest = roster_digest(rows, derived_sources)
 
+    # The committed roster's repositories, as the fixtures spell them. Only these can be public.
+    public = frozenset({"systemorph/memex"})
+
     def slot_run(slot, count, expected, slot_rows=rows, slot_sources=derived_sources,
                  owners=None):
+        if owners is None:      # the ordinary fleet: every row declared by the committed repository
+            owners = {(row["name"], row["baseUrl"]): "Systemorph/Memex" for row in slot_rows}
         with tempfile.TemporaryDirectory() as tmp:
             env_file = Path(tmp) / "env"
             env_file.touch()
             os.environ["GITHUB_ENV"] = str(env_file)
             try:
-                code = resolve_slot(slot_rows, slot_sources, slot, count, expected, owners)
+                code = resolve_slot(slot_rows, slot_sources, slot, count, expected, owners, public)
             finally:
                 del os.environ["GITHUB_ENV"]
             return code, env_file.read_text(encoding="utf-8")
@@ -769,7 +834,7 @@ def self_test() -> int:
                   {"name": "x9", "baseUrl": "https://portal.short.example"}]
     os.environ[lock.PRIVATE_ROSTER_ENV] = '{"instances":[{"id":"x9"}]}'
     try:
-        short_private = [is_private_row(row, "Systemorph/Memex") for row in short_rows]
+        short_private = [is_private_row(row, "Systemorph/Memex", public) for row in short_rows]
         mask_set = lock.private_roster_values()
     finally:
         del os.environ[lock.PRIVATE_ROSTER_ENV]
@@ -791,10 +856,12 @@ def self_test() -> int:
     collision_owners = row_owners(collided)
     os.environ[lock.PRIVATE_ROSTER_ENV] = '{"repositories":{"Systemorph/Umbrella.Memex":{}}}'
     try:
-        verdicts = [is_private_row(row, collision_owners.get((row["name"], row["baseUrl"]), ""))
+        verdicts = [is_private_row(row, collision_owners.get((row["name"], row["baseUrl"]), ""),
+                                   public)
                     for row in collision_rows]
         naive = {instance.id: instance.gh_repo for instance in collided}
-        naive_verdicts = [is_private_row(row, naive.get(row["name"], "")) for row in collision_rows]
+        naive_verdicts = [is_private_row(row, naive.get(row["name"], ""), public)
+                          for row in collision_rows]
     finally:
         del os.environ[lock.PRIVATE_ROSTER_ENV]
     check(not collision_blockers and not derive_blockers
@@ -804,10 +871,66 @@ def self_test() -> int:
     check(naive_verdicts == [False],
           "…and the control: the name-keyed lookup this replaced classifies that same row PUBLIC")
 
-    # 🚨 A row private ONLY through its repository: its name and host are in no secret, so nothing
-    # masks them — the preflight's report must not print them, in the log or the summary.
+    # 🚨 THE SECRET IS MISSING. With no private roster at all, a client repository's row must
+    # still be private: public is what has to be shown (a COMMITTED repository), never private.
+    os.environ.pop(lock.PRIVATE_ROSTER_ENV, None)
+    client_row = {"name": "globex-test", "baseUrl": "https://portal.globex.example"}
+    check(is_private_row(client_row, "Systemorph/Umbrella.Memex", public)
+          and is_private_row(client_row, "", public)
+          and is_private_row(rows[0], "Systemorph/Memex", None)
+          and not is_private_row(rows[0], "Systemorph/Memex", public),
+          "with NO private roster: a row from an uncommitted repository, from an unknown one, or "
+          "with no committed table at all is PRIVATE; only a committed repository's row is public")
+    code, env_text = slot_run("0", "2", digest, owners={})
+    check(code == 0 and "INSTANCE_PRIVATE=true\n" in env_text,
+          "a slot whose declaring repository is unknown resolves PRIVATE")
+    with tempfile.TemporaryDirectory() as tmp:
+        folder = Path(tmp) / ".github" / "acr-retention"
+        folder.mkdir(parents=True)
+        (folder / lock.ROSTER_PATH).write_text(
+            '{"repositories": {"Systemorph/Memex": {}}, "instances": []}', encoding="utf-8")
+        os.environ[lock.PRIVATE_ROSTER_ENV] = '{"repositories":{"Systemorph/Umbrella.Memex":{}}}'
+        try:
+            committed = committed_repositories(tmp)
+        finally:
+            del os.environ[lock.PRIVATE_ROSTER_ENV]
+        check(committed == public and committed_repositories(str(Path(tmp) / "absent")) == frozenset(),
+              "the public set is the COMMITTED file's repositories only — never the private "
+              "roster's — and an unreadable file yields none")
+
+    # 🚨 A SHORT private id in a BLOCKER and in an EXCLUDED line. No mask can cover two characters,
+    # and both lines are built from the id, host and repository verbatim.
+    short_scans = [
+        _scan("Systemorph/Memex", [
+            ("memex", "memex.systemorph.com", "deployments/aks/memex/values.memex.public.yaml")]),
+        _scan("Systemorph/Umbrella.Memex", [
+            ("x9", None, "deployments/aks/x9/values.x9.yaml"),
+            ("q7", "q7.globex.example", "deployments/aks/q7/values.q7.yaml")]),
+    ]
+    short_roster = {"Systemorph/Umbrella.Memex:q7": ("retired", "q7 was moved", "Systemorph/Umbrella.Memex")}
+    short_instances = lock.build_instances(short_scans, short_roster, probe=_no_probe)[0]
+    short_derived, short_excluded, short_blockers = derive(short_scans, short_roster)
+    scanned = ["Systemorph/Memex", "Systemorph/Umbrella.Memex"]
     import contextlib
     import io
+    shown = {}
+    for label, redact in (("redacted", redactor(short_instances, scanned, public)),
+                          ("raw", lambda text: text)):
+        printed = io.StringIO()
+        with contextlib.redirect_stdout(printed):
+            code = report(short_derived, short_excluded, short_blockers, scanned, "", redact=redact)
+        shown[label] = printed.getvalue()
+    leaks = [needle for needle in ("x9", "q7", "globex", "Umbrella")
+             if re.search(r"(?<![A-Za-z0-9])" + needle, shown["redacted"])]
+    check(code == 1 and short_excluded and short_blockers and not leaks
+          and "<private>" in shown["redacted"] and "Systemorph/Memex" in shown["redacted"],
+          "a blocker and an excluded line about a private installation with a TWO-character id "
+          "print neither its id, its host nor its repository; the public repository is still named")
+    check(all(needle in shown["raw"] for needle in ("x9", "q7", "Umbrella")),
+          "…and the control: the same report without the redactor prints all of them")
+
+    # 🚨 A row private ONLY through its repository: its name and host are in no secret, so nothing
+    # masks them — the preflight's report must not print them, in the log or the summary.
     with tempfile.TemporaryDirectory() as tmp:
         summary_file = Path(tmp) / "summary"
         os.environ["GITHUB_STEP_SUMMARY"] = str(summary_file)
@@ -828,7 +951,7 @@ def self_test() -> int:
     printed = io.StringIO()
     try:
         with contextlib.redirect_stdout(printed):
-            masked_count = mask_private_instances(collided)
+            masked_count = mask_private_instances(collided, public)
     finally:
         del os.environ["GITHUB_ACTIONS"]
         del os.environ[lock.PRIVATE_ROSTER_ENV]
@@ -943,26 +1066,29 @@ def main() -> int:
             print(f"  • {problem}")
         return 1
 
+    public_repos = committed_repositories(args.root or ".")
     print(f"deriving the combo-verification roster from {len(repos)} repository(ies): "
-          + ", ".join(repos))
+          + ", ".join(repo if repo.lower() in public_repos else "<private>" for repo in repos))
     roster, roster_problems = lock.read_instance_roster(args.root or ".")
     scans = read_scans(repos, args.root)
     # 🚨 PRIVACY BEFORE ANY LINE ABOUT AN INSTALLATION. Which rows are private is decided here, and
     # every derived identifier of a private installation is masked here — before `derive` builds a
     # blocker naming one, and before `report` or `resolve_slot` prints anything.
     instances = lock.build_instances(scans, roster, probe=_no_probe)[0]
-    mask_private_instances(instances)
+    mask_private_instances(instances, public_repos)
     owners = row_owners(instances)
+    redact = redactor(instances, repos, public_repos)
     rows, excluded, blockers = derive(scans, roster)
     sources, source_blockers = derive_sources(scans)
     all_blockers = roster_problems + blockers + source_blockers
     if args.slot is not None and not all_blockers:
-        return resolve_slot(rows, sources, args.slot, args.expect_count, args.expect_digest, owners)
+        return resolve_slot(rows, sources, args.slot, args.expect_count, args.expect_digest,
+                            owners, public_repos)
     private_names = frozenset(
         row["name"] for row in rows
-        if is_private_row(row, owners.get((row["name"], row["baseUrl"]), "")))
+        if is_private_row(row, owners.get((row["name"], row["baseUrl"]), ""), public_repos))
     # With --slot AND blockers this falls through on purpose: report() prints them and exits 1.
-    return report(rows, excluded, all_blockers, repos, sources, private_names)
+    return report(rows, excluded, all_blockers, repos, sources, private_names, redact)
 
 
 if __name__ == "__main__":

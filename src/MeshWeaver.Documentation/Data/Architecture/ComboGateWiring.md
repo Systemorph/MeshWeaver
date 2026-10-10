@@ -417,9 +417,14 @@ masked. For the same reason the per-instance job is named by its slot
 it. Naming by slot hides the *name* only — what the files contain is the next paragraph's subject.
 Which installation a public slot is can be read in that job's own log.
 
-**A private row's module list never leaves the run.** The slot step also says whether its row is one
-the private roster names — by instance id, by host, or by the repository that declares it, the same
-identifiers the log masks are built from — and writes that as `INSTANCE_PRIVATE`. For such a row the
+**A private row's module list never leaves the run.** The slot step also says whether its row is
+private and writes that as `INSTANCE_PRIVATE`. *Public* is the thing that has to be shown: a row is
+public only when the repository declaring it is in the committed
+`.github/acr-retention/instances.json`, and the private roster does not name that installation by
+id or host. Everything else is private — including every client row when the private-roster secret
+is missing, so a lost secret cannot turn a client's rows public. The preflight counts a private row
+without naming it, masks its derived host and id, and removes private identifiers from blocker and
+exclusion lines, where an id too short to be a log mask would otherwise be printed. For such a row the
 lander prints the verdict and counts only: no name, no host, no response body, no module id, and the
 verifier's own output goes to a file that is never uploaded. The failed-verification artifact
 (`combo.json`, an installation's module list) is uploaded only when `INSTANCE_PRIVATE` is literally
