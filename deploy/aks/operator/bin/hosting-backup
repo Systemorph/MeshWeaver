@@ -88,6 +88,8 @@ hosting::say size "$size"
 hosting::say sha256 "$sha"
 hosting::log "archive ${size} bytes, sha256 ${sha}"
 
+# The dump can run for many minutes; the session's assertion cannot (see hosting::az_refresh).
+hosting::az_refresh "between the dump and the upload"
 hosting::log "uploading to ${store_uri}"
 if ! az storage blob upload --blob-url "$store_uri" --file "$archive" \
       --auth-mode login --overwrite false --output none; then

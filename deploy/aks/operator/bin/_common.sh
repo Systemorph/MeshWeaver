@@ -194,6 +194,82 @@ hosting::pg_password() {
   hosting::log "Postgres admin password read from vault ${vault} object ${object} (value never shown)"
 }
 
+# ── Azure sign-in from a FRESH federated assertion ──────────────────────────────────────────────
+# az signs in with a client ASSERTION (a federated token) and, for every new resource it later
+# needs a token for (Key Vault, Storage, ARM), presents that SAME assertion to Entra again. The
+# assertion is short-lived — a GitHub Actions OIDC token is valid for 5 minutes — so one sign-in at
+# the start of a run cannot carry a step that does long work and then calls az: measured on
+# Ops/Actions/backup-memex-cloud-memex132-i (Memex run 38025769128), pg_dump took 16.6 minutes and
+# the upload that followed failed with "AADSTS700024: Client assertion is not within its valid time
+# range … expiry time of assertion 2026-10-10T05:02:10Z". The workload-identity Job has the same
+# shape: the kubelet refreshes the projected token FILE, but az only ever read it once.
+#
+# So the session is re-established from a fresh assertion before any az call that follows long
+# work: run.sh before every step, and a step script between its long work and its next az call.
+# Where the fresh assertion comes from:
+#   • the GitHub Actions lane — a NEW OIDC token from ACTIONS_ID_TOKEN_REQUEST_URL/_TOKEN (the
+#     runner exports both to every process of a job granted `id-token: write`), audience
+#     api://AzureADTokenExchange; the token file is rewritten so anything else reading it is current;
+#   • the workload-identity Job — the projected AZURE_FEDERATED_TOKEN_FILE, re-read (the kubelet
+#     keeps it fresh).
+# The assertion goes from that source straight into az's argument; it is never printed, logged or
+# passed through hosting::do (which narrates argv).
+
+# Print a fresh federated assertion on stdout. Non-zero, with HOSTING_AZ_ERR set, when none can be had.
+hosting::az_assertion() {
+  local resp tok
+  HOSTING_AZ_ERR=""
+  if [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] && [ -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]; then
+    if ! resp="$(curl -fsS --max-time 30 -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+                   "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${HOSTING_OIDC_AUDIENCE:-api://AzureADTokenExchange}" 2>&1)"; then
+      HOSTING_AZ_ERR="the GitHub OIDC token endpoint did not answer: ${resp}"; return 1
+    fi
+    tok="$(printf '%s' "$resp" | sed -n 's/.*"value"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+    [ -n "$tok" ] || { HOSTING_AZ_ERR="the GitHub OIDC token endpoint answered without a token value"; return 1; }
+    if [ -n "${AZURE_FEDERATED_TOKEN_FILE:-}" ]; then
+      ( umask 077; printf '%s' "$tok" > "$AZURE_FEDERATED_TOKEN_FILE" ) \
+        || { HOSTING_AZ_ERR="could not rewrite ${AZURE_FEDERATED_TOKEN_FILE} with the fresh token"; return 1; }
+    fi
+    printf '%s' "$tok"
+    return 0
+  fi
+  if [ -n "${AZURE_FEDERATED_TOKEN_FILE:-}" ]; then
+    [ -r "$AZURE_FEDERATED_TOKEN_FILE" ] \
+      || { HOSTING_AZ_ERR="AZURE_FEDERATED_TOKEN_FILE=${AZURE_FEDERATED_TOKEN_FILE} is not readable"; return 1; }
+    tok="$(cat "$AZURE_FEDERATED_TOKEN_FILE")"
+    [ -n "$tok" ] || { HOSTING_AZ_ERR="AZURE_FEDERATED_TOKEN_FILE=${AZURE_FEDERATED_TOKEN_FILE} is empty"; return 1; }
+    printf '%s' "$tok"
+    return 0
+  fi
+  HOSTING_AZ_ERR="no federated token source: neither ACTIONS_ID_TOKEN_REQUEST_URL/_TOKEN (the Actions lane) nor AZURE_FEDERATED_TOKEN_FILE (the workload-identity Job) is set"
+  return 2
+}
+
+# Sign in to Azure as the operator identity from a FRESH assertion. Returns non-zero with
+# HOSTING_AZ_ERR set; the caller decides what that refusal says.
+hosting::az_signin() {
+  local assertion
+  assertion="$(hosting::az_assertion)" || return 1
+  if ! az login --service-principal --username "${AZURE_CLIENT_ID:-}" --tenant "${AZURE_TENANT_ID:-}" \
+         --federated-token "$assertion" --allow-no-subscriptions --output none 2>/tmp/az-login.err; then
+    HOSTING_AZ_ERR="az login as ${AZURE_CLIENT_ID:-?} failed: $(tr -d '\n' < /tmp/az-login.err)"
+    return 1
+  fi
+  return 0
+}
+
+# Re-establish the operator session before an az call that follows long work. A no-op when run.sh
+# opened no federated session (HOSTING_AZ_SESSION unset — a by-hand run uses the caller's own az
+# login); otherwise a refusal names WHY, because an az call on an expired assertion fails later with
+# a message that names neither the session nor the step.
+hosting::az_refresh() {
+  local why="$1"
+  [ "${HOSTING_AZ_SESSION:-}" = "1" ] || return 0
+  hosting::az_signin \
+    || hosting::die "the Azure session could not be refreshed ${why}: ${HOSTING_AZ_ERR}. The assertion az signed in with is short-lived, so this call cannot be made on the old session."
+  hosting::log "azure     session refreshed from a fresh federated token (${why})"
+}
+
 # ── the plugin registry's key-lifecycle surface (MeshWeaver#2802) ───────────────────────────────
 
 # A registry BASE URL: https, a hostname, an optional port — no path, no query, nothing else. It is
