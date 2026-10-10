@@ -797,33 +797,47 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         // process — trading "threw once" for "silently stopped forever", which is worse. The error
         // arm is for the SEQUENCE's own fault, and it only logs, because there is nothing left to
         // keep alive at that point and a silent death is the thing to avoid.
-        idleSweep = Observable.Interval(readStreamSweepInterval)
-            .Subscribe(
-                _ =>
-                {
-                    try
+        // 🚨 A constructor that FAILS part-way owns what it already acquired. The hub registration
+        // below is the last statement, so a throw from any acquisition in this block (a feed whose
+        // Subscribe throws synchronously) would leave the sweep and any earlier feed subscription
+        // holding a cache nobody can reach or dispose. The catch releases them and RETHROWS — the
+        // resolution still fails loudly; it just leaves nothing behind. Pinned by
+        // ACacheWhoseHubWentDownMidConstructionHoldsNothingTest.
+        try
+        {
+            idleSweep = Observable.Interval(readStreamSweepInterval)
+                .Subscribe(
+                    _ =>
                     {
-                        ReleaseIdleReadStreams();
-                    }
-                    catch (Exception ex)
-                    {
-                        logger.LogWarning(ex,
-                            "Idle read-stream sweep threw; skipping this pass. The sweep stays "
-                            + "subscribed — a tick's fault must not end it.");
-                    }
-                },
-                ex => logger.LogWarning(ex,
-                    "Idle read-stream sweep sequence faulted and is no longer running. Read "
-                    + "streams will no longer be evicted on idle in this process."));
+                        try
+                        {
+                            ReleaseIdleReadStreams();
+                        }
+                        catch (Exception ex)
+                        {
+                            logger.LogWarning(ex,
+                                "Idle read-stream sweep threw; skipping this pass. The sweep stays "
+                                + "subscribed — a tick's fault must not end it.");
+                        }
+                    },
+                    ex => logger.LogWarning(ex,
+                        "Idle read-stream sweep sequence faulted and is no longer running. Read "
+                        + "streams will no longer be evicted on idle in this process."));
 
-        // Failure-state reset on the EXISTING invalidation broadcast (see the
-        // changeFeedReset field doc). Optional service: minimal test fixtures
-        // without AddMeshCatalog's feed registration simply have no reset seam.
-        var invalidationFeed = meshHub.ServiceProvider.GetService<IMeshInvalidationFeed>();
-        changeFeedReset = invalidationFeed is not null
-            ? invalidationFeed.Subscribe(OnMeshChange)
-            : meshHub.ServiceProvider.GetService<IMeshChangeFeed>()?.Subscribe(OnMeshChange);
-        changeFeedGapReset = invalidationFeed?.Gaps.Subscribe(OnChangeFeedGap);
+            // Failure-state reset on the EXISTING invalidation broadcast (see the
+            // changeFeedReset field doc). Optional service: minimal test fixtures
+            // without AddMeshCatalog's feed registration simply have no reset seam.
+            var invalidationFeed = meshHub.ServiceProvider.GetService<IMeshInvalidationFeed>();
+            changeFeedReset = invalidationFeed is not null
+                ? invalidationFeed.Subscribe(OnMeshChange)
+                : meshHub.ServiceProvider.GetService<IMeshChangeFeed>()?.Subscribe(OnMeshChange);
+            changeFeedGapReset = invalidationFeed?.Gaps.Subscribe(OnChangeFeedGap);
+        }
+        catch
+        {
+            Dispose();
+            throw;
+        }
 
         // Register full teardown on the cache hub so the cache releases ALL
         // its state at the hub's Shutdown entry (before Quiescing). The cache

@@ -79,8 +79,15 @@ public class ACacheWhoseHubWentDownMidConstructionHoldsNothingTest(ITestOutputHe
             return Counted(inner.Subscribe(handler, filter));
         }
 
-        public IObservable<ChangeFeedGap> Gaps => Observable.Create<ChangeFeedGap>(observer =>
-            Counted(inner.Gaps.Subscribe(observer)));
+        private int gapsThrow;
+
+        /// <summary>Makes the next read of <see cref="Gaps"/> throw synchronously — an acquisition
+        /// that fails AFTER the cache already holds its change handler on this feed.</summary>
+        public void ArmGapsThrow() => Volatile.Write(ref gapsThrow, 1);
+
+        public IObservable<ChangeFeedGap> Gaps => Interlocked.Exchange(ref gapsThrow, 0) == 1
+            ? throw new InvalidOperationException("injected: the gap stream cannot be acquired")
+            : Observable.Create<ChangeFeedGap>(observer => Counted(inner.Gaps.Subscribe(observer)));
 
         private IDisposable Counted(IDisposable subscription)
         {
@@ -144,6 +151,26 @@ public class ACacheWhoseHubWentDownMidConstructionHoldsNothingTest(ITestOutputHe
             "a cache whose hub went down during its construction must release every change-feed "
             + "subscription — registered before they existed, its Dispose() ran too early and both "
             + "were created on a dead cache, held by the process-wide feed forever");
+    }
+
+    /// <summary>
+    /// 🚨 A constructor that FAILS part-way releases what it already acquired (review of
+    /// MeshWeaver#6437). The gap-stream acquisition throws after the change handler is already
+    /// subscribed; the construction must still fail loudly, and the handler must not be left on
+    /// the process-wide feed holding a cache nobody can reach.
+    /// </summary>
+    [Fact]
+    public void ACacheWhoseConstructionThrows_ReleasesWhatItAlreadyAcquired()
+    {
+        var (owner, feed) = CreateOwner();
+        feed.ArmGapsThrow();
+
+        Action construct = () => Construct(owner);
+
+        construct.Should().Throw<InvalidOperationException>(
+            "a failed acquisition still fails the construction — the release is not a swallow");
+        feed.LiveCacheSubscriptions.Should().Be(0,
+            "the change handler subscribed before the throw must be released with the failed cache");
     }
 
     /// <summary>
