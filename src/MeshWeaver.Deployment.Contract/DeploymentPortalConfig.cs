@@ -16,6 +16,13 @@ namespace MeshWeaver.Deployment;
 /// </summary>
 public static class DeploymentPortalConfig
 {
+    /// <summary>
+    /// The portal key the record's <c>operator.maintainerSignsAlone</c> renders. Reserved for the typed
+    /// field: an <c>ExtraPortalConfig</c> entry naming it, in any case, is never passed through, so the
+    /// flag cannot be switched on behind a record that says false (policy <c>sole-maintainer-approval</c>).
+    /// </summary>
+    public const string MaintainerSignsAloneKey = "Hosting__Operator__MaintainerSignsAlone";
+
     /// <summary>The configuration key prefix the portal reads its catalog wiring from.</summary>
     public const string CatalogSection = "PluginCatalog";
 
@@ -871,11 +878,15 @@ public static class DeploymentPortalConfig
             Set("Hosting__Operator__Maintainer", string.IsNullOrWhiteSpace(operatorSpec.Maintainer) ? null : operatorSpec.Maintainer.Trim());
             // Policy sole-maintainer-approval: rendered only when true, so an absent key keeps every
             // signature count as it is. The portal reads it only beside a declared maintainer.
-            Set("Hosting__Operator__MaintainerSignsAlone", operatorSpec.MaintainerSignsAlone ? "true" : null);
+            Set(MaintainerSignsAloneKey, operatorSpec.MaintainerSignsAlone ? "true" : null);
         }
 
         foreach (var (key, value) in d.ExtraPortalConfig)
-            if (!c.Keys.Contains(key, StringComparer.OrdinalIgnoreCase))
+            // 🚨 The sole-signer flag is RESERVED for the typed field, rendered or not: an extra must
+            // never re-enable it (in any case) on a record whose operator.maintainerSignsAlone is false —
+            // on the Aspire route there is no other guard (policy sole-maintainer-approval).
+            if (!c.Keys.Contains(key, StringComparer.OrdinalIgnoreCase)
+                && !string.Equals(key, MaintainerSignsAloneKey, StringComparison.OrdinalIgnoreCase))
                 c[key] = value ?? "";
 
         return c;

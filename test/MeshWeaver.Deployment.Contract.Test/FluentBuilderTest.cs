@@ -240,6 +240,18 @@ public class FluentBuilderTest
         Assert.False(DeploymentPortalConfig.PortalConfig(plain, PortalConfigOptions.Helm).ContainsKey("Hosting__Operator__MaintainerSignsAlone"));
         var off = alone with { Operator = alone.Operator with { MaintainerSignsAlone = false } };
         Assert.False(DeploymentPortalConfig.PortalConfig(off, PortalConfigOptions.Helm).ContainsKey("Hosting__Operator__MaintainerSignsAlone"));
+
+        // The key is RESERVED for the typed field: an extra naming it, in any case, never re-enables it
+        // behind a record that says false — on either renderer.
+        var shadowed = off with
+        {
+            ExtraPortalConfig = off.ExtraPortalConfig
+                .SetItem("Hosting__Operator__MaintainerSignsAlone", "true")
+                .SetItem("HOSTING__OPERATOR__MAINTAINERSIGNSALONE", "true"),
+        };
+        foreach (var options in new[] { PortalConfigOptions.Helm, PortalConfigOptions.Aspire("http://localhost:8080") })
+            Assert.DoesNotContain(DeploymentPortalConfig.PortalConfig(shadowed, options).Keys,
+                k => string.Equals(k, "Hosting__Operator__MaintainerSignsAlone", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
