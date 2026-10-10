@@ -839,6 +839,19 @@ public static class MeshExtensions
             new LifecycleVerdictStalledException(operation, subject, Describe(), budget)));
     }
 
+    /// <summary>
+    /// What the post-creation leg of ONE create is doing right now — written by the leg as it
+    /// enters each step, read by the verdict deadline on whatever thread the timer fires on.
+    /// </summary>
+    private sealed class PostCreationStage
+    {
+        private string current = "not started";
+
+        public string Current => System.Threading.Volatile.Read(ref current);
+
+        public void Enter(string detail) => System.Threading.Volatile.Write(ref current, detail);
+    }
+
     // Observable.Timer's scheduled work likewise retains its observer after Dispose. Clear the
     // callbacks when post-creation work ends, so a cancelled deadline cannot retain its hub.
     private sealed class CreateDeadlineSignal(Action onDeadline, Action<Exception> onError)
@@ -1525,22 +1538,45 @@ public static class MeshExtensions
                     // finished, the outcome is unknown" — claimed through the same once-only gate,
                     // so a handler that completes (or fails and compensates) later is not answered
                     // twice. The handler chain itself runs on untouched.
+                    //
+                    // 🚨 And the verdict NAMES what the leg was waiting on (#6391), as the
+                    // validators stage does. "Its post-creation handlers had not finished" named
+                    // every registered handler at once — and was said of creates no handler
+                    // applies to (`Admin/_Notification/…`, a boot `_Activity`). For such a node the
+                    // leg does only two things: it RESOLVES the handlers and asks each one's
+                    // Matches, and for a handler a module registered both go through a forwarding
+                    // proxy into that module's own container. So the stage is refined to
+                    // `resolving`, `matching <handler> (i/n)`, `<handler> (i/n)` and
+                    // `<handler> (i/n): additional nodes`, set as the leg enters each.
+                    var postCreationStage = new PostCreationStage();
+                    void EnterPostCreationStage(string detail)
+                    {
+                        postCreationStage.Enter(detail);
+                        hub.NoteRequestStage(request.Id, $"CREATE_STAGE {CreateStagePostCreationHandlers}: {detail}");
+                    }
                     var postCreationSignal = new CreateDeadlineSignal(() =>
                     {
-                        if (System.Threading.Volatile.Read(ref responded) != 0)
+                        // 🚨 CLAIMED FIRST, then said. This used to READ the gate, write the Error
+                        // line and only then claim through Respond — so a handler chain finishing
+                        // in between answered `Ok` under a line that says 'outcome unknown'. The
+                        // line is the instrument this failure is read through, so it is written
+                        // only for a verdict that IS the create's answer.
+                        if (!TryClaimResponse())
                             return;
+                        var waitingAt = $"{CreateStagePostCreationHandlers}: {postCreationStage.Current}";
                         hub.NoteRequestStage(request.Id, $"CREATE_STAGE {CreateStagePostCreationHandlers} deadline");
                         logger.LogError(
-                            "[CreateNode] {Path} was written, but its post-creation handlers had not finished within {Budget}s — answering 'outcome unknown'",
-                            resultNode.Path, createBudget.TotalSeconds);
+                            "[CreateNode] {Path} was written, but its post-creation handlers had not finished within {Budget}s (waiting at {Stage}) — answering 'outcome unknown'",
+                            resultNode.Path, createBudget.TotalSeconds, waitingAt);
                         var seconds = createBudget.TotalSeconds.ToString("0", System.Globalization.CultureInfo.InvariantCulture);
-                        Respond(CreateNodeResponse.FailWith(
+                        PostCreateVerdict(hub, request, CreateNodeResponse.FailWith(
                             LocalizableText.Keyed(
-                                $"'{resultNode.Path}' was written, but a post-creation step had not finished within {seconds}s; "
+                                $"'{resultNode.Path}' was written, but a post-creation step had not finished within {seconds}s "
+                                + $"(it was waiting at '{waitingAt}'); "
                                 + "the outcome is unknown — read the node before retrying.",
                                 CreatePostCreationOutcomeUnknownKey,
-                                ("path", resultNode.Path), ("seconds", seconds)),
-                            NodeCreationRejectionReason.Unavailable));
+                                ("path", resultNode.Path), ("seconds", seconds), ("stage", waitingAt)),
+                            NodeCreationRejectionReason.Unavailable), parentHub, logger);
                     },
                     // A ONE-SHOT, so it takes the error arm (SubscribeErrorArmRatchetGuard): a faulting
                     // timer source is logged here rather than left with nowhere to go.
@@ -1549,7 +1585,7 @@ public static class MeshExtensions
                         resultNode.Path));
                     var postCreationDeadline = Observable.Timer(deadline).Subscribe(
                         postCreationSignal.Fire, postCreationSignal.Fail);
-                    RunPostCreationHandlersObs(hub, resultNode, capturedRequest.CreatedBy, logger)
+                    RunPostCreationHandlersObs(hub, resultNode, capturedRequest.CreatedBy, logger, EnterPostCreationStage)
                         .Finally(() =>
                         {
                             postCreationSignal.Cancel();
@@ -1603,6 +1639,25 @@ public static class MeshExtensions
                 },
                 ex =>
                 {
+                    // 🚨 THE CHAIN'S DEADLINE IS NOT A VERDICT ONCE THE NODE WAS EMITTED (#6391).
+                    // The post-creation leg runs INSIDE this chain's OnNext, and Take(1) completes
+                    // the chain only when that OnNext returns. A leg that is still on the stack
+                    // when the deadline passes — a handler resolution that parks the thread — is
+                    // therefore answered by the post-creation verdict above, and when it finally
+                    // returns, Rx's Timeout (which holds its expiry back while an OnNext is in
+                    // flight) delivers the stalled fallback HERE. It used to be logged as
+                    // "reached no verdict — stalled at stage write": a second Error line, for a
+                    // create that was written and already answered, naming a stage that had
+                    // finished. Nothing is owed here: the row is written and the answer was given.
+                    if (ex is LifecycleVerdictStalledException && System.Threading.Volatile.Read(ref emitted))
+                    {
+                        hub.NoteRequestStage(request.Id, "CREATE_CHAIN_DEADLINE_AFTER_EMIT");
+                        logger.LogDebug(
+                            "[CreateNode] {Path}: the chain's deadline expired while the post-creation leg "
+                            + "was still running inside its emission; that leg owns the verdict.",
+                            node.Path);
+                        return;
+                    }
                     hub.NoteRequestStage(request.Id, $"CREATE_CHAIN_ERROR {ex.GetType().Name}");
                     if (ex is LifecycleVerdictStalledException stalled)
                     {
@@ -6541,12 +6596,12 @@ public static class MeshExtensions
         return validators
             .Select((v, i) => Observable.Defer(() =>
                 {
-                    onStage?.Invoke($"{v.GetType().Name} ({i + 1}/{validators.Count})");
+                    onStage?.Invoke($"{ModuleServiceProxy.Label(v)} ({i + 1}/{validators.Count})");
                     return v.Validate(context);
                 })
                 .Take(1)
-                .Select(result => (Result: (NodeValidationResult?)result, Validator: v.GetType().Name))
-                .DefaultIfEmpty((Result: null, Validator: v.GetType().Name)))
+                .Select(result => (Result: (NodeValidationResult?)result, Validator: ModuleServiceProxy.Label(v)))
+                .DefaultIfEmpty((Result: null, Validator: ModuleServiceProxy.Label(v))))
             .Concat()
             .Where(verdict => verdict.Result is not { IsValid: true })
             .Select(verdict =>
@@ -6718,21 +6773,26 @@ public static class MeshExtensions
         IMessageHub hub,
         MeshNode node,
         string? createdBy,
-        ILogger logger)
+        ILogger logger,
+        Action<string>? onStage = null)
         // 🚨 DEFERRED: the builder resolves the handling hub's services, and its callers run it from
         // inside Subscribe callbacks that may fire after that hub is disposed — an eager
         // ObjectDisposedException would leave the callback instead of reaching its error arm.
-        => Observable.Defer(() => BuildPostCreationHandlers(hub, node, createdBy, logger));
+        => Observable.Defer(() => BuildPostCreationHandlers(hub, node, createdBy, logger, onStage));
 
     private static IObservable<System.Reactive.Unit> BuildPostCreationHandlers(
         IMessageHub hub,
         MeshNode node,
         string? createdBy,
-        ILogger logger)
+        ILogger logger,
+        Action<string>? onStage)
     {
         if (string.IsNullOrEmpty(node.NodeType))
             return Observable.Empty<System.Reactive.Unit>();
 
+        // Named BEFORE anything is resolved (#6391): resolving is DI construction of every handler
+        // registration, and one that blocks would otherwise read as a silent handler.
+        onStage?.Invoke("resolving");
         var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
         // 🚨 The announcement channel for the additional nodes below (#2087). A bulk/raw storage
         // write that skips it lands a node that EXISTS in Postgres and does not exist to the
@@ -6741,8 +6801,20 @@ public static class MeshExtensions
         // Matching is the HANDLER's decision (INodePostCreationHandler.Matches), as it is on the
         // deletion side: the default IS the NodeType compare, and a structural handler (a
         // partition-owning type declared in mesh content) answers from the node's shape.
-        var handlers = hub.ServiceProvider.GetServices<INodePostCreationHandler>()
-            .Where(h => h.Matches(node))
+        //
+        // 🚨 Each handler is NAMED before it is asked (#6391). A handler a MODULE registered is a
+        // forwarding proxy here (ModuleServiceProxy), and every call on it — Matches included —
+        // first resolves the module's instance from the module's OWN container. So asking a
+        // handler whether it applies can wait on a container that has nothing to do with this
+        // node, and that happens for EVERY create in the mesh, whatever its type. The label is
+        // taken without resolving anything, so the stalled verdict can still say which one.
+        var registered = hub.ServiceProvider.GetServices<INodePostCreationHandler>().ToList();
+        var handlers = registered
+            .Where((h, i) =>
+            {
+                onStage?.Invoke($"matching {ModuleServiceProxy.Label(h)} ({i + 1}/{registered.Count})");
+                return h.Matches(node);
+            })
             .ToList();
 
         if (handlers.Count == 0)
@@ -6755,19 +6827,23 @@ public static class MeshExtensions
         // Subscribe turns that into a CreateNodeResponse.Fail. Best-effort handlers (onboarding
         // seeds) keep log-and-continue. NEVER blanket-swallow a critical grant into a silent Ok —
         // that shipped ownerless, un-navigable Spaces (AGENTS.md: no .Catch(Observable.Empty)).
+        // Concat ENUMERATES this one handler at a time — the next lambda runs only when the previous
+        // handler's sequence completed — so the stage set at its top is the handler being waited on.
         return handlers
-            .Select(handler =>
+            .Select((handler, position) =>
             {
+                var handlerStage = $"{ModuleServiceProxy.Label(handler)} ({position + 1}/{handlers.Count})";
+                onStage?.Invoke(handlerStage);
                 var rawHandle = handler.Handle(node, createdBy);
                 var handleObs = handler.FailsCreateOnError
                     ? rawHandle.Do(_ => { }, ex => logger.LogError(ex,
                         "Critical post-creation handler {Handler} failed for node {Path} — failing the create",
-                        handler.GetType().Name, node.Path))
+                        ModuleServiceProxy.Label(handler), node.Path))
                     : rawHandle.Catch<System.Reactive.Unit, Exception>(ex =>
                     {
                         logger.LogWarning(ex,
                             "Post-creation handler {Handler} failed for node {Path}",
-                            handler.GetType().Name, node.Path);
+                            ModuleServiceProxy.Label(handler), node.Path);
                         return Observable.Return(System.Reactive.Unit.Default);
                     });
 
@@ -6780,7 +6856,7 @@ public static class MeshExtensions
                 {
                     logger.LogWarning(ex,
                         "Post-creation handler {Handler}.GetAdditionalNodes threw for node {Path}",
-                        handler.GetType().Name, node.Path);
+                        ModuleServiceProxy.Label(handler), node.Path);
                     additional = Array.Empty<MeshNode>();
                 }
 
@@ -6853,13 +6929,17 @@ public static class MeshExtensions
                         {
                             logger.LogWarning(ex,
                                 "Failed to persist post-creation additional node from {Handler} for {Path}",
-                                handler.GetType().Name, node.Path);
+                                ModuleServiceProxy.Label(handler), node.Path);
                             return Observable.Empty<MeshNode>();
                         })
                         .Select(_ => System.Reactive.Unit.Default))
                     .Concat();
 
-                return handleObs.Concat(saveExtras);
+                return handleObs.Concat(Observable.Defer(() =>
+                {
+                    onStage?.Invoke($"{handlerStage}: additional nodes");
+                    return saveExtras;
+                }));
             })
             .Concat();
     }

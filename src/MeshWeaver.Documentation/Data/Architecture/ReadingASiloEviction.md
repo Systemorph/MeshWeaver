@@ -162,7 +162,13 @@ Response did not arrive on time in '00:00:30' for message: 'Request
 The first minute then reads the same way every time. `GetMeshNode('Agent/_Activity/import-manifest')
 timed out … NO LOCAL HUB … it never activated here`, the platform-startup `CreateNode` reports
 "post-creation handlers had not finished within 30s", and the static-repo import fails partition
-by partition. Measured: 3 of 3 evicted pods carried it. None of the healthy new pods in the same
+by partition. The doomed process also never logs `Application started`: on the pod read in full
+(2026-10-10 18:10Z), the last hosted service to log its start did so 5 ms before that `CreateNode`
+was written, and the process that replaced it logged `Application started` 40 ms after the same
+point. From the image that carries MeshWeaver#6391's refinement on, that `CreateNode` line also
+says what the leg was waiting at (`post-creation-handlers: resolving`, or `… matching <handler>
+[module <name>, registration <i>]`), which names the module container the create could not get an
+answer from ([Write Verdict Totality](../WriteVerdictTotality)). Measured: 3 of 3 evicted pods carried it. None of the healthy new pods in the same
 rolls did; they created their import manifest within 3 s. The query is
 `did not arrive on time.*_Activity/import-` over the roll window.
 
