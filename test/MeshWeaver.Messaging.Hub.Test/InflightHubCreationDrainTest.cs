@@ -100,7 +100,8 @@ public class InflightHubCreationDrainTest(ITestOutputHelper output) : HubTestBas
     ///
     /// <para><b>Negative control.</b> With the in-flight leg disposing every late hub at once,
     /// the late dependency reads <c>IsDisposing</c> while its sibling is still held, and this case
-    /// goes red.</para>
+    /// goes red. Without <c>InheritCreationFreeze</c> the late dependency reads
+    /// <c>IsShuttingDown == false</c> and accepts a new hosted hub, and it goes red there.</para>
     /// </summary>
     [Fact]
     public async Task ALateDependency_IsDisposedOnlyAfterItsSiblings()
@@ -121,7 +122,7 @@ public class InflightHubCreationDrainTest(ITestOutputHelper output) : HubTestBas
             {
                 childEntered.OnNext(Unit.Default);
                 childEntered.OnCompleted();
-                SpinWait.SpinUntil(() => Volatile.Read(ref releaseChild) == 1, TimeSpan.FromSeconds(30));
+                SpinWait.SpinUntil(() => Volatile.Read(ref releaseChild) == 1, TestTimeouts.Convergence);
             }),
             HostedHubCreation.Always));
 
@@ -134,7 +135,7 @@ public class InflightHubCreationDrainTest(ITestOutputHelper output) : HubTestBas
             {
                 dependencyEntered.OnNext(Unit.Default);
                 dependencyEntered.OnCompleted();
-                SpinWait.SpinUntil(() => Volatile.Read(ref releaseDependency) == 1, TimeSpan.FromSeconds(30));
+                SpinWait.SpinUntil(() => Volatile.Read(ref releaseDependency) == 1, TestTimeouts.Convergence);
                 return c.WithTeardownAfterSiblings();
             },
             HostedHubCreation.Always));
@@ -163,6 +164,20 @@ public class InflightHubCreationDrainTest(ITestOutputHelper output) : HubTestBas
             lateDependency!.IsDisposing.Should().BeFalse(
                 "a late hub declared WithTeardownAfterSiblings goes in the second wave, after its "
                 + "sibling, whose teardown is still held by its own in-flight construction");
+
+            // ...but it is part of the owner's shutdown from the moment it registers. It finished
+            // constructing after CloseCreation walked the owner's hubs, so it was not in that
+            // cascade; without inheriting the freeze it would sit through the whole first wave
+            // reading IsShuttingDown == false, its own hosted collection still open, free to start
+            // descendant work after the owner's teardown began.
+            lateDependency.IsShuttingDown.Should().BeTrue(
+                "a hub that finishes construction under a frozen owner inherits the freeze");
+            lateDependency.GetHostedHub(new Address("dependencychild", "1"), c => c, HostedHubCreation.Always)
+                .Should().BeNull("creation beneath a late dependency is refused while it waits for "
+                                 + "the second wave, exactly as beneath every snapshotted hub");
+            lateDependency.IsDisposing.Should().BeFalse(
+                "precondition: the refusal above came from the inherited freeze, not from the "
+                + "dependency's own disposal having begun");
 
             Volatile.Write(ref releaseChild, 1);
             await disposalCompleted.WaitAsync(TimeSpan.FromSeconds(10));

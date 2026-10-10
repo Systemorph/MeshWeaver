@@ -218,12 +218,23 @@ hostedHubsDisposalSubscription = hostedHubs.DisposalCompleted
 
 `HostedHubsCollection` itself is reactive (`DisposeHubsReactive`): it disposes each
 child, then joins their `DisposalCompleted` streams with `Observable.CombineLatest`
-(per-child `Catch` so one wedged child can't stall the join) under a **5 s** `Timeout`,
-and completes its own `ReplaySubject`. It joins one extra leg — an **in-flight-creation
+(per-child `Catch`, so a child whose disposal FAULTS still answers the join), and
+completes its own `ReplaySubject`. It joins one extra leg — an **in-flight-creation
 drain** that waits for `inflightCreations` to reach zero and then disposes whatever a
 late construction produced, so a hub built during the teardown window is never leaked
-outside the snapshot. On completion **or** the cap, the owner advances to ShutDown — a
-hung child never blocks the parent.
+outside the snapshot. **The join carries no deadline of its own** (#1317): it used to
+cap the wait at a flat 5 s `Timeout` and advance the owner on expiry, which tore the
+container down under children still mid-disposal. Every leg answers from its own
+terminal state, so the owner advances to ShutDown only once every leg has answered. A
+child whose teardown genuinely stops moving is NAMED by the owner's disposal stall
+detector (below), and the bound that ENDS a wedged teardown is the caller's — the test
+base's dispose deadline, the host's shutdown budget — which reports the hang instead of
+a completion that is not true.
+
+A hub that finishes construction after its owner's teardown began also inherits the
+owner's creation freeze when it registers: it was absent from the snapshot that
+`CloseCreation` walked, so without that it would be the one hub in the subtree whose
+`IsShuttingDown` reads false and whose own hosted collection still accepts new children.
 
 #### A hub its siblings depend on goes in a second wave (#6078)
 

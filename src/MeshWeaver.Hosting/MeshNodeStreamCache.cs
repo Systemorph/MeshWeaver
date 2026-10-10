@@ -780,17 +780,6 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                     hub.RegisterForDisposal(routingService.RegisterStream(hub))),
             HostedHubCreation.Always)!;
 
-        // Register full teardown on the cache hub so the cache releases ALL
-        // its state at the hub's Shutdown entry (before Quiescing). The cache
-        // hub owns the cache's lifetime; when the silo/mesh goes down it
-        // disposes this hosted cache hub, which cancels every upstream
-        // SubscribeRequest AND every per-path update-queue Concat subscription
-        // the cache opened — so the leak detector sees a clean response-subjects
-        // set at test-class dispose. The cache is ALSO IDisposable so the DI
-        // container disposes it on container teardown; the _disposed guard
-        // makes whichever fires second a no-op.
-        cacheHub.RegisterForDisposal(_ => Dispose());
-
         // 🚨 Idle sweep for the per-path READ cache. Periodic and EVICTION-ONLY: each
         // tick closes entries that have been subscriber-free AND untouched for the
         // full idle window; it NEVER re-subscribes anything (re-opening is always
@@ -835,6 +824,27 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             ? invalidationFeed.Subscribe(OnMeshChange)
             : meshHub.ServiceProvider.GetService<IMeshChangeFeed>()?.Subscribe(OnMeshChange);
         changeFeedGapReset = invalidationFeed?.Gaps.Subscribe(OnChangeFeedGap);
+
+        // Register full teardown on the cache hub so the cache releases ALL
+        // its state at the hub's Shutdown entry (before Quiescing). The cache
+        // hub owns the cache's lifetime; when the silo/mesh goes down it
+        // disposes this hosted cache hub, which cancels every upstream
+        // SubscribeRequest AND every per-path update-queue Concat subscription
+        // the cache opened — so the leak detector sees a clean response-subjects
+        // set at test-class dispose. The cache is ALSO IDisposable so the DI
+        // container disposes it on container teardown; the _disposed guard
+        // makes whichever fires second a no-op.
+        //
+        // 🚨 LAST statement of the constructor, after every resource Dispose() releases exists.
+        // The cache hub can already be going down by the time it is handed back — a first-time
+        // resolution overlapping a teardown makes it a LATE hub, which the owner disposes as soon
+        // as its construction returns (#6078) — and a registrant added to a hub past ShutDown is
+        // disposed on the spot. Registered first, that ran Dispose() while idleSweep and the
+        // change-feed subscriptions were still unassigned; they were created a moment later on a
+        // disposed cache, and nothing ever released them. Registered last, an early Dispose()
+        // finds everything it has to release. Pinned by
+        // ACacheWhoseHubWentDownMidConstructionHoldsNothingTest.
+        cacheHub.RegisterForDisposal(_ => Dispose());
     }
 
     /// <summary>

@@ -216,6 +216,7 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
                 // Track re-arms the removal: on a hub whose disposal has begun, RegisterForDisposal
                 // disposes the registrant immediately, so the corpse comes straight back out.
                 Track(created.Hub);
+                InheritCreationFreeze(created.Hub);
                 try { _hubAdded.OnNext(created.Hub); } catch { /* never throw on notification */ }
             }
             return created;
@@ -649,7 +650,34 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
     public void CloseCreation()
     {
         creationClosed = true;
+        // Full fence, paired with the one in InheritCreationFreeze: the flag is published before
+        // the registry is walked, so a construction that registers concurrently is either seen by
+        // this walk or reads the flag itself — never neither (store→load needs a full barrier;
+        // `volatile` alone does not order a write before a later read).
+        Interlocked.MemoryBarrier();
         foreach (var hub in messageHubs.Values)
+            (hub as MessageHub)?.CloseHostedHubCreation();
+    }
+
+    /// <summary>
+    /// A hub whose construction FINISHED after this collection's creation was frozen joins the
+    /// freeze. <see cref="CloseCreation"/> cascades over the hubs registered when it ran; a
+    /// construction already in flight then (#613's straggler, a first-time cache resolution)
+    /// registers afterwards, and without this it would be the one hub in a shutting-down subtree
+    /// whose <c>IsShuttingDown</c> reads false and whose own hosted collection still accepts new
+    /// children. A late SIBLING is disposed at once by the in-flight leg, so that window was a
+    /// breath; a late DEPENDENCY (<see cref="MessageHubConfiguration.WithTeardownAfterSiblings"/>,
+    /// #6078) waits for the whole first wave, so it is not.
+    ///
+    /// <para>Applied once construction has RETURNED, never from inside <c>Build</c>: freezing
+    /// mid-build would refuse the sub-hubs a hub's synchronous initialization creates, which is a
+    /// different contract from the one every snapshotted hub gets.</para>
+    /// </summary>
+    /// <param name="hub">The hub this collection just registered.</param>
+    private void InheritCreationFreeze(IMessageHub hub)
+    {
+        Interlocked.MemoryBarrier();
+        if (IsCreationFrozen)
             (hub as MessageHub)?.CloseHostedHubCreation();
     }
 
