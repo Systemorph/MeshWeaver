@@ -11,8 +11,8 @@ name: Docker Hub mirror
 # blip); the fix is to stop asking Docker Hub from pull requests for the runtime images a job
 # runs. For every image DECLARED in the list, this workflow is the only place CI touches docker.io,
 # once per new digest, from main or the schedule. Not in scope: base layers of images core builds
-# (path-filtered `FROM` lines) — the page lists them. The Chart Gate moves onto the mirror in the
-# follow-up to the change that introduced this workflow.
+# (path-filtered `FROM` lines) — the page lists them. Consumers today: the Chart Gate's
+# `docker_auth` and `loki` checks.
 #
 # Consumers: `bash .github/scripts/dockerhub-mirror.sh ref <name>:<tag>` and a ghcr.io login with
 # the job's GITHUB_TOKEN (`packages: read`). No stored credential — so forks and Dependabot pull
