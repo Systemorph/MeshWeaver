@@ -42,6 +42,9 @@ set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 # shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
 HOSTING_CMD="run.sh"
+# hosting::in_step (below) tells hosting::on_exit (_common.sh) which step this shell is in: when
+# run.sh ITSELF stops on a shell error, the step is named in the shape of the step-failure line, so
+# the control plane quotes a step and a cause instead of a bare verdict.
 
 action="${HOSTING_ACTION:-<unset>}"
 deployment="${HOSTING_DEPLOYMENT:-<unset>}"
@@ -107,7 +110,7 @@ if [ -n "${AZURE_FEDERATED_TOKEN_FILE:-}" ]; then
     hosting::say az_login true
     export HOSTING_AZ_SESSION=1
   else
-    hosting::die "az login as workload identity ${AZURE_CLIENT_ID} failed: ${HOSTING_AZ_ERR}. Check the federated credential on the operator identity (subject system:serviceaccount:memex-ops:hosting-operator, issuer AZ_OIDC_ISSUER) — a subject/issuer mismatch fails here and nowhere else."
+    hosting::die "az login as workload identity ${AZURE_CLIENT_ID} failed: ${HOSTING_AZ_ERR:-no cause was recorded}. Check the federated credential on the operator identity (subject system:serviceaccount:memex-ops:hosting-operator, issuer AZ_OIDC_ISSUER) — a subject/issuer mismatch fails here and nowhere else."
   fi
 else
   # Not a refusal: a Reconcile/Roll/Restart is kubectl+helm only and needs no Azure session. A step
@@ -187,6 +190,7 @@ while IFS=$'\t' read -r name command; do
     ilk_name="Run the database migration first (operator interlock)"
     ilk_cmd="hosting-migrate --namespace ${ilk_ns} --tag ${ilk_tag}"
     hosting::step "$ilk_name"
+    hosting::in_step "${index}/${total} '${ilk_name}'"
     echo "[${index}/${total}] ${ilk_name}"
     if hosting::dry; then
       echo "  DRY-RUN would run: ${ilk_cmd}"
@@ -210,6 +214,7 @@ while IFS=$'\t' read -r name command; do
   fi
 
   hosting::step "$name"
+  hosting::in_step "${index}/${total} '${name}'"
   echo "[${index}/${total}] ${name}"
 
   # ── the identity follows the image (MeshWeaver#6052 ask 3) ──────────────────────────────────────
@@ -252,4 +257,5 @@ while IFS=$'\t' read -r name command; do
   fi
 done <<< "$plan"
 
+hosting::in_step ""
 echo "hosting-operator: ${action} of ${deployment} completed ${total}/${total} steps."

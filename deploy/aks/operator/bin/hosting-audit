@@ -86,7 +86,7 @@ command -v jq >/dev/null 2>&1 || hosting::die "jq is not installed in this image
 hosting::dry && hosting::log "dry run requested — the audit is read-only, so it runs for real"
 
 work="$(mktemp -d)"
-trap 'rm -rf "$work"' EXIT
+trap 'hosting::on_exit; rm -rf "$work"' EXIT
 
 # ── 1. the release: which revision is being audited ─────────────────────────────────────────────
 # `helm status -o json` is the whole release object — including `config`, the user-supplied values,

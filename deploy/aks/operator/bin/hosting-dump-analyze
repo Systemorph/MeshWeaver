@@ -193,7 +193,7 @@ cleanup() {
   hosting::do kubectl -n "$namespace" delete job "$job" --wait=false >&2 \
     || hosting::log "could not delete job/${job} in ${namespace} — its ttlSecondsAfterFinished (600 s) removes it"
 }
-trap cleanup EXIT
+trap 'hosting::on_exit; cleanup' EXIT
 
 hosting::do kubectl -n "$namespace" create -f - <<< "$manifest" >&2 \
   || hosting::die "could not create the analysis Job ${job} in ${namespace}"

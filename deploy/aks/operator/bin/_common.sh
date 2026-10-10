@@ -23,8 +23,60 @@ hosting::log() { printf '  %s\n' "$*"; }
 # Fail loudly, naming the command. Never `exit 0` on a problem.
 hosting::die() {
   printf '%s: ERROR: %s\n' "${HOSTING_CMD:-hosting}" "$*" >&2
+  HOSTING_DIED=1
   exit 1
 }
+
+# ── a script that stops WITHOUT saying why still reports a cause ─────────────────────────────────
+# hosting::die is how a script refuses: `<command>: ERROR: <why>` on stderr, the line the control
+# plane quotes as the cause of a failed action (it reads the FIRST `<command>: ERROR:` line of the
+# run's log tail, and run.sh's `step i/n '<name>' failed` line for the step). A script that BASH
+# stops — an unbound variable under `set -u`, a bad substitution — never reaches hosting::die: bash
+# prints `<file>: line N: X: unbound variable`, which matches neither shape, so the action lands as
+# a bare "concluded failure". Measured on Memex run 38038325130 (a Roll of memex-cloud): step 3/3
+# died on `_common.sh: line 269: HOSTING_AZ_ERR: unbound variable` and the control log quoted nothing.
+#
+# So every script that sources this file reports its own unexplained exit in the refusal's shape:
+# WHERE it stopped (file:line — tracked by the DEBUG trap below, because bash has already unwound
+# its call stack when an EXIT trap runs) and the command it was running, as SOURCE TEXT
+# (BASH_COMMAND is the command before expansion, so no value a variable holds is ever printed).
+#
+# Silent on purpose for: exit 0; an exit through hosting::die (it has spoken); and a deliberate
+# `exit N` / `return N` (the script chose it, and said what it had to say).
+#
+# 🚨 A script that sets its OWN EXIT trap replaces this one, so its trap must call hosting::on_exit
+# FIRST — `trap 'hosting::on_exit; rm -f "$tmp"' EXIT`. First, because the function reads `$?` and
+# the line bash was on, and both are only still true for the first command of a trap.
+# test/run-tests.sh refuses an EXIT trap under bin/ that does not.
+HOSTING_DIED=""
+HOSTING_AT=""
+HOSTING_AT_PREV=""
+HOSTING_RUN_STEP=""
+# run.sh says which step it is in — `i/n '<name>'`, or nothing between steps.
+hosting::in_step() { HOSTING_RUN_STEP="${1:-}"; }
+hosting::on_exit() {
+  local rc=$? cmd="${BASH_COMMAND:-}" at="${HOSTING_AT_PREV:-}" who="${HOSTING_CMD:-${0##*/}}"
+  [ "$rc" -ne 0 ] || return 0
+  [ -z "${HOSTING_DIED:-}" ] || return 0
+  case "$cmd" in exit|exit\ *|return|return\ *) return 0 ;; esac
+  HOSTING_DIED=1
+  at="${at##*/}"
+  cmd="${cmd//$'\n'/ }"
+  [ "${#cmd}" -le 300 ] || cmd="${cmd:0:300}…"
+  printf '%s: ERROR: stopped with exit %s at %s without stating a cause, while running: %s — a shell error in the operator script itself (the message bash printed is the line above, unless it died under a redirect), not a refusal and not a property of the plan. Nothing after that line ran.\n' \
+    "$who" "$rc" "${at:-an unknown line}" "$cmd" >&2
+  # run.sh names the step it was in, in the shape of its own step-failure line.
+  [ -z "${HOSTING_RUN_STEP:-}" ] \
+    || printf 'run.sh: ERROR: step %s failed: the operator stopped on a shell error of its own before or while running it — the cause is the line above.\n' "$HOSTING_RUN_STEP" >&2
+  return 0
+}
+# The DEBUG trap fires before every simple command — and once more for the EXIT trap's own call of
+# hosting::on_exit, which is why the line is read from HOSTING_AT_PREV there. functrace carries it
+# into functions, where the lines worth naming are. `:-$0` because BASH_SOURCE is EMPTY under
+# `bash -c`, and an unbound expansion in this trap would be the very defect it exists to report.
+set -o functrace
+trap '[ "${FUNCNAME[0]:-}" = hosting::on_exit ] || { HOSTING_AT_PREV="$HOSTING_AT"; HOSTING_AT="${BASH_SOURCE[0]:-$0}:${LINENO}"; }' DEBUG
+trap 'hosting::on_exit' EXIT
 
 # Require a non-empty environment variable, naming what to set when it is missing.
 hosting::need_env() {
@@ -215,10 +267,23 @@ hosting::pg_password() {
 # The assertion goes from that source straight into az's argument; it is never printed, logged or
 # passed through hosting::do (which narrates argv).
 
-# Print a fresh federated assertion on stdout. Non-zero, with HOSTING_AZ_ERR set, when none can be had.
+# Put a fresh federated assertion in HOSTING_AZ_ASSERTION. Non-zero, with HOSTING_AZ_ERR saying why,
+# when none can be had.
+#
+# 🚨 IN PLACE, NEVER ON STDOUT — the rule at the top of this file (hosting::safe_name), met again.
+# This used to PRINT the assertion for `assertion="$(hosting::az_assertion)"`. A command
+# substitution is a SUBSHELL, so every HOSTING_AZ_ERR set in here died with it, and the caller's
+# refusal then expanded a variable that had never been set in ITS shell. Under `set -u` that is not
+# an empty cause, it is the end of the script: Memex run 38038325130 (a Roll of memex-cloud) stopped
+# at step 3/3 on `_common.sh: line 269: HOSTING_AZ_ERR: unbound variable`, after the chart had been
+# applied, and the reason no assertion could be had was lost. Both variables are initialised here so
+# neither is ever unbound, and the two places that quote the cause carry a fallback as well.
+HOSTING_AZ_ERR=""
+HOSTING_AZ_ASSERTION=""
 hosting::az_assertion() {
   local resp tok
   HOSTING_AZ_ERR=""
+  HOSTING_AZ_ASSERTION=""
   if [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] && [ -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]; then
     if ! resp="$(curl -fsS --max-time 30 -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
                    "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${HOSTING_OIDC_AUDIENCE:-api://AzureADTokenExchange}" 2>&1)"; then
@@ -230,7 +295,7 @@ hosting::az_assertion() {
       ( umask 077; printf '%s' "$tok" > "$AZURE_FEDERATED_TOKEN_FILE" ) \
         || { HOSTING_AZ_ERR="could not rewrite ${AZURE_FEDERATED_TOKEN_FILE} with the fresh token"; return 1; }
     fi
-    printf '%s' "$tok"
+    HOSTING_AZ_ASSERTION="$tok"
     return 0
   fi
   if [ -n "${AZURE_FEDERATED_TOKEN_FILE:-}" ]; then
@@ -238,7 +303,7 @@ hosting::az_assertion() {
       || { HOSTING_AZ_ERR="AZURE_FEDERATED_TOKEN_FILE=${AZURE_FEDERATED_TOKEN_FILE} is not readable"; return 1; }
     tok="$(cat "$AZURE_FEDERATED_TOKEN_FILE")"
     [ -n "$tok" ] || { HOSTING_AZ_ERR="AZURE_FEDERATED_TOKEN_FILE=${AZURE_FEDERATED_TOKEN_FILE} is empty"; return 1; }
-    printf '%s' "$tok"
+    HOSTING_AZ_ASSERTION="$tok"
     return 0
   fi
   HOSTING_AZ_ERR="no federated token source: neither ACTIONS_ID_TOKEN_REQUEST_URL/_TOKEN (the Actions lane) nor AZURE_FEDERATED_TOKEN_FILE (the workload-identity Job) is set"
@@ -246,12 +311,15 @@ hosting::az_assertion() {
 }
 
 # Sign in to Azure as the operator identity from a FRESH assertion. Returns non-zero with
-# HOSTING_AZ_ERR set; the caller decides what that refusal says.
+# HOSTING_AZ_ERR set; the caller decides what that refusal says. The assertion is held for the one
+# az call and cleared on every path out.
 hosting::az_signin() {
-  local assertion
-  assertion="$(hosting::az_assertion)" || return 1
-  if ! az login --service-principal --username "${AZURE_CLIENT_ID:-}" --tenant "${AZURE_TENANT_ID:-}" \
-         --federated-token "$assertion" --allow-no-subscriptions --output none 2>/tmp/az-login.err; then
+  local rc=0
+  hosting::az_assertion || return 1
+  az login --service-principal --username "${AZURE_CLIENT_ID:-}" --tenant "${AZURE_TENANT_ID:-}" \
+     --federated-token "$HOSTING_AZ_ASSERTION" --allow-no-subscriptions --output none 2>/tmp/az-login.err || rc=$?
+  HOSTING_AZ_ASSERTION=""
+  if [ "$rc" -ne 0 ]; then
     HOSTING_AZ_ERR="az login as ${AZURE_CLIENT_ID:-?} failed: $(tr -d '\n' < /tmp/az-login.err)"
     return 1
   fi
@@ -266,7 +334,7 @@ hosting::az_refresh() {
   local why="$1"
   [ "${HOSTING_AZ_SESSION:-}" = "1" ] || return 0
   hosting::az_signin \
-    || hosting::die "the Azure session could not be refreshed ${why}: ${HOSTING_AZ_ERR}. The assertion az signed in with is short-lived, so this call cannot be made on the old session."
+    || hosting::die "the Azure session could not be refreshed ${why}: ${HOSTING_AZ_ERR:-no cause was recorded}. The assertion az signed in with is short-lived, so this call cannot be made on the old session."
   hosting::log "azure     session refreshed from a fresh federated token (${why})"
 }
 

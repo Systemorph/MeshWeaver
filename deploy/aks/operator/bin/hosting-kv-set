@@ -122,7 +122,7 @@ fi
 umask 077
 work="$(mktemp -d)" || hosting::die "could not create a private working directory"
 cleanup() { rm -rf "$work"; unset HOSTING_SECRETS; }
-trap cleanup EXIT
+trap 'hosting::on_exit; cleanup' EXIT
 
 if [ -n "${HOSTING_SECRETS:-}" ]; then
   if ! printf '%s' "$HOSTING_SECRETS" | base64 -d > "$work/secrets.json" 2>/dev/null; then

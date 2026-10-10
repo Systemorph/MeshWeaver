@@ -159,7 +159,7 @@ hosting::log "registered '${instance}' at ${registry} on plan ${plan:-?} — key
 hosting::step "Store the instance key in Key Vault"
 umask 077
 key_file="$(mktemp)"
-trap 'rm -f "$key_file"' EXIT
+trap 'hosting::on_exit; rm -f "$key_file"' EXIT
 printf '%s' "$issued" > "$key_file"
 if ! az keyvault secret set --vault-name "$vault" --name "$object" --file "$key_file" --output none; then
   rm -f "$key_file"; unset issued

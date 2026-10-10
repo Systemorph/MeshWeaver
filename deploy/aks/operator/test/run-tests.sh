@@ -1273,6 +1273,122 @@ _azs_out="$(env -u HOSTING_AZ_SESSION -u ACTIONS_ID_TOKEN_REQUEST_URL PATH="$AZS
 case "$_azs_out" in *"AADSTS700024"*"upload to https://store.test/b/acme-once failed"*) ok "…with AADSTS700024 at the upload, as measured" ;;
   *) bad "fails with AADSTS700024 at the upload" "said: ${_azs_out}" ;; esac
 rm -rf "$_azs_state"
+# ── the refresh's REFUSAL names its cause — on the paths where no assertion can be had ──────────
+# Memex run 38038325130 (a Roll of memex-cloud, 2026-10-10): the chart was applied, and the refresh
+# before step 3/3 died on `_common.sh: line 269: HOSTING_AZ_ERR: unbound variable`. The assertion
+# was fetched inside `$(…)`, a subshell, so the cause it recorded never reached the shell that
+# quoted it — and under `set -u` an unset cause is not an empty sentence, it is a dead script with
+# no sentence at all. Negative control 1 above never met it: there the assertion IS had and `az
+# login` fails, which sets the cause in the caller's own shell. These two fail the FETCH instead —
+# one per source — and are the cases that die on `unbound variable` without the fix.
+#
+# Job route: the projected token is there for the opening sign-in and gone before step 2.
+_azs_tok="$(mktemp)"; printf 'job-token-1' > "$_azs_tok"
+_azs_state="$(mktemp -d)"; : > "$_azs_state/expired"
+_azs_out="$(env -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u HOSTING_AZ_ERR \
+  PATH="$AZS_STUBS:$PG_STUBS:$PATH" HOSTING_AZS_STATE="$_azs_state" HOSTING_PG_STATE="$_azs_state" \
+  AZURE_FEDERATED_TOKEN_FILE="$_azs_tok" AZURE_CLIENT_ID=c AZURE_TENANT_ID=t HOSTING_ACTION=roll HOSTING_DEPLOYMENT=d \
+  HOSTING_PLAN="$(plan "$(printf 'Lose the token\trm -f %s\nSecond\techo step-two-ran' "$_azs_tok")")" "$BIN/run.sh" 2>&1)"; _azs_rc=$?
+[ "$_azs_rc" -ne 0 ] && ok "Job route: a token that is gone at the refresh fails the run" || bad "a vanished token fails the run" "exited 0: ${_azs_out}"
+case "$_azs_out" in *"unbound variable"*) bad "the refusal is a sentence, never bash's 'unbound variable' (Memex run 38038325130)" "said: ${_azs_out}" ;;
+  *) ok "the refusal is a sentence, never bash's 'unbound variable' (Memex run 38038325130)" ;; esac
+case "$_azs_out" in *"run.sh: ERROR: the Azure session could not be refreshed before step 2/2 'Second': AZURE_FEDERATED_TOKEN_FILE=${_azs_tok} is not readable"*) ok "…naming the step it stood before AND why no assertion could be had" ;;
+  *) bad "names the step and the cause" "said: ${_azs_out}" ;; esac
+case "$_azs_out" in *step-two-ran*) bad "…and the step behind the failed refresh never runs" "it ran: ${_azs_out}" ;; *) ok "…and the step behind the failed refresh never runs" ;; esac
+rm -rf "$_azs_state" "$_azs_tok"
+
+# Actions route: the OIDC endpoint answers the opening sign-in and refuses the next request.
+_azs_tok="$(mktemp)"; printf 'gh-token-stale' > "$_azs_tok"
+_azs_state="$(mktemp -d)"; : > "$_azs_state/expired"
+_azs_out="$(env -u HOSTING_AZ_ERR PATH="$AZS_STUBS:$PG_STUBS:$PATH" HOSTING_AZS_STATE="$_azs_state" HOSTING_PG_STATE="$_azs_state" \
+  HOSTING_AZS_OIDC_FAIL_FROM=2 AZURE_FEDERATED_TOKEN_FILE="$_azs_tok" AZURE_CLIENT_ID=c AZURE_TENANT_ID=t \
+  ACTIONS_ID_TOKEN_REQUEST_URL='https://oidc.test/token?api-version=2.0' ACTIONS_ID_TOKEN_REQUEST_TOKEN=request-token-NEVER-PRINTED \
+  HOSTING_ACTION=roll HOSTING_DEPLOYMENT=d HOSTING_PLAN="$(plan 'First	echo step-one-ran')" "$BIN/run.sh" 2>&1)"; _azs_rc=$?
+[ "$_azs_rc" -ne 0 ] && ok "Actions route: an OIDC endpoint that refuses the refresh fails the run" || bad "a refused OIDC request fails the run" "exited 0: ${_azs_out}"
+case "$_azs_out" in *"unbound variable"*) bad "…as a sentence, never 'unbound variable'" "said: ${_azs_out}" ;; *) ok "…as a sentence, never 'unbound variable'" ;; esac
+case "$_azs_out" in *"run.sh: ERROR: the Azure session could not be refreshed before step 1/1 'First': the GitHub OIDC token endpoint did not answer: "*"503"*) ok "…naming the step, the endpoint and what it answered" ;;
+  *) bad "names the endpoint's answer" "said: ${_azs_out}" ;; esac
+case "$_azs_out" in *"::hosting:: az_login=true"*) ok "…after the opening sign-in had succeeded (the failure is the REFRESH)" ;; *) bad "the opening sign-in succeeded" "said: ${_azs_out}" ;; esac
+case "$_azs_out" in *gh-token-*|*request-token-NEVER-PRINTED*) bad "…and neither token nor request token is in the refusal" "it was: ${_azs_out}" ;; *) ok "…and neither token nor request token is in the refusal" ;; esac
+case "$_azs_out" in *step-one-ran*) bad "…and the step never runs" "it ran: ${_azs_out}" ;; *) ok "…and the step never runs" ;; esac
+rm -rf "$_azs_state" "$_azs_tok"
+
+echo
+echo "── a script that BASH stops still reports a step and a cause ──"
+# The other half of the same run: its log tail carried bash's own line and the runner's exit code,
+# neither of which is a `<command>: ERROR:` line — so the control plane had a verdict and no cause.
+# hosting::on_exit (_common.sh) says, in the refusal's shape, where the script stopped and on what.
+#
+# run.sh itself: BASH_ENV is read by run.sh's own shell before its first line, so a function there
+# stands in for `az` and makes the SECOND sign-in (the refresh before step 1) expand an unset
+# variable inside run.sh's shell — a shell error of the operator's own, mid-step, as measured.
+_cr_dir="$(mktemp -d)"; _cr_tok="$_cr_dir/token"; printf 'job-token-1' > "$_cr_tok"; : > "$_cr_dir/expired"
+cat > "$_cr_dir/crash.env" <<'CRASH'
+az() {
+  if [ "${1:-}" = login ] && [ -e "${HOSTING_AZS_STATE}/signed-in-once" ]; then
+    printf '%s\n' "${W15A_NEVER_SET}"
+  fi
+  [ "${1:-}" != login ] || : > "${HOSTING_AZS_STATE}/signed-in-once"
+  command az "$@"
+}
+CRASH
+_cr_out="$(env -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u W15A_NEVER_SET BASH_ENV="$_cr_dir/crash.env" \
+  PATH="$AZS_STUBS:$PG_STUBS:$PATH" HOSTING_AZS_STATE="$_cr_dir" HOSTING_PG_STATE="$_cr_dir" \
+  AZURE_FEDERATED_TOKEN_FILE="$_cr_tok" AZURE_CLIENT_ID=c AZURE_TENANT_ID=t HOSTING_ACTION=roll HOSTING_DEPLOYMENT=d \
+  HOSTING_PLAN="$(plan 'First	echo step-one-ran')" "$BIN/run.sh" 2>&1)"; _cr_rc=$?
+[ "$_cr_rc" -ne 0 ] && ok "run.sh stopped by a shell error of its own exits non-zero" || bad "a shell error exits non-zero" "exited 0: ${_cr_out}"
+# 🚨 bash's OWN line is not in this output, and that is the case worth having: az_signin runs az with
+# stderr redirected to a file, bash wrote `W15A_NEVER_SET: unbound variable` THERE, and the shell
+# ended. The line hosting::on_exit prints is then the only trace of the cause anywhere in the log.
+case "$_cr_out" in *"unbound variable"*) bad "the stand-in dies where bash's own message is swallowed by a redirect" "bash's line reached the log, so this no longer proves the report stands alone: ${_cr_out}" ;;
+  *) ok "bash's own message was swallowed by the redirect it died under — the report has to stand alone" ;; esac
+case "$_cr_out" in *"run.sh: ERROR: stopped with exit "*" at crash.env:3 without stating a cause, while running: printf "*'${W15A_NEVER_SET}'*) ok "…and run.sh reports it as a cause: the file and line, and the command as source text" ;;
+  *) bad "reports file:line and the command" "said: ${_cr_out}" ;; esac
+case "$_cr_out" in *"run.sh: ERROR: step 1/1 'First' failed"*) ok "…and names the step it was in, in the step-failure line's shape" ;; *) bad "names the step" "said: ${_cr_out}" ;; esac
+[ "$(printf '%s\n' "$_cr_out" | grep -c ': ERROR: ')" -eq 2 ] && ok "…exactly once each" || bad "one cause line and one step line" "said: ${_cr_out}"
+case "$_cr_out" in *step-one-ran*) bad "…and the step never runs" "it ran: ${_cr_out}" ;; *) ok "…and the step never runs" ;; esac
+
+# A step script, with an EXIT trap of its own (most have one, for a temp file): the report and the
+# cleanup both happen. Then the three exits that must stay SILENT — a refusal has already spoken, a
+# deliberate `exit N` said what it had to, and success has nothing to report.
+cat > "$_cr_dir/hosting-selftest" <<'STEP'
+#!/usr/bin/env bash
+set -uo pipefail
+source "$1/_common.sh"
+# shellcheck disable=SC2034
+HOSTING_CMD="hosting-selftest"
+marker="$2"
+trap 'hosting::on_exit; echo cleaned > "$marker"' EXIT
+inner() { printf '%s\n' "${W15A_NEVER_SET}"; }
+case "$3" in
+  shell-error) inner ;;
+  refusal)     hosting::die "a refusal that says why" ;;
+  own-exit)    echo "hosting-selftest: said its own piece" >&2; exit 3 ;;
+  success)     echo fine ;;
+esac
+STEP
+chmod +x "$_cr_dir/hosting-selftest"
+cr_step() { rm -f "$_cr_dir/marker"; _cr_out="$(env -u W15A_NEVER_SET "$_cr_dir/hosting-selftest" "$BIN" "$_cr_dir/marker" "$1" 2>&1)"; _cr_rc=$?; }
+cr_step shell-error
+case "$_cr_out" in *"hosting-selftest: ERROR: stopped with exit "*" at hosting-selftest:8 without stating a cause, while running: printf "*) ok "a step script stopped by bash reports it under its own name, with the line inside the function" ;;
+  *) bad "a step script reports its shell error" "said: ${_cr_out}" ;; esac
+[ "$_cr_rc" -ne 0 ] && [ -e "$_cr_dir/marker" ] && ok "…still exits non-zero, and its own cleanup still runs" || bad "exit status and cleanup survive" "rc=${_cr_rc}: ${_cr_out}"
+case "$_cr_out" in *"run.sh: ERROR: step"*) bad "…and claims no run.sh step (it is not run.sh)" "said: ${_cr_out}" ;; *) ok "…and claims no run.sh step (it is not run.sh)" ;; esac
+cr_step refusal
+[ "$_cr_rc" -eq 1 ] && [ "$(printf '%s\n' "$_cr_out" | grep -c ': ERROR: ')" -eq 1 ] && ok "a refusal (hosting::die) is reported once — nothing is added to it" || bad "a refusal is not doubled" "rc=${_cr_rc}: ${_cr_out}"
+cr_step own-exit
+[ "$_cr_rc" -eq 3 ] && [ "$(printf '%s\n' "$_cr_out" | grep -c ': ERROR: ')" -eq 0 ] && ok "a deliberate \`exit 3\` keeps its status and gains no line" || bad "a deliberate exit is left alone" "rc=${_cr_rc}: ${_cr_out}"
+cr_step success
+[ "$_cr_rc" -eq 0 ] && [ "$_cr_out" = fine ] && ok "success prints nothing extra" || bad "success is silent" "rc=${_cr_rc}: ${_cr_out}"
+rm -rf "$_cr_dir"
+
+# The guard for the rule that makes the above true of every command: an EXIT trap of a script's own
+# REPLACES the one _common.sh installs, so it must call hosting::on_exit first.
+_cr_traps="$(grep -nE "^[[:space:]]*trap .* EXIT[[:space:]]*$" "$BIN"/hosting-* "$BIN"/run.sh || true)"
+_cr_bare="$(printf '%s\n' "$_cr_traps" | grep -vE "trap ['\"]hosting::on_exit; " || true)"
+[ -n "$_cr_traps" ] && ok "the EXIT-trap guard has traps to read ($(printf '%s\n' "$_cr_traps" | grep -c .) under bin/)" || bad "the EXIT-trap guard found no traps" "its pattern no longer matches bin/ — it would pass having checked nothing"
+[ -z "$_cr_bare" ] && ok "every EXIT trap under bin/ calls hosting::on_exit first" || bad "an EXIT trap replaces hosting::on_exit without calling it" "${_cr_bare}"
+unset _cr_dir _cr_tok _cr_out _cr_rc _cr_traps _cr_bare
 unset _azs_out _azs_rc _azs_log _azs_state _azs_tok _azs_after_dump
 
 echo
