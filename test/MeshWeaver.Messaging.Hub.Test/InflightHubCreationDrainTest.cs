@@ -86,6 +86,96 @@ public class InflightHubCreationDrainTest(ITestOutputHelper output) : HubTestBas
         }
     }
 
+    /// <summary>
+    /// A hub declared <c>WithTeardownAfterSiblings</c> whose construction finishes AFTER the
+    /// owner's teardown began is still a dependency: it is disposed in the second wave, after its
+    /// siblings, never by the in-flight leg while a sibling is still tearing down (#6078). This is
+    /// the first-time node-stream cache resolution overlapping a teardown.
+    ///
+    /// <para>The sibling's teardown is held deterministically by a construction parked inside the
+    /// SIBLING's own hosted collection: the sibling's disposal joins that in-flight creation, so it
+    /// cannot finish until the test releases it. The dependency's construction is released first;
+    /// the in-flight leg runs synchronously on that release (the creation's <c>finally</c> pings
+    /// before returning), so once the creation has returned, the leg has decided.</para>
+    ///
+    /// <para><b>Negative control.</b> With the in-flight leg disposing every late hub at once,
+    /// the late dependency reads <c>IsDisposing</c> while its sibling is still held, and this case
+    /// goes red.</para>
+    /// </summary>
+    [Fact]
+    public async Task ALateDependency_IsDisposedOnlyAfterItsSiblings()
+    {
+        var client = GetClient();
+        var sibling = client.GetHostedHub(new Address("sibling", "1"), c => c, HostedHubCreation.Always);
+        sibling.Should().NotBeNull();
+
+        var childEntered = new AsyncSubject<Unit>();
+        var dependencyEntered = new AsyncSubject<Unit>();
+        var releaseChild = 0;
+        var releaseDependency = 0;
+
+        // Holds the SIBLING's teardown: its own hosted collection waits for this construction.
+        var childCreation = Task.Run(() => sibling!.GetHostedHub(
+            new Address("siblingchild", "1"),
+            c => c.WithInitialization(_ =>
+            {
+                childEntered.OnNext(Unit.Default);
+                childEntered.OnCompleted();
+                SpinWait.SpinUntil(() => Volatile.Read(ref releaseChild) == 1, TimeSpan.FromSeconds(30));
+            }),
+            HostedHubCreation.Always));
+
+        // The dependency, mid-construction when the owner's teardown begins. Parked in its
+        // CONFIGURATION function, which runs before the hub's constructor registers it with the
+        // owner, so the owner's teardown snapshot cannot hold it: it is a LATE hub.
+        var dependencyCreation = Task.Run(() => client.GetHostedHub(
+            new Address("dependency", "1"),
+            c =>
+            {
+                dependencyEntered.OnNext(Unit.Default);
+                dependencyEntered.OnCompleted();
+                SpinWait.SpinUntil(() => Volatile.Read(ref releaseDependency) == 1, TimeSpan.FromSeconds(30));
+                return c.WithTeardownAfterSiblings();
+            },
+            HostedHubCreation.Always));
+
+        try
+        {
+            await childEntered.Should().Within(10.Seconds()).Emit(
+                "the sibling's child construction must be in flight, so the sibling's teardown is held");
+            await dependencyEntered.Should().Within(10.Seconds()).Emit(
+                "the dependency's construction must be in flight before the owner's teardown begins");
+
+            var disposalCompleted = client.DisposalCompleted.Take(1).Await();
+            client.Dispose();
+
+            // The owner's teardown has snapshotted its hubs and the first wave reached the sibling,
+            // which now sits in its own hosted-hub join. The dependency is still mid-construction,
+            // so it is a LATE hub of the owner's teardown.
+            await sibling!.RunLevelChanged.Where(l => l >= MessageHubRunLevel.DisposeHostedHubs)
+                .Should().Within(10.Seconds()).Emit(
+                    "the owner's first wave must have reached the sibling before the dependency is released");
+
+            Volatile.Write(ref releaseDependency, 1);
+            var lateDependency = await dependencyCreation.WaitAsync(TimeSpan.FromSeconds(10));
+            lateDependency.Should().NotBeNull("a creation started before the teardown is finished, not refused");
+
+            lateDependency!.IsDisposing.Should().BeFalse(
+                "a late hub declared WithTeardownAfterSiblings goes in the second wave, after its "
+                + "sibling, whose teardown is still held by its own in-flight construction");
+
+            Volatile.Write(ref releaseChild, 1);
+            await disposalCompleted.WaitAsync(TimeSpan.FromSeconds(10));
+            await lateDependency.DisposalCompleted.Take(1).Await().WaitAsync(TimeSpan.FromSeconds(10));
+            await childCreation.WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        finally
+        {
+            Volatile.Write(ref releaseDependency, 1);
+            Volatile.Write(ref releaseChild, 1);
+        }
+    }
+
     [Fact]
     public void Creation_AfterDisposalBegan_IsRefused()
     {

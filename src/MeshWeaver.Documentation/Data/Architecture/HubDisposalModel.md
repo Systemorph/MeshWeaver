@@ -231,6 +231,15 @@ A hosted hub declared `WithTeardownAfterSiblings()` is not disposed with the oth
 collection disposes every other child first, joins them (and the retired and in-flight legs), and
 only then disposes the declared hubs and joins those. The owner still waits for both waves.
 
+A declared hub whose construction finishes AFTER the teardown began is a dependency all the same.
+The in-flight leg disposes the late ordinary hubs inside the first wave and carries the late declared
+ones over to the second, so a first-time cache resolution that overlaps a teardown cannot race its
+siblings either. Pinned by `InflightHubCreationDrainTest.ALateDependency_IsDisposedOnlyAfterItsSiblings`:
+the sibling's teardown is held by a construction parked in its own hosted collection, the declared
+hub is parked in its configuration function (before its constructor registers it, so the teardown
+snapshot cannot see it), and it must not be disposing when it is released while the sibling is still
+held.
+
 The node-stream cache's hub is declared this way. It sits beside every hub the mesh hosts, and its
 ShutDown ends every held read with the disposal terminal. In one wave it raced the readers: a
 sibling still mid-turn or mid-quiesce received a fault for its own teardown, and the outgoing pod of

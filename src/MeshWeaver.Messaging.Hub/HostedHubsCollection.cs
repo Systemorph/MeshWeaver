@@ -787,8 +787,11 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
         // properly finish the ones already started. Merge order matters: inflightChanged is
         // subscribed FIRST, then the immediate probe — so a decrement between the snapshot and
         // this subscription is caught by the probe, and one after it by the ping. Whatever a
-        // late construction produced is then disposed here, inside the join, so it is never a
-        // zombie outside the disposal snapshot.
+        // late construction produced is then disposed inside the join, so it is never a zombie
+        // outside the disposal snapshot. The leg emits the late hubs it did NOT dispose: a late
+        // construction that declared WithTeardownAfterSiblings (#6078) is a dependency like any
+        // other and joins the SECOND wave below, so a first-time cache resolution overlapping the
+        // teardown cannot bring back the race the two waves exist to prevent.
         var inflightDrain = Observable
             .Merge(inflightChanged, Observable.Return(Unit.Default))
             .Where(_ => Volatile.Read(ref inflightCreations) == 0)
@@ -799,33 +802,20 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
                 // the two snapshots is joined as retired and is not a late construction.
                 var late = messageHubs.Values.Except(registered).Where(h => !retiredSet.Contains(h)).ToArray();
                 if (late.Length == 0)
-                    return Observable.Return(Unit.Default);
+                    return Observable.Return(Array.Empty<IMessageHub>());
+                var lateDependencies = late.Where(TearsDownAfterSiblings).ToArray();
+                var lateSiblings = late.Where(h => !TearsDownAfterSiblings(h)).ToArray();
                 logger.LogInformation(
-                    "Disposing {count} hub(s) whose construction completed after disposal began: [{addresses}]",
-                    late.Length, string.Join(", ", late.Select(h => h.Address.ToString())));
-                var lateCompletions = late.Select(h =>
-                {
-                    try
-                    {
-                        // Attributed too: a hub that finished constructing after disposal began
-                        // still goes down BECAUSE its owner did, and a line that says otherwise
-                        // would be the one unattributed cascade in the tree.
-                        AttributeCascade(h, originatingCause);
-                        h.Dispose();
-                    }
-                    catch (Exception ex)
-                    {
-                        logger.LogError(ex, "Error during disposal of late-constructed hub {address}", h.Address);
-                    }
-                    return h.DisposalCompleted
-                        .Take(1)
-                        .Catch<Unit, Exception>(ex =>
-                        {
-                            logger.LogError(ex, "Late-constructed hub {address} disposal faulted", h.Address);
-                            return Observable.Return(Unit.Default);
-                        });
-                }).ToArray();
-                return Observable.CombineLatest(lateCompletions).Select(_ => Unit.Default).Take(1);
+                    "Disposing {count} hub(s) whose construction completed after disposal began: [{addresses}]; "
+                    + "{dependencies} of them after their siblings",
+                    late.Length, string.Join(", ", late.Select(h => h.Address.ToString())), lateDependencies.Length);
+                if (lateSiblings.Length == 0)
+                    return Observable.Return(lateDependencies);
+                // Attributed too, inside DisposeAndJoin: a hub that finished constructing after
+                // disposal began still goes down BECAUSE its owner did.
+                return Observable.CombineLatest(lateSiblings.Select(DisposeAndJoin).ToArray())
+                    .Select(_ => lateDependencies)
+                    .Take(1);
             });
 
         var retiredCompletions = retired.Select(h =>
@@ -837,23 +827,29 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
                     return Observable.Return(Unit.Default);
                 }));
 
-        var completionLegs = childCompletions.Concat(retiredCompletions).Append(inflightDrain).ToArray();
-        IObservable<Unit> siblingsDone = Observable
+        // The first wave answers with the late dependencies the in-flight leg carried over.
+        var completionLegs = childCompletions.Concat(retiredCompletions)
+            .Select(leg => leg.Select(_ => Array.Empty<IMessageHub>()))
+            .Append(inflightDrain)
+            .ToArray();
+        var siblingsDone = Observable
             .CombineLatest(completionLegs)
-            .Select(_ => Unit.Default)
+            .Select(carried => carried.SelectMany(h => h).ToArray())
             .Take(1);
-        // The second wave: the hubs the first wave depended on, disposed once nothing that reads
-        // through them is still tearing down. Inside SelectMany, so their Dispose() runs only then.
-        IObservable<Unit> all = dependencies.Length == 0
-            ? siblingsDone
-            : siblingsDone.SelectMany(_ =>
-            {
-                logger.LogDebug("Siblings of {count} dependency hub(s) disposed; disposing [{addresses}]",
-                    dependencies.Length, string.Join(", ", dependencies.Select(h => h.Address.ToString())));
-                return Observable.CombineLatest(dependencies.Select(DisposeAndJoin).ToArray())
-                    .Select(_ => Unit.Default)
-                    .Take(1);
-            });
+        // The second wave: the hubs the first wave depended on — snapshotted ones and late ones
+        // alike — disposed once nothing that reads through them is still tearing down. Inside
+        // SelectMany, so their Dispose() runs only then.
+        IObservable<Unit> all = siblingsDone.SelectMany(lateDependencies =>
+        {
+            var wave = dependencies.Concat(lateDependencies).ToArray();
+            if (wave.Length == 0)
+                return Observable.Return(Unit.Default);
+            logger.LogDebug("Siblings of {count} dependency hub(s) disposed; disposing [{addresses}]",
+                wave.Length, string.Join(", ", wave.Select(h => h.Address.ToString())));
+            return Observable.CombineLatest(wave.Select(DisposeAndJoin).ToArray())
+                .Select(_ => Unit.Default)
+                .Take(1);
+        });
 
         // No Timeout — see the remarks on this method. Every leg answers from its own terminal
         // state, so there is nothing left for a deadline here to rescue; the owning hub's disposal
