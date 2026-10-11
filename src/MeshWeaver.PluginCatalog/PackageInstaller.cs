@@ -3252,16 +3252,20 @@ public static class PackageInstaller
             return false;
         // A NodeType node's stored content is ENRICHED by the live compile (CompilationStatus, release
         // stamps, …), so a whole-content compare would ALWAYS look "changed" on re-install and pointlessly
-        // rewrite + recompile it. Compare only the authored fields the installer writes — the
-        // Configuration lambda AND the Sources list (a source-list change alters what compiles, so it
-        // must re-install + recompile; the source .cs are separate Code nodes, diffed on their own) —
-        // and the InstanceLocations declaration (#3039): authored on the type, read by the storage
-        // planner; a re-install that changes only WHERE instances live must land, or the planner keeps
-        // narrowing to the old declaration.
-        if (current.Content is NodeTypeDefinition curDef && incoming.Content is NodeTypeDefinition inDef)
-            return string.Equals(curDef.Configuration, inDef.Configuration, StringComparison.Ordinal)
-                && (curDef.Sources ?? []).SequenceEqual(inDef.Sources ?? [], StringComparer.Ordinal)
-                && (curDef.InstanceLocations ?? []).SequenceEqual(inDef.InstanceLocations ?? [], StringComparer.Ordinal);
+        // rewrite + recompile it. Compare the AUTHORED surface — every member the repo owns, which is
+        // everything the operational mask does not name (NodeTypeOperationalContent; the partition is
+        // pinned by NodeTypeOperationalContentTest.EverySerializedMember_IsClassified_ExactlyOnce).
+        //
+        // 🚨 ALL of it, never a hand-picked subset. This compared Configuration, Sources and
+        // InstanceLocations only, so a file that changed any OTHER authored member — KeepsHistory,
+        // IncludeGlobalTypes, CellSurface, StorageTable, Description, … — read as "unchanged" and was
+        // never written: the type kept the value it was first installed with, for as long as those
+        // three stayed the same. Measured on Governance/NameCheck (MeshWeaver.Plugins#2786): the file
+        // declares keepsHistory:false, the stored definition read true across 143 versions and five
+        // minor releases of the package, so a type whose whole point is to keep no history kept it.
+        // A member added to the record is covered the day it is added, with nothing to remember here.
+        if (current.Content is NodeTypeDefinition && incoming.Content is NodeTypeDefinition)
+            return AuthoredDefinitionSignature(current, options) == AuthoredDefinitionSignature(incoming, options);
         // Otherwise compare the full content, applying the incoming over current so an omitted field
         // does not read as a change — with WHICHEVER side is a raw JsonElement ALIGNED to the other
         // side's TYPE first (see AlignToPeer). Both mirror cases are live:
@@ -3278,6 +3282,20 @@ public static class PackageInstaller
         return ContentSignature(AlignToPeer(effectiveIncoming, current.Content, options), options)
             == ContentSignature(AlignToPeer(current.Content, effectiveIncoming, options), options);
     }
+
+    /// <summary>
+    /// The signature of a NodeType node's AUTHORED definition members: its typed content with every
+    /// mesh-owned member removed (the same strip an export applies, so "what a file may carry" and
+    /// "what a re-install compares" are one set), canonicalized. Both sides of the compare are the
+    /// same record type, so both materialize the same defaults and an omitted member cannot read as
+    /// a change.
+    /// </summary>
+    private static string AuthoredDefinitionSignature(MeshNode node, JsonSerializerOptions options) =>
+        ContentSignature(
+            NodeTypeOperationalContent.StripOperational(
+                // The strip keys on the node type; an incoming node may leave it to the stored one.
+                node with { NodeType = MeshNode.NodeTypePath }, options).Content,
+            options);
 
     /// <summary>
     /// Materialized-default alignment for the content compare: when ONE side is a raw
