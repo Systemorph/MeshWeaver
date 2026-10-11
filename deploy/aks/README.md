@@ -342,7 +342,7 @@ with `kubectl set image` after `helm upgrade`. The keys the chart *does* consume
 |---|---|---|
 | `portal.image` | `../helm/templates/memex-portal/deployment.yaml` | `ghcr.io/systemorph/memex-portal-ai:latest` |
 | `migration.image` | `../helm/templates/memex-migration/job.yaml` | `ghcr.io/systemorph/memex-migration:latest` |
-| `portalNext.image` | `../helm/templates/memex-portal/portal-next.yaml` | *(only when `portalNext.enabled`)* |
+| `portalNext.image` | `../helm/templates/memex-portal/portal-next.yaml` | `""` — **leave it empty**: `/next` ships inside `portal.image` (`_portal-next.tpl`); an image here is the developer override, a pin no roll moves |
 
 Each is a **full reference including the tag** — registry, repository and tag in
 one string, not a registry prefix that gets composed with something else.

@@ -831,27 +831,31 @@ ingress:
     # EVERY external provider is broken. Observed on a chart-deployed portal, 2026-08-31.
     nginx.ingress.kubernetes.io/proxy-buffer-size: "32k"
 # ---- Next.js React portal (experimental frontend — FEATURE-FLAGGED) --------
-# When enabled, a Next.js streaming-SSR build of the React GUI (clients/portal-next)
-# runs as its OWN Deployment beside memex-portal, and the portal ingress gains a
-# `/next` path routed to it (nginx longest-prefix: /next/* → portal-next, everything
-# else — incl. /api, gRPC-web, _blazor the React app calls same-origin — falls through
-# to the Blazor portal). The Blazor shell also gets Portal:ReactAppUrl=/next injected
+# 🚂 ON THE PLATFORM RELEASE TRAIN (maintainer, 2026-10-11: "yes, please bring next onto same
+# release train. we can bundle in same package."). When enabled with NO image — the normal
+# shape — the Next.js streaming-SSR build of the React GUI (clients/portal-next) ships INSIDE the
+# platform portal image and the portal process serves it on a `next` port; the portal ingress
+# gains a `/next` path routed there (nginx longest-prefix: /next/* → the Next server, everything
+# else — incl. /api, gRPC-web, _blazor the React app calls same-origin — falls through to the
+# Blazor portal). Nothing to pin: /next is always the build the portal runs
+# (templates/memex-portal/_portal-next.tpl). The Blazor shell also gets Portal:ReactAppUrl=/next injected
 # (see the portal ConfigMap), which lights up the reversible PER-USER toggle: the user
 # menu's "Try the new frontend" → GET /frontend/react sets the mw-frontend cookie and
 # redirects to /next; "Back to classic" → /frontend/blazor reverses it. The DEPLOYMENT
 # DEFAULT frontend stays Blazor (Portal:Frontend is left unset) — this is opt-in, not a
-# forced switch. Off by default (neutral chart): prod/AKS is unaffected until an overlay
-# sets portalNext.enabled=true with an image the cluster can pull. Locally, memex-local
-# builds the image and flips this on automatically. See clients/portal-next/DEPLOY.md.
+# forced switch. Off by default (neutral chart): an overlay sets portalNext.enabled=true and
+# nothing else. See clients/portal-next/DEPLOY.md (MeshWeaver.Plugins).
 portalNext:
   enabled: false
-  # Container image. memex-local builds + tags this into Colima's Docker store and k3s
-  # loads it IfNotPresent. For AKS, push to ACR and override this + enabled in an overlay.
-  image: "meshweaver/portal-next:local"
+  # 🚨 EMPTY = BUNDLED, and a deployment leaves it empty. Setting it is the DEVELOPER OVERRIDE: a
+  # separately built image in its own Deployment + Service (templates/memex-portal/portal-next.yaml)
+  # — memex-local builds one into Colima's Docker store and passes it here. An image in a
+  # deployment overlay is a PIN that no roll moves, which is what the bundle exists to remove.
+  image: ""
+  # The override's Deployment only (bundled: the Next server runs in every portal pod).
   replicas: 1
-  # Server-side (SSR) token mint + snapshot fetch go straight to the portal Service,
-  # skipping the ingress round-trip. The BROWSER still talks same-origin (cookies +
-  # gRPC-web are ingress-routed), so this only affects SSR.
+  # The override's server-side (SSR) token mint + snapshot fetch target. Bundled, SSR reaches its
+  # own pod's portal over loopback. The BROWSER always talks same-origin (ingress-routed).
   portalOrigin: "http://memex-portal-service:8080"
 # ---- The fleet's own container registry (cr.meshweaver.cloud) ----------------
 # A SEPARATE service beside the portal — its own pods, host and blob container — built from two

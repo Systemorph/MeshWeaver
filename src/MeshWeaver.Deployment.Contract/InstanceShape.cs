@@ -353,7 +353,10 @@ public sealed record IngressSpec
 
 /// <summary>
 /// The Next.js React front end (<c>clients/portal-next</c>), served at <c>/next</c> beside the
-/// Blazor portal as its OWN Deployment and Service. When it is on, the chart also routes the
+/// Blazor portal. 🚂 It ships INSIDE the platform portal image and the portal process serves it
+/// (maintainer, 2026-10-11: <i>"yes, please bring next onto same release train. we can bundle in same
+/// package."</i>) — so <see cref="Enabled"/> is the whole declaration, and /next is always the build
+/// the portal runs (the chart's <c>templates/memex-portal/_portal-next.tpl</c>). When it is on, the chart also routes the
 /// <c>/next</c> ingress path to it and renders <c>Portal__ReactAppUrl</c> into the portal's
 /// ConfigMap, which is what lights up the per-user "Try the new frontend" toggle. Null → the
 /// section renders nothing and the chart's own default (off) stands, so every record that does not
@@ -368,10 +371,11 @@ public sealed record IngressSpec
 /// would have deleted it and reverted <c>/next</c> to "not deployed", silently
 /// (MeshWeaver.Plugins#1408).</para>
 ///
-/// <para>🚨 ENABLED WITHOUT AN IMAGE IS REFUSED. The chart's default image is the LOCAL developer
-/// tag (<c>meshweaver/portal-next:local</c>), which no cluster node can pull, so turning the flag
-/// on without naming a pullable image is the ImagePullBackOff above arrived at from the record
-/// instead of by hand — <c>HelmValues.Problems</c> names it and the render refuses.</para>
+/// <para>🚂 ENABLED WITHOUT AN IMAGE IS THE BUNDLED SHAPE. It used to be refused, because the
+/// chart's default image was the LOCAL developer tag (<c>meshweaver/portal-next:local</c>) and the
+/// flag alone rendered an <c>ImagePullBackOff</c>; the chart's default is now the bundle. Hosting's
+/// <c>HelmValues</c> lifts its refusal once this chart has shipped, and a record then states
+/// <c>enabled</c> and nothing else.</para>
 /// </summary>
 public sealed record PortalNextSpec
 {
@@ -380,12 +384,11 @@ public sealed record PortalNextSpec
     public bool Enabled { get; init; }
 
     /// <summary>
-    /// The container image, fully qualified with its tag. There is NO derivation from the portal's
-    /// repository or tag: this front end is built and versioned on its own line
-    /// (<c>memex-portal-next:3.0.0-next.N</c>), so a derived tag would name an image that does not
-    /// exist. Blank while <see cref="Enabled"/> is a named problem, never a chart default.
+    /// The DEVELOPER OVERRIDE: a separately built image (repository:tag) the chart runs in its own
+    /// Deployment instead of the bundle. A deployment leaves it blank — an image here is a pin that no
+    /// roll moves, which is what bundling /next into the portal image removed.
     /// </summary>
-    [Description("Container image (repository:tag) — its own release line, never derived")]
+    [Description("Developer override: a separately built image (repository:tag) — blank serves /next from the portal image")]
     public string? Image { get; init; }
 
     /// <summary>Replicas. Null → the chart's 1. Stateless by design (every request mints its own token), so it scales with no sticky sessions.</summary>

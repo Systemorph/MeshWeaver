@@ -92,6 +92,14 @@ jobs:
       # Multi-arch publish (identical to the green `images` job), but: Version is BAKED to the edge
       # version, and tags are `<edge-version>` + the moving `edge` (NOT `main`, which is the green tag).
       # %3B is the MSBuild escape for a literal ';' inside a `;`-separated property value.
+      # 🚂 /next rides in the portal image (maintainer, 2026-10-11: "yes, please bring next onto same
+      # release train. we can bundle in same package.") — an edge build carries it exactly as the green
+      # one does (main-cd.yml, the portal-ai leg), or an edge install with /next on would serve none.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - name: Build the /next bundle
+        run: .github/scripts/build-portal-next-bundle.sh plugins-repo "$RUNNER_TEMP/portal-next.zip"
       - name: Build + push portal-ai (edge)
         run: >
           dotnet publish plugins-repo/src/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj
@@ -105,6 +113,7 @@ jobs:
           -p:ContainerRepository=memex-portal-ai
           -p:ContainerImageTags="${{ steps.vars.outputs.version }}%3Bedge"
           -p:ContainerBaseImage=${{ env.ACR }}/memex-portal-ai-base:latest
+          -p:PortalNextBundle="$RUNNER_TEMP/portal-next.zip"
       - name: Build + push migration (edge)
         run: >
           dotnet publish plugins-repo/src/Memex.Database.Migration/Memex.Database.Migration.csproj

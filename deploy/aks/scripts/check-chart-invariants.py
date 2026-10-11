@@ -1116,6 +1116,65 @@ for _label, _c in (("portal", portal), ("crash-dump-prepare", _prep)):
             "by the next roll. " + _dump_fix,
         )
 
+# ---- 20. /next is served by ONE shape, end to end — bundled in the portal pod, or the override ----
+# 🚂 Maintainer, 2026-10-11: "yes, please bring next onto same release train. we can bundle in same
+# package." BUNDLED (portalNext.enabled, no image): the portal process serves /next from its own
+# image, so the config arms PortalNext__Bundled, the portal container and Service carry a `next`
+# port, the ingress routes /next THERE, and no portal-next Deployment exists — a second workload is
+# exactly what drifted. The OVERRIDE (portalNext.image) is the old shape, whole. Half of each is a
+# /next that 503s or a server nothing routes to; both are invisible to `helm template`.
+checks += 1
+_next_fix = "See templates/memex-portal/_portal-next.tpl."
+_svc = next(iter(by_kind("Service", "memex-portal-service")), None)
+_svc_ports = {p.get("name"): p for p in (((_svc or {}).get("spec") or {}).get("ports") or [])}
+_c_ports = {p.get("name"): p for p in (portal.get("ports") or [])}
+_next_dep = next(iter(by_kind("Deployment", "portal-next-deployment")), None)
+_next_backends = []
+_routed = False  # does a portal Ingress render at all? (off in the neutral chart: nothing to route)
+for _ing in by_kind("Ingress"):
+    for _rule in ((_ing.get("spec") or {}).get("rules") or []):
+        for _path in (((_rule.get("http") or {}).get("paths")) or []):
+            _backend = ((_path.get("backend") or {}).get("service")) or {}
+            if _path.get("path") == "/" and _backend.get("name") == "memex-portal-service":
+                _routed = True
+            if _path.get("path") == "/next":
+                _next_backends.append(_backend)
+_bundled = str(cfg_data.get("PortalNext__Bundled", "")).lower() == "true"
+if _bundled:
+    if _next_dep is not None:
+        finding("/next is BUNDLED and a portal-next Deployment renders too",
+                "two servers for one path, and the second one is the workload a roll leaves behind. " + _next_fix)
+    _cp = _c_ports.get("next")
+    if _cp is None:
+        finding("/next is BUNDLED but the portal container declares no `next` port",
+                "the Service's targetPort `next` would resolve to nothing. " + _next_fix)
+    elif str(cfg_data.get("PortalNext__Port")) != str(_cp.get("containerPort")):
+        finding(f"PortalNext__Port is {cfg_data.get('PortalNext__Port')!r}, the `next` port is {_cp.get('containerPort')!r}",
+                "the server would bind one port while the pod exposes another. " + _next_fix)
+    if (_svc_ports.get("next") or {}).get("targetPort") != "next":
+        finding("/next is BUNDLED but memex-portal-service has no `next` port targeting the container's",
+                "the ingress path would point at a port the Service does not have. " + _next_fix)
+    if (_routed and not _next_backends) or any(
+            b.get("name") != "memex-portal-service" or (b.get("port") or {}).get("name") != "next" for b in _next_backends):
+        finding(f"/next is BUNDLED but the ingress routes it to {_next_backends!r}",
+                "it must target memex-portal-service port `next`. " + _next_fix)
+    if not str(cfg_data.get("PortalNext__PortalOrigin", "")).startswith("http://127.0.0.1:"):
+        finding(f"PortalNext__PortalOrigin is {cfg_data.get('PortalNext__PortalOrigin')!r}",
+                "the bundled server's SSR reaches its OWN pod's portal over loopback. " + _next_fix)
+elif _next_dep is not None:
+    if "next" in _svc_ports or "next" in _c_ports:
+        finding("the /next OVERRIDE renders its own Deployment AND a `next` port on the portal",
+                "half of the bundled shape is left behind. " + _next_fix)
+    if (_routed and not _next_backends) or any(b.get("name") != "portal-next-service" for b in _next_backends):
+        finding(f"the /next OVERRIDE renders a Deployment but the ingress routes /next to {_next_backends!r}",
+                "the override's server would serve nothing. " + _next_fix)
+else:
+    if _next_backends:
+        finding("/next is routed but nothing serves it",
+                "no PortalNext__Bundled and no portal-next Deployment. " + _next_fix)
+    if "next" in _svc_ports or "next" in _c_ports or "PortalNext__Bundled" in cfg_data:
+        finding("/next is OFF but part of the bundled shape renders", _next_fix)
+
 MIN_CHECKS = 5
 if checks < MIN_CHECKS:
     print(

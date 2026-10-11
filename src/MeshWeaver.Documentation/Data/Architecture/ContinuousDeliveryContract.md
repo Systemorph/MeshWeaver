@@ -27,7 +27,20 @@ two properties that make a partial or missing release impossible rather than mer
 | `memex-portal-ai` | linux/amd64 + arm64 | **the self-updater** — the only repository it lists |
 | `memex-migration` | linux/amd64 + arm64 | rolled to the same version as the portal, applies schema |
 | `mw-plugin-test` | linux/amd64 + arm64 | the plugins repo's CI (ACR **and** a GHCR mirror) |
-| `memex-portal-next` | linux/amd64 (by design) | pinned explicitly by deployments |
+
+**🚂 `/next` is not a repository of the set — it rides inside `memex-portal-ai`.** *"yes, please bring
+next onto same release train. we can bundle in same package."* (maintainer, 2026-10-11). The Next.js
+front end used to be `memex-portal-next:3.0.0-next.<run>`, published by a MeshWeaver.Plugins lane of
+its own, excluded from this set by name, never promoted by `release.yml` and never moved by a roll —
+so every deployment that enabled it pinned it, and the pin drifted from the portal it talks to. The
+portal-ai leg now builds it from the same Plugins commit as the portal host
+(`.github/scripts/build-portal-next-bundle.sh` → `clients/portal-next/scripts/bundle.sh`), publishes
+it as `/app/portal-next.zip` (one file: every file in `/app` is an entry of the 1 MiB-capped
+[closure record](/Doc/Architecture/ImageClosureAsMeshData)), and asserts it is in the published bytes of every
+architecture before `promote`. The portal process unpacks and serves it on a `next` port with a clean
+environment (Plugins `PortalNextProcess`); the chart routes `/next` there when `portalNext.enabled` is
+set with no image. Same sha, same version, same `3-latest` — nothing to pin, and no path that moves the
+portal's image can leave `/next` behind.
 
 `.github/scripts/check-image-set.sh` **is** the definition of that set. It is asked by two jobs —
 `gate` on the reconcile path, `verify-images` after a publish — and lives in one file precisely so
