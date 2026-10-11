@@ -169,6 +169,23 @@ as before, and the line names the pools (`IoPoolQueueReport`). Pinned by
 completes in its turn, and a leaf admitted and hung in its own lane fails inside two budgets while an
 unrelated lane keeps advancing. With the stalled-lane condition removed, the second case ran to 27 s.
 
+🚨 **A pool's `Waiting` is not its queue order — read `BehindCap` before claiming a leaf is behind
+other work.** A pool counts a leaf as waiting from the moment it is ACCEPTED, one ThreadPool hop
+before the leaf reaches the gate (`IoPoolAdmission.BeforeGate`), and the gate is first-come-first-served
+among the leaves that have REACHED it. The first version of that test loaded the lane with twelve
+holders, waited for `CurrentlyWaiting >= 11` and started the delete. Run alone it passed; run with the
+whole project in one process (macOS arm64, Release, 2,746 tests) it failed four runs out of four with
+`Expected 00:00:01.8188890 to be greater than 00:00:04`: the delete's leaf reached the gate behind
+three of the twelve accepted holders, was served after 3 × 600 ms, and the watchdog was never
+involved. The same reading is reproduced with no load at all by parking nine holder prologues before
+the gate (`IoPool.OnLeafPrologueStarting`): `11 waiting, 1 in flight` with `before the gate 9, behind
+the cap 2`, and the delete returns in 1.9 s. So the test now reads the load where the order is decided
+(`BehindCap`), keeps the queue at depth until the delete's leaf has asked for its slot, and compares
+the budget with the leaf's own wait, measured by the store it queued in — never with a wall clock
+started at the request, which also charges the watchdog for every stage before the commit. The
+product was not at fault here, and the credit's own rule is unaffected: a lane whose work is still
+before the gate reads as busy-and-not-advancing, which denies credit — the conservative direction.
+
 🚨 **Raising the budget is not a fix for either half** — the question is never "how much headroom
 does this need", it is "is the bound measuring the right quantity, and does the check look at the
 whole subtree".
