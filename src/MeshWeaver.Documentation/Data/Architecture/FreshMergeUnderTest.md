@@ -59,6 +59,15 @@ git checkout --detach <commit>
   merge-bases, are walkable. The script's self-test carries such a criss-cross: clean over the
   virtual base and byte-identical to `git merge`, conflicting over either single base (the control),
   and still red when the head really conflicts.
+- **A non-empty answer from a shallow checkout is not yet the answer.** Git treats every shallow
+  boundary commit as a root, so one base of a criss-cross can be visible while the other still lies
+  beyond the boundary, and `merge-base --all` then names only the visible one. The script accepts the
+  bases only once no boundary commit reachable from either tip lies ABOVE them — every hidden common
+  ancestor is then an ancestor of a base it already has, so none of them is a merge-base. Until then
+  it keeps deepening, and when the deepening ladder ends first it is red, naming the boundary, rather
+  than merging over a subset of the bases. The self-test carries a criss-cross whose second base lies
+  past the first deepening: one base visible after it (the control), merged over both once the
+  history is read, and refused when the ladder is cut short.
 - **It is reported.** Every applying job prints, and adds to its summary:
   *Tested: head `abc…` merged onto `main@def…` → `123…` (merged) (GitHub's merge ref was built on main@456…)*.
 - **A selector sees the right diff.** A scope that diffs `origin/<base>...HEAD` now gets exactly the
