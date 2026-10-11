@@ -128,6 +128,37 @@ public class HomeSpaceManifestTest
     }
 
     [Fact]
+    public void The_space_manifest_never_lists_the_platforms_own_partitions()
+    {
+        var roots = new[]
+        {
+            new MeshNode("Esl"), new MeshNode("Doc"), new MeshNode("Ops"), new MeshNode("Plugins"),
+            new MeshNode("Agent"), new MeshNode("skill"), new MeshNode("Provider"), new MeshNode("Admin"),
+        };
+
+        RefreshSpacePathsLogonAction.SpacePathsFrom(roots, Owner)
+            .Should().Equal(["Esl"], "a space is a place people work together; platform partitions are reached through their apps");
+    }
+
+    [Fact]
+    public void The_shared_manifest_never_lists_grants_on_the_platforms_own_partitions()
+    {
+        // Every global admin holds assignments whose scope is Admin and Provider (GlobalAdminSeed);
+        // neither is a space somebody shared with them.
+        var grants = new[]
+        {
+            new MeshNode("a", "Admin/_Access") { MainNode = "Admin" },
+            new MeshNode("b", "Provider/_Access") { MainNode = "Provider" },
+            new MeshNode("c", "Governance/Activities/x/_Access") { MainNode = "Governance/Activities/x" },
+            new MeshNode("d", "Esl/_Access") { MainNode = "Esl" },
+            new MeshNode("e", "Initech/Module/_Access") { MainNode = "Initech/Module" },
+        };
+
+        UserActivityLayoutAreas.SharedTargetPaths(grants, Owner)
+            .Should().Equal(["Esl", "Initech/Module"], "platform and fleet partitions are reached through their apps");
+    }
+
+    [Fact]
     public void A_fresh_answer_writes_both_lists()
     {
         var user = new User { SpacePaths = ["Old"], SharedPaths = [] };
