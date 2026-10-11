@@ -681,7 +681,7 @@ Policy [`deployment-config-authorizes-named-commercial`](../PolicyNotProse).
 
 `PluginCatalog:InstallByDefault` lives in the instance's **deployment record**, and that record
 changes only through a reviewed pull request in the deployment repository, merged by the auto-merge
-App — a merge there *is* the release. Naming `PartnerRe/Claims` there is therefore a decision people
+App — a merge there *is* the release. Naming `ClientA/Claims` there is therefore a decision people
 took, reviewed and put on record: the same kind of decision a governed `package.provision` activity
 records. So the unattended default install carries an explicitly named principal for it,
 **`deployment-config:{PluginCatalog:InstanceId}`** (`DeploymentConfigAuthority`), and

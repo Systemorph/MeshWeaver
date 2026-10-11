@@ -25,7 +25,7 @@ in-process by `NuGetAssemblyResolver` (`src/MeshWeaver.NuGet`). The resolver pro
 
 ## Why the split exists — Microsoft.Data.SqlClient
 
-Measured on partnerre.meshweaver.cloud (linux-x64) on 2026-10-11: a NodeType referencing
+Measured on client-a.meshweaver.cloud (linux-x64) on 2026-10-11: a NodeType referencing
 `Microsoft.Data.SqlClient` 6.1.1 compiled, then failed at render with
 `Could not load file or assembly 'Microsoft.Data.SqlClient, Version=6.0.0.0'`. The package ships
 

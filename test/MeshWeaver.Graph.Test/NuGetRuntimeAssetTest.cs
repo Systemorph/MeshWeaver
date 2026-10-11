@@ -18,7 +18,7 @@ namespace MeshWeaver.Graph.Test;
 /// <list type="bullet">
 ///   <item>a package's <c>runtimes/&lt;rid&gt;/lib/&lt;tfm&gt;/</c> group replaces its <c>lib/&lt;tfm&gt;/</c>
 ///     group — the shape of every .NET SQL Server client, whose <c>lib/</c> copy is the "not supported
-///     on this platform" stub (partnerre.meshweaver.cloud, linux-x64, 2026-10-11);</item>
+///     on this platform" stub (client-a.meshweaver.cloud, linux-x64, 2026-10-11);</item>
 ///   <item>a dependency the host ships at an equal-or-newer version binds to the host's copy.</item>
 /// </list>
 /// </summary>
