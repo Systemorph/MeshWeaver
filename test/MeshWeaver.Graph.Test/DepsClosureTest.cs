@@ -425,6 +425,7 @@ public class DepsClosureTest
     [Theory]
     [InlineData("linux-x64", true)]
     [InlineData("linux", true)]
+    [InlineData("unix-x64", true)]
     [InlineData("unix", true)]
     [InlineData("any", true)]
     [InlineData("", true)]

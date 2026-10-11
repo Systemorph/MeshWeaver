@@ -657,6 +657,27 @@ public class ModulePackCommandTest : IDisposable
         }
     }
 
+    /// <summary>
+    /// <see cref="PackCapturingErrors"/> with standard OUTPUT captured too — for what the pack
+    /// reports as information (stdout) rather than as a refusal (stderr). Same serialization and
+    /// restore-in-finally guarantees.
+    /// </summary>
+    private static (int Exit, string Output, string Error) PackCapturingBoth(IEnumerable<string> args)
+    {
+        var originalOut = Console.Out;
+        using var output = new StringWriter();
+        Console.SetOut(output);
+        try
+        {
+            var (exit, error) = PackCapturingErrors(args);
+            return (exit, output.ToString(), error);
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+        }
+    }
+
     private List<string> DepsClosurePackArgs(string version, string outDir) =>
     [
         Path.Combine(root, "closure"),
@@ -806,10 +827,17 @@ public class ModulePackCommandTest : IDisposable
             """);
         var outDir = Path.Combine(root, "out-rid-foreign");
 
-        var (exit, error) = PackCapturingErrors(DepsClosurePackArgs("2.0.2", outDir));
+        var (exit, output, error) = PackCapturingBoth(DepsClosurePackArgs("2.0.2", outDir));
 
         Assert.True(exit == 0, $"an asset for a RID no bundle targets is information; stderr: {error}");
         Assert.True(File.Exists(BundleIn(outDir, "2.0.2")));
+        // The information is the CONTRACT, not a by-product: one stdout line naming the package,
+        // the path and the foreign RID — and not a word of it on stderr, where a refusal goes.
+        var info = Assert.Single(output.Split('\n'), l => l.StartsWith("deps-closure: info:", StringComparison.Ordinal));
+        Assert.Contains("'RidPicky'", info, StringComparison.Ordinal);
+        Assert.Contains("runtimes/win/lib/net10.0/RidPicky.dll", info, StringComparison.Ordinal);
+        Assert.Contains("RID 'win'", info, StringComparison.Ordinal);
+        Assert.DoesNotContain("runtimes/win/", error, StringComparison.Ordinal);
     }
 
     /// <summary>

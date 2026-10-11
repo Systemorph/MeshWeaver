@@ -33,6 +33,15 @@ public static class ModuleBundleTarget
     /// <c>MeshWeaver.NuGet.RuntimeAssetSelector</c> documents). An asset under <c>runtimes/unix/</c>
     /// is therefore targeted, and one under <c>runtimes/win/</c> or <c>runtimes/osx-arm64/</c> is
     /// not. Immutable, written once.
+    ///
+    /// <para>🚨 This chain decides ONE thing: whether an asset the derivation does NOT carry is a
+    /// refusal or information. It never marks anything carried. For a native, "carried" is decided
+    /// by layout alone (<see cref="NuGetPackageWriter.IsModuleNativeLayout"/>), independently of
+    /// this chain, and the module-native loader (<c>ModuleNativeAssets</c>) probes only the running
+    /// RID — so a native under <c>runtimes/linux/</c> or <c>runtimes/unix/</c> that is NOT at the
+    /// probed layout is refused here (the chain only ever errs towards refusing for natives), and
+    /// whether a carried one at <c>runtimes/unix/native/</c> is ever probed is a question about the
+    /// layout check, not about this chain.</para>
     /// </summary>
     public static readonly ImmutableArray<string> CompatibleRids =
         [Rid, "linux", "unix-x64", "unix", "any"];
