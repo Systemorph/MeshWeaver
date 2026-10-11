@@ -328,7 +328,7 @@
       "slots": [],
       "why": [
         "Maintainer directive, 2026-10-03: 'always merge with latest before push ==> as general rule in",
-        "all the agents' / 'also in our agents.md incl partner re'. The occasion: nine pull requests were",
+        "all the agents' / 'also in our agents.md incl client-a'. The occasion: nine pull requests were",
         "DIRTY at once, each pushed on a base main had since moved past. GitHub runs no checks on a DIRTY",
         "pull request, so each kept rendering the green it earned before the conflict and nothing drained.",
         "",

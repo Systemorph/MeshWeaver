@@ -69,13 +69,13 @@ Two other choices were considered and rejected:
   `3.0.0-ci.10330 < 3.1.10331` by run number and by SemVer. A floor stamped `3.0.0-ci.10317` is met by
   every `3.1.<run>`; a floor `3.1.<run>` holds a portal still on the old notation until it rolls.
 - **Patterns.** `3.*` (every Systemorph record, Memex step 3) admits both notations. A record still on
-  `3.0.0-ci*` admits NO new build and freezes silently — the PartnerRe estate's records
-  (`Systemorph/PartnerRe.Memex`) are widened in their own repository.
+  `3.0.0-ci*` admits NO new build and freezes silently — the ClientA estate's records
+  (`Systemorph/ClientA.Memex`) are widened in their own repository.
 - **Mixed fleets.** A portal decides WHICH tag through its own `VersionSelect` and hands it to the
   control lane. A portal whose image predates the step-1 readers (merged 2026-10-07 15:01Z) ranks
   `3.1.<run>` below every `3.0.0-ci.*` set, so it takes TWO hops: first the newest old-notation set
   (which carries the readers), then the new notation. Measured at the cut-over: control and memex had
-  the readers; memex-cloud (`3.0.0-ci.10148`) and pearl did not, and were already not rolling for an
+  the readers; memex-cloud (`3.0.0-ci.10148`) and client-b did not, and were already not rolling for an
   unrelated reason. The control lane's own lag check (`SelfUpdateRouting.RollInsteadOfRestart`, Plugins
   step 2) reads both notations and opens a roll to control's newest seen tag on a restart-pending.
 - **Binding identity.** `AssemblyVersion` moves `3.0.0.0` → `3.1.0.0` with the line, as designed
@@ -172,7 +172,7 @@ delegate to core's order, not to add another regex.
 
 | place | role | on `3.1.N` |
 |---|---|---|
-| `mesh/Deployments/{build,control,memex,memex-cloud,pearl}.json` `updatePattern: "3.0.0-ci*"` | data: the records | refuses every `3.1.N`; must become `3.*` **before** the minter flips |
+| `mesh/Deployments/{build,control,memex,memex-cloud,client-b}.json` `updatePattern: "3.0.0-ci*"` | data: the records | refuses every `3.1.N`; must become `3.*` **before** the minter flips |
 | `deployments/aks/*/values.*.public.yaml` `SelfUpdate__DefaultPattern: "3.0.0-ci*"` | data: overlay mirror of the record | same, in the same change |
 | the same overlays' `portal.image` / migration seed `…:3.0.0-latest` | data: seed pointer | `3-latest` |
 | `scripts/check-no-pins.py:56` `FLEET_PATTERN` | **R**: records must equal it | change with the records |
