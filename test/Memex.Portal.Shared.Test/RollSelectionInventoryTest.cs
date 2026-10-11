@@ -36,8 +36,10 @@ namespace Memex.Portal.Shared.Test;
 /// gate already uses, and they have measurably answered ZERO on a live portal that carried 42
 /// modules (memex, 2026-08-10 — the measurement that made <c>InstanceComboReader</c> fold two
 /// shapes). With an empty denominator every release ships all zero plugins, so a selector that does
-/// not refuse the case degenerates into "take the newest" — #3441's vacuity, one level up. Here it
-/// is <see cref="RollSelectionKind.NoPluginsKnown"/>, and it selects nothing.</para>
+/// not refuse the case degenerates into "take the newest" — #3441's vacuity, one level up. Under
+/// policy <c>platform-rolls-independently-of-packages</c> the platform rolls independently of its
+/// packages, so the newest admitted release IS
+/// taken — and the outcome says, in the summary and the advisory, that no package was checked.</para>
 /// </summary>
 public class RollSelectionInventoryTest(ITestOutputHelper output)
     : MonolithMeshTestBase(output), IDisposable
@@ -98,12 +100,14 @@ public class RollSelectionInventoryTest(ITestOutputHelper output)
 
     /// <summary>
     /// The same fixture on an instance that opts into <c>Modules:RequirePrebuilt</c> — the strict
-    /// mode in which the seeder refuses a boot compile — declines the newer NAMING Feedback and
-    /// selects the older, exactly as every instance did before #3651. Read from the instance's
-    /// own configuration, the same key the seeder reads.
+    /// mode in which the seeder refuses a boot compile. Until policy
+    /// <c>platform-rolls-independently-of-packages</c> it declined the newer and
+    /// selected the older; under that policy it selects the NEWER anyway and names Feedback as
+    /// the package that does not follow — it parks under the strict seeder and catches up through
+    /// its own update policy.
     /// </summary>
     [Fact(Timeout = 240_000)]
-    public async Task UnderRequirePrebuilt_SelectsTheLatestReleaseThatShipsEveryInstalledPackage()
+    public async Task UnderRequirePrebuilt_TheNewestIsSelected_AndTheUnpublishedPackageIsAnAdvisory()
     {
         foreach (var id in Installed)
             await Record(id);
@@ -117,26 +121,27 @@ public class RollSelectionInventoryTest(ITestOutputHelper output)
         Output.WriteLine(outcome.Summary);
 
         outcome.Kind.Should().Be(RollSelectionKind.Update);
-        outcome.SelectedVersion.Should().Be(CompleteVersion);
-        outcome.BootCompiles.Should().BeEmpty();
-
-        var declined = outcome.Declined.Should().ContainSingle().Subject;
-        declined.Version.Should().Be(IncompleteVersion);
-        declined.Reason.Should().Contain("Feedback");
-        declined.Blockers.Should().ContainSingle()
-            .Which.Kind.Should().Be(PackageAvailabilityKind.ContentBakeMissing);
+        outcome.SelectedVersion.Should().Be(IncompleteVersion);
+        outcome.Declined.Should().BeEmpty();
+        outcome.RequiredPlugins.Should().Be(Installed.Length);
+        outcome.SatisfiedPlugins.Should().Be(ShippedByTheNewerRelease.Length);
+        outcome.Advisories.Should().NotBeEmpty();
+        outcome.Advisories[0].Should().Contain("independently of packages");
+        outcome.Advisories[0].Should().Contain("Feedback");
+        outcome.Summary.Should().Contain("not following this roll");
     }
 
     /// <summary>
-    /// 🚨 THE VACUITY REFUSAL, on a real mesh: no install records at all. Every candidate would ship
-    /// all zero plugins, so nothing is selected and the refusal says the denominator out loud.
-    ///
-    /// <para>The negative control is inside the assertion: the SAME root, walked with a denominator,
-    /// selects the older release (the test above), and the newest is complete-for-nothing here — so
-    /// "took the newest" is a state this fixture can actually produce.</para>
+    /// 🚨 THE VACUITY, on a real mesh: no install records at all. Every candidate would ship all zero
+    /// plugins. Under policy <c>platform-rolls-independently-of-packages</c> that is a statement
+    /// about PACKAGES and does not stop the platform
+    /// — the
+    /// newest admitted release is selected — but it is still never spelled like "all plugins
+    /// present": the summary and the advisory say the denominator out loud and that no package was
+    /// checked, and the shared predicate still answers the PACKAGE question with a refusal.
     /// </summary>
     [Fact(Timeout = 240_000)]
-    public async Task NoInstallRecordsRefusesInsteadOfSelectingTheNewest()
+    public async Task NoInstallRecordsSelectsTheNewest_AndSaysNoPackageWasChecked()
     {
         var root = StagedRoot();
 
@@ -146,32 +151,38 @@ public class RollSelectionInventoryTest(ITestOutputHelper output)
 
         Output.WriteLine(outcome.Summary);
 
-        outcome.Kind.Should().Be(RollSelectionKind.NoPluginsKnown);
-        outcome.SelectedVersion.Should().BeNull(
-            "an empty denominator makes every release vacuously complete — selecting the newest on "
-            + "that basis is the defect this refusal exists to prevent");
-        outcome.ShouldUpdate.Should().BeFalse();
-        outcome.IsIndeterminate.Should().BeTrue();
+        outcome.Kind.Should().Be(RollSelectionKind.Update);
+        outcome.SelectedVersion.Should().Be(IncompleteVersion,
+            "the platform rolls independently of packages — an unread denominator is reported, "
+            + "never a reason to stay");
+        outcome.ShouldUpdate.Should().BeTrue();
         outcome.RequiredPlugins.Should().Be(0);
+        outcome.SatisfiedPlugins.Should().Be(0);
         outcome.Summary.Should().Contain("0 plugins required");
+        outcome.Summary.Should().Contain("no package was checked");
 
-        // 🚨 And the SHARED predicate refuses it too, in the same place, so the poller's own
-        // re-gate cannot wave through what the selector declined to choose. A refusal only the
-        // selector honours would be a rule with one caller.
+        // 🚨 The SHARED predicate still answers the PACKAGE question truthfully — a gate that
+        // compares two empty sets is the vacuity #3441 removed — and the roll surfaces turn that
+        // refusal into an advisory (ForPlatformRoll), never a clearance of the packages.
         var verdict = await Service(root).IsUpdatable(IncompleteVersion)
             .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
         verdict.IsUpdatable.Should().BeFalse(
             "a gate that compares two empty sets is the vacuity #3441 removed one level down");
         verdict.IsIndeterminate.Should().BeTrue();
         verdict.HoldReason.Should().Contain("ZERO");
+        var roll = verdict.ForPlatformRoll();
+        roll.IsUpdatable.Should().BeTrue();
+        roll.WaivedHold.Should().Contain("ZERO");
     }
 
     /// <summary>
     /// With no candidate list the service derives one from the published root's own release markers
     /// — so an environment can answer "which release should I be on" without listing a container
-    /// registry it may not be able to reach. Ordering is <c>VersionSelect</c>'s, which is why —
-    /// on the strict instance, where the incomplete release is declined — the older-but-complete
-    /// release wins over the newer incomplete one rather than over a lexicographic accident.
+    /// registry it may not be able to reach. Ordering is <c>VersionSelect</c>'s, which is why the
+    /// NEWEST marker (ci.7676) is selected rather than a lexicographic accident — and, under policy
+    /// <c>platform-rolls-independently-of-packages</c>, selected even on the strict instance where
+    /// its missing Feedback bake is refused:
+    /// that refusal is an advisory on the platform roll.
     /// </summary>
     [Fact(Timeout = 240_000)]
     public async Task DerivesItsCandidatesFromThePublishedReleaseMarkers()
@@ -187,16 +198,20 @@ public class RollSelectionInventoryTest(ITestOutputHelper output)
 
         Output.WriteLine(outcome.Summary);
 
-        outcome.SelectedVersion.Should().Be(CompleteVersion);
-        outcome.Declined.Select(d => d.Version).Should().Equal([IncompleteVersion]);
+        outcome.SelectedVersion.Should().Be(IncompleteVersion);
+        outcome.Declined.Should().BeEmpty();
+        outcome.Summary.Should().Contain("Feedback");
     }
 
     /// <summary>
-    /// A configured root that is not there is a mis-mount, not an empty publication history: the
-    /// selector HOLDS and names it. Cannot determine is not clearance to take the newest.
+    /// A configured root that is not there is a mis-mount, not an empty publication history. Under
+    /// policy <c>platform-rolls-independently-of-packages</c> that unanswerable PACKAGE question
+    /// does not hold the platform: with the candidates
+    /// in hand the newest admitted one is selected, and the summary and the advisory NAME the
+    /// mis-mount — cannot determine is reported, never dressed up as "all plugins present".
     /// </summary>
     [Fact(Timeout = 240_000)]
-    public async Task AnAbsentPublishedRootHoldsRatherThanSelectingTheNewest()
+    public async Task AnAbsentPublishedRootSelectsTheNewest_AndNamesTheMisMount()
     {
         foreach (var id in Installed)
             await Record(id);
@@ -209,10 +224,12 @@ public class RollSelectionInventoryTest(ITestOutputHelper output)
 
         Output.WriteLine(outcome.Summary);
 
-        outcome.Kind.Should().Be(RollSelectionKind.Indeterminate);
-        outcome.SelectedVersion.Should().BeNull();
-        outcome.IsIndeterminate.Should().BeTrue();
+        outcome.Kind.Should().Be(RollSelectionKind.Update);
+        outcome.SelectedVersion.Should().Be(IncompleteVersion);
         outcome.Summary.Should().Contain("does not exist");
+        outcome.Summary.Should().Contain("no package was checked");
+        outcome.Advisories.Should().ContainSingle()
+            .Which.Should().Contain("does not exist");
     }
 
     // ── fixture ─────────────────────────────────────────────────────────────────────────────────
