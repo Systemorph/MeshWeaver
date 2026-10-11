@@ -366,6 +366,53 @@ Two legs, each selecting its own type's own states, merged for display only.
 nothing, and it must never be mistaken for the retention pass that actually bounds the data
 ([Notification Retention](/Doc/Architecture/NotificationRetention)).
 
+### Select many, then act — what ships today
+
+The Inbox app (`/{user}/Inbox`, `InboxLayoutArea`) renders each band as a `Controls.DataGrid` with
+the platform's own selection column (`WithRowSelection`, [DataGrid](/Doc/GUI/DataGrid) → "Row
+selection"): a checkbox per row, a header checkbox per band, and two toolbar buttons that act on
+every ticked row of every band.
+
+| Button | Does | Never does |
+|---|---|---|
+| **Delete** | puts each ticked item away through its own type's `IInboxItemHandler.Dismiss`, records the batch | remove a node from the mesh |
+| **Undo** | brings the last batch back through `IInboxItemHandler.Restore` | touch anything Delete did not put away |
+
+🚨 **Delete is SOFT, and what it means belongs to the item's type, not to the inbox.** The action
+half of the potluck mirrors the query half: a package that brings a leg brings, as a singleton
+service, the `IInboxItemHandler` for the node type its leg selects. "Put away" moves the item into a
+state the package's OWN leg excludes — and Undo is the exact inverse:
+
+| Item type | Brought by | Delete | Undo | The leg excludes |
+|---|---|---|---|---|
+| `Notification` | core | `Dismissed = true` | `Dismissed = false` | `-content.dismissed:true` |
+| `Email` (`{user}/_Email`, inbound) | core | `Status = Archived` | `Status = Read` | `-content.status:Archived` |
+| `Thread` | the Threads app | closes the conversation | reopens it | `-content.status:Done` |
+
+Three rules follow, and each is pinned by a test in `InboxSelectAndDeleteTest`:
+
+- **A row whose type has no handler is LISTED but not selectable**, and its disabled checkbox says
+  why. The inbox never guesses a write for a type nobody taught it — a governed record (an approval,
+  an instance action) deliberately has no handler and leaves the inbox by being decided.
+- **A row in *Running* is never selectable.** It is not the viewer's to put away; it leaves the band
+  by finishing.
+- **A selection is the viewer's claim, not a grant.** The click re-checks the ticked keys against
+  the rows as they stand (`InboxRows.Targets`) and issues every write under the CLICKER's access
+  context, opened around the handler call — so each write is authorised exactly as if the viewer had
+  made it on the item's own page.
+
+🚨 **A default is OMITTED from stored JSON, so a leg negates the STAMPED value it excludes.**
+`Dismissed` defaults to `false`, `Email.Status` to `New`, `Direction` to `Inbound`: a positive match
+on any of those selects nothing that was ever written. The legs therefore read
+`-content.dismissed:true`, `-content.status:Archived`, `-content.direction:Outbound` — the same trap
+the activity legs document for `Running`.
+
+**How a package brings a leg today:** as a service —
+`services.AddSingleton(new InboxQueryLeg { Source = "Threads", Band = InboxBand.NeedsYou, Query = "namespace:{viewer}/… select:…" })`
+— which `InboxQueries.All` runs beside core's own. That serves a COMPILED module. A node-native
+package cannot register a service, so the durable, node-contributed form of a leg described above is
+still owed (§11).
+
 ### Ordering: by IMPORTANCE first, date second
 
 🚨 **The default order is importance, not time.** What the viewer must act on comes **first, at the
@@ -621,6 +668,16 @@ twice.
 
 ## 11. What is NOT established here
 
+- **Legs contributed as NODES do not exist yet.** A compiled module registers its leg and its
+  handler as services; a node-native package (the Hosting approvals, triage items, fleet issues,
+  feedback submissions) has no way to bring either. Until it does, those lists stay on their own
+  pages.
+- **The inbox's rows carry no read state and no channel glyph.** A row shows what it is, who brought
+  it and when it last changed; "unread" and the transport marker of §6 need content the row
+  projection does not select.
+- **Only the viewer's OWN partition is listed.** A conversation started on a page in another
+  partition lives beside that page, so no anchored leg finds it — it stays in the Threads app until
+  it has a delivery copy in the viewer's partition (§4).
 - **No measurement of copy volume.** The write-side fan-out is bounded by recipient count *by
   construction*; no production distribution has been sampled, because the feature does not exist yet.
 - **WhatsApp and iMessage transports are asserted to fit the adapter shape, not demonstrated.**

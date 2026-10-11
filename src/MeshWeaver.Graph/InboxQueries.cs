@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Graph;
 
@@ -52,8 +53,24 @@ public static class InboxQueries
             Source = "Notifications",
             Band = InboxBand.NeedsYou,
             Order = 10,
+            // Not put away. `Dismissed` defaults to false and is therefore OMITTED from stored
+            // JSON, so the leg negates the stamped `true` — a positive match on `false` would
+            // select nothing (the same trap as the activity legs below).
             Query = $"namespace:{ViewerToken}/{NotificationService.SatelliteSegment} "
-                    + $"nodeType:{NotificationNodeType.NodeType} sort:CreatedAt-desc {RowProjection}",
+                    + $"nodeType:{NotificationNodeType.NodeType} -content.dismissed:true "
+                    + $"sort:CreatedAt-desc {RowProjection}",
+        },
+        new()
+        {
+            Source = "Mail",
+            Band = InboxBand.NeedsYou,
+            Order = 20,
+            // The viewer's own stored mail, inbound and not archived. Both defaults (Inbound, New)
+            // are omitted from stored JSON, so the leg negates the two stamped values it excludes.
+            Query = $"namespace:{ViewerToken}/{EmailNodeType.UserEmailSegment} "
+                    + $"nodeType:{EmailNodeType.NodeType} -content.status:{nameof(EmailStatus.Archived)} "
+                    + $"-content.direction:{nameof(EmailDirection.Outbound)} "
+                    + $"sort:LastModified-desc {RowProjection}",
         },
         new()
         {
@@ -76,6 +93,15 @@ public static class InboxQueries
                     + $" sort:LastModified-desc {RowProjection}",
         },
     ];
+
+    /// <summary>
+    /// Every leg on this mesh: core's own plus each one a package registered as a service
+    /// (<c>services.AddSingleton(new InboxQueryLeg { … })</c>). The inbox runs what it is handed —
+    /// it carries no list of the packages it knows.
+    /// </summary>
+    /// <param name="services">The hub's service provider.</param>
+    public static ImmutableArray<InboxQueryLeg> All(IServiceProvider services)
+        => [.. BuiltIn, .. services.GetServices<InboxQueryLeg>()];
 
     /// <summary>
     /// Substitutes the viewer into every enabled leg, ordered by band then <see cref="InboxQueryLeg.Order"/>.
