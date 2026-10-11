@@ -29,25 +29,32 @@ public class ActionHandlerRuleChainTest(ITestOutputHelper output) : MonolithMesh
 {
     private const string Partition = "TestData";
 
+    /// <summary>A partition the test may write into but that is NOT declared for rules.</summary>
+    private const string Undeclared = "UndeclaredRules";
+
+    /// <summary>Declares the test's own partition for rules — the platform's declaration seam, used as a deployment would.</summary>
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder) =>
+        base.ConfigureMesh(builder).DeclareActionHandlerRuleNamespaces(Partition);
+
     private static string NewKey() => "test.action-" + Guid.NewGuid().ToString("N")[..8];
 
     private static ActionInvocation Invocation(string key, int version = 1) =>
         new() { HandlerKey = key, HandlerVersion = version };
 
-    private async Task<string> WriteRule(ActionHandlerRule rule) =>
-        await WriteRuleNode(rule.Id, rule);
+    private async Task<string> WriteRule(ActionHandlerRule rule, string partition = Partition) =>
+        await WriteRuleNode(rule.Id, rule, partition);
 
-    private async Task<string> WriteRuleNode(string id, object content)
+    private async Task<string> WriteRuleNode(string id, object content, string partition = Partition)
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        await meshService.CreateNode(new MeshNode(id, $"{Partition}/ActionHandlers")
+        await meshService.CreateNode(new MeshNode(id, $"{partition}/ActionHandlers")
         {
             Name = "action handler rule probe",
             NodeType = ActionHandlerRuleNodeType.NodeType,
             State = MeshNodeState.Active,
             Content = content,
         }).FirstAsync().Timeout(TestTimeouts.Convergence).Await();
-        return $"{Partition}/ActionHandlers/{id}";
+        return $"{partition}/ActionHandlers/{id}";
     }
 
     private Task<ActionHandlerResolution> Resolve(ActionInvocation invocation) =>
@@ -91,6 +98,50 @@ public class ActionHandlerRuleChainTest(ITestOutputHelper output) : MonolithMesh
         resolution.Outcome.Status.Should().Be(ActionOutcomeStatus.Ready,
             "a rule written while the portal runs takes effect on the next resolution — no recycle");
         resolution.Handler!.Capability.HandlerKey.Should().Be(key);
+    }
+
+    [Fact]
+    public async Task ARuleInAnUndeclaredPartition_WithALowerOrder_DoesNotWin_AndIsReported()
+    {
+        var key = NewKey();
+        var declared = await WriteRule(new ActionHandlerRule
+        {
+            Id = "declared" + Guid.NewGuid().ToString("N")[..6], Claims = [key], Order = 100,
+            Handler = $"{Partition}/Coupons/Review",
+        });
+        var hijack = await WriteRule(new ActionHandlerRule
+        {
+            Id = "hijack" + Guid.NewGuid().ToString("N")[..6], Claims = [key], Order = 1,
+            Handler = $"{Undeclared}/Phish",
+        }, Undeclared);
+        // Wait on the condition: both rules are in the snapshot — one bound, one refused by name.
+        var chain = await Mesh.ActionHandlerChain()
+            .Where(c => c.Handlers.Any(h => h.Capability.HandlerKey == key)
+                        && c.Rejected.Any(r => r.Path == hijack))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+
+        chain.Rejected.Should().Contain(new RejectedActionHandlerRule(hijack, ActionHandlerRules.UndeclaredNamespace));
+        chain.DeclaredNamespaces.Should().Contain(Partition).And.NotContain(Undeclared);
+
+        var resolution = await Resolve(Invocation(key));
+        resolution.Outcome.Status.Should().Be(ActionOutcomeStatus.Ready,
+            "the rule in the declared namespace still resolves");
+        resolution.Handler!.Capability.Order.Should().Be(100,
+            "Create rights in some partition are not a declaration — the lower-Order rule there does not win");
+        resolution.Handler.ToString().Should().StartWith(declared);
+
+        var onlyUndeclared = NewKey();
+        var orphan = await WriteRule(new ActionHandlerRule
+        {
+            Id = "orphan" + Guid.NewGuid().ToString("N")[..6], Claims = [onlyUndeclared], Order = 1,
+            Handler = $"{Undeclared}/Phish",
+        }, Undeclared);
+        await Mesh.ActionHandlerChain().Where(c => c.Rejected.Any(r => r.Path == orphan))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+        var unknown = await Resolve(Invocation(onlyUndeclared));
+        unknown.Outcome.Status.Should().Be(ActionOutcomeStatus.UnknownHandler);
+        unknown.Outcome.Detail.Should().Contain($"{orphan} ({ActionHandlerRules.UndeclaredNamespace})",
+            "an undeclared rule is named in the unclaimed detail, never dropped in silence");
     }
 
     [Fact]

@@ -113,8 +113,9 @@ How it is read and resolved:
 
 - **Live.** `hub.ActionHandlerChain()` is one synced query over every `ActionHandlerRule` node,
   read as System (which handler acts for a key is platform configuration, never a function of who
-  asks), re-emitted whenever a rule changes. A rule written while the portal runs is used by the next
-  resolution — **no recycle**. `hub.ResolveActionHandler(invocation)` resolves over the current
+  asks), combined with the live set of **declared namespaces** (below) and re-emitted whenever
+  either changes. A rule written — or a package installed — while the portal runs is used by the
+  next resolution — **no recycle**. `hub.ResolveActionHandler(invocation)` resolves over the current
   chain; it is cold and emits once.
 - **Pure underneath.** `ActionHandlerRules.Bind(rules)` turns rule nodes into one handler per
   claimed key and `ActionHandlerResolution.Resolve(handlers, invocation)` chooses among them; neither
@@ -122,12 +123,31 @@ How it is read and resolved:
 - **Platform handlers are ordinary rules.** There is no earlier pass, no built-in fast path and no
   service fallback.
 - 🚨 **The terminal is loud.** An unclaimed key resolves to `UnknownHandler` whose detail says how
-  many rules were read and names every rule that was **refused** (`UnreadableContent`, `NoHandler`,
-  `UnsafeHandler`, `HandlerOutsidePartition`), and it is logged at Warning. A broken rule therefore
-  fails *as unclaimed, by name* — it is never skipped in silence.
-- 🚨 **A rule routes only into its own partition.** Rules are authored wherever their package lives,
-  so the read is mesh-wide; a rule whose `Handler` lies outside the rule's own first path segment is
-  refused. Writing a rule needs Create in that partition, under its ordinary access rules.
+  many rules were read, which namespaces were declared, and names every rule that was **refused**
+  (`UndeclaredNamespace`, `UnreadableContent`, `NoHandler`, `UnsafeHandler`,
+  `HandlerOutsidePartition`), and it is logged at Warning. Each refused rule is also logged once per
+  mesh at Warning, even when another rule resolves the key. A broken rule therefore fails *as
+  unclaimed, by name* — it is never skipped in silence.
+- 🚨 **A rule routes only into its own partition.** A rule whose `Handler` lies outside the rule's
+  own first path segment is refused.
+
+### Only declared namespaces count
+
+🚨 **A rule counts only when its partition (first path segment) is DECLARED.** Create rights in
+some partition are not a declaration: without this, anyone who could create a node in partition X
+could add a lower-`Order` rule and route a key to X's own page. A rule anywhere else is refused as
+`UndeclaredNamespace` and reported as above — never silently dropped.
+
+The declared set is configuration, never a hand-maintained list of where rules happen to be, and it
+is read live. It is the union of every `IActionHandlerRuleNamespaceSource`:
+
+| Source | What it declares |
+|---|---|
+| The platform | `Admin` (where platform configuration lives; only a platform admin writes there), every `builder.DeclareActionHandlerRuleNamespaces(…)`, and the deployment configuration key `ActionLinks:RuleNamespaces` (an array) |
+| The package installer (`AddPluginCatalog`) | each installed package's own partition, read from its install record (`Plugins/{id}`, node type `Package`) as `TargetPartition ?? id` — the same rule the installer uses for "which partition is this install about". Installing the package IS the declaration; uninstalling it withdraws it. No opt-in field |
+
+Namespaces compare ignoring case, as partitions do. A package installed while the portal runs has
+its rules counted in the chain's next emission.
 
 **What a rule-bound handler does.** `Validate` is the structural check. `Prepare` answers `Ready`
 with a navigation to `/{Handler}?link={linkId}` — the handler node's page, which re-validates the

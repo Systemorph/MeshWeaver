@@ -211,6 +211,9 @@ public class ActionLinkContractTest
 
     // ── Rule binding: the chain is rule nodes ───────────────────────────────────────────────────
 
+    /// <summary>The namespaces declared for the pure binding tests — the store package's own.</summary>
+    private static readonly string[] Declared = ["Store"];
+
     [Fact]
     public void ARule_BindsOneHandlerPerClaimedKey_CarryingItsOrderVersionsAndCapabilities()
     {
@@ -226,7 +229,7 @@ public class ActionLinkContractTest
                 Capabilities = [ActionCapabilities.PaymentMethodSetup],
                 Mutates = true,
             }),
-        ]);
+        ], Declared);
 
         chain.RulesRead.Should().Be(1);
         chain.Rejected.Should().BeEmpty();
@@ -243,7 +246,7 @@ public class ActionLinkContractTest
     public void ADisabledRule_ClaimsNothing_AndIsNotReportedAsBroken()
     {
         var chain = ActionHandlerRules.Bind(
-            [("Store/ActionHandlers/coupon", new ActionHandlerRule { Claims = ["k"], Handler = "Store/R", Enabled = false })]);
+            [("Store/ActionHandlers/coupon", new ActionHandlerRule { Claims = ["k"], Handler = "Store/R", Enabled = false })], Declared);
 
         chain.Handlers.Should().BeEmpty();
         chain.Rejected.Should().BeEmpty();
@@ -260,7 +263,7 @@ public class ActionLinkContractTest
         [
             ("Store/ActionHandlers/coupon", new ActionHandlerRule { Claims = ["store.coupon-journey"], Handler = handler }),
             ("Store/ActionHandlers/unreadable", null),
-        ]);
+        ], Declared);
 
         chain.Handlers.Should().BeEmpty();
         chain.Rejected.Should().Equal(
@@ -272,6 +275,48 @@ public class ActionLinkContractTest
     }
 
     [Fact]
+    public void ARuleInAnUndeclaredNamespace_DoesNotWin_EvenWithALowerOrder_AndIsReportedByName()
+    {
+        var chain = ActionHandlerRules.Bind(
+        [
+            ("Mallory/ActionHandlers/hijack", new ActionHandlerRule
+            {
+                Claims = ["store.coupon-journey"], Order = 1, Handler = "Mallory/Phish",
+            }),
+            ("Store/ActionHandlers/coupon", new ActionHandlerRule
+            {
+                Claims = ["store.coupon-journey"], Order = 100, Handler = "Store/Coupons/Review",
+            }),
+        ], Declared);
+
+        chain.Rejected.Should().Equal(
+            new RejectedActionHandlerRule("Mallory/ActionHandlers/hijack", ActionHandlerRules.UndeclaredNamespace));
+        var resolution = chain.Resolve(Invocation());
+        resolution.Outcome.Status.Should().Be(ActionOutcomeStatus.Ready);
+        resolution.Handler!.Capability.Order.Should().Be(100,
+            "Create rights in some partition are not a declaration: only a declared namespace's rule counts");
+
+        var alone = ActionHandlerRules.Bind([("mallory/ActionHandlers/hijack", new ActionHandlerRule
+        {
+            Claims = ["store.coupon-journey"], Order = 1, Handler = "mallory/Phish",
+        })], Declared);
+        var outcome = alone.Resolve(Invocation()).Outcome;
+        outcome.Status.Should().Be(ActionOutcomeStatus.UnknownHandler);
+        outcome.Detail.Should().Contain($"mallory/ActionHandlers/hijack ({ActionHandlerRules.UndeclaredNamespace})")
+            .And.Contain("declared namespaces: Store", "the undeclared rule is named, never dropped in silence");
+    }
+
+    [Fact]
+    public void DeclaredNamespaces_CompareIgnoringCase()
+    {
+        var chain = ActionHandlerRules.Bind(
+            [("store/ActionHandlers/coupon", new ActionHandlerRule { Claims = ["k"], Handler = "store/Review" })], Declared);
+
+        chain.Rejected.Should().BeEmpty("partitions are case-insensitive, so a declaration is too");
+        chain.Resolve(Invocation("k")).Outcome.Status.Should().Be(ActionOutcomeStatus.Ready);
+    }
+
+    [Fact]
     public void ARuleBoundHandler_PreparesANavigationToItsHandlerNode_CarryingTheLink()
     {
         var chain = ActionHandlerRules.Bind(
@@ -280,7 +325,7 @@ public class ActionLinkContractTest
             {
                 Claims = ["store.coupon-journey"], Handler = "Store/Coupons/Review", Label = "Review the offer",
             }),
-        ]);
+        ], Declared);
         var resolution = chain.Resolve(Invocation());
         resolution.Outcome.Status.Should().Be(ActionOutcomeStatus.Ready);
 

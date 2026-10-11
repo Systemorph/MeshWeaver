@@ -89,7 +89,7 @@ public sealed record ActionHandlerRule
 /// A rule node the chain could not use, and why — reported, never dropped in silence.
 /// </summary>
 /// <param name="Path">The rule node's path.</param>
-/// <param name="Reason">An identifier for operators and logs: <c>UnreadableContent</c>, <c>NoHandler</c>, <c>HandlerOutsidePartition</c>, <c>UnsafeHandler</c>.</param>
+/// <param name="Reason">An identifier for operators and logs: <c>UndeclaredNamespace</c>, <c>UnreadableContent</c>, <c>NoHandler</c>, <c>HandlerOutsidePartition</c>, <c>UnsafeHandler</c>.</param>
 public sealed record RejectedActionHandlerRule(string Path, string Reason);
 
 /// <summary>
@@ -106,6 +106,14 @@ public sealed record ActionHandlerChain
 
     /// <summary>The rules that could not be bound, each with its reason.</summary>
     public ImmutableArray<RejectedActionHandlerRule> Rejected { get; init; } = [];
+
+    /// <summary>
+    /// The namespaces whose rules counted for this snapshot — the platform's declared ones and each
+    /// installed package's own (<see cref="ActionHandlerRules.Bind"/>). A rule outside them is in
+    /// <see cref="Rejected"/> as <see cref="ActionHandlerRules.UndeclaredNamespace"/>.
+    /// </summary>
+    public ImmutableSortedSet<string> DeclaredNamespaces { get; init; } =
+        ImmutableSortedSet.Create<string>(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Resolves <paramref name="invocation"/> over <see cref="Handlers"/>
@@ -125,11 +133,12 @@ public sealed record ActionHandlerChain
         var refused = Rejected.IsDefaultOrEmpty
             ? string.Empty
             : "; refused: " + string.Join(", ", Rejected.Select(r => $"{r.Path} ({r.Reason})"));
+        var declared = DeclaredNamespaces.Count == 0 ? "none" : string.Join(", ", DeclaredNamespaces);
         return resolution with
         {
             Outcome = resolution.Outcome with
             {
-                Detail = $"no enabled rule claims it ({RulesRead} rule(s) read{refused})",
+                Detail = $"no enabled rule claims it ({RulesRead} rule(s) read; declared namespaces: {declared}{refused})",
             },
         };
     }
@@ -142,6 +151,14 @@ public sealed record ActionHandlerChain
 /// </summary>
 public static class ActionHandlerRules
 {
+    /// <summary>
+    /// The rule lies outside every DECLARED namespace — neither the platform's own nor an installed
+    /// package's. Writing a node somewhere is not a declaration: without this, anyone with Create in
+    /// some partition could add a lower-<see cref="ActionHandlerRule.Order"/> rule and route a key
+    /// to their own page.
+    /// </summary>
+    public const string UndeclaredNamespace = "UndeclaredNamespace";
+
     /// <summary>The handler path does not resolve to a node in the rule's own partition.</summary>
     public const string HandlerOutsidePartition = "HandlerOutsidePartition";
 
@@ -155,14 +172,25 @@ public static class ActionHandlerRules
     public const string UnreadableContent = "UnreadableContent";
 
     /// <summary>
-    /// Binds every enabled, well-formed rule into one handler per claimed key, and reports every
-    /// rule that cannot be bound. A disabled rule is neither bound nor refused.
+    /// Binds every enabled, well-formed rule in a DECLARED namespace into one handler per claimed
+    /// key, and reports every rule that cannot be bound — a rule outside
+    /// <paramref name="declaredNamespaces"/> is refused as <see cref="UndeclaredNamespace"/>, never
+    /// silently dropped. A disabled rule is neither bound nor refused.
     /// </summary>
     /// <param name="rules">Each rule node's path and its content, or null when the content did not read.</param>
+    /// <param name="declaredNamespaces">The namespaces (first path segments, compared ignoring case)
+    /// whose rules count: the platform's declared ones and each installed package's own.</param>
     /// <returns>The chain.</returns>
-    public static ActionHandlerChain Bind(IEnumerable<(string Path, ActionHandlerRule? Rule)> rules)
+    public static ActionHandlerChain Bind(
+        IEnumerable<(string Path, ActionHandlerRule? Rule)> rules,
+        IEnumerable<string> declaredNamespaces)
     {
         ArgumentNullException.ThrowIfNull(rules);
+        ArgumentNullException.ThrowIfNull(declaredNamespaces);
+        var declared = declaredNamespaces
+            .Where(ns => !string.IsNullOrWhiteSpace(ns))
+            .Select(ns => ns.Trim().Trim('/'))
+            .ToImmutableSortedSet(StringComparer.OrdinalIgnoreCase);
         var handlers = ImmutableArray.CreateBuilder<IActionHandler>();
         var rejected = ImmutableArray.CreateBuilder<RejectedActionHandlerRule>();
         var read = 0;
@@ -176,6 +204,11 @@ public static class ActionHandlerRules
             }
             if (!rule.Enabled)
                 continue;
+            if (!declared.Contains(Partition(path)))
+            {
+                rejected.Add(new(path, UndeclaredNamespace));
+                continue;
+            }
             var refusal = Refusal(path, rule);
             if (refusal is not null)
             {
@@ -192,6 +225,7 @@ public static class ActionHandlerRules
             Handlers = handlers.ToImmutable(),
             RulesRead = read,
             Rejected = rejected.ToImmutable(),
+            DeclaredNamespaces = declared,
         };
     }
 
