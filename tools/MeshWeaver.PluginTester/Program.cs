@@ -70,6 +70,8 @@ try
         return await RunBuildProject(args[1..]);
     if (args.Length > 0 && args[0] == "framework-identity")
         return RunFrameworkIdentity(args[1..]);
+    if (args.Length > 0 && args[0] == ModuleIdentityCheck.Verb)
+        return ModuleIdentityCheck.Run(args[1..], Console.Out, Console.Error);
     if (args.Length > 0 && args[0] == "platform-surface")
         return RunPlatformSurface(args[1..]);
     if (args.Length > 0 && args[0] == PlatformLink.Verb)

@@ -400,8 +400,17 @@ jobs:
             gh issue edit "$existing" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/body.md"
             gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "Still ${COUNT} at core \`${MAIN}\` ([run](${RUN_URL}))."
           else
-            gh issue create --repo "$GITHUB_REPOSITORY" --label "$LABEL" \
+            # 🏷️ The canary states its own TYPE and SEVERITY (core Doc/Architecture/IssueTaxonomy): a bug
+            # without a sev: is invisible to the release gate. sev:M — nothing is red here today; it is what
+            # the next pin bump will hit. Each taxonomy label is made to EXIST first (the single-label endpoint
+            # 404s when absent), so the create below never meets an unknown label; a failure here is RED.
+            for spec in "bug|d73a4a|Something isn't working" "sev:M|FBCA04|Medium - secondary path broken, or easy workaround"; do
+              IFS='|' read -r name color desc <<<"$spec"
+              gh api "repos/$GITHUB_REPOSITORY/labels/$name" --silent 2>/dev/null \
+                || gh label create "$name" --repo "$GITHUB_REPOSITORY" --color "$color" --description "$desc"
+            done
+            gh issue create --repo "$GITHUB_REPOSITORY" --label "$LABEL" --label bug --label sev:M \
               --title "Platform canary: core main breaks ${COUNT} regression(s) against this pin" --body-file "$RUNNER_TEMP/body.md" || \
-            gh issue create --repo "$GITHUB_REPOSITORY" \
+            gh issue create --repo "$GITHUB_REPOSITORY" --label bug --label sev:M \
               --title "Platform canary: core main breaks ${COUNT} regression(s) against this pin" --body-file "$RUNNER_TEMP/body.md"
           fi

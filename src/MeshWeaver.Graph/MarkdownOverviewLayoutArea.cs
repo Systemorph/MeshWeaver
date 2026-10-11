@@ -144,8 +144,36 @@ public static class MarkdownOverviewLayoutArea
         => SuppliedNavigation(host)
             .Select(supplied => supplied is { Entries.Count: > 0 }
                 ? (UiControl?)SuppliedNavigationRail.Render(
-                    SuppliedNavigationRail.Plan(supplied, host.Hub.Address.ToString()))
+                    SuppliedNavigationRail.Plan(supplied, host.Hub.Address.ToString()), 240, true,
+                    DefaultNodeNavigation.IndexRoot(host.Hub.Address.ToString()))
                 : null);
+
+    /// <summary>
+    /// Wraps ANY node page with the left-hand index the markdown pages have: the navigation a module
+    /// supplied for the page, else core's lazy default tree (<see cref="DefaultNodeNavigation"/>) —
+    /// so typed pages read like documents instead of ending in a list of their children
+    /// (policy <c>explorer-navigation</c>). An <c>@@</c> embed
+    /// (<c>?showHeader=false</c>) never gets a rail, and the page never waits for the index.
+    /// </summary>
+    /// <param name="host">The layout-area host rendering the page.</param>
+    /// <param name="page">The page itself.</param>
+    public static IObservable<UiControl?> WithIndexRail(LayoutAreaHost host, IObservable<UiControl?> page)
+    {
+        var embedded = host.Reference.HasParameter("showHeader")
+            && string.Equals(host.Reference.GetParameterValue("showHeader"), "false", System.StringComparison.OrdinalIgnoreCase);
+        if (embedded)
+            return page;
+        return page.CombineLatest(DefaultNodeNavigation.Observe(host), SuppliedNavigation(host),
+            (content, defaultNavigation, supplied) =>
+            {
+                if (content is null)
+                    return content;
+                var navigation = supplied is { Entries.Count: > 0 } ? supplied : defaultNavigation;
+                return navigation is { Entries.Count: > 0 }
+                    ? BuildWithSubNodeNav(host, content, navigation)
+                    : content;
+            });
+    }
 
     /// <summary>
     /// Asks each registered <see cref="INodeNavigationProvider"/> for this page's navigation, first
@@ -213,7 +241,10 @@ public static class MarkdownOverviewLayoutArea
         // Rendered by the shared rail, whose shape is pinned by SuppliedNavigationRail's tests.
         // The nav renders NON-collapsible: the Splitter below owns both resize and collapse.
         var nav = SuppliedNavigationRail.Render(
-            SuppliedNavigationRail.Plan(navigation, host.Hub.Address.ToString()), collapsible: false);
+            SuppliedNavigationRail.Plan(navigation, host.Hub.Address.ToString()), 240, false,
+            // Explorer and search in one place. The box searches the page's SPACE (its first path
+            // segment) — never the supplied index's own root, which may be a course inside it.
+            DefaultNodeNavigation.IndexRoot(host.Hub.Address.ToString()));
 
         // A SPLITTER, not a Stack — the same idiom as the Settings pages, and for the same reason:
         // the divider is a real, draggable resize handle (FluentMultiSplitter, client-side), and

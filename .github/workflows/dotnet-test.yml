@@ -2300,6 +2300,12 @@ jobs:
     - name: "The fresh merge tests head + CURRENT main, and refuses a conflict (self-test)"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/ci-fresh-merge.py --self-test
+    # The issue-taxonomy check (daily lane issue-taxonomy.yml) and the stamp every sentinel calls: a bug
+    # without a severity, two types, an unknown sev:, a violation past page one, an unreadable repository
+    # (never clean), and a person's classification left untouched by a reopened sentinel.
+    - name: "The issue taxonomy is checked past page one and a sentinel never files an untyped bug (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 scripts/check-issue-taxonomy.py --self-test
 
     # main-cd's core image-relevance classifier (policy image-rebuild-own-inputs, #4688) runs on
     # main only, so its first execution would be in production. Proven both ways here: tests /
@@ -3022,6 +3028,16 @@ jobs:
     - name: "Execute the lanes' external-module landing against real bundle shapes"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/test-module-asset-landing.py
+
+    # The publish-bake lane's previous-epoch leg CARRIES FORWARD the previous epoch's sealed module
+    # set (#3583): its `carry-forward` step reads the seal, has the ceiling's tester verify every
+    # bundle's identity and exports the carried digests, and `ext-modules` seals an own bundle only
+    # when its bytes are one of them. Both run only in a satellite's publish-bake on a declared break,
+    # so this EXTRACTS both steps by `id:` and executes them against stubbed seal/tester calls, with
+    # a falsification arm that removes the digest refusal and must go red.
+    - name: "Execute the previous-epoch carry-forward against stubbed seal and tester"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/test-previous-epoch-carry-forward.py
 
     # node-repo-compile-check.yml takes its reference set from the tester's /app, or — with the
     # optional platform-image pair — from the PORTAL's, asserting the two are one build. The lane
