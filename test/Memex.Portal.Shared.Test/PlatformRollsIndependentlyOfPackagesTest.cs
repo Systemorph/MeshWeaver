@@ -34,12 +34,12 @@ namespace Memex.Portal.Shared.Test;
 /// 🚨 <b>The platform rolls independently of its packages</b> — policy
 /// <c>platform-rolls-independently-of-packages</c>.
 ///
-/// <para>Measured on partnerre.meshweaver.cloud that day: <c>Admin/UpdatePolicy</c> read
+/// <para>Measured on an enterprise deployment: <c>Admin/UpdatePolicy</c> read
 /// <c>HOLDING 3.1.10502 — the framework identity of release 3.1.10502 is not resolvable — no content
 /// bake has been published for it, so nothing can be shown adoptable; cannot determine availability,
 /// which is not clearance to proceed</c> (<c>heldIndeterminate=true</c>), while every package update
 /// on the same instance was held because it needed platform &gt;= 3.1.10493 — a deadlock between
-/// platform and packages. memex.systemorph.com ran 3.1.10502 fine.</para>
+/// platform and packages. Another deployment ran 3.1.10502 fine.</para>
 ///
 /// <para>These tests drive the REAL poller against a real monolith mesh with the availability gate
 /// answering exactly that verdict (and the strict-mode missing-bake one), and assert the rule from
@@ -61,7 +61,7 @@ public class PlatformRollsIndependentlyOfPackagesTest(ITestOutputHelper output) 
     //  The pure rule
     // ══════════════════════════════════════════════════════════════════════════
 
-    /// <summary>The partnerre verdict, through the shared predicate: an unresolvable framework
+    /// <summary>That deployment's verdict, through the shared predicate: an unresolvable framework
     /// identity makes every package Indeterminate and the package verdict NOT updatable.</summary>
     private static UpdatabilityVerdict UnresolvableIdentity() =>
         ReleaseAvailability.IsUpdatable(
@@ -121,7 +121,7 @@ public class PlatformRollsIndependentlyOfPackagesTest(ITestOutputHelper output) 
     // ══════════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// 🚨 THE ACCEPTANCE CRITERION — partnerre's exact verdict. Before policy
+    /// 🚨 THE ACCEPTANCE CRITERION — that deployment's exact verdict. Before policy
     /// <c>platform-rolls-independently-of-packages</c> the poller wrote
     /// <c>HeldTag = 3.1.10502, heldIndeterminate = true</c> and patched nothing; now the roll lands,
     /// no hold is recorded, and the reason is on <c>Admin/UpdatePolicy</c> as the advisory the
@@ -239,7 +239,7 @@ public class PlatformRollsIndependentlyOfPackagesTest(ITestOutputHelper output) 
         root.GetProperty("advisories").EnumerateArray().First().GetString()
             .Should().Contain("independently of packages").And.Contain("Feedback");
         var statuses = root.GetProperty("packages").EnumerateArray()
-            .ToDictionary(p => p.GetProperty("package").GetString()!, p => p.GetProperty("status").GetString());
+            .ToImmutableDictionary(p => p.GetProperty("package").GetString()!, p => p.GetProperty("status").GetString());
         statuses.Keys.Order(StringComparer.Ordinal).Should().Equal(["Crm", "Feedback"]);
         statuses["Crm"].Should().Be(nameof(PackageAvailabilityKind.Available));
         statuses["Feedback"].Should().NotBe(nameof(PackageAvailabilityKind.Available),
@@ -428,7 +428,7 @@ public class PlatformRollsIndependentlyOfPackagesTest(ITestOutputHelper output) 
 
     /// <summary>Seeds the policy node — optionally with the hold the poller wrote, before policy
     /// <c>platform-rolls-independently-of-packages</c>, on
-    /// partnerre, so the test also proves the roll CLEARS it.</summary>
+    /// that deployment, so the test also proves the roll CLEARS it.</summary>
     private Task Seed(CancellationToken cancellationToken, bool staleHold = false, bool comboRed = false, string? advisories = null)
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();

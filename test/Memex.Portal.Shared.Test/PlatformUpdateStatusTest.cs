@@ -166,9 +166,8 @@ public class PlatformUpdateStatusTest
     }
 
     /// <summary>
-    /// 🚨 THE ABOUT TAB UNDER POLICY <c>platform-rolls-independently-of-packages</c>. memex reached
-    /// partnerre.meshweaver.cloud's
-    /// exact state: the poller found 3.1.10502, the availability check could not resolve its
+    /// 🚨 THE ABOUT TAB UNDER POLICY <c>platform-rolls-independently-of-packages</c>. This
+    /// reproduces an enterprise deployment's exact state: the poller found 3.1.10502, the availability check could not resolve its
     /// framework identity, and — before the change — the record said HELD and the About tab read
     /// "Update held — a package this deployment runs is not available for that build". Now the
     /// poller records no hold, only the advisory, and the About line says the platform rolls and

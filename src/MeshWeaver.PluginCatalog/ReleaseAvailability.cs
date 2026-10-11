@@ -1009,7 +1009,7 @@ public sealed record UpdatabilityVerdict(
     /// <see cref="WaivedHold"/>) and whose <see cref="Lagging"/> names every package that will not
     /// follow: they keep their previous generation or recompile at boot, and catch up through their
     /// own update policy (the held-update lane). Packages follow the platform — never the reverse.
-    /// Measured on partnerre.meshweaver.cloud 2026-10-11: the platform held on 3.1.10502 because no
+    /// Measured on an enterprise deployment on 2026-10-11: the platform held on 3.1.10502 because no
     /// content bake was published for its identity, while every package update was held because it
     /// needed that very platform — a deadlock only this direction breaks.</para>
     ///

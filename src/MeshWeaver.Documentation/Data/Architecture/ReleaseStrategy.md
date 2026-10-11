@@ -196,11 +196,11 @@ CD reads (`/api/plugins/roll-target`), the manual-roll check (`/api/plugins/is-u
 returns the waived reason as `waivedHold`), the reboot's image step and the **Apply update now**
 button all apply the same rule, so no roll path selects differently from the poller.
 
-**Why.** Measured on partnerre.meshweaver.cloud on 2026-10-11: `Admin/UpdatePolicy` read
+**Why.** Measured on an enterprise deployment on 2026-10-11: `Admin/UpdatePolicy` read
 `HOLDING 3.1.10502 — the framework identity of release 3.1.10502 is not resolvable — no content bake
 has been published for it …` (`heldIndeterminate=true`), while every package update on the same
 instance was held because it needed platform `>= 3.1.10493`. The platform waited for the packages and
-the packages waited for the platform — a deadlock only one direction can break. memex.systemorph.com
+the packages waited for the platform — a deadlock only one direction can break. Another deployment
 ran 3.1.10502 fine.
 
 The pure predicate (`ReleaseAvailability.IsUpdatable`) still answers the package question truthfully

@@ -1044,18 +1044,13 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
             _logger?.LogWarning("[SelfUpdate] {Advisory}", advisory);
 
         return ListTags()
-            // 🚨 The BEST ROLLABLE release, not merely the newest one. A target is only rollable if a
-            // sealed content bake exists for the identity that exact image resolves to, and picking
-            // the newest tag and stopping means one unbaked release freezes the instance FOREVER:
-            // it holds, the next platform build produces another unbaked tag, the bake publishes yet
-            // another identity, and the two never meet. memex sat on 3.0.0-rc6 held against
-            // 3.0.0-rc7.ci.4928 while three separate bakes published three other identities — every
-            // job green throughout, nothing to point at.
-            //
-            // So walk the candidates newest-first and take the first that the gate accepts. Still
-            // never backwards (IsNewer), still never into a boot storm (unsealed candidates are
-            // SKIPPED, not forced) — but a not-yet-baked head no longer blocks the releases behind
-            // it, and an instance always advances to the best release that can actually serve.
+            // 🚨 The NEWEST ADMITTED release (policy <c>platform-rolls-independently-of-packages</c>):
+            // SelectCandidates filters the listing by the update policy, newest first and never
+            // backwards (IsNewer), and FirstRollable takes the head. No package answer walks past
+            // it — a missing content bake, an unresolvable identity or a combo Red is recorded as
+            // an advisory by GateThenApply, and the packages catch up on their own. (Before the
+            // policy the poller walked past unbaked candidates; holding the platform on a bake is
+            // what froze memex on 3.0.0-rc6 while three bakes published three other identities.)
             //
             // 🚨 And the selection asks a SECOND question of the same listing (#3543): does the tag
             // this install RUNS still resolve in it? "Nothing is newer" is the honest verdict only
@@ -1154,7 +1149,7 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
     /// bake, an unresolvable framework identity, a module that does not compile against the
     /// candidate — and they are recorded as advisories by <see cref="GateThenApply"/>; the
     /// packages catch up through their own update policy. Holding the platform for a package's
-    /// sake is how partnerre.meshweaver.cloud deadlocked: the platform waited for a content bake
+    /// sake is how an enterprise deployment deadlocked: the platform waited for a content bake
     /// while every package update waited for that platform.</para>
     /// </summary>
     /// <remarks>
@@ -1224,7 +1219,7 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
                     // Admin/UpdatePolicy beside the (cleared) hold so the Updates and About tabs
                     // name every package that will not follow, and carried on the check verdict.
                     // The packages catch up through their own update policy and the held-update
-                    // lane — never the reverse. Holding here deadlocked partnerre.meshweaver.cloud
+                    // lane — never the reverse. Holding here deadlocked an enterprise deployment
                     // on 2026-10-11: the platform waited for a content bake of 3.1.10502 while
                     // every package update waited for platform >= 3.1.10493.
                     var verdict = raw.ForPlatformRoll();

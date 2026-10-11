@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Microsoft.Extensions.Configuration;
 using System.Globalization;
 using System.Reactive.Linq;
@@ -194,7 +195,7 @@ public static class UpdatePolicySettingsTab
                     // verdict.Advisories (ForPlatformRoll), and an already-updatable verdict
                     // carries its boot-compile / link / declared-floor advisories there with
                     // WaivedHold null — reading only WaivedHold would drop those.
-                    string[] advisories =
+                    ImmutableArray<string> advisories =
                     [
                         .. verdict.Advisories.IsDefault ? [] : verdict.Advisories,
                         .. clearance.Refuses ? new[] { clearance.Reason } : [],

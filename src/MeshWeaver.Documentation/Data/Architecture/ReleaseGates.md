@@ -313,8 +313,12 @@ check clears them — on the candidate path with the roll's own record, and, whe
 evaluated, so such a record stays and the Updates tab shows it as history, not as the reason the
 install is standing still (#3812).
 
-The advisories are re-recorded on every check that evaluates a candidate, so a package that has
-caught up simply stops being named. Nothing has to be un-stuck by hand.
+The advisories are a record of what the roll ACCEPTED for one build (`AdvisoriesTag`), not a live
+package status: they are rewritten whenever a check evaluates a candidate, and after the roll — when
+nothing is newer and no candidate is evaluated — they stay as they were, so the Updates and About tabs
+keep saying what that roll accepted until the next candidate replaces them. Whether a package has
+caught up since is answered by the package's own update policy and its catalog card, not by this
+record. Nothing has to be un-stuck by hand: no advisory holds anything.
 
 ### Bookkeeping never blocks the roll
 

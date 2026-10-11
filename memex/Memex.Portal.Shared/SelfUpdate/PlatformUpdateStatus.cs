@@ -25,11 +25,14 @@ public enum PlatformUpdateAvailability
     UpdateAvailable,
 
     /// <summary>
-    /// A newer build exists but a gate is HOLDING it: the release-availability gate (#1754) found a
-    /// package this deployment runs with no usable artifact for that release, or the COMBO gate
-    /// (#2274) recorded a <see cref="ComboVerdictKind.Red"/> verdict — that image cannot serve the
-    /// modules this instance has landed. <see cref="PlatformUpdateStatus.LatestVersion"/> still
-    /// names the build.
+    /// A newer build exists and an OPERATIVE hold record names it
+    /// (<see cref="UpdatePolicyContent.IsHoldOperative"/>). Under policy
+    /// <c>platform-rolls-independently-of-packages</c> no package answer produces this state — a
+    /// package that has no usable artifact for the build and a <see cref="ComboVerdictKind.Red"/>
+    /// combo verdict are package advisories (<see cref="UpdateAvailable"/> with
+    /// <see cref="PlatformUpdateStatus.HasAdvisories"/>) — so it is reached only through a hold an
+    /// older build recorded, until the next check clears it.
+    /// <see cref="PlatformUpdateStatus.LatestVersion"/> still names the build.
     ///
     /// <para>🚨 This state exists so a hold cannot be silent. Rendering a held update as
     /// "update available" would leave an install looking normal while it never moves; rendering it
