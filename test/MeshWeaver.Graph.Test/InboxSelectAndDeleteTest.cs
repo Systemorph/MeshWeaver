@@ -36,9 +36,11 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
         => base.ConfigureClient(configuration).AddLayoutClient();
 
     /// <summary>
-    /// The page end to end, as its owner: the band's grid lists both notifications, the viewer ticks
-    /// ONE, Delete puts exactly that one away and says so, and Undo brings it back. The write is
-    /// issued by the page under the clicker's identity — nothing here runs as System.
+    /// The page end to end, as its owner: the grid lists three notifications, the viewer ticks TWO,
+    /// Delete puts exactly those away and says so, and Undo brings them back. The writes are issued
+    /// by the page under the clicker's identity — nothing here runs as System — and for EVERY item:
+    /// the second write is subscribed after the first completes, off the click turn, which is where
+    /// an identity captured too late is gone.
     /// </summary>
     [Fact(Timeout = 120000)]
     public async Task ThePage_DeletesTheTickedRow_AndUndoBringsItBack()
@@ -47,7 +49,7 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
         const string owner = "inbox-page";
         await CreateUserAsync(owner, ct);
         var ns = $"{owner}/{NotificationService.SatelliteSegment}";
-        foreach (var id in new[] { "keep", "bin" })
+        foreach (var id in new[] { "keep", "bin", "bin2" })
             await CreateAsync(new MeshNode(id, ns)
             {
                 NodeType = NotificationNodeType.NodeType, Name = id, MainNode = owner, State = MeshNodeState.Active,
@@ -68,7 +70,7 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
                  && r.EnumerateArray().Select(x => x.GetProperty("path").GetString()).OrderBy(x => x)
                      .SequenceEqual(ids.Select(id => $"{ns}/{id}").OrderBy(x => x)),
             because, ct);
-        await Listed("both notifications are listed", "keep", "bin");
+        await Listed("every notification is listed", "keep", "bin", "bin2");
 
         var pointer = grid.SelectedItems.Should().BeOfType<JsonPointerReference>().Subject.Pointer;
         // The selection is the client's claim. Beside the real tick it names a node of the owner's
@@ -79,18 +81,19 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
             NodeType = NotificationNodeType.NodeType, Name = "away", MainNode = owner, State = MeshNodeState.Active,
             Content = new Notification { Id = "away", Title = "away", Recipient = owner, Dismissed = true },
         }, ct);
-        stream.UpdatePointer(new JsonArray(JsonValue.Create($"{ns}/bin"), JsonValue.Create($"{ns}/away")),
+        stream.UpdatePointer(new JsonArray(JsonValue.Create($"{ns}/bin"), JsonValue.Create($"{ns}/bin2"), JsonValue.Create($"{ns}/away")),
             pointer, new JsonPointerReference("keys"));
         await stream.GetDataStream<DataGridSelectionState>(new JsonPointerReference(pointer))
-            .Should().Within(TestTimeouts.Convergence).Match(s => s is { Keys.Count: 2 }, "the ticks reached the owner", ct);
+            .Should().Within(TestTimeouts.Convergence).Match(s => s is { Keys.Count: 3 }, "the ticks reached the owner", ct);
 
-        await Click(stream, DeleteArea, "1 moved out of the inbox. Undo brings them back.", ct);
-        await Listed("only the ticked row left", "keep");
+        await Click(stream, DeleteArea, "2 moved out of the inbox. Undo brings them back.", ct);
+        await Listed("only the unticked row left", "keep");
         (await Content<Notification>($"{ns}/bin", n => n.Dismissed, ct)).Dismissed.Should().BeTrue();
+        (await Content<Notification>($"{ns}/bin2", n => n.Dismissed, ct)).Dismissed.Should().BeTrue("every ticked row is written, not only the first");
         (await Content<Notification>($"{ns}/keep", _ => true, ct)).Dismissed.Should().BeFalse("an unticked row is never written");
 
-        await Click(stream, UndoArea, "1 back in the inbox.", ct);
-        await Listed("Undo brought it back — and only what Delete put away: the unlisted node stays away", "keep", "bin");
+        await Click(stream, UndoArea, "2 back in the inbox.", ct);
+        await Listed("Undo brought them back — and only what Delete put away: the unlisted node stays away", "keep", "bin", "bin2");
         (await Content<Notification>($"{ns}/away", _ => true, ct)).Dismissed.Should().BeTrue();
     }
 
@@ -143,7 +146,7 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
         Set($"sources/{InboxRows.SourceKey("Mail")}", JsonValue.Create(true));
         await Titles("and returns when switched on", "Alpha invoice", "Zulu workshop");
 
-        Set("search", JsonValue.Create("name:*workshop*"));
+        Set("search", JsonValue.Create("workshop"));
         await Titles("a term is evaluated by the query engine, per leg", "Zulu workshop");
         Set("search", JsonValue.Create(""));
         await Titles("clearing the box restores the list", "Alpha invoice", "Zulu workshop");
@@ -256,9 +259,94 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
     }
 
     /// <summary>
+    /// A handler's write carries the identity of the CALL, not of the subscription. The inbox opens
+    /// the clicker's scope around the handler call only; it subscribes every item after the first
+    /// later, on the previous write's completion thread, where that scope is gone. A handler that
+    /// deferred building its write to subscription would issue it as nobody — so a multi-row Delete
+    /// would put away its first row and refuse the rest.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task AHandlersWrite_CarriesTheIdentityOfTheCall_NotOfTheSubscription()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string owner = "inbox-identity";
+        await CreateUserAsync(owner, ct);
+        var ns = $"{owner}/{NotificationService.SatelliteSegment}";
+        await CreateAsync(new MeshNode("n", ns)
+        {
+            NodeType = NotificationNodeType.NodeType, Name = "n", MainNode = owner, State = MeshNodeState.Active,
+            Content = new Notification { Id = "n", Title = "n", Recipient = owner },
+        }, ct);
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var handler = Handler(NotificationNodeType.NodeType);
+
+        IObservable<InboxItemOutcome> write;
+        using (access.SwitchAccessContext(new AccessContext { ObjectId = owner, Name = owner, Email = $"{owner}@meshweaver.io" }))
+            write = handler.Dismiss(Mesh, $"{ns}/n");
+        // Subscribed only now, after the scope closed — as Concat subscribes every later item.
+        (await write.FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct)).Done.Should().BeTrue();
+
+        (await Mesh.ServiceProvider.GetRequiredService<AccessService>()
+                .RunAsSystem(() => Mesh.GetMeshNodeStream($"{ns}/n").Where(n => n.ContentAs<Notification>(Mesh.JsonSerializerOptions) is { Dismissed: true }))
+                .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct))
+            .LastModifiedBy.Should().Be(owner, "the write is the clicker's, issued under the identity of the call");
+    }
+
+    /// <summary>
     /// The page asks each source for a bounded number of rows — the newest, every leg sorts newest
     /// first — and a provider that names its own limit keeps it.
     /// </summary>
+    /// <summary>
+    /// The search can narrow a leg, never replace its constraints: whatever is typed — an <c>OR</c>,
+    /// a field filter, a <c>limit:</c>, a stray quote — reaches the parser as free text, and the
+    /// leg's own filter, path and bound come out exactly as they went in.
+    /// </summary>
+    [Theory]
+    [InlineData("OR content.status:Archived")]
+    [InlineData("limit:all")]
+    [InlineData("\" OR content.status:Archived \"")]
+    [InlineData("') namespace:someone-else/_Email (' scope:subtree")]
+    [InlineData("-content.direction:Outbound sort:Name-asc")]
+    public void ATypedTerm_IsFreeText_AndCannotReplaceTheLegsConstraints(string term)
+    {
+        var leg = InboxQueries.Bounded(Leg("inbox-search", "Mail"));
+        var parser = new QueryParser();
+        var bare = parser.Parse(leg);
+        var searched = parser.Parse($"{leg} {InboxLayoutArea.SearchText(term)}");
+
+        static string Shape(object? part) => part is null ? "null" : JsonSerializer.Serialize(part, part.GetType());
+        Shape(searched.Filter).Should().Be(Shape(bare.Filter), "the leg's filter is untouched");
+        searched.Path.Should().Be(bare.Path);
+        searched.Scope.Should().Be(bare.Scope);
+        searched.Limit.Should().Be(InboxQueries.LegLimit);
+        Shape(searched.OrderBy).Should().Be(Shape(bare.OrderBy));
+        searched.TextSearch.Should().NotBeNullOrWhiteSpace("the term is still searched for, as text");
+    }
+
+    /// <summary>
+    /// Delete and Undo hold the page one at a time: a second act while one runs is refused with its
+    /// own line, and the claim is released however the first one ends — so neither can overwrite the
+    /// Undo batch the other is writing.
+    /// </summary>
+    [Fact]
+    public void ASecondAct_WhileOneRuns_IsRefused_AndTheClaimIsReleased()
+    {
+        var acts = new InboxActs();
+        var first = new Subject<System.Reactive.Unit>();
+        var firstDone = false;
+        using var running = acts.Exclusive("busy", first).Subscribe(_ => { }, _ => { }, () => firstDone = true);
+
+        Exception? refused = null;
+        acts.Exclusive("busy", Observable.Return(System.Reactive.Unit.Default)).Subscribe(_ => { }, ex => refused = ex);
+        refused.Should().BeOfType<InvalidOperationException>().Which.Message.Should().Be("busy");
+
+        first.OnError(new InvalidOperationException("the first act failed"));
+        firstDone.Should().BeFalse();
+        var ran = false;
+        acts.Exclusive("busy", Observable.Return(System.Reactive.Unit.Default)).Subscribe(_ => ran = true, _ => { });
+        ran.Should().BeTrue("a failed act releases the page too");
+    }
+
     [Fact]
     public void ALeg_IsBoundedByThePage_UnlessItNamesItsOwnLimit()
     {

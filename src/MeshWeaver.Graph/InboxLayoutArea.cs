@@ -32,9 +32,10 @@ namespace MeshWeaver.Graph;
 /// state and the legs — nothing is copied, and no control has a click handler that re-renders the
 /// page.</para>
 ///
-/// <para><b>The search is the mesh's own.</b> A typed term is appended to every leg and handed to
-/// the query engine (free text, field filters, the semantic index) under the OWNER's identity; it is
-/// not a filter over the rows that happened to be loaded.</para>
+/// <para><b>The search is the mesh's own.</b> A typed term is handed to the query engine with every
+/// leg, as FREE TEXT (full text and the semantic index), under the OWNER's identity; it is not a
+/// filter over the rows that happened to be loaded. It is never spliced into the query grammar: a
+/// typed <c>OR</c> or <c>limit:</c> must not be able to replace a leg's own constraints.</para>
 ///
 /// <para><b>Select many, then act.</b> The grid carries the platform's own selection column
 /// (<see cref="DataGridControl.WithRowSelection"/>); Delete acts on every ticked row and Undo brings
@@ -53,9 +54,10 @@ public static class InboxLayoutArea
     public const string AreaName = "Inbox";
 
     /// <summary>
-    /// The key of what the last Delete put away — what Undo brings back. A HOST variable, never the
-    /// data section: the data section is two-way, so a batch kept there is whatever the client says
-    /// it is, and Undo would restore paths the viewer never deleted.
+    /// The key of the page's <see cref="InboxActs"/> — what the last Delete put away, and whether an
+    /// act is running. A HOST variable, never the data section: the data section is two-way, so a
+    /// batch kept there is whatever the client says it is, and Undo would restore paths the viewer
+    /// never deleted.
     /// </summary>
     public const string UndoId = "inboxUndo";
 
@@ -64,9 +66,6 @@ public static class InboxLayoutArea
 
     /// <summary>The data id of the notice shown when a source answered as many rows as the page asks for; empty otherwise.</summary>
     public const string CappedId = "inboxCapped";
-
-    /// <summary>How long a source that could not be read is left before it is read again.</summary>
-    internal static readonly TimeSpan RetryAfter = TimeSpan.FromSeconds(30);
 
     /// <summary>How long the page waits after the last keystroke before it asks the query engine.</summary>
     internal static readonly TimeSpan SearchQuiet = TimeSpan.FromMilliseconds(300);
@@ -98,6 +97,12 @@ public static class InboxLayoutArea
             host.UpdateData(CappedId, string.Empty);
         }
         host.SeedRowSelection(InboxRows.SelectionId);
+        // One per page, created on the render turn; the buttons share it.
+        if (host.GetVariable<InboxActs>(UndoId) is not { } acts)
+        {
+            acts = new InboxActs();
+            host.SetVariable(UndoId, acts);
+        }
         // ONE feed, owner-computed: the grid binds it, and Delete re-reads it at the click.
         var rows = Rows(host, sections, owner, access.ViewerZoneId());
 
@@ -128,9 +133,9 @@ public static class InboxLayoutArea
             // outcome line that names every item that was not put away (Doc/GUI/ButtonPendingState).
             .WithView(Controls.Toolbar
                 .WithView(Controls.Button(host.Localize("inbox.delete")).WithAppearance(Appearance.Accent)
-                    .WithReactiveClickAction(ctx => Delete(ctx, owner, rows)), "Delete")
+                    .WithReactiveClickAction(ctx => Delete(ctx, acts, owner, rows)), "Delete")
                 .WithView(Controls.Button(host.Localize("inbox.undo")).WithAppearance(Appearance.Neutral)
-                    .WithReactiveClickAction(Undo), "Undo"),
+                    .WithReactiveClickAction(ctx => Undo(ctx, acts)), "Undo"),
                 "Actions")
             // Says which sources could not be read — an unreadable source must never look like an
             // empty one. Bound: it appears and clears with the reads, with no re-render.
@@ -152,8 +157,8 @@ public static class InboxLayoutArea
         var hub = host.Hub;
         var handlers = hub.ServiceProvider.GetServices<IInboxItemHandler>().ToImmutableArray();
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(InboxLayoutArea));
-        // Captured ONCE, on the render turn: the legs are (re)subscribed on data emissions and on
-        // timers, where the ambient context is no longer the viewer's.
+        // Captured ONCE, on the render turn: the legs are (re)subscribed on data emissions, where
+        // the ambient context is no longer the viewer's.
         var access = hub.ServiceProvider.GetService<AccessService>();
         var caller = access?.Context;
         // Resolved ONCE, on the render turn: every text a row may carry.
@@ -173,9 +178,11 @@ public static class InboxLayoutArea
             .DistinctUntilChanged(InboxRows.Fingerprint, StringComparer.Ordinal);
 
         // What each leg last answered: its rows, and whether that answer was a failure. A leg that
-        // cannot be read contributes no rows, is LOGGED, is NAMED above the grid, and is read again
-        // after RetryAfter — one provider's failure must not blank the others, and must not pass
-        // for "nothing here" either.
+        // cannot be read contributes no rows, is LOGGED and is NAMED above the grid — one provider's
+        // failure must not blank the others, and must not pass for "nothing here" either. It is
+        // read again when the viewer changes the search or reopens the page, never on a timer: a
+        // provider that stays broken would otherwise be re-queried, and re-logged, for as long as
+        // any inbox is open.
         IObservable<(ImmutableList<InboxRow> Rows, string? Unread)> Leg(InboxSection section, string term) =>
             Nodes(hub, section, term, owner, access, caller)
                 .Select(nodes => (nodes
@@ -186,8 +193,7 @@ public static class InboxLayoutArea
                 .Catch((Exception ex) =>
                 {
                     logger?.LogWarning(ex, "Inbox leg {Source} ({Band}) could not be read", section.Source, section.Band);
-                    return Observable.Return((ImmutableList<InboxRow>.Empty, (string?)labels[section.Source]))
-                        .Concat(Observable.Timer(RetryAfter).SelectMany(_ => Leg(section, term)));
+                    return Observable.Return((ImmutableList<InboxRow>.Empty, (string?)labels[section.Source]));
                 });
 
         IObservable<ImmutableList<InboxRow>> Merged(string term) => sections
@@ -255,8 +261,12 @@ public static class InboxLayoutArea
     /// changes — because a synced query is kept for the process's life per distinct query text, and
     /// a typed term is unbounded.
     ///
+    /// <para>🚨 The term is FREE TEXT (<see cref="SearchText"/>) and the bound is pinned on the
+    /// request (<see cref="MeshQueryRequest.Limit"/>, which wins over any <c>limit:</c> in the
+    /// string): what the viewer types can narrow a leg, never widen it.</para>
+    ///
     /// <para>🚨 BOTH branches name the viewer, neither trusts the ambient identity: this runs on a
-    /// data emission (or a retry timer), where the ambient context is no longer the page's. The
+    /// data emission, where the ambient context is no longer the page's. The
     /// synced query takes the identity it finds when it is CREATED — with none it hands back the
     /// System-loaded stream, unfiltered — so the captured caller is re-established around that
     /// call; the live read takes the viewer as an argument.</para>
@@ -269,10 +279,23 @@ public static class InboxLayoutArea
             using (access?.SwitchAccessContext(caller))
                 return hub.GetQuery(InboxRows.QueryId(section), query);
         return hub.ServiceProvider.GetRequiredService<IMeshService>()
-            .Query<MeshNode>(MeshQueryRequest.FromQuery($"{query} {term}", owner))
+            .Query<MeshNode>(MeshQueryRequest.FromQuery($"{query} {SearchText(term)}", owner) with
+            {
+                Limit = new QueryParser().Parse(query).Limit ?? InboxQueries.LegLimit,
+            })
             .Scan(ImmutableDictionary<string, MeshNode>.Empty.WithComparers(StringComparer.Ordinal), Fold)
             .Select(nodes => (IEnumerable<MeshNode>)nodes.Values);
     }
+
+    /// <summary>
+    /// <paramref name="term"/> as one quoted free-text phrase. The quote characters are removed
+    /// first, so nothing the viewer types can close the phrase: inside it, <c>OR</c>,
+    /// <c>content.status:Archived</c>, <c>limit:all</c> and <c>namespace:…</c> are words to look for,
+    /// never grammar — a search may narrow a leg, never replace its constraints.
+    /// </summary>
+    /// <param name="term">The trimmed, non-empty search text.</param>
+    internal static string SearchText(string term)
+        => "\"" + new string([.. term.Where(c => c is not ('"' or '\''))]).Trim() + "\"";
 
     /// <summary>
     /// A live read answers its first set whole and every later change as a delta; this folds them
@@ -341,7 +364,7 @@ public static class InboxLayoutArea
     /// <paramref name="rows"/>, re-read here from the legs: the grid's rows in the data section are
     /// two-way, so pruning the client's keys against them would prove nothing.</para>
     /// </summary>
-    private static IObservable<Unit> Delete(UiActionContext ctx, string owner, IObservable<ImmutableList<InboxRow>> rows)
+    private static IObservable<Unit> Delete(UiActionContext ctx, InboxActs acts, string owner, IObservable<ImmutableList<InboxRow>> rows)
     {
         var host = ctx.Host;
         var hub = host.Hub;
@@ -350,7 +373,7 @@ public static class InboxLayoutArea
         // thread that read answers on, where the ambient context is no longer the clicker's.
         var caller = access?.Context;
         var handlers = hub.ServiceProvider.GetServices<IInboxItemHandler>().ToImmutableArray();
-        return ctx.SelectedRowKeys(InboxRows.SelectionId)
+        return acts.Exclusive(host.Localize("inbox.busy"), ctx.SelectedRowKeys(InboxRows.SelectionId)
             .Zip(rows.Take(1), (keys, current) => InboxRows.Targets(current, keys, owner))
             .SelectMany(targets => targets.Count == 0
                 ? Observable.Throw<Unit>(new InvalidOperationException(host.Localize("inbox.nothingSelected")))
@@ -359,13 +382,13 @@ public static class InboxLayoutArea
                     .Do(outcomes =>
                     {
                         var done = outcomes.Where(o => o.Done).Select(o => o.Path).ToImmutableHashSet(StringComparer.Ordinal);
-                        host.SetVariable(UndoId, targets.Where(row => done.Contains(row.Path))
-                            .Select(row => new InboxUndoItem(row.Path, row.NodeType)).ToImmutableList());
+                        acts.Batch = targets.Where(row => done.Contains(row.Path))
+                            .Select(row => new InboxUndoItem(row.Path, row.NodeType)).ToImmutableList();
                         // The rows are gone from the grid; so are their ticks.
                         host.UpdateData(InboxRows.SelectionId, new DataGridSelectionState());
                         ctx.ReportSummary(Summary(host, "inbox.summary.deleted", outcomes));
                     })
-                    .Select(_ => Unit.Default));
+                    .Select(_ => Unit.Default)));
     }
 
     /// <summary>
@@ -373,25 +396,30 @@ public static class InboxLayoutArea
     /// HOST's own record of what this page deleted — never client data — so Undo can only restore
     /// what Delete put away.
     /// </summary>
-    private static IObservable<Unit> Undo(UiActionContext ctx)
+    private static IObservable<Unit> Undo(UiActionContext ctx, InboxActs acts)
     {
         var host = ctx.Host;
         var hub = host.Hub;
         var access = hub.ServiceProvider.GetService<AccessService>();
         var caller = access?.Context;
         var handlers = hub.ServiceProvider.GetServices<IInboxItemHandler>().ToImmutableArray();
-        var batch = host.GetVariable<ImmutableList<InboxUndoItem>>(UndoId);
-        return batch is not { Count: > 0 }
+        return acts.Exclusive(host.Localize("inbox.busy"), Observable.Defer(() =>
+        {
+            // Read once the act holds the page — never before, or a Delete that finished in
+            // between would be overwritten from a stale batch.
+            var batch = acts.Batch;
+            return batch is not { Count: > 0 }
             ? Observable.Throw<Unit>(new InvalidOperationException(host.Localize("inbox.nothingToUndo")))
             : Act(ctx, access, caller, batch, handlers, (handler, path) => handler.Restore(hub, path), "inbox.progress.restoring")
                 .Do(outcomes =>
                 {
                     // Whatever could not be brought back stays undoable — a second click retries it.
                     var done = outcomes.Where(o => o.Done).Select(o => o.Path).ToImmutableHashSet(StringComparer.Ordinal);
-                    host.SetVariable(UndoId, batch.Where(item => !done.Contains(item.Path)).ToImmutableList());
+                    acts.Batch = batch.Where(item => !done.Contains(item.Path)).ToImmutableList();
                     ctx.ReportSummary(Summary(host, "inbox.summary.restored", outcomes));
                 })
                 .Select(_ => Unit.Default);
+        }));
     }
 
     /// <summary>
@@ -413,14 +441,26 @@ public static class InboxLayoutArea
                     return Observable.Return(new InboxItemOutcome(item.Path, false, ctx.Host.Localize("inbox.blocked.noHandler")));
                 // 🚨 The scope is opened around the CALL: the handler issues its write inside it
                 // (IInboxItemHandler). Around the subscription it would be gone by the first hop.
+                IObservable<InboxItemOutcome> Faulted(Exception ex)
+                {
+                    // A package's handler may throw anything; its message is never shown.
+                    logger?.LogWarning(ex, "Inbox: the {NodeType} handler faulted on {Path}", item.NodeType, item.Path);
+                    return Observable.Return(new InboxItemOutcome(item.Path, false));
+                }
                 using (access?.SwitchAccessContext(caller))
-                    return act(handler, item.Path)
-                        .Catch((Exception ex) =>
-                        {
-                            // A package's handler may throw anything; its message is never shown.
-                            logger?.LogWarning(ex, "Inbox: the {NodeType} handler faulted on {Path}", item.NodeType, item.Path);
-                            return Observable.Return(new InboxItemOutcome(item.Path, false));
-                        });
+                {
+                    // The handler builds its write inside this call (IInboxItemHandler), so it may
+                    // also throw here rather than on the returned stream — either is that item's
+                    // answer, never the batch's.
+                    try
+                    {
+                        return act(handler, item.Path).Catch((Func<Exception, IObservable<InboxItemOutcome>>)Faulted);
+                    }
+                    catch (Exception ex)
+                    {
+                        return Faulted(ex);
+                    }
+                }
             }))
             .Concat()
             .Aggregate(ImmutableList<InboxItemOutcome>.Empty, (done, outcome) => done.Add(outcome));
@@ -458,4 +498,36 @@ public static class InboxLayoutArea
 
     /// <summary>The localization key of a band's title.</summary>
     internal static string BandTitleKey(string band) => "inbox.band." + band;
+}
+
+/// <summary>
+/// One inbox page's acts: what the last Delete put away (what Undo brings back), and whether a
+/// Delete or an Undo is running. Shared by the two buttons, and written from whichever thread an
+/// act completes on — so the claim is atomic and the batch is one reference swap.
+/// </summary>
+internal sealed class InboxActs
+{
+    private int busy;
+    private ImmutableList<InboxUndoItem> batch = ImmutableList<InboxUndoItem>.Empty;
+
+    /// <summary>What the last Delete put away. Written only by the act that holds the page.</summary>
+    public ImmutableList<InboxUndoItem> Batch
+    {
+        get => Volatile.Read(ref batch);
+        set => Volatile.Write(ref batch, value);
+    }
+
+    /// <summary>
+    /// Runs <paramref name="act"/> only when no other Delete or Undo is running on this page, and
+    /// refuses it — with a line that says so — when one is. The two are separate buttons, so the
+    /// click framework would run them side by side, and each rewrites the batch when it finishes:
+    /// interleaved, whichever finished last would be the batch, and the newest deletion could not be
+    /// undone. The claim is taken on subscription and released however the act ends.
+    /// </summary>
+    /// <param name="refusal">What the refused click says, in the viewer's language.</param>
+    /// <param name="act">The Delete or the Undo.</param>
+    public IObservable<Unit> Exclusive(string refusal, IObservable<Unit> act)
+        => Observable.Defer(() => Interlocked.CompareExchange(ref busy, 1, 0) != 0
+            ? Observable.Throw<Unit>(new InvalidOperationException(refusal))
+            : act.Finally(() => Volatile.Write(ref busy, 0)));
 }

@@ -44,28 +44,32 @@ public static class InboxItemHandlers
     /// asked-for state too, and counting it would put it in this click's Undo batch, where Undo
     /// would reverse the other writer's act. The update lambda can run more than once (a retried
     /// write), so the flag records its LAST run — the one whose result was written.
+    /// <para>🚨 The write is BUILT here, inside the call, never in a <c>Defer</c>: <c>Update</c>
+    /// captures the caller's identity when it is constructed, and the inbox holds the clicker's
+    /// access scope open only around this call. A deferred build runs at subscription — for every
+    /// item after the first, on the previous write's completion thread, as nobody.</para>
     /// </remarks>
     internal static IObservable<InboxItemOutcome> Write<TContent>(
         IMessageHub hub, string path, Func<TContent, TContent> change, Func<TContent, bool> reached) where TContent : class
-        => Observable.Defer(() =>
-        {
-            var changed = false;
-            return hub.GetMeshNodeStream(path).Update<TContent>(current =>
-                {
-                    var next = change(current);
-                    changed = !Equals(next, current);
-                    return next;
-                })
-                .Take(1)
-                .Select(node => new InboxItemOutcome(path,
-                    changed && node.ContentAs<TContent>(hub.JsonSerializerOptions) is { } content && reached(content)));
-        })
+    {
+        // One flag per call — each call is one write, subscribed once by the inbox.
+        var changed = false;
+        return hub.GetMeshNodeStream(path).Update<TContent>(current =>
+            {
+                var next = change(current);
+                changed = !Equals(next, current);
+                return next;
+            })
+            .Take(1)
+            .Select(node => new InboxItemOutcome(path,
+                changed && node.ContentAs<TContent>(hub.JsonSerializerOptions) is { } content && reached(content)))
             .Catch((Exception ex) =>
             {
                 hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(InboxItemHandlers))
                     .LogWarning(ex, "Inbox: {Path} could not be written", path);
                 return Observable.Return(new InboxItemOutcome(path, false));
             });
+    }
 }
 
 /// <summary>

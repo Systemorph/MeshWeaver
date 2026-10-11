@@ -378,7 +378,7 @@ function of the filter and the legs.
 
 | Control | Bound to | What it does |
 |---|---|---|
-| search box | `search` | the term is appended to EVERY leg and handed to the query engine (free text, field filters, the semantic index) under the owner's identity — never a match over the rows already loaded |
+| search box | `search` | the term goes to the query engine with EVERY leg, as free text (full text and the semantic index), under the owner's identity — never a match over the rows already loaded |
 | order select | `order` | an `InboxOrder` constant: what needs you first (default — band rank, newest within), newest, oldest, by title, by source — the last two alphabetical in the viewer's language |
 | one switch per source | `sources/{key}` (the id, hex-encoded) | shows or hides what one provider brought (Mail, WhatsApp, Notifications, …); a source with no entry is shown, so a leg a package brings later never arrives switched off |
 | the grid's checkboxes | `inboxSelection` | the ticked row keys, read by Delete |
@@ -389,6 +389,11 @@ Three properties of that binding are load-bearing:
   shared synced query. A typed term is unbounded text, and a synced query is kept per distinct query
   for the life of the process — so a term gets its own live read, folded from deltas into "what the
   leg selects now" and ended when the term changes.
+- 🚨 **The term is free text, never grammar.** It is handed over as one quoted phrase with its quote
+  characters removed, and the leg's bound is pinned on the request (`MeshQueryRequest.Limit`, which
+  wins over any `limit:` in the string). Spliced in raw, `OR content.status:Archived` would parse as
+  "(the leg) OR archived" and bring put-away rows back, and `limit:all` would lift the bound. A search
+  narrows a leg; it never replaces its constraints.
 - 🚨 **The filter is compared by VALUE.** The data section re-emits an id whenever any id in it
   changes — the grid's own rows included — and each emission is a freshly deserialized record. Read
   naively, the page feeds on its own writes: rows written, filter "changed", rows written again,
@@ -445,13 +450,22 @@ Three rules follow, and each is pinned by a test in `InboxSelectAndDeleteTest`:
   source has more.** Unbounded, the page folds every historical row into memory and into the
   client's payload on a surface that is open all day. Older items are found with the search, which
   goes to the query engine; "oldest first" therefore orders the listed window, not all history.
-- **Both reads name the viewer.** A leg is (re)subscribed on a data emission or a retry timer, where
+- **Both reads name the viewer.** A leg is (re)subscribed on a data emission, where
   the ambient identity is gone: the synced query is created under the captured caller (with no
   identity it hands back the System-loaded stream, unfiltered) and the live read takes the viewer as
   an argument.
-- **A source that cannot be read is named, and read again.** It contributes no rows, is logged, is
-  listed in a notice above the grid, and is re-read after a pause — an unreadable source must never
-  look like an empty one.
+- **A source that cannot be read is named — and read again only when the viewer asks.** It
+  contributes no rows, is logged, and is listed in a notice above the grid: an unreadable source must
+  never look like an empty one. It is re-read when the search changes or the page is reopened, never
+  on a timer — a provider that stays broken would otherwise be re-queried and re-logged for as long
+  as any inbox is open.
+- **The handler builds its write INSIDE the call.** `Update` captures the caller's identity when it
+  is constructed, and the inbox opens the clicker's scope only around the call. A write deferred to
+  subscription runs, for every item after the first, on the previous write's completion thread — as
+  nobody — so a multi-row Delete would put away only its first row.
+- **Delete and Undo hold the page one at a time.** They are separate buttons, so the click framework
+  would run them side by side, and each rewrites the Undo batch when it finishes. A second act while
+  one runs is refused with its own line; the claim is released however the first one ends.
 
 🚨 **A default is OMITTED from stored JSON, so a leg negates the STAMPED value it excludes.**
 `Dismissed` defaults to `false`, `Email.Status` to `New`, `Direction` to `Inbound`: a positive match
