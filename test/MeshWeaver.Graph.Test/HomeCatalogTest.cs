@@ -241,6 +241,8 @@ public class HomeCatalogTest
         // the home then opens on its own first sort (Location) with every known sort still offered.
         var unknown = new HomeConfig { SortBy = "ByOwner" };
         unknown.EffectiveSort().Should().Be("ByOwner");
+        UserActivityLayoutAreas.UnknownSort(unknown).Should().Be("ByOwner", "an unknown value stays named, so it is reported");
+        UserActivityLayoutAreas.UnknownSort(new HomeConfig()).Should().BeNull();
         var search = UserActivityLayoutAreas.BuildCatalog(NodePath, unknown).Should().BeOfType<MeshSearchControl>().Subject;
         search.SortOptions!.Select(o => o.Label).Should().Equal("Location", "Last accessed", "Last modified", "Alphabetical");
     }

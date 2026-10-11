@@ -7,7 +7,7 @@ namespace MeshWeaver.Graph;
 
 /// <summary>
 /// Turns a module-supplied <see cref="NodeNavigation"/> into the left-hand rail — as a PURE PLAN
-/// first (<see cref="Plan"/>), then a control tree (<see cref="Render"/>).
+/// first (<see cref="Plan"/>), then a control tree (<see cref="Render(Rail, int, bool)"/>).
 ///
 /// <para><b>Why the plan exists.</b> A <see cref="ContainerControl{TControl}"/>'s child views are
 /// protected, so a rail built straight into controls cannot be asserted on: a test can count areas
@@ -39,7 +39,7 @@ namespace MeshWeaver.Graph;
 ///   children — a course's four lessons, ordered 1–4, rendered tenth to thirteenth behind every leaf
 ///   page, and no <c>Order</c> value could fix it because the numbers were already right (#3406).
 ///   The plan now carries ONE ordered sequence, <see cref="Rail.Items"/>, whose element is a
-///   <see cref="RailLink"/> or a <see cref="RailGroup"/>, and <see cref="Render"/> walks it once.
+///   <see cref="RailLink"/> or a <see cref="RailGroup"/>, and <see cref="Render(Rail, int, bool)"/> walks it once.
 ///   Both container renderers emit a container's areas in declaration order, so preserving the order
 ///   here is the whole fix.</item>
 ///   <item><b>A group nests: an entry's child that has children of its own is a group INSIDE the
@@ -48,7 +48,7 @@ namespace MeshWeaver.Graph;
 ///   the page above it showed a link where a folder was (2026-09-14, the default index that core
 ///   now derives for every markdown tree). A <see cref="RailGroup"/> therefore carries
 ///   <see cref="RailGroup.Items"/>, the same ordered sequence as the rail itself, and
-///   <see cref="Render"/> walks it recursively.</item>
+///   <see cref="Render(Rail, int, bool)"/> walks it recursively.</item>
 /// </list>
 ///
 /// <para>Only the group the reader is inside is expanded, so a long index stays a scannable list of
@@ -59,7 +59,7 @@ public static class SuppliedNavigationRail
     /// <summary>
     /// One item of the rail, in the order its supplier declared it: a <see cref="RailLink"/> or a
     /// <see cref="RailGroup"/>, and nothing else — the constructor is <c>private protected</c>, so
-    /// the two cases below are the whole hierarchy and <see cref="Render"/>'s walk over them is
+    /// the two cases below are the whole hierarchy and <see cref="Render(Rail, int, bool)"/>'s walk over them is
     /// exhaustive.
     /// </summary>
     public abstract record RailItem
@@ -176,8 +176,19 @@ public static class SuppliedNavigationRail
     /// <param name="rail">The plan to render.</param>
     /// <param name="width">Menu width in pixels.</param>
     /// <param name="collapsible">Whether the menu offers the collapse toggle.</param>
+    public static NavMenuControl Render(Rail rail, int width = 240, bool collapsible = true)
+        => Render(rail, width, collapsible, searchNamespace: null);
+
+    /// <summary>
+    /// <see cref="Render(Rail, int, bool)"/> with the search box: the menu searches
+    /// <paramref name="searchNamespace"/> in the mesh search. A separate overload, so the
+    /// three-parameter one keeps the metadata signature compiled plugins bind.
+    /// </summary>
+    /// <param name="rail">The plan to render.</param>
+    /// <param name="width">Menu width in pixels.</param>
+    /// <param name="collapsible">Whether the menu offers the collapse toggle.</param>
     /// <param name="searchNamespace">The namespace the menu's search box searches; null shows no box.</param>
-    public static NavMenuControl Render(Rail rail, int width = 240, bool collapsible = true, string? searchNamespace = null)
+    public static NavMenuControl Render(Rail rail, int width, bool collapsible, string? searchNamespace)
     {
         ArgumentNullException.ThrowIfNull(rail);
 

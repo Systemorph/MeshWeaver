@@ -16,7 +16,7 @@ namespace MeshWeaver.Graph.Test;
 /// sub-pages, and clicking any of them lost the list — the index was the page's OWN children, and
 /// a sub-page has none. The index is now the tree under the page's <see cref="DefaultNodeNavigation.IndexRoot"/>,
 /// the same on every page of the tree, with the page being read marked as current. Each rule below
-/// is a case here, on the pure <see cref="DefaultNodeNavigation.Build"/>.</para>
+/// is a case here, on the pure <see cref="DefaultNodeNavigation.Build(string, System.Collections.Generic.IReadOnlyCollection{MeshWeaver.Mesh.MeshNode}, string)"/>.</para>
 /// </summary>
 public class DefaultNodeNavigationTest
 {

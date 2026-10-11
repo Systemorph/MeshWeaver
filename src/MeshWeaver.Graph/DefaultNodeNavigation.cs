@@ -35,7 +35,7 @@ namespace MeshWeaver.Graph;
 /// legible because only the groups on the reader's path open. A space's own root page shows the
 /// index too, so the rail is the one place that never moves.</para>
 ///
-/// <para>Pure at its core: <see cref="Build"/> turns one subtree snapshot into the index, so
+/// <para>Pure at its core: <see cref="Build(string, IReadOnlyCollection{MeshNode}, string)"/> turns one subtree snapshot into the index, so
 /// structure, ordering, exclusions and position marking are pinned without a mesh.</para>
 /// </summary>
 public static class DefaultNodeNavigation
@@ -256,9 +256,24 @@ public static class DefaultNodeNavigation
     /// <param name="root">The index root (<see cref="IndexRoot"/>).</param>
     /// <param name="subtree">The root's subtree — the root itself included when it exists.</param>
     /// <param name="currentPath">The page being read.</param>
+    public static NodeNavigation? Build(string root, IReadOnlyCollection<MeshNode> subtree, string currentPath)
+        => Build(root, subtree, currentPath, moreLinks: null, loadMoreLabel: null);
+
+    /// <summary>
+    /// <see cref="Build(string, IReadOnlyCollection{MeshNode}, string)"/> for a lazily loaded tree: a
+    /// level named in <paramref name="moreLinks"/> ends with an entry (labelled
+    /// <paramref name="loadMoreLabel"/>, else <see cref="LoadMoreLabel"/>) whose path is the link
+    /// that loads the level's next batch. A separate overload, so the three-parameter one keeps the
+    /// metadata signature compiled plugins bind. Pure.
+    /// </summary>
+    /// <param name="root">The index root (<see cref="IndexRoot"/>).</param>
+    /// <param name="subtree">The loaded nodes — the root itself included when it exists.</param>
+    /// <param name="currentPath">The page being read.</param>
+    /// <param name="moreLinks">Per level that holds more than it shows: the link that loads more.</param>
+    /// <param name="loadMoreLabel">The viewer's label for that entry.</param>
     public static NodeNavigation? Build(
         string root, IReadOnlyCollection<MeshNode> subtree, string currentPath,
-        IReadOnlyDictionary<string, string>? moreLinks = null, string? loadMoreLabel = null)
+        IReadOnlyDictionary<string, string>? moreLinks, string? loadMoreLabel)
     {
         ArgumentNullException.ThrowIfNull(subtree);
         var entries = ChildrenOf(root, subtree, currentPath, moreLinks, loadMoreLabel ?? LoadMoreLabel);

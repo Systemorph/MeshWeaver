@@ -590,8 +590,16 @@ public static class UserActivityLayoutAreas
                 // It is a run-once LOGON action now (SeedDefaultAppsLogonAction), which says what
                 // the proxy was reaching for: once per user because the ledger says so.
                 (config, user, viewerScreen) =>
-                    (UiControl?)BuildHome(ownerId, config, sharedTargets: null, user, locale, viewerScreen,
-                        appsFromDirectory))
+                {
+                    // Open vocabulary: a sort this build does not know stays NAMED and is reported —
+                    // the home then opens on its own first sort, never on a silent stand-in.
+                    if (UnknownSort(config) is { } unknown)
+                        homeLogger?.LogWarning(
+                            "[Home] Admin/HomeConfig names sort '{Sort}', which this build does not know — "
+                            + "the home opens on its first sort and still offers every sort it knows", unknown);
+                    return (UiControl?)BuildHome(ownerId, config, sharedTargets: null, user, locale, viewerScreen,
+                        appsFromDirectory);
+                })
             .Do(_ =>
             {
                 if (System.Threading.Interlocked.Exchange(ref catalogLogged, 1) == 0)
@@ -1087,6 +1095,15 @@ public static class UserActivityLayoutAreas
             .WithItemLimit(50)
             .WithMaxRows(2)
             .WithReactiveMode(true);
+    }
+
+    /// <summary>The effective sort of <paramref name="config"/> when it is NOT one this build knows
+    /// (<see cref="CatalogSorts"/>), else null. The value is returned as written, so the caller can
+    /// name it. Pure.</summary>
+    internal static string? UnknownSort(HomeConfig? config)
+    {
+        var sort = (config ?? HomeConfigNodeType.Defaults).EffectiveSort();
+        return CatalogSorts.Any(s => string.Equals(s.Sort, sort, StringComparison.Ordinal)) ? null : sort;
     }
 
     /// <summary>One content tab: localized label + the four catalog sorts (default first), each
