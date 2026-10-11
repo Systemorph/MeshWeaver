@@ -64,7 +64,7 @@
 # cross-image identity. (This note used to record a drift between legs computing 3.0.0-rc1.ci.<n>
 # and memex-portal-next hand-writing 3.0.0-ci.<n>. Both halves are gone: the rc line is retired —
 # every leg mints the clean shape, Doc/Architecture/ReleaseProcess §1 — and portal-next is no
-# longer built here.)
+# longer an image: it ships inside memex-portal-ai.)
 set -uo pipefail
 
 usage() {
@@ -151,11 +151,13 @@ for repo in $REPOS; do
   assert_index "$repo" "$SHA" "Commit $SHA requires all three images." || true
 done
 
-# 🚨 memex-portal-next is NOT checked here any more: its sources and its build lane moved to
-# MeshWeaver.Plugins (MeshWeaver#2169). It is publishable independently because portalNext is
-# opt-in (chart default enabled: false) and the self-updater never rolls it — nothing waits on
-# it, so it is not part of THIS repo's all-or-nothing set. Asserting an image this repo does not
-# build would fail every commit.
+# 🚂 memex-portal-next is NOT a repository of the set — and no longer an image at all. /next rides
+# the platform release train (policy `portal-next-in-platform-image`): main-cd's portal-ai leg builds it into memex-portal-ai
+# (/app/portal-next.zip, .github/scripts/build-portal-next-bundle.sh) and asserts it is in the
+# published bytes of every architecture before `promote`. So /next is covered by `memex-portal-ai`
+# above, with the portal's sha, version and pointers — there is nothing of its own to assert here.
+# (It used to be a separately published image, excluded from this set by name, which every
+# deployment had to pin; that lane, MeshWeaver.Plugins portal-next-image.yml, is retired.)
 
 # ── THE POINTERS: every named tag the promotion publishes, on every repository it publishes it to ──
 #

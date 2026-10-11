@@ -107,7 +107,8 @@ public static class PackageEntitlement
     /// <summary>
     /// The ids of a signed package set — the SAME rule the Store's provision control plane reads it
     /// by (MeshWeaver.Plugins <c>Store/Provision PackageSet.Parse</c>): ids separated by commas,
-    /// semicolons or whitespace, each a plain id (letters, digits, <c>.</c>, <c>-</c>, <c>_</c>).
+    /// semicolons or whitespace, each a plain id (letters, digits, <c>.</c>, <c>-</c>, <c>_</c>; never
+    /// <c>.</c> or <c>..</c>, which are path navigation).
     /// A list with any id that is not plain, or the same id twice, authorizes NOTHING — empty, so
     /// a malformed signature can never be read as covering a package. Pure.
     /// </summary>
@@ -119,6 +120,7 @@ public static class PackageEntitlement
             .Split(PackageSetSeparators.ToCharArray(), StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .ToImmutableList();
         var plain = ids.All(id => id.Length is > 0 and <= 120
+                                  && id is not ("." or "..")
                                   && id.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '-' or '_'));
         var distinct = ids.Distinct(StringComparer.OrdinalIgnoreCase).Count() == ids.Count;
         return plain && distinct ? ids : ImmutableList<string>.Empty;
