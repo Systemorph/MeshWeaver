@@ -129,7 +129,10 @@ How it is read and resolved:
   mesh at Warning, even when another rule resolves the key. A broken rule therefore fails *as
   unclaimed, by name* — it is never skipped in silence.
 - 🚨 **A rule routes only into its own partition.** A rule whose `Handler` lies outside the rule's
-  own first path segment is refused.
+  own first path segment is refused. So is a `Handler` that is not already a canonical mesh path —
+  a dot segment (`Store/../Admin`), a percent-escape (`Store/%2e%2e/Admin`), `?`, `#`, a backslash
+  or an empty segment — as `UnsafeHandler`, because the browser normalises those after the check and
+  could leave the partition.
 
 ### Only declared namespaces count
 

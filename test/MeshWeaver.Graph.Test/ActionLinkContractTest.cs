@@ -257,6 +257,12 @@ public class ActionLinkContractTest
     [InlineData("", ActionHandlerRules.NoHandler)]
     [InlineData("Elsewhere/Review", ActionHandlerRules.HandlerOutsidePartition)]
     [InlineData("Store/\\evil", ActionHandlerRules.UnsafeHandler)]
+    [InlineData("Store/../Admin", ActionHandlerRules.UnsafeHandler)]
+    [InlineData("Store/%2e%2e/Admin", ActionHandlerRules.UnsafeHandler)]
+    [InlineData("Store/./Review", ActionHandlerRules.UnsafeHandler)]
+    [InlineData("Store//Review", ActionHandlerRules.UnsafeHandler)]
+    [InlineData("Store/Review?next=/Admin", ActionHandlerRules.UnsafeHandler)]
+    [InlineData("Store/Review#/Admin", ActionHandlerRules.UnsafeHandler)]
     public void ABrokenRule_IsRefusedByName_AndTheUnclaimedKeySaysWhichRuleBroke(string handler, string reason)
     {
         var chain = ActionHandlerRules.Bind(

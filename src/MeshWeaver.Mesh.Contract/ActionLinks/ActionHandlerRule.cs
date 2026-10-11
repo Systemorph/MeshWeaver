@@ -165,7 +165,12 @@ public static class ActionHandlerRules
     /// <summary>The rule names no handler node.</summary>
     public const string NoHandler = "NoHandler";
 
-    /// <summary>The handler path would not make a local target.</summary>
+    /// <summary>
+    /// The handler path would not make a local target, or is not a canonical mesh path — a dot
+    /// segment (<c>Store/../Admin</c>), a percent-escape (<c>Store/%2e%2e/Admin</c>), a query or
+    /// fragment delimiter, a backslash or an empty segment. The browser normalises those AFTER the
+    /// own-partition check, so any of them could leave the rule's partition.
+    /// </summary>
     public const string UnsafeHandler = "UnsafeHandler";
 
     /// <summary>The rule node's content does not read as an <see cref="ActionHandlerRule"/>.</summary>
@@ -243,11 +248,26 @@ public static class ActionHandlerRules
     {
         if (string.IsNullOrWhiteSpace(rule.Handler))
             return NoHandler;
-        if (!ActivityActionReference.IsLocalTarget(Target(rule.Handler, null)))
+        if (!IsCanonicalMeshPath(rule.Handler)
+            || !ActivityActionReference.IsLocalTarget(Target(rule.Handler, null)))
             return UnsafeHandler;
         return string.Equals(Partition(path), Partition(rule.Handler), StringComparison.Ordinal)
             ? null
             : HandlerOutsidePartition;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="handler"/> is already the path the browser will request: no dot
+    /// segment, no empty segment, and none of the characters a browser or server decodes or splits
+    /// on (<c>%</c>, <c>?</c>, <c>#</c>, <c>\</c>). Only such a path can have its partition judged
+    /// from its first segment.
+    /// </summary>
+    private static bool IsCanonicalMeshPath(string handler)
+    {
+        var trimmed = handler.Trim().Trim('/');
+        if (trimmed.Length == 0 || trimmed.IndexOfAny(['%', '?', '#', '\\']) >= 0)
+            return false;
+        return trimmed.Split('/').All(segment => segment.Length > 0 && segment != "." && segment != "..");
     }
 
     private static string Partition(string path)
