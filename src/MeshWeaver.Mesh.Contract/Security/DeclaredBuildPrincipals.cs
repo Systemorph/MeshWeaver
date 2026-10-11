@@ -28,8 +28,10 @@ namespace MeshWeaver.Mesh.Security;
 /// <para>🚨 <b>The node, when one exists, is the authority.</b> The authenticator reads
 /// <c>Admin/_BuildPrincipal/&lt;id&gt;</c> first and consults the declaration only when no node is
 /// there. So a hand-created node keeps working exactly as before, and a global admin can revoke a
-/// DECLARED principal at once — write the node with <see cref="BuildPrincipalActions.Revoke"/> —
-/// without waiting for a configuration change to roll.</para>
+/// DECLARED principal — write the node with <see cref="BuildPrincipalActions.Revoke"/> — without
+/// waiting for a configuration change to roll. The node decides from the moment the authenticator's
+/// node mirror has it (the change feed, on every replica), which is the propagation a node revoke
+/// has always had, not the instant the write returns.</para>
 ///
 /// <para><b>Nothing is materialised and nothing is reconciled.</b> The declaration is read from
 /// configuration when a token is decided; no node is written at boot, so there is no importer that

@@ -12,8 +12,12 @@ namespace MeshWeaver.Mesh.Security;
 /// event it exists for (<c>AADSTS700213</c>, measured 2026-08-27). Nothing in the mesh recorded that
 /// those credentials existed, which repos held one, or who authorised them. That is the shape of the
 /// plaintext-provider-key incident: a security fact with no record a reader can point at. Here the
-/// rule IS a node — <c>search nodeType:BuildPrincipal</c> is the complete list of repositories this
-/// mesh trusts and exactly what each may do.</para>
+/// rule IS a node — <c>search nodeType:BuildPrincipal</c> lists every repository this mesh trusts
+/// through a node and exactly what each may do. A deployment may also DECLARE a principal in its
+/// configuration (<see cref="DeclaredBuildPrincipals"/>): that one is in no node, is consulted only
+/// when no node exists for the repository, and is listed by the public <c>/health</c> body
+/// (<see cref="DeclaredBuildPrincipals.HealthCheckName"/>). The two readings together are the
+/// complete list.</para>
 ///
 /// <para>🚨 <b>It lives in the Admin partition</b> (<see cref="Namespace"/>), exactly like
 /// <see cref="PluginGrant"/> and for exactly the same reason: the subject of an access decision must

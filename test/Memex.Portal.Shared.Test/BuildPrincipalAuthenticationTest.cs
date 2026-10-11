@@ -527,8 +527,10 @@ public class BuildPrincipalAuthenticationTest(ITestOutputHelper output) : Monoli
         }
 
         // A declaration grants verify:combo and nothing else — the publication routes stay shut.
+        // 403, exactly: the declared principal authenticated and was refused for the scope it lacks.
+        // Anything else (a 401, a 404, a 500) would mean the request never reached that decision.
         using var fetch = await Get(app, $"/api/plugins/bundles/prebuilt/{Identity}/{Source}", designed);
-        Assert.NotEqual(HttpStatusCode.OK, fetch.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, fetch.StatusCode);
     }
 
     [Fact(Timeout = 240_000)]
