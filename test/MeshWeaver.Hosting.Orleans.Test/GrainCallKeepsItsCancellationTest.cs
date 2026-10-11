@@ -21,8 +21,8 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// <para>Orleans cancels a message that expired while its target grain was still being placed with
 /// an <see cref="OperationCanceledException"/> the caller receives as a CANCELLED task. Rx's task
 /// bridge reported that task as a fresh <see cref="TaskCanceledException"/> ("A task was
-/// canceled."), so production's NACK named nothing. <c>RoutingGrain.ObserveGrainCall</c> hands over
-/// the exception the task stored instead.</para>
+/// canceled."), so production's NACK named nothing. <c>RoutingGrain.ObserveGrainCall</c> re-states
+/// that cancellation with the stored exception's text - and nothing else of it.</para>
 ///
 /// <para><b>What this deliberately does NOT change, and pins.</b> The verdict: a placement expiry
 /// is still reported to the sender as <see cref="ErrorType.Failed"/> and is still not re-sent. Why
@@ -154,9 +154,11 @@ public class GrainCallKeepsItsCancellationTest
         var viaGrainCall = await Terminal(RoutingGrain.ObserveGrainCall(call));
 
         viaGrainCall.Kind.Should().Be(NotificationKind.OnError);
-        viaGrainCall.Exception!.GetType().Should().Be(typeof(OperationCanceledException),
-            "the exception the task stored is handed over as it is");
-        viaGrainCall.Exception.Message.Should().Be(PlacementExpiredText);
+        viaGrainCall.Exception!.GetType().Should().Be(typeof(TaskCanceledException),
+            "the TYPE every classifier reads stays the one Rx produced");
+        (viaGrainCall.Exception.InnerException is null).Should().BeTrue(
+            "and so does the graph: nothing is attached for a graph walk to find");
+        viaGrainCall.Exception.Message.Should().Be(PlacementExpiredText, "only the text is new");
     }
 
     [Fact]
@@ -204,7 +206,7 @@ public class GrainCallKeepsItsCancellationTest
             $"there is no better sentence to report; got '{nacks[0].Message}'");
 
         var withoutATask = new TaskCanceledException("no task behind this one");
-        ReferenceEquals(RoutingGrain.OriginalCancellation(withoutATask), withoutATask).Should().BeTrue(
+        ReferenceEquals(RoutingGrain.WithTheStoredText(withoutATask), withoutATask).Should().BeTrue(
             "with no cancelled task to read, the exception is handed back untouched");
     }
 
@@ -237,27 +239,59 @@ public class GrainCallKeepsItsCancellationTest
     }
 
     /// <summary>
-    /// WHY THE VERDICT CANNOT MOVE, as a fact rather than an argument. Only a CANCELLED task is
-    /// re-read, and what it stores is an <see cref="OperationCanceledException"/>. Every type the
-    /// delivery classifier turns into <see cref="ErrorType.ShuttingDown"/> is NOT one - those arrive
-    /// as FAULTED tasks, which this change does not touch. So what is handed over differs from Rx's
-    /// stand-in in its text, never in whether one of these arms matches it.
+    /// THE NEGATIVE CONTROL ON THE GRAPH. A stored cancellation may WRAP a fault the retry gate and
+    /// the classifier both recognise. Handing the stored exception over would put that inner fault
+    /// in front of predicates that walk the graph - the delivery would be re-sent and NACKed
+    /// <see cref="ErrorType.ShuttingDown"/>, where Rx's opaque stand-in was sent once and NACKed
+    /// <see cref="ErrorType.Failed"/>. Only the text travels, so neither moves.
     ///
-    /// <para>If Orleans ever makes one of these a cancellation, this fact goes red and "diagnostics
-    /// only" has to be re-examined rather than assumed. (A stored cancellation that WRAPS one of
-    /// them as an inner exception would also be seen now; no such shape is known.)</para>
+    /// <para>The two assertions at the top prove the control is live: the wrapped exception, seen
+    /// directly, IS re-sendable and IS a lifecycle transition.</para>
     /// </summary>
-    [Theory]
-    [InlineData(typeof(OrleansException))]
-    [InlineData(typeof(OrleansMessageRejectionException))]
-    [InlineData(typeof(SiloUnavailableException))]
-    [InlineData(typeof(OrleansLifecycleCanceledException))]
-    [InlineData(typeof(global::Orleans.Runtime.Messaging.ConnectionFailedException))]
-    [InlineData(typeof(ObjectDisposedException))]
-    public void NoTypeTheClassifierCallsTransient_IsACancellation(Type classified)
+    [Fact]
+    public async Task ACancellationWrappingATransientFault_IsStillSentOnce_AndStillTerminal()
     {
-        typeof(OperationCanceledException).IsAssignableFrom(classified).Should().BeFalse(
-            $"{classified.Name} would then reach the delivery classifier through a cancelled task, "
-            + "where Rx's stand-in used to hide it - a verdict change this fix does not intend");
+        var wrapped = new OperationCanceledException(
+            PlacementExpiredText, new SiloUnavailableException("the silo is going away"));
+
+        RoutingGrain.ClassifyDeliveryException(wrapped).Should().Be(ErrorType.ShuttingDown,
+            "seen directly, the graph walk finds the inner fault - which is why it must not be handed over");
+
+        var directory = new OperationCanceledException(
+            PlacementExpiredText, new OrleansException("The grain directory is unstable. Retry later."));
+        RoutingGrain.IsResendableDeliveryFailure(directory).Should().BeTrue(
+            "seen directly, this one would be sent again up to the retry budget");
+
+        foreach (var stored in new[] { wrapped, directory })
+        {
+            var calls = 0;
+            var nacks = await NacksOf(
+                () =>
+                {
+                    Interlocked.Increment(ref calls);
+                    return CancelledWith(stored);
+                },
+                "keeps-sentence-6");
+
+            calls.Should().Be(1, "the inner fault is not in front of the retry gate");
+            nacks.Count.Should().Be(1);
+            nacks[0].Type.Should().Be(ErrorType.Failed, "nor in front of the classifier");
+            nacks[0].Message.Contains(PlacementExpiredText, StringComparison.Ordinal).Should().BeTrue(
+                $"and the text still arrives; got '{nacks[0].Message}'");
+        }
+    }
+
+    /// <summary>
+    /// The sender's side also classifies a NACK by its TEXT (<c>ClassifyRoutedFailure</c>, shared
+    /// with the area and stream-cache rules). Orleans' placement sentence is not one of its phrases.
+    /// </summary>
+    [Fact]
+    public async Task TheSentenceItself_IsNotReadAsTransientByTheSharedTextRule()
+    {
+        var nacks = await NacksOf(
+            () => CancelledWith(new OperationCanceledException(PlacementExpiredText)), "keeps-sentence-7");
+
+        MeshWeaver.Connection.Orleans.OrleansRoutingService.ClassifyRoutedFailure(nacks[0].Message)
+            .Should().Be(ErrorType.Failed);
     }
 }
