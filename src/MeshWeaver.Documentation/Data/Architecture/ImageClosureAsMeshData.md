@@ -45,6 +45,18 @@ by name, whenever the record was not accepted verified — never green-by-skip.
 `Admin/ImageClosures` **with** a `SecretConfigKey`. A target allowlisted without one is refused at
 Error: an unsigned record would let anyone who reaches the endpoint write the data a gate trusts.
 
+**Accepted by the endpoint is not recorded by the ingest.** The endpoint's answer
+(`accepted` + `verified`) says the delivery is stored. Whether it became a record is the ingest's
+decision, made again over the stored event, and the only proof is the node. Measured on the control
+instance on 2026-10-11: eight deliveries in four hours were each answered `accepted`, `verified`, and
+each was then refused by the ingest as *"the signature does not verify over the stored body"*, so
+`Admin/ImageClosures` held no record while every `image-closure-record` job was green. The cause was
+the header lookup, not the signature. HTTP/2 delivers header names lowercased
+(`x-hub-signature-256`); the endpoint finds the header through a case-insensitive dictionary, and
+that comparer does not survive the store, so the event the ingest read back answered "no such
+header" to the canonical name. A consumer of a stored delivery reads a header with
+`WebhookEvent.Header(name)`, which ignores case, and never with `Headers.TryGetValue`.
+
 ## Reading it: coverage, never a bare answer
 
 A mesh read can answer *smaller* rather than wrong — a record never written, written to another

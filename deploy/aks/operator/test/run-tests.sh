@@ -3913,8 +3913,8 @@ da -- --namespace memex-cloud --pod "$_da_pod"
 [ "$_da_rc" -eq 0 ] && ok "dump analysis reads the volume and reports" || bad "dump analysis happy path" "exited ${_da_rc}: ${_da_out}"
 case "$_da_out" in *"::hosting:: dump_listing=2"*"::hosting:: dump_file=${_da_pod}.1791621060/coredump.1.1791621003"*"::hosting:: dump_threads=3"*) ok "…the listing (the denominator), the file read and its thread count" ;; *) bad "summary facts" "said: ${_da_out}" ;; esac
 [ "$(printf '%s\n' "$_da_out" | tail -1 | cut -c1-28)" = "::hosting:: dump_analysis=H4" ] && ok "…and the gzip+base64 analysis is the LAST line, inside the lane's log tail" || bad "analysis is the last line" "last: $(printf '%s\n' "$_da_out" | tail -1 | cut -c1-80)"
-[ "$(printf '%s' "$_da_json" | jq -r '.stacks.threadCount, .stacks.groupCount, .stacks.groups[0].threads, .stacks.groups[0].frames[1]' | tr '\n' '|')" = "3|2|2|Orleans.Runtime.Catalog.GetOrCreateActivation(Orleans.Runtime.GrainId)|" ] \
-  && ok "clrstack -all is grouped by identical stack, largest group first, frames without SP/IP" || bad "stack grouping" "json: ${_da_json}"
+[ "$(printf '%s' "$_da_json" | jq -r '.stacks.threadCount, .stacks.groupCount, .stacks.lockOwners, .stacks.groups[0].threads, .stacks.groups[0].threadIds[0], .stacks.groups[0].frames[0], .stacks.groups[0].frames[2]' | tr '\n' '|')" = "3|3|1|1|0x2c|HOLDS MONITOR #7 (1 thread(s) waiting) — thread 0x2c, see syncblk|Orleans.Runtime.Catalog.GetOrCreateActivation(Orleans.Runtime.GrainId)|" ] \
+  && ok "the thread syncblk names as a monitor's owner is its OWN group, FIRST, labelled with the monitor and its waiters, frames without SP/IP" || bad "lock owner first" "json: ${_da_json}"
 [ "$(printf '%s' "$_da_json" | jq -r '[.sections[].name] | join(",")')" = "eeversion,threadpool,syncblk,clrthreads,dumpasync" ] \
   && ok "…with the fixed text sections beside it" || bad "sections" "json: ${_da_json}"
 case "$(printf '%s' "$_da_json" | jq -r '.sections[] | select(.name == "syncblk") | .text')" in *"2c  12"*"System.Object"*) ok "…the lock owner (syncblk) survives intact" ;; *) bad "syncblk text" "json: ${_da_json}" ;; esac
@@ -4001,6 +4001,75 @@ _da_fact="$(printf '%s\n' "$_da_out" | sed -n 's/^::hosting:: dump_analysis=//p'
 [ "$(printf '%s' "$_da_json" | jq -r '.stacks.threadCount, .stacks.groupCount, (.stacks.groupsShown < .stacks.groupCount), ((.stacks.groups | length) == .stacks.groupsShown), (.stacks.framesCap < 40)' | tr '\n' ' ')" = "400 400 true true true " ] \
   && ok "…stating what it kept: every thread counted, groups shown < groups found, the frame cap shrunk to fit" || bad "caps stated" "json: $(printf '%s' "$_da_json" | jq -c '.stacks | del(.groups)')"
 rm -f "$_da_large"
+
+# 🚨 The read that MATTERS on a wedged process: who holds the monitor everyone waits on, and what is
+# that thread doing. Shaped on the first real read (memex-cloud, the 2026-10-10 18:16Z dump,
+# MeshWeaver#6432): syncblk named thread 0x1e as the owner of a monitor with 21 waiters, and its stack
+# was among the groups "cut to fit" — the OLDEST thread, whose deciding frame is the CALLER at the
+# bottom of a deep stack. Here: one old owner thread with a 150-frame stack, 30 waiters that differ
+# only in a per-thread frame address and a source path, and 300 unrelated threads to force the cut.
+_da_owner="$(mktemp)"
+da_owner_log() {  # da_owner_log <syncblk owner line, or empty>
+  printf '@@MW-DUMP listing\n17179869184\t1791656179\tp/coredump.1.1791656179\n'
+  printf '@@MW-DUMP selected\tp/coredump.1.1791656179\t17179869184\t1791656179\n'
+  printf '@@MW-DUMP section\tsyncblk\tsyncblk\n'
+  printf 'Index         SyncBlock MonitorHeld Recursion Owning Thread Info          SyncBlock Owner\n'
+  [ -z "$1" ] || printf '%s\n' "$1"
+  printf '@@MW-DUMP end\tsyncblk\t0\t200\n'
+  printf '@@MW-DUMP section\tclrstack\tclrstack -all\n'
+  # 300 unrelated threads FIRST in the address order the old condensation kept (low stack addresses).
+  local t=1 x=12345 y f
+  while [ "$t" -le 300 ]; do
+    printf 'OS Thread Id: 0x%x (%d)\n        Child SP               IP Call Site\n' "$((t + 4096))" "$t"
+    f=1
+    while [ "$f" -le 40 ]; do
+      x=$(( (x * 1103515245 + 12345) % 2147483648 )); y=$(( (x * 1103515245 + 12345) % 2147483648 )); x=$y
+      printf '00007F12C%07x 00007F12D%07x Generated.N%08x.T%08x.M%08x(System.Object)\n' "$f" "$f" "$x" "$((x ^ 2863311530))" "$((x * 7 % 2147483648))"
+      f=$((f+1))
+    done
+    t=$((t+1))
+  done
+  # 30 waiters: the same stack but for the frame's own address and nothing else.
+  t=1
+  while [ "$t" -le 30 ]; do
+    printf 'OS Thread Id: 0x%x (%d)\n        Child SP               IP Call Site\n' "$((t + 512))" "$((t + 400))"
+    printf '00007F3E%08x 00007F4F00000000 [InlinedCallFrame: 00007f3e%08x] System.Threading.Monitor.Enter_Slowpath(System.Runtime.CompilerServices.ObjectHandleOnStack)\n' "$((t * 4096))" "$((t * 4096))"
+    printf '00007F3E%08x 00007F4F00000001 System.Threading.Monitor.Enter_Slowpath(System.Object) [/_/src/runtime/src/coreclr/System.Private.CoreLib/src/System/Threading/Monitor.CoreCLR.cs @ 26]\n' "$((t * 4096 + 16))"
+    printf '00007F3E%08x 00007F4F00000002 Autofac.Core.Lifetime.LifetimeScope.CreateSharedInstance(System.Guid, System.Func`1<System.Object>)\n' "$((t * 4096 + 32))"
+    t=$((t+1))
+  done
+  # The owner: the process's oldest pool thread (highest stack address), 150 frames, the caller LAST.
+  printf 'OS Thread Id: 0x1e (13)\n        Child SP               IP Call Site\n'
+  printf '00007F4F2E3C0000 00007F4F00000000 [HelperMethodFrame_1OBJ: 00007f4f2e3c0000] System.Threading.Monitor.ObjWait(Int32, System.Object)\n'
+  f=1
+  while [ "$f" -le 148 ]; do
+    printf '00007F4F2E3C%04x 00007F4F0000%04x Autofac.Core.Resolving.Pipeline.Layer%d.Execute(Autofac.Core.Resolving.Pipeline.ResolveRequestContext)\n' "$f" "$f" "$f"
+    f=$((f+1))
+  done
+  printf '00007F4F2E3CFFF0 00007F4F0000FFF0 MeshWeaver.Test.TheCallThatHoldsTheLock.Run()\n'
+  printf '@@MW-DUMP end\tclrstack\t0\t9999999\n@@MW-DUMP done\n'
+}
+da_owner_log '    2 000055F4045B5FD0           61         1 000055F404593ED0 1e  13   00007f3fa8d4e5b0 System.Object' > "$_da_owner"
+da HOSTING_DA_LOG="$_da_owner" -- --namespace memex-cloud
+_da_fact="$(printf '%s\n' "$_da_out" | sed -n 's/^::hosting:: dump_analysis=//p' | tail -1)"
+[ "$_da_rc" -eq 0 ] && [ "${#_da_fact}" -le 14000 ] && [ "$(printf '%s' "$_da_json" | jq -r '(.stacks.groupsShown < .stacks.groupCount), .stacks.lockOwners, .stacks.groups[0].threadIds[0], .stacks.groups[0].frames[0]' | tr '\n' '|')" = "true|1|0x1e|HOLDS MONITOR #2 (30 thread(s) waiting) — thread 0x1e, see syncblk|" ] \
+  && ok "a dump whose groups ARE cut still shows the monitor's owner FIRST, naming the monitor and its 30 waiters (${#_da_fact} bytes)" || bad "owner survives the cut" "rc ${_da_rc}; ${#_da_fact} bytes; stacks: $(printf '%s' "$_da_json" | jq -c '.stacks | del(.groups)')"
+[ "$(printf '%s' "$_da_json" | jq -r '.stacks.groups[0].frames | (.[1]), (.[-1]), (map(select(startswith("…"))) | length)' | tr '\n' '|')" = "[HelperMethodFrame_1OBJ] System.Threading.Monitor.ObjWait(Int32, System.Object)|MeshWeaver.Test.TheCallThatHoldsTheLock.Run()|0|" ] \
+  && ok "…with its WHOLE stack: what it waits in at the top, and the CALLER that took the lock at the bottom" || bad "owner stack whole" "frames: $(printf '%s' "$_da_json" | jq -c '.stacks.groups[0].frames | [.[0:3], .[-3:]]')"
+[ "$(printf '%s' "$_da_json" | jq -r '[.stacks.groups[] | select(.threads == 30)] | length, (.[0].frames | join("|"))')" = "1
+[InlinedCallFrame] System.Threading.Monitor.Enter_Slowpath(System.Runtime.CompilerServices.ObjectHandleOnStack)|System.Threading.Monitor.Enter_Slowpath(System.Object)|Autofac.Core.Lifetime.LifetimeScope.CreateSharedInstance(System.Guid, System.Func\`1<System.Object>)" ] \
+  && ok "…and its 30 waiters are ONE group: a frame's own stack address and source path no longer make every thread a stack of its own" || bad "waiters group" "groups of 30: $(printf '%s' "$_da_json" | jq -c '[.stacks.groups[] | select(.threads >= 2)]')"
+# Negative control: the SAME dump with no owner named in syncblk — the old thread is cut with the rest,
+# which is what the first real read did. It is the syncblk line, and nothing else, that keeps it.
+da_owner_log '' > "$_da_owner"
+da HOSTING_DA_LOG="$_da_owner" -- --namespace memex-cloud
+[ "$_da_rc" -eq 0 ] && [ "$(printf '%s' "$_da_json" | jq -r '.stacks.lockOwners, ([.stacks.groups[] | select(.threadIds | index("0x1e"))] | length)' | tr '\n' '|')" = "0|0|" ] \
+  && ok "negative control: with no owner in syncblk the same thread is among the groups cut to fit" || bad "negative control (owner unnamed)" "stacks: $(printf '%s' "$_da_json" | jq -c '.stacks | del(.groups)')"
+# A capped stack keeps its head AND its tail, and says how many frames it dropped between them.
+[ "$(printf '%s' "$_da_json" | jq -r '.stacks.framesCap as $c | [.stacks.groups[] | select(.frames | length == $c)][0].frames | (map(select(test("^… [0-9]+ frame\\(s\\) cut …$"))) | length), (.[-1] | startswith("Generated."))' | tr '\n' '|')" = "1|true|" ] \
+  && ok "a capped stack keeps its top frames AND its bottom (caller) frames, with the cut counted between them" || bad "head and tail" "group: $(printf '%s' "$_da_json" | jq -c '.stacks.groups[1]')"
+rm -f "$_da_owner"
+unset -f da_owner_log
 
 # ── the IN-POD half, run for real against a stub dotnet-dump ────────────────────────────────────
 # bin/_dump_analyze_pod.sh needs GNU find/stat/realpath/date/timeout — what the analyser image and

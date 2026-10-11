@@ -29,7 +29,7 @@ namespace Memex.Portal.Shared.Test;
 public class ADeploymentNamedCommercialPackageInstallsTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private const string SourceName = "registered-0";
-    private const string Instance = "partnerre-test";
+    private const string Instance = "client-a-test";
     private const string Principal = PackageEntitlement.DeploymentConfigPrefix + Instance;
     private const string LedgerPath = PackageInstaller.InstalledPartition + "/_DefaultInstallLedger";
 
@@ -40,7 +40,7 @@ public class ADeploymentNamedCommercialPackageInstallsTest(ITestOutputHelper out
                 .AddSingleton<IPackageSource>(_ => new NodeRepoPackageSource(
                     (_, _, _, _) => Observable.Return(new RepoSnapshot("commit-deployment-named", Repo)),
                     "https://github.com/acme/plugins"))
-                // The PartnerRe shape: the whole source as a seed AND one commercial module named
+                // The ClientA shape: the whole source as a seed AND one commercial module named
                 // exactly — the named one is the decision, the wildcard is not.
                 .AddSingleton(new PluginCatalogOptions
                 {
@@ -172,19 +172,19 @@ public class ADeploymentNamedCommercialPackageInstallsTest(ITestOutputHelper out
         PackageEntitlement.IsDeploymentConfigPrincipal("rbuergi").Should().BeFalse();
         PackageEntitlement.IsDeploymentConfigPrincipal("Governance/Activities/x").Should().BeFalse();
         PackageEntitlement.IsGovernedActivityPrincipal(Principal).Should().BeFalse();
-        PackageEntitlement.DeploymentConfigPrincipal(" partnerre ").Should().Be("deployment-config:partnerre");
+        PackageEntitlement.DeploymentConfigPrincipal(" client-a ").Should().Be("deployment-config:client-a");
     }
 
     [Fact]
     public void OnlyAnExactEntry_NamesAPackage()
     {
-        var claims = new PackageManifest { Id = "Claims", Source = "PartnerRe" };
-        DeploymentConfigAuthority.NamingEntry(["PartnerRe/*"], claims).Should().BeNull(
+        var claims = new PackageManifest { Id = "Claims", Source = "ClientA" };
+        DeploymentConfigAuthority.NamingEntry(["ClientA/*"], claims).Should().BeNull(
             "a whole-source pattern names nothing");
         DeploymentConfigAuthority.NamingEntry(["Plugins/Claims"], claims).Should().BeNull(
             "another source's package of the same id is not this one");
-        DeploymentConfigAuthority.NamingEntry(["PartnerRe/*", "PartnerRe/Claims"], claims)
-            .Should().Be("PartnerRe/Claims");
+        DeploymentConfigAuthority.NamingEntry(["ClientA/*", "ClientA/Claims"], claims)
+            .Should().Be("ClientA/Claims");
         DeploymentConfigAuthority.NamingEntry(null, claims).Should().BeNull();
     }
 
