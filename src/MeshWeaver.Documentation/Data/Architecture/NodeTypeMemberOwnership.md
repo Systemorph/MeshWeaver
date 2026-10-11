@@ -132,8 +132,8 @@ That is what it did. The gate compared `Configuration`, `Sources` and `InstanceL
 nothing else, so a file that changed any other authored member read as unchanged and was never
 written. Measured on a deployed portal: `Governance/NameCheck` declares `"keepsHistory": false` in
 its committed file, and its stored definition read `keepsHistory: true` at node version 143, across
-five minor releases of the package. Every one of those versions was the mesh's own compile
-bookkeeping; no import had written the node since its first install. The serializer fix that lets an
+five minor releases of the package. The versions read back were the mesh's own compile bookkeeping
+(whether an import ever wrote the node after its first install was not established). The serializer fix that lets an
 explicit `false` survive a write (`[JsonIgnore(Condition = Never)]` on the flag) could not help,
 because no write was issued. Nineteen authored members were invisible to the gate this way.
 
