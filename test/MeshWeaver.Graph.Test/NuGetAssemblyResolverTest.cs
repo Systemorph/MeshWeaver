@@ -111,7 +111,7 @@ public class NuGetAssemblyResolverTest
     }
 
     /// <summary>
-    /// The motivating case (partnerre.meshweaver.cloud, linux-x64, 2026-10-11): a NodeType referencing
+    /// The motivating case (client-a.meshweaver.cloud, linux-x64, 2026-10-11): a NodeType referencing
     /// Microsoft.Data.SqlClient compiled and then failed at render, because the resolver surfaced only
     /// the package's <c>lib/</c> assembly — the "not supported on this platform" stub. This compiles a
     /// snippet the way a NodeType is compiled (against the COMPILE assets), loads it into a context

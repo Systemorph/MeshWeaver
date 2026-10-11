@@ -752,7 +752,7 @@ def check_static(scan: RepoScan, require_pins: bool) -> list[str]:
     # FILE-scoped:
     # - a ref "satisfied" by a lane in another file was never readable by that lane;
     # - a ref in a file that calls NO lane is not a lane's source ref at all.
-    # PartnerRe.Memex is the second case: `helm-release.yml` and `infra-deploy.yml` each pin the
+    # ClientA.Memex is the second case: `helm-release.yml` and `infra-deploy.yml` each pin the
     # core commit they check the CHART / Bicep out of. Those are deployment-content pins, moved
     # deliberately and alone, in a repository whose one lane (`auto-arm.yml`) is unrelated CI
     # tooling. The repo-wide pooling demanded that both deploy pins equal the auto-arm lane's sha,
@@ -941,7 +941,7 @@ HALF_MOVED = CONSISTENT.replace(
     'echo "image-digest=sha256:0BADHEX"',
 )
 
-# A deploy workflow (PartnerRe.Memex's helm-release.yml shape): it checks the chart out of core at
+# A deploy workflow (ClientA.Memex's helm-release.yml shape): it checks the chart out of core at
 # its own PLATFORM_REF and calls no platform lane. I8's subject is a LANE's source ref; this is not one.
 DEPLOY_ONLY = """
 env:

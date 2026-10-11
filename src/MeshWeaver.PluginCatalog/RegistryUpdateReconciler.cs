@@ -800,8 +800,23 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
                 Served = packages.Select(ServedPackage.Of).ToImmutableList(),
                 TargetPlatform = TargetSet.Platform(packages.Select(ServedPackage.Of)),
             }))
-            .Select(_ => Unit.Default);
+            .SelectMany(_ => RetryFailedDefaultInstalls(name, via));
     }
+
+    /// <summary>
+    /// 🚨 Ends every reconcile that a feed read AFTER boot made possible (the safety-net pass and
+    /// <see cref="ReconcileNow"/>, and a drained deferral): re-runs the default install when its last pass left a package
+    /// uninstalled (MeshWeaver#5825). The registry has just answered, which is the event that pass
+    /// was missing, and this is the lane it writes on — so the repair needs no timer of its own and
+    /// no second writer, the same shape as <see cref="RetryFaultedReloads"/>. Not at boot: the boot
+    /// reconcile runs straight after the pass that failed, against the same registry state. Never
+    /// faults (<see cref="InstanceAutoRegistrationService.RetryFailedDefaults"/>).
+    /// </summary>
+    private IObservable<Unit> RetryFailedDefaultInstalls(string registryName, string via) =>
+        string.Equals(via, RegistryReconcileEntry.ViaBoot, StringComparison.Ordinal)
+        || hub.ServiceProvider.GetService<InstanceAutoRegistrationService>() is not { } installer
+            ? Observable.Return(Unit.Default)
+            : installer.RetryFailedDefaults($"registry '{registryName}' answered a feed read ({via})");
 
     /// <summary>How long the delivery lane's ONE install-record listing may take. Bounded for the
     /// same reason every other read on this path is: a wedged listing must cost this, never the

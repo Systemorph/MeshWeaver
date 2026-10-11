@@ -20,7 +20,7 @@ namespace MeshWeaver.Hosting.Test;
 /// 🚨 <b>A platform admin can ISSUE a grant on a Space nobody else can grant on — a SYSTEM-OWNED
 /// (one-way GitSynced) Space, or an OWNERLESS one — and on no other (MeshWeaver#5904).</b>
 ///
-/// <para>Measured on partnerre-control 2026-09-29/30: the platform admin created Space
+/// <para>Measured on client-a-control 2026-09-29/30: the platform admin created Space
 /// <c>Deployments</c> over MCP and wired its <c>_GitSync</c>; the retraction took the creator's Admin
 /// away (a system-owned Space grants write to the importer only), so <c>Deployments</c> carried NO
 /// grant. <c>create Deployments/_Access/rbuergi_Access</c> (Viewer) was refused with "…anyone else
@@ -161,7 +161,7 @@ public class PlatformAdminCanGrantOnAnUngrantableSpaceTest(ITestOutputHelper out
     {
         var space = await PrepareSystemOwnedSpace();
         await AssertIsPlatformAdmin();
-        await Mesh.GetEffectivePermissions($"{space}/partnerre-test", PlatformAdmin).Should().Within(Budget)
+        await Mesh.GetEffectivePermissions($"{space}/client-a-test", PlatformAdmin).Should().Within(Budget)
             .Match(p => !p.HasFlag(Permission.Read),
                 "a platform admin is NOT a data superuser — no Read before an explicit grant",
                 cancellationToken: TestContext.Current.CancellationToken);
@@ -171,7 +171,7 @@ public class PlatformAdminCanGrantOnAnUngrantableSpaceTest(ITestOutputHelper out
             $"the platform admin's Viewer entitlement on the system-owned Space must be accepted — "
             + $"the refusal itself prescribes it — but was refused: {granted.Error}");
 
-        await Mesh.GetEffectivePermissions($"{space}/partnerre-test", PlatformAdmin).Should().Within(Budget)
+        await Mesh.GetEffectivePermissions($"{space}/client-a-test", PlatformAdmin).Should().Within(Budget)
             .Match(p => p.HasFlag(Permission.Read) && !p.HasFlag(Permission.Update),
                 "the entitlement confers Read and nothing more",
                 cancellationToken: TestContext.Current.CancellationToken);
@@ -256,7 +256,7 @@ public class PlatformAdminCanGrantOnAnUngrantableSpaceTest(ITestOutputHelper out
         const string approver = "approver-ann";
         var space = await PrepareSystemOwnedSpace();
         await AssertIsPlatformAdmin();
-        var record = $"{space}/partnerre-test";
+        var record = $"{space}/client-a-test";
         await Mesh.GetEffectivePermissions(record, approver).Should().Within(Budget)
             .Match(p => !p.HasFlag(Permission.Read), "the approver holds nothing before the grant",
                 cancellationToken: TestContext.Current.CancellationToken);
