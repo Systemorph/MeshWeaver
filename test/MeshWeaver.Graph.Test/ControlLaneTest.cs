@@ -415,6 +415,179 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         SpaceDeletion.TeardownCommand(large with { StoreExists = null }).Should().Contain("swept below the pipeline");
     }
 
+    /// <summary>
+    /// 🚨 A PLAN TARGET IS TESTED BY RUNNING ITS QUERY (#6040). The GitSync removal is issued for every
+    /// row <see cref="SpaceDeletion.IsGitSync"/> names — typed, or at or beneath a <c>_GitSync</c>
+    /// segment — and the plan used to bind THAT count beside a query selecting the typed rows alone.
+    /// Each target's count is now the number of rows its own predicate selects.
+    /// </summary>
+    [Fact]
+    public void AGitSyncTarget_CountsTheRowsItsOwnQuerySelects()
+    {
+        static MeshNode Row(string path, string? nodeType = null) => MeshNode.FromPath(path) with { Name = path, NodeType = nodeType };
+        var rows = new[]
+        {
+            Row("S/_GitSync", SpaceDeletion.GitSyncNodeType),        // typed and named: the usual shape
+            Row("S/_GitSync/state"), Row("S/_GitSync/state/x"),      // beneath it: neither typed nor named
+            Row("S/Sub/_GitSync", "Markdown"),                       // named, otherwise typed
+            Row("S/Elsewhere/Sync", SpaceDeletion.GitSyncNodeType),  // typed, not named
+            Row("S/Gone/_GitSync/state"), Row("S/Gone/_GitSync/state/x"), // beneath a segment that holds no node
+            Row("S/Gone/_GitSync/_Activity/a", "Activity"),               // …and a satellite row there: no untyped query reads its table
+            Row("S/Page", "Markdown"),
+        };
+        var inventory = SpaceDeletion.Fold("S", null, rows, recordExists: true, storeExists: true, [], []);
+
+        inventory.GitSync.Should().HaveCount(8, "the removal is still issued for every row the predicate names");
+        inventory.GitSyncRows.Should().Be(8, "the command's row count covers the satellite row no untyped target can");
+        var targets = SpaceDeletion.PlanSteps(inventory).Steps.Single(s => s.Name == "Remove GitSync configuration").Targets;
+        targets.Should().HaveCount(3);
+        foreach (var planTarget in targets)
+        {
+            Func<MeshNode, bool> selects = planTarget.Query == SpaceDeletion.GitSyncQuery("S")
+                ? SpaceDeletion.IsGitSyncTyped
+                // The two untyped queries read no satellite table, so neither may count a row in one.
+                : planTarget.Query == SpaceDeletion.GitSyncNamedQuery("S")
+                    ? row => SpaceDeletion.IsGitSyncNamed(row) && !SatelliteTableMapping.IsSatellitePath(row.Path)
+                    : planTarget.Query == SpaceDeletion.GitSyncBeneathQuery("S/Gone/_GitSync")
+                        ? row => row.Path.StartsWith("S/Gone/_GitSync/", StringComparison.Ordinal)
+                                 && !SatelliteTableMapping.IsSatellitePath(row.Path)
+                        : throw new InvalidOperationException($"unexpected GitSync target query '{planTarget.Query}'");
+            planTarget.Count.Should().Be(rows.Count(selects), $"'{planTarget.Query}' must count exactly what it selects");
+        }
+        // 🚨 Every row the removal is issued for is in a target, or beneath a row one selects — the plan
+        // never authorizes a delete of rows no target names. The segment with no node of its own is the
+        // case that had none: its rows were deleted under a placeholder that selected nothing.
+        var roots = rows.Where(r => SpaceDeletion.IsGitSyncTyped(r) || SpaceDeletion.IsGitSyncNamed(r)).Select(r => r.Path)
+            .Concat(SpaceDeletion.UnselectedGitSyncSegments(inventory)).ToArray();
+        inventory.GitSync.Should().OnlyContain(
+            path => roots.Any(root => path == root || path.StartsWith(root + "/", StringComparison.Ordinal)));
+        targets.Should().NotContain(t => t.Count == 0, "a target that selects nothing names no set the step acts on");
+        targets.Single(t => t.Label == SpaceDeletion.TargetGitSyncBeneath).Count.Should().Be(2,
+            "the satellite row beneath the segment is in the command's row count, never in an untyped query's");
+
+        // The ordinary space — one typed `_GitSync`, rows beneath it — keeps ONE target, and its count
+        // is the one row the typed query selects, never the three rows the removal covers.
+        var ordinary = SpaceDeletion.Fold("S", null, rows.Take(3), recordExists: true, storeExists: true, [], []);
+        var only = SpaceDeletion.GitSyncTargets(ordinary).Should().ContainSingle().Subject;
+        only.Query.Should().Be(SpaceDeletion.GitSyncQuery("S"));
+        only.Count.Should().Be(1);
+        ordinary.GitSyncRows.Should().Be(3);
+    }
+
+    /// <summary>
+    /// 🚨 EVERYTHING STAYS COMPATIBLE: a copy of the inventory record that predates the per-query split
+    /// round-trips <see cref="SpaceDeletionInventory.GitSync"/> alone (MeshWeaver.Plugins'
+    /// DeleteSpaceRunner does, through its own inventory record). That field keeps the meaning it had —
+    /// every row typed as a GitSync configuration or at or beneath a <c>_GitSync</c> segment — and such
+    /// an inventory is planned exactly as before: ONE <c>gitsync</c> target counting it. Read as
+    /// "no split", never as "no GitSync rows", which dropped the target from every such plan.
+    /// </summary>
+    [Fact]
+    public void AnInventoryWithoutTheSplit_KeepsTheLegacyGitSyncTarget()
+    {
+        static MeshNode Row(string path, string? nodeType = null) => MeshNode.FromPath(path) with { Name = path, NodeType = nodeType };
+        var rows = new[]
+        {
+            Row("S/_GitSync", SpaceDeletion.GitSyncNodeType), Row("S/_GitSync/state"),
+            Row("S/Sub/_GitSync", "Markdown"), Row("S/Elsewhere/Sync", SpaceDeletion.GitSyncNodeType),
+            Row("S/Gone/_GitSync/_Activity/a", "Activity"), Row("S/Page", "Markdown"),
+        };
+        var folded = SpaceDeletion.Fold("S", null, rows, recordExists: true, storeExists: true, [], []);
+
+        // The legacy field is the union the code before the split produced, row for row.
+        var legacyUnion = rows
+            .Where(r => r.NodeType == SpaceDeletion.GitSyncNodeType || r.Path.Split('/').Contains("_GitSync"))
+            .Select(r => r.Path).OrderBy(p => p, StringComparer.Ordinal);
+        folded.GitSync.Should().Equal(legacyUnion);
+        folded.HasGitSyncSplit.Should().BeTrue("Fold always reads the split");
+        folded.GitSync.Should().Equal(
+            folded.GitSyncTyped!.Union(folded.GitSyncNamed!).Union(folded.GitSyncContent!)
+                .Union(rows.Where(r => SatelliteTableMapping.IsSatellitePath(r.Path) && SpaceDeletion.IsGitSync(r)).Select(r => r.Path))
+                .OrderBy(p => p, StringComparer.Ordinal),
+            "the split partitions what the legacy field names; it never adds a row to it");
+
+        // What a mirror that predates the split hands back: every field it knows, none of the three new ones.
+        var mirrored = new SpaceDeletionInventory
+        {
+            Space = folded.Space, Schema = folded.Schema, StoreExists = folded.StoreExists, RecordExists = folded.RecordExists,
+            Tables = folded.Tables, Grants = folded.Grants, GitSync = folded.GitSync, GitSyncRows = folded.GitSyncRows,
+            NodeTypes = folded.NodeTypes, ContentRoots = folded.ContentRoots,
+        };
+        mirrored.HasGitSyncSplit.Should().BeFalse();
+        var step = SpaceDeletion.PlanSteps(mirrored).Steps.Single(s => s.Name == "Remove GitSync configuration");
+        var only = step.Targets.Should().ContainSingle().Subject;
+        only.Label.Should().Be(SpaceDeletion.TargetGitSync);
+        only.Query.Should().Be(SpaceDeletion.GitSyncQuery("S"));
+        only.Count.Should().Be(folded.GitSync.Count, "the target and count the plan bound before the split");
+        SpaceDeletion.UnselectedGitSyncSegments(mirrored).Should().BeEmpty();
+    }
+
+    /// <summary>
+    /// The reader's own test, run against a real mesh: every GitSync target's query, executed as
+    /// system, returns exactly the count the plan binds — for a space holding an untyped
+    /// <c>_GitSync</c> with a row beneath it and a second one deeper down (#6040).
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task EveryGitSyncTargetQuery_ReturnsTheCountThePlanBinds()
+    {
+        const string space = "Sync6040";
+        var instance = target!;
+        // Seeded with a split (namespace, id), as a real `_GitSync` node is: the query's `id:` filter
+        // reads the node id, and SeedPage's single-argument MeshNode keeps the whole path as its id.
+        foreach (var path in new[] { $"{space}/_GitSync", $"{space}/_GitSync/state", $"{space}/Sub/_GitSync", $"{space}/Page" })
+            await instance.Seed(MeshNode.FromPath(path) with
+            {
+                Name = path, NodeType = "Markdown", Content = new MarkdownContent { Content = "# page" },
+            });
+
+        // The inventory lists through the index, which trails the creates: wait for the reading that
+        // holds both `_GitSync` rows and the row beneath the first.
+        var inventory = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .Select(_ => SpaceDeletion.Inventory(instance.Hub, space)).Concat()
+            .Where(i => i.GitSync.Count == 3)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
+
+        var targets = SpaceDeletion.GitSyncTargets(inventory);
+        var named = targets.Should().ContainSingle("no row is typed as a GitSync configuration, so only the named target is offered").Subject;
+        named.Count.Should().Be(2);
+        (await instance.Selects(named.Query)).Should().Be(2,
+            $"running '{named.Query}' is how a reader tests the bound count");
+        (await instance.Selects(SpaceDeletion.GitSyncQuery(space))).Should().Be(0,
+            "the typed query selects none of these rows, which is why the predicate's count beside it could not be tested");
+    }
+
+    /// <summary>
+    /// 🚨 Rows beneath a <c>_GitSync</c> segment that holds NO node — what a half-removed space leaves —
+    /// are a target of their own, and its query selects exactly them on a real mesh. The removal is
+    /// issued for each of these rows; before, the plan stated them as a query that selected nothing.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task RowsBeneathAGitSyncSegmentWithNoNode_AreATargetWhoseQuerySelectsThem()
+    {
+        const string space = "Sync6040Gone";
+        var instance = target!;
+        foreach (var path in new[] { $"{space}/Deep/_GitSync/state", $"{space}/Deep/_GitSync/state/x", $"{space}/Page" })
+            await instance.Seed(MeshNode.FromPath(path) with
+            {
+                Name = path, NodeType = "Markdown", Content = new MarkdownContent { Content = "# page" },
+            });
+
+        var inventory = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .Select(_ => SpaceDeletion.Inventory(instance.Hub, space)).Concat()
+            .Where(i => i.GitSync.Count == 2)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
+
+        var beneath = SpaceDeletion.GitSyncTargets(inventory).Should().ContainSingle(
+            "neither the typed nor the named query selects a row here, so the segment itself is the target").Subject;
+        beneath.Label.Should().Be(SpaceDeletion.TargetGitSyncBeneath);
+        beneath.Query.Should().Be(SpaceDeletion.GitSyncBeneathQuery($"{space}/Deep/_GitSync"));
+        beneath.Count.Should().Be(2);
+        (await instance.Selects(beneath.Query)).Should().Be(2,
+            $"running '{beneath.Query}' is how a reader tests the bound count");
+        (await instance.Selects(SpaceDeletion.GitSyncNamedQuery(space))).Should().Be(0,
+            "no row is named _GitSync, which is why the named query could not stand for these rows");
+    }
+
     [Fact]
     public void TwoExecutorsClaimingOneOperation_AreRefusedAtConstruction()
     {
@@ -613,11 +786,21 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
             await SeedPage($"{space}/Page");
         }
 
+        public Task Seed(MeshNode node) => AsSystem(Mesh, () => MeshQuery.CreateOrUpdateNode(node));
+
         public Task SeedPage(string path) =>
             AsSystem(Mesh, () => MeshQuery.CreateOrUpdateNode(new MeshNode(path)
             {
                 Name = path, NodeType = "Markdown", Content = new MarkdownContent { Content = "# page" },
             }));
+
+        /// <summary>How many rows a query selects, read as system and asserted to be an answer.</summary>
+        public async Task<int> Selects(string query)
+        {
+            var reading = await AsSystem(Mesh, () => MeshReading.Read(MeshQuery, query));
+            reading.IsAnswer.Should().BeTrue(reading.WhyNotAnAnswer ?? "");
+            return reading.Rows.Count;
+        }
 
         public async Task<bool> Exists(string path)
         {

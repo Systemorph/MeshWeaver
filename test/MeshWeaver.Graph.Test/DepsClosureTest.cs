@@ -52,7 +52,7 @@ public class DepsClosureTest
               },
               "Microsoft.Identity.Client/4.66.1": {
                 "runtime": { "lib/net8.0/Microsoft.Identity.Client.dll": {} },
-                "runtimeTargets": { "runtimes/win/lib/net8.0/msalruntime.dll": { "rid": "win", "assetType": "native" } }
+                "runtimeTargets": { "runtimes/linux-x64/lib/net8.0/msalruntime.dll": { "rid": "linux-x64", "assetType": "native" } }
               },
               "Microsoft.Extensions.Options/10.0.0": {
                 "runtime": { "lib/net10.0/Microsoft.Extensions.Options.dll": {} }
@@ -112,14 +112,14 @@ public class DepsClosureTest
     {
         var result = DepsClosure.Derive(Graph, "MeshWeaver.Mail.MicrosoftGraph");
 
-        // This graph's native sits at `runtimes/win/lib/net8.0/…`, which is NOT the shape
+        // This graph's native sits at `runtimes/linux-x64/lib/net8.0/…`, which is NOT the shape
         // `ModuleNativeAssets` probes (`runtimes/<rid>/native/<file>`). Carrying it at its own path
         // would put bytes somewhere nothing looks at — which reads as "the bundle ships it" and
         // behaves as if it does not. So it is named instead, and the name says why.
         Assert.Empty(result.Natives);
         Assert.Contains(result.Warnings,
             w => w.Contains("Microsoft.Identity.Client")
-                 && w.Contains("runtimes/win/lib/net8.0/msalruntime.dll")
+                 && w.Contains("runtimes/linux-x64/lib/net8.0/msalruntime.dll")
                  && w.Contains("runtimes/<rid>/native/<file>"));
     }
 
@@ -145,7 +145,7 @@ public class DepsClosureTest
               "RidPicky/1.0.0": {
                 "runtime": { "lib/net10.0/RidPicky.dll": {} },
                 "runtimeTargets": {
-                  "runtimes/win-x64/lib/net10.0/RidPicky.dll": { "rid": "win-x64", "assetType": "runtime" }
+                  "runtimes/linux-x64/lib/net10.0/RidPicky.dll": { "rid": "linux-x64", "assetType": "runtime" }
                 }
               }
             }
@@ -273,8 +273,8 @@ public class DepsClosureTest
         var managed = Assert.Single(pure.Uncarried);
         Assert.Equal(DepsClosure.UncarriedKind.RidSpecificManaged, managed.Kind);
         Assert.Equal("RidPicky", managed.Package);
-        Assert.Equal("runtimes/win-x64/lib/net10.0/RidPicky.dll", managed.RelativePath);
-        Assert.Equal("win-x64", managed.Rid);
+        Assert.Equal("runtimes/linux-x64/lib/net10.0/RidPicky.dll", managed.RelativePath);
+        Assert.Equal("linux-x64", managed.Rid);
         Assert.Equal("RidPicky.dll", managed.FileName);
         // A managed assembly has no probed NATIVE layout — --with is its only carrier.
         Assert.Null(managed.ProbedPath);
@@ -283,17 +283,17 @@ public class DepsClosureTest
         var native = Assert.Single(graph.Uncarried);
         Assert.Equal(DepsClosure.UncarriedKind.UnprobedNative, native.Kind);
         Assert.Equal("Microsoft.Identity.Client", native.Package);
-        Assert.Equal("runtimes/win/lib/net8.0/msalruntime.dll", native.RelativePath);
+        Assert.Equal("runtimes/linux-x64/lib/net8.0/msalruntime.dll", native.RelativePath);
         Assert.Equal("msalruntime.dll", native.FileName);
         // The slot the loader probes for the same file and the same RID.
-        Assert.Equal("runtimes/win/native/msalruntime.dll", native.ProbedPath);
+        Assert.Equal("runtimes/linux-x64/native/msalruntime.dll", native.ProbedPath);
 
         // The finding is the ONE spelling both lanes share, so one grep measures both (#4445).
         Assert.StartsWith(
-            UncarriedAssetFindings.RidSpecificManaged("RidPicky", "runtimes/win-x64/lib/net10.0/RidPicky.dll"),
+            UncarriedAssetFindings.RidSpecificManaged("RidPicky", "runtimes/linux-x64/lib/net10.0/RidPicky.dll"),
             managed.Describe(), StringComparison.Ordinal);
         Assert.StartsWith(
-            UncarriedAssetFindings.UnprobedNative("Microsoft.Identity.Client", "runtimes/win/lib/net8.0/msalruntime.dll"),
+            UncarriedAssetFindings.UnprobedNative("Microsoft.Identity.Client", "runtimes/linux-x64/lib/net8.0/msalruntime.dll"),
             native.Describe(), StringComparison.Ordinal);
 
         Assert.Equal(pure.Uncarried.Select(u => u.Describe()), pure.Warnings);
@@ -355,10 +355,86 @@ public class DepsClosureTest
         // Still dropped — but NAMED, which is the half the old warning got right and could not
         // deliver for a pure-native package.
         Assert.Contains(result.Warnings,
-            w => w.Contains("RidPicky") && w.Contains("runtimes/win-x64/lib/net10.0/RidPicky.dll"));
+            w => w.Contains("RidPicky") && w.Contains("runtimes/linux-x64/lib/net10.0/RidPicky.dll"));
         // The RID-agnostic copy still rides, exactly as before.
         Assert.Contains("RidPicky.dll", result.Files);
     }
+
+    /// <summary>The #4445 measurement in one graph: a Windows-only managed implementation
+    /// (<c>System.Security.Cryptography.ProtectedData</c> 6.0.0's <c>runtimes/win/</c> copy) and a
+    /// browser-wasm native, beside one asset for a RID the bundle DOES target.</summary>
+    private const string ForeignRidGraph = """
+        {
+          "runtimeTarget": { "name": ".NETCoreApp,Version=v10.0" },
+          "targets": {
+            ".NETCoreApp,Version=v10.0": {
+              "Widget/1.0.0": {
+                "dependencies": { "System.Security.Cryptography.ProtectedData": "6.0.0", "Mixed": "1.0.0" },
+                "runtime": { "Widget.dll": {} }
+              },
+              "System.Security.Cryptography.ProtectedData/6.0.0": {
+                "runtime": { "lib/netstandard2.0/System.Security.Cryptography.ProtectedData.dll": {} },
+                "runtimeTargets": {
+                  "runtimes/win/lib/netstandard2.0/System.Security.Cryptography.ProtectedData.dll": { "rid": "win", "assetType": "runtime" }
+                }
+              },
+              "Mixed/1.0.0": {
+                "runtime": { "lib/net10.0/Mixed.dll": {} },
+                "runtimeTargets": {
+                  "runtimes/browser-wasm/nativeassets/net9.0/mixed.so": { "rid": "browser-wasm", "assetType": "native" },
+                  "runtimes/unix/lib/net10.0/Mixed.dll": { "rid": "unix", "assetType": "runtime" }
+                }
+              }
+            }
+          },
+          "libraries": {
+            "Widget/1.0.0": { "type": "project" },
+            "System.Security.Cryptography.ProtectedData/6.0.0": { "type": "package" },
+            "Mixed/1.0.0": { "type": "package" }
+          }
+        }
+        """;
+
+    /// <summary>
+    /// 🚨 #4445 — a module bundle targets ONE RID (<see cref="ModuleBundleTarget"/>), so an asset
+    /// for a RID outside its fallback chain is not uncarried: it is INFORMATION, never in
+    /// <see cref="DepsClosure.Result.Uncarried"/> (which refuses the pack) nor in its words. The
+    /// <c>unix</c> asset is IN the chain and stays refused — the positive control.
+    /// </summary>
+    [Fact]
+    public void AnAssetForARidTheBundleDoesNotTarget_IsInformation_NeverARefusal()
+    {
+        var result = DepsClosure.Derive(ForeignRidGraph, "Widget");
+
+        Assert.Equal(2, result.NotTargeted.Count);
+        Assert.Contains(result.NotTargeted, a => a.Rid == "win"
+            && a.Kind == DepsClosure.UncarriedKind.RidSpecificManaged
+            && a.Package == "System.Security.Cryptography.ProtectedData");
+        Assert.Contains(result.NotTargeted, a => a.Rid == "browser-wasm"
+            && a.Kind == DepsClosure.UncarriedKind.UnprobedNative);
+
+        var refused = Assert.Single(result.Uncarried);
+        Assert.Equal("unix", refused.Rid);
+        Assert.Equal("runtimes/unix/lib/net10.0/Mixed.dll", refused.RelativePath);
+        Assert.DoesNotContain(result.Warnings, w => w.Contains("runtimes/win/", StringComparison.Ordinal)
+                                                   || w.Contains("browser-wasm", StringComparison.Ordinal));
+        // The facade still rides — leaving the Windows implementation out costs nothing.
+        Assert.Contains("System.Security.Cryptography.ProtectedData.dll", result.Files);
+    }
+
+    [Theory]
+    [InlineData("linux-x64", true)]
+    [InlineData("linux", true)]
+    [InlineData("unix-x64", true)]
+    [InlineData("unix", true)]
+    [InlineData("any", true)]
+    [InlineData("", true)]
+    [InlineData("win", false)]
+    [InlineData("win-x64", false)]
+    [InlineData("osx-arm64", false)]
+    [InlineData("browser-wasm", false)]
+    public void TheTargetRidChain_DecidesWhatABundleMustCarry(string rid, bool applies) =>
+        Assert.Equal(applies, ModuleBundleTarget.Applies(rid));
 
     /// <summary>An Import-shaped graph: the module references a MODULE-OWNED MeshWeaver.*
     /// sibling (its source lives in the module's repo, so it is nowhere in /app) which itself

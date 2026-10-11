@@ -102,6 +102,7 @@ public sealed class ModuleLibrariesShelf
         var versions = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.OrdinalIgnoreCase);
         var natives = ImmutableDictionary.CreateBuilder<string, ImmutableArray<string>>(StringComparer.OrdinalIgnoreCase);
         var uncarried = ImmutableDictionary.CreateBuilder<string, ImmutableArray<string>>(StringComparer.OrdinalIgnoreCase);
+        var notTargeted = ImmutableDictionary.CreateBuilder<string, ImmutableArray<string>>(StringComparer.OrdinalIgnoreCase);
 
         if (!document.RootElement.TryGetProperty("targets", out var targets))
             throw new InvalidOperationException($"'{depsFiles[0]}' has no 'targets' — not a deps.json.");
@@ -134,6 +135,8 @@ public sealed class ModuleLibrariesShelf
                 // cannot carry — named, never read past (#4445).
                 if (NativeContributions.UncarriedBy(library.Value, id) is { IsEmpty: false } dropped)
                     uncarried[id] = dropped;
+                if (NativeContributions.NotTargetedBy(library.Value, id) is { IsEmpty: false } foreign)
+                    notTargeted[id] = foreign;
                 if (library.Value.TryGetProperty("dependencies", out var deps))
                     dependencies[id] = [.. deps.EnumerateObject().Select(d => d.Name)];
             }
@@ -147,7 +150,10 @@ public sealed class ModuleLibrariesShelf
 
         return new ModuleLibrariesShelf(
             full, assemblies.ToImmutable(), dependencies.ToImmutable(),
-            versions.ToImmutable(), files, natives.ToImmutable(), uncarried.ToImmutable());
+            versions.ToImmutable(), files, natives.ToImmutable(), uncarried.ToImmutable())
+        {
+            NotTargetedByPackage = notTargeted.ToImmutable(),
+        };
     }
 
     /// <summary>Whether the shelf carries this package at all (its deps record names it).</summary>
@@ -190,6 +196,16 @@ public sealed class ModuleLibrariesShelf
     /// <returns>The findings, empty when none.</returns>
     public ImmutableArray<string> UncarriedOf(string packageId) =>
         _uncarriedByPackage.TryGetValue(packageId, out var findings) ? findings : [];
+
+    /// <summary>What a shelf package declares for a RID a module bundle does NOT target, as
+    /// INFORMATION lines (<see cref="NativeContributions.NotTargetedBy"/>, #4445).</summary>
+    /// <param name="packageId">The package id.</param>
+    /// <returns>The lines, empty when none.</returns>
+    public ImmutableArray<string> NotTargetedOf(string packageId) =>
+        NotTargetedByPackage.TryGetValue(packageId, out var lines) ? lines : [];
+
+    private ImmutableDictionary<string, ImmutableArray<string>> NotTargetedByPackage { get; init; } =
+        ImmutableDictionary<string, ImmutableArray<string>>.Empty;
 
     /// <summary>The file on the shelf backing one declared native path, or null.</summary>
     /// <param name="relativePath">The module-relative path.</param>

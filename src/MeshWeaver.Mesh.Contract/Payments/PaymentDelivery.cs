@@ -38,13 +38,33 @@ public sealed record PaymentDelivery
     public PaymentSubscriptionEvent? Subscription { get; init; }
 
     /// <summary>
+    /// The payment-method SETUP this delivery is about, or null when it is not one.
+    ///
+    /// <para>🚨 A finished setup is reported HERE and never as <see cref="Checkout"/>. A setup
+    /// charges nothing and buys nothing; a provider that parsed a setup-mode session into a
+    /// completed checkout would hand fulfilment a paid order that was never paid. The two are
+    /// separate properties so that mistake has nowhere to hide.</para>
+    /// </summary>
+    public PaymentMethodSetupFact? Setup { get; init; }
+
+    /// <summary>
+    /// The DEFERRED subscription this delivery is about — one scheduled with nothing due today — or
+    /// null when it is not one. Carries the scheduling facts (created, trial ending, cancelled, the
+    /// initial zero invoice); it is never a paid period. A PAID renewal of the same subscription
+    /// arrives as <see cref="Subscription"/>.
+    /// </summary>
+    public DeferredSubscriptionFact? DeferredSubscription { get; init; }
+
+    /// <summary>
     /// Whether this delivery names work the portal would actually DO — a checkout naming an order,
-    /// or a subscription event that renews a plan, ends it, or reports a failed charge on it. The predicate the retention decision
+    /// a subscription event that renews a plan, ends it, or reports a failed charge on it, a setup
+    /// naming its attempt or claim, or a deferred subscription naming its claim. The predicate the retention decision
     /// turns on: a renewal discarded as noise is a subscriber whose plan silently lapses next month
     /// with nothing anywhere to say why. Pure.
     /// </summary>
     public bool NamesWork =>
-        Checkout is { OrderPath: { Length: > 0 } } || Subscription is { IsActionable: true };
+        Checkout is { OrderPath: { Length: > 0 } } || Subscription is { IsActionable: true }
+        || Setup is { NamesWork: true } || DeferredSubscription is { NamesWork: true };
 }
 
 /// <summary>What a checkout delivery says happened to the session.</summary>
@@ -175,6 +195,29 @@ public sealed record PaymentSubscriptionEvent(
     /// only when the processor did not say.</para>
     /// </summary>
     public DateTimeOffset? PaidThrough { get; init; }
+
+    /// <summary>
+    /// What this delivery's invoice actually COLLECTED, in the currency's major unit, when the
+    /// payload states it. Null when the processor did not say.
+    ///
+    /// <para>🚨 This is what keeps a zero invoice from buying a period. A subscription scheduled
+    /// with nothing due today (<see cref="IPaymentMethodSetupProvider.CreateDeferredSubscription"/>)
+    /// produces an initial invoice of zero; a provider must not report that invoice as
+    /// <see cref="PaymentSubscriptionChange.Renewed"/> at all, and <see cref="IsPaidRenewal"/> lets
+    /// a caller refuse it independently if one ever does.</para>
+    /// </summary>
+    public decimal? AmountPaid { get; init; }
+
+    /// <summary>
+    /// Whether this event is a renewal that PAID for a period: it renews, and the amount collected
+    /// is positive or was not stated. A renewal that states it collected zero is not one. This —
+    /// not the existence of a subscription, and not its initial zero invoice — is what starts and
+    /// continues paid-period accounting. Pure.
+    /// </summary>
+    public bool IsPaidRenewal => Renews && AmountPaid is not <= 0m;
+
+    /// <summary>The claim the subscription was scheduled for, when it is a deferred one.</summary>
+    public string? ClaimReference => Meta(PaymentMetadata.ClaimReference);
 
     /// <summary>The viewer whose plan it is.</summary>
     public string? Buyer => Meta(PaymentMetadata.Buyer);

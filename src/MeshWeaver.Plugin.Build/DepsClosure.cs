@@ -116,6 +116,18 @@ public static class DepsClosure
         /// <see cref="Natives"/>.</para>
         /// </summary>
         public IReadOnlyList<UncarriedAsset> Uncarried { get; init; } = [];
+
+        /// <summary>
+        /// Assets of either shape the closure declares for a RID a module bundle does NOT target
+        /// (<see cref="ModuleBundleTarget"/>, #4445). Not carried, and correctly so: nothing that
+        /// loads the bundle runs on that RID. INFORMATION, never part of <see cref="Uncarried"/>,
+        /// so they never refuse a pack. The packer prints one
+        /// <see cref="UncarriedAssetFindings.NotTargetedRid"/> line each.
+        ///
+        /// <para>An <c>init</c> property for the same binary-compatibility reason as
+        /// <see cref="Natives"/>.</para>
+        /// </summary>
+        public IReadOnlyList<UncarriedAsset> NotTargeted { get; init; } = [];
     }
 
     /// <summary>The two shapes a module bundle cannot carry BY DERIVATION (#4126, #4367).</summary>
@@ -341,6 +353,7 @@ public static class DepsClosure
         var files = new List<string>();
         var natives = new List<NativeAsset>();
         var uncarried = new List<UncarriedAsset>();
+        var notTargeted = new List<UncarriedAsset>();
         foreach (var name in ownReachable.OrderBy(n => n, StringComparer.OrdinalIgnoreCase))
         {
             // 🚨 NO `RuntimeFiles.Count == 0` SHORT-CIRCUIT. It used to sit here, and it made the
@@ -361,10 +374,16 @@ public static class DepsClosure
             // UncarriedAsset.Describe. `--with` accepts a plain file name inside the module folder
             // and REFUSES any path component, so the copy has to be flattened into the module
             // folder first, and saying so is the difference between advice and a dead end.
+            //
+            // 🚨 Only for a RID the bundle TARGETS (#4445). An asset for another RID — the measured
+            // case is a Windows-only implementation in a bundle every portal loads on linux-x64 —
+            // is not missing from the bundle; it is information (NotTargeted), never a refusal.
             foreach (var (path, rid) in node.RidSpecificManaged)
-                uncarried.Add(new UncarriedAsset(UncarriedKind.RidSpecificManaged, name, path, rid));
+                (ModuleBundleTarget.Applies(rid) ? uncarried : notTargeted)
+                    .Add(new UncarriedAsset(UncarriedKind.RidSpecificManaged, name, path, rid));
             foreach (var (path, rid) in node.UnreachableNatives)
-                uncarried.Add(new UncarriedAsset(UncarriedKind.UnprobedNative, name, path, rid));
+                (ModuleBundleTarget.Applies(rid) ? uncarried : notTargeted)
+                    .Add(new UncarriedAsset(UncarriedKind.UnprobedNative, name, path, rid));
         }
         var excluded = platformStops.OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
 
@@ -394,6 +413,7 @@ public static class DepsClosure
         {
             Natives = carried,
             Uncarried = uncarried,
+            NotTargeted = notTargeted,
         };
     }
 
