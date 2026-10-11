@@ -431,23 +431,34 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
             Row("S/_GitSync/state"), Row("S/_GitSync/state/x"),      // beneath it: neither typed nor named
             Row("S/Sub/_GitSync", "Markdown"),                       // named, otherwise typed
             Row("S/Elsewhere/Sync", SpaceDeletion.GitSyncNodeType),  // typed, not named
+            Row("S/Gone/_GitSync/state"), Row("S/Gone/_GitSync/state/x"), // beneath a segment that holds no node
             Row("S/Page", "Markdown"),
         };
         var inventory = SpaceDeletion.Fold("S", null, rows, recordExists: true, storeExists: true, [], []);
 
-        inventory.GitSync.Should().HaveCount(5, "the removal is still issued for every row the predicate names");
-        inventory.GitSyncRows.Should().Be(5);
+        inventory.GitSync.Should().HaveCount(7, "the removal is still issued for every row the predicate names");
+        inventory.GitSyncRows.Should().Be(7);
         var targets = SpaceDeletion.PlanSteps(inventory).Steps.Single(s => s.Name == "Remove GitSync configuration").Targets;
-        targets.Should().HaveCount(2);
+        targets.Should().HaveCount(3);
         foreach (var planTarget in targets)
         {
             Func<MeshNode, bool> selects = planTarget.Query == SpaceDeletion.GitSyncQuery("S")
                 ? SpaceDeletion.IsGitSyncTyped
                 : planTarget.Query == SpaceDeletion.GitSyncNamedQuery("S")
                     ? SpaceDeletion.IsGitSyncNamed
-                    : throw new InvalidOperationException($"unexpected GitSync target query '{planTarget.Query}'");
+                    : planTarget.Query == SpaceDeletion.GitSyncBeneathQuery("S/Gone/_GitSync")
+                        ? row => row.Path.StartsWith("S/Gone/_GitSync/", StringComparison.Ordinal)
+                        : throw new InvalidOperationException($"unexpected GitSync target query '{planTarget.Query}'");
             planTarget.Count.Should().Be(rows.Count(selects), $"'{planTarget.Query}' must count exactly what it selects");
         }
+        // 🚨 Every row the removal is issued for is in a target, or beneath a row one selects — the plan
+        // never authorizes a delete of rows no target names. The segment with no node of its own is the
+        // case that had none: its rows were deleted under a placeholder that selected nothing.
+        var roots = rows.Where(r => SpaceDeletion.IsGitSyncTyped(r) || SpaceDeletion.IsGitSyncNamed(r)).Select(r => r.Path)
+            .Concat(SpaceDeletion.UnselectedGitSyncSegments(inventory)).ToArray();
+        inventory.GitSync.Should().OnlyContain(
+            path => roots.Any(root => path == root || path.StartsWith(root + "/", StringComparison.Ordinal)));
+        targets.Should().NotContain(t => t.Count == 0, "a target that selects nothing names no set the step acts on");
 
         // The ordinary space — one typed `_GitSync`, rows beneath it — keeps ONE target, and its count
         // is the one row the typed query selects, never the three rows the removal covers.
@@ -486,10 +497,42 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var targets = SpaceDeletion.GitSyncTargets(inventory);
         var named = targets.Should().ContainSingle("no row is typed as a GitSync configuration, so only the named target is offered").Subject;
         named.Count.Should().Be(2);
-        (await instance.Count(named.Query)).Should().Be(2,
+        (await instance.Selects(named.Query)).Should().Be(2,
             $"running '{named.Query}' is how a reader tests the bound count");
-        (await instance.Count(SpaceDeletion.GitSyncQuery(space))).Should().Be(0,
+        (await instance.Selects(SpaceDeletion.GitSyncQuery(space))).Should().Be(0,
             "the typed query selects none of these rows, which is why the predicate's count beside it could not be tested");
+    }
+
+    /// <summary>
+    /// 🚨 Rows beneath a <c>_GitSync</c> segment that holds NO node — what a half-removed space leaves —
+    /// are a target of their own, and its query selects exactly them on a real mesh. The removal is
+    /// issued for each of these rows; before, the plan stated them as a query that selected nothing.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task RowsBeneathAGitSyncSegmentWithNoNode_AreATargetWhoseQuerySelectsThem()
+    {
+        const string space = "Sync6040Gone";
+        var instance = target!;
+        foreach (var path in new[] { $"{space}/Deep/_GitSync/state", $"{space}/Deep/_GitSync/state/x", $"{space}/Page" })
+            await instance.Seed(MeshNode.FromPath(path) with
+            {
+                Name = path, NodeType = "Markdown", Content = new MarkdownContent { Content = "# page" },
+            });
+
+        var inventory = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .Select(_ => SpaceDeletion.Inventory(instance.Hub, space)).Concat()
+            .Where(i => i.GitSync.Count == 2)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
+
+        var beneath = SpaceDeletion.GitSyncTargets(inventory).Should().ContainSingle(
+            "neither the typed nor the named query selects a row here, so the segment itself is the target").Subject;
+        beneath.Label.Should().Be(SpaceDeletion.TargetGitSyncBeneath);
+        beneath.Query.Should().Be(SpaceDeletion.GitSyncBeneathQuery($"{space}/Deep/_GitSync"));
+        beneath.Count.Should().Be(2);
+        (await instance.Selects(beneath.Query)).Should().Be(2,
+            $"running '{beneath.Query}' is how a reader tests the bound count");
+        (await instance.Selects(SpaceDeletion.GitSyncNamedQuery(space))).Should().Be(0,
+            "no row is named _GitSync, which is why the named query could not stand for these rows");
     }
 
     [Fact]
@@ -699,7 +742,7 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
             }));
 
         /// <summary>How many rows a query selects, read as system and asserted to be an answer.</summary>
-        public async Task<int> Count(string query)
+        public async Task<int> Selects(string query)
         {
             var reading = await AsSystem(Mesh, () => MeshReading.Read(MeshQuery, query));
             reading.IsAnswer.Should().BeTrue(reading.WhyNotAnAnswer ?? "");

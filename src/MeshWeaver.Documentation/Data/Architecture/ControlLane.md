@@ -149,10 +149,15 @@ tested. The GitSync removal is the case that had this wrong: it is issued for ev
 and that count sat beside a query selecting the typed rows alone. `SpaceDeletion.GitSyncTargets` now
 offers the typed rows as one target (`nodeType:GitHubSyncConfig`) and, when some row named `_GitSync`
 is not typed, those rows as a second (`id:_GitSync`), each with the count of its own query. The two
-sets may overlap; neither uses a negation. Rows merely beneath a `_GitSync` node leave with its
-recursive delete and are the row count in the step's command, which the pre-flight bounds.
-`ControlLaneTest.AGitSyncTarget_CountsTheRowsItsOwnQuerySelects` pins the pairing, and
-`EveryGitSyncTargetQuery_ReturnsTheCountThePlanBinds` runs the queries against a
+sets may overlap; neither uses a negation. Rows merely beneath a `_GitSync` node one of those queries
+selects leave with its recursive delete and are the row count in the step's command, which the
+pre-flight bounds. Rows beneath a `_GitSync` segment that neither query selects (a half-removed space
+leaves the rows and no node at the segment) are a third target per segment, `gitsync-beneath`:
+`namespace:{…/_GitSync} scope:descendants` with the count of rows beneath it. So every row the
+removal is issued for is in a target or beneath a row one selects, and no target is a query that
+selects nothing. `ControlLaneTest.AGitSyncTarget_CountsTheRowsItsOwnQuerySelects` pins the pairing,
+and `EveryGitSyncTargetQuery_ReturnsTheCountThePlanBinds` and
+`RowsBeneathAGitSyncSegmentWithNoNode_AreATargetWhoseQuerySelectsThem` run the queries against a
 mesh. No plan offers a `content-roots` target any more: content goes with the store.
 
 The control instance parks the action with the reported plan, the approval binds that snapshot's

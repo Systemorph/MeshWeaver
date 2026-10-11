@@ -436,6 +436,9 @@ public static class SpaceDeletion
     /// <summary>Target label key: the rows named <c>_GitSync</c> that are not all typed as a GitSync configuration.</summary>
     public const string TargetGitSyncNamed = "gitsync-named";
 
+    /// <summary>Target label key: the rows beneath a <c>_GitSync</c> segment that holds no node either GitSync query selects.</summary>
+    public const string TargetGitSyncBeneath = "gitsync-beneath";
+
     /// <summary>Target label key: the content roots (kept for stored plans that name them).</summary>
     public const string TargetContentRoots = "content-roots";
 
@@ -450,7 +453,14 @@ public static class SpaceDeletion
     /// rows NAMED <c>_GitSync</c> are a second one, offered only when some of them are not typed: a
     /// typed <c>_GitSync</c> is already in the first target, and the two sets may overlap, which is
     /// stated here rather than hidden behind a negation. Rows merely BENEATH a <c>_GitSync</c> node
-    /// leave with its recursive delete and are the row count in the step's command. Pure.
+    /// one of those two queries selects leave with its recursive delete and are the row count in the
+    /// step's command.
+    ///
+    /// <para>🚨 Rows beneath a <c>_GitSync</c> segment that NEITHER query selects — the segment holds
+    /// no node (a half-removed space), or one that is neither typed nor named — have no root in the
+    /// first two targets, yet the removal is issued for each of them. Every such segment is a target
+    /// of its own (<see cref="GitSyncBeneathQuery"/>), counted by the rows beneath it, so the plan
+    /// never authorizes a delete of rows no target names. Pure.</para>
     /// </summary>
     public static ImmutableList<ControlLanePlanTarget> GitSyncTargets(SpaceDeletionInventory inventory)
     {
@@ -459,11 +469,32 @@ public static class SpaceDeletion
             targets.Add(Target(TargetGitSync, GitSyncQuery(inventory.Space), inventory.GitSyncTyped.Count));
         if (inventory.GitSyncNamed.Except(inventory.GitSyncTyped, StringComparer.Ordinal).Any())
             targets.Add(Target(TargetGitSyncNamed, GitSyncNamedQuery(inventory.Space), inventory.GitSyncNamed.Count));
-        // Rows beneath a `_GitSync` segment that holds no node of its own: neither query selects
-        // one, and the plan says so with a count of zero rather than carrying no target at all.
-        if (targets.Count == 0)
-            targets.Add(Target(TargetGitSyncNamed, GitSyncNamedQuery(inventory.Space), 0));
+        foreach (var segment in UnselectedGitSyncSegments(inventory))
+            targets.Add(Target(TargetGitSyncBeneath, GitSyncBeneathQuery(segment),
+                inventory.GitSync.Count(p => p.StartsWith(segment + "/", StringComparison.Ordinal))));
         return targets.ToImmutable();
+    }
+
+    /// <summary>
+    /// The outermost <c>…/_GitSync</c> paths that have rows beneath them and that neither
+    /// <see cref="GitSyncQuery"/> nor <see cref="GitSyncNamedQuery"/> selects, in ordinal order. Pure.
+    /// </summary>
+    public static ImmutableList<string> UnselectedGitSyncSegments(SpaceDeletionInventory inventory)
+    {
+        var selected = inventory.GitSyncTyped.Concat(inventory.GitSyncNamed).ToImmutableHashSet(StringComparer.Ordinal);
+        return inventory.GitSync
+            .Select(path =>
+            {
+                var segments = path.Split('/');
+                var at = Array.IndexOf(segments, AccessAssignmentGuard.SyncConfigId);
+                // Strictly beneath the segment: the row AT it is the named target's business.
+                return at < 0 || at == segments.Length - 1 ? null : string.Join('/', segments.Take(at + 1));
+            })
+            .OfType<string>()
+            .Distinct(StringComparer.Ordinal)
+            .Where(segment => !selected.Contains(segment))
+            .OrderBy(segment => segment, StringComparer.Ordinal)
+            .ToImmutableList();
     }
 
     private static ControlLanePlanTarget Target(string label, string query, int? count) =>
@@ -493,6 +524,10 @@ public static class SpaceDeletion
     /// <summary>Every node in the space whose own id is <c>_GitSync</c>, whatever its type (<see cref="IsGitSyncNamed"/>). Pure.</summary>
     public static string GitSyncNamedQuery(string space) =>
         $"namespace:{space} scope:descendants id:{AccessAssignmentGuard.SyncConfigId}";
+
+    /// <summary>Every node beneath one <c>…/_GitSync</c> path, at any depth — the rows the removal is
+    /// issued for where that path holds no node of its own (<see cref="UnselectedGitSyncSegments"/>). Pure.</summary>
+    public static string GitSyncBeneathQuery(string gitSyncPath) => $"namespace:{gitSyncPath} scope:descendants";
 
     /// <summary>
     /// The teardown step's command, as the plan states and the approval binds it: the mechanism, and
