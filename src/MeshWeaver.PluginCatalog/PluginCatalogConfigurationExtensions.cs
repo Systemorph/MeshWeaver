@@ -49,6 +49,11 @@ public static class PluginCatalogConfigurationExtensions
             // "Reboot this instance" — sync, land, roll, verify in one step; plus the instance's own
             // wedge watchdog (Doc/Architecture/InstanceReboot).
             .AddInstanceReboot()
+            // Each installed package's own partition counts for action-handler rules, read live
+            // from its install record (Doc/Architecture/ActionLinkContracts).
+            .ConfigureServices(services => services
+                .AddSingleton<MeshWeaver.ActionLinks.IActionHandlerRuleNamespaceSource,
+                    InstalledPackageActionHandlerRuleNamespaces>())
             // Infrastructure credential, never pickable content.
             .AddAutocompleteExcludedTypes(PluginRegistryCredentials.NodeType)
             // The registry's token signing key — infrastructure, never pickable content.
