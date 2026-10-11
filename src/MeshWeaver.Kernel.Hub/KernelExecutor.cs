@@ -709,8 +709,10 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
     /// </summary>
     internal sealed class AssemblyProbingResolver : IDisposable
     {
-        // Ordered (managed runtime dirs first, native last — ResolvedPackageSet.ProbingDirectories).
-        private ImmutableList<string> probingDirs = ImmutableList<string>.Empty;
+        // One entry per resolution (a submission's ResolvedPackageSet.ProbingDirectories — managed
+        // runtime dirs first, native last). Kept apart so a native import is answered only from the
+        // closure its requesting assembly belongs to.
+        private ImmutableList<ImmutableArray<string>> closures = ImmutableList<ImmutableArray<string>>.Empty;
         private readonly object gate = new();
         private readonly Func<AssemblyLoadContext, System.Reflection.AssemblyName, System.Reflection.Assembly?> handler;
         private readonly Func<System.Reflection.Assembly, string, IntPtr> nativeHandler;
@@ -722,9 +724,10 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                 // The default context only raises Resolving for a name the host does NOT ship, so
                 // host unification is implicit here; the probe skips the native directories.
                 if (string.IsNullOrEmpty(name.Name)) return null;
-                ImmutableList<string> dirs;
+                ImmutableList<ImmutableArray<string>> current;
                 lock (gate)
-                    dirs = probingDirs;
+                    current = closures;
+                var dirs = current.SelectMany(c => c).Distinct(StringComparer.OrdinalIgnoreCase);
                 foreach (var candidate in MeshWeaver.NuGet.PackageAssemblyProbe.FindManagedCandidates(name.Name, dirs, name.CultureName))
                 {
                     try { return ctx.LoadFromAssemblyPath(candidate); }
@@ -733,17 +736,20 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                 return null;
             };
             // A package's runtimes/<rid>/native/ library for a DllImport the default search missed —
-            // answered ONLY for an assembly this session loaded from its own package directories, so
-            // two sessions with different versions of one native library never bind each other's.
+            // answered ONLY from the resolution(s) whose managed directories hold the requesting
+            // assembly, so a later submission's (or another session's) different version of the same
+            // native library is never offered to it. The default context is process-wide: one
+            // managed path is one loaded assembly with one native binding, whoever asked first.
             nativeHandler = (requesting, libraryName) =>
             {
-                ImmutableList<string> dirs;
+                if (requesting.IsDynamic) return IntPtr.Zero;
+                ImmutableList<ImmutableArray<string>> current;
                 lock (gate)
-                    dirs = probingDirs;
-                if (requesting.IsDynamic || string.IsNullOrEmpty(requesting.Location)) return IntPtr.Zero;
-                var origin = Path.GetDirectoryName(requesting.Location);
-                if (origin is null || !dirs.Contains(origin, StringComparer.OrdinalIgnoreCase)) return IntPtr.Zero;
-                return MeshWeaver.NuGet.PackageAssemblyProbe.ResolveUnmanaged(libraryName, dirs);
+                    current = closures;
+                var dirs = MeshWeaver.NuGet.PackageAssemblyProbe.NativeSearchDirectoriesFor(requesting.Location, current);
+                return dirs.IsEmpty
+                    ? IntPtr.Zero
+                    : MeshWeaver.NuGet.PackageAssemblyProbe.ResolveUnmanaged(libraryName, dirs);
             };
             AssemblyLoadContext.Default.Resolving += handler;
             AssemblyLoadContext.Default.ResolvingUnmanagedDll += nativeHandler;
@@ -751,10 +757,11 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
 
         public void AddDirectories(IEnumerable<string> dirs)
         {
+            var closure = dirs.ToImmutableArray();
+            if (closure.IsEmpty) return;
             lock (gate)
-                foreach (var dir in dirs)
-                    if (!probingDirs.Contains(dir, StringComparer.OrdinalIgnoreCase))
-                        probingDirs = probingDirs.Add(dir);
+                if (!closures.Any(c => c.SequenceEqual(closure, StringComparer.OrdinalIgnoreCase)))
+                    closures = closures.Add(closure);
         }
 
         public void Dispose()

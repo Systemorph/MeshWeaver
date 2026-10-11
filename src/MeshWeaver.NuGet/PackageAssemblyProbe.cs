@@ -210,6 +210,29 @@ public static class PackageAssemblyProbe
             .SelectMany(dir => NativeFileNames(name).Select(file => Path.Combine(dir, file)))
             .Where(File.Exists);
 
+    /// <summary>
+    /// The probing directories a native import from <paramref name="requestingAssemblyLocation"/>
+    /// may search, for a context that accumulates several resolutions (a kernel session's
+    /// submissions): only the CLOSURES — one per <see cref="ResolvedPackageSet.ProbingDirectories"/>
+    /// — whose managed directories contain the requesting assembly. A native library that a
+    /// different resolution brought (another version under the same import name) is never offered.
+    /// Empty when the assembly came from none of them.
+    /// </summary>
+    public static ImmutableArray<string> NativeSearchDirectoriesFor(
+        string? requestingAssemblyLocation, IEnumerable<ImmutableArray<string>> closures)
+    {
+        if (string.IsNullOrEmpty(requestingAssemblyLocation)) return [];
+        var origin = Path.GetDirectoryName(requestingAssemblyLocation);
+        if (string.IsNullOrEmpty(origin)) return [];
+        return
+        [
+            .. closures
+                .Where(closure => closure.Contains(origin, StringComparer.OrdinalIgnoreCase))
+                .SelectMany(closure => closure)
+                .Distinct(StringComparer.OrdinalIgnoreCase),
+        ];
+    }
+
     /// <summary>The first of <see cref="FindNativeCandidates"/>, or <c>null</c>.</summary>
     public static string? FindNative(string name, IEnumerable<string> probingDirectories)
         => FindNativeCandidates(name, probingDirectories).FirstOrDefault();
