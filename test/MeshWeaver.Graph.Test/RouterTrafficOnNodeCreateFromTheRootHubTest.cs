@@ -706,6 +706,62 @@ public class RouterTrafficOnNodeCreateFromTheRootHubTest : MonolithMeshTestBase
             + "the log pipeline");
     }
 
+    /// <summary>
+    /// 🚨 <b>The bounce of an ANSWER the router posted is not router traffic (#5713).</b> The routing
+    /// layer NACKs an undeliverable delivery to its sender, so when an answer the router itself
+    /// posted cannot be delivered the notice is posted by the router and addressed at it — and the
+    /// detector read that as proof the router had issued a request. Production: the success
+    /// <c>DeleteNodeResponse</c>, which the delete handler answers from the mesh hub by design,
+    /// bounced by a host that was stopping, reported as <c>sender AND target</c> at the routing
+    /// service's own NACK site, where there is no call site to move.
+    ///
+    /// <para>Exercised in the packaged shape the routing service actually holds — the payload is
+    /// <see cref="RawJson"/>, the request-id correlation rides the envelope — and in the same
+    /// self-addressed NACK the routing service posts (<c>WithTarget(delivery.Sender)</c>).</para>
+    ///
+    /// <para>Control, in the same test: the bounce of a REQUEST the router posted (no correlation
+    /// on the failed delivery) is still reported — that delivery is a violation in its own right,
+    /// and its bounce is often the only sighting of it. Without the exemption both are reported.</para>
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public void TheBounceOfAnAnswerTheRouterPosted_IsNotReported_ButTheBounceOfItsRequestIs()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        var client = GetClient();
+        // The router's ANSWER to the client: sender = router, target = client, correlated.
+        IMessageDelivery typedAnswer = new MessageDelivery<RouterOriginProbe>(
+            Mesh.Address, client.Address, new RouterOriginProbe(), Mesh.JsonSerializerOptions);
+        var answer = typedAnswer
+            .SetProperty(PostOptions.RequestId, "request-the-router-answered")
+            .Package();
+        answer.Message.Should().BeOfType<RawJson>("the routing service NACKs a PACKAGED delivery");
+        answer.Properties.ContainsKey(PostOptions.RequestId).Should().BeTrue(
+            "the correlation must survive packaging, or the exemption could never match in production");
+        // A REQUEST the router posted: same ends, no correlation.
+        var request = new MessageDelivery<SecondFailedProbe>(
+            Mesh.Address, client.Address, new SecondFailedProbe(), Mesh.JsonSerializerOptions).Package();
+
+        // Exactly OrleansRoutingService.SendDeliveryFailure's post: from the mesh hub, addressed at
+        // the failed delivery's sender — the mesh hub — correlated to the failed delivery.
+        Mesh.Post(new DeliveryFailure(answer, "Host is shutting down, cannot route to client"),
+            o => o.WithTarget(answer.Sender).WithRequestIdFrom(answer));
+        Mesh.Post(new DeliveryFailure(request, "Host is shutting down, cannot route to client"),
+            o => o.WithTarget(request.Sender).WithRequestIdFrom(request));
+
+        DumpReports();
+        var nacks = _capture.Records
+            .Where(r => r.MessageType.StartsWith(nameof(DeliveryFailure), StringComparison.Ordinal))
+            .ToArray();
+        nacks.Should().NotContain(r => r.MessageType.Contains(nameof(RouterOriginProbe), StringComparison.Ordinal),
+            "the failed delivery was an answer — routing's own duty, never reported — so its bounce "
+            + "proves no router-issued request and names no call site anyone can move");
+        nacks.Should().ContainSingle(r => r.IsOrigin
+                                           && r.MessageType.Contains(nameof(SecondFailedProbe), StringComparison.Ordinal)
+                                           && r.Role == "sender AND target",
+            "the bounce of a REQUEST the router posted must still be reported: that post is the "
+            + "violation, and this is the capture's positive control");
+    }
+
     /// <summary>The receiver-side lines — <c>ROUTER_TRAFFIC:</c>, logged in <c>DeliverMessage</c>.</summary>
     private RouterTrafficRecord[] Reports() => _capture.Records.Where(r => !r.IsOrigin).ToArray();
 

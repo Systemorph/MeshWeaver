@@ -80,6 +80,23 @@ not also being the target is the undeliverable-mail NACK (`RoutingServiceBase.Po
 `NackRouteFailure` post their `DeliveryFailure` from the mesh hub via `ResponseFor`, so its sender is
 honestly `mesh/{id}`). Both are excluded by the shared predicate, at both sites.
 
+**The bounce of an answer the router posted.** A NACK inherits the verdict of the delivery it is
+about. The routing layer NACKs an undeliverable delivery to that delivery's *sender*, so when an
+answer the router itself posted cannot be delivered, the notice is posted by the router and addressed
+at it: `sender AND target`. The predicate reads a response addressed at the router as proof that the
+router *issued a request*, and for this one shape the inference is false — the delivery that failed
+was an answer, which the paragraph above already excludes. The first production reading with the
+failed delivery named ([#5713](https://github.com/Systemorph/MeshWeaver/issues/5713), 2026-10-10)
+was exactly that: `NACK of DeleteNodeResponse, mesh/… -> Store: "Host is shutting down, cannot route
+to Store"`. `HandleDeleteNodeRequest` answers its caller from the mesh hub on purpose — the handling
+per-node hub may be gone by the time the cascade completes — and that answer bounced off a stopping
+host. The line named `OrleansRoutingService.SendDeliveryFailure`, where there is no call site to move
+and no seam that applies. `RouterTrafficRule.IsNackOfAnAnswerTheRouterPosted` excludes it at both
+sites: a `DeliveryFailure` whose failed delivery came from the mesh hub, was addressed to another hub,
+and carried a request-id correlation. Deliberately narrow — the bounce of a *request* the router
+posted is still reported (that post is a violation, and its bounce is often the only sighting of it),
+and so is the bounce of anything addressed at the router.
+
 **A delivery the receiver correlates BY ITS SENDER.** A message implementing
 `ICorrelatedBySender` is excluded wherever the detector can still SEE its type — see the scope note
 below, which is narrower than it looks. The claim it carries is about the RECEIVER: some
@@ -505,6 +522,10 @@ the `sender AND target` NACK in that issue could not say which router post had f
 site (`SendDeliveryFailure`) is the innocent answering half; the post to fix is the one that sent the
 failed message, which the line now names. Pinned by
 `RouterTrafficOnNodeCreateFromTheRootHubTest.TwoNacksAboutDifferentFailedMessages_EachNameTheFailedDelivery`.
+That holds for the bounce of a *request*. When the failed delivery is an *answer* the router posted,
+there is no post to fix and the line is not written at all — see "The bounce of an answer the router
+posted" above, pinned by
+`RouterTrafficOnNodeCreateFromTheRootHubTest.TheBounceOfAnAnswerTheRouterPosted_IsNotReported_ButTheBounceOfItsRequestIs`.
 
 The receiver-side line stays, unchanged, and is still the only one that can see a violation posted by
 another process.
