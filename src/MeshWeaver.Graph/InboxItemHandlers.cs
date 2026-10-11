@@ -2,6 +2,8 @@ using System.Reactive.Linq;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph;
 
@@ -26,13 +28,22 @@ public static class InboxItemHandlers
     /// One typed write as an outcome: the node's content read as <typeparamref name="TContent"/>,
     /// changed, written through the owning hub. A fault becomes the item's own answer — a bulk act
     /// names what happened to each item rather than aborting on the first refusal.
+    ///
+    /// <para>🚨 The fault is LOGGED here and the outcome carries NO reason: a typed-write failure can
+    /// quote the content it could not read, and an outcome's reason is shown to the viewer verbatim.
+    /// The page says "could not be changed"; the log says why.</para>
     /// </summary>
     internal static IObservable<InboxItemOutcome> Write<TContent>(
         IMessageHub hub, string path, Func<TContent, TContent> change) where TContent : class
         => hub.GetMeshNodeStream(path).Update(change)
             .Take(1)
             .Select(_ => new InboxItemOutcome(path, true))
-            .Catch((Exception ex) => Observable.Return(new InboxItemOutcome(path, false, ex.Message)));
+            .Catch((Exception ex) =>
+            {
+                hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(InboxItemHandlers))
+                    .LogWarning(ex, "Inbox: {Path} could not be written", path);
+                return Observable.Return(new InboxItemOutcome(path, false));
+            });
 }
 
 /// <summary>

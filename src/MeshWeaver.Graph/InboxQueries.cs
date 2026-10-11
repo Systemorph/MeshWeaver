@@ -51,6 +51,7 @@ public static class InboxQueries
         new()
         {
             Source = "Notifications",
+            SourceLabelKey = "inbox.source.Notifications",
             Band = InboxBand.NeedsYou,
             Order = 10,
             // Not put away. `Dismissed` defaults to false and is therefore OMITTED from stored
@@ -63,6 +64,7 @@ public static class InboxQueries
         new()
         {
             Source = "Mail",
+            SourceLabelKey = "inbox.source.Mail",
             Band = InboxBand.NeedsYou,
             Order = 20,
             // The viewer's own stored mail, inbound and not archived. Both defaults (Inbound, New)
@@ -75,6 +77,7 @@ public static class InboxQueries
         new()
         {
             Source = "Activities",
+            SourceLabelKey = "inbox.source.Activities",
             Band = InboxBand.Running,
             Order = 10,
             // Not terminal — every stamped terminal state negated (Running itself is omitted).
@@ -85,6 +88,7 @@ public static class InboxQueries
         new()
         {
             Source = "Activities",
+            SourceLabelKey = "inbox.source.Activities",
             Band = InboxBand.Recent,
             Order = 20,
             // Terminal — any stamped terminal state.

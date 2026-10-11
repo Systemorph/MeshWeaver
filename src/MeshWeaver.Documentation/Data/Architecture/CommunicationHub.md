@@ -422,6 +422,13 @@ Three rules follow, and each is pinned by a test in `InboxSelectAndDeleteTest`:
   an instance action) deliberately has no handler and leaves the inbox by being decided.
 - **A row in *Running* is never selectable.** It is not the viewer's to put away; it leaves the band
   by finishing.
+- **An outcome never quotes an exception.** A handler's `Reason` is shown to the viewer verbatim, so
+  it is a refusal the handler chose to state. A write that faults is LOGGED and answers with no
+  reason; the page then says only that the item could not be changed.
+- **A source has an id and a display name.** `InboxQueryLeg.Source` keys the switch and the
+  by-source order; `SourceLabelKey` names the catalog text the row and the switch show in the
+  viewer's language. A provider gives no key only for a name that is the same in every language.
+  The row's date is written in the viewer's time zone AND the viewer's date format.
 - **A bulk act never leaves the owner's partition.** A search runs with the viewer's rights and may
   list a node elsewhere; a ticked row outside `{owner}/` is not a target.
 - **A selection is the viewer's claim, not a grant.** The click re-checks the ticked keys against

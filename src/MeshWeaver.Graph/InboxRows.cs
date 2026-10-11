@@ -10,7 +10,11 @@ namespace MeshWeaver.Graph;
 /// <param name="Source">Who brought the leg — the row's source marker.</param>
 /// <param name="Order">The leg's order within its band.</param>
 /// <param name="Query">The resolved query, anchored on the owner.</param>
-public sealed record InboxSection(string Band, string Source, int Order, string Query);
+public sealed record InboxSection(string Band, string Source, int Order, string Query)
+{
+    /// <summary>The catalog key of the source's display name, when the provider gave one.</summary>
+    public string? SourceLabelKey { get; init; }
+}
 
 /// <summary>
 /// One row of the inbox, whatever brought it — the grid's row record, so its camelCase property
@@ -24,8 +28,14 @@ public sealed record InboxRow
     /// <summary>What the row says: the node's name, else its id.</summary>
     public string Title { get; init; } = string.Empty;
 
-    /// <summary>Who brought the row — the leg's <see cref="InboxQueryLeg.Source"/>.</summary>
+    /// <summary>Who brought the row, as the viewer reads it — the source's display name.</summary>
     public string Source { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Who brought the row, as an identifier — the leg's <see cref="InboxQueryLeg.Source"/>. What
+    /// the source's switch and the by-source order key on, never shown.
+    /// </summary>
+    public string SourceId { get; init; } = string.Empty;
 
     /// <summary>The item's node type — what picks its <see cref="IInboxItemHandler"/>.</summary>
     public string NodeType { get; init; } = string.Empty;
@@ -124,7 +134,16 @@ public static class InboxRows
     /// re-cases dictionary keys must not move it.
     /// </summary>
     /// <param name="source">The leg's source.</param>
-    public static string SourceKey(string source) => Slug(source).ToLowerInvariant();
+    public static string SourceKey(string source)
+    {
+        // The readable part alone is not unique ("Ops / Approvals" and "Ops Approvals" read the
+        // same), and two sources sharing a key would share one switch — so the key ends in a
+        // stable hash of the exact id. FNV-1a: deterministic across processes, unlike GetHashCode.
+        var hash = 2166136261u;
+        foreach (var c in source)
+            hash = (hash ^ c) * 16777619u;
+        return Slug(source).ToLowerInvariant() + hash.ToString("x8", CultureInfo.InvariantCulture);
+    }
 
     /// <summary>
     /// <paramref name="filter"/> by VALUE — what the page compares to tell a change the viewer made
@@ -152,19 +171,23 @@ public static class InboxRows
     /// <param name="blockedReason">Why the row cannot be selected, or null when it can.</param>
     /// <param name="band">The band's title as the viewer reads it; the band id when omitted.</param>
     /// <param name="rank">The band's rank in the importance order.</param>
+    /// <param name="sourceLabel">The source's display name; its id when omitted.</param>
+    /// <param name="culture">The viewer's culture, resolved once on the render turn; invariant when omitted.</param>
     public static InboxRow Of(MeshNode node, InboxSection section, string? zone, string? blockedReason,
-        string? band = null, int rank = 0)
+        string? band = null, int rank = 0, string? sourceLabel = null, CultureInfo? culture = null)
         => new()
         {
             Path = node.Path,
             Title = string.IsNullOrWhiteSpace(node.Name) ? node.Id : node.Name,
-            Source = section.Source,
+            Source = sourceLabel ?? section.Source,
+            SourceId = section.Source,
             NodeType = node.NodeType ?? string.Empty,
             Band = band ?? section.Band,
             Rank = rank,
-            // A stored instant, shown where the viewer is — never the container's UTC.
+            // A stored instant, shown where the viewer is and the way the viewer writes a date —
+            // never the container's UTC, never one fixed pattern for every language.
             When = DisplayTimeExtensions.ToDisplayTime(node.LastModified, zone)
-                .ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture),
+                .ToString("g", culture ?? CultureInfo.InvariantCulture),
             Stamp = node.LastModified.UtcDateTime.ToString("O", CultureInfo.InvariantCulture),
             BlockedReason = blockedReason ?? string.Empty,
         };
@@ -188,7 +211,7 @@ public static class InboxRows
     /// <param name="filter">What the viewer asked for.</param>
     public static ImmutableList<InboxRow> Apply(IEnumerable<InboxRow> rows, InboxFilter filter)
     {
-        var shown = rows.Where(row => !filter.Sources.TryGetValue(SourceKey(row.Source), out var on) || on);
+        var shown = rows.Where(row => !filter.Sources.TryGetValue(SourceKey(row.SourceId), out var on) || on);
         var ordered = filter.Order switch
         {
             InboxOrder.Newest => shown.OrderByDescending(r => r.Stamp, StringComparer.Ordinal),

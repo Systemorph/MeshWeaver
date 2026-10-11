@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Globalization;
 using System.Reactive;
 using System.Reactive.Linq;
 using MeshWeaver.Data;
@@ -70,13 +71,15 @@ public static class InboxLayoutArea
             return Observable.Return<UiControl?>(Controls.Markdown(host.Localize("inbox.notYours")));
 
         var sections = Sections(InboxQueries.All(host.Hub.ServiceProvider), owner);
-        var sources = sections.Select(section => section.Source).Distinct(StringComparer.Ordinal).ToImmutableList();
+        var sources = sections.GroupBy(section => section.Source, StringComparer.Ordinal)
+            .Select(source => (Id: source.Key, Label: SourceLabel(host, source.First())))
+            .ToImmutableList();
         // Seeded ONCE per session: a re-render must not reset what the viewer typed, switched or ticked.
         if (host.TryMarkEditStateInitialized("inbox:" + InboxRows.FilterId))
         {
             host.UpdateData(InboxRows.FilterId, new InboxFilter
             {
-                Sources = sources.ToImmutableDictionary(InboxRows.SourceKey, _ => true),
+                Sources = sources.ToImmutableDictionary(source => InboxRows.SourceKey(source.Id), _ => true),
             });
             host.UpdateData(UndoId, ImmutableList<InboxUndoItem>.Empty);
         }
@@ -85,12 +88,11 @@ public static class InboxLayoutArea
         var filterContext = LayoutAreaReference.GetDataPointer(InboxRows.FilterId);
         var switches = Controls.Stack.WithOrientation(Orientation.Horizontal).WithStyle("gap: 16px; flex-wrap: wrap;");
         foreach (var source in sources)
-            // A source is named by the package that brought it — its id is its label.
             switches = switches.WithView(
-                Controls.Switch(new JsonPointerReference($"sources/{InboxRows.SourceKey(source)}")) with
+                Controls.Switch(new JsonPointerReference($"sources/{InboxRows.SourceKey(source.Id)}")) with
                 {
-                    DataContext = filterContext, Label = source,
-                }, "Show" + InboxRows.SourceKey(source));
+                    DataContext = filterContext, Label = source.Label,
+                }, "Show" + InboxRows.SourceKey(source.Id));
 
         return Observable.Return<UiControl?>(Controls.Stack.WithWidth("100%").WithVerticalGap(12)
             .WithView(Controls.H2(host.Localize("inbox.title")).WithStyle("margin: 0;"), "Title")
@@ -131,6 +133,9 @@ public static class InboxLayoutArea
         // Resolved ONCE, on the render turn: every text a row may carry.
         var running = host.Localize("inbox.blocked.running");
         var noHandler = host.Localize("inbox.blocked.noHandler");
+        var culture = ViewerCulture(host.ViewerLocale());
+        var labels = sections.GroupBy(s => s.Source, StringComparer.Ordinal)
+            .ToImmutableDictionary(s => s.Key, s => SourceLabel(host, s.First()), StringComparer.Ordinal);
         var bands = sections.Select(s => s.Band).Distinct(StringComparer.Ordinal)
             .Select((band, rank) => (band, rank, Title: BandOrder.Contains(band) ? host.Localize(BandTitleKey(band)) : band))
             .ToImmutableDictionary(b => b.band, b => (b.rank, b.Title), StringComparer.Ordinal);
@@ -146,7 +151,7 @@ public static class InboxLayoutArea
                 .Select(nodes => nodes
                     .Select(node => InboxRows.Of(node, section, zone,
                         BlockedReason(section.Band, InboxItemHandlers.For(handlers, node.NodeType), running, noHandler),
-                        bands[section.Band].Title, bands[section.Band].rank))
+                        bands[section.Band].Title, bands[section.Band].rank, labels[section.Source], culture))
                     .ToImmutableList())
                 .Catch((Exception ex) =>
                 {
@@ -165,6 +170,31 @@ public static class InboxLayoutArea
             .Select(Merged)
             .Switch()
             .CombineLatest(filter, InboxRows.Apply);
+    }
+
+    /// <summary>
+    /// A source's display name: its catalog text in the viewer's language when the provider gave a
+    /// key, else its id (right for a name that is the same in every language).
+    /// </summary>
+    internal static string SourceLabel(LayoutAreaHost host, InboxSection section)
+        => string.IsNullOrWhiteSpace(section.SourceLabelKey) ? section.Source : host.Localize(section.SourceLabelKey);
+
+    /// <summary>
+    /// The culture a row's date is written in. A language tag the runtime does not know falls back
+    /// to invariant — an unreadable preference must never fault a render.
+    /// </summary>
+    internal static CultureInfo ViewerCulture(string? locale)
+    {
+        if (string.IsNullOrWhiteSpace(locale))
+            return CultureInfo.InvariantCulture;
+        try
+        {
+            return CultureInfo.GetCultureInfo(locale);
+        }
+        catch (CultureNotFoundException)
+        {
+            return CultureInfo.InvariantCulture;
+        }
     }
 
     /// <summary>
@@ -306,7 +336,9 @@ public static class InboxLayoutArea
         UiActionContext ctx, AccessService? access, AccessContext? caller, ImmutableList<InboxUndoItem> items,
         ImmutableArray<IInboxItemHandler> handlers,
         Func<IInboxItemHandler, string, IObservable<InboxItemOutcome>> act, string progressKey)
-        => items
+    {
+        var logger = ctx.Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(InboxLayoutArea));
+        return items
             .Select((item, i) => Observable.Defer(() =>
             {
                 ctx.ReportProgress(ctx.Host.Localize(progressKey, i + 1, items.Count), (double)i / items.Count);
@@ -316,11 +348,16 @@ public static class InboxLayoutArea
                 // (IInboxItemHandler). Around the subscription it would be gone by the first hop.
                 using (access?.SwitchAccessContext(caller))
                     return act(handler, item.Path)
-                        .Catch((Exception ex) => Observable.Return(new InboxItemOutcome(item.Path, false, ex.Message)));
+                        .Catch((Exception ex) =>
+                        {
+                            // A package's handler may throw anything; its message is never shown.
+                            logger?.LogWarning(ex, "Inbox: the {NodeType} handler faulted on {Path}", item.NodeType, item.Path);
+                            return Observable.Return(new InboxItemOutcome(item.Path, false));
+                        });
             }))
             .Concat()
-            .ToList()
-            .Select(outcomes => outcomes.ToImmutableList());
+            .Aggregate(ImmutableList<InboxItemOutcome>.Empty, (done, outcome) => done.Add(outcome));
+    }
 
     /// <summary>The outcome line: how many, and every item that was not done with its reason.</summary>
     internal static string Summary(LayoutAreaHost host, string key, IReadOnlyCollection<InboxItemOutcome> outcomes)
@@ -330,7 +367,8 @@ public static class InboxLayoutArea
         return failed.Count == 0
             ? line
             : line + " " + host.Localize("inbox.summary.failed", failed.Count,
-                string.Join("; ", failed.Select(o => $"{o.Path}: {o.Reason}")));
+                string.Join("; ", failed.Select(o =>
+                    $"{o.Path}: {(string.IsNullOrWhiteSpace(o.Reason) ? host.Localize("inbox.failed.generic") : o.Reason)}")));
     }
 
     /// <summary>
@@ -345,7 +383,7 @@ public static class InboxLayoutArea
             .ThenBy(leg => leg.Band, StringComparer.Ordinal)
             .ThenBy(leg => leg.Order)
             .Where(leg => seen.Add(leg.Query))
-            .Select(leg => new InboxSection(leg.Band, leg.Source, leg.Order, leg.Query))
+            .Select(leg => new InboxSection(leg.Band, leg.Source, leg.Order, leg.Query) { SourceLabelKey = leg.SourceLabelKey })
             .ToArray();
     }
 

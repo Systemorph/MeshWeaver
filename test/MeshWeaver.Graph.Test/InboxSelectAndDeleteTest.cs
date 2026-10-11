@@ -351,7 +351,6 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
         var filter = new InboxFilter { Sources = ImmutableDictionary<string, bool>.Empty.Add(InboxRows.SourceKey("Mail"), false) };
 
         InboxRows.Apply(rows, filter).Select(r => r.Title).Should().Equal("wa");
-        InboxRows.SourceKey("Ops / Approvals").Should().Be("opsapprovals", "a pointer segment carries no slash, space or capital");
     }
 
     /// <summary>
@@ -403,22 +402,90 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
     };
 
     /// <summary>
-    /// A stored instant is shown in the VIEWER's zone — across the date line, and on both sides of
-    /// a daylight-saving change — while the row ORDER stays on the UTC instant.
+    /// A stored instant is shown in the VIEWER's zone and the viewer's date format — across the
+    /// date line, and on both sides of a daylight-saving change — while the row ORDER stays on the
+    /// UTC instant.
     /// </summary>
     [Theory]
-    [InlineData("2026-01-15T23:30:00Z", "Europe/Zurich", "2026-01-16 00:30")]
-    [InlineData("2026-07-15T23:30:00Z", "Europe/Zurich", "2026-07-16 01:30")]
-    [InlineData("2026-07-15T02:30:00Z", "America/New_York", "2026-07-14 22:30")]
-    [InlineData("2026-07-15T02:30:00Z", null, "2026-07-15 02:30")]
-    public void ARowsTime_IsTheViewers_NotTheContainers(string utc, string? zone, string expected)
+    [InlineData("2026-01-15T23:30:00Z", "Europe/Zurich", "de-CH", "16.01.2026 00:30")]
+    [InlineData("2026-07-15T23:30:00Z", "Europe/Zurich", "de-CH", "16.07.2026 01:30")]
+    [InlineData("2026-07-15T02:30:00Z", "America/New_York", "de-CH", "14.07.2026 22:30")]
+    [InlineData("2026-07-15T02:30:00Z", null, null, "07/15/2026 02:30")]
+    public void ARowsTime_IsTheViewers_NotTheContainers(string utc, string? zone, string? locale, string expected)
     {
         var node = new MeshNode("n", "alice/_X") { LastModified = DateTimeOffset.Parse(utc, System.Globalization.CultureInfo.InvariantCulture) };
 
-        var row = InboxRows.Of(node, new InboxSection(InboxBand.NeedsYou, "Mail", 20, "q"), zone, null);
+        var row = InboxRows.Of(node, new InboxSection(InboxBand.NeedsYou, "Mail", 20, "q"), zone, null,
+            culture: InboxLayoutArea.ViewerCulture(locale));
 
         row.When.Should().Be(expected);
-        row.Stamp.Should().StartWith(utc[..19], "the sort key is the UTC instant, whatever the viewer's zone");
+        row.Stamp.Should().StartWith(utc[..19], "the sort key is the UTC instant, whatever the viewer's zone or language");
+    }
+
+    /// <summary>A language tag the runtime does not know must never fault a render.</summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("not a language tag !!")]
+    public void AnUnreadableLocale_FallsBackToInvariant(string? locale)
+        => InboxLayoutArea.ViewerCulture(locale).Should().Be(System.Globalization.CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// A source's switch key is unique per source id — two ids that READ the same once punctuation
+    /// is dropped must not share one switch — and carries nothing a pointer segment cannot.
+    /// </summary>
+    [Fact]
+    public void ASourcesSwitchKey_IsUniquePerSource_AndPointerSafe()
+    {
+        var spaced = InboxRows.SourceKey("Ops / Approvals");
+
+        spaced.Should().StartWith("opsapprovals");
+        spaced.Should().MatchRegex("^[a-z0-9]+$", "no slash, space or capital");
+        spaced.Should().NotBe(InboxRows.SourceKey("Ops Approvals"));
+        InboxRows.SourceKey("Mail").Should().Be(InboxRows.SourceKey("Mail"), "stable: it is stored in the page's data");
+    }
+
+    /// <summary>
+    /// The row shows the source's DISPLAY name and keeps its id apart: the switch and the by-source
+    /// order key on the id, so a translated label can never detach a row from its switch. Every leg
+    /// core brings has a catalog key.
+    /// </summary>
+    [Fact]
+    public void ASourcesLabel_IsShown_AndItsIdKeysTheSwitch()
+    {
+        var mail = new InboxSection(InboxBand.NeedsYou, "Mail", 20, "q");
+        var row = InboxRows.Of(Node("m", 1), mail, null, null, sourceLabel: "E-Mail");
+
+        row.Source.Should().Be("E-Mail");
+        row.SourceId.Should().Be("Mail");
+        InboxRows.Apply([row], new InboxFilter { Sources = ImmutableDictionary<string, bool>.Empty.Add(InboxRows.SourceKey("Mail"), false) })
+            .Should().BeEmpty("the switch is keyed on the id, not on what the cell shows");
+        InboxQueries.BuiltIn.Should().OnlyContain(leg => !string.IsNullOrEmpty(leg.SourceLabelKey));
+        InboxLayoutArea.Sections(InboxQueries.BuiltIn, "alice").Should().OnlyContain(s => !string.IsNullOrEmpty(s.SourceLabelKey));
+    }
+
+    /// <summary>
+    /// A write that faults answers for its item with NO reason: an outcome's reason is shown to the
+    /// viewer verbatim, and a typed-write failure can quote the content it could not read. The cause
+    /// is logged; the page says only that the item could not be changed.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task AFaultedWrite_AnswersForItsItem_WithoutQuotingItsCause()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string owner = "inbox-fault";
+        await CreateUserAsync(owner, ct);
+        var ns = $"{owner}/{EmailNodeType.UserEmailSegment}";
+        // A node the notification handler cannot read AS a notification: content of another shape.
+        await CreateAsync(new MeshNode("odd", ns)
+        {
+            NodeType = EmailNodeType.NodeType, Name = "odd", MainNode = owner, State = MeshNodeState.Active,
+            Content = "this is not a mail record",
+        }, ct);
+
+        var outcome = await Run(() => Handler(EmailNodeType.NodeType).Dismiss(Mesh, $"{ns}/odd"), ct);
+
+        outcome.Should().Be(new InboxItemOutcome($"{ns}/odd", false), "no reason: the cause is logged, never shown");
     }
 
     private IInboxItemHandler Handler(string nodeType)

@@ -7,7 +7,12 @@ namespace MeshWeaver.Mesh;
 /// </summary>
 /// <param name="Path">The item's node path.</param>
 /// <param name="Done">True when the item is now in the state the action asked for.</param>
-/// <param name="Reason">Why not, when <paramref name="Done"/> is false — shown to the viewer verbatim.</param>
+/// <param name="Reason">
+/// Why not, when <paramref name="Done"/> is false — shown to the viewer VERBATIM, so it is a refusal
+/// the handler chose to state (a rule that applies), never an exception's message. Null when the
+/// handler has nothing safe to say: the inbox then reports a generic failure, and the handler has
+/// logged the cause.
+/// </param>
 public sealed record InboxItemOutcome(string Path, bool Done, string? Reason = null);
 
 /// <summary>
