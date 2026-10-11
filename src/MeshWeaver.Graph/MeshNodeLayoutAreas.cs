@@ -315,11 +315,17 @@ public static class MeshNodeLayoutAreas
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
+        // Select + Switch, never SelectMany: the page for an earlier permission verdict (its rail
+        // included, which never completes) is DISPOSED when the verdict changes, so a revoked page
+        // cannot keep emitting beside the denial that replaced it.
         return PermissionGate(host, hubPath)
-            .SelectMany(gate =>
+            .Select(gate =>
             {
                 if (gate.Read)
-                    return Observable.Return((UiControl?)host.BuildDetailsTemplate(gate.Update));
+                    // The left-hand index, as on every document page: children are navigated in the
+                    // rail, never listed at the bottom of the page.
+                    return MarkdownOverviewLayoutArea.WithIndexRail(host,
+                        Observable.Return((UiControl?)host.BuildDetailsTemplate(gate.Update)));
                 // Read denied: the partition's declared funnel page (RedirectOnDenied — e.g.
                 // a product's glossy marketing brochure) takes the viewer there instead of a
                 // dead-end Request-Access wall. Rendering the denial INSIDE the area used to
@@ -335,7 +341,8 @@ public static class MeshNodeLayoutAreas
                             .WithView(Controls.Markdown(
                                 $"[Continue here →](/{redirect.TrimStart('/')})"))
                         : BuildAccessDenied(hubPath, locale: host.ViewerLocale()));
-            });
+            })
+            .Switch();
     }
 
     /// <summary>
