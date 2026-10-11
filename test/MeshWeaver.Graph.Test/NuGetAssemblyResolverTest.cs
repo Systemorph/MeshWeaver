@@ -1,9 +1,14 @@
 using System;
+using System.Collections.Immutable;
 using System.IO;
+using System.Linq;
 using System.Net.Http;
+using System.Runtime.Loader;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.NuGet;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -103,6 +108,96 @@ public class NuGetAssemblyResolverTest
         var second = await resolver.ResolveAsync(refs, targetFramework: null, TestContext.Current.CancellationToken);
 
         second.Should().BeSameAs(first);
+    }
+
+    /// <summary>
+    /// The motivating case (partnerre.meshweaver.cloud, linux-x64, 2026-10-11): a NodeType referencing
+    /// Microsoft.Data.SqlClient compiled and then failed at render, because the resolver surfaced only
+    /// the package's <c>lib/</c> assembly — the "not supported on this platform" stub. This compiles a
+    /// snippet the way a NodeType is compiled (against the COMPILE assets), loads it into a context
+    /// that binds packages the way a NodeType's context does, and constructs a
+    /// <c>SqlConnection</c> with a managed-identity connection string — which runs the real client's
+    /// connection-string parser and authentication-provider registration (MSAL / Azure.Identity). No
+    /// server is contacted. It also pins host unification: nothing the host already ships at an
+    /// equal-or-newer version is loaded a second time.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task Resolve_SqlClient_LoadsTheRuntimeAssetAndBuildsManagedIdentityAndDefaultConnections()
+    {
+        await SkipUnlessNuGetOrgReachable(TestContext.Current.CancellationToken);
+        var resolver = new NuGetAssemblyResolver(NullLogger<NuGetAssemblyResolver>.Instance);
+
+        var result = await resolver.ResolveAsync(
+            [new NuGetPackageReference("Microsoft.Data.SqlClient", "6.1.1")],
+            targetFramework: null,
+            ct: TestContext.Current.CancellationToken);
+
+        var rid = OperatingSystem.IsWindows() ? "win" : "unix";
+        var runtimeSqlClient = result.RuntimeAssemblyPaths
+            .Single(p => Path.GetFileName(p) == "Microsoft.Data.SqlClient.dll");
+        runtimeSqlClient.Replace('\\', '/').Should().Contain($"/runtimes/{rid}/lib/");
+        result.AssemblyPaths.Should().Contain(p => p.EndsWith("Microsoft.Data.SqlClient.dll"));
+        result.ProbingDirectories.Should().Contain(Path.GetDirectoryName(runtimeSqlClient)!);
+        result.ProbingDirectories.Should().NotContain(d =>
+            d.Replace('\\', '/').Contains("/microsoft.data.sqlclient/") && !d.Replace('\\', '/').Contains("/runtimes/"),
+            "the RID group REPLACES the stub's lib/ directory — probing it would load the stub");
+
+        // Both authentication modes the portal uses: Managed Identity, and Active Directory Default
+        // (Azure.Identity's DefaultAzureCredential — AKS workload identity) with the identity's
+        // client id as User Id, the shape of the ESL Office connection string.
+        const string source = """
+            public static class SqlProbe
+            {
+                public static string Run(string connectionString)
+                {
+                    using var connection = new Microsoft.Data.SqlClient.SqlConnection(connectionString);
+                    var builder = new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(connection.ConnectionString);
+                    return connection.DataSource + "|" + builder.Authentication + "|" + connection.State;
+                }
+            }
+            """;
+        var trusted = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!)
+            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries);
+        var compileNames = result.AssemblyPaths.Select(Path.GetFileName).ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+        var references = trusted
+            .Where(p => !compileNames.Contains(Path.GetFileName(p)))
+            .Concat(result.AssemblyPaths)
+            .Select(p => (MetadataReference)MetadataReference.CreateFromFile(p));
+        var compilation = CSharpCompilation.Create("SqlProbe" + Guid.NewGuid().ToString("N"),
+            [CSharpSyntaxTree.ParseText(source)], references,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        using var image = new MemoryStream();
+        var emit = compilation.Emit(image);
+        emit.Success.Should().BeTrue(string.Join(Environment.NewLine, emit.Diagnostics));
+
+        var context = new NuGetRuntimeAssetTest.ProbingContext([.. result.ProbingDirectories]);
+        try
+        {
+            image.Position = 0;
+            var probe = context.LoadFromStream(image).GetType("SqlProbe")!;
+            var run = probe.GetMethod("Run")!;
+            ((string)run.Invoke(null, [
+                    "Server=tcp:sql.invalid,1433;Database=ESLOffice;"
+                    + "Authentication=Active Directory Managed Identity;Encrypt=True"])!)
+                .Should().Be("tcp:sql.invalid,1433|ActiveDirectoryManagedIdentity|Closed");
+            ((string)run.Invoke(null, [
+                    "Server=tcp:sql.invalid,1433;Database=ESLOffice;Authentication=Active Directory Default;"
+                    + "User Id=00000000-0000-0000-0000-000000000000;Encrypt=True;"])!)
+                .Should().Be("tcp:sql.invalid,1433|ActiveDirectoryDefault|Closed");
+            var loadedSqlClient = context.Assemblies.Single(a => a.GetName().Name == "Microsoft.Data.SqlClient");
+            loadedSqlClient.Location.Should().Be(runtimeSqlClient);
+            foreach (var loaded in context.Assemblies.Where(a => !a.IsDynamic && a.Location.Length > 0))
+            {
+                var host = PackageAssemblyProbe.HostVersionOf(loaded.GetName().Name!);
+                if (host is not null)
+                    (host < loaded.GetName().Version!).Should().BeTrue(
+                        $"{loaded.GetName().Name} is shipped by the host at {host} and must bind there, not load beside it");
+            }
+        }
+        finally
+        {
+            context.Unload();
+        }
     }
 
     // The former ScopeGenerator_ResolvesFromMeshLocalFeed test was DELETED with the CI
