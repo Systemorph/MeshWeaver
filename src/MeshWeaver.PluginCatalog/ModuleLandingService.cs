@@ -923,6 +923,10 @@ public sealed class ModuleLandingService : IDisposable
     /// is logged as an error naming both packages and both versions, and the call FAULTS, which
     /// every caller already answers by leaving the mesh on the set it runs. A set no replica should
     /// boot onto is never written; the next wave that lands a satisfying dependency proposes.
+    /// MeshWeaver#6192: an unmet requirement no longer refuses the WHOLE wave. The dependent whose floor is
+    /// unmet is held back at its previous generation and the rest is proposed (<see cref="ModuleSetHoldBack"/>);
+    /// the call faults only for what cannot be held back (no previous generation, or a hold-back that would
+    /// break another package's requirement).
     /// </summary>
     /// <param name="installed">The install records whose <see cref="PackageManifest.Requires"/>
     /// the set must meet. Empty checks nothing — the unchecked proposal.</param>
@@ -953,6 +957,20 @@ public sealed class ModuleLandingService : IDisposable
             // replica may boot onto: the dependent's code calls into a dependency build that does
             // not have what it needs, and fails at RUN time with nothing pointing back here.
             var unmet = ModuleDependencyFloor.Unmet(installed ?? [], landed);
+            var generations = ModuleSetStore.GenerationsOf(landed);
+            if (!unmet.IsEmpty)
+            {
+                // MeshWeaver#6192: an unmet floor withholds the DEPENDENT at its previous generation and
+                // the rest of the wave is proposed; only what cannot be held back refuses the wave.
+                var plan = ModuleSetHoldBack.Plan(installed ?? [], landed,
+                    generation => Directory.Exists(Path.Combine(baseDirectory, "modules", generation)));
+                foreach (var held in plan.Held)
+                    logger?.LogWarning(
+                        "[ModuleSet] holding a module back at its previous generation and proposing the rest of the wave: {Held}",
+                        held.Describe());
+                generations = plan.Generations;
+                unmet = plan.Refused;
+            }
             if (!unmet.IsEmpty)
             {
                 foreach (var floor in unmet)
@@ -964,7 +982,7 @@ public sealed class ModuleLandingService : IDisposable
                     + "The mesh stays on the set it runs until a wave lands a dependency that satisfies "
                     + "every floor (MeshWeaver#6067).");
             }
-            var proposed = ModuleSetStore.Propose(baseDirectory, landed,
+            var proposed = ModuleSetStore.ProposeGenerations(baseDirectory, generations,
                 proposedBy: Environment.MachineName,
                 onCorrupt: msg => logger?.LogWarning("{Message}", msg));
             if (proposed is not null)
