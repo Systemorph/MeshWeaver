@@ -50,20 +50,29 @@ spec:
     - host: {{ .Values.ingress.host | quote }}
       http:
         paths:
-{{- if (.Values.portalNext).enabled }}
+{{- $nextMode := include "memex.portalNext.mode" . }}
+{{- if ne $nextMode "off" }}
           # ---- Next.js React GUI (FEATURE-FLAGGED — see .Values.portalNext) ---
           # nginx matches the LONGEST prefix first regardless of order, so /next/*
-          # (the app + its /next/_next assets) hits portal-next while everything
+          # (the app + its /next/_next assets) hits the Next server while everything
           # else — including /api, gRPC-web and _blazor that the React app calls
           # same-origin — falls through to the Blazor portal below. The app is
           # built with basePath: "/next", so NO rewrite annotation is needed.
+          # 🚂 BUNDLED (the normal shape): the Next server runs inside the portal pod, so the
+          # path targets the portal Service's `next` port (_portal-next.tpl).
           - path: "/next"
             pathType: "Prefix"
             backend:
               service:
+{{- if eq $nextMode "bundled" }}
+                name: "memex-portal-service"
+                port:
+                  name: "next"
+{{- else }}
                 name: "portal-next-service"
                 port:
                   number: 3000
+{{- end }}
 {{- end }}
           - path: "/"
             pathType: "Prefix"

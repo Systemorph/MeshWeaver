@@ -343,6 +343,8 @@ public class AGovernedActivityAuthorizesACommercialInstallTest(ITestOutputHelper
         PackageEntitlement.PackageSetIds(null).Should().BeEmpty();
         PackageEntitlement.PackageSetIds("Claims, a/b").Should().BeEmpty("one id that is not plain voids the list");
         PackageEntitlement.PackageSetIds("Claims, claims").Should().BeEmpty("the same partition twice voids the list");
+        PackageEntitlement.PackageSetIds("Claims, ..").Should().BeEmpty("'..' is path navigation, not a package — the Store refuses it too");
+        PackageEntitlement.PackageSetIds(". Claims").Should().BeEmpty("nor is '.'");
     }
 
     /// <summary>End to end through the installer: a set activity naming the package admits it.</summary>

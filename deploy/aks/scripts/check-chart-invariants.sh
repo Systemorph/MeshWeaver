@@ -50,6 +50,10 @@
 #  20. a crash dump lands in <root>/$(MEMEX_POD_NAME)/ on a    or every roll deletes the dump (the
 #      dedicated claim or /data, root normalised, and the     09-26 and 10-07 dumps were lost so)
 #      retention script runs as init container AND postStart
+#  21. /next renders ONE whole shape: bundled (portal config, or /next 503s, or a second
+#      container + Service `next` ports, ingress to them, no     server is left behind by a roll
+#      portal-next Deployment) or the override (its own         (policy portal-next-in-platform-image)
+#      Deployment + Service on port 3000, ingress to it)
 #
 # NO SKIP-TRAPDOOR (AGENTS.md → "A gate NEVER tests its own inputs"). Every input is IN THIS REPO:
 # the chart and the tracked values files. There is no secret to be absent, so there is no condition
@@ -183,6 +187,11 @@ COMBOS=(
   # Crash dumps on a DEDICATED claim (persistence.dumps), on the AKS overlay: the only combination in
   # which invariant 20 sees the dedicated-claim branch, and invariant 12 a chart-created dump PVC.
   "AKS overlay + crash dumps on a dedicated claim (fixture)|deploy/helm/values.yaml:deploy/aks/values.aks.yaml:deploy/aks/scripts/testdata/values.crash-dumps-dedicated-claim.yaml"
+  # 🚂 /next on the platform release train (policy `portal-next-in-platform-image`): BUNDLED in the portal image —
+  # the normal shape — and the developer override (a separately built image). Nothing else here
+  # turns portalNext on, so without these invariant 21 would only ever see /next OFF.
+  "AKS overlay + /next bundled in the portal image (fixture)|deploy/helm/values.yaml:deploy/aks/values.aks.yaml:deploy/aks/scripts/testdata/values.portal-next-bundled.yaml"
+  "AKS overlay + /next from a separately built image, the developer override (fixture)|deploy/helm/values.yaml:deploy/aks/values.aks.yaml:deploy/aks/scripts/testdata/values.portal-next-override.yaml"
 )
 
 WORK="$(mktemp -d)"
