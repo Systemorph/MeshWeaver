@@ -146,12 +146,14 @@ public static class UpdatePolicySettingsTab
                 // button is exactly the moment an operator, seeing an update that never
                 // applied, would force the roll the poller refused for good reason.
                 //
-                // 🚨 Since 2026-10-11 nothing the gate answers refuses this button — the
+                // 🚨 Under policy <c>platform-rolls-independently-of-packages</c> nothing the gate
+                // answers refuses this button — the
                 // platform rolls independently of its packages, so a refusal is turned into
                 // advisories below (ForPlatformRoll), exactly as the poller does. The paragraphs
                 // that follow are why the UNWIRED gate is still reported rather than read as a pass.
                 //
-                // 🚨 An UNWIRED gate is a HOLD here too. It used to resolve to NotEnforced,
+                // 🚨 An UNWIRED gate is an unanswered package question (an ADVISORY under the
+                // policy above, a hold before it). It used to resolve to NotEnforced,
                 // which is `IsUpdatable: true` — so the one host where nothing checks anything
                 // was also the one host where this button never refused. NotEnforced is the
                 // single stated applicability exemption (a deployment that consumes no CI
@@ -173,12 +175,12 @@ public static class UpdatePolicySettingsTab
                             : UpdatabilityVerdict.Unavailable(
                                 "no release-availability gate is registered on this install, so "
                                 + "nothing could check whether the packages it deploys have "
-                                + "usable artifacts for this release — that is a hold, not "
-                                + "clearance to proceed"));
+                                + "usable artifacts for this release — package availability "
+                                + "is unchecked, not confirmed"));
                 decision.Subscribe(raw =>
                 {
-                    // 🚨 The platform rolls independently of its packages (maintainer,
-                    // 2026-10-11: "again, we want to roll platform independently of packages").
+                    // 🚨 The platform rolls independently of its packages (policy
+                    // <c>platform-rolls-independently-of-packages</c>).
                     // The button decides exactly as the poller does: a package-availability
                     // refusal and a recorded combo Red are ADVISORIES, never a refusal of the
                     // roll — they are logged here and the poller records them on the policy
@@ -188,17 +190,24 @@ public static class UpdatePolicySettingsTab
                     var clearance = combo is null
                         ? ComboVerificationGate.NotRegistered(tag)
                         : combo.Recorded(content, tag);
+                    // EVERY advisory the verdict carries, then the combo one. A waived hold leads
+                    // verdict.Advisories (ForPlatformRoll), and an already-updatable verdict
+                    // carries its boot-compile / link / declared-floor advisories there with
+                    // WaivedHold null — reading only WaivedHold would drop those.
+                    string[] advisories =
+                    [
+                        .. verdict.Advisories.IsDefault ? [] : verdict.Advisories,
+                        .. clearance.Refuses ? new[] { clearance.Reason } : [],
+                    ];
                     if (verdict.WaivedHold is not null || clearance.Refuses)
                         h.Hub.ServiceProvider.GetService<ILoggerFactory>()
                             ?.CreateLogger(typeof(UpdatePolicySettingsTab))
                             .LogWarning(
                                 "[SelfUpdate] manual roll to {Tag} proceeds over package advisories — "
-                                + "the platform rolls independently of packages: {Availability} {Combo}",
-                                tag, verdict.WaivedHold ?? "", clearance.Refuses ? clearance.Reason : "");
+                                + "the platform rolls independently of packages: {Advisories}",
+                                tag, string.Join("; ", advisories));
                     // Said on the result line too — the roll the operator just started is one
-                    // whose lagging packages they must be able to see without a pod log.
-                    var advisories = new[] { verdict.WaivedHold, clearance.Refuses ? clearance.Reason : null }
-                        .OfType<string>().ToArray();
+                    // whose package advisories they must be able to see without a pod log.
                     var note = advisories.Length == 0
                         ? ""
                         : "\n\n" + h.Localize("ui.updatePackageAdvisoriesManual") + "\n\n> "
@@ -431,8 +440,8 @@ public static class UpdatePolicySettingsTab
                 + localize("ui.updateVerifiedGreen", [verdict.Modules.Count])
                 + " " + verifiedAt
                 + CaveatBlock(verdict, localize),
-            // 🚨 A Red is an ADVISORY since 2026-10-11 (maintainer: "again, we want to roll
-            // platform independently of packages"): the availability line stays — the build IS
+            // 🚨 A Red is an ADVISORY under policy <c>platform-rolls-independently-of-packages</c>:
+            // the availability line stays — the build IS
             // what this install rolls to — and the failing modules are named beneath it as the
             // packages that will not follow, never as a reason the platform stays.
             ComboVerdictKind.Red =>

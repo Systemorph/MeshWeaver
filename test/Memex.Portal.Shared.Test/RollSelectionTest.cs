@@ -53,8 +53,8 @@ namespace Memex.Portal.Shared.Test;
 /// shapes need a decline to exist. The decline that exists everywhere now — an UNLOADABLE module —
 /// is pinned in <see cref="ReleaseLinkGateTest"/>.</para>
 ///
-/// <para>🚨 <b>Since 2026-10-11 nothing declines a candidate</b> (maintainer: <i>"again, we want to
-/// roll platform independently of packages"</i>): the newest admitted release is always selected,
+/// <para>🚨 <b>Under policy <c>platform-rolls-independently-of-packages</c> nothing declines a
+/// candidate</b>: the newest admitted release is always selected,
 /// and what the strict policy, an unread or empty plugin list, or an unloadable module would have
 /// declined it for is carried on the outcome's advisories and summary instead.</para>
 /// </summary>
@@ -124,10 +124,11 @@ public class RollSelectionTest : IDisposable
     }
 
     /// <summary>
-    /// 🚨 THE PLATFORM ROLLS INDEPENDENTLY OF ITS PACKAGES (maintainer, 2026-10-11: <i>"again, we
-    /// want to roll platform independently of packages"</i>). Under the opt-in strict mode
+    /// 🚨 THE PLATFORM ROLLS INDEPENDENTLY OF ITS PACKAGES (policy
+    /// <c>platform-rolls-independently-of-packages</c>). Under the opt-in strict mode
     /// (<c>Modules:RequirePrebuilt</c>) the predicate still REFUSES the newest release for the eight
-    /// missing bakes — and until 2026-10-11 the walk declined it and selected the complete one below.
+    /// missing bakes — and until policy <c>platform-rolls-independently-of-packages</c> the walk
+    /// declined it and selected the complete one below.
     /// Now the newest admitted release is selected regardless, and the refusal survives as what it
     /// is: a statement about packages, <b>naming Feedback</b>, on the advisories and the summary.
     /// </summary>
@@ -161,7 +162,8 @@ public class RollSelectionTest : IDisposable
     /// release passes the shared predicate outright — "no plugins to check" and "all plugins
     /// present" look alike to the predicate.
     ///
-    /// <para>Since 2026-10-11 an empty plugin list no longer stops the PLATFORM (it is a statement
+    /// <para>Under policy <c>platform-rolls-independently-of-packages</c> an empty plugin list no
+    /// longer stops the PLATFORM (it is a statement
     /// about packages), so the newest admitted release is selected — but the two states are still
     /// never spelled the same way: the summary and the advisory say that NO package was checked,
     /// and the denominator printed is zero.</para>
@@ -200,7 +202,8 @@ public class RollSelectionTest : IDisposable
     }
 
     /// <summary>
-    /// A plugin list that could not be READ is a different answer again — and since 2026-10-11 it
+    /// A plugin list that could not be READ is a different answer again — and under policy
+    /// <c>platform-rolls-independently-of-packages</c> it
     /// does not hold the platform either. It is still never collapsed into "nothing to check": the
     /// reason the read failed is in the summary and the advisory.
     /// </summary>
@@ -226,7 +229,8 @@ public class RollSelectionTest : IDisposable
     }
 
     /// <summary>
-    /// When NO release ships all plugins, a strict instance used to stay put. Since 2026-10-11 the
+    /// When NO release ships all plugins, a strict instance used to stay put. Under policy
+    /// <c>platform-rolls-independently-of-packages</c> the
     /// platform rolls to the newest admitted release anyway and NAMES the plugin that does not
     /// follow — an advisory, never a silent one and never a hold.
     /// </summary>
@@ -255,8 +259,9 @@ public class RollSelectionTest : IDisposable
     }
 
     /// <summary>
-    /// 🚨 The running release does not ship all its plugins, and older releases do. Until
-    /// 2026-10-11 the walk reported the older complete release as BEHIND current; now no package
+    /// 🚨 The running release does not ship all its plugins, and older releases do. Until policy
+    /// <c>platform-rolls-independently-of-packages</c> the walk reported the older complete release
+    /// as BEHIND current; now no package
     /// verdict walks the platform past anything, so the environment is told it already runs the
     /// newest admitted release — and the packages that do not follow it are named. Rolling
     /// backwards is still never selected.
@@ -356,7 +361,8 @@ public class RollSelectionTest : IDisposable
     }
 
     /// <summary>
-    /// The walk is LAZY: since 2026-10-11 every verdict is accepted (a package refusal becomes an
+    /// The walk is LAZY: under policy <c>platform-rolls-independently-of-packages</c> every verdict
+    /// is accepted (a package refusal becomes an
     /// advisory), so exactly ONE verdict is asked — about the newest admitted release — even when
     /// the strict policy refuses it. That keeps a selection over a long publication history one
     /// directory read rather than hundreds on a network share against a bounded budget.

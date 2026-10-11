@@ -10,10 +10,11 @@ namespace MeshWeaver.PluginCatalog;
 /// each environment which is the latest platform version shipping all plugins, if different from
 /// current version ⇒ update."</i></blockquote>
 ///
-/// <blockquote>🚨 Superseded for the PLATFORM roll — maintainer, 2026-10-11: <i>"again, we want to
-/// roll platform independently of packages"</i>.</blockquote>
+/// <blockquote>🚨 Superseded for the PLATFORM roll — policy
+/// <c>platform-rolls-independently-of-packages</c>.</blockquote>
 ///
-/// <para>🚨 <b>Since 2026-10-11 the walk selects the NEWEST ADMITTED candidate, always.</b> A package
+/// <para>🚨 <b>Under policy <c>platform-rolls-independently-of-packages</c> the walk selects the
+/// NEWEST ADMITTED candidate, always.</b> A package
 /// verdict — a missing bake, an unresolvable framework identity, a package without an artifact for
 /// the target, an unreadable catalogue, an unloadable landed module, an unread or empty plugin list —
 /// is never a reason to walk past a release: it becomes the selected release's ADVISORIES
@@ -91,7 +92,8 @@ public static class RollSelection
         Observable.Defer(() =>
         {
             // 🚨 Nothing to walk. Not an incident; still said out loud rather than completing empty.
-            // Checked FIRST since 2026-10-11: with the platform rolling independently of its
+            // Checked FIRST under policy <c>platform-rolls-independently-of-packages</c>: with the
+            // platform rolling independently of its
             // packages, the candidate list is the only thing that can leave nothing to select.
             if (inputs.CandidatesNewestFirst.IsDefaultOrEmpty)
                 return One(new RollSelectionOutcome(
@@ -101,8 +103,8 @@ public static class RollSelection
                     + $"(from {inputs.Inventory.Source}); no release was offered to choose from."));
 
             // 🚨 The plugin list could not be read, or named none. Both are statements about the
-            // PACKAGES, so neither holds the platform (maintainer, 2026-10-11: "again, we want to
-            // roll platform independently of packages"): the newest admitted candidate is
+            // PACKAGES, so neither holds the platform (policy
+            // <c>platform-rolls-independently-of-packages</c>): the newest admitted candidate is
             // selected, and the summary and the advisory SAY that no package was checked — an
             // unread denominator is reported, never dressed up as "all plugins present".
             if (inputs.Inventory.Refusal is { Length: > 0 } refusal)
@@ -187,7 +189,8 @@ public static class RollSelection
                        ? string.Empty
                        : $"; {bootCompiles.Length} package(s) would recompile at boot: "
                          + string.Join(", ", bootCompiles))
-                   // 🚨 The platform rolls independently of its packages (2026-10-11): what the
+                   // 🚨 The platform rolls independently of its packages (policy
+                   // <c>platform-rolls-independently-of-packages</c>): what the
                    // package verdict would have held on is said on the same line as the choice.
                    + (walk.Verdict?.WaivedHold is { } waived
                        ? $"; the platform rolls independently of packages — not following this roll: {waived}"
@@ -216,7 +219,8 @@ public static class RollSelection
     /// <summary>
     /// 🚨 The newest admitted candidate, selected WITHOUT a package verdict, with
     /// <paramref name="advisory"/> saying why none was asked — the platform rolls independently of
-    /// its packages (maintainer, 2026-10-11), so a package question that could not be asked is
+    /// its packages (policy <c>platform-rolls-independently-of-packages</c>), so a package question
+    /// that could not be asked is
     /// reported, never a reason to stay. Used by this walk for an unread or empty plugin list, and
     /// by the caller (<c>ReleaseAvailabilityService.SelectRollTarget</c>) when the published root
     /// could not be read.
@@ -299,8 +303,8 @@ public static class RollSelection
         public static WalkState Empty { get; } = new([], null, null);
 
         /// <summary>
-        /// 🚨 Every candidate verdict is ACCEPTED (maintainer, 2026-10-11: <i>"again, we want to
-        /// roll platform independently of packages"</i>): a package-availability refusal becomes
+        /// 🚨 Every candidate verdict is ACCEPTED (policy
+        /// <c>platform-rolls-independently-of-packages</c>): a package-availability refusal becomes
         /// the accepted verdict's advisories (<see cref="UpdatabilityVerdict.ForPlatformRoll"/>),
         /// so the walk selects the newest admitted candidate and asks exactly one verdict.
         /// </summary>

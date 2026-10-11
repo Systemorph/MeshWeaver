@@ -128,8 +128,8 @@ public class ComboVerdictRecordingTest(ITestOutputHelper output) : MonolithMeshT
 
         var markdown = UpdatePolicySettingsTab.StatusMarkdown(content, EchoLocalizer);
 
-        // 🚨 Since 2026-10-11 a Red is an ADVISORY (maintainer: "again, we want to roll platform
-        // independently of packages"): the build is still what this install rolls to, so the
+        // 🚨 Under policy <c>platform-rolls-independently-of-packages</c> a Red is an ADVISORY: the
+        // build is still what this install rolls to, so the
         // availability line stays, and the failing modules are named beneath it — never silently.
         markdown.Should().Contain($"ui.updateBlocked[{Tag}]",
             "a Red must not read as a plain 'update available' — the modules that do not follow are named");

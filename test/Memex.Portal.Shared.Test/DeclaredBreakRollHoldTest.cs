@@ -194,9 +194,9 @@ public class DeclaredBreakRollHoldTest
     // ─────────────────────────────── the walk: a held newest release is walked past
 
     /// <summary>
-    /// 🚨 A declared break is a statement about a PACKAGE, so since 2026-10-11 it no longer walks the
-    /// platform back to the last build of the old epoch (maintainer: <i>"again, we want to roll
-    /// platform independently of packages"</i>). The newest admitted release is selected, the plugin
+    /// 🚨 A declared break is a statement about a PACKAGE, so under policy
+    /// <c>platform-rolls-independently-of-packages</c> it no longer walks the
+    /// platform back to the last build of the old epoch. The newest admitted release is selected, the plugin
     /// that does not cover it is NAMED on the advisories, and it catches up through its own update
     /// policy. The predicate itself still refuses (the tests above) — the waiver is the roll's.
     /// </summary>

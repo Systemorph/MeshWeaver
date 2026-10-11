@@ -525,15 +525,20 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
             return Observable.Return(new RebootImageChoice(installed, target,
                 $"{target} is the newest admitted release. No release-availability gate is registered on this host, so "
                 + "package availability was not checked — which does not hold the platform (it rolls independently of packages)." + waived));
-        // 🚨 The platform rolls independently of its packages (maintainer, 2026-10-11): neither the
+        // 🚨 The platform rolls independently of its packages (policy
+        // <c>platform-rolls-independently-of-packages</c>): neither the
         // availability verdict nor a recorded combo Red keeps the reboot on the running image —
         // both are package answers, and the detail names them so the choice is never silent.
         return gate.IsUpdatable(target).Select(raw =>
         {
             var verdict = raw.ForPlatformRoll();
-            var packages = verdict.WaivedHold is { } lagging
-                ? $" Package availability does not hold the platform (it rolls independently of packages): {lagging}."
-                : "";
+            // EVERY advisory, not only the waived hold: an already-updatable verdict carries its
+            // boot-compile / link / declared-floor advisories with WaivedHold null, and a waived
+            // one leads its Advisories with the waived reason — so the collection is the whole list.
+            var packages = verdict.Advisories.IsDefaultOrEmpty
+                ? ""
+                : " Package advisories — they do not hold the platform (it rolls independently of packages): "
+                  + string.Join("; ", verdict.Advisories) + ".";
             var red = !wedged && ResolveComboGate() is { } combo && combo.Recorded(policy, target) is { Refuses: true } refused
                 ? $" The combo gate recorded RED for this instance's modules ({refused.Reason}) — an advisory: those modules keep their previous generation and catch up on their own."
                 : "";
@@ -1147,12 +1152,13 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
     /// </summary>
     /// <summary>
     /// 🚨 The NEWEST admitted candidate — the platform rolls independently of its packages
-    /// (maintainer, 2026-10-11: <i>"again, we want to roll platform independently of packages"</i>).
+    /// (policy <c>platform-rolls-independently-of-packages</c>).
     ///
     /// <para>This used to walk past every candidate the availability gate declined and past every
     /// one the combo gate had recorded RED. Both are answers about PACKAGES — a missing bake, an
     /// unresolvable framework identity, a module that does not compile against the candidate — and
-    /// since 2026-10-11 neither decides which platform build an instance runs: they are recorded as
+    /// under policy <c>platform-rolls-independently-of-packages</c> neither decides which platform
+    /// build an instance runs: they are recorded as
     /// advisories by <see cref="GateThenApply"/> and the packages catch up through their own update
     /// policy. Holding the platform for a package's sake is exactly how partnerre.meshweaver.cloud
     /// deadlocked: the platform waited for a content bake while every package update waited for
@@ -1194,8 +1200,8 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
             return gate.IsUpdatable(target)
                 .SelectMany(raw =>
                 {
-                    // 🚨 THE PLATFORM ROLLS INDEPENDENTLY OF ITS PACKAGES (maintainer, 2026-10-11:
-                    // "again, we want to roll platform independently of packages"). A package-
+                    // 🚨 THE PLATFORM ROLLS INDEPENDENTLY OF ITS PACKAGES (policy
+                    // <c>platform-rolls-independently-of-packages</c>). A package-
                     // availability verdict — a missing bake, an unresolvable framework identity, a
                     // package without an artifact for the target, an unreadable catalogue — is
                     // NEVER a hold on this roll: it becomes an ADVISORY, logged here, recorded on
@@ -1221,7 +1227,8 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
                     // 🚨 The advisories ride beside the verdict, never inside it (#3651, #3648):
                     // the packages this roll would recompile at boot, a landed module whose
                     // loadability on the target could not be measured, a declared floor the
-                    // target does not rank above — and, since 2026-10-11, the waived package hold.
+                    // target does not rank above — and, under policy
+                    // <c>platform-rolls-independently-of-packages</c>, the waived package hold.
                     if (!verdict.Advisories.IsDefaultOrEmpty)
                         _logger?.LogInformation(
                             "[SelfUpdate] rolling to {Tag} with {Count} advisory line(s) — "
@@ -1247,8 +1254,8 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
     /// <list type="bullet">
     /// <item><b>Green</b> ⇒ cleared. The roll proceeds and the clearance is logged with its
     /// caveats.</item>
-    /// <item><b>Red</b> ⇒ ADVISORY since 2026-10-11 (maintainer: <i>"again, we want to roll
-    /// platform independently of packages"</i>) — it used to hold the roll. Every failing module is
+    /// <item><b>Red</b> ⇒ ADVISORY under policy <c>platform-rolls-independently-of-packages</c> —
+    /// it used to hold the roll. Every failing module is
     /// still NAMED on <c>Admin/UpdatePolicy</c> where the Updates tab reads it, logged at Warning
     /// and carried on the check verdict, and the roll proceeds: those modules keep their previous
     /// generation and catch up through their own update policy.</item>
@@ -1275,8 +1282,8 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
                 : combo.Clearance(policy, target, _options.PortalImage(target)))
             .SelectMany(clearance =>
             {
-                // 🚨 A RED combo verdict is an ADVISORY since 2026-10-11, not a hold (maintainer:
-                // "again, we want to roll platform independently of packages"). It names modules
+                // 🚨 A RED combo verdict is an ADVISORY under policy
+                // <c>platform-rolls-independently-of-packages</c>, not a hold. It names modules
                 // this instance has landed that do not survive the candidate — a statement about
                 // PACKAGES. Each failing module is named on Admin/UpdatePolicy (the Updates tab),
                 // logged at Warning, and carried on the check verdict; the module keeps its
@@ -1300,7 +1307,9 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
                 // that no longer applies must disappear from the admin tab the moment it is
                 // resolved. The availability verdict rides along so what it SAID about this tag
                 // (the boot-compile cost, an unmeasurable module — #3651; the packages that do not
-                // follow the roll and a combo Red — 2026-10-11) is recorded with the clear rather
+                // follow the roll and a combo Red — policy
+                // <c>platform-rolls-independently-of-packages</c>) is recorded with the clear
+                // rather
                 // than lost with it.
                 return RecordHold(target, advised).Catch(HoldWriteFailed(target))
                     .IgnoreElements()
@@ -1339,7 +1348,8 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
     }
 
     /// <summary>
-    /// The combo Red expressed as what it is since 2026-10-11 — an ADVISORY on the availability
+    /// The combo Red expressed as what it is under policy
+    /// <c>platform-rolls-independently-of-packages</c> — an ADVISORY on the availability
     /// verdict the roll records: one <see cref="PackageAvailabilityKind.ComboVerificationFailed"/>
     /// per FAILING MODULE (so the Updates tab can name them all) and one advisory line naming the
     /// refusal, leading. The verdict stays updatable: a module that does not survive the candidate
@@ -1374,8 +1384,8 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
     /// 🚨 <b>No gate is registered on this host — the roll proceeds, SAYING that package
     /// availability was not checked.</b>
     ///
-    /// <para>🚨 Since 2026-10-11 (maintainer: <i>"again, we want to roll platform independently of
-    /// packages"</i>) this is an ADVISORY rather than the hold the paragraphs below describe: the
+    /// <para>🚨 Under policy <c>platform-rolls-independently-of-packages</c> this is an ADVISORY
+    /// rather than the hold the paragraphs below describe: the
     /// gate answers a question about PACKAGES, and no answer to it — not even its absence — holds
     /// the platform. What survives of the reasoning below is that the state is never SILENT: it is
     /// logged at Warning, recorded on the policy node and carried on the check verdict.</para>
@@ -1434,9 +1444,9 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
                 return ComboThenApply(trigger, policy, target);
             }
 
-            // 🚨 The unanswered package question is an ADVISORY since 2026-10-11, like every other
-            // package-availability answer (maintainer: "again, we want to roll platform
-            // independently of packages"). It is still never silent: logged at Warning on every
+            // 🚨 The unanswered package question is an ADVISORY under policy
+            // <c>platform-rolls-independently-of-packages</c>, like every other
+            // package-availability answer. It is still never silent: logged at Warning on every
             // tick, recorded on Admin/UpdatePolicy beside the cleared hold, carried on the check
             // verdict — and the combo gate still runs. AllowUnverifiedRoll is no longer needed to
             // roll here; it only quietens nothing, by design.

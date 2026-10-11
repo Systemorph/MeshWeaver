@@ -7,8 +7,9 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 # Roll Selection
 
-> 🚨 **Rule change, 2026-10-11 (maintainer): _"again, we want to roll platform independently of
-> packages"_.** The selection now takes the **newest admitted candidate, always**. No package verdict
+> 🚨 **The platform rolls independently of its packages** — policy
+> `platform-rolls-independently-of-packages` ([Policy Not Prose](../PolicyNotProse)). The selection
+> now takes the **newest admitted candidate, always**. No package verdict
 > — a missing bake, an unresolvable framework identity, a package without an artifact, an unreadable
 > catalogue or plugin list, an empty denominator, an unloadable module, a recorded combo Red — walks
 > past a release any more: it becomes the selected release's **advisories** (`RollSelectionOutcome.Advisories`,

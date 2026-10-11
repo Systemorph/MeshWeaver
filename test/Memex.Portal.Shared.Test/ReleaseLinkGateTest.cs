@@ -662,10 +662,11 @@ public class ReleaseLinkGateTest : IDisposable
     // ── the walk ────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// 🚨 Until 2026-10-11 <see cref="RollSelection"/> walked past a release with an UNLOADABLE
+    /// 🚨 Until policy <c>platform-rolls-independently-of-packages</c> <see cref="RollSelection"/>
+    /// walked past a release with an UNLOADABLE
     /// module. An unloadable module is a statement about a PACKAGE, and the platform rolls
-    /// independently of its packages (maintainer, 2026-10-11: <i>"again, we want to roll platform
-    /// independently of packages"</i>): the newest is selected after exactly one verdict, and the
+    /// independently of its packages (policy <c>platform-rolls-independently-of-packages</c>): the
+    /// newest is selected after exactly one verdict, and the
     /// module that will not load there is NAMED on the advisories — it keeps its previous
     /// generation and catches up on its own.
     /// </summary>
@@ -704,7 +705,8 @@ public class ReleaseLinkGateTest : IDisposable
     }
 
     /// <summary>"No complete release" — every candidate's surface lacks the type — used to stay put.
-    /// Since 2026-10-11 the newest is selected and the module is NAMED as the package that does not
+    /// Under policy <c>platform-rolls-independently-of-packages</c> the newest is selected and the
+    /// module is NAMED as the package that does not
     /// follow the platform.</summary>
     [Fact]
     public async Task WhenEveryCandidateCannotLoadTheModule_TheNewestIsSelected_AndTheModuleIsNamed()

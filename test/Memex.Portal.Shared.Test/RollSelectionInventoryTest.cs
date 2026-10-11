@@ -36,8 +36,9 @@ namespace Memex.Portal.Shared.Test;
 /// gate already uses, and they have measurably answered ZERO on a live portal that carried 42
 /// modules (memex, 2026-08-10 — the measurement that made <c>InstanceComboReader</c> fold two
 /// shapes). With an empty denominator every release ships all zero plugins, so a selector that does
-/// not refuse the case degenerates into "take the newest" — #3441's vacuity, one level up. Since
-/// 2026-10-11 the platform rolls independently of its packages, so the newest admitted release IS
+/// not refuse the case degenerates into "take the newest" — #3441's vacuity, one level up. Under
+/// policy <c>platform-rolls-independently-of-packages</c> the platform rolls independently of its
+/// packages, so the newest admitted release IS
 /// taken — and the outcome says, in the summary and the advisory, that no package was checked.</para>
 /// </summary>
 public class RollSelectionInventoryTest(ITestOutputHelper output)
@@ -99,9 +100,9 @@ public class RollSelectionInventoryTest(ITestOutputHelper output)
 
     /// <summary>
     /// The same fixture on an instance that opts into <c>Modules:RequirePrebuilt</c> — the strict
-    /// mode in which the seeder refuses a boot compile. Until 2026-10-11 it declined the newer and
-    /// selected the older; since the maintainer decision of that day (<i>"again, we want to roll
-    /// platform independently of packages"</i>) it selects the NEWER anyway and names Feedback as
+    /// mode in which the seeder refuses a boot compile. Until policy
+    /// <c>platform-rolls-independently-of-packages</c> it declined the newer and
+    /// selected the older; under that policy it selects the NEWER anyway and names Feedback as
     /// the package that does not follow — it parks under the strict seeder and catches up through
     /// its own update policy.
     /// </summary>
@@ -132,8 +133,9 @@ public class RollSelectionInventoryTest(ITestOutputHelper output)
 
     /// <summary>
     /// 🚨 THE VACUITY, on a real mesh: no install records at all. Every candidate would ship all zero
-    /// plugins. Since 2026-10-11 that is a statement about PACKAGES and does not stop the platform
-    /// (maintainer: <i>"again, we want to roll platform independently of packages"</i>) — the
+    /// plugins. Under policy <c>platform-rolls-independently-of-packages</c> that is a statement
+    /// about PACKAGES and does not stop the platform
+    /// — the
     /// newest admitted release is selected — but it is still never spelled like "all plugins
     /// present": the summary and the advisory say the denominator out loud and that no package was
     /// checked, and the shared predicate still answers the PACKAGE question with a refusal.
@@ -177,8 +179,9 @@ public class RollSelectionInventoryTest(ITestOutputHelper output)
     /// With no candidate list the service derives one from the published root's own release markers
     /// — so an environment can answer "which release should I be on" without listing a container
     /// registry it may not be able to reach. Ordering is <c>VersionSelect</c>'s, which is why the
-    /// NEWEST marker (ci.7676) is selected rather than a lexicographic accident — and, since
-    /// 2026-10-11, selected even on the strict instance where its missing Feedback bake is refused:
+    /// NEWEST marker (ci.7676) is selected rather than a lexicographic accident — and, under policy
+    /// <c>platform-rolls-independently-of-packages</c>, selected even on the strict instance where
+    /// its missing Feedback bake is refused:
     /// that refusal is an advisory on the platform roll.
     /// </summary>
     [Fact(Timeout = 240_000)]
@@ -201,8 +204,9 @@ public class RollSelectionInventoryTest(ITestOutputHelper output)
     }
 
     /// <summary>
-    /// A configured root that is not there is a mis-mount, not an empty publication history. Since
-    /// 2026-10-11 that unanswerable PACKAGE question does not hold the platform: with the candidates
+    /// A configured root that is not there is a mis-mount, not an empty publication history. Under
+    /// policy <c>platform-rolls-independently-of-packages</c> that unanswerable PACKAGE question
+    /// does not hold the platform: with the candidates
     /// in hand the newest admitted one is selected, and the summary and the advisory NAME the
     /// mis-mount — cannot determine is reported, never dressed up as "all plugins present".
     /// </summary>

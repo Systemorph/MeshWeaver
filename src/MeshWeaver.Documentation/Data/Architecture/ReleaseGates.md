@@ -8,8 +8,9 @@ icon: "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><rect width='
 
 # Release Availability Gates
 
-> 🚨 **Rule change, 2026-10-11 (maintainer): _"again, we want to roll platform independently of
-> packages"_.** For the **deployment** gate (#1754) a package-availability verdict is never a hold
+> 🚨 **The platform rolls independently of its packages** — policy
+> `platform-rolls-independently-of-packages` ([Policy Not Prose](../PolicyNotProse)). For the
+> **deployment** gate (#1754) a package-availability verdict is never a hold
 > on the platform roll any more — not a missing bake, not an unresolvable framework identity, not an
 > unreadable catalogue, not an unloadable module. Every roll path (the self-update poller, the
 > reboot's image step, the **Apply update now** button, `/api/plugins/roll-target`,

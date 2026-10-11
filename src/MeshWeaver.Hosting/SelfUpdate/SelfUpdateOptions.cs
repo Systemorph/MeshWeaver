@@ -299,8 +299,8 @@ public record SelfUpdateOptions
     /// <summary>
     /// 🚨 Roll even though the release-availability gate is NOT WIRED into this host.
     ///
-    /// <para>🚨 <b>Moot since 2026-10-11</b> (maintainer: <i>"again, we want to roll platform
-    /// independently of packages"</i>): no package-availability answer — an unwired gate included —
+    /// <para>🚨 <b>Moot under policy <c>platform-rolls-independently-of-packages</c></b>: no
+    /// package-availability answer — an unwired gate included —
     /// holds the platform roll any more. An unwired gate rolls with a logged, recorded advisory
     /// whether or not this key is set; the key is kept so existing configuration still binds, and
     /// the warning names it when set. The paragraphs below are its history.</para>

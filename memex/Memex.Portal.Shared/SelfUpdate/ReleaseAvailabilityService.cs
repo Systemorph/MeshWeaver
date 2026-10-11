@@ -17,8 +17,9 @@ namespace Memex.Portal.Shared.SelfUpdate;
 /// <summary>
 /// 🚨 <b>The deployment gate (#1754): may this environment be rolled to that release?</b>
 ///
-/// <para>🚨 <b>Since 2026-10-11 its answer is a PACKAGE answer and never holds the platform</b>
-/// (maintainer: <i>"again, we want to roll platform independently of packages"</i>). This service
+/// <para>🚨 <b>Under policy <c>platform-rolls-independently-of-packages</c> its answer is a PACKAGE
+/// answer and never holds the platform</b>
+///. This service
 /// still answers truthfully — "cannot determine" is still not "available" — and every roll path
 /// (the poller, the reboot, the manual button, <c>/api/plugins/is-updatable</c>,
 /// <see cref="SelectRollTarget"/>) waives a refusal into advisories through
@@ -229,8 +230,9 @@ public class ReleaseAvailabilityService(
     /// decision that stays with the poller.</param>
     /// <param name="condemned">Optional second opinion about each candidate — e.g. the combo gate's
     /// recorded refusal. Returns the refusal, or null when it has nothing against the candidate.
-    /// 🚨 Since 2026-10-11 a refusal is an ADVISORY on the candidate, never a reason to walk past it
-    /// (maintainer: "again, we want to roll platform independently of packages").</param>
+    /// 🚨 Under policy <c>platform-rolls-independently-of-packages</c> a refusal is an ADVISORY on
+    /// the candidate, never a reason to walk past it
+    ///.</param>
     /// <param name="requireCiGreen">Exclude unverified <c>edge</c> builds when deriving candidates.</param>
     public virtual IObservable<RollSelectionOutcome> SelectRollTarget(
         string? currentVersion,
@@ -260,8 +262,9 @@ public class ReleaseAvailabilityService(
                     // Verdict() for the full reasoning; this is the same order, one level up.
                     f.Refusal is { } refusal
                         // 🚨 An unreadable root is a PACKAGE question that could not be asked, so
-                        // it holds nothing (maintainer, 2026-10-11: "again, we want to roll
-                        // platform independently of packages"). With the candidates in hand the
+                        // it holds nothing (policy
+                        // <c>platform-rolls-independently-of-packages</c>). With the candidates in
+                        // hand the
                         // newest admitted one is selected and the advisory says nothing was
                         // checked; without them (they would have come from that very root) there
                         // is nothing to select, and that is still said as Indeterminate.
@@ -333,9 +336,9 @@ public class ReleaseAvailabilityService(
             .Do(LogAdvisories)
             .Select(verdict => condemned?.Invoke(version) is { } refusal
                 // 🚨 The second opinion (the combo gate's recorded Red) is a statement about the
-                // modules this instance has landed — a PACKAGE question — so since 2026-10-11 it
-                // is an ADVISORY on the candidate, never a reason to walk past it (maintainer:
-                // "again, we want to roll platform independently of packages").
+                // modules this instance has landed — a PACKAGE question — so under policy
+                // <c>platform-rolls-independently-of-packages</c> it
+                // is an ADVISORY on the candidate, never a reason to walk past it.
                 ? verdict with
                 {
                     Advisories =

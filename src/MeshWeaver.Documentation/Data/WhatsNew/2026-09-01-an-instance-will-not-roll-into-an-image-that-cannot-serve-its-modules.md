@@ -8,10 +8,10 @@ Order: -20260901
 
 # An instance will not roll into an image that cannot serve its modules
 
-> **Superseded on 2026-10-11** — maintainer: _"again, we want to roll platform independently of
-> packages"_. A red verification no longer refuses the update: the platform rolls, and the modules
-> that would break are listed as advisories that catch up on their own. See
-> [The platform updates independently of its packages](../2026-10-11-the-platform-updates-independently-of-its-packages).
+> **Superseded** by policy `platform-rolls-independently-of-packages`
+> ([Policy Not Prose](../../Architecture/PolicyNotProse)). A red verification no longer refuses the
+> update: the platform rolls, and the modules that would break are listed as advisories that catch up
+> on their own. See [Release Strategy](../../Architecture/ReleaseStrategy).
 
 A build being newer never meant it could run what a deployment has already installed. A platform
 change can invalidate the compiled content a module ships, and the update would still be offered,

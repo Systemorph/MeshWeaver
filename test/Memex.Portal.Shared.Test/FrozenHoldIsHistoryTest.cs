@@ -133,9 +133,9 @@ public class FrozenHoldIsHistoryTest
 
     /// <summary>
     /// 🚨 The OTHER half. A Red combo verification is a recorded FACT about the build, not a note
-    /// about the poller — but since 2026-10-11 it is a fact about PACKAGES, and the platform rolls
-    /// independently of them (maintainer: <i>"again, we want to roll platform independently of
-    /// packages"</i>). So it never renders as "held"; it renders as an advisory naming what does not
+    /// about the poller — but under policy <c>platform-rolls-independently-of-packages</c> it is a
+    /// fact about PACKAGES, and the platform rolls
+    /// independently of them. So it never renders as "held"; it renders as an advisory naming what does not
     /// follow — with checking off as with checking on.
     /// </summary>
     [Fact]

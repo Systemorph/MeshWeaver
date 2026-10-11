@@ -394,8 +394,8 @@ public sealed record SelfUpdateVerdict(SelfUpdateOutcome Outcome, string Message
 
     /// <summary>
     /// 🚨 The roll went ahead over a PACKAGE answer that used to hold it — a waived availability
-    /// hold or a recorded combo Red (maintainer, 2026-10-11: <i>"again, we want to roll platform
-    /// independently of packages"</i>). Said on the verdict, the durable half, so the Updates tab
+    /// hold or a recorded combo Red (policy <c>platform-rolls-independently-of-packages</c>). Said
+    /// on the verdict, the durable half, so the Updates tab
     /// and the next session read which packages did not follow, not only a pod log.
     /// </summary>
     /// <param name="advisory">What the package answer said.</param>

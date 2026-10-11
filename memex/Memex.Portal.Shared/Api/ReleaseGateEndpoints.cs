@@ -217,8 +217,8 @@ public static class ReleaseGateEndpoints
         return service.IsUpdatable(version)
             .Select(raw =>
             {
-                // 🚨 The platform rolls independently of its packages (maintainer, 2026-10-11:
-                // "again, we want to roll platform independently of packages"). This endpoint
+                // 🚨 The platform rolls independently of its packages (policy
+                // <c>platform-rolls-independently-of-packages</c>). This endpoint
                 // answers the ROLL question for a manual `kubectl set image` exactly as the poller
                 // and /roll-target do: a package-availability refusal is waived into advisories
                 // (`waivedHold` keeps it verbatim, `packages` still names every lagging package),
@@ -235,7 +235,8 @@ public static class ReleaseGateEndpoints
                 {
                     version,
                     isUpdatable = verdict.IsUpdatable,
-                    // 🚨 What the package verdict would have held on before 2026-10-11 — the
+                    // 🚨 What the package verdict would have held on before policy
+                    // <c>platform-rolls-independently-of-packages</c> — the
                     // packages that do not follow this roll and catch up on their own.
                     waivedHold = verdict.WaivedHold,
                     // Distinguishes "the gate does not apply here" from "the gate passed" — the

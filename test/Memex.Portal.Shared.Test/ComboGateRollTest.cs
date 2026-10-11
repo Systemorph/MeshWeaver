@@ -38,8 +38,8 @@ namespace Memex.Portal.Shared.Test;
 /// <see cref="ComboClearanceTest"/>) — it is that a RED verdict actually STOPS a roll, and that the
 /// verifier is genuinely RUN and its verdict RECORDED where an admin looks.</para>
 ///
-/// <para>🚨 <b>Since 2026-10-11 a Red is an ADVISORY, not a hold</b> (maintainer: <i>"again, we
-/// want to roll platform independently of packages"</i>). The assertions stay positive and
+/// <para>🚨 <b>Under policy <c>platform-rolls-independently-of-packages</c> a Red is an ADVISORY,
+/// not a hold</b>. The assertions stay positive and
 /// observable: a Red is asserted as a roll that DID land PLUS the failing module named in the
 /// advisories on <c>Admin/UpdatePolicy</c> and on the check verdict (never as "a roll happened",
 /// which a poller that ignores the gate also produces). Delete the wiring in
@@ -73,8 +73,8 @@ public class ComboGateRollTest(ITestOutputHelper output) : MonolithMeshTestBase(
     // ══════════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// 🚨 <b>A Red is an ADVISORY since 2026-10-11</b> (maintainer: <i>"again, we want to roll
-    /// platform independently of packages"</i>). It used to hold the roll; a module that does not
+    /// 🚨 <b>A Red is an ADVISORY under policy <c>platform-rolls-independently-of-packages</c></b>.
+    /// It used to hold the roll; a module that does not
     /// survive the candidate is a statement about a PACKAGE, so the platform rolls and the module
     /// keeps its previous generation and catches up on its own. What must survive is the
     /// visibility: the failing module is NAMED where an admin looks (the advisories on
@@ -245,8 +245,8 @@ public class ComboGateRollTest(ITestOutputHelper output) : MonolithMeshTestBase(
             var advised = await WaitForContent(
                 c => c.LastCheckVerdict?.Contains("the combo gate recorded RED") == true);
 
-            // 🚨 Since 2026-10-11 the honoured verdict is an ADVISORY, not a hold (maintainer:
-            // "again, we want to roll platform independently of packages") — but it must still be
+            // 🚨 Under policy <c>platform-rolls-independently-of-packages</c> the honoured verdict
+            // is an ADVISORY, not a hold — but it must still be
             // SEEN by the running poller, naming the module, exactly as when it was there from the
             // start.
             advised.IsHeld(CandidateTag).Should().BeFalse();
@@ -312,7 +312,8 @@ public class ComboGateRollTest(ITestOutputHelper output) : MonolithMeshTestBase(
                 "the verdict names its exact input — these files, at this commit");
             module.Failures.Should().ContainSingle().Which.Should().Contain("AddTracking");
 
-            // 2. And that verdict is an ADVISORY on the roll (2026-10-11): the platform rolled, the
+            // 2. And that verdict is an ADVISORY on the roll (policy
+            // <c>platform-rolls-independently-of-packages</c>): the platform rolled, the
             //    module is named.
             updater.Tags.Should().Contain(CandidateTag);
             content.IsHeld(CandidateTag).Should().BeFalse();

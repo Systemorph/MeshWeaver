@@ -143,8 +143,9 @@ public class PlatformUpdateStatusTest
 
     /// <summary>
     /// 🚨 A combo RED (#2274) is read off the recorded verdict itself — not only off the poller's
-    /// notes — and since 2026-10-11 it renders as what it is: an ADVISORY about packages, never a
-    /// hold (maintainer: <i>"again, we want to roll platform independently of packages"</i>). The
+    /// notes — and under policy <c>platform-rolls-independently-of-packages</c> it renders as what
+    /// it is: an ADVISORY about packages, never a
+    /// hold. The
     /// build stays "available" (the poller rolls to it) and the failing modules are named on the
     /// status, so it never reads as an unqualified "update available" either.
     /// </summary>
@@ -165,15 +166,16 @@ public class PlatformUpdateStatusTest
     }
 
     /// <summary>
-    /// 🚨 THE ABOUT TAB AFTER THE 2026-10-11 DECISION. memex reached partnerre.meshweaver.cloud's
+    /// 🚨 THE ABOUT TAB UNDER POLICY <c>platform-rolls-independently-of-packages</c>. memex reached
+    /// partnerre.meshweaver.cloud's
     /// exact state: the poller found 3.1.10502, the availability check could not resolve its
     /// framework identity, and — before the change — the record said HELD and the About tab read
     /// "Update held — a package this deployment runs is not available for that build". Now the
     /// poller records no hold, only the advisory, and the About line says the platform rolls and
-    /// lists what does not follow.
+    /// points to the Updates tab, where the advisories are listed.
     /// </summary>
     [Fact]
-    public void AWaivedPackageHold_RendersAsAvailable_AndTheAboutLineListsThePackageAdvisories()
+    public void AWaivedPackageHold_RendersAsAvailable_AndTheAboutLineAnnouncesThePackageAdvisories()
     {
         const string Tag = "3.1.10502";
         const string Advisory =
@@ -198,16 +200,17 @@ public class PlatformUpdateStatusTest
         Assert.DoesNotContain("<about.updateHeld>", markdown);
         Assert.Contains("<about.updateAvailable>", markdown);
         Assert.Contains("<about.platformRolls>", markdown);
-        Assert.Contains("- the platform rolls independently of packages", markdown);
-        Assert.Contains("framework identity of release 3.1.10502 is not resolvable", markdown);
+        // The diagnostics themselves are untranslated server prose: admin-scoped, on the Updates
+        // tab — the About line carries the translated sentence only.
+        Assert.DoesNotContain("framework identity of release 3.1.10502 is not resolvable", markdown);
     }
 
     /// <summary>
     /// After the roll, the running build is the one the advisories describe: the About tab reads
-    /// "up to date" and still names the packages that have not caught up yet.
+    /// "up to date" and still says that package advisories are recorded for it.
     /// </summary>
     [Fact]
-    public void AfterTheRoll_UpToDate_StillListsThePackagesThatHaveNotCaughtUp()
+    public void AfterTheRoll_UpToDate_StillAnnouncesThePackageAdvisories()
     {
         var status = PlatformUpdateStatus.Derive(
             new UpdatePolicyContent

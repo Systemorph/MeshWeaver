@@ -137,16 +137,16 @@ public static class AboutSettingsTab
     /// </summary>
     internal static string? UpdateStatusMarkdown(PlatformUpdateStatus status, Func<string, string> localize) =>
         StatusLine(status, localize) is { } line
-            // 🚨 The platform rolls independently of packages (maintainer, 2026-10-11: "again, we
-            // want to roll platform independently of packages"). When it rolls — or rolled — past
-            // packages that are not available for the build, the About tab SAYS so and lists them,
-            // rather than reading "update held" for a hold that no longer exists.
+            // 🚨 The platform rolls independently of packages (policy
+            // <c>platform-rolls-independently-of-packages</c>). When it rolls — or rolled — with
+            // package advisories recorded for the build, the About tab SAYS so in one translated
+            // sentence, rather than reading "update held" for a hold that no longer exists. The
+            // advisories themselves are server-written diagnostics (package names and reasons, in
+            // English): like a hold's reason they are admin-scoped and stay on the Updates tab, so
+            // this surface never shows untranslated prose under a translated heading.
             ? line + (string.IsNullOrEmpty(status.Advisories)
                 ? ""
-                : "\n\n" + localize("about.platformRolls") + "\n\n"
-                  + string.Join("\n", status.Advisories!
-                      .Split("; ", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                      .Select(advisory => "- " + advisory.Replace("\n", " ").Replace("\r", " "))))
+                : "\n\n" + localize("about.platformRolls"))
             : null;
 
     private static string? StatusLine(PlatformUpdateStatus status, Func<string, string> localize) =>

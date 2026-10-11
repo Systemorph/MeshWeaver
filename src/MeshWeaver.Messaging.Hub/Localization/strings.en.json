@@ -387,7 +387,7 @@
   "about.upToDate": "Up to date — no newer build has been detected",
   "about.updateAvailable": "Update available",
   "about.updateHeld": "Update held — the Updates tab says why",
-  "about.platformRolls": "The platform rolls independently of packages — these packages do not follow it yet and catch up on their own:",
+  "about.platformRolls": "The platform rolls independently of packages — package advisories were reported for this build and do not hold it; the Updates tab lists them",
   "about.plugins.title": "Installed plugins",
   "about.plugins.none": "No plugins are installed on this instance.",
   "about.plugins.column.name": "Name",

@@ -103,8 +103,8 @@ public record PlatformUpdateStatus(PlatformUpdateAvailability Availability, stri
             // naming an incompatibility that may have been fixed days ago. A Red verification is
             // unaffected: that is a recorded FACT about the build, not a note about the poller.
             //
-            // 🚨 SUPERSEDED 2026-10-11 for the combo half (maintainer: "again, we want to roll
-            // platform independently of packages"): a Red verification names modules that do not
+            // 🚨 SUPERSEDED for the combo half by policy <c>platform-rolls-independently-of-packages</c>:
+            // a Red verification names modules that do not
             // survive the build — a statement about PACKAGES — and the poller rolls over it, so
             // rendering it as "held" would be the lie the paragraph above warns about, inverted.
             // It reaches this surface as a package ADVISORY instead (Advisories below).
@@ -132,9 +132,10 @@ public record PlatformUpdateStatus(PlatformUpdateAvailability Availability, stri
     /// The package advisories recorded for <paramref name="tag"/> — what the release check said about
     /// it without holding it (the boot-compile cost, the packages that do not follow the platform
     /// roll, a combo Red), plus the failing modules of a Red verification — or null when there is
-    /// nothing to say. 🚨 Package NAMES and reasons only: the plugin inventory is already on the About
-    /// page, and these lines are what makes "the platform rolled while a package stayed behind" a
-    /// visible state for everyone rather than a fact only an admin tab knows.
+    /// nothing to say. 🚨 Package NAMES and reasons only. The About tab announces that they exist (one
+    /// translated sentence, so "the platform rolled while a package stayed behind" is a visible
+    /// state for everyone); the lines themselves are untranslated diagnostics and render on the
+    /// admin-scoped Updates tab.
     /// </summary>
     private static string? AdvisoriesFor(UpdatePolicyContent policy, string? tag)
     {
@@ -150,8 +151,8 @@ public record PlatformUpdateStatus(PlatformUpdateAvailability Availability, stri
 
     /// <summary>
     /// 🚨 What the release check said about the build this status is about WITHOUT holding it — the
-    /// packages that do not follow the platform roll and catch up on their own (maintainer,
-    /// 2026-10-11: <i>"again, we want to roll platform independently of packages"</i>). Null when
+    /// packages that do not follow the platform roll and catch up on their own (policy
+    /// <c>platform-rolls-independently-of-packages</c>). Null when
     /// there is nothing to say. Init-only, so the positional shape stays what it was.
     /// </summary>
     public string? Advisories { get; init; }

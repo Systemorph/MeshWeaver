@@ -27,8 +27,8 @@ using Xunit;
 namespace Memex.Portal.Shared.Test;
 
 /// <summary>
-/// 🚨 <b>The platform rolls independently of its packages</b> — maintainer, 2026-10-11:
-/// <i>"again, we want to roll platform independently of packages"</i>.
+/// 🚨 <b>The platform rolls independently of its packages</b> — policy
+/// <c>platform-rolls-independently-of-packages</c>.
 ///
 /// <para>Measured on partnerre.meshweaver.cloud that day: <c>Admin/UpdatePolicy</c> read
 /// <c>HOLDING 3.1.10502 — the framework identity of release 3.1.10502 is not resolvable — no content
@@ -117,7 +117,8 @@ public class PlatformRollsIndependentlyOfPackagesTest(ITestOutputHelper output) 
     // ══════════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// 🚨 THE ACCEPTANCE CRITERION — partnerre's exact verdict. Before 2026-10-11 the poller wrote
+    /// 🚨 THE ACCEPTANCE CRITERION — partnerre's exact verdict. Before policy
+    /// <c>platform-rolls-independently-of-packages</c> the poller wrote
     /// <c>HeldTag = 3.1.10502, heldIndeterminate = true</c> and patched nothing; now the roll lands,
     /// no hold is recorded, and the reason is on <c>Admin/UpdatePolicy</c> as the advisory the
     /// Updates and About tabs render.
@@ -164,6 +165,37 @@ public class PlatformRollsIndependentlyOfPackagesTest(ITestOutputHelper output) 
         content.LastCheckVerdict.Should().Contain("PACKAGE ADVISORY").And.Contain("Feedback");
     }
 
+    /// <summary>
+    /// The reboot's image step names EVERY advisory the verdict carries — not only a waived hold.
+    /// An already-updatable verdict has <c>WaivedHold</c> null and still carries its boot-compile /
+    /// link / declared-floor advisories; a detail built from the waived hold alone drops them
+    /// silently, so the operator reading the reboot's record never learns what the roll accepted.
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task TheRebootImageStep_NamesEveryAdvisory_AlsoOnAnUpdatableVerdict()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await Seed(ct);
+        const string BootCompile = "Feedback: no prebuilt bake for this release — compiled at boot";
+        var updatable = ReleaseAvailability.IsUpdatable(
+                new ReleaseTarget(CandidateTag, "sid"), [new RequiredPackage("Crm", "Crm")], ReleaseArtifacts.Of(["Crm"]))
+            with { Advisories = [BootCompile] };
+        updatable.IsUpdatable.Should().BeTrue();
+        updatable.WaivedHold.Should().BeNull("nothing was waived — the advisory rides on an updatable verdict");
+
+        var choice = await Service(new RecordingUpdater(), updatable)
+            .SelectImage(wedged: false).FirstAsync().Timeout(Budget).Await(ct);
+
+        choice.Target.Should().Be(CandidateTag);
+        choice.Detail.Should().Contain(BootCompile).And.Contain("do not hold the platform");
+
+        var waived = await Service(new RecordingUpdater(), UnresolvableIdentity())
+            .SelectImage(wedged: false).FirstAsync().Timeout(Budget).Await(ct);
+
+        waived.Target.Should().Be(CandidateTag, "a waived package hold does not keep the reboot on the running image");
+        waived.Detail.Should().Contain("framework identity of release 9999.0.0-ci.1 is not resolvable");
+    }
+
     // ══════════════════════════════════════════════════════════════════════════
     //  Harness (the ComboGateRollTest shape)
     // ══════════════════════════════════════════════════════════════════════════
@@ -171,11 +203,7 @@ public class PlatformRollsIndependentlyOfPackagesTest(ITestOutputHelper output) 
     private async Task<UpdatePolicyContent> RunOneCheck(RecordingUpdater updater, UpdatabilityVerdict verdict)
     {
         var ct = TestContext.Current.CancellationToken;
-        var service = new GatedSelfUpdateService(
-            Mesh, new FakeAcrTagLister(), updater, FastPoll(),
-            Mesh.ServiceProvider.GetService<ILogger<SelfUpdateHostedService>>(),
-            new FixedVerdict(Mesh, new ConfigurationBuilder().Build(), verdict),
-            new ComboVerificationGate(Mesh));
+        var service = Service(updater, verdict);
 
         await service.StartAsync(CancellationToken.None);
         try
@@ -188,6 +216,12 @@ public class PlatformRollsIndependentlyOfPackagesTest(ITestOutputHelper output) 
             await service.StopAsync(CancellationToken.None);
         }
     }
+
+    private GatedSelfUpdateService Service(RecordingUpdater updater, UpdatabilityVerdict verdict) =>
+        new(Mesh, new FakeAcrTagLister(), updater, FastPoll(),
+            Mesh.ServiceProvider.GetService<ILogger<SelfUpdateHostedService>>(),
+            new FixedVerdict(Mesh, new ConfigurationBuilder().Build(), verdict),
+            new ComboVerificationGate(Mesh));
 
     private static SelfUpdateOptions FastPoll() => new()
     {
@@ -258,7 +292,8 @@ public class PlatformRollsIndependentlyOfPackagesTest(ITestOutputHelper output) 
         protected override ComboVerificationGate? ResolveComboGate() => combo;
     }
 
-    /// <summary>Seeds the policy node — optionally with the hold the pre-2026-10-11 poller wrote on
+    /// <summary>Seeds the policy node — optionally with the hold the poller wrote, before policy
+    /// <c>platform-rolls-independently-of-packages</c>, on
     /// partnerre, so the test also proves the roll CLEARS it.</summary>
     private Task Seed(CancellationToken cancellationToken, bool staleHold = false)
     {

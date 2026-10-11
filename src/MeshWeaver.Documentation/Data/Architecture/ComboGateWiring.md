@@ -7,10 +7,11 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 # Combo Gate Wiring
 
-> 🚨 **Rule change, 2026-10-11 (maintainer): _"again, we want to roll platform independently of
-> packages"_.** A recorded **Red** is no longer a hold. It names modules this instance has landed that
+> 🚨 **The platform rolls independently of its packages** — policy
+> `platform-rolls-independently-of-packages` ([Policy Not Prose](../PolicyNotProse)). A recorded
+> **Red** is no longer a hold. It names modules this instance has landed that
 > do not survive the candidate — a statement about packages — so the roll proceeds, the failing
-> modules are named on `Admin/UpdatePolicy` (the advisories, which the Updates and About tabs render)
+> modules are named on `Admin/UpdatePolicy` (the advisories, which the Updates tab renders and the About tab announces)
 > and on the check verdict (`PACKAGE ADVISORY … the combo gate recorded RED`), and the modules keep
 > their previous generation and catch up through their own update policy. The candidate walk no longer
 > steps past a recorded Red, the manual button and the reboot no longer refuse on it, and the About

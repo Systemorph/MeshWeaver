@@ -969,7 +969,7 @@ public sealed record UpdatabilityVerdict(
 
     /// <summary>
     /// 🚨 The hold this verdict WOULD have been before the platform rolled independently of its
-    /// packages (maintainer, 2026-10-11) — the package-availability reason
+    /// packages (policy <c>platform-rolls-independently-of-packages</c>) — the package-availability reason
     /// <see cref="ForPlatformRoll"/> waived, kept verbatim so every surface can still say which
     /// packages will not follow the roll and why. Null when nothing was waived. Init-only: the
     /// positional constructor is binary API.
@@ -977,8 +977,8 @@ public sealed record UpdatabilityVerdict(
     public string? WaivedHold { get; init; }
 
     /// <summary>
-    /// 🚨 <b>THE PLATFORM ROLLS INDEPENDENTLY OF ITS PACKAGES</b> (maintainer, 2026-10-11:
-    /// <i>"again, we want to roll platform independently of packages"</i>).
+    /// 🚨 <b>THE PLATFORM ROLLS INDEPENDENTLY OF ITS PACKAGES</b> (policy
+    /// <c>platform-rolls-independently-of-packages</c>).
     ///
     /// <para>The package-availability question — is there a sealed bake for the target's framework
     /// identity, can that identity be resolved at all, does every installed package have an artifact

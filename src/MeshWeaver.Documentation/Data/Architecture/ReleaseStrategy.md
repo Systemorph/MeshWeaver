@@ -161,8 +161,9 @@ applies the update.
 
 ### The platform rolls independently of its packages
 
-> 🚨 **Rule, 2026-10-11 (maintainer): _"again, we want to roll platform independently of
-> packages"_.** A package-availability verdict is **never** a hold on the platform roll. It is an
+> 🚨 **The platform rolls independently of its packages** — policy
+> `platform-rolls-independently-of-packages` ([Policy Not Prose](../PolicyNotProse)). A
+> package-availability verdict is **never** a hold on the platform roll. It is an
 > **advisory**: logged, recorded on `Admin/UpdatePolicy`, shown on the Updates and About tabs — and
 > the roll proceeds to the newest admitted tag. Packages catch up on their own (their own update
 > policy, the held-update lane), never the reverse.
@@ -172,7 +173,7 @@ about the newest tag the update policy admits: does every package this deploymen
 artifact for it, can its framework identity be resolved, can the catalogue be read, can every landed
 module load against the surface it published ([the link gate](../ModulePlatformLinkGate)), and —
 from the [combo gate](../ComboGateWiring) — do the landed modules compile and test against it. Those
-are questions about **packages**, and since 2026-10-11 their answers never decide which platform build
+are questions about **packages**, and under policy `platform-rolls-independently-of-packages` their answers never decide which platform build
 an instance runs:
 
 - **The gate answers yes** — the roll proceeds, with whatever it reported without holding (a course
@@ -188,8 +189,9 @@ an instance runs:
   hold recorded by an older build is cleared on the roll.
 
 Everything is written to the same node (`AdvisoriesTag`, `Advisories`) and shown on the Updates tab
-beneath the available line; the About tab says the platform rolls (or rolled) and lists the package
-advisories, and no longer reads `⏸️ Update held — a package … is not available`. The roll selection
+beneath the available line; the About tab says, in one translated sentence, that the platform rolls
+(or rolled) with package advisories and points to the Updates tab — the advisories themselves are
+server-written diagnostics and stay on that admin surface — and no longer reads `⏸️ Update held — a package … is not available`. The roll selection
 CD reads (`/api/plugins/roll-target`), the manual-roll check (`/api/plugins/is-updatable`, which now
 returns the waived reason as `waivedHold`), the reboot's image step and the **Apply update now**
 button all apply the same rule, so no roll path selects differently from the poller.
