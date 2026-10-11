@@ -121,6 +121,39 @@ Decide the owner, and write the reason down next to the entry:
 
 The partition guard fails until one of the three is true, and names the member.
 
+## The installer's unchanged-gate reads the same partition
+
+"Imports honour it" has one more seam than the merge. A package re-install writes a NodeType node
+only when `PackageInstaller.IsUnchanged` says the file differs from the stored node, and that gate
+runs **before** the upsert is asked. A gate that compares fewer members than the repo owns turns
+every member it leaves out into one that can be set at the first install and never changed again.
+
+That is what it did. The gate compared `Configuration`, `Sources` and `InstanceLocations` and
+nothing else, so a file that changed any other authored member read as unchanged and was never
+written. Measured on a deployed portal: `Governance/NameCheck` declares `"keepsHistory": false` in
+its committed file, and its stored definition read `keepsHistory: true` at node version 143, across
+five minor releases of the package. Every one of those versions was the mesh's own compile
+bookkeeping; no import had written the node since its first install. The serializer fix that lets an
+explicit `false` survive a write (`[JsonIgnore(Condition = Never)]` on the flag) could not help,
+because no write was issued. Nineteen authored members were invisible to the gate this way.
+
+The gate now compares the **whole authored surface**: both definitions are stripped with
+`NodeTypeOperationalContent.StripOperational` — the strip an export applies, so "what a file may
+carry" and "what a re-install compares" are one set — and their canonical signatures are compared.
+Nothing is listed in the installer, so a member added to the record is covered the day it is
+classified here.
+
+`AReinstallLandsEveryAuthoredNodeTypeMemberTest` pins it reflectively: for every serialised member
+the mask does not name, a file that differs in that member alone must read as a change. Its two
+controls are the half that keeps a re-install idempotent: a stored node that differs from its file
+only by compile state must still read as unchanged, and so must an identical definition.
+
+**What this does to a running fleet.** The first install after this change writes each NodeType
+whose stored authored members had drifted from its file, once, and requests its compile. A type
+whose file and stored definition already agree is untouched. For a type that declares
+`keepsHistory: false` the version writer's cached verdict is invalidated by that write, and history
+written before it is purged by the next write or the delete of each instance.
+
 ## Related
 
 - [Node Type Compilation](../NodeTypeCompilation) — the compile control plane that writes this state
