@@ -92,8 +92,8 @@ The interactive kernel's probe hooks `AssemblyLoadContext.Default.Resolving`, wh
 only for names the host cannot bind, so unification is implicit there; it skips native directories
 for managed loads, tries the next candidate when one fails to load, and hooks
 `ResolvingUnmanagedDll` for native ones. Each submission's probing directories are kept as one
-closure, and a native import is answered only from the closure(s) whose managed directories hold the
-requesting assembly — a later submission's different version of the same native library is never
+closure, and a native import is answered only from the FIRST closure whose managed directories hold the
+requesting assembly (the resolution that owns that loaded assembly) — a later submission's different version of the same native library is never
 offered to an earlier one's assembly.
 
 **Limitation — the kernel loads into the default context.** That context is process-wide: one managed

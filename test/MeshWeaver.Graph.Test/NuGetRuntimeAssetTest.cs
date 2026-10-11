@@ -204,6 +204,14 @@ public class NuGetRuntimeAssetTest : IDisposable
             .Should().Equal(b);
         PackageAssemblyProbe.NativeSearchDirectoriesFor("/pkgs/wrapper/1.0.0/lib/net8.0/Wrapper.dll", closures)
             .Should().Equal(a);
+        // Overlapping closures — both submissions share one managed package path but resolved
+        // different native versions: the first resolution owns the shared assembly, and only ITS
+        // native directory is searched.
+        ImmutableArray<string> c = ["/pkgs/common/1.0.0/lib/net8.0", "/pkgs/native/1.0.0/runtimes/linux-x64/native"];
+        ImmutableArray<string> d = ["/pkgs/common/1.0.0/lib/net8.0", "/pkgs/native/2.0.0/runtimes/linux-x64/native"];
+        PackageAssemblyProbe.NativeSearchDirectoriesFor("/pkgs/common/1.0.0/lib/net8.0/Common.dll", [c, d])
+            .Should().Equal(c);
+
         PackageAssemblyProbe.NativeSearchDirectoriesFor("/app/Host.dll", closures).Should().BeEmpty();
         PackageAssemblyProbe.NativeSearchDirectoriesFor("", closures).Should().BeEmpty();
     }

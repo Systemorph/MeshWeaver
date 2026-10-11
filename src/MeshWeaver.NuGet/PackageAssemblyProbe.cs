@@ -213,7 +213,7 @@ public static class PackageAssemblyProbe
     /// <summary>
     /// The probing directories a native import from <paramref name="requestingAssemblyLocation"/>
     /// may search, for a context that accumulates several resolutions (a kernel session's
-    /// submissions): only the CLOSURES — one per <see cref="ResolvedPackageSet.ProbingDirectories"/>
+    /// submissions): only the FIRST closure — one per <see cref="ResolvedPackageSet.ProbingDirectories"/>
     /// — whose managed directories contain the requesting assembly. A native library that a
     /// different resolution brought (another version under the same import name) is never offered.
     /// Empty when the assembly came from none of them.
@@ -224,13 +224,14 @@ public static class PackageAssemblyProbe
         if (string.IsNullOrEmpty(requestingAssemblyLocation)) return [];
         var origin = Path.GetDirectoryName(requestingAssemblyLocation);
         if (string.IsNullOrEmpty(origin)) return [];
-        return
-        [
-            .. closures
-                .Where(closure => closure.Contains(origin, StringComparer.OrdinalIgnoreCase))
-                .SelectMany(closure => closure)
-                .Distinct(StringComparer.OrdinalIgnoreCase),
-        ];
+        // The FIRST closure that holds it, and only that one: the default context binds a managed
+        // path once, to whichever resolution asked first, so that resolution owns the assembly — and
+        // its native dependencies with it. Closures overlap routinely (each carries its whole
+        // transitive graph); merging them would offer one resolution's native version to another.
+        return closures.FirstOrDefault(closure => closure.Contains(origin, StringComparer.OrdinalIgnoreCase)) is
+            { IsDefaultOrEmpty: false } owner
+            ? owner
+            : [];
     }
 
     /// <summary>The first of <see cref="FindNativeCandidates"/>, or <c>null</c>.</summary>

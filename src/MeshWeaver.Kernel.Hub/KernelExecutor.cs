@@ -736,7 +736,7 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                 return null;
             };
             // A package's runtimes/<rid>/native/ library for a DllImport the default search missed —
-            // answered ONLY from the resolution(s) whose managed directories hold the requesting
+            // answered ONLY from the FIRST resolution whose managed directories hold the requesting
             // assembly, so a later submission's (or another session's) different version of the same
             // native library is never offered to it. The default context is process-wide: one
             // managed path is one loaded assembly with one native binding, whoever asked first.
