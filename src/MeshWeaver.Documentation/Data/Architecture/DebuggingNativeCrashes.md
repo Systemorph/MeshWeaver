@@ -200,8 +200,9 @@ Its one step is core's `hosting-dump-analyze --namespace <ns> [selector]`
 
 The answer lands on the action node (`dumpAnalysis`) and as a Markdown page at `Ops/Dumps/<action id>`.
 The page carries the listing of every dump on the volume (the denominator), the file read with its
-size and write instant, the thread pool, the lock owners, and the stack groups, largest first. The
-raw dump never leaves the cluster. A selector that is not that shape is refused before anything
+size and write instant, the thread pool, the lock owners, and the stack groups: the group of each
+thread that owns a monitor first, then every other group, largest first. The raw dump never leaves
+the cluster. A selector that is not that shape is refused before anything
 reaches the cluster, and so is a pod refusal, a failed Job or a log that never reached the end. None
 of them reports an analysis. The Job needs egress to nuget.org (the tool) and Microsoft's symbol
 server (the DAC matching the dump). A namespace that forbids either fails the read by name.
