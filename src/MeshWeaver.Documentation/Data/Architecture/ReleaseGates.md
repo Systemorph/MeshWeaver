@@ -8,15 +8,25 @@ icon: "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><rect width='
 
 # Release Availability Gates
 
-> ✅ **Rule change, 2026-09-07 (maintainer) — [Module Adoption Policy](../ModuleAdoptionPolicy), implemented by [#3648](https://github.com/Systemorph/MeshWeaver/issues/3648), [#3649](https://github.com/Systemorph/MeshWeaver/issues/3649), [#3650](https://github.com/Systemorph/MeshWeaver/issues/3650) and [#3651](https://github.com/Systemorph/MeshWeaver/issues/3651).** This page describes the mechanism as it runs after those changes: a declared floor is advisory, a refused generation falls back to the previous one, a new build is adopted eagerly, and a platform roll is held only by a module that provably cannot load on the target.
+> 🚨 **The platform rolls independently of its packages** — policy
+> `platform-rolls-independently-of-packages` ([Policy Not Prose](../PolicyNotProse)). This page
+> describes two things and keeps them apart: the **package verdict** — the predicate, which answers
+> truthfully whether each package is available for a release, and on which the build gate (#1755)
+> exits — and the **platform-roll decision**, which never waits for that verdict: on every roll
+> path a package refusal is an **advisory**, and the newest admitted tag is taken. See
+> [Release & Self-Update Strategy](../ReleaseStrategy).
 
-A release is not safe to act on just because its version is newer. Two questions have the same
-answer, and until they were asked, both were answered by hand:
+> ✅ **Rule change, 2026-09-07 (maintainer) — [Module Adoption Policy](../ModuleAdoptionPolicy), implemented by [#3648](https://github.com/Systemorph/MeshWeaver/issues/3648), [#3649](https://github.com/Systemorph/MeshWeaver/issues/3649), [#3650](https://github.com/Systemorph/MeshWeaver/issues/3650) and [#3651](https://github.com/Systemorph/MeshWeaver/issues/3651).** This page describes the mechanism as it runs after those changes: a declared floor is advisory, a refused generation falls back to the previous one, a new build is adopted eagerly, and the package verdict refuses only a module that provably cannot load on the target (or a torn sealed set). What a roll does with that refusal is the newer rule in the banner above: it reports it and rolls.
 
-- **Deploying** — before an environment is rolled to a release, every package that environment
-  deploys must have a usable artifact *for that release* (#1754).
+A newer version says nothing about the packages around it. Two questions have the same answer, and
+until they were asked, both were answered by hand:
+
+- **Deploying** — when an environment is rolled to a release, does every package that environment
+  deploys have a usable artifact *for that release* (#1754)? The answer is **reported** on the roll
+  and never stops it: the packages that are not available do not follow the roll and catch up on
+  their own.
 - **Building** — before a repo builds against a released framework, every upstream it depends on
-  must have published *for that framework* (#1755).
+  must have published *for that framework* (#1755). Here the answer **decides**: not ready ⇒ exit.
 
 Both reduce to one predicate: **given a target release, and given a set of packages, is every one
 of them available?** It is stated exactly once, in
@@ -53,7 +63,7 @@ passed between workflows, or a rebuilt `bin/`. The registry is where a release b
 exists for anyone other than the run that produced it — one credential model, one entitlement
 check, one set of bytes. See [Plugin Registry](../PluginRegistry).
 
-## 🚨 What holds a roll: a module that provably cannot load there — and nothing declared
+## 🚨 What the package verdict refuses: a module that provably cannot load there — and nothing declared
 
 > **Maintainer, 2026-09-07** ([Module Adoption Policy](../ModuleAdoptionPolicy), implemented by
 > MeshWeaver#3648 and MeshWeaver#3651): *if no plugin version is shipped, we use the old one. We
@@ -65,20 +75,34 @@ Two rules held it, one after the other, and both were about something *declared*
 *measured*: the installed modules' `minMeshVersion` floors declined all eleven candidates ("77
 plugins required … every one declined"), and behind them the satellites' bakes for the new identity
 did not exist yet — although a boot compile of those courses succeeds on every pull request and every
-candidate would have loaded. The predicate is now:
+candidate would have loaded. The predicate — the PACKAGE verdict, per package — is now:
 
 | Lane | What decides | What is reported, never decided |
 |---|---|---|
-| **Compiled module** | **Measured.** A module the target publishes a build of will be adopted at the roll — nothing to check. A module with no such build keeps its LANDED generation across the roll, so that generation's bytes are linked against the target's type surface — `platform-surface.json`, measured on the target release's own portal image and recorded at `_releases/_surface/<version>` (policy `exact-release-surface`), read by [the link gate](../ModulePlatformLinkGate). **`Unlinkable` ⇒ `ModuleUnloadable`, THE hold**, naming the module and the missing type | `Linkable` clears. `Indeterminate` — no surface published, unreadable bytes — is an advisory: *"whether its landed module … loads could not be determined"*. The declared `MinMeshVersion` floor is an advisory too (MeshWeaver#3648) |
-| **Content package** | Nothing, by default. A missing sealed bake under the target's identity means the instance Roslyn-compiles that content at boot — the same code path every pull request of it already proved green | `ContentBakeMissing` is a COST: *"would recompile at boot on …: education, crm"* (`UpdatabilityVerdict.BootCompiles`). `Modules:RequirePrebuilt` — the opt-in strict mode in which the seeder refuses a boot compile — keeps it the hold it used to be |
-| **The sealed SET** | Still a hold: two builds of one module under one identity, or a bundle built against a build the identity does not carry (`SealedSetInconsistent`, MeshWeaver#3175). A torn publication is refused whole | — |
+| **Compiled module** | **Measured.** A module the target publishes a build of will be adopted at the roll — nothing to check. A module with no such build keeps its LANDED generation across the roll, so that generation's bytes are linked against the target's type surface — `platform-surface.json`, measured on the target release's own portal image and recorded at `_releases/_surface/<version>` (policy `exact-release-surface`), read by [the link gate](../ModulePlatformLinkGate). **`Unlinkable` ⇒ `ModuleUnloadable`, the refusal**, naming the module and the missing type | `Linkable` clears. `Indeterminate` — no surface published, unreadable bytes — is an advisory: *"whether its landed module … loads could not be determined"*. The declared `MinMeshVersion` floor is an advisory too (MeshWeaver#3648) |
+| **Content package** | Nothing, by default. A missing sealed bake under the target's identity means the instance Roslyn-compiles that content at boot — the same code path every pull request of it already proved green | `ContentBakeMissing` is a COST: *"would recompile at boot on …: education, crm"* (`UpdatabilityVerdict.BootCompiles`). `Modules:RequirePrebuilt` — the opt-in strict mode in which the seeder refuses a boot compile — makes it a refusal |
+| **The sealed SET** | A refusal: two builds of one module under one identity, or a bundle built against a build the identity does not carry (`SealedSetInconsistent`, MeshWeaver#3175). A torn publication is refused whole | — |
 
 The strict-MVID rule stays where it belongs, on content bundles, in
 `PrebuiltAssemblySeeder.DeclineReason`. Applying it to modules would forbid every ex-post Store
-install across platform versions — and the roll gate does not apply it to modules either: it asks
+install across platform versions — and the predicate does not apply it to modules either: it asks
 whether the *bytes* link, which is the question MVID equality only approximates.
 
-## The declared-break hold — the ladder's one roll hold (policy `platform-backwards-compatibility`)
+### What a refusal does — two consumers, two answers
+
+The table is a statement about **packages**, and it reads the same for every caller. What follows
+from a refusal depends on who asked:
+
+| Who asked | What a refused package means |
+|---|---|
+| **The build gate** (#1755, `check-release-availability.sh` in `node-repo-publish-bake`) | The repo EXITS red without building — see [The build gate](#the-build-gate--exit-dont-wait). Unchanged |
+| **A platform roll** (the self-update poll, CD's roll target, a manual roll, the reboot's image step) | **Nothing is held** (policy `platform-rolls-independently-of-packages`). `UpdatabilityVerdict.ForPlatformRoll` turns the refusal into an updatable verdict: the reason leads `Advisories` and is kept verbatim on `WaivedHold`, every package that is not available is on `Lagging`, and `Blockers` is empty. The roll takes the newest admitted tag; the refused package keeps what it has — a module its previous generation, a content package a boot compile or, under `Modules:RequirePrebuilt`, a parked type — and catches up through its own update policy (`packages-auto-update`) or the held-update lane |
+
+The pure predicate (`ReleaseAvailability.IsUpdatable`) is not changed by that: it still answers
+`IsUpdatable: false` with the package named. The waiver is the roll's, applied at each decision
+point, so a package surface that asks the predicate directly still gets the truthful answer.
+
+## The declared break — the ladder's one package refusal (policy `platform-backwards-compatibility`)
 
 Platform builds are backwards compatible within a compatibility epoch, and publications are keyed on
 the compatibility key `c<major>e<epoch>`, so a **normal platform build needs no plugin seal at all**:
@@ -87,16 +111,23 @@ a missing bake is the boot-compile cost it always was. `ReleaseAvailability.Plat
 answers null for every package on that path, and `DeclaredBreakRollHoldTest.AnOpenCeiling_SameKey_RollsWithoutAnySeal`
 is the ratchet that keeps it so.
 
-The hold exists only behind a DECLARED break (`src/MeshWeaver.Compiler/platform-compatibility.json`):
+The refusal exists only behind a DECLARED break (`src/MeshWeaver.Compiler/platform-compatibility.json`):
 when the target's key differs from the key an installed build was produced under (an epoch or major
 bump, whose `previousEpochCeiling` the old builds inherit), or the target is above a ceiling the
-installed build's bundle declares (`BundleReader.Manifest.PlatformCeiling`). Then the roll needs a
-REPLACEMENT — the package sealed under the target's key with a range that admits the target
-(`PlatformCompatibility.DeclineReason` null) — and without one the candidate is declined as
-`PackageAvailabilityKind.PlatformRangeExceeded`, the reason naming the plugin, the installed key and
-ceiling, and the target version and key. The walk is newest-first, so the environment lands on the
-newest release its plugins still cover rather than staying put. A legacy installed identity
-(`s…`/`g…`) states no epoch and is never held by this rule.
+installed build's bundle declares (`BundleReader.Manifest.PlatformCeiling`). Then the PACKAGE needs
+a REPLACEMENT — sealed under the target's key with a range that admits the target
+(`PlatformCompatibility.DeclineReason` null) — and without one the predicate answers
+`PackageAvailabilityKind.PlatformRangeExceeded` for it, the reason naming the plugin, the installed
+key and ceiling, and the target version and key. A legacy installed identity (`s…`/`g…`) states no
+epoch and is never refused by this rule.
+
+**It is a statement about a package, so it does not stop the platform** (policy `platform-rolls-independently-of-packages`).
+Before that policy the walk declined the candidate and the environment landed on the newest release
+its plugins still covered — the last build of the old epoch. Now the walk selects the newest
+admitted release across the break, and the plugin that does not cover it is named on the selected
+release's advisories; it catches up when its replacement is sealed
+(`DeclaredBreakRollHoldTest.TheWalk_SelectsTheNewest_AndNamesThePluginThatDoesNotCoverIt`). The
+build gate still reads the refusal as a refusal.
 
 The whole procedure, both paths: [Deploying Across Platform Versions](../DeployingAcrossPlatformVersions).
 
@@ -121,41 +152,45 @@ Two properties are load-bearing:
   when content × framework both match, and the API-surface identity is breaking-change-keyed, so an
   ordinary release re-resolves the *same* identity and skips the upload. If the marker rode along
   with the bundles, the second and every later release of a surface generation would have no marker
-  — and every environment would be held on a release that is in fact perfectly fine.
+  — and every package would answer *cannot determine* for a release that is in fact perfectly fine.
 - **A missing marker means one precise thing**: that release published no platform content bake. So
-  the honest answer is *cannot determine*, which is a HOLD.
+  the honest answer is *cannot determine* — `Indeterminate`, never a pass. The build gate exits on
+  it; a platform roll reports it as an advisory (*"package availability for this release could NOT
+  be determined"*) and proceeds.
 
 ## Fail safe, fail loud, fail distinguishable
 
-> 🚨 "Cannot determine" is not "clear to proceed."
+> 🚨 "Cannot determine" is not "every package is available."
 
-`PackageAvailabilityKind` keeps the answers apart on purpose:
+`PackageAvailabilityKind` keeps the PACKAGE answers apart on purpose — the build gate decides on
+them, and a platform roll carries each of them, by name, on its advisories:
 
 - `ModuleUnloadable` / `SealedSetInconsistent` — we looked, and this package cannot survive the
   release. Actionable: publish a build of the module for this platform (or uninstall it); re-seal
   the torn set.
 - `ContentBakeMissing` — we looked, and the instance will compile this package at boot. A cost the
-  verdict names (`PackageAvailability.IsAdvisory`), not a hold — except under
+  verdict names (`PackageAvailability.IsAdvisory`), not a refusal — except under
   `Modules:RequirePrebuilt`, where it is one.
 - `ModuleFloorExceedsTarget` — retired (MeshWeaver#3648). Nothing produces it; the declared floor
   is an advisory line beside the verdict.
 - `Indeterminate` — we could **not** look at the STORE: the catalogue was unreachable, or the
   release has no resolvable identity. An availability failure is never dressed up as a
   compatibility verdict; an operator must be able to tell an outage from an incompatible release.
-  🚨 The one indeterminate that does NOT hold is the *link check's* own — a release with no
-  surface of its own (`_releases/_surface/<version>`) predates exact-release surfaces or
-  MeshWeaver#3651, and holding every roll on it would freeze the fleet exactly as the floors did.
-  It is reported on the advisories instead.
+  🚨 The one indeterminate that is NOT a refusal even of the package is the *link check's* own — a
+  release with no surface of its own (`_releases/_surface/<version>`) predates exact-release
+  surfaces or MeshWeaver#3651, and refusing every module on it would freeze the fleet exactly as
+  the floors did. It is reported on the advisories instead.
 - `UpdatabilityVerdict.NotEnforced` — the gate does not **apply**: this deployment consumes no CI
-  bakes at all, so it already compiles at every boot and holding it could only freeze it forever.
+  bakes at all, so it already compiles at every boot and there is nothing to check it against.
   Deliberately not the same as passing — it carries a reason the caller logs and surfaces, so
   "nothing is gating this environment" is visible rather than inferred from a green tick.
 
 ## Both halves ask "would this roll take away something that works today"
 
-A gate that holds an environment forever is a worse outage than the one it prevents. So neither
-half asks "is this package perfect for the target"; both ask whether the roll would take away
-something that works today — and since MeshWeaver#3651 only the module half can answer "yes".
+A verdict that refuses a package forever is a worse outage than the one it prevents. So neither
+half of the predicate asks "is this package perfect for the target"; both ask whether the roll
+would take away something that works today — and since MeshWeaver#3651 only the module half can
+answer "yes".
 
 - **Content**: a package is treated as content-bearing exactly when it has **ever** been sealed
   under **any** framework identity the published root holds. A package with no compilable NodeTypes
@@ -165,19 +200,22 @@ something that works today — and since MeshWeaver#3651 only the module half ca
   left the set of packages the gate asks about, so every later roll was silent about precisely the
   package that had regressed. See [The Release Gate's Denominator](../ReleaseGateDenominator). What
   the denominator produces is the **named cost** on every verdict; what it used to produce was the
-  hold, which `Modules:RequirePrebuilt` alone still asks for.
+  refusal, which `Modules:RequirePrebuilt` alone still asks for.
 - **Modules**: the landed generation is linked against the target's published surface. A module
   that links keeps working; a module the target publishes a build of will be adopted; a module that
   does not link would throw `TypeLoadException` on its first render there — *that* is the roll
-  taking away something that works today, and it is the one thing this gate holds on. The declared
+  taking away something that works today, and it is the one thing the module half refuses. The
+  module itself does not break: it keeps its landed generation, and the platform rolls on with the
+  module named on the advisories. The declared
   floor is not consulted: SemVer puts `3.0.0-ci.8009` **below** `3.0.0-rc8`, so every `rc` floor
   held every `ci` candidate on 2026-09-07 while every one of them would have loaded (MeshWeaver#3648).
 
 ## The verdict as a service
 
 `ReleaseAvailabilityService` (on the registry instance) answers `IsUpdatable(targetVersion)` reactively — the
-file-system leaves run on the I/O pool, never on a hub action block — and it is exposed for the
-paths that roll a version from outside the portal:
+file-system leaves run on the I/O pool, never on a hub action block. In-process it returns the
+PACKAGE verdict, and each roll path applies `ForPlatformRoll()` to it. It is also exposed for the
+paths that roll a version from outside the portal, and there it answers the **roll** question:
 
 ```
 GET /api/plugins/is-updatable?version=<release>
@@ -187,11 +225,15 @@ Authorization: Bearer mwi_…
 ```json
 {
   "version": "3.0.0-ci.8100",
-  "isUpdatable": false,
+  "isUpdatable": true,
+  "waivedHold": "SocialMedia: its landed module MeshWeaver.Social cannot load on 3.0.0-ci.8100 (framework identity s5b8b…): … references MeshWeaver.Mesh.CodeOutputCurrency (MeshWeaver.Mesh.Contract), which the target does not carry …",
   "enforced": true,
   "indeterminate": false,
-  "holdReason": "SocialMedia: its landed module MeshWeaver.Social cannot load on 3.0.0-ci.8100 (framework identity s5b8b…): … references MeshWeaver.Mesh.CodeOutputCurrency (MeshWeaver.Mesh.Contract), which the target does not carry …",
-  "advisories": [ "would recompile at boot on 3.0.0-ci.8100 (no sealed content bake for framework identity s5b8b…): AgenticPrimer, Crm" ],
+  "holdReason": null,
+  "advisories": [
+    "the platform rolls independently of packages — 1 package(s) are not available for this release, so they do not follow this roll and catch up through their own update policy: SocialMedia: its landed module MeshWeaver.Social cannot load on 3.0.0-ci.8100 …",
+    "would recompile at boot on 3.0.0-ci.8100 (no sealed content bake for framework identity s5b8b…): AgenticPrimer, Crm"
+  ],
   "bootCompiles": [ "AgenticPrimer", "Crm" ],
   "packages": [
     { "package": "SocialMedia", "status": "ModuleUnloadable", "reason": "…", "advisory": false },
@@ -200,7 +242,12 @@ Authorization: Bearer mwi_…
 }
 ```
 
-`advisory: true` marks a status that names a cost the roll accepts rather than a hold;
+`isUpdatable` is the answer for the platform roll, so a package refusal does not make it `false`
+(policy `platform-rolls-independently-of-packages`). What the package verdict refused is `waivedHold`, verbatim, and it
+leads `advisories`; `packages` still carries every package's own status, so a refused package
+(`advisory: false`, a status that is not available) is named whether or not anything waits for it.
+`indeterminate` keeps the packages' own answer — *could not be determined* stays distinguishable
+from *is not available*. `advisory: true` marks a status that names a cost the roll accepts;
 `advisories` and `bootCompiles` carry what the verdict said without deciding on it
 (MeshWeaver#3651), and the roll-target endpoint carries the same two fields for the release it
 selected.
@@ -214,51 +261,73 @@ party can answer for it today; each environment is asked at its own URL. When pe
 composition lands, the *declared* package set becomes answerable centrally, and
 `ReleaseAvailabilityService` is the one place that changes — the predicate above does not.
 
-**The consequence, designed for deliberately:** this makes the registry a dependency of an
-environment's ability to update. When its catalogue cannot be read the answer is `Indeterminate` —
-a hold, with its own named reason — never a pass, and never a compatibility verdict.
+**The registry is not a dependency of an environment's ability to update its platform.** When its
+catalogue cannot be read the package answer is `Indeterminate`, with its own named reason — never a
+pass, and never a compatibility verdict — and the roll proceeds with that reason as its advisory.
+Before policy `platform-rolls-independently-of-packages` the same answer held the roll, which made an
+unreadable catalogue, or a release with no content bake yet, a reason for the platform to stand
+still while its packages waited for that very platform.
 
-## The deployment gate — all three roll paths read the one verdict
+## The deployment gate — every roll path reads the one verdict, and none waits for it
 
-A version reaches an environment three ways, and a gate honoured by only one of them is not a gate.
+A version reaches an environment several ways, and a rule honoured by only one of them is not a
+rule. All of them ask the same service, apply the same waiver (`ForPlatformRoll`), and take the
+newest admitted tag (policy `platform-rolls-independently-of-packages`).
 
-| Path | How it consults the verdict | What a refusal looks like |
+| Path | How it consults the verdict | What a package refusal looks like |
 |---|---|---|
-| **The self-update poll** | `SelfUpdateHostedService` calls the service in-process after `VersionSelect` picks a target and before `KubernetesDeploymentUpdater` patches anything | the roll does not happen; the hold is written to `Admin/UpdatePolicy` (`HeldTag`/`HeldReason`/`HeldAt`) and shown on the Updates tab |
-| **CD's promote** | `main-cd`'s `publish-bake` job asserts, right after publishing, that the release it armed resolves an identity and carries a sealed platform bake (`.github/scripts/check-release-availability.sh`) | the CD run goes **red**, naming what is missing — never a grey skip, which renders identically to a pass |
-| **A manual roll** (a `Roll` `Hosting/InstanceAction`, or break-glass `kubectl set image` — [OperatingFromThePortal](/Doc/Architecture/OperatingFromThePortal)) | the operator asks the target portal `GET /api/plugins/is-updatable?version=…` before setting the image; the in-product **Apply update now** button consults the same service | the button reports the hold and patches nothing |
+| **The self-update poll** | `SelfUpdateHostedService` selects the newest admitted candidate (`FirstRollable` → `SelectRollTarget`), asks the service in-process, and applies the roll | the roll HAPPENS. The refusal is logged at Warning, written to `Admin/UpdatePolicy` as `AdvisoriesTag`/`Advisories` (never `HeldTag`), and stated on the check verdict: `… PACKAGE ADVISORY (the platform rolls independently of packages; …)` |
+| **CD** | `main-cd`'s `publish-bake` job asserts, right after publishing, that the release it armed resolves an identity and carries a sealed platform bake (`.github/scripts/check-release-availability.sh`) — a check of CD's OWN publication, unchanged. Which release an environment selects is answered by `GET /api/plugins/roll-target` | a publication that is not what it claims turns the CD run **red**, naming what is missing — never a grey skip. An environment's package refusal is on the roll target's `advisories` and selects nothing older |
+| **A manual roll** (a `Roll` `Hosting/InstanceAction`, or break-glass `kubectl set image` — [OperatingFromThePortal](/Doc/Architecture/OperatingFromThePortal)) | the operator asks the target portal `GET /api/plugins/is-updatable?version=…`; the in-product **Apply update now** button consults the same service | the answer is `isUpdatable: true` with `waivedHold`; the button applies the roll and lists every advisory on its result line |
+| **A reboot's image step** (`SelectImage`) | the same selection and the same verdict | the newest admitted tag is chosen and the step's detail names every advisory |
 
-### A hold is a state, not a silence
+A recorded combo **Red** ([Combo Gate Wiring](../ComboGateWiring)) is the same kind of statement —
+modules this instance has landed that do not survive the candidate — and is treated the same way
+on each of these paths: named as an advisory, never a refusal of the roll.
 
-The refusal is written where update state already lives, so it renders on the surfaces an operator
-and a user already look at:
+### An advisory is a state, not a silence
 
-- **About tab** (any user): `⏸️ Update held — a package this deployment runs is not available for
-  that build`, deliberately distinct from `⬆️ Update available`. An install that has *refused* a
-  build must not look like one that is about to take it.
-- **Updates tab** (platform admin): the held tag, the reason naming the package, and when it was
-  held — plus a different sentence when the hold is `Indeterminate`, because "we could not check"
-  and "this package cannot survive the release" have different fixes. And, held or not, **what
-  the gate reported about the tag without holding it** (`Admin/UpdatePolicy` → `AdvisoriesTag` /
-  `Advisories`, MeshWeaver#3651): the packages the roll recompiles at boot, a landed module whose
-  loadability there could not be measured, a declared floor the target does not rank above. A roll
-  that compiles content at boot is a state an operator can see on the tab, not a fact that lives
-  only in a pod log.
+What the roll proceeded over is written where update state already lives, so it renders on the
+surfaces an operator and a user already look at:
 
-### The hold is re-evaluated every tick, never persisted as a decision
+- **About tab** (any user): `⬆️ Update available` (or up to date, after the roll), followed by one
+  translated sentence — *the platform rolls independently of packages; package advisories were
+  reported for this build and do not hold it; the Updates tab lists them*. The advisories
+  themselves are server-written diagnostics (package names and reasons) and are not shown here.
+- **Updates tab** (platform admin): **what the release check reported about the tag without holding
+  it** (`Admin/UpdatePolicy` → `AdvisoriesTag` / `Advisories`): the packages that are not available
+  for the build and do not follow the roll, a package verdict that could not be determined, the
+  packages the roll recompiles at boot, a landed module whose loadability there could not be
+  measured, a declared floor the target does not rank above — and, under the release line, the
+  modules of a recorded combo Red. A roll that left a package behind is a state an operator can see
+  on the tab, not a fact that lives only in a pod log.
 
-The poller re-asks on every poll and on every green-build event, and clears the hold the moment the
-verdict flips. So the missing bake being published is the whole remedy — nothing has to be un-stuck
-by hand, and no operator has to remember that an environment was held. That is what makes refusing
-safe to do at all.
+### No hold is written — and one an older build wrote is cleared
 
-### The gate never gates itself out of existence
+The poller writes no hold: a check either rolls or says why nothing is newer. The hold fields on
+`Admin/UpdatePolicy` (`HeldTag`/`HeldReason`/`HeldIndeterminate`/`HeldAt`) can therefore only carry
+what a build from before policy `platform-rolls-independently-of-packages` recorded, and the first
+check clears them — on the candidate path with the roll's own record, and, when nothing is newer
+(the state of an instance that was rolled by hand onto the very tag it held), through
+`ClearLegacyHold`, which leaves the advisories in place. With updates switched off nothing is
+evaluated, so such a record stays and the Updates tab shows it as history, not as the reason the
+install is standing still (#3812).
 
-Recording the hold is best-effort and can never block the roll (the same rule the availability
-bookkeeping has carried since the 37-hour stall of #1020): the DECISION comes from the verdict, and
-a gate that could not run resolves to a hold with its own reason rather than to an exception that
-kills the tick. An install with no gate registered at all logs that fact and rolls — said out loud,
-never inferred from silence.
+The advisories are a record of what the roll ACCEPTED for one build (`AdvisoriesTag`), not a live
+package status: they are rewritten whenever a check evaluates a candidate, and after the roll — when
+nothing is newer and no candidate is evaluated — they stay as they were, so the Updates and About tabs
+keep saying what that roll accepted until the next candidate replaces them. Whether a package has
+caught up since is answered by the package's own update policy and its catalog card, not by this
+record. Nothing has to be un-stuck by hand: no advisory holds anything.
+
+### Bookkeeping never blocks the roll
+
+Recording the advisories is best-effort and can never block the roll (the same rule the
+availability bookkeeping has carried since the 37-hour stall of #1020): a failed write is logged
+and the roll is applied. An install with no gate registered at all rolls too — its package question
+was not asked, which is said as an advisory (*"no release-availability gate is registered on this
+host, so nothing checked whether the packages this environment deploys have usable artifacts for
+this release"*), logged at Warning on every check, and never inferred from silence.
 
 ## The build gate — exit, don't wait
 
@@ -322,8 +391,8 @@ on:
 > 🚨 **The schedule is not optional decoration.** A repo without it exits waiting for an event that
 > no longer exists and never rebuilds — silently, with everything green. That is the same
 > terminal-exit failure the dispatch was invented to prevent; the cure is now the schedule, and it
-> is the one thing to check when a source's bundles are the ones missing from an instance's
-> `heldReason`.
+> is the one thing to check when a source's bundles are the ones an instance's advisories
+> (`Admin/UpdatePolicy` → `Advisories`) name as missing.
 
 ### Build only what you own — the half that is not done
 
@@ -431,6 +500,13 @@ rebuilt — removes the recompiles rather than making each one cheaper.
 
 ## 🚨 How a fleet goes stale while every check is green (2026-08-22)
 
+> **History.** This is the account of an incident under the rule of its day, when a package verdict
+> held the platform roll. Under policy `platform-rolls-independently-of-packages` the instance
+> below would have rolled to the head and named `Store` on its advisories; defects 2 and 3 are
+> unchanged and still decide whether a package's bake exists for the released identity. A
+> `heldTag`/`heldReason` on a record today was written by an older build and is cleared by the next
+> check.
+
 The public instance sat on a day-old release and would not move. Nothing was red: CI green, CD
 green, bakes green, the portal healthy. The instance was doing exactly what this page asks of it —
 and could never stop.
@@ -453,9 +529,10 @@ another unbaked tag, the next bake published yet another identity, and the two n
 is always the release *least* likely to be baked, and it blocked every release behind it that was.
 A sister instance had rolled cleanly to `ci.4908` — this instance should have taken that and did not.
 
-Fixed by selecting the newest **baked** release: walk candidates newest-first and take the first
-the gate accepts. Never backwards, never into a boot storm, but a not-yet-baked head no longer
-freezes the fleet.
+Fixed at the time by selecting the newest **baked** release: walk candidates newest-first and take
+the first the gate accepts. That walk is retired — the selection now takes the newest admitted
+release and reports the unbaked package ([Roll Selection](../RollSelection)) — because the walk
+still stood still whenever no candidate was baked, which is the same freeze one step later.
 
 ### 2. Nothing ever baked for the released identity
 
@@ -561,6 +638,10 @@ promising a restart that cannot help:
   otherwise is a prompt no restart can ever clear.
 
 ### Breaking the deadlock by hand
+
+This still applies to an instance frozen by a build from before policy `platform-rolls-independently-of-packages`:
+the rule that ends the freeze cannot deploy itself either. One roll through the ops lane brings it
+onto a build that carries the rule, and its first check clears the old hold.
 
 The selection fix cannot deploy itself — an instance cannot roll to receive the change that lets it
 roll. Once, by hand, roll it to a release a SISTER INSTANCE is already serving: that release is

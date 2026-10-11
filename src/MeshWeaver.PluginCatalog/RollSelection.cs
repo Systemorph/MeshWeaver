@@ -4,102 +4,79 @@ using System.Reactive.Linq;
 namespace MeshWeaver.PluginCatalog;
 
 /// <summary>
-/// 🚨 <b>THE roll-selection algorithm (#3479), stated once.</b>
+/// 🚨 <b>THE roll-selection algorithm, stated once: an environment selects the NEWEST release its
+/// update policy admits.</b> The platform rolls independently of its packages
+/// (policy <c>platform-rolls-independently-of-packages</c>).
 ///
-/// <blockquote>Maintainer, 2026-09-06: <i>"Whenever a new platform / plugin is published, check for
-/// each environment which is the latest platform version shipping all plugins, if different from
-/// current version ⇒ update."</i></blockquote>
+/// <para><b>Two questions, and only the first decides.</b> <i>Which release?</i> — the head of
+/// the caller's newest-first candidate list, always. <i>What do this environment's packages say
+/// about it?</i> — asked ONCE, of that release, through the shared predicate, and REPORTED on the
+/// outcome: a refusal (a missing bake under the strict mode, an unresolvable framework identity, a
+/// torn sealed set, a landed module that cannot load) is waived by
+/// <see cref="UpdatabilityVerdict.ForPlatformRoll"/> into
+/// <see cref="RollSelectionOutcome.Advisories"/>, led by the reason it would have held on, and
+/// <see cref="RollSelectionOutcome.Summary"/> names what does not follow the roll. No package
+/// answer walks past a release; a package that is not available for it keeps its previous
+/// generation or parks, and catches up through its own update policy.</para>
 ///
-/// <para><b>It is an INVERSION of the order this fleet used to roll in.</b> Before, an environment
-/// took the newest published set, booted onto it, and only then discovered a plugin missing or
-/// regressed — at which point the readiness gate refused and the rollout stalled. Completeness was
-/// a <i>post-hoc verdict</i>. Here it is a <b>selection criterion</b>: an environment never targets
-/// a release on which one of its modules provably cannot load, so there is nothing left to refuse.</para>
+/// <para><b>History.</b> The selection was built (#3479) as "the latest platform version shipping
+/// all plugins" and walked past every release that did not; #3651 narrowed what declined a
+/// candidate to a module measured unloadable. That made the platform wait for its packages while
+/// every package update waited for its platform floor, and the two waits met — the deadlock the
+/// policy removes. Nothing declines a candidate now, so <see cref="RollSelectionKind.NoCompleteRelease"/>,
+/// <see cref="RollSelectionKind.BehindCurrent"/> and <see cref="RollSelectionKind.NoPluginsKnown"/>
+/// are no longer produced.</para>
 ///
-/// <para>🚨 <b>"Ships all plugins" means "no installed module is UNLOADABLE on it" since #3651</b>
-/// (maintainer rule of 2026-09-07, <c>Doc/Architecture/ModuleAdoptionPolicy</c>). The walk stops
-/// at the first release, newest first, on which no module of this environment is measured
-/// unloadable. A missing content bake is a COST the outcome reports
-/// (<see cref="RollSelectionOutcome.BootCompiles"/>: "would recompile at boot: …"), not a reason to
-/// walk past the release — holding on it is what would have kept every portal on the morning
-/// build a second day. A link check that could not be made is reported the same way and decides
-/// nothing. Only a module whose landed bytes reference a type the target does not carry declines a
-/// candidate, and "no complete release" then names that module.</para>
+/// <para><b>The package answer is PER ENVIRONMENT.</b> It is a statement about <i>that
+/// environment's</i> plugin list, so two environments selecting one release may carry different
+/// advisories.</para>
 ///
-/// <para><b>The quantifier is PER ENVIRONMENT.</b> "Ships all plugins" is not a property of a
-/// release — it is a question about <i>that environment's</i> plugin list. Two environments looking
-/// at one publication may legitimately choose different targets, and one may correctly stay put.
-/// </para>
+/// <para>🚨 <b>The predicate is SHARED, never re-implemented.</b> Whether one release serves one
+/// environment's packages is <see cref="ReleaseAvailability.IsUpdatable(ReleaseTarget, IEnumerable{RequiredPackage}, ReleaseArtifacts)"/> — the gate #3441/#3443
+/// built and falsified, unchanged, and still read as a yes or no by the CI build gate and the
+/// package surfaces. This type takes the verdict as a function, so what the outcome reports can
+/// never drift from the rule.</para>
 ///
-/// <para>🚨 <b>The predicate is SHARED, never re-implemented.</b> Whether one release ships one
-/// environment's plugins is <see cref="ReleaseAvailability.IsUpdatable(ReleaseTarget, IEnumerable{RequiredPackage}, ReleaseArtifacts)"/> — the gate #3441/#3443
-/// built and falsified. This type contributes the <i>walk</i> and the <i>denominator discipline</i>
-/// around it, and takes the per-candidate verdict as a function so there can never be a second copy
-/// of the rule to drift from the first.</para>
-///
-/// <para>🚨 <b>A selector that finds ZERO plugins fails LOUDLY.</b> "No plugins to check" and "all
-/// plugins present" must never be spelled the same way — with an empty denominator every candidate
-/// is vacuously complete and the algorithm degenerates into "take the newest", which is precisely
-/// what it exists to replace. That is the defect #3441 removed one level down, and
-/// <see cref="RollSelectionKind.NoPluginsKnown"/> is where it is refused here. The denominator is
-/// PRINTED in <see cref="RollSelectionOutcome.Summary"/> on every outcome, so a reader never has to
-/// infer it from a pass.</para>
+/// <para>🚨 <b>A selection that checked ZERO plugins says so.</b> "No plugins were checked" and "all
+/// plugins present" must never be spelled the same way. An unread or empty plugin list no longer
+/// stops the selection — it is a statement about packages — but the newest candidate is then
+/// selected through <see cref="RollSelection.Unjudged"/>, with zero satisfied and an advisory that names the
+/// read that failed or came back empty. The denominator is PRINTED in
+/// <see cref="RollSelectionOutcome.Summary"/> on every outcome, so a reader never has to infer it.</para>
 ///
 /// <para><b>Ordering is POSITIONAL, so this assembly needs no version comparer.</b> The caller hands
 /// the candidates newest-first — it already owns the SemVer rules, the tag-shape filters and the
-/// update policy — and this walk reads "newer" off the index. That is what lets it name the one
-/// answer nobody could get before: the newest complete release is <i>behind</i> what the environment
-/// runs (<see cref="RollSelectionKind.BehindCurrent"/>). Rolling backwards is a different act from
-/// declining to roll forwards, so it is REPORTED and never selected.</para>
+/// update policy — and the selection takes index 0. Nothing behind the head is examined, so the
+/// selection cannot land behind a running version that is among the candidates; keeping a roll
+/// from going backwards is the candidate list's job.</para>
 ///
 /// <para>See <c>Doc/Architecture/RollSelection</c>.</para>
 /// </summary>
 public static class RollSelection
 {
     /// <summary>
-    /// The latest candidate on which no installed module is unloadable, walked newest-first.
-    /// Cold and LAZY: <paramref name="verdictOf"/> is asked about one candidate at a time and the
-    /// walk stops at the first acceptance, so the common case (the head is complete) costs exactly
-    /// one verdict.
+    /// The newest candidate, with what this environment's packages say about it. Cold and LAZY:
+    /// <paramref name="verdictOf"/> is asked about the head only, so a selection costs exactly one
+    /// verdict — and none at all when no candidate was offered or the plugin list is unread or
+    /// empty (<see cref="Unjudged"/>).
     /// </summary>
-    /// <param name="inputs">The environment, what it runs, what it could run, and what it must be
-    /// able to serve.</param>
-    /// <param name="verdictOf">The SHARED completeness predicate for one candidate — in production
+    /// <param name="inputs">The environment, what it runs, what it could run, and the packages
+    /// the verdict is asked about.</param>
+    /// <param name="verdictOf">The SHARED package predicate for one candidate — in production
     /// <c>ReleaseAvailabilityService.IsUpdatable</c>, which is
     /// <see cref="ReleaseAvailability.IsUpdatable(ReleaseTarget, IEnumerable{RequiredPackage}, ReleaseArtifacts)"/> plus the observation it needs. Must be total:
-    /// every failure resolves to a verdict carrying its reason, never a fault.</param>
+    /// every failure resolves to a verdict carrying its reason, never a fault. A refusing verdict
+    /// does not change the selection; it becomes the outcome's advisories.</param>
     /// <returns>Exactly one outcome, then completes.</returns>
     public static IObservable<RollSelectionOutcome> Select(
         RollSelectionInputs inputs,
         Func<string, IObservable<UpdatabilityVerdict>> verdictOf) =>
         Observable.Defer(() =>
         {
-            // 🚨 ORDER MATTERS, and every one of these is spelled DIFFERENTLY from "all plugins
-            // present". Each is a state in which the selector cannot see, and a selector that
-            // cannot see must never answer "take the newest".
-
-            // 1. We could not establish WHAT this environment carries. A HOLD, named.
-            if (inputs.Inventory.Refusal is { Length: > 0 } refusal)
-                return One(new RollSelectionOutcome(
-                    RollSelectionKind.Indeterminate,
-                    null, inputs.CurrentVersion, 0, 0, [],
-                    $"{inputs.Environment}: the plugin list could not be read from "
-                    + $"{inputs.Inventory.Source} ({refusal}) — cannot determine which release ships "
-                    + "all plugins, which is not clearance to roll to the newest one."));
-
-            // 2. 🚨 THE VACUITY REFUSAL. Zero plugins makes every release vacuously complete.
-            if (inputs.Inventory.Plugins.IsDefaultOrEmpty)
-                return One(new RollSelectionOutcome(
-                    RollSelectionKind.NoPluginsKnown,
-                    null, inputs.CurrentVersion, 0, 0, [],
-                    $"{inputs.Environment}: 0 plugins required — {inputs.Inventory.Source} named "
-                    + "none. Every release would ship all zero of them, so the selection is vacuous "
-                    + "and nothing is selected. Either this environment genuinely deploys no "
-                    + "packages (in which case the release-availability gate does not apply to it "
-                    + "at all and should not be configured), or its plugin list is not being read — "
-                    + "which is the failure this refusal exists to make visible."));
-
-            // 3. Nothing to walk. Not an incident; still said out loud rather than completing empty.
+            // 🚨 Nothing to walk. Not an incident; still said out loud rather than completing empty.
+            // Checked FIRST under policy <c>platform-rolls-independently-of-packages</c>: with the
+            // platform rolling independently of its
+            // packages, the candidate list is the only thing that can leave nothing to select.
             if (inputs.CandidatesNewestFirst.IsDefaultOrEmpty)
                 return One(new RollSelectionOutcome(
                     RollSelectionKind.NoCandidates,
@@ -107,23 +84,36 @@ public static class RollSelection
                     $"{inputs.Environment}: {inputs.Inventory.Plugins.Length} plugin(s) required "
                     + $"(from {inputs.Inventory.Source}); no release was offered to choose from."));
 
+            // 🚨 The plugin list could not be read, or named none. Both are statements about the
+            // PACKAGES, so neither holds the platform (policy
+            // <c>platform-rolls-independently-of-packages</c>): the newest admitted candidate is
+            // selected, and the summary and the advisory SAY that no package was checked — an
+            // unread denominator is reported, never dressed up as "all plugins present".
+            if (inputs.Inventory.Refusal is { Length: > 0 } refusal)
+                return One(Unjudged(inputs,
+                    $"the plugin list could not be read from {inputs.Inventory.Source} ({refusal}) — "
+                    + "package availability for this release is unknown, which decides nothing about "
+                    + "the platform roll; the packages catch up through their own update policy"));
+
+            if (inputs.Inventory.Plugins.IsDefaultOrEmpty)
+                return One(Unjudged(inputs,
+                    $"0 plugins required — {inputs.Inventory.Source} named none, so no package was "
+                    + "checked against this release (either this environment genuinely deploys no "
+                    + "packages, or its plugin list is not being read — which is what this line exists "
+                    + "to make visible)"));
+
             return Walk(inputs, verdictOf).Select(walk => Conclude(inputs, walk));
         });
 
     /// <summary>
-    /// The walk itself: newest-first, one verdict at a time, stopping at the first acceptance.
+    /// The walk itself: the head's verdict, accepted whatever it says.
     ///
-    /// <para>🚨 <b>Expressed as a recursive step rather than <c>Concat</c> + a stop predicate</b>,
-    /// and that is load-bearing rather than stylistic: the next candidate's verdict is only ASKED
-    /// FOR inside the previous one's decline, so laziness is a property of the shape instead of a
-    /// property of how promptly a downstream operator disposes its source. <c>Concat</c> over
-    /// synchronous verdicts was measured walking one candidate past the acceptance
-    /// (<c>TheWalkStopsAtTheFirstCompleteRelease</c>), and on a network share a candidate is a
-    /// directory scan against a bounded budget — an extra one per selection is a cost, and an extra
-    /// hundred is a timeout.</para>
-    ///
-    /// <para>Recursion depth is the number of candidates actually EXAMINED, which is one whenever
-    /// the head is complete — the ordinary case — and bounded by the candidate list otherwise.</para>
+    /// <para>Every verdict is accepted (policy <c>platform-rolls-independently-of-packages</c>, see
+    /// <see cref="WalkState.Add"/>), so the walk ends after one step and asks exactly one verdict.
+    /// It keeps its recursive shape — the next candidate's verdict is only ASKED FOR inside the
+    /// previous step's non-acceptance — so laziness stays a property of the shape rather than of
+    /// how promptly a downstream operator disposes its source: on a network share a candidate is a
+    /// directory scan against a bounded budget, and one that is never asked for costs nothing.</para>
     /// </summary>
     private static IObservable<WalkState> Walk(
         RollSelectionInputs inputs, Func<string, IObservable<UpdatabilityVerdict>> verdictOf) =>
@@ -144,8 +134,12 @@ public static class RollSelection
                     : Step(candidates, index + 1, next, verdictOf));
 
     /// <summary>
-    /// What the walk means. The three "we chose something" answers differ only in where the choice
-    /// sits relative to what is running, and that difference is the whole point of reporting it.
+    /// What the walk means: the selected release, where it sits relative to what is running
+    /// (<see cref="RollSelectionKind.AlreadyCurrent"/> or <see cref="RollSelectionKind.Update"/>),
+    /// and — on the same line as the choice — the denominator, the boot-compile cost and what the
+    /// package verdict would have held on. The walk always accepts its head, so the branches below
+    /// for "nothing accepted", for declined candidates and for a selection behind the running
+    /// version are not reached from <see cref="Select"/>.
     /// </summary>
     private static RollSelectionOutcome Conclude(RollSelectionInputs inputs, WalkState walk)
     {
@@ -175,7 +169,13 @@ public static class RollSelection
                    + (bootCompiles.IsDefaultOrEmpty
                        ? string.Empty
                        : $"; {bootCompiles.Length} package(s) would recompile at boot: "
-                         + string.Join(", ", bootCompiles));
+                         + string.Join(", ", bootCompiles))
+                   // 🚨 The platform rolls independently of its packages (policy
+                   // <c>platform-rolls-independently-of-packages</c>): what the
+                   // package verdict would have held on is said on the same line as the choice.
+                   + (walk.Verdict?.WaivedHold is { } waived
+                       ? $"; the platform rolls independently of packages — not following this roll: {waived}"
+                       : string.Empty);
 
         return new RollSelectionOutcome(
             kind, selected, inputs.CurrentVersion, required, satisfied, walk.Declined,
@@ -194,6 +194,42 @@ public static class RollSelection
         {
             Advisories = advisories,
             BootCompiles = bootCompiles,
+        };
+    }
+
+    /// <summary>
+    /// 🚨 The newest admitted candidate, selected WITHOUT a package verdict, with
+    /// <paramref name="advisory"/> saying why none was asked — the platform rolls independently of
+    /// its packages (policy <c>platform-rolls-independently-of-packages</c>), so a package question
+    /// that could not be asked is
+    /// reported, never a reason to stay. Used by this walk for an unread or empty plugin list, and
+    /// by the caller (<c>ReleaseAvailabilityService.SelectRollTarget</c>) when the published root
+    /// could not be read.
+    /// </summary>
+    /// <param name="inputs">The environment, what it runs, and the candidates (non-empty).</param>
+    /// <param name="advisory">Why no package verdict was asked, in one sentence.</param>
+    public static RollSelectionOutcome Unjudged(RollSelectionInputs inputs, string advisory)
+    {
+        ArgumentNullException.ThrowIfNull(inputs);
+        if (inputs.CandidatesNewestFirst.IsDefaultOrEmpty)
+            return new RollSelectionOutcome(
+                RollSelectionKind.NoCandidates, null, inputs.CurrentVersion,
+                inputs.Inventory.Plugins.IsDefault ? 0 : inputs.Inventory.Plugins.Length, 0, [],
+                $"{inputs.Environment}: no release was offered to choose from ({advisory}).");
+
+        var selected = inputs.CandidatesNewestFirst[0];
+        var kind = Position(inputs, selected);
+        var required = inputs.Inventory.Plugins.IsDefault ? 0 : inputs.Inventory.Plugins.Length;
+        var head = $"{inputs.Environment}: {required} plugin(s) required (from "
+                   + $"{inputs.Inventory.Source}); {selected} is the newest admitted release; "
+                   + $"the platform rolls independently of packages — {advisory}";
+        return new RollSelectionOutcome(
+            kind, selected, inputs.CurrentVersion, required, 0, [],
+            kind == RollSelectionKind.AlreadyCurrent
+                ? $"{head}. That is what this environment already runs — no update."
+                : $"{head}. Different from {Describe(inputs.CurrentVersion)} ⇒ update.")
+        {
+            Advisories = [$"the platform rolls independently of packages — {advisory}"],
         };
     }
 
@@ -247,16 +283,14 @@ public static class RollSelection
     {
         public static WalkState Empty { get; } = new([], null, null);
 
+        /// <summary>
+        /// 🚨 Every candidate verdict is ACCEPTED (policy
+        /// <c>platform-rolls-independently-of-packages</c>): a package-availability refusal becomes
+        /// the accepted verdict's advisories (<see cref="UpdatabilityVerdict.ForPlatformRoll"/>),
+        /// so the walk selects the newest admitted candidate and asks exactly one verdict.
+        /// </summary>
         public WalkState Add(string version, UpdatabilityVerdict verdict) =>
-            verdict.IsUpdatable
-                ? this with { Accepted = version, Verdict = verdict }
-                : this with
-                {
-                    Declined = Declined.Add(new DeclinedRelease(
-                        version,
-                        verdict.HoldReason ?? "declined without a stated reason",
-                        [.. verdict.Blockers])),
-                };
+            this with { Accepted = version, Verdict = verdict.ForPlatformRoll() };
     }
 }
 
@@ -281,8 +315,8 @@ public sealed record RollSelectionInputs(
     PluginInventory Inventory);
 
 /// <summary>
-/// 🚨 The DENOMINATOR of the selection: what this environment must be able to serve, and WHERE that
-/// list came from.
+/// 🚨 The DENOMINATOR of the package answer: what this environment must be able to serve, and
+/// WHERE that list came from.
 ///
 /// <para>The source is carried as text and reported on every outcome deliberately. An environment's
 /// plugin list has several possible readings that <b>disagree in this fleet</b> — install records,
@@ -290,32 +324,38 @@ public sealed record RollSelectionInputs(
 /// provenance is not stated cannot be argued with. See <c>Doc/Architecture/RollSelection</c> for
 /// which reading is used and why.</para>
 ///
-/// <para>🚨 <see cref="Unreadable"/> is NOT an empty list, and neither is an empty list a pass. A
-/// failed read HOLDS; a genuinely empty list refuses as vacuous
-/// (<see cref="RollSelectionKind.NoPluginsKnown"/>). Collapsing either into "nothing to check,
-/// carry on" is the defect this whole type exists to prevent.</para>
+/// <para>🚨 <see cref="Unreadable"/> is NOT an empty list, and neither is an empty list "all
+/// plugins present". Neither stops the selection (policy <c>platform-rolls-independently-of-packages</c>):
+/// the newest candidate is selected through <see cref="RollSelection.Unjudged"/>. Each is REPORTED
+/// in its own words — a read that failed, or a read that named no plugin — with zero satisfied, so
+/// a selection that checked nothing never reads as one that found everything.</para>
 /// </summary>
-/// <param name="Plugins">What must survive the roll — the same
+/// <param name="Plugins">The packages the verdict is asked about — the same
 /// <see cref="RequiredPackage"/> values the release gate evaluates, so gate and selector can never
 /// disagree about the set.</param>
-/// <param name="Source">Where the list came from, in words a human reads in the refusal.</param>
+/// <param name="Source">Where the list came from, in words a human reads in the advisory.</param>
 /// <param name="Refusal">Why it could not be read, or null when it was read.</param>
 public sealed record PluginInventory(
     ImmutableArray<RequiredPackage> Plugins,
     string Source,
     string? Refusal = null)
 {
-    /// <summary>A list that was READ — even if it turned out to be empty, which is a refusal and
-    /// not a pass.</summary>
+    /// <summary>A list that was READ — even if it turned out to be empty, which is reported as
+    /// "no package was checked" and never as a pass.</summary>
     public static PluginInventory Of(IEnumerable<RequiredPackage> plugins, string source) =>
         new([.. plugins], source);
 
-    /// <summary>A list that could NOT be read — the fail-safe constructor.</summary>
+    /// <summary>A list that could NOT be read — reported as such on the selected release.</summary>
     public static PluginInventory Unreadable(string source, string reason) =>
         new([], source, reason);
 }
 
-/// <summary>One candidate the walk refused, with the shared predicate's own words.</summary>
+/// <summary>
+/// One candidate the walk refused, with the shared predicate's own words. The walk refuses none
+/// under policy <c>platform-rolls-independently-of-packages</c>, so
+/// <see cref="RollSelectionOutcome.Declined"/> is empty; the type is kept because it is part of the
+/// outcome's positional shape and of the <c>/api/plugins/roll-target</c> answer.
+/// </summary>
 /// <param name="Version">The release.</param>
 /// <param name="Reason">The joined hold reason — what a human reads first.</param>
 /// <param name="Blockers">Every package that blocked it, so the plugin can be NAMED rather than
@@ -323,39 +363,41 @@ public sealed record PluginInventory(
 public sealed record DeclinedRelease(
     string Version, string Reason, ImmutableArray<PackageAvailability> Blockers);
 
-/// <summary>What the selection concluded. Every member is a DIFFERENT sentence on purpose: the
-/// states this algorithm exists to keep apart are exactly the ones a weaker selector spells
-/// identically.</summary>
+/// <summary>What the selection concluded. Every member is a DIFFERENT sentence on purpose: "we
+/// chose", "there was nothing to choose from", "we could not look" and "this does not apply here"
+/// are exactly the states a weaker selector spells identically.</summary>
 public enum RollSelectionKind
 {
-    /// <summary>A release on which none of this environment's modules is unloadable, and it is
-    /// not what the environment runs ⇒ update to it.</summary>
+    /// <summary>The newest admitted release is not what the environment runs ⇒ update to it. What
+    /// its packages say about that release is on <see cref="RollSelectionOutcome.Advisories"/>.</summary>
     Update,
 
-    /// <summary>The newest release that ships all plugins is the one already running ⇒ nothing to
-    /// do. The happy steady state, and it is SAID rather than left as a silence.</summary>
+    /// <summary>The newest admitted release is the one already running ⇒ nothing to do. The happy
+    /// steady state, and it is SAID rather than left as a silence.</summary>
     AlreadyCurrent,
 
-    /// <summary>🚨 The newest release that ships all plugins is BEHIND the running version — so the
-    /// environment is currently running something that does not ship all its plugins. Reported,
-    /// never applied: rolling backwards is a separate decision with its own risks (a schema is not
-    /// reversible), and taking it silently would be worse than the state it fixes.</summary>
+    /// <summary>No longer produced by the walk under
+    /// policy <c>platform-rolls-independently-of-packages</c>; kept for compatibility. It said the
+    /// newest release that shipped all plugins was BEHIND the running version, reported and never
+    /// applied. The walk now takes the head of the candidate list and examines nothing behind it.</summary>
     BehindCurrent,
 
-    /// <summary>On every candidate an installed module is unloadable (or the sealed set is torn).
-    /// Stay put, and name the module and the environment — a module no published release can
-    /// serve is an alert, not a quiet hold.</summary>
+    /// <summary>No longer produced by the walk under
+    /// policy <c>platform-rolls-independently-of-packages</c>; kept for compatibility. It said every
+    /// candidate was declined because an installed module was unloadable on it (or its sealed set
+    /// was torn). Such a module is now named in the selected release's advisories.</summary>
     NoCompleteRelease,
 
-    /// <summary>🚨 The environment's plugin list is EMPTY, so completeness is vacuous. Never a
-    /// selection.</summary>
+    /// <summary>No longer produced by the walk under
+    /// policy <c>platform-rolls-independently-of-packages</c>; kept for compatibility. It refused a
+    /// selection over an EMPTY plugin list. The newest candidate is now selected and the outcome
+    /// says that no package was checked (<see cref="RollSelection.Unjudged"/>).</summary>
     NoPluginsKnown,
 
-    /// <summary>🚨 The selector could not SEE — the plugin list, the release listing or the
-    /// artifact store could not be read. A HOLD: cannot determine is not clearance. Deliberately
-    /// distinct from <see cref="NoPluginsKnown"/>, which is a read that SUCCEEDED and returned
-    /// nothing; one is a broken read to fix, the other a configuration statement to correct.
-    /// </summary>
+    /// <summary>🚨 The selector could not SEE what to choose FROM — the release listing could not be
+    /// read, or the selection did not answer within its budget. Nothing is selected. It is no
+    /// longer the answer to an unread plugin list or published root when candidates are in hand:
+    /// that is a package question, reported on the selected release.</summary>
     Indeterminate,
 
     /// <summary>No candidate was offered at all.</summary>
@@ -372,19 +414,23 @@ public enum RollSelectionKind
 }
 
 /// <summary>
-/// The selection, and the evidence for it. <see cref="Summary"/> always carries the denominator —
-/// <i>"N plugin(s) required (from …); M satisfied by X"</i> — because a completeness answer whose
-/// expected count nobody can read is one nobody can tell from a vacuous one.
+/// The selection, and what the packages said about it. <see cref="Summary"/> always carries the
+/// denominator — <i>"N plugin(s) required (from …); M of N satisfied by X"</i> — because a package
+/// answer whose expected count nobody can read is one nobody can tell from a vacuous one.
 /// </summary>
 /// <param name="Kind">What was concluded.</param>
-/// <param name="SelectedVersion">The release that ships all plugins, or null when none does.</param>
+/// <param name="SelectedVersion">The newest admitted release, or null when nothing was selected
+/// (no candidates, an unlistable candidate universe, or a selection that does not apply).</param>
 /// <param name="CurrentVersion">What the environment runs.</param>
-/// <param name="RequiredPlugins">The denominator — how many plugins had to be shipped.</param>
-/// <param name="SatisfiedPlugins">How many the selected release ships. Equal to
-/// <paramref name="RequiredPlugins"/> whenever a selection was made; zero when none was.</param>
-/// <param name="Declined">Every candidate examined and refused, newest first, with its reasons.</param>
-/// <param name="Summary">One line naming the environment, the denominator, the choice and the
-/// refusals — what a log line and an operator both read.</param>
+/// <param name="RequiredPlugins">The denominator — how many packages the verdict was asked about.</param>
+/// <param name="SatisfiedPlugins">How many of them are available on the selected release. It can be
+/// LESS than <paramref name="RequiredPlugins"/>: the difference is the packages that do not follow
+/// the roll, named in <see cref="Advisories"/>. Zero when nothing was selected or no package was
+/// checked.</param>
+/// <param name="Declined">Candidates examined and refused. Empty from the walk, which refuses
+/// none; kept as part of the positional shape.</param>
+/// <param name="Summary">One line naming the environment, the denominator, the choice, the
+/// boot-compile cost and what does not follow the roll — what a log line and an operator both read.</param>
 public sealed record RollSelectionOutcome(
     RollSelectionKind Kind,
     string? SelectedVersion,
@@ -395,10 +441,13 @@ public sealed record RollSelectionOutcome(
     string Summary)
 {
     /// <summary>
-    /// What the selected release's verdict SAID without deciding on it (#3651,
-    /// <see cref="UpdatabilityVerdict.Advisories"/>): the boot-compile cost, a link check that
-    /// could not be made, a declared floor the target does not rank above. Empty when nothing was
-    /// selected or there was nothing to say. Init-only: the positional constructor is binary API.
+    /// What the selected release's verdict SAID without deciding on it
+    /// (<see cref="UpdatabilityVerdict.Advisories"/>): first, when the package verdict refused or
+    /// could not be made, the waived reason (<see cref="UpdatabilityVerdict.ForPlatformRoll"/>) or
+    /// why no package was checked (<see cref="RollSelection.Unjudged"/>); then the boot-compile
+    /// cost, a link check that could not be made, a declared floor the target does not rank above
+    /// (#3651). Empty when nothing was selected or there was nothing to say. Init-only: the
+    /// positional constructor is binary API.
     /// </summary>
     public ImmutableArray<string> Advisories { get; init; } = [];
 
@@ -408,13 +457,15 @@ public sealed record RollSelectionOutcome(
     public ImmutableArray<string> BootCompiles { get; init; } = [];
 
     /// <summary>Whether this outcome asks for a roll. <b>Only</b>
-    /// <see cref="RollSelectionKind.Update"/> does — every other member is a state to report, and
-    /// there is deliberately no branch that turns "could not tell" into a roll.</summary>
+    /// <see cref="RollSelectionKind.Update"/> does — every other member is a state to report. An
+    /// outcome that could not list its candidates selects nothing here; a caller that holds its
+    /// own candidate list (the poller) still takes its head.</summary>
     public bool ShouldUpdate => Kind == RollSelectionKind.Update;
 
-    /// <summary>Whether the selector could not SEE, as opposed to having looked and found nothing
-    /// adoptable. Callers surface the two differently: an unreadable inventory is an incident to
-    /// fix, an incomplete publication is a release to re-bake.</summary>
+    /// <summary>Whether the selector could not SEE what to choose from
+    /// (<see cref="RollSelectionKind.Indeterminate"/>). <see cref="RollSelectionKind.NoPluginsKnown"/>
+    /// is still matched for compatibility and is no longer produced. A package answer that could
+    /// not be made is NOT this: it is an advisory on a selected release.</summary>
     public bool IsIndeterminate =>
         Kind is RollSelectionKind.Indeterminate or RollSelectionKind.NoPluginsKnown;
 }

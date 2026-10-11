@@ -105,7 +105,7 @@ public class ComboVerdictRecordingTest(ITestOutputHelper output) : MonolithMeshT
     // ── rendering: the join an admin actually sees ──
 
     [Fact]
-    public void StatusMarkdown_RedVerdict_ReplacesUpdateAvailable_NamesEveryFailingModule()
+    public void StatusMarkdown_RedVerdict_IsAnAdvisoryBesideUpdateAvailable_NamesEveryFailingModule()
     {
         var content = new UpdatePolicyContent
         {
@@ -128,9 +128,13 @@ public class ComboVerdictRecordingTest(ITestOutputHelper output) : MonolithMeshT
 
         var markdown = UpdatePolicySettingsTab.StatusMarkdown(content, EchoLocalizer);
 
+        // 🚨 Under policy <c>platform-rolls-independently-of-packages</c> a Red is an ADVISORY: the
+        // build is still what this install rolls to, so the
+        // availability line stays, and the failing modules are named beneath it — never silently.
         markdown.Should().Contain($"ui.updateBlocked[{Tag}]",
-            "a blocked upgrade must not read as a plain 'update available'");
-        markdown.Should().NotContain("ui.updateLatestAvailable");
+            "a Red must not read as a plain 'update available' — the modules that do not follow are named");
+        markdown.Should().Contain("ui.updateLatestAvailable",
+            "the platform rolls independently of packages — a Red does not replace the release line");
         markdown.Should().Contain("**Widget**").And.Contain("AddTracking");
         markdown.Should().Contain("**Store**").And.Contain("import faulted");
         markdown.Should().NotContain("**Edu**", "only failing modules are listed");

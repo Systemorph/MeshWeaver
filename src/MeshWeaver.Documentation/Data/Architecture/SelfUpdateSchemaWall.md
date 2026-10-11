@@ -155,8 +155,10 @@ curl -s -H "Authorization: Bearer $MWI_KEY" \
   "https://<portal>/api/plugins/is-updatable?version=<tag>" | jq
 ```
 
-`isUpdatable: false` names the blocking packages; `indeterminate: true` means the check could not
-run and is **not** clearance. Why a green Promote can sit above an unsealed publication at all is
+`isUpdatable` is the roll decision and is `true` even when a package is not available for the tag
+(policy `platform-rolls-independently-of-packages`): the package answer is on `waivedHold` and in
+`packages[]`, and `indeterminate: true` means the package check could not run. Neither says anything
+about the SCHEMA — the schema step below is the only thing that can stop this roll. Why a green Promote can sit above an unsealed publication at all is
 [Bake Identity Mismatch](/Doc/Architecture/BakeIdentityMismatch) and
 [The Continuous Delivery Contract](/Doc/Architecture/ContinuousDeliveryContract) → "A promoted tag is
 not a deployable tag".

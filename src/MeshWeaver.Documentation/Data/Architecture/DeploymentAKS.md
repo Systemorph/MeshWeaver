@@ -338,23 +338,27 @@ MeshWeaver.Plugins (`get Hosting/ClusterUpgrade` on the control instance's MCP).
 
 Operational facts about the in-pod updater (learned the hard way — each cost a debugging session):
 
-- 🚨 **Check availability BEFORE a manual roll.** `kubectl set image` bypasses the poller, and with it
-  the [release availability gate](/Doc/Architecture/ReleaseGates) — so it can put an environment on a
-  release whose content bake has not been published, and every pod then Roslyn-compiles the whole
-  content set at boot (a type that fails to compile parks its hub for the full activation budget).
-  Ask the target portal first:
+- 🚨 **Read the package advisories BEFORE a manual roll.** `kubectl set image` bypasses the poller,
+  and with it the record of what the roll accepts — a package without a content bake for the release
+  Roslyn-compiles at boot (a type that fails to compile parks its hub for the full activation budget),
+  and a package that is not available for it keeps its previous generation. Neither stops a platform
+  roll (policy `platform-rolls-independently-of-packages`), but you should know which packages will
+  not follow. Ask the target portal first:
 
   ```bash
   curl -s -H "Authorization: Bearer $MWI_KEY" \
     "https://<portal>/api/plugins/is-updatable?version=<tag>" | jq
   ```
 
-  `isUpdatable: false` names the blocking packages in `holdReason`. `indeterminate: true` means the
-  check itself could not run — an availability problem to fix, never a release to re-bake, and never
-  clearance to proceed. If the portal is unreachable, `.github/scripts/check-release-availability.sh
-  <tag>` asks the artifact store the same question directly (needs the storage role).
-  **A held update needs no manual roll anyway**: publish the missing bake and the poller applies it
-  on its next tick.
+  `isUpdatable` is the ROLL decision and is `true` whenever the gate applies — a package that is not
+  available is NOT a "no". The package answer is in `waivedHold` (verbatim, null when every package
+  is available), leads `advisories`, and each package keeps its own `status` in `packages[]`.
+  `indeterminate: true` means the package check itself could not run — an availability problem to
+  fix, never a release to re-bake. If the portal is unreachable,
+  `.github/scripts/check-release-availability.sh <tag>` asks the artifact store the package question
+  directly (needs the storage role; it exits non-zero when a package is not served — that script is
+  the build-side PACKAGE gate, not a roll decision). **No update is held anyway**: the poller rolls
+  to the newest admitted tag on its next tick and records the same advisories.
 - **Tags must be dotted SemVer** (`3.0.0` / `3.0.0-ci.749`). `VersionSelect.PickTarget` keeps only tags
   matching `^\d+\.\d+\.\d+([-+].*)?$` (and drops per-RID suffixes like `-linux-arm64`), then picks the
   highest. It never inspects the tag you deployed — it compares its pick against the **running build's
