@@ -73,6 +73,11 @@ public class ReleaseAvailabilityService(
         hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem)
         ?? IoPool.Unbounded;
 
+    /// <summary>Where a release's framework identity is read when this root has no marker for it.</summary>
+    private readonly RegistryReleaseIdentities registryIdentities =
+        hub.ServiceProvider.GetService<RegistryReleaseIdentities>()
+        ?? new RegistryReleaseIdentities(hub, logger);
+
     /// <summary>
     /// 🚨 The gate's DENOMINATOR, read incrementally (#4742). The mesh-scoped singleton
     /// <c>AddSelfUpdate</c> registers; the fall-back is an instance of this service's own, which is
@@ -467,7 +472,7 @@ public class ReleaseAvailabilityService(
 
     /// <summary>
     /// 🚨 THE SHARED PREDICATE, with its two IO halves (#3651) — read the target's publication
-    /// (<see cref="PublishedBundleCatalogue.Read"/>), link every landed module against the surface
+    /// (<see cref="PublishedBundleCatalogue.ReadWithRegistryIdentity"/>), link every landed module against the surface
     /// it carries (<see cref="ModuleLinkObservation.Measure"/>), then decide
     /// (<see cref="ReleaseAvailability.IsUpdatable(ReleaseTarget, IEnumerable{RequiredPackage}, ReleaseArtifacts, ReleaseGatePolicy)"/>).
     /// Both IO halves run on the file-system pool, never on a hub action block; the rule is pure.
@@ -478,12 +483,20 @@ public class ReleaseAvailabilityService(
         string publishedRoot, ImmutableArray<RequiredPackage> required, string? version)
     {
         var policy = Policy;
-        return pool.InvokeBlocking(_ =>
+        // A root no publisher writes to carries no marker for ANY release (policy
+        // release-identity-from-registry): the registry's own record is asked then, and only then.
+        // The publisher's marker, where there is one, is read without a network call.
+        return pool.InvokeBlocking(_ => PublishedBundleCatalogue.HasReleaseMarker(publishedRoot, version))
+            // false = established absent. Present, or undetermined, never asks the registry.
+            .SelectMany(marked => marked == false
+                ? registryIdentities.Resolve(version).Select(record => record?.Identity)
+                : Observable.Return<string?>(null))
+            .SelectMany(registryIdentity => pool.InvokeBlocking(_ =>
         {
-            var observation = PublishedBundleCatalogue.Read(publishedRoot, version, logger);
+            var observation = PublishedBundleCatalogue.ReadWithRegistryIdentity(publishedRoot, version, registryIdentity, logger);
             var measured = ModuleLinkObservation.Measure(observation.Artifacts, required, logger);
             return ReleaseAvailability.IsUpdatable(observation.Target, required, measured, policy);
-        });
+        }));
     }
 
     /// <summary>
