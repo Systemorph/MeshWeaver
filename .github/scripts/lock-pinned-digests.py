@@ -1871,7 +1871,7 @@ def running_repositories_of(axis2: list[OverlayScan],
     # 2026-10-10). The first cut of the record join took EVERY in-registry repository the record's
     # text mentions — and a record also pins its side images, `operator.image` above all
     # (`hosting-operator:<sha>`, built from its OWN commit, never the portal's). For an installation
-    # whose portal lives in a fleet-unlockable registry (`pearl` → cr.meshweaver.cloud, and the
+    # whose portal lives in a fleet-unlockable registry (`client-b` → cr.meshweaver.cloud, and the
     # client estate's control/test pair) that put `hosting-operator` into its running set, and the
     # HALF COVERED blocker below then fired on all three — the first push run carrying the join
     # (38013647613) was red on exactly those three and nothing else, so the purge's reEnableWhen
@@ -5306,7 +5306,7 @@ whisper:
 
     # ── ARM 20c: from the RECORD only its PORTAL repository joins the running set ───────────────
     # MeshWeaver#3438 / Memex#219, measured 2026-10-10 on push run 38013647613 — the first one
-    # carrying the record join: red on `pearl` and the client estate's control/test pair, each
+    # carrying the record join: red on `client-b` and the client estate's control/test pair, each
     # "pins 1 repository(ies) in the registry this run locks (hosting-operator) AND images in
     # <their registry> … Half its running set would be protected". The join had taken every
     # in-registry image the record's TEXT mentions, and a record pins its operator here even when
