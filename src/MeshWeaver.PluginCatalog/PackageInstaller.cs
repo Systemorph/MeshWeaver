@@ -58,6 +58,36 @@ public static class PackageInstaller
     internal static string TargetPartitionOf(string recordId, PackageManifest manifest) =>
         string.IsNullOrWhiteSpace(manifest.TargetPartition) ? recordId : manifest.TargetPartition!;
 
+    /// <summary>
+    /// 🚨 The version of the rule that decides, node by node, whether an install writes
+    /// (<see cref="IsUnchanged"/>). A full install stamps it on the record
+    /// (<see cref="PackageManifest.ComparisonEpoch"/>); a record carrying an older value is not a
+    /// diff baseline, so the next install of that package is a full one
+    /// (<see cref="RecordPredatesTheComparisonRule"/>).
+    ///
+    /// <para><b>Raise it whenever the rule starts to see a difference it used to miss</b> — the
+    /// change that made a write necessary where an earlier install skipped it. Every record stamped
+    /// before then claims, through its file hashes, content that rule never compared, and nothing but
+    /// a full install can make that claim true again. Narrowing the rule (seeing LESS) needs no bump.</para>
+    ///
+    /// <list type="bullet">
+    ///   <item><b>1</b> — a NodeType node is compared on its whole authored surface, not on
+    ///     <c>Configuration</c>, <c>Sources</c> and <c>InstanceLocations</c> alone
+    ///     (MeshWeaver#6479, MeshWeaver.Plugins#2786).</item>
+    /// </list>
+    /// </summary>
+    public const int InstallComparisonEpoch = 1;
+
+    /// <summary>
+    /// True when <paramref name="record"/> was stamped under an older comparison rule than this
+    /// installer applies, so its file hashes are no evidence of what the mesh stores and neither
+    /// the up-to-date exit nor the incremental diff may trust them.
+    /// </summary>
+    /// <param name="record">The install record as stored.</param>
+    /// <returns>True when the next install must compare every node in full.</returns>
+    public static bool RecordPredatesTheComparisonRule(PackageManifest record) =>
+        (record.ComparisonEpoch ?? 0) < InstallComparisonEpoch;
+
     /// <summary>Bounded concurrency for the per-node upsert fan-out (mirrors <c>NodeCopyHelper</c>).</summary>
     public const int DefaultBatchSize = 8;
 
@@ -2984,11 +3014,16 @@ public static class PackageInstaller
     /// see <see cref="MergeUnreadableFiles"/>.</param>
     /// <param name="unreadableFiles">Those of <paramref name="examinedFiles"/> that did not become
     /// a node (MeshWeaver#3659).</param>
+    /// <param name="comparedEveryNode">True when this install compared EVERY declared node with the
+    /// stored one (a full install) and may stamp <see cref="InstallComparisonEpoch"/>; false for an
+    /// incremental update, which compared only what it fetched and carries the previous value
+    /// forward (MeshWeaver.Plugins#2786).</param>
     private static IObservable<MeshNode> WriteInstalledRecord(
         IMessageHub hub, PackageManifest manifest, string installedFromRef, int count,
         ModuleManifest? moduleManifest = null, string? authorizingUserId = null,
         IReadOnlyCollection<string>? examinedFiles = null,
-        IReadOnlyCollection<string>? unreadableFiles = null)
+        IReadOnlyCollection<string>? unreadableFiles = null,
+        bool comparedEveryNode = true)
     {
         var recordPath = $"{InstalledPartition}/{manifest.Id}";
         var serializerOptions = hub.JsonSerializerOptions;
@@ -3023,6 +3058,13 @@ public static class PackageInstaller
                     // not import. Without it the portal cannot name the version a module shipped at.
                     ReleasedVersion = moduleManifest?.Version ?? manifest.ReleasedVersion,
                     InstalledFiles = moduleManifest?.Files ?? manifest.InstalledFiles,
+                    // 🚨 The rule the file hashes above were decided under (MeshWeaver.Plugins#2786).
+                    // Only an install that compared every node may claim the current one; an
+                    // incremental update keeps what the record had, so a record that predates the
+                    // rule stays untrusted until a full install has compared everything.
+                    ComparisonEpoch = comparedEveryNode
+                        ? InstallComparisonEpoch
+                        : existingRecord?.ComparisonEpoch,
                     // 🚨 The content half of "is this file a node", recorded by the ONE side that
                     // can answer it (MeshWeaver#3659). Merged, never replaced — an incremental
                     // update only examined what it fetched. See MergeUnreadableFiles.
@@ -4461,7 +4503,7 @@ public static class PackageInstaller
                         hub, manifest, manifest.TargetPartition ?? manifest.Id, logger))
                     .SelectMany(_ => WriteInstalledRecord(hub, manifest, installedFromRef,
                         newManifest.Files.Count, newManifest, authorizingUserId,
-                        examined, unreadable))
+                        examined, unreadable, comparedEveryNode: false))
                     .SelectMany(_ => WarmInstalledRoots(hub, manifest, nodes, logger))
                     // A changed BINARY is a changed file like any other: manifest.lock hashes the
                     // `content/**` assets too, so a re-cut video is in `changedFiles` and an
