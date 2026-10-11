@@ -304,7 +304,10 @@ EMPTY on a healthy hub also stays registered on purpose: its caller is still owe
 Three in-process, read-only censuses on images carrying every fix this page names (core
 `e438ab89e7`, image `3.1.10517`). They walk the live hosted-hub tree by field reads and resolve
 nothing from DI. This is the reading #3432 was closed on, and it is the issue's own third outcome
-row: **the population is per-hub cost, not retention.**
+row: **the `sync/` population is per-hub cost, not retention of `sync/` hubs.** No `sync/` hub was
+found outliving or lacking its owner. That moves the lifetime question to the owners and does not
+answer it: whether the node hubs themselves retire once idle is NOT established here (end of this
+section), so this reading does not say the owners are all needed.
 
 | replica | uptime | hubs | `sync/` | node hubs | last-GC heap |
 |---|---:|---:|---:|---:|---:|
@@ -334,8 +337,13 @@ discriminator reads `streams=228 distinctPairs=197 excess=31`, and **every** dup
 
 980 of 1 047 parents hold exactly three or four. A hub that accumulated streams per read, per write
 or per subscriber would stand out of that histogram, and the only parent above twelve is the cache
-hub, whose count is its entry count. **So the number of `sync/` hubs is (live node hubs × 3–4) + cache
-entries, and nothing else.**
+hub, whose count is its entry count. **So the number of `sync/` hubs is bounded per live node hub —
+three or four for 980 of the 1 046 non-cache parents, at most twelve for any — plus the cache
+entries.** The 66 parents outside three-or-four (one with a single child, 65 with five to twelve,
+354 hubs) were NOT attributed stream by stream on this replica; the per-stream attribution was run
+on instance A, where the whole excess over the base set (31 of 228) was the configured, deliberately
+uncached branch. That is the likely reading of the 65 here and it is an inference, not a
+measurement.
 
 🚨 **What decides the heap is therefore how many node hubs are live, and on the first replica of a
 generation that is the boot.** The 1 059 node hubs on `8f2g5` thirty minutes after it started are
