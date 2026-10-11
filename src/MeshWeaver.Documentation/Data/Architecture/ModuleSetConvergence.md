@@ -356,7 +356,7 @@ was GitSync-imported and compiled against the loaded AI 1.20.4. The same floor i
 checked on the import, against the LOADED dependency, and a module that fails it is declined there
 ([Module Sync Per Manifest Hash](../ModuleSyncPerManifestHash) → rule 1b).
 
-🚨 **A third lane moved a record onto an unmet floor: the unattended registry update (#6192).**
+🚨 **A third lane moved a record onto an unmet floor: the installer, updating from the registry (#6192).**
 Measured on the control instance on 2026-10-10/11: Governance auto-updated to a version declaring
 `Essentials@^1.12.0` while the Essentials module that ran was 1.11.26 (Essentials' partition is
 kept by a sync source, so its module lands with the seal, later than the registry serves the
@@ -365,14 +365,18 @@ then stated floors the running dependency did not meet, and this check refused e
 deployment — `[ModuleSet] NOT proposing the landed module set`, logged on every reconcile of every
 replica, 4,204 lines in one night — until the dependency's module landed. Neither dependent ships
 a module of its own, so no module-lane rule could withhold it: the UPDATE has to be held.
-`PackageUpdateReconciler` now reads the candidate's `requires` against the LOADED dependency
-(`PackageDependencyFloorGate`, the same `ILoadedPackageModules` reading the import uses) before it
-applies or offers an update: an unmet one is held — nothing fetched, the installed version and its
-record unchanged, `heldUpdate` naming the requirement, the module that runs and its version — and
-the first reconcile after a satisfying dependency is loaded applies it. Not gated: a fresh install,
-a person's click on Update, and a sync-owned partition (its import applies rule 1b, and the record
-must adopt what the owner landed). Pinned by `PackageDependencyFloorHoldTest`; with the gate
-unwired the held arms never record a hold.
+The install orchestrator (`CatalogLayoutAreas.InstallOrUpdate`, which the boot install, the
+unattended apply and a click on Update all go through) now reads the candidate's `requires` against
+the LOADED dependency (`PackageDependencyFloorGate`, the same `ILoadedPackageModules` reading the
+import uses) before an update over an existing record: an unmet one is held — nothing fetched, the
+installed version and its record unchanged, `heldUpdate` naming the requirement, the module that
+runs and its version — and the first pass after a satisfying dependency is loaded applies it.
+`PackageUpdateReconciler` asks the same question before it raises a reminder, so a held update is
+not offered either. Not gated: a fresh install (nothing to keep, and the installer orders
+dependencies first), a re-install of the recorded content, and a sync-owned partition (its import
+applies rule 1b, and the record must adopt what the owner landed). Which installer lane moved the
+two records was not read from the logs; all of them go through the orchestrator. Pinned by
+`PackageDependencyFloorHoldTest`; with the gate unwired the held arms never record a hold.
 
 **What it does not judge, deliberately.** A requirement whose dependency has no landed module here
 (content-only, image-shipped, not installed) has no landed version to compare. A range it cannot

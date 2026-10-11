@@ -162,6 +162,61 @@ public class PackageDependencyFloorHoldTest(ITestOutputHelper output) : Monolith
         source.Fetches.Should().Be(0);
     }
 
+    /// <summary>
+    /// The ONE install orchestrator holds too — the boot install and the click go through it, not
+    /// through the reconciler — and the same call lands the update once the dependency is loaded.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task InstallOrUpdate_HoldsTheUpdate_ReturnsNothingWritten_ThenLands()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await InstallV1(PackageUpdatePolicy.Auto);
+        loaded.Set(Dependency, DependencyModule, "1.11.26");
+
+        var source = new FloorHoldFixture.CountingSource(FloorHoldFixture.V2Files());
+        var result = await CatalogLayoutAreas
+            .InstallOrUpdate(Mesh, source, "HEAD", V2Requiring(Requirement), Logger)
+            .Timeout(120.Seconds()).Await(ct);
+
+        result.Should().Be(new InstallResult(0, 0));
+        source.Fetches.Should().Be(0);
+        (await FloorHoldFixture.Text(Mesh)).Should().Be(FloorHoldFixture.V1Text);
+        var held = await FloorHoldFixture.AwaitRecord(Mesh, r => r.HeldUpdate is not null, ct);
+        held.ModuleVersion.Should().Be(FloorHoldFixture.V1Hash);
+        held.Requires.Should().BeEmpty();
+        PackageDependencyFloorGate.IsDependencyHold(held.HeldUpdate).Should().BeTrue();
+
+        loaded.Set(Dependency, DependencyModule, "1.12.0");
+        await CatalogLayoutAreas
+            .InstallOrUpdate(Mesh, source, "HEAD", V2Requiring(Requirement), Logger)
+            .Timeout(180.Seconds()).Await(ct);
+        var landed = await FloorHoldFixture.AwaitRecord(Mesh, r => r.ModuleVersion == FloorHoldFixture.V2Hash, ct);
+        landed.HeldUpdate.Should().BeNull();
+        (await FloorHoldFixture.Text(Mesh)).Should().Be(FloorHoldFixture.V2Text);
+    }
+
+    /// <summary>
+    /// A FRESH install is not held: there is no installed version to keep, and the installer orders
+    /// a package's dependencies before it. Holding it would leave a default package uninstalled.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task AFreshInstall_IsNotHeld()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await Mesh.ServiceProvider.GetRequiredService<InstanceAutoRegistrationService>().Completed
+            .FirstAsync().Timeout(180.Seconds()).Await(ct);
+        loaded.Set(Dependency, DependencyModule, "1.11.26");
+
+        var source = new FloorHoldFixture.CountingSource(FloorHoldFixture.V2Files());
+        await CatalogLayoutAreas
+            .InstallOrUpdate(Mesh, source, "HEAD", V2Requiring(Requirement), Logger)
+            .Timeout(180.Seconds()).Await(ct);
+
+        var installed = await FloorHoldFixture.AwaitRecord(Mesh, r => r.ModuleVersion == FloorHoldFixture.V2Hash, ct);
+        installed.HeldUpdate.Should().BeNull();
+        (await FloorHoldFixture.Text(Mesh)).Should().Be(FloorHoldFixture.V2Text);
+    }
+
     /// <summary>The loaded-module reading, set by the test.</summary>
     private sealed class SettableLoadedModules : ILoadedPackageModules
     {

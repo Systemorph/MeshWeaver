@@ -14,14 +14,14 @@ namespace MeshWeaver.PluginCatalog;
 
 /// <summary>
 /// 🚨 <b>A package UPDATE never moves onto a dependency build that does not meet its declared
-/// floor</b> — the registry-update lane's half of MeshWeaver#6067, and the root of MeshWeaver#6192.
+/// floor</b> — the installer's half of MeshWeaver#6067, and the root of MeshWeaver#6192.
 ///
 /// <para><b>What was missing.</b> A package's <see cref="PackageManifest.Requires"/> entry
 /// (<c>Essentials@^1.12.0</c>) was judged in two places: by the GitSync import before it writes a
 /// module's sources (<see cref="ModuleSyncDecision.DeclineUnmetRequirements"/>) and by the module-set
-/// proposal after a landing wave (<see cref="ModuleDependencyFloor"/>). The unattended registry
-/// update (<see cref="PackageUpdateReconciler"/>) judged the candidate by its content hash and its
-/// platform floor only. So an auto-updating package took a version whose floor the dependency this
+/// proposal after a landing wave (<see cref="ModuleDependencyFloor"/>). The installer judged an
+/// update by its content hash and its platform floor only. So a package updated from the registry
+/// took a version whose floor the dependency this
 /// instance RUNS did not meet: its install record then declared the new floor, every module-set
 /// proposal on the deployment was refused for it, and its NodeType sources were compiled against a
 /// dependency build that predates what they call.</para>
@@ -42,10 +42,15 @@ namespace MeshWeaver.PluginCatalog;
 /// process did not load) and a range <see cref="PackageRequirement.Satisfies"/> cannot read are NOT
 /// judged — absent means "not judged", never "met" or "unmet", exactly as on the GitSync lane.</para>
 ///
+/// <para><b>Where it sits.</b> On the one install orchestrator (<c>CatalogLayoutAreas.InstallOrUpdate</c>),
+/// which the boot install, the unattended apply and a click on Update all go through, and in
+/// <see cref="PackageUpdateReconciler"/> before a reminder is raised, so an update this instance
+/// cannot run is not offered either.</para>
+///
 /// <para><b>What it does not cover.</b> A FRESH install (the installer orders dependencies first and
-/// there is no installed version to keep), a click on Update (a person's explicit decision, the
-/// same escape the sync-ownership gate leaves), and a sync-owned partition (its sync source applies
-/// the same rule before it writes).</para>
+/// there is no installed version to keep), a re-install of the content already recorded, and a
+/// sync-owned partition (its sync source applies the same rule before it writes, and the record must
+/// adopt what that owner has landed).</para>
 /// </summary>
 public static class PackageDependencyFloorGate
 {
