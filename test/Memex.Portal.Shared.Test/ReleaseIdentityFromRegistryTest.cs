@@ -190,7 +190,7 @@ public class ReleaseIdentityFromRegistryTest(ITestOutputHelper output) : Monolit
         // No marker, nothing from the registry: the answer every candidate got on this estate.
         var unknown = PublishedBundleCatalogue.Read(root, Release);
         Assert.Null(unknown.Target.FrameworkIdentity);
-        Assert.False(PublishedBundleCatalogue.HasReleaseMarker(root, Release));
+        Assert.False(PublishedBundleCatalogue.HasReleaseMarker(root, Release), "established absent");
 
         // No marker, the registry names the identity: the bundles sealed under it are observed.
         var resolved = PublishedBundleCatalogue.ReadWithRegistryIdentity(root, Release, Identity);
@@ -208,6 +208,14 @@ public class ReleaseIdentityFromRegistryTest(ITestOutputHelper output) : Monolit
         // treated as not given, whoever the caller is.
         foreach (var hostile in new[] { "../" + Identity, "..", "a/b", "_releases", " " })
             Assert.Null(PublishedBundleCatalogue.ReadWithRegistryIdentity(root, Release, hostile).Target.FrameworkIdentity);
+
+        // A marker whose presence cannot be determined is not an absent one: something that is not
+        // a file sits where the marker would be, so the registry does not stand in.
+        Directory.CreateDirectory(Path.Combine(root, SealedPublicationIndex.ReleaseMarkerDirectoryName, "3.1.7"));
+        Assert.Null(PublishedBundleCatalogue.HasReleaseMarker(root, "3.1.7"));
+        Assert.Null(PublishedBundleCatalogue.ReadWithRegistryIdentity(root, "3.1.7", Identity).Target.FrameworkIdentity);
+        Assert.Null(PublishedBundleCatalogue.HasReleaseMarker(null, Release));
+        Directory.Delete(Path.Combine(root, SealedPublicationIndex.ReleaseMarkerDirectoryName), recursive: true);
 
         // The publisher's marker wins over whatever the registry says.
         Seal(root, "published", "plugins", [Package]);
@@ -242,10 +250,8 @@ public class ReleaseIdentityFromRegistryTest(ITestOutputHelper output) : Monolit
         var gate = new ReleaseAvailabilityService(
             Mesh,
             new ConfigurationBuilder()
-                .AddInMemoryCollection(new Dictionary<string, string?>
-                {
-                    [ShippedPrebuiltBundles.PublishedRootConfigKey] = root,
-                })
+                .AddInMemoryCollection(ImmutableDictionary<string, string?>.Empty
+                    .Add(ShippedPrebuiltBundles.PublishedRootConfigKey, root))
                 .Build());
 
         var held = await gate.IsUpdatable(Release).FirstAsync().Timeout(Budget).Await(ct);
@@ -267,7 +273,7 @@ public class ReleaseIdentityFromRegistryTest(ITestOutputHelper output) : Monolit
     {
         var directory = Path.Combine(root, identity, source);
         Directory.CreateDirectory(directory);
-        var names = new List<string>();
+        var names = ImmutableList<string>.Empty;
         foreach (var bundle in bundles)
         {
             var manifest = new BundleReader.Manifest(
@@ -275,17 +281,15 @@ public class ReleaseIdentityFromRegistryTest(ITestOutputHelper output) : Monolit
                 [
                     new BundleReader.AssemblyRef(
                         $"{bundle}/Type", $"{bundle}_Type.dll",
-                        new Dictionary<string, string>(StringComparer.Ordinal)
-                        {
-                            ["MeshWeaver.Layout"] = MeshWeaver.Compiler.CompiledDependencies.RefAsmScheme + "abc",
-                        }),
+                        ImmutableDictionary.Create<string, string>(StringComparer.Ordinal)
+                            .Add("MeshWeaver.Layout", MeshWeaver.Compiler.CompiledDependencies.RefAsmScheme + "abc")),
                 ]);
             using (var file = File.Create(Path.Combine(directory, bundle + ".zip")))
             using (var zip = new ZipArchive(file, ZipArchiveMode.Create))
             using (var stream = zip.CreateEntry(NuGetPackageWriter.ManifestEntry).Open())
                 stream.Write(JsonSerializer.SerializeToUtf8Bytes(
                     manifest, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
-            names.Add(bundle + ".zip");
+            names = names.Add(bundle + ".zip");
         }
         File.WriteAllText(
             Path.Combine(directory, ShippedPrebuiltBundles.CompletionSentinelFileName),

@@ -168,7 +168,22 @@ The gate therefore asks the registry when, and only when, the marker file is abs
 | no marker, the registry names an identity nothing on the root is published under | identity known, no bundle sealed — the completeness hold, by package |
 | no marker and no mount declares an artifact host, the record is absent or malformed, or the read fails | *identity not resolvable* — the hold, as before |
 
-The last-but-one row is the remaining limit of a registry-fed root: `bundle-fetch` materialises
+"The marker file exists" means its presence was established. A marker whose presence cannot be
+determined (access denied, an I/O fault) is neither read as absent nor overridden: the registry is
+not asked and the read reports what it found.
+
+🚨 **The second row is weaker than a marked release, and is not equivalent to one.** The registry
+record binds `version → identity` and nothing more. The bundles the gate then counts are the
+snapshot `bundle-fetch` pulled when THIS pod started, while `plugins/<source>:<identity>` is a tag
+that moves whenever that source publishes again under the same identity. The pod that starts on the
+new image pulls the tag as it stands then. A package that left a source's publication after this
+pod started is therefore still counted here, and the new pod compiles it at boot instead of
+adopting it. The gate on such a root answers "the identity is known and this pod's snapshot is
+complete for it", not "the publication the next pod will pull is complete". Closing that needs the
+release bound to an immutable publication digest per source, which the release record does not
+carry.
+
+The third row is the other limit of a registry-fed root: `bundle-fetch` materialises
 one identity, the running image's. A release that moves the compatibility key
 (`c<major>e<epoch>`) is not shown adoptable from that root, because its bundles are not there
 until the pod restarts on the new image. The enumeration of candidates

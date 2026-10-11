@@ -460,9 +460,10 @@ public class ReleaseAvailabilityService(
         // release-identity-from-registry): the registry's own record is asked then, and only then.
         // The publisher's marker, where there is one, is read without a network call.
         return pool.InvokeBlocking(_ => PublishedBundleCatalogue.HasReleaseMarker(publishedRoot, version))
-            .SelectMany(marked => marked
-                ? Observable.Return<string?>(null)
-                : registryIdentities.Resolve(version).Select(record => record?.Identity))
+            // false = established absent. Present, or undetermined, never asks the registry.
+            .SelectMany(marked => marked == false
+                ? registryIdentities.Resolve(version).Select(record => record?.Identity)
+                : Observable.Return<string?>(null))
             .SelectMany(registryIdentity => pool.InvokeBlocking(_ =>
         {
             var observation = PublishedBundleCatalogue.ReadWithRegistryIdentity(publishedRoot, version, registryIdentity, logger);

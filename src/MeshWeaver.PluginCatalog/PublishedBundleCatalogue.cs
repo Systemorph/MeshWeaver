@@ -145,7 +145,11 @@ public static class PublishedBundleCatalogue
                     + "single path segment — ignored", targetVersion);
                 registryIdentity = null;
             }
-            var fromRegistry = !File.Exists(markerPath) && !string.IsNullOrEmpty(registryIdentity);
+            // Only an ESTABLISHED absence admits the registry's answer (HasReleaseMarker): a marker
+            // whose presence could not be determined falls through to the read below, which reports
+            // what it found, and is never overridden.
+            var fromRegistry = !string.IsNullOrEmpty(registryIdentity)
+                               && HasReleaseMarker(publishedRoot, targetVersion) == false;
             if (fromRegistry)
                 logger?.LogInformation(
                     "ReleaseAvailability: release {Version} has no marker under {Root}/{Markers}; its "
@@ -199,23 +203,40 @@ public static class PublishedBundleCatalogue
         }
     }
 
-    /// <summary>Whether the publisher's marker for <paramref name="targetVersion"/> is on this root —
-    /// the question that decides whether the registry is asked at all. False, never a throw, when
-    /// the root cannot be read: the caller then asks the registry, and <see cref="ReadWithRegistryIdentity"/>
-    /// reports the unreadable root by name.</summary>
+    /// <summary>
+    /// Whether the publisher's marker for <paramref name="targetVersion"/> is on this root — the
+    /// question that decides whether the registry may stand in for it. Three answers, because
+    /// "absent" and "could not tell" decide opposite things: <c>true</c> present, <c>false</c>
+    /// established ABSENT (the file or its directory does not exist), <c>null</c> undetermined
+    /// (access denied, an I/O fault, no root or version). Only an established absence admits the
+    /// registry's answer; an undetermined marker is never treated as a missing one, so a marker
+    /// that could not be read is never overridden.
+    /// </summary>
     /// <param name="publishedRoot">The published bundle root.</param>
     /// <param name="targetVersion">The platform version being rolled to.</param>
-    public static bool HasReleaseMarker(string? publishedRoot, string? targetVersion)
+    public static bool? HasReleaseMarker(string? publishedRoot, string? targetVersion)
     {
         if (string.IsNullOrWhiteSpace(publishedRoot) || string.IsNullOrWhiteSpace(targetVersion))
-            return false;
+            return null;
         try
         {
-            return File.Exists(Path.Combine(publishedRoot, ReleaseMarkerDirectoryName, targetVersion));
+            // GetAttributes, not File.Exists: Exists answers false for access-denied and for most
+            // I/O failures, which would report an unreadable marker as an absent one.
+            var attributes = File.GetAttributes(
+                Path.Combine(publishedRoot, ReleaseMarkerDirectoryName, targetVersion));
+            return (attributes & FileAttributes.Directory) == 0 ? true : null;
+        }
+        catch (FileNotFoundException)
+        {
+            return false;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return false;
         }
         catch (Exception)
         {
-            return false;
+            return null;
         }
     }
 
