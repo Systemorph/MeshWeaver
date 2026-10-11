@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.Linq;
+using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
@@ -41,8 +42,17 @@ namespace MeshWeaver.Graph.Test;
 /// run whole, in one process) the delete's leaf reached the gate behind three of twelve accepted holders, waited
 /// 1.8 s, and the test failed its own discriminator although the watchdog was never involved. The load is
 /// therefore read where the order is decided (<see cref="IoPoolAdmission.BehindCap"/>), it is kept at depth
-/// until the delete's leaf has asked for its slot - however long the stages before the commit took - and the
-/// wait the test compares with the budget is the leaf's own, measured by the store it queued in.</para>
+/// until the delete's leaf asks for its slot - however long the stages before the commit took - and the wait
+/// the test compares with the budget is the leaf's own, measured by the store it queued in.</para>
+///
+/// <para><b>The queue ahead of the leaf is PINNED, not hoped for.</b> A replacement holder takes the same
+/// ThreadPool hop as any other leaf, so "kept at depth" is itself only an accepted count. The instant the leaf
+/// asks - before the pool has heard of it - the test reads how many holders are at the gate (all of them ahead
+/// of the leaf, by construction) and stops the lane draining: a holder granted the slot keeps it. The lane is
+/// released once nothing accepted is still before the gate, which is the leaf having reached the gate behind
+/// exactly the holders that were counted. From there the lane moves at one grant per <see cref="HoldEach"/>,
+/// which is the stretch the credit is about. The pause is one ThreadPool hop long and costs the watchdog
+/// nothing it is not supposed to pay: a lane that stands still with work earns no credit.</para>
 /// </summary>
 public class DeleteCommitQueuedBehindAMovingLaneTest(ITestOutputHelper output)
     : MonolithMeshTestBase(output)
@@ -52,14 +62,24 @@ public class DeleteCommitQueuedBehindAMovingLaneTest(ITestOutputHelper output)
     /// <summary>A pg: name, so the pool gets the same cap 1 as the real Postgres write pool.</summary>
     private const string LaneName = "pg:1198-moving-lane";
 
-    private const int Holders = 12;
+    private const int Holders = 16;
 
     /// <summary>
-    /// How many holders must be AT THE GATE, behind the cap, before the delete may start: 9 x 600 ms = 5.4 s of
-    /// queue ahead of the leaf against the 4 s budget. Fewer than <see cref="Holders"/> on purpose - around each
-    /// grant one holder is between the gate and running, and its replacement has not reached the gate yet.
+    /// How many holders must be AT THE GATE, behind the cap, both before the delete may start and at the instant
+    /// its leaf asks for a slot: 9 x 600 ms = 5.4 s of queue ahead of the leaf against the 4 s budget. Well under
+    /// <see cref="Holders"/> on purpose - around each grant one holder is between the gate and running, and a
+    /// replacement needs a ThreadPool thread before it has a place in the queue.
     /// </summary>
     private const int QueuedAhead = 9;
+
+    /// <summary>1 once the delete's leaf has asked for its slot: a holder that is granted the lane keeps it.</summary>
+    private int pinned;
+
+    /// <summary>1 once the watch for the leaf reaching the gate has been started.</summary>
+    private int watching;
+
+    /// <summary>Completed when the leaf has reached the gate; pinned holders let go on it.</summary>
+    private readonly AsyncSubject<Unit> released = new();
 
     private static readonly TimeSpan Budget = TimeSpan.FromSeconds(4);
 
@@ -96,7 +116,30 @@ public class DeleteCommitQueuedBehindAMovingLaneTest(ITestOutputHelper output)
         // as deep as the one the precondition read, whatever the stages before the commit cost.
         using var holders = new CompositeDisposable();
         for (var i = 0; i < Holders; i++)
-            Hold(lane, holders, replaceWhile: () => storage.LaneAsked == 0);
+            Hold(lane, holders, replaceWhile: () => storage.LaneAsked == 0,
+                afterHold: () => Volatile.Read(ref pinned) == 1 ? released.Select(_ => 0) : Observable.Return(0));
+
+        // PIN the queue ahead of the leaf. Asking: the pool has not heard of the leaf, so every holder at the
+        // gate is ahead of it - count them and stop the lane draining. Accepted: the leaf is counted by the
+        // pool, so "nothing accepted is still before the gate" now means the leaf is AT the gate, behind them.
+        var aheadAtAsk = -1;
+        storage.OnLaneAsking = () =>
+        {
+            if (Interlocked.Exchange(ref pinned, 1) == 0)
+                Volatile.Write(ref aheadAtAsk, BehindCap(registry, LaneName));
+        };
+        storage.OnLaneAccepted = () =>
+        {
+            if (Interlocked.Exchange(ref watching, 1) == 0)
+                holders.Add(Observable.Interval(TimeSpan.FromMilliseconds(50))
+                    .Where(_ => BeforeGate(registry, LaneName) == 0)
+                    .Take(1)
+                    .Subscribe(_ =>
+                    {
+                        released.OnNext(Unit.Default);
+                        released.OnCompleted();
+                    }));
+        };
 
         SpinWait.SpinUntil(() => BehindCap(registry, LaneName) >= QueuedAhead, TestTimeouts.Convergence);
         var loaded = registry.Snapshot().First(reading => reading.Name == LaneName);
@@ -110,9 +153,13 @@ public class DeleteCommitQueuedBehindAMovingLaneTest(ITestOutputHelper output)
             "a leaf queued behind a lane that keeps serving other writers is waiting its turn, not stuck",
             cancellationToken: TestContext.Current.CancellationToken);
         var waited = storage.LongestLaneWait;
-        Output.WriteLine($"The leaf waited {waited.TotalSeconds:0.0}s for its slot");
+        Output.WriteLine($"The leaf waited {waited.TotalSeconds:0.0}s for its slot, behind "
+                         + $"{Volatile.Read(ref aheadAtAsk)} holder(s) that were at the gate when it asked");
 
         deleted.Should().BeTrue();
+        Volatile.Read(ref aheadAtAsk).Should().BeGreaterThanOrEqualTo(QueuedAhead,
+            "the queue AHEAD of the leaf is what makes it wait - counted at the gate the instant the leaf asked, "
+            + "and pinned there until the leaf had joined it");
         waited.Should().BeGreaterThan(Budget,
             "the test only discriminates if the leaf really was queued for longer than the stage budget - "
             + $"it waited {waited.TotalSeconds:0.0}s for its slot against {Budget.TotalSeconds:0}s");
@@ -123,14 +170,17 @@ public class DeleteCommitQueuedBehindAMovingLaneTest(ITestOutputHelper output)
 
     /// <summary>
     /// One unrelated writer on <paramref name="lane"/>: it holds the slot for <see cref="HoldEach"/> once granted,
-    /// and is replaced by another when it finishes for as long as <paramref name="replaceWhile"/> holds.
+    /// then for as long as <paramref name="afterHold"/> takes to answer (not at all when it is null), and is
+    /// replaced by another when it finishes for as long as <paramref name="replaceWhile"/> holds.
     /// </summary>
-    private static void Hold(IIoPool lane, CompositeDisposable holders, Func<bool> replaceWhile)
+    private static void Hold(
+        IIoPool lane, CompositeDisposable holders, Func<bool> replaceWhile, Func<IObservable<int>>? afterHold = null)
     {
         var holder = new SingleAssignmentDisposable();
         holders.Add(holder);
         holder.Disposable = lane
-            .InvokeObservable(ct => Observable.Timer(HoldEach).Select(tick => 0))
+            .InvokeObservable(ct => Observable.Timer(HoldEach)
+                .SelectMany(tick => afterHold?.Invoke() ?? Observable.Return(0)))
             .Subscribe(
                 _ => { },
                 _ => holders.Remove(holder),
@@ -138,9 +188,16 @@ public class DeleteCommitQueuedBehindAMovingLaneTest(ITestOutputHelper output)
                 {
                     holders.Remove(holder);
                     if (replaceWhile())
-                        Hold(lane, holders, replaceWhile);
+                        Hold(lane, holders, replaceWhile, afterHold);
                 });
     }
+
+    /// <summary>
+    /// How many leaves the pool <paramref name="name"/> has accepted that have not reached its gate yet. Zero
+    /// when the pool is unknown would read as "all at the gate", so an unread pool counts as one.
+    /// </summary>
+    private static int BeforeGate(IoPoolRegistry registry, string name)
+        => registry.Snapshot().FirstOrDefault(reading => reading.Name == name).Admission?.BeforeGate ?? 1;
 
     /// <summary>
     /// How many leaves of the pool <paramref name="name"/> are at its gate with no permit - the part of its queue

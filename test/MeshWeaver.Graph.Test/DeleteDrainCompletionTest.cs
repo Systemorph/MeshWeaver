@@ -116,7 +116,7 @@ internal sealed class LatentDeleteStorageAdapter(InMemoryStorageAdapter inner) :
 
         var askedAt = Stopwatch.GetTimestamp();
         Interlocked.Increment(ref _laneAsked);
-        return lane.InvokeObservable(ct =>
+        var admitted = lane.InvokeObservable(ct =>
         {
             var grantedAt = Stopwatch.GetTimestamp();
             Interlocked.CompareExchange(ref _laneAdmittedAt, grantedAt, 0);
@@ -130,7 +130,29 @@ internal sealed class LatentDeleteStorageAdapter(InMemoryStorageAdapter inner) :
                    && Interlocked.CompareExchange(ref _longestLaneWaitTicks, waited, seen) != seen);
             return served;
         });
+        return Observable.Create<T>(observer =>
+        {
+            // Before the pool has heard of this leaf: whatever is at the gate now is AHEAD of it.
+            OnLaneAsking?.Invoke();
+            var subscription = admitted.Subscribe(observer);
+            // The pool has accepted the leaf (it counts as waiting), and it may not have reached the gate yet.
+            OnLaneAccepted?.Invoke();
+            return subscription;
+        });
     }
+
+    /// <summary>
+    /// Runs on the asking thread immediately BEFORE a delete under <see cref="LatencyRoot"/> is handed to
+    /// <see cref="DeleteLane"/>. The leaf is not in the pool yet, so a reading of the gate taken here counts
+    /// only work the leaf is certain to be behind.
+    /// </summary>
+    public Action? OnLaneAsking { get; set; }
+
+    /// <summary>
+    /// Runs on the asking thread immediately AFTER <see cref="DeleteLane"/> accepted a delete under
+    /// <see cref="LatencyRoot"/>: from here the pool counts the leaf as waiting, before the gate or at it.
+    /// </summary>
+    public Action? OnLaneAccepted { get; set; }
 
     private bool UnderLatencyRoot(string path)
         => LatencyRoot is { Length: > 0 } root
