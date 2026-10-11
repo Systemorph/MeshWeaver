@@ -129,9 +129,10 @@ public sealed class ImageClosureIngest(IMessageHub hub, ILogger<ImageClosureInge
             refusal = "not a WebhookEvent";
         else if (string.IsNullOrWhiteSpace(secret))
             refusal = "this instance holds no secret for the target";
-        else if (!WebhookInbox.VerifyHmacSha256(
-                     delivery.Headers.TryGetValue(WebhookInbox.SignatureHeader, out var sig) ? sig : null,
-                     delivery.Body, secret))
+        // 🚨 `Header(…)`, never `Headers.TryGetValue`: the stored dictionary is case-sensitive and the
+        // wire delivers the name lowercased (HTTP/2), so a canonical-case lookup misses the header
+        // the endpoint verified — every production delivery was refused here on exactly that.
+        else if (!WebhookInbox.VerifyHmacSha256(delivery.Header(WebhookInbox.SignatureHeader), delivery.Body, secret))
             refusal = "the signature does not verify over the stored body";
         else
         {
