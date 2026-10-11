@@ -415,6 +415,83 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         SpaceDeletion.TeardownCommand(large with { StoreExists = null }).Should().Contain("swept below the pipeline");
     }
 
+    /// <summary>
+    /// 🚨 A PLAN TARGET IS TESTED BY RUNNING ITS QUERY (#6040). The GitSync removal is issued for every
+    /// row <see cref="SpaceDeletion.IsGitSync"/> names — typed, or at or beneath a <c>_GitSync</c>
+    /// segment — and the plan used to bind THAT count beside a query selecting the typed rows alone.
+    /// Each target's count is now the number of rows its own predicate selects.
+    /// </summary>
+    [Fact]
+    public void AGitSyncTarget_CountsTheRowsItsOwnQuerySelects()
+    {
+        static MeshNode Row(string path, string? nodeType = null) => MeshNode.FromPath(path) with { Name = path, NodeType = nodeType };
+        var rows = new[]
+        {
+            Row("S/_GitSync", SpaceDeletion.GitSyncNodeType),        // typed and named: the usual shape
+            Row("S/_GitSync/state"), Row("S/_GitSync/state/x"),      // beneath it: neither typed nor named
+            Row("S/Sub/_GitSync", "Markdown"),                       // named, otherwise typed
+            Row("S/Elsewhere/Sync", SpaceDeletion.GitSyncNodeType),  // typed, not named
+            Row("S/Page", "Markdown"),
+        };
+        var inventory = SpaceDeletion.Fold("S", null, rows, recordExists: true, storeExists: true, [], []);
+
+        inventory.GitSync.Should().HaveCount(5, "the removal is still issued for every row the predicate names");
+        inventory.GitSyncRows.Should().Be(5);
+        var targets = SpaceDeletion.PlanSteps(inventory).Steps.Single(s => s.Name == "Remove GitSync configuration").Targets;
+        targets.Should().HaveCount(2);
+        foreach (var planTarget in targets)
+        {
+            Func<MeshNode, bool> selects = planTarget.Query == SpaceDeletion.GitSyncQuery("S")
+                ? SpaceDeletion.IsGitSyncTyped
+                : planTarget.Query == SpaceDeletion.GitSyncNamedQuery("S")
+                    ? SpaceDeletion.IsGitSyncNamed
+                    : throw new InvalidOperationException($"unexpected GitSync target query '{planTarget.Query}'");
+            planTarget.Count.Should().Be(rows.Count(selects), $"'{planTarget.Query}' must count exactly what it selects");
+        }
+
+        // The ordinary space — one typed `_GitSync`, rows beneath it — keeps ONE target, and its count
+        // is the one row the typed query selects, never the three rows the removal covers.
+        var ordinary = SpaceDeletion.Fold("S", null, rows.Take(3), recordExists: true, storeExists: true, [], []);
+        var only = SpaceDeletion.GitSyncTargets(ordinary).Should().ContainSingle().Subject;
+        only.Query.Should().Be(SpaceDeletion.GitSyncQuery("S"));
+        only.Count.Should().Be(1);
+        ordinary.GitSyncRows.Should().Be(3);
+    }
+
+    /// <summary>
+    /// The reader's own test, run against a real mesh: every GitSync target's query, executed as
+    /// system, returns exactly the count the plan binds — for a space holding an untyped
+    /// <c>_GitSync</c> with a row beneath it and a second one deeper down (#6040).
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task EveryGitSyncTargetQuery_ReturnsTheCountThePlanBinds()
+    {
+        const string space = "Sync6040";
+        var instance = target!;
+        // Seeded with a split (namespace, id), as a real `_GitSync` node is: the query's `id:` filter
+        // reads the node id, and SeedPage's single-argument MeshNode keeps the whole path as its id.
+        foreach (var path in new[] { $"{space}/_GitSync", $"{space}/_GitSync/state", $"{space}/Sub/_GitSync", $"{space}/Page" })
+            await instance.Seed(MeshNode.FromPath(path) with
+            {
+                Name = path, NodeType = "Markdown", Content = new MarkdownContent { Content = "# page" },
+            });
+
+        // The inventory lists through the index, which trails the creates: wait for the reading that
+        // holds both `_GitSync` rows and the row beneath the first.
+        var inventory = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .Select(_ => SpaceDeletion.Inventory(instance.Hub, space)).Concat()
+            .Where(i => i.GitSync.Count == 3)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
+
+        var targets = SpaceDeletion.GitSyncTargets(inventory);
+        var named = targets.Should().ContainSingle("no row is typed as a GitSync configuration, so only the named target is offered").Subject;
+        named.Count.Should().Be(2);
+        (await instance.Count(named.Query)).Should().Be(2,
+            $"running '{named.Query}' is how a reader tests the bound count");
+        (await instance.Count(SpaceDeletion.GitSyncQuery(space))).Should().Be(0,
+            "the typed query selects none of these rows, which is why the predicate's count beside it could not be tested");
+    }
+
     [Fact]
     public void TwoExecutorsClaimingOneOperation_AreRefusedAtConstruction()
     {
@@ -613,11 +690,21 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
             await SeedPage($"{space}/Page");
         }
 
+        public Task Seed(MeshNode node) => AsSystem(Mesh, () => MeshQuery.CreateOrUpdateNode(node));
+
         public Task SeedPage(string path) =>
             AsSystem(Mesh, () => MeshQuery.CreateOrUpdateNode(new MeshNode(path)
             {
                 Name = path, NodeType = "Markdown", Content = new MarkdownContent { Content = "# page" },
             }));
+
+        /// <summary>How many rows a query selects, read as system and asserted to be an answer.</summary>
+        public async Task<int> Count(string query)
+        {
+            var reading = await AsSystem(Mesh, () => MeshReading.Read(MeshQuery, query));
+            reading.IsAnswer.Should().BeTrue(reading.WhyNotAnAnswer ?? "");
+            return reading.Rows.Count;
+        }
 
         public async Task<bool> Exists(string path)
         {

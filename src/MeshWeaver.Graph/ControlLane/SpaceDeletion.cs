@@ -40,8 +40,20 @@ public sealed record SpaceDeletionInventory
     /// <summary>The access grants anywhere in the space.</summary>
     public ImmutableList<string> Grants { get; init; } = [];
 
-    /// <summary>The GitSync configuration nodes anywhere in the space.</summary>
+    /// <summary>
+    /// Every row the GitSync removal is about: typed as a GitSync configuration, or at or beneath a
+    /// <c>_GitSync</c> segment (<see cref="SpaceDeletion.IsGitSync"/>). The per-node removal is issued
+    /// for these. It is NOT what a plan target counts: no single query selects this set, so the plan
+    /// pairs each query with the rows that query selects (<see cref="GitSyncTyped"/>,
+    /// <see cref="GitSyncNamed"/>).
+    /// </summary>
     public ImmutableList<string> GitSync { get; init; } = [];
+
+    /// <summary>The rows TYPED as a GitSync configuration — exactly what <see cref="SpaceDeletion.GitSyncQuery"/> selects.</summary>
+    public ImmutableList<string> GitSyncTyped { get; init; } = [];
+
+    /// <summary>The rows whose own id is <c>_GitSync</c>, whatever their type — exactly what <see cref="SpaceDeletion.GitSyncNamedQuery"/> selects.</summary>
+    public ImmutableList<string> GitSyncNamed { get; init; } = [];
 
     /// <summary>
     /// How many rows the per-node GitSync removal covers — every row at or under a GitSync path. It is
@@ -206,8 +218,20 @@ public static class SpaceDeletion
 
     /// <summary>Whether a row is a GitSync configuration node (<c>…/_GitSync</c> or below, or typed as one). Pure.</summary>
     public static bool IsGitSync(MeshNode row) =>
-        string.Equals(row.NodeType, GitSyncNodeType, StringComparison.Ordinal)
+        IsGitSyncTyped(row)
         || row.Path.Split('/').Contains(AccessAssignmentGuard.SyncConfigId, StringComparer.Ordinal);
+
+    /// <summary>Whether a row is TYPED as a GitSync configuration — the predicate of <see cref="GitSyncQuery"/>. Pure.</summary>
+    public static bool IsGitSyncTyped(MeshNode row) =>
+        string.Equals(row.NodeType, GitSyncNodeType, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Whether a row's own id is <c>_GitSync</c> — the predicate of <see cref="GitSyncNamedQuery"/>.
+    /// It reads <see cref="MeshNode.Id"/>, as the query's <c>id:</c> filter does, and never the last
+    /// path segment: an id may itself contain a slash, and the query does not select such a row. Pure.
+    /// </summary>
+    public static bool IsGitSyncNamed(MeshNode row) =>
+        string.Equals(row.Id, AccessAssignmentGuard.SyncConfigId, StringComparison.Ordinal);
 
     /// <summary>The inventory folded from its readings. Pure.</summary>
     public static SpaceDeletionInventory Fold(
@@ -229,6 +253,8 @@ public static class SpaceDeletion
             .Where(r => string.Equals(r.NodeType, AccessAssignmentGuard.AccessAssignmentNodeType, StringComparison.Ordinal))
             .Select(r => r.Path).OrderBy(p => p, StringComparer.Ordinal).ToImmutableList();
         var gitSync = distinct.Where(IsGitSync).Select(r => r.Path).OrderBy(p => p, StringComparer.Ordinal).ToImmutableList();
+        var gitSyncTyped = distinct.Where(IsGitSyncTyped).Select(r => r.Path).OrderBy(p => p, StringComparer.Ordinal).ToImmutableList();
+        var gitSyncNamed = distinct.Where(IsGitSyncNamed).Select(r => r.Path).OrderBy(p => p, StringComparer.Ordinal).ToImmutableList();
         var gitSyncRoots = MinimalRoots(gitSync);
         var gitSyncRows = distinct.Count(r => gitSyncRoots.Any(g =>
             string.Equals(r.Path, g, StringComparison.Ordinal) || r.Path.StartsWith(g + "/", StringComparison.Ordinal)));
@@ -253,6 +279,8 @@ public static class SpaceDeletion
             Tables = tables,
             Grants = grants,
             GitSync = gitSync,
+            GitSyncTyped = gitSyncTyped,
+            GitSyncNamed = gitSyncNamed,
             GitSyncRows = gitSyncRows,
             NodeTypes = nodeTypes,
             ContentRoots = MinimalRoots(content),
@@ -351,7 +379,7 @@ public static class SpaceDeletion
                     + "first, so no sync source re-imports while the space is torn down; the ONE per-node leg, "
                     + $"{inventory.GitSyncRows.ToString(CultureInfo.InvariantCulture)} row(s) ≤ bound {PerNodeDeleteBound.ToString(CultureInfo.InvariantCulture)}",
                 Destructive = true,
-                Targets = [Target(TargetGitSync, GitSyncQuery(space), inventory.GitSync.Count)],
+                Targets = GitSyncTargets(inventory),
             });
         var teardownTargets = ImmutableList.CreateBuilder<ControlLanePlanTarget>();
         if (inventory.Grants.Count > 0)
@@ -405,11 +433,38 @@ public static class SpaceDeletion
     /// <summary>Target label key: the space's GitSync configuration.</summary>
     public const string TargetGitSync = "gitsync";
 
+    /// <summary>Target label key: the rows named <c>_GitSync</c> that are not all typed as a GitSync configuration.</summary>
+    public const string TargetGitSyncNamed = "gitsync-named";
+
     /// <summary>Target label key: the content roots (kept for stored plans that name them).</summary>
     public const string TargetContentRoots = "content-roots";
 
     /// <summary>Target label key: everything beneath them — uncounted, the rows are in the notes.</summary>
     public const string TargetSubtree = "subtree";
+
+    /// <summary>
+    /// The targets of the GitSync removal. 🚨 Each count is the number of rows ITS OWN query selects —
+    /// a reader tests a target by running the query and comparing — so the set the removal is issued
+    /// for (<see cref="IsGitSync"/>: typed, or at or beneath a <c>_GitSync</c> segment) is never bound
+    /// as one number beside a query that selects only part of it. The typed rows are one target. The
+    /// rows NAMED <c>_GitSync</c> are a second one, offered only when some of them are not typed: a
+    /// typed <c>_GitSync</c> is already in the first target, and the two sets may overlap, which is
+    /// stated here rather than hidden behind a negation. Rows merely BENEATH a <c>_GitSync</c> node
+    /// leave with its recursive delete and are the row count in the step's command. Pure.
+    /// </summary>
+    public static ImmutableList<ControlLanePlanTarget> GitSyncTargets(SpaceDeletionInventory inventory)
+    {
+        var targets = ImmutableList.CreateBuilder<ControlLanePlanTarget>();
+        if (inventory.GitSyncTyped.Count > 0)
+            targets.Add(Target(TargetGitSync, GitSyncQuery(inventory.Space), inventory.GitSyncTyped.Count));
+        if (inventory.GitSyncNamed.Except(inventory.GitSyncTyped, StringComparer.Ordinal).Any())
+            targets.Add(Target(TargetGitSyncNamed, GitSyncNamedQuery(inventory.Space), inventory.GitSyncNamed.Count));
+        // Rows beneath a `_GitSync` segment that holds no node of its own: neither query selects
+        // one, and the plan says so with a count of zero rather than carrying no target at all.
+        if (targets.Count == 0)
+            targets.Add(Target(TargetGitSyncNamed, GitSyncNamedQuery(inventory.Space), 0));
+        return targets.ToImmutable();
+    }
 
     private static ControlLanePlanTarget Target(string label, string query, int? count) =>
         new() { Label = label, Query = query, Count = count };
@@ -418,7 +473,8 @@ public static class SpaceDeletion
     /// <see cref="RootQuery"/>, which is the existence LISTING the inventory reads it through. Pure.</summary>
     public static string SpaceTargetQuery(string space) => $"path:{space}";
 
-    /// <summary>The space's direct children — a rootless space's content roots. Pure.</summary>
+    /// <summary>The space's direct children. No plan offers it any more — content goes with the
+    /// store in one teardown — so it survives only for stored plans that name it. Pure.</summary>
     public static string ChildrenQuery(string space) => $"namespace:{space} scope:children";
 
     /// <summary>Everything in the space, root included. Pure.</summary>
@@ -431,8 +487,12 @@ public static class SpaceDeletion
     public static string GrantsQuery(string space) =>
         $"namespace:{space} scope:descendants nodeType:{AccessAssignmentGuard.AccessAssignmentNodeType}";
 
-    /// <summary>Every GitSync configuration node in the space. Pure.</summary>
+    /// <summary>Every node in the space TYPED as a GitSync configuration (<see cref="IsGitSyncTyped"/>). Pure.</summary>
     public static string GitSyncQuery(string space) => $"namespace:{space} scope:descendants nodeType:{GitSyncNodeType}";
+
+    /// <summary>Every node in the space whose own id is <c>_GitSync</c>, whatever its type (<see cref="IsGitSyncNamed"/>). Pure.</summary>
+    public static string GitSyncNamedQuery(string space) =>
+        $"namespace:{space} scope:descendants id:{AccessAssignmentGuard.SyncConfigId}";
 
     /// <summary>
     /// The teardown step's command, as the plan states and the approval binds it: the mechanism, and

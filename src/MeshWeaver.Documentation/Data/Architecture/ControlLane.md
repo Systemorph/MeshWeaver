@@ -136,11 +136,24 @@ length-prefixed and injective, with no namespace, no image and executor `control
 
 🚨 **A plan never contains a listing.** Every set a step acts on is a TARGET
 (`ControlLanePlanTarget`): an anchored, scoped query with its count. Examples are the space's
-NodeTypes, its grants, its GitSync nodes and its content roots. The whole subtree is a query with NO
+NodeTypes, its grants and its GitSync nodes. The whole subtree is a query with NO
 count, because its rows move while a stranded space waits. The outside dependents and a NodeType's
 dependency network are counts in the command. A plan whose steps carry targets digests as
 `action-plan/v2`, which binds each query and count but never a label. A plan without targets stays
 `action-plan/v1`.
+
+🚨 **A target's count is the number of rows ITS OWN query selects.** A reader tests a target by
+running the query and comparing, so a count taken from a wider predicate than the query cannot be
+tested. The GitSync removal is the case that had this wrong: it is issued for every row
+`SpaceDeletion.IsGitSync` names (typed `GitHubSyncConfig`, or at or beneath a `_GitSync` segment),
+and that count sat beside a query selecting the typed rows alone. `SpaceDeletion.GitSyncTargets` now
+offers the typed rows as one target (`nodeType:GitHubSyncConfig`) and, when some row named `_GitSync`
+is not typed, those rows as a second (`id:_GitSync`), each with the count of its own query. The two
+sets may overlap; neither uses a negation. Rows merely beneath a `_GitSync` node leave with its
+recursive delete and are the row count in the step's command, which the pre-flight bounds.
+`ControlLaneTest.AGitSyncTarget_CountsTheRowsItsOwnQuerySelects` pins the pairing, and
+`EveryGitSyncTargetQuery_ReturnsTheCountThePlanBinds` runs the queries against a
+mesh. No plan offers a `content-roots` target any more: content goes with the store.
 
 The control instance parks the action with the reported plan, the approval binds that snapshot's
 digest, and the real run carries it. The control side recomputes the digest over the reported steps
