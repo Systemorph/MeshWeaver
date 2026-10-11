@@ -206,6 +206,15 @@ exclude `-nodeType:Store/Plugin -nodeType:Store/Catalog`; Shared-with-me also ex
 person's space as shared content. **The Store itself is an app** (a config default); only the
 anonymous header keeps a Store link.
 
+**The platform's own partitions are not spaces.** A space is a place people work together. The
+partitions the platform itself runs on carry a `Space` root for plumbing reasons, so they would
+otherwise sit beside the real workspaces: `WellKnownPartitions.Platform` (Admin, Auth, …) and
+`WellKnownPartitions.Fleet` (Doc, Ops, Plugins, Agent, Skill, Provider, Governance, Store, …). The
+home lists neither as a space, and a grant on one of them (every global admin holds some) is not
+listed as shared with the viewer. Each is reached through its app: Documentation, Threads, Settings,
+Administration. The filter is `RefreshSpacePathsLogonAction.IsPlatformOwnedPartition`, applied when
+the viewer's space and shared manifests are written at logon.
+
 ## Sort semantics — why last-accessed is a two-leg union
 
 `source:accessed` is an **INNER join** on the caller's access log: a pure accessed-sorted query

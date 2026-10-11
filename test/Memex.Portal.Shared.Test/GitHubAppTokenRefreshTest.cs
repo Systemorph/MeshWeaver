@@ -16,7 +16,7 @@ namespace Memex.Portal.Shared.Test;
 
 /// <summary>
 /// The installation-token cache of <see cref="GitHubAppTokenService"/> as a LONG-LIVED consumer
-/// sees it: one <see cref="GitHubAppTokenService.GetInstallationToken"/> observable held for the
+/// sees it: one <see cref="GitHubAppTokenService.GetInstallationToken()"/> observable held for the
 /// life of a feed and subscribed once per poll pass — the shape of the Store's git poll loop.
 ///
 /// <para>🚨 <b>The failure this file makes impossible (Systemorph/Memex#165):</b> the promise was

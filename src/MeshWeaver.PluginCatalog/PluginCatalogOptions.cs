@@ -105,9 +105,27 @@ public sealed class PluginCatalogOptions
     /// config or a failed install. A package newly listed in a source this installation already
     /// seeded from, and covered only by a whole-source pattern (<c>Plugins/*</c>), is HELD: it lands
     /// through a governed <c>package.provision</c> activity or by being named here; a held package
-    /// gets NO ledger entry. A COMMERCIAL package that passes the hold is never installed by this
-    /// unattended pass — it has no authorizing principal — and is recorded under <c>skipped</c> on
-    /// the ledger with its reason.</para>
+    /// gets NO ledger entry.</para>
+    ///
+    /// <para>🚨 <b>COMMERCIAL packages: naming one exactly IS the authorization.</b> A commercial
+    /// package (a price, or a sales contact) named EXACTLY here — <c>Source/Package</c>, e.g.
+    /// <c>PartnerRe/Claims</c> — is INSTALLED by the unattended pass, together with everything it
+    /// requires (commercial requirements included). The authorizing principal is the deployment
+    /// configuration itself, <c>deployment-config:{InstanceId}</c>
+    /// (<see cref="DeploymentConfigAuthority"/>): this list lives in the instance's deployment
+    /// record, which changes only through a reviewed pull request the auto-merge App merges, so
+    /// naming a package here is a reviewed decision on record (policy
+    /// <c>deployment-config-authorizes-named-commercial</c>). The principal is logged, stamped on the install record
+    /// (<see cref="PackageManifest.AuthorizedBy"/>) and on the ledger (<c>authorized</c>), and the
+    /// entitlement gate re-verifies it against the CURRENT list, so a package this list stops naming
+    /// stops being authorized by it. Installing grants nobody access — the plan
+    /// (<c>Store:InstancePlan</c>) and the subscriptions decide who reads the content; nothing is
+    /// swept to users and nobody is notified. A commercial package covered only by a whole-source
+    /// pattern (<c>Plugins/*</c>) names nothing: it is never installed (nor pulled in as a
+    /// requirement) by this pass and is recorded under <c>skipped</c> on the ledger with its
+    /// reason. A package whose licence requires ACCEPTANCE is skipped either way — a configuration
+    /// cannot accept terms on a person's behalf. The ledger still seeds once: an operator who
+    /// removes a named commercial package is not fought by the next restart.</para>
     /// </summary>
     public List<string> InstallByDefault { get; set; } = [];
 
