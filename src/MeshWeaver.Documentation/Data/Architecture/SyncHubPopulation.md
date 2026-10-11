@@ -345,16 +345,21 @@ on instance A, where the whole excess over the base set (31 of 228) was the conf
 uncached branch. That is the likely reading of the 65 here and it is an inference, not a
 measurement.
 
-🚨 **What decides the heap is therefore how many node hubs are live, and on the first replica of a
-generation that is the boot.** The 1 059 node hubs on `8f2g5` thirty minutes after it started are
-not traffic: 403 are two-segment addresses (NodeType definitions, the bake), 128 are partition
-roots, 115 are `…/_Policy`, 115 `…/_Entitlements`, 43 `…/_GitSync`, 82 `Admin/Build/…`, 44
-`MeshWeaver/samples/…`. Its sibling, booted ninety seconds later and serving the same instance,
-holds 101. At about 5 MB of live heap per node hub (its own scope, type registry, workspace and its
-three or four `sync/` hubs) that fan-out is the multi-GiB `[HEAPSTEP]` series every roll prints in
-its first minutes — the sampled allocation of those steps is `System.String`, `System.Byte[]`,
-`Entry[System.String][]` and Autofac's `IResolvePipelineBuilder` handlers and
-`MiddlewareDeclaration`, which is hub construction.
+🚨 **The working hypothesis is that the heap follows the number of live node hubs, and that on the
+first replica of a generation the boot sets that number.** It is a correlation across two replicas,
+not a root attribution. Of the 1 059 node hubs on `8f2g5` thirty minutes after it started, 930 fall
+in buckets that are not request traffic: 403 are two-segment addresses (NodeType definitions, the
+bake), 128 are partition roots, 115 are `…/_Policy`, 115 `…/_Entitlements`, 43 `…/_GitSync`, 82
+`Admin/Build/…`, 44 `MeshWeaver/samples/…`. The other 129 were not classified. Its sibling, booted
+ninety seconds later and serving the same instance, holds 101 node hubs. The two readings differ
+by 958 node hubs and 4 260 MiB of last-GC heap, about 4.4 MiB per node hub (its own scope, type
+registry, workspace and its three or four `sync/` hubs would be in that figure). That fan-out is the candidate for the multi-GiB
+`[HEAPSTEP]` series every roll prints in its first minutes: the sampled allocation of those steps
+is `System.String`, `System.Byte[]`, `Entry[System.String][]` and Autofac's
+`IResolvePipelineBuilder` handlers and `MiddlewareDeclaration`, which is what hub construction
+allocates. `[HEAPSTEP]` names allocated types, not retained roots, and this section has neither a
+quiet-process root attribution nor a before/after on one process, so the per-hub figure and the
+link to the heap step are to be confirmed, not cited.
 
 🚨 **NOT established:** whether those boot-activated hubs retire once idle. The replica was replaced
 by the next roll 20 minutes after the reading (the instance rolled twice inside one hour), so no
