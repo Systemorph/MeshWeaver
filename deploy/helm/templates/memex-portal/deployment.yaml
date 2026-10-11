@@ -421,6 +421,12 @@ spec:
             - name: "http"
               protocol: "TCP"
               containerPort: 8080
+{{- if eq (include "memex.portalNext.mode" .) "bundled" }}
+            # 🚂 The /next front end, served by this container's own child process (_portal-next.tpl).
+            - name: "next"
+              protocol: "TCP"
+              containerPort: {{ include "memex.portalNext.port" . }}
+{{- end }}
 {{- if (.Values.grpc).enabled }}
             # Public h2c gRPC (the trusted port binds 127.0.0.1 and is same-pod only — not listed).
             - name: "grpc"

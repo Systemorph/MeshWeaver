@@ -1,0 +1,6 @@
+# FIXTURE for check-chart-invariants.sh — /next from a separately built image (the DEVELOPER
+# OVERRIDE, what memex-local passes). Invariant 20 asserts the old shape renders whole: its own
+# Deployment + Service, the ingress /next path to it, and none of the bundled shape on the portal.
+portalNext:
+  enabled: true
+  image: "meshweaver/portal-next:local"

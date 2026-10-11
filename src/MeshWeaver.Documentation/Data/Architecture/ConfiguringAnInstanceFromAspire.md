@@ -383,7 +383,7 @@ in-mesh `[Translation]` texts, preserved here until the catalog follow-up above)
 | `IngressSpec` | `Annotations` | Ingress annotations | Ingress-Annotationen |
 | `IngressSpec` | `SessionAffinity` | Session affinity | Sitzungsaffinität |
 | `PortalNextSpec` | `Enabled` | Deploy the React front end at /next | React-Oberfläche unter /next bereitstellen |
-| `PortalNextSpec` | `Image` | Container image (repository:tag) — its own release line, never derived | Container-Image (Repository:Tag) — eigene Release-Linie, nie abgeleitet |
+| `PortalNextSpec` | `Image` | Developer override: a separately built image (repository:tag) — blank serves /next from the portal image | Entwickler-Override: ein separat gebautes Image (Repository:Tag) — leer liefert /next aus dem Portal-Image |
 | `PortalNextSpec` | `Replicas` | Replicas — blank means the chart's 1 | Replikate — leer heißt 1 (Standard des Charts) |
 | `PortalNextSpec` | `PortalOrigin` | Portal origin for server-side rendering — blank means the in-cluster Service | Portal-Origin für serverseitiges Rendern — leer heißt der clusterinterne Service |
 | `KeyVaultSecretRef` | `Key` | Configuration key it lands as (Section__Key, e.g. Email__ClientSecret) | Konfigurationsschlüssel, unter dem es ankommt (Section__Key, z. B. Email__ClientSecret) |

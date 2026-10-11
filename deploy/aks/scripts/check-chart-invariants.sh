@@ -183,6 +183,11 @@ COMBOS=(
   # Crash dumps on a DEDICATED claim (persistence.dumps), on the AKS overlay: the only combination in
   # which invariant 20 sees the dedicated-claim branch, and invariant 12 a chart-created dump PVC.
   "AKS overlay + crash dumps on a dedicated claim (fixture)|deploy/helm/values.yaml:deploy/aks/values.aks.yaml:deploy/aks/scripts/testdata/values.crash-dumps-dedicated-claim.yaml"
+  # 🚂 /next on the platform release train (maintainer, 2026-10-11): BUNDLED in the portal image —
+  # the normal shape — and the developer override (a separately built image). Nothing else here
+  # turns portalNext on, so without these invariant 20 would only ever see /next OFF.
+  "AKS overlay + /next bundled in the portal image (fixture)|deploy/helm/values.yaml:deploy/aks/values.aks.yaml:deploy/aks/scripts/testdata/values.portal-next-bundled.yaml"
+  "AKS overlay + /next from a separately built image, the developer override (fixture)|deploy/helm/values.yaml:deploy/aks/values.aks.yaml:deploy/aks/scripts/testdata/values.portal-next-override.yaml"
 )
 
 WORK="$(mktemp -d)"

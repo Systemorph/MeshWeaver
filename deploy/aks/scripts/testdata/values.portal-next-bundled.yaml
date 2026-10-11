@@ -1,0 +1,8 @@
+# FIXTURE for check-chart-invariants.sh — /next BUNDLED in the portal image (the normal shape).
+#
+# 🚂 Maintainer, 2026-10-11: "yes, please bring next onto same release train. we can bundle in same
+# package." The flag alone, no image: the portal process serves /next from its own image, so
+# invariant 20 asserts the config arms it, the portal container and Service carry the `next` port,
+# the ingress routes /next there, and NO portal-next Deployment renders.
+portalNext:
+  enabled: true
