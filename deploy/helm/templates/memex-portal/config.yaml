@@ -1399,6 +1399,19 @@ data:
   PluginCatalog__Sources__{{ $i }}__RepoPath: "{{ $s.repoPath }}"
   PluginCatalog__Sources__{{ $i }}__Ref: "{{ $s.ref | default "main" }}"
   PluginCatalog__Sources__{{ $i }}__Format: "{{ $s.format | default "node-repo" }}"
+  {{- /* The source's OWN credential, by reference — never a value. `tokenKey` is the
+         CONFIGURATION KEY the repository's token is read from (PluginCatalog:SourceTokens:<name>);
+         the value reaches the pod under that key from the vault (keyVaultSecrets: vaultSecret →
+         PluginCatalog__SourceTokens__<name>). `installationOwner` is the account whose installation
+         of the instance's GitHub App reads the repository. Emitted only when stated: a declared
+         key that is empty makes the portal REFUSE the repository by name, so an unconditional ""
+         would turn every source into a refusal. */}}
+  {{- if ($s.tokenKey | default "" | trim) }}
+  PluginCatalog__Sources__{{ $i }}__TokenKey: "{{ $s.tokenKey | trim }}"
+  {{- end }}
+  {{- if ($s.installationOwner | default "" | trim) }}
+  PluginCatalog__Sources__{{ $i }}__InstallationOwner: "{{ $s.installationOwner | trim }}"
+  {{- end }}
   {{- end }}
   {{- range $i, $g := .Values.pluginCatalog.defaultGrants }}
   PluginCatalog__DefaultGrants__{{ $i }}: "{{ $g }}"
