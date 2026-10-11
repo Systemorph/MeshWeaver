@@ -791,13 +791,13 @@ public static class UserActivityLayoutAreas
     private const string SortSuffixLocation = "sort:path-asc";
     // Keyed by the OPEN HomeSortBy values (policy open-vocabulary-string-constants): a config
     // value this build does not know matches none of them, and the list keeps its own order.
-    private static readonly (string Sort, string LabelKey, string Suffix)[] CatalogSorts =
-    {
+    private static readonly ImmutableArray<(string Sort, string LabelKey, string Suffix)> CatalogSorts =
+    [
         (HomeSortBy.Location, "home.sortLocation", SortSuffixLocation),
         (HomeSortBy.LastAccessed, "home.sortLastAccessed", SortSuffixLastAccessed),
         (HomeSortBy.LastModified, "home.sortLastModified", SortSuffixLastModified),
         (HomeSortBy.Alphabetical, "home.sortAlphabetical", SortSuffixAlphabetical),
-    };
+    ];
 
     /// <summary>
     /// The home surface — ONE search control whose SCOPE TABS are the phone-home tabs:

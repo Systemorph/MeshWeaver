@@ -95,10 +95,17 @@ public static class DefaultNodeNavigation
         // `_` entries left out) — never in the store's row order, which would let hidden satellites
         // eat the budget and push an Order = 1 page behind "Load more". So each level reads LIGHT
         // rows (no content) up to the hard bound, and the cut happens after the render order.
+        // 🚨 The read itself is ordered by PATH, stated in the query: a filter-only query is
+        // otherwise clipped newest-first, so which rows a very large level contributes would
+        // change with every edit. The bound is honest about what it is: a level holding more
+        // than MaxCap rows lists the first MaxCap + 1 BY LOCATION, rendered in declared order
+        // within that window; a row beyond the window is reached by search, never by this rail.
+        // Rendering order applied by the store before its clip (two keys, nulls last) is not
+        // expressible in a query today — policy explorer-navigation lists it as owed.
         IObservable<(string Level, ImmutableDictionary<string, MeshNode> Nodes)> Level(string ns) =>
             meshService
                 .Query<MeshNode>(MeshQueryRequest.FromQuery(
-                    $"namespace:{ns} is:main select:path,id,namespace,name,nodeType,order,icon limit:{MaxCap + 1}"))
+                    $"namespace:{ns} is:main select:path,id,namespace,name,nodeType,order,icon sort:path-asc limit:{MaxCap + 1}"))
                 .Scan(ImmutableDictionary<string, MeshNode>.Empty, Fold)
                 // Each level paints on its own: a slow level never holds the others back.
                 .StartWith(ImmutableDictionary<string, MeshNode>.Empty)
@@ -155,7 +162,8 @@ public static class DefaultNodeNavigation
     /// <summary>One level's entries as the rail lists them: internal <c>_</c> entries left out, in
     /// the rendered order (<see cref="MarkdownOverviewLayoutArea.OrderSubNodes"/>). Pure.</summary>
     public static IReadOnlyList<MeshNode> VisibleInOrder(IEnumerable<MeshNode> level) =>
-        [.. MarkdownOverviewLayoutArea.OrderSubNodes(level.Where(n => !LastSegment(n.Path).StartsWith('_')))];
+        MarkdownOverviewLayoutArea.OrderSubNodes(level.Where(n => !LastSegment(n.Path).StartsWith('_')))
+            .ToImmutableList();
 
     /// <summary>Reads <c>?more={level}:{cap}</c>: the one level whose cap is raised, and to what —
     /// null for a missing or malformed value, and a cap below <see cref="LevelCap"/> is never
@@ -303,11 +311,11 @@ public static class DefaultNodeNavigation
             {
                 Children = ChildrenOf(n.Path, subtree, currentPath, moreLinks, loadMoreLabel),
             })
-            .ToList();
+            .ToImmutableList();
         // A level that holds more than it shows ends with the entry that loads the next batch.
-        if (children.Count > 0 && moreLinks is not null && moreLinks.TryGetValue(parent, out var more))
-            children.Add(new NodeNavigationEntry(loadMoreLabel, more, false, null));
-        return children;
+        return children.Count > 0 && moreLinks is not null && moreLinks.TryGetValue(parent, out var more)
+            ? children.Add(new NodeNavigationEntry(loadMoreLabel, more, false, null))
+            : children;
     }
 
     private static bool IsChildOf(string path, string parent)

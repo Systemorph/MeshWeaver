@@ -304,7 +304,7 @@ public class DefaultNodeNavigationTest
     {
         // An Order = 1 page whose path sorts LAST, behind hidden satellites that sort first: it must
         // lead the level, and the satellites must not use up the budget.
-        MeshNode[] level =
+        ImmutableList<MeshNode> level =
         [
             Node("S/_Access", "internal"), Node("S/_Comment", "internal"),
             Node("S/Alpha", "Alpha"), Node("S/Beta", "Beta"), Node("S/Zulu", "Zulu", 1),
