@@ -56,6 +56,19 @@ done
 for required in identity packages upstreams out; do
   [ -n "${!required}" ] || { echo "::error::compose-sealed-modules.sh: --${required} is required"; exit 2; }
 done
+# `--packages '*'` — EVERY package the ONE named source sealed for this identity (MeshWeaver#3583).
+# The publish-bake lane's previous-epoch leg uses it to CARRY FORWARD its own sealed module set:
+# what it must reproduce is exactly what the old epoch's publication holds, so the set is read off
+# that seal, never re-listed by the caller. One source only: across several, "every package" would
+# be a union nobody sealed together.
+ALL_PACKAGES=false
+if [ "$packages" = "*" ]; then
+  # shellcheck disable=SC2086 # word count of the whitespace-separated list
+  set -- $upstreams
+  [ $# -eq 1 ] || { echo "::error::compose-sealed-modules.sh: --packages '*' takes exactly ONE --upstreams source (got: $upstreams) — 'every package' across several seals is a union nobody sealed together"; exit 2; }
+  ALL_PACKAGES=true
+  ALL_SOURCE="$1"
+fi
 if [ -n "$registry_url" ]; then
   [ -n "$registry_key" ] || { echo "::error::compose-sealed-modules.sh: --registry-url needs --registry-key"; exit 2; }
 elif [ -z "$storage_target" ]; then
@@ -323,6 +336,12 @@ compose_once() {
 
   composed=0
   : > "$work/composed.list"
+  if [ "$ALL_PACKAGES" = "true" ]; then
+    # The packages ARE the seal's listing: `<pkg>.module.nupkg` → `<pkg>`. An EMPTY listing is a
+    # sealed publication that owns no module, which is a legitimate answer and composes nothing.
+    packages=$(sed -n 's/\.module\.nupkg$//p' "$work/$ALL_SOURCE.list" | tr '\n' ' ')
+    echo "--packages '*': '$ALL_SOURCE' sealed [${packages% }] for identity $identity"
+  fi
   for pkg in $packages; do
     wanted="$(printf '%s' "$pkg" | tr '[:upper:]' '[:lower:]').module.nupkg"
     found=""

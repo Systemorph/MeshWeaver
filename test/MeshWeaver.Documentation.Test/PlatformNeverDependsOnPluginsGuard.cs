@@ -112,6 +112,12 @@ public class PlatformNeverDependsOnPluginsGuard
             new KeyValuePair<string, string>("shared-rules.yml",
                 "the scheduled half of the same shared-rule sweep, so a drift is caught in a week "
                 + "when nobody opens a pull request anywhere"),
+            new KeyValuePair<string, string>("issue-taxonomy.yml",
+                "the daily, scheduled measurement of the issue taxonomy (Doc/Architecture/IssueTaxonomy): "
+                + "it reads the OPEN ISSUES and the severity labels of every repository of the triage "
+                + "scope over REST with a fleet-reader App token (Issues: read). It checks nothing out, "
+                + "runs on no pull request and gates no merge — its verdict is its own standing issue, "
+                + "about the fleet's issues, never a core build"),
         ]);
 
     /// <summary>The repos this guard treats as "not the platform".</summary>
