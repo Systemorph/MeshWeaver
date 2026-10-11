@@ -79,6 +79,23 @@ DEFAULT_REOPEN_WINDOW_DAYS = 7
 MAX_LEDGER_ENTRIES = 40          # ~500 bytes an entry; GitHub caps a body at 65,536 characters
 LEDGER_MARK = "<!-- ci-main-red ledger -->"  # the ownership mark: only an issue carrying it is ours
 FORBIDDEN_LABEL = "ci-failure"               # CD's label; the ledger never files under it
+
+# 🏷️ The ledger states its own TYPE and SEVERITY (Doc/Architecture/IssueTaxonomy, policy
+# `release-blocker-gate`): an issue without them is invisible to the release gate, which counts open
+# sev:B/sev:H bugs. A red main is a primary path broken — nothing the repository merges is published
+# while it is open — so a bug at sev:H. Triage's BugThreadRefusal still gives a ledger no second worker:
+# the red run's own item carries it. The look is core's own (scripts/check-issue-taxonomy.py CANONICAL).
+TAXONOMY = ("bug", "sev:H")
+TAXONOMY_LOOK = {
+    "bug": ("d73a4a", "Something isn't working"),
+    "sev:H": ("D93F0B", "BLOCKING: primary path broken, intermittent user-visible failure, or silently wrong results."),
+}
+TYPE_LABELS = ("bug", "enhancement", "documentation", "chore")
+
+
+def needs_taxonomy(labels: tuple[str, ...]) -> bool:
+    """True when the issue carries neither a type nor a severity — a classification a person gave is never touched."""
+    return not any(l.lower() in TYPE_LABELS or l.lower().startswith("sev:") for l in labels)
 BOT_LOGIN, BOT_TYPE = "github-actions[bot]", "Bot"   # the only author whose issues this ledger owns
 INBOX_PATH_PREFIX = "/api/hooks/"
 ENTRY_HEAD = "### "              # every ledger entry starts with this at column 0
@@ -395,6 +412,19 @@ class GitHub:
         # 422 = already exists, which is the idempotent path; 201 = created now.
         _ = status
 
+    def stamp_taxonomy(self, number: int, current: tuple[str, ...]) -> str:
+        """Give the ledger issue its TYPE and SEVERITY (`TAXONOMY`) when it carries neither yet; create a
+        missing taxonomy label with core's canonical look first. Returns what it did, in words."""
+        if not needs_taxonomy(current):
+            return f"#{number} already classified — kept"
+        for name in TAXONOMY:
+            status, _ = self.call("GET", f"labels/{urllib.parse.quote(name, safe='')}", ok=(200, 404))
+            if status == 404:
+                color, description = TAXONOMY_LOOK[name]
+                self.call("POST", "labels", body={"name": name, "color": color, "description": description}, ok=(201, 422))
+        self.call("POST", f"issues/{number}/labels", body={"labels": list(TAXONOMY)}, ok=(200,))
+        return f"#{number} labelled {', '.join(TAXONOMY)}"
+
     def labelled_issues(self, label: str) -> list[Issue]:
         """Every issue (never a pull request) carrying `label`, any state — ownership is judged by `owns`."""
         out: list[Issue] = []
@@ -558,6 +588,14 @@ def apply(gh, run: Run, verdict: Verdict, title: str, label: str, now: datetime,
         issue = gh.update_issue(verdict.issue, state="open", body=append_entry(current.body, entry))
     else:
         raise Red(f"unknown verdict {verdict.action!r}")
+    # 🏷️ Type + severity on the issue it filed, reopened or appended to. Decoration on the ledger, never
+    # the ledger: a label call that fails is SAID and the event still goes to triage — whose sweep, and
+    # core's daily issue-taxonomy lane, name an issue left untyped.
+    labels_now = issue.labels if verdict.action == "create" else current.labels
+    try:
+        print(f"taxonomy: {gh.stamp_taxonomy(issue.number, labels_now)}")
+    except Red as e:
+        print(f"::warning title=ci-failure-ledger::could not stamp {', '.join(TAXONOMY)} on #{issue.number} ({e}) — the issue-taxonomy lane will name it")
     return issue, event_body("ci-failure", run, issue)
 
 
@@ -693,6 +731,14 @@ class _Fake:
         self.writes += 1
         self.comments.append((number, body))
 
+    def stamp_taxonomy(self, number, current):
+        i = self.issues[number]
+        if not needs_taxonomy(tuple(i.labels)):
+            return "kept"
+        self.writes += 1
+        i.labels = tuple(i.labels) + TAXONOMY
+        return "labelled"
+
     def failed_jobs_of_run(self, run_id):
         # The SAME transcription the real client uses, so the self-test proves the rule that runs.
         return tuple(failed_job_entry(j) for j in self.run_jobs if j.get("conclusion") in FAILED_CONCLUSIONS)
@@ -736,6 +782,12 @@ def self_test() -> int:
     check("a job that ran its steps is not marked never-started in the entry",
           issue is not None and "never started" not in issue.body)
     check("event bytes are compact and field-ordered", (body or "").startswith('{"event":"ci-failure","repo":"o/r","sha":"abc123","run":555,'))
+    check("🏷️ the ledger it filed carries its type AND severity (bug, sev:H) — never invisible to the release gate",
+          issue is not None and all(t in gh.issues[issue.number].labels for t in TAXONOMY))
+    typed = _Fake([Issue(77, title, "open", new_body("o/r", 7), "https://github.com/o/r/issues/77", (label, "chore"), None, BOT_LOGIN, BOT_TYPE)])
+    go(typed, run("failure", [job]))
+    check("🏷️ a classification a person gave the ledger is kept — never a second type or severity",
+          typed.issues[77].labels == (label, "chore"))
 
     # 2. open issue → append, not duplicate
     v, issue2, _ = go(gh, run("failure", [job]))
