@@ -356,6 +356,24 @@ was GitSync-imported and compiled against the loaded AI 1.20.4. The same floor i
 checked on the import, against the LOADED dependency, and a module that fails it is declined there
 ([Module Sync Per Manifest Hash](../ModuleSyncPerManifestHash) → rule 1b).
 
+🚨 **A third lane moved a record onto an unmet floor: the unattended registry update (#6192).**
+Measured on the control instance on 2026-10-10/11: Governance auto-updated to a version declaring
+`Essentials@^1.12.0` while the Essentials module that ran was 1.11.26 (Essentials' partition is
+kept by a sync source, so its module lands with the seal, later than the registry serves the
+dependent), and AppleWeather to one declaring `AI@^1.27.0` beside AI 1.26.2. The install records
+then stated floors the running dependency did not meet, and this check refused every wave on the
+deployment — `[ModuleSet] NOT proposing the landed module set`, logged on every reconcile of every
+replica, 4,204 lines in one night — until the dependency's module landed. Neither dependent ships
+a module of its own, so no module-lane rule could withhold it: the UPDATE has to be held.
+`PackageUpdateReconciler` now reads the candidate's `requires` against the LOADED dependency
+(`PackageDependencyFloorGate`, the same `ILoadedPackageModules` reading the import uses) before it
+applies or offers an update: an unmet one is held — nothing fetched, the installed version and its
+record unchanged, `heldUpdate` naming the requirement, the module that runs and its version — and
+the first reconcile after a satisfying dependency is loaded applies it. Not gated: a fresh install,
+a person's click on Update, and a sync-owned partition (its import applies rule 1b, and the record
+must adopt what the owner landed). Pinned by `PackageDependencyFloorHoldTest`; with the gate
+unwired the held arms never record a hold.
+
 **What it does not judge, deliberately.** A requirement whose dependency has no landed module here
 (content-only, image-shipped, not installed) has no landed version to compare. A range it cannot
 parse is unverifiable (`ModuleDependencyFloor.Satisfies` → null) and never refuses; the fleet's

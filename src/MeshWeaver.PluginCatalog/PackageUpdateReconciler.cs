@@ -212,6 +212,17 @@ internal static class PackageUpdateReconciler
             "Package update: {Id} has an update ({Old} → {New}; {Detail}); updatePolicy={Policy}. {Provenance}",
             pkg.Id, record.ModuleVersion, pkg.ModuleVersion, detail, policy, provenance);
 
+        // 🚨 MeshWeaver#6192 — a candidate whose declared requirement the LOADED dependency does not
+        // meet is neither applied nor offered on the lanes where THIS lane would write or remind: the
+        // installed version keeps running and the record says which dependency has to be loaded. A
+        // sync-owned partition is not gated here — its sync source applies the same rule before it
+        // writes (ModuleSyncDecision.DeclineUnmetRequirements), and a record must adopt what that
+        // owner has already landed.
+        IObservable<Unit> UnlessADependencyHolds(Func<PackageManifest, IObservable<Unit>> proceed) =>
+            PackageDependencyFloorGate.Evaluate(hub, pkg, logger).SelectMany(unmet => unmet is null
+                ? PackageDependencyFloorGate.ClearMetHold(hub, record, logger).SelectMany(proceed)
+                : PackageDependencyFloorGate.RecordHold(hub, pkg, record, unmet, logger));
+
         // The PACKAGE's own policy decides — never the platform's image policy (Admin/UpdatePolicy),
         // which governs the image roll alone since 2026-09-14.
         return policy switch
@@ -232,8 +243,9 @@ internal static class PackageUpdateReconciler
             PackageUpdatePolicy.Auto => PartitionContentOwnership
                 .Observe(hub, PackageInstaller.TargetPartitionOf(pkg.Id, pkg), pkg.Id, logger)
                 .SelectMany(ownership => ownership.InstallerOwnsTheContent
-                    ? Apply(hub, meshService, accessService, source, sourceRef, pkg, record,
-                        recordPath, provenance, delta, logger)
+                    ? UnlessADependencyHolds(current => Apply(
+                        hub, meshService, accessService, source, sourceRef, pkg, current,
+                        recordPath, provenance, delta, logger))
                     // 🚨 Sync-owned — but has the sync ALREADY landed this very content? Then there
                     // is nothing to write and no second writer: the record adopts the candidate and
                     // the module lane (RegistryUpdateReconciler.AdoptOne) lands its code in the same
@@ -261,8 +273,8 @@ internal static class PackageUpdateReconciler
                             ("name", name), ("changed", delta?.Changed), ("removed", delta?.Removed),
                             ("because", ownership.Because), ("provenance", provenance)),
                         logger)),
-            PackageUpdatePolicy.Notify => Notify(
-                hub, meshService, accessService, recordPath, pkg, record, UpdateAvailableKind,
+            PackageUpdatePolicy.Notify => UnlessADependencyHolds(current => Notify(
+                hub, meshService, accessService, recordPath, pkg, current, UpdateAvailableKind,
                 LocalizableText.Keyed(
                     $"Update available: {name}",
                     "notification.packageUpdate.available.title", ("name", name)),
@@ -271,7 +283,7 @@ internal static class PackageUpdateReconciler
                     BodyKey("available", delta),
                     ("name", name), ("changed", delta?.Changed), ("removed", delta?.Removed),
                     ("provenance", provenance)),
-                logger),
+                logger)),
             // Pinned: the update exists, the log says so, and nothing else moves — no notification
             // either, because the administrator chose not to be reminded.
             _ => Observable.Return(Unit.Default),
