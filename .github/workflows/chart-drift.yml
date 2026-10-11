@@ -536,11 +536,13 @@ jobs:
       contents: read
       issues: write
     steps:
-      # The sentinel lookup lives in a script so it can carry a self-test; nothing else is read.
-      # FIRST: checkout cleans the workspace, so it must run before the verdicts are downloaded.
+      # The sentinel lookup and the taxonomy stamp live in scripts so they carry self-tests; nothing
+      # else is read. FIRST: checkout cleans the workspace, so it must run before the verdicts are downloaded.
       - uses: actions/checkout@v7
         with:
-          sparse-checkout: .github/scripts
+          sparse-checkout: |
+            .github/scripts
+            scripts
       - uses: actions/download-artifact@v8
         with:
           pattern: chart-drift-verdict-*
@@ -645,4 +647,11 @@ jobs:
             # next run — serialised behind this one — must find it by that listing. So this run
             # does not finish until it does, and reds if it never does.
             python3 .github/scripts/sentinel-issue.py await-visible --repo "$REPO" --label "$LABEL" --number "$NEW"
+            NUM="$NEW"
           fi
+          # 🏷️ The sentinel states its own TYPE and SEVERITY (Doc/Architecture/IssueTaxonomy) — on the
+          # issue it opened AND on the one it reopened: a bug without a sev: is invisible to the
+          # release gate. sev:H — a cluster that does not match its chart is a deployed state silently
+          # different from the declared one (or, for `unknown`, a detector that cannot fail). `stamp`
+          # leaves a classification a person already gave untouched.
+          python3 scripts/check-issue-taxonomy.py stamp --repo "$REPO" --number "$NUM" --label bug --label sev:H

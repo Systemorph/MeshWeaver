@@ -82,11 +82,18 @@ public static class PrivateClosure
         /// 🚨 What the walk reached that a package DECLARES and this lane does NOT carry — a native
         /// at a layout the loader does not probe, or a RID-specific MANAGED assembly — as worded
         /// findings (#4367, #4445). The SDK lane REFUSES the pack on the same findings (same
-        /// wording, <c>UncarriedAssetFindings</c>); this lane NAMES them as warnings until a
-        /// measured container wave arms a refusal here. Until this existed it dropped both without
-        /// a line, so no such wave could be measured.
+        /// wording, <c>UncarriedAssetFindings</c>); this lane REFUSES the project on them too,
+        /// armed on the measured waves once the finding was scoped to the bundle's target RID.
+        /// Only assets for a targeted RID land here; the rest are <see cref="NotTargeted"/>.
         /// </summary>
         public ImmutableArray<string> Uncarried { get; init; } = [];
+
+        /// <summary>
+        /// What the walk reached that a package declares for a RID a module bundle does NOT
+        /// target (<c>ModuleBundleTarget</c>, #4445), as INFORMATION lines. Not carried, and
+        /// correctly so; never refused. Kept apart from <see cref="Uncarried"/>, which refuses.
+        /// </summary>
+        public ImmutableArray<string> NotTargeted { get; init; } = [];
     }
 
     /// <summary>One native payload riding the bundle.</summary>
@@ -123,6 +130,7 @@ public static class PrivateClosure
         var natives = new Dictionary<string, NativeRide>(StringComparer.Ordinal);
         var nativesMissing = new SortedSet<string>(StringComparer.Ordinal);
         var uncarried = new SortedSet<string>(StringComparer.Ordinal);
+        var notTargeted = new SortedSet<string>(StringComparer.Ordinal);
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var pending = new Stack<string>(packageIds);
 
@@ -189,6 +197,8 @@ public static class PrivateClosure
             // named, never passed over (#4445).
             foreach (var finding in container.UncarriedOf(id).Concat(shelf?.UncarriedOf(id) ?? []))
                 uncarried.Add(finding);
+            foreach (var line in container.NotTargetedOf(id).Concat(shelf?.NotTargetedOf(id) ?? []))
+                notTargeted.Add(line);
 
             // Both records are followed: the shelf pins additional libraries, the image pins
             // everything it carries, and a package can be known to one and not the other.
@@ -207,6 +217,7 @@ public static class PrivateClosure
             Natives = [.. natives.Values.OrderBy(n => n.RelativePath, StringComparer.Ordinal)],
             NativesMissing = [.. nativesMissing],
             Uncarried = [.. uncarried],
+            NotTargeted = [.. notTargeted],
         };
     }
 

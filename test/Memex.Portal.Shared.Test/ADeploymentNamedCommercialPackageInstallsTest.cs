@@ -163,6 +163,55 @@ public class ADeploymentNamedCommercialPackageInstallsTest(ITestOutputHelper out
             .Which.Message.Should().Contain("another instance");
     }
 
+    /// <summary>
+    /// A manifest that names NO source (one listed straight off a watched repository) is refused
+    /// even for an installed, named package: a package id alone never authorizes, because another
+    /// source may list the same id and would inherit the configured source's authorization.
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task AManifestWithoutASource_IsRefused_EvenForAnInstalledNamedPackage()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await Mesh.ServiceProvider.GetRequiredService<InstanceAutoRegistrationService>().Completed
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(180)).Await(ct);
+
+        var sourceless = async () => await PackageEntitlement
+            .Authorize(Mesh, new PackageManifest { Id = "Claims", Price = 900m, Currency = "CHF" }, Principal)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        (await sourceless.Should().ThrowAsync<PackageAuthorizationException>())
+            .Which.Message.Should().Contain("without a source");
+        // …and a REQUIREMENT of a named package is no exception: ClaimsCore is admitted only
+        // under its own source, never by id from a source-less (or other-source) listing.
+        var sourcelessRequirement = async () => await PackageEntitlement
+            .Authorize(Mesh, new PackageManifest { Id = "ClaimsCore", ContactEmail = "sales@acme.test" }, Principal)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        await sourcelessRequirement.Should().ThrowAsync<PackageAuthorizationException>();
+        // …and a source-less manifest that OMITS the commercial fields (reads as free) is still
+        // verified under this principal: the free fast path never applies to it.
+        var sourcelessFree = async () => await PackageEntitlement
+            .Authorize(Mesh, new PackageManifest { Id = "Claims" }, Principal)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        await sourcelessFree.Should().ThrowAsync<PackageAuthorizationException>();
+        // A source-STAMPED manifest that has genuinely become free takes the free path — even for a
+        // package the configuration does not name.
+        await PackageEntitlement
+            .Authorize(Mesh, new PackageManifest { Id = "Other", Source = SourceName, Price = 0m }, Principal)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        // …and a source-less price-0 refusal does not call it "price 0".
+        var zero = async () => await PackageEntitlement
+            .Authorize(Mesh, new PackageManifest { Id = "Claims", Price = 0m }, Principal)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        (await zero.Should().ThrowAsync<PackageAuthorizationException>())
+            .Which.Message.Should().NotContain("commercial (price 0)");
+        var otherSourceRequirement = async () => await PackageEntitlement
+            .Authorize(Mesh, new PackageManifest { Id = "ClaimsCore", Source = "elsewhere", ContactEmail = "sales@acme.test" }, Principal)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        await otherSourceRequirement.Should().ThrowAsync<PackageAuthorizationException>();
+        await PackageEntitlement
+            .Authorize(Mesh, new PackageManifest { Id = "ClaimsCore", Source = SourceName, ContactEmail = "sales@acme.test" }, Principal)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+    }
+
     [Fact]
     public void ThePrincipal_IsRecognisedByShapeOnly()
     {
@@ -248,4 +297,108 @@ public class ADeploymentNamedCommercialPackageInstallsTest(ITestOutputHelper out
             .Read(LedgerPath, Mesh.JsonSerializerOptions)
             .Select(n => n?.ContentAs<DefaultInstallLedger>(Mesh.JsonSerializerOptions))
             .Take(1).Timeout(TestTimeouts.Convergence).Await();
+}
+
+/// <summary>
+/// An INCOMPLETE commercial package the deployment configuration installed is REPAIRED under that
+/// same authority by the boot repair pass — not classified as unauthorized and skipped on every
+/// boot. Without the authority on the repair's candidates the lost node below never comes back.
+/// </summary>
+public class ADeploymentNamedCommercialPackageIsRepairedTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
+{
+    private const string Principal = PackageEntitlement.DeploymentConfigPrefix + "acme-test";
+
+    private static PackageManifest Commercial() =>
+        ReassertFixture.Candidate() with { Price = 900m, Currency = "CHF" };
+
+    private sealed class CommercialSource : IPackageSource
+    {
+        public IObservable<IReadOnlyList<PackageManifest>> ListPackages(string gitRef) =>
+            Observable.Return<IReadOnlyList<PackageManifest>>(ImmutableList.Create(Commercial()));
+
+        public IObservable<IReadOnlyList<PackageFile>> FetchPackageFiles(PackageManifest package, string gitRef) =>
+            Observable.Return(ReassertFixture.Files());
+    }
+
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+        => base.ConfigureMesh(builder)
+            .AddPluginCatalog()
+            .ConfigureServices(services => services
+                .AddSingleton<IPackageSource>(_ => new CommercialSource())
+                .AddSingleton(new PluginCatalogOptions
+                {
+                    InstanceId = "acme-test",
+                    InstallByDefault = [$"registered-0/{ReassertFixture.Package}"],
+                    InstallPreInstalledPackages = false,
+                }));
+
+    [Fact(Timeout = 300_000)]
+    public async Task ALostNode_ComesBack_UnderTheDeploymentPrincipal()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var first = await Mesh.ServiceProvider.GetRequiredService<InstanceAutoRegistrationService>().Completed
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(180)).Await(ct);
+        first.Delivered.Should().Contain(ReassertFixture.Package, "the named commercial package installs at boot");
+        (await ReassertFixture.WaitForNode(Mesh, ReassertFixture.GuidePath, present: true)).Should().BeTrue();
+
+        await Mesh.ServiceProvider.GetRequiredService<IMeshService>().DeleteNode(ReassertFixture.GuidePath)
+            .Should().Within(TestTimeouts.Convergence).Emit("the loss is the precondition", cancellationToken: ct);
+        (await ReassertFixture.WaitForNode(Mesh, ReassertFixture.GuidePath, present: false)).Should().BeTrue();
+
+        await Mesh.ServiceProvider.GetRequiredService<InstalledPackageRepairService>()
+            .RunRepair().Timeout(TimeSpan.FromSeconds(240)).Await(ct);
+
+        (await ReassertFixture.WaitForNode(Mesh, ReassertFixture.GuidePath, present: true)).Should().BeTrue(
+            "the repair re-asserts a config-authorized commercial package instead of skipping it");
+        (await ReassertFixture.ReadRecord(Mesh))!.AuthorizedBy.Should().Be(Principal,
+            "the repair runs under the same deployment-config principal");
+    }
+}
+
+/// <summary>
+/// A directly read repository cannot claim another source's <c>Source/Package</c> scoping by
+/// AUTHORING a <c>source</c> in its manifest. The boot lane keeps the authored value (selection is
+/// unchanged), but the fail-closed provenance check withholds the deployment configuration's
+/// authority from any candidate whose source is neither a registry's stamp nor the name its source
+/// was configured under — so this package is selected, classified commercial-without-authority, and
+/// skipped.
+/// </summary>
+public class AnAuthoredSourceClaimsNoAuthorityTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
+{
+    /// <summary>A direct source whose listing carries an AUTHORED source — what
+    /// <c>GitPackageSource</c> / <c>GitHubPackageSource</c> preserve from a package.json.</summary>
+    private sealed class AuthoringSource : IPackageSource
+    {
+        public IObservable<IReadOnlyList<PackageManifest>> ListPackages(string gitRef) =>
+            Observable.Return<IReadOnlyList<PackageManifest>>(ImmutableList.Create(
+                ReassertFixture.Candidate() with { Price = 900m, Currency = "CHF", Source = "Trusted" }));
+
+        public IObservable<IReadOnlyList<PackageFile>> FetchPackageFiles(PackageManifest package, string gitRef) =>
+            Observable.Return(ReassertFixture.Files());
+    }
+
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+        => base.ConfigureMesh(builder)
+            .AddPluginCatalog()
+            .ConfigureServices(services => services
+                .AddSingleton<IPackageSource>(_ => new AuthoringSource())
+                .AddSingleton(new PluginCatalogOptions
+                {
+                    InstanceId = "acme-test",
+                    InstallByDefault = [$"Trusted/{ReassertFixture.Package}"],
+                    InstallPreInstalledPackages = false,
+                }));
+
+    [Fact(Timeout = 240_000)]
+    public async Task APackageWritingTheNamedSourcesName_IsNotAuthorized()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var first = await Mesh.ServiceProvider.GetRequiredService<InstanceAutoRegistrationService>().Completed
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(180)).Await(ct);
+        Output.WriteLine($"pass 1: {first}");
+        first.Delivered.Should().NotContain(ReassertFixture.Package,
+            "the manifest's authored source is not provenance — it was served by 'registered-0', "
+            + "which the configuration does not name");
+        first.Authorized.Should().BeEmpty();
+    }
 }

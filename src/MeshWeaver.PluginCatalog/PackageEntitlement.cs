@@ -208,9 +208,22 @@ public static class PackageEntitlement
         ArgumentNullException.ThrowIfNull(hub);
         ArgumentNullException.ThrowIfNull(manifest);
 
+        // 🚨 A SOURCE-LESS manifest under a deployment-config principal is verified BEFORE the free
+        // fast path (and refused): the principal is stamped only on a commercial install, so a
+        // source-less manifest that reads as free is the shape of another repository listing the
+        // same id without the commercial fields. A source-STAMPED manifest that is genuinely free
+        // (terms changed) takes the free path like any other free package.
+        if (IsDeploymentConfigPrincipal(authorizingUserId) && string.IsNullOrWhiteSpace(manifest.Source))
+            return AuthorizeByDeploymentConfig(hub, manifest, authorizingUserId!.Trim(), logger);
+
         // Free — the common case, and the whole point of the rule: no permission, no round-trip.
         if (!manifest.IsCommercial())
             return Observable.Return(Unit.Default);
+
+        // The deployment configuration is verified against the configuration it booted with —
+        // never trusted by its string, and never asked whether it is a global admin.
+        if (IsDeploymentConfigPrincipal(authorizingUserId))
+            return AuthorizeByDeploymentConfig(hub, manifest, authorizingUserId!.Trim(), logger);
 
         if (string.IsNullOrWhiteSpace(authorizingUserId))
             return Refuse(manifest, null, logger);
@@ -220,10 +233,6 @@ public static class PackageEntitlement
         if (IsGovernedActivityPrincipal(authorizingUserId))
             return AuthorizeByActivity(hub, manifest, authorizingUserId!.Trim(), logger);
 
-        // The deployment configuration is verified against the CURRENT configuration — never
-        // trusted by its string, and never asked whether it is a global admin.
-        if (IsDeploymentConfigPrincipal(authorizingUserId))
-            return AuthorizeByDeploymentConfig(hub, manifest, authorizingUserId!.Trim(), logger);
 
         // Wait for the POSITIVE confirmation, not the first emission (see AdminConfirmationWindow).
         // TakeDecisionOutsideGate leaves the evaluator's Rx gate before the install's real work
@@ -346,6 +355,11 @@ public static class PackageEntitlement
             if (hub.ServiceProvider.GetService(typeof(DeploymentConfigAuthority)) is not DeploymentConfigAuthority authority)
                 return Refuse(manifest, principal, logger,
                     detail: "no deployment configuration authority is registered on this host");
+            // 🚨 The check binds on the manifest's OWN source. A manifest that names none (one
+            // listed straight off a repository by the update watcher) is refused — fail closed.
+            // Borrowing the source from the install record would bind by package id alone, and a
+            // second watched source listing the same id would then inherit the configured source's
+            // authorization. Such an update is applied by a person's Update click instead.
             if (authority.WhyNot(principal, manifest) is { } why)
                 return Refuse(manifest, principal, logger, detail: why);
             logger?.LogInformation(
@@ -392,11 +406,13 @@ public static class PackageEntitlement
         // Name what made it commercial — a price, or the sales contact. A contact-sales package has
         // no price, and reporting "price " with a blank where the number goes reads as a bug in the
         // gate rather than as the deliberate refusal it is.
-        var terms = manifest.Price is { } amount
+        var terms = manifest.Price is { } amount && amount != 0m
             ? manifest.Currency is { Length: > 0 } currency
                 ? $"price {amount} {currency}"
                 : $"price {amount}"
-            : $"contact sales: {manifest.ContactEmail}";
+            : !string.IsNullOrWhiteSpace(manifest.ContactEmail)
+                ? $"contact sales: {manifest.ContactEmail}"
+                : "listed without commercial terms, but installed here as commercial";
         var who = string.IsNullOrWhiteSpace(userId)
             ? "no authorizing principal (unattended install)"
             : $"'{userId}'";
