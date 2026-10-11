@@ -488,20 +488,38 @@ public static class InboxLayoutArea
                     // answer, never the batch's.
                     try
                     {
-                        return act(handler, item.Path).Catch((Func<Exception, IObservable<InboxItemOutcome>>)Faulted);
+                        return Detached(act(handler, item.Path).Catch((Func<Exception, IObservable<InboxItemOutcome>>)Faulted),
+                            outcome =>
+                            {
+                                if (outcome.Done)
+                                    done(item);
+                            });
                     }
                     catch (Exception ex)
                     {
                         return Faulted(ex);
                     }
                 }
-            }).Do(outcome =>
-            {
-                if (outcome.Done)
-                    done(item);
             }))
             .Concat()
             .Aggregate(ImmutableList<InboxItemOutcome>.Empty, (done, outcome) => done.Add(outcome));
+    }
+
+    /// <summary>
+    /// Runs <paramref name="write"/> on its OWN subscription, which <paramref name="landed"/> sees to
+    /// the end, and hands the click a view of its outcome. A click is cancellable, and cancelling
+    /// disposes the click's chain — but a write already posted may still be committed by its owner
+    /// afterwards, and an outcome observed only through the click's chain would then be lost: the
+    /// item changes state and never enters (or leaves) the Undo batch. Detached, cancelling stops the
+    /// items not yet started; it never stops the bookkeeping of one that was.
+    /// </summary>
+    /// <param name="write">One item's write, already built under the clicker's identity.</param>
+    /// <param name="landed">Told of the outcome however the click ends.</param>
+    internal static IObservable<InboxItemOutcome> Detached(IObservable<InboxItemOutcome> write, Action<InboxItemOutcome> landed)
+    {
+        var outcome = new AsyncSubject<InboxItemOutcome>();
+        write.Take(1).Do(landed).Subscribe(outcome);
+        return outcome;
     }
 
     /// <summary>The outcome line: how many, and every item that was not done with its reason.</summary>

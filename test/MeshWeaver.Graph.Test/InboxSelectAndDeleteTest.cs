@@ -465,6 +465,24 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
     }
 
     /// <summary>
+    /// A write already posted is seen to the end even when the click that started it is cancelled:
+    /// its outcome still reaches the bookkeeping, so an item the owner commits after the cancel is
+    /// still undoable.
+    /// </summary>
+    [Fact]
+    public void AWritePostedBeforeACancel_IsStillRecorded()
+    {
+        var write = new Subject<InboxItemOutcome>();
+        var recorded = new List<InboxItemOutcome>();
+        var click = InboxLayoutArea.Detached(write, recorded.Add).Subscribe(_ => { });
+
+        click.Dispose();
+        write.OnNext(new InboxItemOutcome("a", true));
+
+        recorded.Should().Equal([new InboxItemOutcome("a", true)]);
+    }
+
+    /// <summary>
     /// "By title" is alphabetical in the VIEWER's language: for a German viewer Ä sorts with A, not
     /// after Z as it does by code point.
     /// </summary>

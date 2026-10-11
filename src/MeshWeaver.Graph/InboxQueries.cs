@@ -84,11 +84,14 @@ public static class InboxQueries
     /// <param name="viewer">The viewer's partition.</param>
     public static bool IsAnchored(string resolvedQuery, string viewer)
     {
-        if (AnchorPattern.Match(resolvedQuery) is not { Success: true } anchor
-            || !string.Equals(anchor.Groups[1].Value, viewer, StringComparison.OrdinalIgnoreCase)
+        var terms = resolvedQuery.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        // The FIRST term is the anchor, on the viewer's own partition — compared to the viewer's id
+        // itself, never to a character class: partition keys may be any Unicode letters and digits
+        // (PartitionDefinition.IsValidPartitionSegment), and "müller" must get an inbox.
+        if (terms.Length == 0 || Anchor(terms[0]) is not { } anchor || !InPartition(anchor, viewer)
             // ONE structural anchor: the parser lets a later namespace:/path: replace the first,
             // so a leg that names two could pass on its first and run on its second.
-            || resolvedQuery.Split(' ', StringSplitOptions.RemoveEmptyEntries).Count(IsStructural) != 1)
+            || terms.Count(IsStructural) != 1)
             return false;
         // And what the PARSER will run — not only what the text says first.
         var parsed = new QueryParser().Parse(resolvedQuery);
@@ -96,6 +99,11 @@ public static class InboxQueries
                && parsed.Path is { } path && InPartition(path, viewer)
                && (parsed.Paths is null || parsed.Paths.All(p => InPartition(p, viewer)));
     }
+
+    private static string? Anchor(string term)
+        => term.StartsWith("namespace:", StringComparison.OrdinalIgnoreCase) ? term["namespace:".Length..]
+            : term.StartsWith("path:", StringComparison.OrdinalIgnoreCase) ? term["path:".Length..]
+            : null;
 
     private static bool IsStructural(string term)
     {
@@ -110,9 +118,6 @@ public static class InboxQueries
         return trimmed.Equals(viewer, StringComparison.OrdinalIgnoreCase)
                || trimmed.StartsWith(viewer + "/", StringComparison.OrdinalIgnoreCase);
     }
-
-    private static readonly System.Text.RegularExpressions.Regex AnchorPattern =
-        new(@"^(?:namespace|path):([A-Za-z0-9_.\-]+)(?=/|\s|$)", System.Text.RegularExpressions.RegexOptions.Compiled);
 
     /// <summary>
     /// The enabled legs <see cref="Resolve"/> refuses to run because they are not anchored on

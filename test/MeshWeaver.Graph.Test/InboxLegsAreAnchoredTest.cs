@@ -115,10 +115,27 @@ public class InboxLegsAreAnchoredTest
     [InlineData("namespace:{viewer}/_Thread path:someone-else/_Thread", false)]
     [InlineData("path:{viewer}/_Email nodeType:Email path:someone-else/_Email", false)]
     public void OnlyALegReadingTheViewersOwnPartition_IsRun(string query, bool run)
+        => AssertRun(query, run, Viewer);
+
+    /// <summary>
+    /// A partition key may be any Unicode letters and digits — a guard that only knew ASCII would
+    /// refuse every leg of such a viewer and leave their inbox empty.
+    /// </summary>
+    [Theory]
+    [InlineData("müller")]
+    [InlineData("zoë-ångström")]
+    public void AUnicodeViewer_GetsEveryBuiltInLeg(string viewer)
+    {
+        Assert.Equal(InboxQueries.BuiltIn.Length, InboxQueries.Resolve(InboxQueries.BuiltIn, viewer).Length);
+        AssertRun("namespace:{viewer}/_Thread nodeType:Thread", true, viewer);
+        AssertRun("namespace:someone-else/_Thread nodeType:Thread", false, viewer);
+    }
+
+    private static void AssertRun(string query, bool run, string viewer)
     {
         var leg = new InboxQueryLeg { Source = "Contributed", Band = InboxBand.NeedsYou, Query = query };
-        Assert.Equal(run, InboxQueries.Resolve([leg], Viewer).Length == 1);
-        Assert.Equal(!run, InboxQueries.Refused([leg], Viewer).Length == 1);
+        Assert.Equal(run, InboxQueries.Resolve([leg], viewer).Length == 1);
+        Assert.Equal(!run, InboxQueries.Refused([leg], viewer).Length == 1);
     }
 
     /// <summary>
