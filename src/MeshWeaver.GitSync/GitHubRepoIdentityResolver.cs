@@ -120,7 +120,7 @@ public sealed class GitHubRepoIdentityResolver(
     /// concurrent caller (<c>Replay(1)</c> connected once, owned by this resolver — the promise
     /// runs once and dies with the resolver).</summary>
     private IObservable<Resolution> Lookup(string repositoryUrl, string? userId) =>
-        ResolveToken(userId)
+        ResolveToken(userId, repositoryUrl)
             .Do(_ => Interlocked.Increment(ref lookupCount))
             .SelectMany(token => repoClient.GetCanonicalRepository(repositoryUrl, token))
             .Select(id => id is { IsComplete: true } ? id : null)
@@ -176,7 +176,7 @@ public sealed class GitHubRepoIdentityResolver(
     /// at all" is not an error here — an anonymous read still resolves a PUBLIC repository, and a
     /// private one degrades to the loud zero-match the caller already reports.
     /// </summary>
-    private IObservable<string> ResolveToken(string? userId)
+    private IObservable<string> ResolveToken(string? userId, string repositoryUrl)
     {
         var user = string.IsNullOrEmpty(userId) || userId == WellKnownUsers.System ? null : userId;
         var fromUser = user is null
@@ -185,8 +185,21 @@ public sealed class GitHubRepoIdentityResolver(
         return fromUser.SelectMany(cred =>
             cred?.AccessToken is { Length: > 0 } token
                 ? Observable.Return(token)
+                // The repository's own declared credential before the instance's installation: a
+                // repository in another organisation is invisible to the latter. A declared
+                // credential that cannot be produced faults, and Lookup reports it as the unknown
+                // it is — never an anonymous read in its place.
+                : SourceCredentials?.TokenFor(repositoryUrl) is { } declared
+                    ? declared
                 : appTokens is { IsConfigured: true }
                     ? appTokens.GetInstallationToken()
                     : Observable.Return(string.Empty));
     }
+
+    /// <summary>
+    /// The per-source credential declarations (<see cref="GitSourceCredentials"/>), when the host
+    /// registers them. A property rather than a constructor parameter so the constructor a module
+    /// was compiled against keeps its exact signature.
+    /// </summary>
+    public GitSourceCredentials? SourceCredentials { get; init; }
 }
