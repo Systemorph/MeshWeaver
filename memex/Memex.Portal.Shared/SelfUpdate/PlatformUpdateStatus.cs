@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
@@ -139,14 +140,14 @@ public record PlatformUpdateStatus(PlatformUpdateAvailability Availability, stri
     /// </summary>
     private static string? AdvisoriesFor(UpdatePolicyContent policy, string? tag)
     {
-        var lines = new List<string>();
-        if (policy.HasAdvisoriesFor(tag))
-            lines.Add(policy.Advisories!);
-        if (policy.VerificationFor(tag) is { Verdict: ComboVerdictKind.Red } red)
-            lines.AddRange(red.FailedModules.Count == 0
+        ImmutableArray<string> recorded = policy.HasAdvisoriesFor(tag) ? [policy.Advisories!] : [];
+        ImmutableArray<string> combo = policy.VerificationFor(tag) is { Verdict: ComboVerdictKind.Red } red
+            ? red.FailedModules.Count == 0
                 ? [$"the combo gate recorded RED for {tag}"]
-                : red.FailedModules.Select(m => $"{m.ModuleId}: does not compile or test against {tag}"));
-        return lines.Count == 0 ? null : string.Join("; ", lines);
+                : [.. red.FailedModules.Select(m => $"{m.ModuleId}: does not compile or test against {tag}")]
+            : [];
+        ImmutableArray<string> lines = [.. recorded, .. combo];
+        return lines.IsEmpty ? null : string.Join("; ", lines);
     }
 
     /// <summary>

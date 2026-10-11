@@ -521,10 +521,18 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
     private IObservable<RebootImageChoice> ChooseGated(UpdatePolicyContent policy, string target, string installed, bool wedged, string waived)
     {
         var gate = ResolveAvailabilityGate();
+        // The recorded combo Red is named on EVERY branch — also when no availability gate is
+        // registered, exactly as the poller's unwired path still evaluates combo. A wedged
+        // instance did not wait for the verdict, so it has none to report (the `waived` text says so).
+        string RecordedRed() =>
+            !wedged && ResolveComboGate() is { } combo && combo.Recorded(policy, target) is { Refuses: true } refused
+                ? $" The combo gate recorded RED for this instance's modules ({refused.Reason}) — an advisory: those modules keep their previous generation and catch up on their own."
+                : "";
         if (gate is null)
             return Observable.Return(new RebootImageChoice(installed, target,
                 $"{target} is the newest admitted release. No release-availability gate is registered on this host, so "
-                + "package availability was not checked — which does not hold the platform (it rolls independently of packages)." + waived));
+                + "package availability was not checked — which does not hold the platform (it rolls independently of packages)."
+                + RecordedRed() + waived));
         // 🚨 The platform rolls independently of its packages (policy
         // <c>platform-rolls-independently-of-packages</c>): neither the
         // availability verdict nor a recorded combo Red keeps the reboot on the running image —
@@ -539,13 +547,10 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
                 ? ""
                 : " Package advisories — they do not hold the platform (it rolls independently of packages): "
                   + string.Join("; ", verdict.Advisories) + ".";
-            var red = !wedged && ResolveComboGate() is { } combo && combo.Recorded(policy, target) is { Refuses: true } refused
-                ? $" The combo gate recorded RED for this instance's modules ({refused.Reason}) — an advisory: those modules keep their previous generation and catch up on their own."
-                : "";
             return new RebootImageChoice(installed, target,
                 $"{target} is the newest release the update policy admits ({policy.Policy}{(policy.Pattern is null ? "" : $", pattern {policy.Pattern}")})"
                 + (verdict.NotEnforcedReason is { } why ? $" (availability gate not enforced: {why})" : "")
-                + "." + packages + red + waived);
+                + "." + packages + RecordedRed() + waived);
         });
     }
 

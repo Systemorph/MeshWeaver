@@ -196,6 +196,31 @@ public class PlatformRollsIndependentlyOfPackagesTest(ITestOutputHelper output) 
         waived.Detail.Should().Contain("framework identity of release 9999.0.0-ci.1 is not resolvable");
     }
 
+    /// <summary>
+    /// A host with NO availability gate registered still names a recorded combo Red on the reboot's
+    /// image step — the poller's unwired path evaluates combo too, and a branch that returned
+    /// before consulting it would select the image without saying which modules do not survive it.
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task TheRebootImageStep_WithNoAvailabilityGate_StillNamesARecordedComboRed()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await Seed(ct, comboRed: true);
+
+        var choice = await Service(new RecordingUpdater(), verdict: null)
+            .SelectImage(wedged: false).FirstAsync().Timeout(Budget).Await(ct);
+
+        choice.Target.Should().Be(CandidateTag, "neither an unwired gate nor a combo Red holds the platform");
+        choice.Detail.Should().Contain("No release-availability gate is registered")
+            .And.Contain("combo gate recorded RED");
+
+        var wedged = await Service(new RecordingUpdater(), verdict: null)
+            .SelectImage(wedged: true).FirstAsync().Timeout(Budget).Await(ct);
+
+        wedged.Detail.Should().NotContain("combo gate recorded RED",
+            "a wedged instance does not wait for the combo verdict, so it reports none");
+    }
+
     // ══════════════════════════════════════════════════════════════════════════
     //  Harness (the ComboGateRollTest shape)
     // ══════════════════════════════════════════════════════════════════════════
@@ -217,10 +242,12 @@ public class PlatformRollsIndependentlyOfPackagesTest(ITestOutputHelper output) 
         }
     }
 
-    private GatedSelfUpdateService Service(RecordingUpdater updater, UpdatabilityVerdict verdict) =>
+    /// <summary>The service under test; a null <paramref name="verdict"/> is a host with no
+    /// availability gate registered.</summary>
+    private GatedSelfUpdateService Service(RecordingUpdater updater, UpdatabilityVerdict? verdict) =>
         new(Mesh, new FakeAcrTagLister(), updater, FastPoll(),
             Mesh.ServiceProvider.GetService<ILogger<SelfUpdateHostedService>>(),
-            new FixedVerdict(Mesh, new ConfigurationBuilder().Build(), verdict),
+            verdict is null ? null : new FixedVerdict(Mesh, new ConfigurationBuilder().Build(), verdict),
             new ComboVerificationGate(Mesh));
 
     private static SelfUpdateOptions FastPoll() => new()
@@ -295,7 +322,7 @@ public class PlatformRollsIndependentlyOfPackagesTest(ITestOutputHelper output) 
     /// <summary>Seeds the policy node — optionally with the hold the poller wrote, before policy
     /// <c>platform-rolls-independently-of-packages</c>, on
     /// partnerre, so the test also proves the roll CLEARS it.</summary>
-    private Task Seed(CancellationToken cancellationToken, bool staleHold = false)
+    private Task Seed(CancellationToken cancellationToken, bool staleHold = false, bool comboRed = false)
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var content = new UpdatePolicyContent { Policy = UpdatePolicyKind.Continuous, Pattern = "*-ci*" };
@@ -306,6 +333,19 @@ public class PlatformRollsIndependentlyOfPackagesTest(ITestOutputHelper output) 
                 HeldReason = UnresolvableIdentity().HoldReason,
                 HeldIndeterminate = true,
                 HeldAt = DateTimeOffset.UtcNow.AddHours(-1),
+            };
+        if (comboRed)
+            content = content with
+            {
+                ComboVerifications =
+                [
+                    new ComboVerification
+                    {
+                        CandidateTag = CandidateTag,
+                        Verdict = ComboVerdictKind.Red,
+                        VerifiedAt = DateTimeOffset.UtcNow,
+                    },
+                ],
             };
         var node = new MeshNode(UpdatePolicyNodeType.NodeId, UpdatePolicyNodeType.AdminPartition)
         {
