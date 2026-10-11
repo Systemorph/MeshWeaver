@@ -163,6 +163,28 @@ public class ADeploymentNamedCommercialPackageInstallsTest(ITestOutputHelper out
             .Which.Message.Should().Contain("another instance");
     }
 
+    /// <summary>
+    /// The update watcher lists manifests straight off a repository — they carry NO source. The
+    /// gate then anchors on the source the install record was stamped with, but only when that
+    /// record was authorized by this principal; a package with no such record still fails closed.
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task AManifestWithoutASource_IsCheckedAgainstTheInstallRecordsSource()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await Mesh.ServiceProvider.GetRequiredService<InstanceAutoRegistrationService>().Completed
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(180)).Await(ct);
+
+        await PackageEntitlement
+            .Authorize(Mesh, new PackageManifest { Id = "Claims", Price = 900m, Currency = "CHF" }, Principal)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+
+        var neverInstalled = async () => await PackageEntitlement
+            .Authorize(Mesh, new PackageManifest { Id = "Other", Price = 490m, Currency = "CHF" }, Principal)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        await neverInstalled.Should().ThrowAsync<PackageAuthorizationException>();
+    }
+
     [Fact]
     public void ThePrincipal_IsRecognisedByShapeOnly()
     {
