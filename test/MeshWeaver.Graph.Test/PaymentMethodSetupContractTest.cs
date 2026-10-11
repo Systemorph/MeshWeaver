@@ -620,4 +620,71 @@ public class PaymentMethodSetupContractTest
         new PaymentDelivery { CanAuthenticate = true, Authentic = true, Checkout = checkout }
             .NamesWork.Should().BeTrue();
     }
+
+    // ── Every field a fact is matched on is required, and checked ──────────────────────────────
+
+    [Fact]
+    public void AConsentWithNoAcceptanceInstant_RecordsNoAcceptance()
+    {
+        Storage().Is(PaymentConsentKind.MethodStorage).Should().BeTrue("negative control: a stamped consent counts");
+        var request = WithRenewal() with { StorageConsent = Storage() with { AcceptedAt = default } };
+
+        request.Problems().Should().Contain(PaymentRequestProblem.MissingStorageConsent);
+        (WithRenewal() with { RenewalConsent = Renewal() with { AcceptedAt = default } })
+            .AuthorizesOffSession.Should().BeFalse("an off-session mandate needs a recorded acceptance");
+    }
+
+    [Fact]
+    public void ASetupWithABlankReferenceCurrencyUseOrReturnUrl_IsRefused()
+    {
+        SetupOnly().Problems().Should().BeEmpty("negative control");
+        var request = SetupOnly() with { Reference = " ", Currency = "", IntendedUse = " ", ReturnUrl = "" };
+
+        request.Problems().Should().Contain(PaymentRequestProblem.MissingReference)
+            .And.Contain(PaymentRequestProblem.MissingCurrency)
+            .And.Contain(PaymentRequestProblem.MissingIntendedUse)
+            .And.Contain(PaymentRequestProblem.MissingReturnUrl);
+    }
+
+    [Fact]
+    public void ARenewalWithABlankClaimPlanCadenceOrCurrency_IsRefused()
+    {
+        RenewalRequest().Problems(Now).Should().BeEmpty("negative control");
+
+        (RenewalRequest() with { ClaimReference = " " }).Problems(Now).Should().Contain(PaymentRequestProblem.MissingReference);
+        (RenewalRequest() with { PlanTier = "" }).Problems(Now).Should().Contain(PaymentRequestProblem.MissingPlanTerms);
+        (RenewalRequest() with { Cadence = " " }).Problems(Now).Should().Contain(PaymentRequestProblem.MissingPlanTerms);
+        (RenewalRequest() with { Currency = "" }).Problems(Now).Should().Contain(PaymentRequestProblem.MissingCurrency);
+    }
+
+    [Fact]
+    public void ASetupFactStampedForAnotherSite_DoesNotSatisfy()
+    {
+        var request = SetupOnly();
+        Succeeded(request).Satisfies(request, Session()).Should().BeTrue("negative control");
+
+        var otherSite = Succeeded(request with { SiteId = "other-site" });
+        otherSite.Mismatches(request, Session()).Should().Contain(nameof(PaymentMethodSetupFact.SiteId));
+        otherSite.Satisfies(request, Session()).Should().BeFalse();
+    }
+
+    [Fact]
+    public void ASucceededSetupThatNamesNoMethod_DoesNotSatisfy()
+    {
+        var request = SetupOnly();
+
+        (Succeeded(request) with { PaymentMethodId = " " }).Satisfies(request, Session())
+            .Should().BeFalse("a success with no saved method proves nothing reusable");
+    }
+
+    [Fact]
+    public void ASubscriptionCreatedFromAnotherSetup_DoesNotSatisfy()
+    {
+        var request = RenewalRequest();
+        Scheduled(request).Satisfies(request).Should().BeTrue("negative control");
+
+        var fromOtherSetup = Scheduled(request with { SetupId = "seti_OTHER" });
+        fromOtherSetup.Mismatches(request).Should().Contain(nameof(DeferredSubscriptionFact.SetupReference));
+        fromOtherSetup.Satisfies(request).Should().BeFalse();
+    }
 }

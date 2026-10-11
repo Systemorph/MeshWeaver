@@ -146,13 +146,19 @@ public sealed record PaymentConsentReference
     /// </summary>
     public string? TermsHash { get; init; }
 
-    /// <summary>Whether this reference is of <paramref name="kind"/> and names its text and version. Pure.</summary>
+    /// <summary>
+    /// Whether this reference is of <paramref name="kind"/> and names its text, its version and
+    /// WHEN it was accepted. <c>required</c> does not keep a caller or a deserializer from supplying
+    /// <see cref="DateTimeOffset"/>'s default, and a consent with no acceptance instant records no
+    /// acceptance at all. Pure.
+    /// </summary>
     /// <param name="kind">The consent kind required.</param>
     /// <returns>True when the reference can stand for a consent of that kind.</returns>
     public bool Is(string kind) =>
         string.Equals(Kind, kind, StringComparison.Ordinal)
         && !string.IsNullOrWhiteSpace(TextVersion)
-        && !string.IsNullOrWhiteSpace(TextHash);
+        && !string.IsNullOrWhiteSpace(TextHash)
+        && AcceptedAt != default;
 }
 
 /// <summary>
@@ -188,6 +194,25 @@ public static class PaymentRequestProblem
 
     /// <summary>The request names no verified setup, customer or method to charge.</summary>
     public const string MissingPaymentMethod = "MissingPaymentMethod";
+
+    /// <summary>
+    /// The request carries no caller reference (a setup's <see cref="PaymentMethodSetupRequest.Reference"/>)
+    /// or no owning claim (a renewal's <see cref="DeferredSubscriptionRequest.ClaimReference"/>). A blank
+    /// one is stamped and then read back as absent, so the created object could never be paired with it.
+    /// </summary>
+    public const string MissingReference = "MissingReference";
+
+    /// <summary>The request names no currency.</summary>
+    public const string MissingCurrency = "MissingCurrency";
+
+    /// <summary>The setup request names no intended use.</summary>
+    public const string MissingIntendedUse = "MissingIntendedUse";
+
+    /// <summary>The setup request names no return URL for the buyer.</summary>
+    public const string MissingReturnUrl = "MissingReturnUrl";
+
+    /// <summary>The renewal request names no plan tier or no cadence.</summary>
+    public const string MissingPlanTerms = "MissingPlanTerms";
 }
 
 /// <summary>
@@ -288,8 +313,16 @@ public sealed record PaymentMethodSetupRequest
     public ImmutableArray<string> Problems()
     {
         var problems = ImmutableArray.CreateBuilder<string>();
+        if (string.IsNullOrWhiteSpace(Reference))
+            problems.Add(PaymentRequestProblem.MissingReference);
         if (string.IsNullOrWhiteSpace(Buyer))
             problems.Add(PaymentRequestProblem.MissingBuyer);
+        if (string.IsNullOrWhiteSpace(Currency))
+            problems.Add(PaymentRequestProblem.MissingCurrency);
+        if (string.IsNullOrWhiteSpace(IntendedUse))
+            problems.Add(PaymentRequestProblem.MissingIntendedUse);
+        if (string.IsNullOrWhiteSpace(ReturnUrl))
+            problems.Add(PaymentRequestProblem.MissingReturnUrl);
         if (string.IsNullOrWhiteSpace(IdempotencyKey))
             problems.Add(PaymentRequestProblem.MissingIdempotencyKey);
         if (StorageConsent is null || !StorageConsent.Is(PaymentConsentKind.MethodStorage))
@@ -458,6 +491,10 @@ public sealed record PaymentMethodSetupFact
     [JsonIgnore]
     public string? TermsHash => Meta(PaymentMetadata.TermsHash);
 
+    /// <summary>The registered site the setup was bound to.</summary>
+    [JsonIgnore]
+    public string? SiteId => Meta(PaymentMetadata.SiteId);
+
     /// <summary>The intended use the setup was requested for.</summary>
     [JsonIgnore]
     public string? IntendedUse => Meta(PaymentMetadata.IntendedUse);
@@ -477,8 +514,8 @@ public sealed record PaymentMethodSetupFact
     /// Everything about this fact that does NOT match the request it is offered for and the session
     /// that request created — empty when it matches. Pure.
     ///
-    /// <para>Compared: the setup id, the buyer, the caller's reference, the claim, the terms hash,
-    /// the intended use, the customer (when the session named one), the account mode (when the
+    /// <para>Compared: the setup id, the buyer, the caller's reference, the claim, the site, the
+    /// terms hash, the intended use, the customer (when the session named one), the account mode (when the
     /// request stated one), and off-session permission, which must equal exactly what the request
     /// authorized.</para>
     /// </summary>
@@ -498,6 +535,8 @@ public sealed record PaymentMethodSetupFact
             mismatches.Add(nameof(SetupReference));
         if (!string.Equals(ClaimReference, Blank(request.ClaimReference), StringComparison.Ordinal))
             mismatches.Add(nameof(ClaimReference));
+        if (!string.Equals(SiteId, Blank(request.SiteId), StringComparison.Ordinal))
+            mismatches.Add(nameof(SiteId));
         if (!string.Equals(TermsHash, Blank(request.TermsHash), StringComparison.Ordinal))
             mismatches.Add(nameof(TermsHash));
         if (!string.Equals(IntendedUse, request.IntendedUse, StringComparison.Ordinal))
@@ -514,14 +553,15 @@ public sealed record PaymentMethodSetupFact
     }
 
     /// <summary>
-    /// Whether this fact SATISFIES the request: the setup succeeded and nothing mismatches. The one
-    /// predicate a caller may proceed on. Pure.
+    /// Whether this fact SATISFIES the request: the setup succeeded, it names the saved method, and
+    /// nothing mismatches. The one predicate a caller may proceed on. A success that names no method
+    /// proves nothing was saved that could be reused, removed or billed. Pure.
     /// </summary>
     /// <param name="request">The request the caller sent.</param>
     /// <param name="session">The session the provider answered that request with.</param>
     /// <returns>True only for a succeeded setup that is this request's own.</returns>
     public bool Satisfies(PaymentMethodSetupRequest request, PaymentMethodSetupSession session) =>
-        IsSucceeded && Mismatches(request, session).IsEmpty;
+        IsSucceeded && !string.IsNullOrWhiteSpace(PaymentMethodId) && Mismatches(request, session).IsEmpty;
 
     /// <summary>One metadata value, or null when absent or blank. Pure.</summary>
     /// <param name="key">The metadata key.</param>

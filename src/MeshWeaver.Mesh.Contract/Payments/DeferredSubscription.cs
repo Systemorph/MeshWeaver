@@ -127,8 +127,14 @@ public sealed record DeferredSubscriptionRequest
     public ImmutableArray<string> Problems(DateTimeOffset now)
     {
         var problems = ImmutableArray.CreateBuilder<string>();
+        if (string.IsNullOrWhiteSpace(ClaimReference))
+            problems.Add(PaymentRequestProblem.MissingReference);
         if (string.IsNullOrWhiteSpace(Buyer))
             problems.Add(PaymentRequestProblem.MissingBuyer);
+        if (string.IsNullOrWhiteSpace(PlanTier) || string.IsNullOrWhiteSpace(Cadence))
+            problems.Add(PaymentRequestProblem.MissingPlanTerms);
+        if (string.IsNullOrWhiteSpace(Currency))
+            problems.Add(PaymentRequestProblem.MissingCurrency);
         if (string.IsNullOrWhiteSpace(IdempotencyKey))
             problems.Add(PaymentRequestProblem.MissingIdempotencyKey);
         if (string.IsNullOrWhiteSpace(SetupId) || string.IsNullOrWhiteSpace(CustomerId)
@@ -249,6 +255,10 @@ public sealed record DeferredSubscriptionFact
     [JsonIgnore]
     public string? TermsHash => Meta(PaymentMetadata.TermsHash);
 
+    /// <summary>The verified setup that authorized off-session billing for it, as stamped.</summary>
+    [JsonIgnore]
+    public string? SetupReference => Meta(PaymentMetadata.SetupReference);
+
     /// <summary>Whether the subscription exists and is waiting for its first charge.</summary>
     [JsonIgnore]
     public bool IsScheduled => string.Equals(Status, DeferredSubscriptionStatus.Scheduled, StringComparison.Ordinal);
@@ -272,7 +282,7 @@ public sealed record DeferredSubscriptionFact
     /// Everything about this fact that does NOT match the request it is offered for — empty when it
     /// matches. Pure.
     ///
-    /// <para>Compared exactly: the claim, the buyer, the terms hash, the customer, the method, the
+    /// <para>Compared exactly: the claim, the buyer, the terms hash, the setup that authorized it, the customer, the method, the
     /// plan, the cadence, the currency (case-insensitively), the recurring total, the first-charge
     /// instant, the account mode (when the request stated one) — and zero-due, which must be
     /// PROVEN (<see cref="IsZeroDueToday"/>), not merely unreported.</para>
@@ -289,6 +299,8 @@ public sealed record DeferredSubscriptionFact
             mismatches.Add(nameof(Buyer));
         if (!string.Equals(TermsHash, request.TermsHash, StringComparison.Ordinal))
             mismatches.Add(nameof(TermsHash));
+        if (!string.Equals(SetupReference, request.SetupId, StringComparison.Ordinal))
+            mismatches.Add(nameof(SetupReference));
         if (!string.Equals(CustomerId, request.CustomerId, StringComparison.Ordinal))
             mismatches.Add(nameof(CustomerId));
         if (!string.Equals(PaymentMethodId, request.PaymentMethodId, StringComparison.Ordinal))

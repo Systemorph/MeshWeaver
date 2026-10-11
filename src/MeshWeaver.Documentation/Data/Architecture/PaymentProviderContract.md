@@ -207,10 +207,10 @@ written to a node, an activity, a log line, a URL, a cache or browser storage.
 
 `PaymentMethodSetupFact` comes from an authenticated delivery (`PaymentDelivery.Setup`) or from
 `RetrieveSetup`, never from a browser return. It is **not a payment and not an entitlement**.
-`Satisfies(request, session)` holds only when the status is `Succeeded` and nothing in
-`Mismatches(…)` differs. The fields compared are the setup id, buyer, the caller's reference, claim,
-terms hash, intended use, customer, account mode, and off-session permission, which must equal
-exactly what the request authorized. Permission the request never asked for is a mismatch, not a
+`Satisfies(request, session)` holds only when the status is `Succeeded`, the fact names the saved
+method (`PaymentMethodId`), and nothing in `Mismatches(…)` differs. The fields compared are the
+setup id, buyer, the caller's reference, claim, site, terms hash, intended use, customer, account
+mode, and off-session permission, which must equal exactly what the request authorized. Permission the request never asked for is a mismatch, not a
 bonus.
 
 A finished setup is reported on `PaymentDelivery.Setup` and **never** on `Checkout`, so it cannot
@@ -225,11 +225,15 @@ customer, method, plan, cadence, currency, the **tax-inclusive** recurring total
 `FirstChargeAt` instant, the renewal consent, the terms hash and one idempotency key. There is no
 field through which a caller could ask for a charge now. `DueToday` is the constant zero. A provider
 refuses a request with `Problems(now)`, a setup that did not authorize off-session use, and any
-account state that would make today's amount positive or change the accepted total. It never omits
+account state that would make today's amount positive or change the accepted total. Every field a
+fact is later matched on must be non-blank in the request: a blank one is stamped and then read
+back as absent, so the created object could never satisfy its own request. A consent counts only
+with its kind, text version, text hash and an acceptance instant. It never omits
 the first-charge instant as a fallback and never charges and refunds.
 
 `DeferredSubscriptionFact.Satisfies(request)` holds only when the status is `Scheduled`, a
-subscription id is named, every term matches exactly, and zero-due is **proven** from the
+subscription id is named, every term matches exactly (the stamped setup reference included, so a
+subscription created from another setup never stands for this one), and zero-due is **proven** from the
 processor's own numbers: `InitialInvoiceAmountDue == 0` and `AmountCharged == 0`. An amount the
 processor did not report is not a zero.
 
