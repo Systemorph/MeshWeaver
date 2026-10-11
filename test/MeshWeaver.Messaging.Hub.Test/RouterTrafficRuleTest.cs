@@ -146,6 +146,9 @@ public class RouterTrafficRuleTest
             new DeliveryFailure(Failed(Mesh, Mesh)), _ => true));         // addressed AT the router
         Assert.False(RouterTrafficRule.IsNackOfAnAnswerTheRouterPosted(
             new DeliveryFailure(Failed("portal", "client")), _ => true)); // not the router's delivery
+        Assert.False(RouterTrafficRule.IsNackOfAnAnswerTheRouterPosted(
+            new DeliveryFailure(new MessageDelivery<string>(new Address(Mesh, "s"), null!, "payload",
+                new System.Text.Json.JsonSerializerOptions())), _ => true)); // addressed at NO hub: not an answer to one
         Assert.False(RouterTrafficRule.IsNackOfAnAnswerTheRouterPosted(new object(), _ => true));
         Assert.False(RouterTrafficRule.IsNackOfAnAnswerTheRouterPosted(null, _ => true));
     }
