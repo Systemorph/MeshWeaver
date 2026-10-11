@@ -399,6 +399,8 @@ public static class ProjectBuild
             + $"+ the shared framework; {container.PackageVersions.Count} package version(s) from the image's "
             + $"deps.json; platform AssemblyVersion {container.PlatformAssemblyVersion}");
 
+        sink.Info(UncarriedRefusalEnforcedLine);
+
         if (options.BindToImage)
         {
             options = options with { Properties = BoundToImage(options.Properties, container.PlatformAssemblyVersion, sink) };
@@ -999,7 +1001,14 @@ public static class ProjectBuild
             sink.Warn($"[{name}] private closure: a package declares the native payload '{absent}' "
                 + "and neither the image nor the shelf carries the file — it cannot ride, and the "
                 + "module will throw DllNotFoundException at its first P/Invoke");
-        ReportUncarried(name, privateClosure, sink.Warn);
+        // 🚨 ARMED (#4445): an asset the private closure declares for the bundle's TARGET RID that
+        // this lane does not carry refuses the module — the same findings the SDK lane's
+        // module-pack refuses on. An asset for a RID no bundle targets is information only.
+        foreach (var foreign in privateClosure.NotTargeted)
+            sink.Info($"[{name}] private closure: {foreign}");
+        if (RefuseUncarried(name, privateClosure, sink.Error) is { } refusal)
+            return new ProjectResult(model.ProjectPath, model.AssemblyName, clock.Elapsed,
+                model.CompileItems.Length, privateClosure.Uncarried.Length, 0, null, [], refusal);
         if (!privateClosure.Rides.IsEmpty)
             sink.Info($"[{name}] private closure: {privateClosure.Rides.Length} assembl(y|ies) ride "
                 + $"the bundle, {privateClosure.FrameworkResolved.Length} left to the shared framework"
@@ -1565,23 +1574,38 @@ public static class ProjectBuild
     }
 
     /// <summary>
-    /// 🚨 NAMES, as one warning line each, what the module's private closure declares and this lane
-    /// does not carry (#4367, #4445) — never a refusal here, deliberately: nothing had ever printed
-    /// on this lane, so a refusal would be armed on faith (the #3240 shape). The line carries the
-    /// SAME finding wording the SDK lane refuses on, so one grep over a container wave's logs is the
-    /// measurement #4445 arms on. A separate method, and a delegate rather than the sink, so the
-    /// report is pinnable without a build.
+    /// The line every <c>build-project</c> run prints once, before it builds anything, stating that
+    /// the uncarried-asset refusal is ARMED (#4445). The shared lane
+    /// (<c>node-repo-module-pack.yml</c>) asserts it in the workspace-build log, so a tester that
+    /// stopped refusing turns the lane RED instead of passing over what it no longer checks.
+    /// </summary>
+    internal static string UncarriedRefusalEnforcedLine =>
+        $"uncarried-asset refusal — ENFORCED for bundle target RID {ModuleBundleTarget.Rid} (#4445)";
+
+    /// <summary>
+    /// 🚨 REFUSES the module when its private closure declares an asset for the bundle's TARGET
+    /// RID that this lane does not carry (#4367, #4445). Each finding is one ERROR line, in the
+    /// SAME words the SDK lane's module-pack refuses on, plus the step this lane offers
+    /// (<see cref="NativeContributions.ContainerRemedy"/>). Armed on two stable measured waves
+    /// once the finding was scoped to the target RID: the only findings those waves printed were
+    /// for <c>win</c>, which is now information (<see cref="PrivateClosure.Result.NotTargeted"/>).
+    /// A separate method, and a delegate rather than the sink, so the refusal is pinnable without a
+    /// build.
     /// </summary>
     /// <param name="moduleName">The module's name, for the log line.</param>
     /// <param name="closure">The derived private closure.</param>
-    /// <param name="warn">Where a finding goes (the build sink's warning channel).</param>
-    /// <returns>How many findings were named.</returns>
-    internal static int ReportUncarried(
-        string moduleName, PrivateClosure.Result closure, Action<string> warn)
+    /// <param name="error">Where a finding goes (the build sink's error channel).</param>
+    /// <returns>The project's failure text, or null when nothing is refused.</returns>
+    internal static string? RefuseUncarried(
+        string moduleName, PrivateClosure.Result closure, Action<string> error)
     {
+        if (closure.Uncarried.IsEmpty)
+            return null;
         foreach (var finding in closure.Uncarried)
-            warn($"[{moduleName}] private closure: {finding}");
-        return closure.Uncarried.Length;
+            error($"[{moduleName}] private closure: {finding}");
+        return $"{closure.Uncarried.Length} declared asset(s) for the bundle target RID "
+            + $"{ModuleBundleTarget.Rid} that this lane does not carry — a module that lands without "
+            + "an asset its own dependency graph declares faults at first use (#4367, #4445)";
     }
 
     /// <summary>
