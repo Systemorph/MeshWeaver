@@ -815,6 +815,31 @@ public static partial class CatalogLayoutAreas
             .Catch<PackageManifest?, Exception>(_ => Observable.Return<PackageManifest?>(null))
             .SelectMany(record =>
             {
+                // 🚨 MeshWeaver.Plugins#2786 — BOTH exits below decide from hashes of the SOURCE:
+                // the up-to-date exit from the module hash, the incremental diff from the per-file
+                // map. Each trusts the record to say what the MESH stores, and the record says so
+                // only for the comparison rule it was stamped under. Under an older rule a file
+                // could differ from its stored node in a member that rule did not look at, be
+                // skipped, and have its hash stamped anyway — after which every later install read
+                // the equal hash and never compared that node again. Governance/NameCheck kept
+                // `keepsHistory: true` through a reinstall on a platform whose comparison (#6479)
+                // could see the difference, because neither exit ever reached it. So a record
+                // under an older rule is no baseline: install in FULL, which compares every stored
+                // node with the package, writes only the ones that differ, and stamps the current
+                // rule — once per package, never again until the rule is raised.
+                if (record is not null && PackageInstaller.RecordPredatesTheComparisonRule(record))
+                {
+                    logger?.LogInformation(
+                        "Package {Id}: its install record was stamped under comparison rule {Recorded}, "
+                        + "older than this installer's {Current}, so its file hashes are no evidence of "
+                        + "what the mesh stores. Installing in FULL: every stored node is compared with "
+                        + "the package and only the ones that differ are written "
+                        + "(MeshWeaver.Plugins#2786).",
+                        pkg.Id, record.ComparisonEpoch?.ToString() ?? "(none)",
+                        PackageInstaller.InstallComparisonEpoch);
+                    return Full();
+                }
+
                 if (record is not null
                     && string.Equals(record.ModuleVersion, pkg.ModuleVersion, StringComparison.Ordinal))
                 {
