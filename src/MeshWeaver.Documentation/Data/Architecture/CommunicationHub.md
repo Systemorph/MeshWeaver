@@ -366,6 +366,133 @@ Two legs, each selecting its own type's own states, merged for display only.
 nothing, and it must never be mistaken for the retention pass that actually bounds the data
 ([Notification Retention](/Doc/Architecture/NotificationRetention)).
 
+### Select many, then act — what ships today
+
+The Inbox app (`/{user}/Inbox`, `InboxLayoutArea`) is ONE `Controls.DataGrid` over every leg, with
+the platform's own selection column (`WithRowSelection`, [DataGrid](/Doc/GUI/DataGrid) → "Row
+selection") — and everything above the grid is **data-bound**.
+
+The page holds one piece of view state, an `InboxFilter` in its data section, and each control is
+bound to a field of it. No control has a click handler that re-renders the page; the rows are a
+function of the filter and the legs.
+
+| Control | Bound to | What it does |
+|---|---|---|
+| search box | `search` | the term goes to the query engine with EVERY leg, as free text (full text and the semantic index), under the owner's identity — never a match over the rows already loaded |
+| order select | `order` | an `InboxOrder` constant: what needs you first (default — band rank, newest within), newest, oldest, by title, by source — the last two alphabetical in the viewer's language |
+| one switch per source | `sources/{key}` (the id, hex-encoded) | shows or hides what one provider brought (Mail, WhatsApp, Notifications, …); a source with no entry is shown, so a leg a package brings later never arrives switched off |
+| the grid's checkboxes | `inboxSelection` | the ticked row keys, read by Delete |
+
+Three properties of that binding are load-bearing:
+
+- **Every leg is a live read bound to the page.** Idle or searched, a leg is an `IMeshService.Query`
+  folded from deltas into "what the leg selects now", ended when the term changes or the page closes.
+  Never the process-wide synced query (`GetQuery`): that cache lives as long as the process, per
+  distinct query text, and every leg is resolved for its owner — so it would keep a subscription and
+  a snapshot per leg for everyone who ever opened their inbox.
+- 🚨 **The term is free text, never grammar.** It is handed over as one quoted phrase with its quote
+  characters removed, and the leg's bound is pinned on the request (`MeshQueryRequest.Limit`, which
+  wins over any `limit:` in the string). Spliced in raw, `OR content.status:Archived` would parse as
+  "(the leg) OR archived" and bring put-away rows back, and `limit:all` would lift the bound. A search
+  narrows a leg; it never replaces its constraints.
+- 🚨 **The filter is compared by VALUE.** The data section re-emits an id whenever any id in it
+  changes — the grid's own rows included — and each emission is a freshly deserialized record. Read
+  naively, the page feeds on its own writes: rows written, filter "changed", rows written again,
+  without end. `InboxRows.Fingerprint` is what tells a change the viewer made from a re-emission.
+- **Importance stays the default order, in one list.** The bands are a column and a rank rather
+  than three stacked lists, so "what needs you" is still on top — and an order the page does not
+  recognise falls back to it.
+
+The toolbar's two buttons act on every ticked row.
+
+| Button | Does | Never does |
+|---|---|---|
+| **Delete** | puts each ticked item away through its own type's `IInboxItemHandler.Dismiss`, records the batch | remove a node from the mesh |
+| **Undo** | brings the last batch back through `IInboxItemHandler.Restore` | touch anything Delete did not put away |
+
+🚨 **Delete is SOFT, and what it means belongs to the item's type, not to the inbox.** The action
+half of the potluck mirrors the query half: a package that brings a leg brings, as a singleton
+service, the `IInboxItemHandler` for the node type its leg selects. "Put away" moves the item into a
+state the package's OWN leg excludes — and Undo brings it back into that leg. Not the exact inverse:
+the inbox keeps no record of the prior state, so Undo returns the item to a state its leg selects
+again, chosen by the handler (an archived mail comes back as Read, whether it was New or Read):
+
+| Item type | Brought by | Delete | Undo | The leg excludes |
+|---|---|---|---|---|
+| `Notification` | core | `Dismissed = true` | `Dismissed = false` | `-content.dismissed:true` |
+| `Email` (`{user}/_Email`, inbound) | core | `Status = Archived` | `Status = Read` | `-content.status:Archived` |
+| `Thread` | the Threads app | closes the conversation | reopens it | `-content.status:Done` |
+
+Three rules follow, and each is pinned by a test in `InboxSelectAndDeleteTest`:
+
+- **A row whose type has no handler is LISTED but not selectable**, and its disabled checkbox says
+  why. The inbox never guesses a write for a type nobody taught it — a governed record (an approval,
+  an instance action) deliberately has no handler and leaves the inbox by being decided.
+- **A row in *Running* is never selectable.** It is not the viewer's to put away; it leaves the band
+  by finishing.
+- **An outcome never quotes an exception.** A handler's `Reason` is shown to the viewer verbatim, so
+  it is a refusal the handler chose to state. A write that faults is LOGGED and answers with no
+  reason; the page then says only that the item could not be changed.
+- **A leg that does not read exactly the viewer's own partition is never run.** `InboxQueries.Resolve`
+  drops it — its first term must be a `namespace:` or `path:` whose first segment is the viewer,
+  literally, with no `partitions:all` — and the page logs it as an error naming the source. A
+  provider's mistake is loud, and it can never become a fan-out over every schema on every render.
+- **Every leg is read through the row projection.** The page appends `InboxQueries.RowProjection`
+  (and the bound) to whatever a provider wrote: a leg with no `select:` would fetch whole thread and
+  message bodies to render one line each.
+- **A provider band has a display name too.** `InboxQueryLeg.BandLabelKey` names its catalog text;
+  core's own three bands are named by core.
+- **The orderings are a closed set**, owned by the page; a stored order outside it reads as
+  importance.
+- **A source has an id and a display name.** `InboxQueryLeg.Source` keys the switch; `SourceLabelKey` names the catalog text the row and the switch show in the
+  viewer's language. A provider gives no key only for a name that is the same in every language.
+  The row's date is written in the viewer's time zone AND the viewer's date format.
+- **A bulk act never leaves the owner's partition.** A search runs with the viewer's rights and may
+  list a node elsewhere; a ticked row outside `{owner}/` is not a target.
+- **A selection is the viewer's claim, not a grant — and it is the ONLY thing taken from the
+  client.** The data section is two-way, so the click never trusts what is in it: the ticked keys are
+  intersected with the owner's own feed, re-read from the legs at the click (which also supplies the
+  node type that picks each handler), and every write is issued under the CLICKER's access context,
+  opened around the handler call. The Undo batch is a host variable for the same reason — kept in the
+  data section it would be whatever the client says it is.
+- **"The write completed" is not "the item was put away".** A handler answers `Done` only when THIS
+  call changed the content AND the content is now in the asked-for state. A no-op (an outbound mail)
+  completes like any other write; and an item someone else already put away is in the asked-for
+  state too — counted, it would enter this click's Undo batch and Undo would reverse the other
+  writer's act.
+- **Each source is asked for its newest `InboxQueries.LegLimit` rows — or fewer, when its provider
+  names a smaller positive `limit:` — and the page says so when a source answered its full bound.**
+  `limit:all` and a non-positive limit are UNBOUNDED to the parser, so they are capped like a leg that
+  names none; the effective bound is also pinned on the searched read's `MeshQueryRequest.Limit`. Unbounded, the page folds every historical row into memory and into the
+  client's payload on a surface that is open all day. Older items are found with the search, which
+  goes to the query engine; "oldest first" therefore orders the listed window, not all history.
+- **The read names the viewer.** A leg is (re)subscribed on a data emission, where the ambient
+  identity is gone, so the live read takes the viewer as an argument.
+- **A source that cannot be read is named — and read again only when the viewer asks.** It
+  contributes no rows, is logged, and is listed in a notice above the grid: an unreadable source must
+  never look like an empty one. It is re-read when the search changes or the page is reopened, never
+  on a timer — a provider that stays broken would otherwise be re-queried and re-logged for as long
+  as any inbox is open.
+- **The handler builds its write INSIDE the call.** `Update` captures the caller's identity when it
+  is constructed, and the inbox opens the clicker's scope only around the call. A write deferred to
+  subscription runs, for every item after the first, on the previous write's completion thread — as
+  nobody — so a multi-row Delete would put away only its first row.
+- **Delete and Undo hold the page one at a time.** They are separate buttons, so the click framework
+  would run them side by side, and each rewrites the Undo batch when it finishes. A second act while
+  one runs is refused with its own line; the claim is released however the first one ends.
+
+🚨 **A default is OMITTED from stored JSON, so a leg negates the STAMPED value it excludes.**
+`Dismissed` defaults to `false`, `Email.Status` to `New`, `Direction` to `Inbound`: a positive match
+on any of those selects nothing that was ever written. The legs therefore read
+`-content.dismissed:true`, `-content.status:Archived`, `-content.direction:Outbound` — the same trap
+the activity legs document for `Running`.
+
+**How a package brings a leg today:** as a service —
+`services.AddSingleton(new InboxQueryLeg { Source = "Threads", Band = InboxBand.NeedsYou, Query = "namespace:{viewer}/… select:…" })`
+— which `InboxQueries.All` runs beside core's own. That serves a COMPILED module. A node-native
+package cannot register a service, so the durable, node-contributed form of a leg described above is
+still owed (§11).
+
 ### Ordering: by IMPORTANCE first, date second
 
 🚨 **The default order is importance, not time.** What the viewer must act on comes **first, at the
@@ -388,37 +515,32 @@ and for one reading in high-contrast or dark mode, so emphasis is carried by **p
 glyph and an accessible label together** — colour is the fourth signal, never the only one. This is
 the same rule as the transport marker: the meaning lives in something a screen reader can say.
 
-### The filter bar is `MeshSearchControl` — not a new one
+### The filter bar — what shipped, and why it is not `MeshSearchControl`
 
-🚨 **Do not build an inbox filter bar.** `MeshSearchControl` already is one, and every feature this
-surface needs is in it. Building a second is the hand-rolling the platform rules forbid, and it
-would be a worse one.
+The first design mapped the inbox onto `MeshSearchControl` (bands as scope tabs, ordering as
+`SortOptions`, its own search bar). It was superseded when the inbox became **select many, then
+act**: Delete and Undo need the platform grid's row selection (`DataGridControl.WithRowSelection`),
+which a search result list does not carry, and a person working through their inbox wants every band
+in ONE list rather than one tab at a time. What ships is the contract in
+[Select many, then act](#select-many-then-act--what-ships-today): one `Controls.DataGrid`, with the
+search box, order select and per-source switches as ordinary platform controls bound to ONE
+`InboxFilter` in the page's data section. It is still not a hand-built filter bar — every control is
+the platform's own, and the search still goes to the mesh query engine with each leg.
 
-The mapping is almost exact, which is the tell that this is the right control:
+What carried over from the first design:
 
-| Inbox needs | `MeshSearchControl` gives |
-|---|---|
-| the three **bands** | **scope tabs** — a tab strip above the header, one `MeshSearchScope(Label, Query)` per band, each carrying its band's hidden query |
-| **ordering**, importance first | `SortOptions` — `MeshSearchSortOption(Label, Query)`, **per scope**. Each option is a FULL query, so one can change ordering *and* the result set |
-| a **filter bar** | the control's own search bar |
-| a term that survives switching band | built in — scopes deliberately **share one search bar**, so switching swaps only the hidden query while the typed text stays |
-| how rows render | `MeshSearchRenderMode` |
+- **Importance is the default order** — band rank first, newest within — and an order the page does
+  not recognise falls back to it.
+- **The provider legs ARE the queries.** A provider contributing a leg contributes the query text
+  the page runs; nothing is adapted between them.
+- **The term survives** a change of order or of the source switches: they are fields of the same
+  bound record.
 
-Two consequences worth stating, because both are properties of the control rather than choices we
-get to make later:
-
-- **The first sort option is the default, and it must match the scope's `HiddenQuery`.** So
-  importance-first is not styling applied after the fact — it is the *first* `SortOptions` entry and
-  the hidden query's own ordering, in agreement. If those two disagree the list reorders itself the
-  moment the user touches the dropdown.
-- **The provider legs ARE the hidden queries.** A provider contributing a leg is contributing the
-  scope's query text, so the potluck and the control are the same mechanism seen from two sides —
-  nothing has to be adapted between them.
-
-🚨 **A filter must never silently hide an obligation.** Filtering to *Recent* and seeing an empty
-"Needs you" band is indistinguishable from having nothing to do — the same failure as a tick on a
-pending row, reached a different way. When a filter or scope hides open items, the inbox says so and
-how many: *"3 items needing you are hidden by this filter."* The count is never filtered away with
+🚨 **A filter must never silently hide an obligation.** Switching a source off and seeing no
+"Needs you" row is indistinguishable from having nothing to do — the same failure as a tick on a
+pending row, reached a different way. When the switches hide open items, the inbox says so and how
+many, in a bound notice above the grid (`inboxHidden`): *"3 items needing you are hidden by the
+source switches."* The count is taken before the switches apply, so it is never filtered away with
 the rows.
 
 Built from framework controls only — `Controls.DataGrid` with `PropertyColumnControl<T>`, composed
@@ -621,6 +743,23 @@ twice.
 
 ## 11. What is NOT established here
 
+- **"Done" is judged on the writer's mirror, not on the owner's verdict.** A handler counts an item
+  as put away when its update lambda changed the content it was handed and the written result is in
+  the asked-for state. If the same item was put away in ANOTHER session a moment earlier and this
+  mirror has not seen it yet, the owner applies a no-op while this click counts it — and its Undo can
+  bring back an item the viewer put away elsewhere. Bounded (the viewer's own partition, a soft and
+  repeatable act) but real; closing it needs the write path to report an owner-side no-op, which
+  `Update` does not do today.
+- **Legs contributed as NODES do not exist yet.** A compiled module registers its leg and its
+  handler as services; a node-native package (the Hosting approvals, triage items, fleet issues,
+  feedback submissions) has no way to bring either. Until it does, those lists stay on their own
+  pages.
+- **The inbox's rows carry no read state and no channel glyph.** A row shows what it is, who brought
+  it and when it last changed; "unread" and the transport marker of §6 need content the row
+  projection does not select.
+- **Only the viewer's OWN partition is listed.** A conversation started on a page in another
+  partition lives beside that page, so no anchored leg finds it — it stays in the Threads app until
+  it has a delivery copy in the viewer's partition (§4).
 - **No measurement of copy volume.** The write-side fan-out is bounded by recipient count *by
   construction*; no production distribution has been sampled, because the feature does not exist yet.
 - **WhatsApp and iMessage transports are asserted to fit the adapter shape, not demonstrated.**
