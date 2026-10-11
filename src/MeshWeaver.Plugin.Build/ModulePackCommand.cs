@@ -544,6 +544,11 @@ public static class ModulePackCommand
                 return 2;
             }
             uncarried = derived.Uncarried;
+            // An asset for a RID no bundle targets (#4445) is information, never a refusal — one
+            // line each, so the pack log still names what was left out.
+            foreach (var foreign in derived.NotTargeted)
+                Console.WriteLine("deps-closure: " + UncarriedAssetFindings.NotTargetedRid(
+                    foreign.Package, foreign.RelativePath, foreign.Rid));
             var present = derived.Files
                 .Where(f => File.Exists(Path.Combine(moduleDirectory, f)))
                 .ToList();

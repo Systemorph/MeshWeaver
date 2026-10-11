@@ -88,11 +88,11 @@ internal static class NativeContributions
     /// only step a module can take here is the sdk path, whose pack names the exact csproj lines.
     /// </summary>
     internal const string ContainerRemedy =
-        " The container lane carries neither shape and does not refuse yet — a refusal here is "
-        + "armed only after a measured container wave (#4445). If the module needs it, build the "
-        + "module on the sdk path (\"build\": \"sdk\" on its modules: entry) and declare the carrier "
-        + "in its csproj (MeshWeaverPackWith / MeshWeaverPackWithNative) — that path's module-pack "
-        + "refuses until it is carried and prints the exact lines.";
+        " The container lane carries neither shape, so this build REFUSES the module (#4445). The "
+        + "step this lane offers: build the module on the sdk path (\"build\": \"sdk\" on its "
+        + "modules: entry) and declare the carrier in its csproj (MeshWeaverPackWith / "
+        + "MeshWeaverPackWithNative) — that path's module-pack prints the exact lines and accepts "
+        + "the pack once the asset is carried. Or drop the dependency.";
 
     /// <summary>
     /// 🚨 What one <c>deps.json</c> node DECLARES that this lane does NOT carry — NAMED, never
@@ -111,15 +111,37 @@ internal static class NativeContributions
     /// <param name="node">One entry of the deps.json <c>targets/&lt;tfm&gt;</c> object.</param>
     /// <param name="packageId">The package the node describes, for the finding.</param>
     /// <returns>The worded findings, ordered and de-duplicated ORDINAL.</returns>
-    public static ImmutableArray<string> UncarriedBy(JsonElement node, string packageId)
+    public static ImmutableArray<string> UncarriedBy(JsonElement node, string packageId) =>
+        Classify(node, packageId).Uncarried;
+
+    /// <summary>
+    /// What one <c>deps.json</c> node declares for a RID a module bundle does NOT target
+    /// (<see cref="ModuleBundleTarget"/>, #4445), as INFORMATION lines
+    /// (<see cref="UncarriedAssetFindings.NotTargetedRid"/>). Never refused: nothing that loads a
+    /// bundle runs on that RID, so leaving the asset out is correct.
+    /// </summary>
+    /// <param name="node">One entry of the deps.json <c>targets/&lt;tfm&gt;</c> object.</param>
+    /// <param name="packageId">The package the node describes.</param>
+    /// <returns>The information lines, ordered and de-duplicated ORDINAL.</returns>
+    public static ImmutableArray<string> NotTargetedBy(JsonElement node, string packageId) =>
+        Classify(node, packageId).NotTargeted;
+
+    /// <summary>
+    /// ONE pass over a node's uncarried shapes, split on the bundle's target RID, so the refusal
+    /// and the information can never disagree about which asset is which.
+    /// </summary>
+    private static (ImmutableArray<string> Uncarried, ImmutableArray<string> NotTargeted) Classify(
+        JsonElement node, string packageId)
     {
         if (node.ValueKind != JsonValueKind.Object)
-            return [];
+            return ([], []);
         var found = new SortedSet<string>(StringComparer.Ordinal);
+        var foreign = new SortedSet<string>(StringComparer.Ordinal);
 
+        // A RID-specific publish's `native` section carries no `rid` property: the key names it.
         if (node.TryGetProperty("native", out var native) && native.ValueKind == JsonValueKind.Object)
             foreach (var file in native.EnumerateObject())
-                ConsiderNative(file.Name);
+                ConsiderNative(file.Name, RidOf(file.Value, file.Name));
 
         if (node.TryGetProperty("runtimeTargets", out var targets)
             && targets.ValueKind == JsonValueKind.Object)
@@ -129,23 +151,44 @@ internal static class NativeContributions
                     || !file.Value.TryGetProperty("assetType", out var assetType))
                     continue;
                 if (string.Equals(assetType.GetString(), "native", StringComparison.OrdinalIgnoreCase))
-                    ConsiderNative(file.Name);
+                    ConsiderNative(file.Name, RidOf(file.Value, file.Name));
                 else if (string.Equals(assetType.GetString(), "runtime", StringComparison.OrdinalIgnoreCase))
-                    found.Add(UncarriedAssetFindings.RidSpecificManaged(
-                        packageId, file.Name.Replace('\\', '/')) + ContainerRemedy);
+                {
+                    var relative = file.Name.Replace('\\', '/');
+                    var rid = RidOf(file.Value, file.Name);
+                    if (ModuleBundleTarget.Applies(rid))
+                        found.Add(UncarriedAssetFindings.RidSpecificManaged(packageId, relative)
+                            + ContainerRemedy);
+                    else
+                        foreign.Add(UncarriedAssetFindings.NotTargetedRid(packageId, relative, rid));
+                }
             }
 
-        return [.. found];
+        return ([.. found], [.. foreign]);
 
-        void ConsiderNative(string key)
+        void ConsiderNative(string key, string rid)
         {
             var relative = key.Replace('\\', '/');
             if (NuGetPackageWriter.IsModuleNativeLayout(relative)
                 || relative.EndsWith(".a", StringComparison.OrdinalIgnoreCase)
                 || relative.EndsWith(".lib", StringComparison.OrdinalIgnoreCase))
                 return;
-            found.Add(UncarriedAssetFindings.UnprobedNative(packageId, relative) + ContainerRemedy);
+            if (ModuleBundleTarget.Applies(rid))
+                found.Add(UncarriedAssetFindings.UnprobedNative(packageId, relative) + ContainerRemedy);
+            else
+                foreign.Add(UncarriedAssetFindings.NotTargetedRid(packageId, relative, rid));
         }
+    }
+
+    /// <summary>The RID an entry is for: its <c>rid</c> property, else the <c>runtimes/&lt;rid&gt;/</c>
+    /// segment of its key, else empty (which <see cref="ModuleBundleTarget.Applies"/> treats as
+    /// targeted). The same reading as the SDK lane's <c>DepsClosure</c>.</summary>
+    private static string RidOf(JsonElement entry, string key)
+    {
+        var rid = entry.ValueKind == JsonValueKind.Object && entry.TryGetProperty("rid", out var r)
+            ? r.GetString() ?? ""
+            : "";
+        return string.IsNullOrEmpty(rid) ? ModuleBundleTarget.RidOfPath(key) : rid;
     }
 
     /// <summary>
