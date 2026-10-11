@@ -645,8 +645,10 @@ def publish(a: argparse.Namespace) -> int:
         print("nothing owes a hand-over in this call: "
               f"{len(mine)} staged record(s), {len(selected)} selected, 0 to publish.")
         summarise(["### Module publication", "",
-                   f"{len(mine)} staged record(s) accounted for; **none owed a hand-over** "
-                   "(the build ledger already serves these keys, or the selection was empty)."])
+                   f"{len(mine)} staged record(s) accounted for; **none owed a hand-over**.", ""]
+                  + ([f"- `{m}@{rec.get('version', '?')}`: {rec.get('reason') or 'no reason recorded'}"
+                      for m, rec in sorted(mine.items())]
+                     or ["The selection was empty."]))
         return 0
 
     token = os.environ.get(PUBLISH_TOKEN_ENV, "")

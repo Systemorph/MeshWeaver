@@ -469,6 +469,22 @@ on:
         type: boolean
         required: false
         default: false
+      publish-withhold:
+        description: >-
+          PACKAGES this call must NOT hand to the registry although `publish` is true — a
+          whitespace- or comma-separated list of package names (the `package` of a matrix entry),
+          empty by default. A withheld package's module is still built, inspected and tested, its
+          bundle artifact is still uploaded for the caller's gates, and its receipt says
+          `publication: withheld`; only the hand-over is left out, in BOTH publish modes. It exists
+          for a caller whose publication is decided PER PACKAGE (MeshWeaver.Plugins: a package whose
+          lock is not settled, or whose platform floor is not stamped for its sources, waits — and
+          every package that depends on one waits with it — while the others publish). The caller
+          owns that decision and its dependency closure; this lane only executes it. A name that
+          matches no selected entry is not an error: the list describes the caller's whole tree,
+          and this call may have selected a subset of it. Ignored when `publish` is false.
+        type: string
+        required: false
+        default: ''
       publish-mode:
         description: >
           WHERE the live-registry hand-over happens, when `publish` is true. Both values are
@@ -2397,6 +2413,7 @@ jobs:
         env:
           LEDGER: ${{ inputs.ledger }}
           PUBLISH: ${{ inputs.publish }}
+          PUBLISH_WITHHOLD: ${{ inputs.publish-withhold }}
           TEST_MODULES: ${{ inputs.test-modules }}
           MW_LEDGER_URL: ${{ inputs.registry-url }}
           MW_LEDGER_TOKEN: ${{ secrets.ledger-token }}
@@ -2416,6 +2433,9 @@ jobs:
             NARROWED=true
             printf '%s' "$TEST_MODULES" | tr ',' '\n' | tr ' ' '\n' | sed '/^$/d' | sort -u > "$RUNNER_TEMP/test-modules.txt"
           fi
+          # 🚨 `publish-withhold` — the PACKAGES the caller's publication leaves out of this run.
+          # One name per line, exact match on the entry's `package`; the decision is the caller's.
+          printf '%s' "$PUBLISH_WITHHOLD" | tr ',' '\n' | tr ' ' '\n' | sed '/^$/d' | sort -u > "$RUNNER_TEMP/publish-withhold.txt"
           mapfile -t modules < <(bk list --ok)
           for MODULE in "${modules[@]}"; do
             ENTRY_LEDGER="$(bk get --module "$MODULE" ledger --default null)"
@@ -2458,6 +2478,15 @@ jobs:
                 need_test=false
                 echo "plan: $MODULE is packed but NOT tested — test-modules does not name it (its suite is not owed by this change set)"
               fi
+              # A withheld package is built and tested like any other and is NOT handed over —
+              # whatever the ledger answered. Written down per module (`withheld`), so the receipt
+              # says WHY nothing was published rather than leaving it to be inferred.
+              withheld=false
+              if [ "$PUBLISH" = true ] && grep -qxF "$(bk get --module "$MODULE" package)" "$RUNNER_TEMP/publish-withhold.txt"; then
+                withheld=true; need_publish=false
+                echo "plan: $MODULE is built and tested but NOT published — the caller withholds its package '$(bk get --module "$MODULE" package)' from this run's publication (publish-withhold)"
+              fi
+              bk set --module "$MODULE" "withheld=$withheld"
               bk set --module "$MODULE" "decision=$decision" "key=$key" "need_test=$need_test" "need_publish=$need_publish" \
                 "art_run=$art_run" "art_name=$art_name" "sha=$sha" "holder=$holder" "store_loc=$store_loc"
             )
@@ -4050,6 +4079,9 @@ jobs:
             PACKAGE="$(bk get --module "$MODULE" package)"
             VERSION="$(bk get --module "$MODULE" version)"
             OWED="$(bk get --module "$MODULE" need_publish)"
+            # A withheld package is not owed for a DIFFERENT reason than a ledger-served key, and
+            # the staged record is what the publication lane prints: it must say which.
+            WITHHELD="$(bk get --module "$MODULE" withheld --default false)"
             DECISION="$(bk get --module "$MODULE" decision)"
             HOLDER="$(bk get --module "$MODULE" holder)"
             LEDGER_KEY="$(bk get --module "$MODULE" key)"
@@ -4072,6 +4104,8 @@ jobs:
               if [ "$OWED" = "true" ]; then
                 cp "$BUNDLE" "$RUNNER_TEMP/staged/$name"
                 echo "staged $MODULE@$VERSION ($name, sha256 $sha, built against $identity) — the publication lane hands it over once this run's validation is green"
+              elif [ "$WITHHELD" = "true" ]; then
+                reason="no hand-over owed: the caller withholds package '$PACKAGE' from this run's publication (publish-withhold) — the registry does NOT serve this key yet; a later run of the caller hands it over"
               else
                 reason="no hand-over owed: the module build ledger already serves this key (decision '$DECISION'${HOLDER:+, holder $HOLDER})"
                 echo "staged $MODULE@$VERSION as NOT OWED — $reason"
@@ -4150,8 +4184,9 @@ jobs:
             # `publish-mode: staged` nothing reached the registry from here, and a receipt saying
             # otherwise would make the lane's own report ("N published to the registry") a claim
             # about something that has not happened yet.
+            WITHHELD="$(bk get --module "$MODULE" withheld --default false)"
             PUBLISHED=false
-            if [ "$PUBLISH" = true ] && [ "$PUBLISH_MODE" = direct ] && [ "$NEWER" != true ]; then PUBLISHED=true; fi
+            if [ "$PUBLISH" = true ] && [ "$PUBLISH_MODE" = direct ] && [ "$NEWER" != true ] && [ "$WITHHELD" != true ]; then PUBLISHED=true; fi
             # 🚨 WHICH ARM OWNED THIS MODULE'S HAND-OVER, written down rather than inferred from an
             # `if:` nobody can read after the fact — the same discipline as `TESTS` below. `direct`:
             # this leg POSTed the bundle itself. `staged`: it staged the bytes for the caller's
@@ -4159,7 +4194,10 @@ jobs:
             # `superseded`: publish-newest-only stood it down for the trunk tip. `none`: this call
             # does not publish at all. Two mutually exclusive conditions can BOTH be false; this is
             # what makes that impossible to do quietly.
+            # `withheld`: the caller's publication leaves this package out of this run
+            # (`publish-withhold`) — built and tested, handed over by a later run of the caller.
             if [ "$PUBLISH" != true ]; then PUBLICATION=none
+            elif [ "$WITHHELD" = true ]; then PUBLICATION=withheld
             elif [ "$NEWER" = true ]; then PUBLICATION=superseded
             else PUBLICATION="$PUBLISH_MODE"; fi
             # publish-newest-only: the trunk tip whose own run publishes this module instead.
