@@ -139,15 +139,16 @@ public sealed record ActionRecipientContext
     public string? Locale { get; init; }
 
     /// <summary>
-    /// Whether a real, signed-in person is present: a non-blank identity that is neither the
-    /// anonymous visitor, nor the "every signed-in user" grant subject, nor the system identity.
+    /// Whether a real, signed-in person is present: a non-blank identity that is not a RESERVED
+    /// principal (<see cref="RequestIdentity.IsReservedPrincipal"/>) — not the anonymous visitor,
+    /// not the "every signed-in user" grant subject, not the system identity, and not a hub-shaped
+    /// platform principal (<c>node/…</c>, <c>mesh/…</c>). The identity boundary's own predicate, so
+    /// admission can never drift from what sign-in refuses.
     /// </summary>
     [JsonIgnore]
     public bool IsAuthenticated =>
         !string.IsNullOrWhiteSpace(Recipient)
-        && !string.Equals(Recipient, WellKnownUsers.Anonymous, StringComparison.OrdinalIgnoreCase)
-        && !string.Equals(Recipient, WellKnownUsers.Public, StringComparison.OrdinalIgnoreCase)
-        && !string.Equals(Recipient, WellKnownUsers.System, StringComparison.OrdinalIgnoreCase);
+        && !RequestIdentity.IsReservedPrincipal(Recipient.Trim());
 
     /// <summary>
     /// Whether this recipient may be shown an action bound to <paramref name="boundTo"/>, as a

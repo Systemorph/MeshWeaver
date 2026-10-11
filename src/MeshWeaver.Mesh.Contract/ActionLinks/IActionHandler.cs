@@ -30,8 +30,10 @@ namespace MeshWeaver.ActionLinks;
 public interface IActionHandler
 {
     /// <summary>
-    /// What this handler answers to and can offer on this portal now. Read each time it is needed:
-    /// <see cref="ActionHandlerCapability.Capabilities"/> reflects the deployment's current state.
+    /// What this handler answers to and DECLARES it can offer. For a rule-bound handler every value,
+    /// <see cref="ActionHandlerCapability.Capabilities"/> included, is copied from its
+    /// <see cref="ActionHandlerRule"/>: a declaration that changes when the rule is edited, not a
+    /// probe of the deployment.
     /// </summary>
     ActionHandlerCapability Capability { get; }
 
@@ -40,16 +42,25 @@ public interface IActionHandler
     /// asked before a link exists, so a publication the destination cannot honour fails with a
     /// named outcome instead of producing a link that later dead-ends. Read-only.
     ///
-    /// <para>The default answers the structural check alone
-    /// (<see cref="ActionHandlerCapability.Supports"/>). A handler whose domain restricts WHO may
-    /// distribute an action — the right to hand out a coupon is not the right to run an activity —
-    /// overrides it and answers <see cref="ActionOutcomeStatus.Unauthorized"/> itself.</para>
+    /// <para>🚨 <b>The default FAILS CLOSED for authorization.</b> It answers the structural check
+    /// (<see cref="ActionHandlerCapability.Supports"/>) and, when that passes,
+    /// <see cref="ActionOutcomeStatus.Unauthorized"/>: a handler that does not say who may
+    /// distribute its action authorizes nobody — the right to hand out a coupon is not the right to
+    /// run an activity. A rule-bound handler authorizes against its rule's
+    /// <see cref="ActionHandlerRule.PublishPermission"/> through the mesh's permission seam.</para>
     /// </summary>
     /// <param name="invocation">The invocation to be published.</param>
     /// <param name="context">Who publishes, to which site, under which request id.</param>
     /// <returns>A cold observable emitting one outcome.</returns>
     IObservable<ActionOutcome> Validate(ActionInvocation invocation, ActionPublicationContext context) =>
-        Observable.Return(Capability.Supports(invocation));
+        Observable.Defer(() =>
+        {
+            var structural = Capability.Supports(invocation);
+            return Observable.Return(structural.Status != ActionOutcomeStatus.Ready
+                ? structural
+                : ActionOutcome.Of(ActionOutcomeStatus.Unauthorized, invocation,
+                    "this handler states no publisher authorization, so no publisher may distribute it"));
+        });
 
     /// <summary>
     /// Prepares <paramref name="invocation"/> for one authenticated recipient and answers where

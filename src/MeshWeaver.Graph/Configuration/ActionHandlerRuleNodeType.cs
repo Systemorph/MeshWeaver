@@ -10,6 +10,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Primitives;
 
 namespace MeshWeaver.ActionLinks;
 
@@ -25,7 +26,8 @@ public static class ActionHandlerRuleNodeType
 
     /// <summary>
     /// The configuration key listing further namespaces whose rules count — deployment-record
-    /// configuration (<c>ActionLinks:RuleNamespaces:0</c>, <c>:1</c>, …), read on every chain read.
+    /// configuration (<c>ActionLinks:RuleNamespaces:0</c>, <c>:1</c>, …), read when the chain is
+    /// subscribed and again on every configuration reload (the provider's reload token).
     /// </summary>
     public const string RuleNamespacesConfigKey = "ActionLinks:RuleNamespaces";
 
@@ -103,21 +105,34 @@ public sealed record ActionHandlerRuleNamespaceDeclaration(ImmutableArray<string
 
 /// <summary>
 /// The platform's declared rule namespaces: every <see cref="ActionHandlerRuleNamespaceDeclaration"/>
-/// plus <see cref="ActionHandlerRuleNodeType.RuleNamespacesConfigKey"/>.
+/// plus <see cref="ActionHandlerRuleNodeType.RuleNamespacesConfigKey"/>, LIVE — re-read on every
+/// configuration reload, pushed by the provider's reload token
+/// (<see cref="ChangeToken.OnChange(Func{IChangeToken?}, Action)"/>, the shape
+/// <c>ConfigurationFeatureFlags</c> uses): no timer, no poller. Each subscription owns its
+/// registration and drops it on dispose, so nothing outlives the chain that read it.
 /// </summary>
 internal sealed class PlatformActionHandlerRuleNamespaces(
     IEnumerable<ActionHandlerRuleNamespaceDeclaration> declarations,
     IConfiguration? configuration = null) : IActionHandlerRuleNamespaceSource
 {
     public IObservable<IEnumerable<string>> Namespaces(IMessageHub hub) =>
-        Observable.Defer(() => Observable.Return<IEnumerable<string>>(declarations
+        Observable.Create<IEnumerable<string>>(observer =>
+        {
+            observer.OnNext(Read());
+            return configuration is null
+                ? System.Reactive.Disposables.Disposable.Empty
+                : ChangeToken.OnChange(configuration.GetReloadToken, () => observer.OnNext(Read()));
+        });
+
+    private ImmutableArray<string> Read() =>
+        declarations
             .SelectMany(d => d.Namespaces.IsDefault ? [] : d.Namespaces)
             .Concat(configuration?.GetSection(ActionHandlerRuleNodeType.RuleNamespacesConfigKey)
                         .GetChildren()
                         .Select(child => child.Value)
                         .OfType<string>()
                     ?? [])
-            .ToImmutableArray()));
+            .ToImmutableArray();
 }
 
 /// <summary>
@@ -161,6 +176,10 @@ public static class ActionHandlerRuleExtensions
     /// anywhere else is refused as <see cref="ActionHandlerRules.UndeclaredNamespace"/>, named in
     /// <see cref="ActionHandlerChain.Rejected"/> and logged once at Warning — never silently
     /// dropped. Create rights in some partition are not a declaration.</para>
+    ///
+    /// <para>🚨 Each bound handler's <see cref="IActionHandler.Validate"/> authorizes the publisher
+    /// against its rule's <see cref="ActionHandlerRule.PublishPermission"/> through
+    /// <c>hub.CheckPermissionOutcome</c>; a rule that states none authorizes nobody.</para>
     /// </summary>
     /// <param name="hub">The hub reading the chain; its serializer options type the rule content.</param>
     /// <returns>A live stream of chain snapshots.</returns>
@@ -176,7 +195,10 @@ public static class ActionHandlerRuleExtensions
                 nodes
                     .Where(node => !string.IsNullOrEmpty(node.Path))
                     .Select(node => (Path: node.Path!, Rule: node.ContentAs<ActionHandlerRule>(hub.JsonSerializerOptions, logger))),
-                declared))
+                declared,
+                // The publisher check runs through the mesh's ONE permission seam, as the publisher —
+                // explicit user id, tri-state (an undetermined fold is never a grant).
+                (handlerPath, publisher, permission) => hub.CheckPermissionOutcome(handlerPath, publisher, permission)))
             .Do(refusals.Report);
     }
 

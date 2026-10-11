@@ -56,8 +56,10 @@ anything. The handler decides from the authenticated recipient, afresh, every ti
 
 A handler declares an `ActionHandlerCapability` — its key, the payload versions it reads
 (`MinVersion`…`MaxVersion`), whether completing the action `Mutates` anything, and the
-`Capabilities` it can offer on this portal **now** (computed from the deployment's actual state, not
-a static claim).
+`Capabilities` it **declares** it offers on this portal. For a rule-bound handler — every handler a
+portal resolves — those are copied from the rule's `Capabilities`: a declaration that changes when
+the rule is edited, not a probe of the deployment. `Ready` therefore means "the rule declares it",
+never "a provider was detected"; the handler's own page re-checks the domain from current state.
 
 `ActionHandlerResolution.Resolve(handlers, invocation)` chooses the handler, or answers why not. It
 is pure: the same verdict comes from a service container, a list a test builds, or any other
@@ -95,7 +97,8 @@ put an `IActionHandler` into the root service container. It can write a node.
   "handler": "Store/Coupons/Review",
   "capabilities": ["PaymentMethodSetup"],
   "mutates": true,
-  "label": "Review the offer"
+  "label": "Review the offer",
+  "publishPermission": "Update"
 }
 ```
 
@@ -105,7 +108,8 @@ put an `IActionHandler` into the root service container. It can write a node.
 | `MinVersion` / `MaxVersion` | the payload versions the handler reads |
 | `Order` | lower runs first; between two rules claiming the same key and version the lower wins, an equal order is `AmbiguousHandler` — never registration, load or query order |
 | `Handler` | the handler's own node, **in the rule's own partition**; its page is the review page |
-| `Capabilities` / `Mutates` | what the handler offers and whether completing it changes anything |
+| `Capabilities` / `Mutates` | what the rule **declares** the handler offers (copied as written, never detected) and whether completing it changes anything |
+| `PublishPermission` | the `Permission` (`Update`, `Create`, …) a **publisher** must hold on `Handler` to distribute a link — see "Who may publish" |
 | `Label` / `LabelKey` | the caption of the navigation, as authored |
 | `Enabled` | a disabled rule claims nothing; a deployment disables one without a build |
 
@@ -149,10 +153,31 @@ is read live. It is the union of every `IActionHandlerRuleNamespaceSource`:
 | The platform | `Admin` (where platform configuration lives; only a platform admin writes there), every `builder.DeclareActionHandlerRuleNamespaces(…)`, and the deployment configuration key `ActionLinks:RuleNamespaces` (an array) |
 | The package installer (`AddPluginCatalog`) | each installed package's own partition, read from its install record (`Plugins/{id}`, node type `Package`) as `TargetPartition ?? id` — the same rule the installer uses for "which partition is this install about". Installing the package IS the declaration; uninstalling it withdraws it. No opt-in field |
 
-Namespaces compare ignoring case, as partitions do. A package installed while the portal runs has
-its rules counted in the chain's next emission.
+Namespaces compare ignoring case, as partitions do — and so does the own-partition check above
+(`store/ActionHandlers/x` may name `Store/Review`). A package installed while the portal runs has
+its rules counted in the chain's next emission, and a change to `ActionLinks:RuleNamespaces` takes
+effect on the configuration provider's reload (the source re-reads on the reload token, as
+`ConfigurationFeatureFlags` does) — no resubscribe, no recycle.
 
-**What a rule-bound handler does.** `Validate` is the structural check. `Prepare` answers `Ready`
+### Who may publish
+
+🚨 **Publisher authorization fails closed.** `IActionHandler.Validate`'s default answers
+`Unauthorized` once the structural check passes: a handler that does not say who may distribute its
+action authorizes nobody. A rule-bound handler authorizes against its rule's `PublishPermission`:
+
+- no `PublishPermission`, or a word that is not exactly one `Permission` flag → `Unauthorized`;
+- a blank or reserved publisher (System, `Anonymous`, `Public`, a hub-shaped `node/…`/`mesh/…`
+  principal) → `Unauthorized` — the platform's own identity would pass every permission check;
+- otherwise the mesh's permission seam (`hub.CheckPermissionOutcome(Handler, publisher,
+  permission)`) decides: granted → the structural `Ready`; denied → `Unauthorized`, naming the
+  permission and the node; a fold that reached no verdict → `Failed`, *could not be checked*,
+  never a denial and never a grant.
+
+The live chain binds that seam; a pure `ActionHandlerRules.Bind(rules, declared)` with no seam
+authorizes nobody.
+
+**What a rule-bound handler does.** `Validate` is the structural check followed by the publisher
+authorization above. `Prepare` answers `Ready`
 with a navigation to `/{Handler}?link={linkId}` — the handler node's page, which re-validates the
 domain from current state (the offer exists, the recipient is eligible, the recipient already
 finished) and is where the person confirms. It is read-only like every `Prepare`.
@@ -173,8 +198,9 @@ build has never seen is reported verbatim and treated as **not** successful. The
 `IActionHandler` has two calls, and both are **read-only**:
 
 - `Validate(invocation, publicationContext)` — may this publisher publish this to this site? The
-  default answers the structural check; a handler whose domain restricts who may distribute an
-  action (the right to hand out a coupon is not the right to run an activity) overrides it.
+  default answers the structural check and then **refuses** (`Unauthorized`): the right to hand out
+  a coupon is not the right to run an activity, so a handler must state who may distribute its
+  action. A rule-bound handler states it as the rule's `PublishPermission` (see "Who may publish").
 - `Prepare(invocation, recipientContext)` — for one authenticated recipient, where do they go?
   `Ready` with the handler's own review page, `Completed` with the existing result, or a refusal.
 
@@ -197,8 +223,10 @@ prefill, a query string or a posted form.
 
 `Admission(boundTo)` answers, in this order:
 
-1. `Unauthenticated` — nobody real is signed in (blank, `Anonymous`, the `Public` grant subject or
-   the system identity). Checked **first**, so an anonymous visitor learns nothing about the link —
+1. `Unauthenticated` — nobody real is signed in: blank, or a **reserved principal**
+   (`RequestIdentity.IsReservedPrincipal` — `Anonymous`, the `Public` grant subject, the system
+   identity, or a hub-shaped platform principal such as `node/…` or `mesh/…`), the same predicate
+   that refuses those ids at sign-in. Checked **first**, so an anonymous visitor learns nothing about the link —
    not even that it belongs to another site. The caller sends them to sign in.
 2. `OriginMismatch` — the action is bound to a different site than the one serving the request.
 3. `Ready`.

@@ -4,8 +4,8 @@ namespace MeshWeaver.ActionLinks;
 
 /// <summary>
 /// What one registered <see cref="IActionHandler"/> declares about itself: the key it answers to,
-/// the payload versions it reads, whether it changes anything, and the capabilities it can offer on
-/// this portal right now.
+/// the payload versions it reads, whether it changes anything, and the capabilities it declares it
+/// offers on this portal.
 ///
 /// <para>Registration is EXPLICIT by key and version, and DURABLE: on a portal every handler comes
 /// from an <see cref="ActionHandlerRule"/> node in the mesh (<see cref="ActionHandlerRules.Bind"/>),
@@ -48,9 +48,12 @@ public sealed record ActionHandlerCapability
     public bool Mutates { get; init; }
 
     /// <summary>
-    /// The capabilities this handler can offer on THIS portal now — <see cref="ActionCapabilities"/>
-    /// words or a module's own. Computed by the handler from the deployment's actual state (a
-    /// payment provider that supports setup is mounted), never a static claim.
+    /// The capabilities this handler DECLARES it offers on this portal — <see cref="ActionCapabilities"/>
+    /// words or a module's own. For a rule-bound handler (every handler a portal resolves) this is
+    /// a copy of the rule's <see cref="ActionHandlerRule.Capabilities"/>: it changes when the rule
+    /// is edited, not when a provider is mounted or removed. <see cref="ActionOutcomeStatus.Ready"/>
+    /// from <see cref="Supports"/> therefore means "the rule declares it", never "a provider was
+    /// detected"; the handler's own page re-checks the domain from current state.
     /// </summary>
     public ImmutableArray<string> Capabilities { get; init; } = [];
 

@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
 using MeshWeaver.Data;
+using MeshWeaver.Mesh.Security;
 
 namespace MeshWeaver.ActionLinks;
 
@@ -83,6 +84,18 @@ public sealed record ActionHandlerRule
 
     /// <summary>A disabled rule claims nothing, and a deployment may disable one without a build.</summary>
     public bool Enabled { get; init; } = true;
+
+    /// <summary>
+    /// WHO may publish an invocation this rule handles: the name of the <see cref="Permission"/>
+    /// (<c>Update</c>, <c>Create</c>, …) the PUBLISHER must hold on <see cref="Handler"/>, checked
+    /// through the mesh's permission seam when a link is validated for publication
+    /// (<see cref="IActionHandler.Validate"/>).
+    ///
+    /// <para>🚨 <b>Fails closed.</b> A rule that states no permission, or a word that is not one
+    /// <see cref="Permission"/> flag, authorizes NO publisher: the right to distribute an action is
+    /// stated by the rule's author, never assumed.</para>
+    /// </summary>
+    public string? PublishPermission { get; init; }
 }
 
 /// <summary>
@@ -185,10 +198,15 @@ public static class ActionHandlerRules
     /// <param name="rules">Each rule node's path and its content, or null when the content did not read.</param>
     /// <param name="declaredNamespaces">The namespaces (first path segments, compared ignoring case)
     /// whose rules count: the platform's declared ones and each installed package's own.</param>
+    /// <param name="authorizePublisher">The permission seam a bound handler asks whether a publisher
+    /// holds a rule's <see cref="ActionHandlerRule.PublishPermission"/> on its handler node — on a
+    /// live mesh, <c>hub.CheckPermissionOutcome</c>. Null (a pure binding) authorizes nobody: every
+    /// publication then validates as <see cref="ActionOutcomeStatus.Unauthorized"/>.</param>
     /// <returns>The chain.</returns>
     public static ActionHandlerChain Bind(
         IEnumerable<(string Path, ActionHandlerRule? Rule)> rules,
-        IEnumerable<string> declaredNamespaces)
+        IEnumerable<string> declaredNamespaces,
+        Func<string, string, Permission, IObservable<PermissionCheckOutcome>>? authorizePublisher = null)
     {
         ArgumentNullException.ThrowIfNull(rules);
         ArgumentNullException.ThrowIfNull(declaredNamespaces);
@@ -223,7 +241,7 @@ public static class ActionHandlerRules
             foreach (var key in (rule.Claims.IsDefault ? [] : rule.Claims)
                          .Where(k => !string.IsNullOrWhiteSpace(k))
                          .Distinct(StringComparer.Ordinal))
-                handlers.Add(new RuleBoundActionHandler(path, rule, key));
+                handlers.Add(new RuleBoundActionHandler(path, rule, key, authorizePublisher));
         }
         return new ActionHandlerChain
         {
@@ -251,7 +269,8 @@ public static class ActionHandlerRules
         if (!IsCanonicalMeshPath(rule.Handler)
             || !ActivityActionReference.IsLocalTarget(Target(rule.Handler, null)))
             return UnsafeHandler;
-        return string.Equals(Partition(path), Partition(rule.Handler), StringComparison.Ordinal)
+        // Partitions are case-insensitive everywhere (DeclaredNamespaces, schema routing).
+        return string.Equals(Partition(path), Partition(rule.Handler), StringComparison.OrdinalIgnoreCase)
             ? null
             : HandlerOutsidePartition;
     }
@@ -278,11 +297,31 @@ public static class ActionHandlerRules
     }
 
     /// <summary>
-    /// A handler declared by a rule node. Validate is the structural check; Prepare sends the
-    /// recipient to the rule's handler node, whose page re-validates the domain and is where the
-    /// person confirms. Read-only — it touches nothing.
+    /// The single <see cref="Permission"/> flag <paramref name="word"/> names, or null when it names
+    /// none, several, or <see cref="Permission.None"/>. Pure.
     /// </summary>
-    private sealed class RuleBoundActionHandler(string rulePath, ActionHandlerRule rule, string key) : IActionHandler
+    private static Permission? ParsePermission(string? word)
+    {
+        if (string.IsNullOrWhiteSpace(word)
+            || !Enum.TryParse<Permission>(word.Trim(), ignoreCase: true, out var permission)
+            || permission == Permission.None
+            || !Enum.IsDefined(permission)
+            || int.TryParse(word.Trim(), out _))
+            return null;
+        return permission;
+    }
+
+    /// <summary>
+    /// A handler declared by a rule node. Validate is the structural check followed by the rule's
+    /// publisher authorization (<see cref="ActionHandlerRule.PublishPermission"/>, failing closed);
+    /// Prepare sends the recipient to the rule's handler node, whose page re-validates the domain
+    /// and is where the person confirms. Read-only — it touches nothing.
+    /// </summary>
+    private sealed class RuleBoundActionHandler(
+        string rulePath,
+        ActionHandlerRule rule,
+        string key,
+        Func<string, string, Permission, IObservable<PermissionCheckOutcome>>? authorizePublisher) : IActionHandler
     {
         public ActionHandlerCapability Capability { get; } = new()
         {
@@ -293,6 +332,38 @@ public static class ActionHandlerRules
             Mutates = rule.Mutates,
             Capabilities = rule.Capabilities.IsDefault ? [] : rule.Capabilities,
         };
+
+        public IObservable<ActionOutcome> Validate(ActionInvocation invocation, ActionPublicationContext context) =>
+            Observable.Defer(() =>
+            {
+                ArgumentNullException.ThrowIfNull(context);
+                var structural = Capability.Supports(invocation);
+                if (structural.Status != ActionOutcomeStatus.Ready)
+                    return Observable.Return(structural);
+                if (ParsePermission(rule.PublishPermission) is not { } permission)
+                    return Observable.Return(ActionOutcome.Of(ActionOutcomeStatus.Unauthorized, invocation,
+                        string.IsNullOrWhiteSpace(rule.PublishPermission)
+                            ? $"rule {rulePath} states no publish permission, so no publisher may distribute it"
+                            : $"rule {rulePath} names publish permission '{rule.PublishPermission}', which is not one permission"));
+                var publisher = context.Publisher?.Trim();
+                if (string.IsNullOrEmpty(publisher) || RequestIdentity.IsReservedPrincipal(publisher))
+                    return Observable.Return(ActionOutcome.Of(ActionOutcomeStatus.Unauthorized, invocation,
+                        "the publisher is not an authenticated person or service"));
+                if (authorizePublisher is null)
+                    return Observable.Return(ActionOutcome.Of(ActionOutcomeStatus.Unauthorized, invocation,
+                        $"rule {rulePath}: no permission seam is bound to this chain, so no publisher is authorized"));
+                var handlerPath = rule.Handler.Trim().Trim('/');
+                return authorizePublisher(handlerPath, publisher, permission)
+                    .Take(1)
+                    .DefaultIfEmpty(PermissionCheckOutcome.Undetermined("the permission check produced no verdict"))
+                    .Select(check => check.IsGranted
+                        ? structural
+                        : check.IsUndetermined
+                            ? ActionOutcome.Of(ActionOutcomeStatus.Failed, invocation,
+                                $"publish permission {permission} on {handlerPath} could not be checked: {check.UndeterminedReason}")
+                            : ActionOutcome.Of(ActionOutcomeStatus.Unauthorized, invocation,
+                                $"the publisher lacks {permission} on {handlerPath} (rule {rulePath})"));
+            });
 
         public IObservable<ActionOutcome> Prepare(ActionInvocation invocation, ActionRecipientContext context) =>
             Observable.Defer(() =>

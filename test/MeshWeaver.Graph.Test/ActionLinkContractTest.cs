@@ -212,7 +212,7 @@ public class ActionLinkContractTest
     // ── Rule binding: the chain is rule nodes ───────────────────────────────────────────────────
 
     /// <summary>The namespaces declared for the pure binding tests — the store package's own.</summary>
-    private static readonly string[] Declared = ["Store"];
+    private static readonly ImmutableArray<string> Declared = ["Store"];
 
     [Fact]
     public void ARule_BindsOneHandlerPerClaimedKey_CarryingItsOrderVersionsAndCapabilities()
@@ -323,6 +323,142 @@ public class ActionLinkContractTest
     }
 
     [Fact]
+    public void TheOwnPartitionCheck_ComparesIgnoringCase_AndStillRefusesAnotherPartition()
+    {
+        var chain = ActionHandlerRules.Bind(
+        [
+            ("store/ActionHandlers/mixed", new ActionHandlerRule { Claims = ["k.mixed"], Handler = "Store/Review" }),
+            ("STORE/ActionHandlers/upper", new ActionHandlerRule { Claims = ["k.upper"], Handler = "store/Review" }),
+            ("Store/ActionHandlers/other", new ActionHandlerRule { Claims = ["k.other"], Handler = "Storefront/Review" }),
+        ], Declared);
+
+        chain.Resolve(Invocation("k.mixed")).Outcome.Status.Should().Be(ActionOutcomeStatus.Ready,
+            "store/… and Store/… address the same partition — partitions are case-insensitive everywhere");
+        chain.Resolve(Invocation("k.upper")).Outcome.Status.Should().Be(ActionOutcomeStatus.Ready);
+        chain.Rejected.Should().Equal(
+            [new RejectedActionHandlerRule("Store/ActionHandlers/other", ActionHandlerRules.HandlerOutsidePartition)],
+            "the negative control: ignoring case must not turn into a prefix match on another partition");
+    }
+
+    // ── Publisher authorization: fails closed ───────────────────────────────────────────────────
+
+    private static readonly ActionPublicationContext Publication =
+        new() { Publisher = "alice", Site = Site, PublisherRequestId = "r1" };
+
+    /// <summary>
+    /// A permission seam that grants exactly one (publisher, node, permission) triple and records
+    /// what it was asked — the stand-in for <c>hub.CheckPermissionOutcome</c> in the pure binding.
+    /// </summary>
+    private sealed class OneGrant(string publisher, string node, Permission permission)
+    {
+        public ImmutableList<(string Node, string Publisher, Permission Permission)> Asked { get; private set; } = [];
+
+        public IObservable<PermissionCheckOutcome> Check(string n, string p, Permission perm)
+        {
+            Asked = Asked.Add((n, p, perm));
+            return Observable.Return(PermissionCheckOutcome.FromVerdict(n == node && p == publisher && perm == permission));
+        }
+    }
+
+    private static ActionOutcome Validated(ActionHandlerChain chain, ActionPublicationContext context, string key = "k")
+    {
+        var resolution = chain.Resolve(Invocation(key));
+        resolution.Outcome.Status.Should().Be(ActionOutcomeStatus.Ready);
+        ActionOutcome? validated = null;
+        using (resolution.Handler!.Validate(Invocation(key), context).Subscribe(o => validated = o)) { }
+        return validated!;
+    }
+
+    [Fact]
+    public void ARuleThatStatesNoPublishPermission_AuthorizesNoPublisher()
+    {
+        var seam = new OneGrant("alice", "Store/Review", Permission.Update);
+        var chain = ActionHandlerRules.Bind(
+            [("Store/ActionHandlers/r", new ActionHandlerRule { Claims = ["k"], Handler = "Store/Review" })],
+            Declared, seam.Check);
+
+        var outcome = Validated(chain, Publication);
+
+        outcome.Status.Should().Be(ActionOutcomeStatus.Unauthorized,
+            "a rule-bound handler that does not say who may publish authorizes nobody — never the old structural pass");
+        outcome.Detail.Should().Contain("states no publish permission");
+        seam.Asked.Should().BeEmpty("there is nothing to check without a stated permission");
+    }
+
+    [Theory]
+    [InlineData("NotAPermission")]
+    [InlineData("None")]
+    [InlineData("4")]
+    [InlineData("Read, Update")]
+    public void APublishPermissionThatIsNotOneFlag_AuthorizesNoPublisher(string word)
+    {
+        var seam = new OneGrant("alice", "Store/Review", Permission.Update);
+        var chain = ActionHandlerRules.Bind(
+            [("Store/ActionHandlers/r", new ActionHandlerRule { Claims = ["k"], Handler = "Store/Review", PublishPermission = word })],
+            Declared, seam.Check);
+
+        Validated(chain, Publication).Status.Should().Be(ActionOutcomeStatus.Unauthorized);
+        seam.Asked.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void APublisherWithoutTheStatedPermission_IsRefused_AndOneWithIt_IsAdmitted()
+    {
+        var seam = new OneGrant("alice", "Store/Review", Permission.Update);
+        var chain = ActionHandlerRules.Bind(
+            [("Store/ActionHandlers/r", new ActionHandlerRule { Claims = ["k"], Handler = "Store/Review", PublishPermission = "update" })],
+            Declared, seam.Check);
+
+        var refused = Validated(chain, Publication with { Publisher = "mallory" });
+        refused.Status.Should().Be(ActionOutcomeStatus.Unauthorized);
+        refused.Detail.Should().Contain("Update").And.Contain("Store/Review");
+
+        Validated(chain, Publication).Status.Should().Be(ActionOutcomeStatus.Ready,
+            "the control: the publisher holding Update on the handler node is admitted");
+        seam.Asked.Should().Equal(("Store/Review", "mallory", Permission.Update), ("Store/Review", "alice", Permission.Update));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(WellKnownUsers.System)]
+    [InlineData(WellKnownUsers.Anonymous)]
+    [InlineData("node/Store/Review")]
+    [InlineData("mesh/portal")]
+    public void AReservedOrBlankPublisher_IsRefused_BeforeThePermissionSeamIsAsked(string publisher)
+    {
+        var seam = new OneGrant(publisher, "Store/Review", Permission.Update);
+        var chain = ActionHandlerRules.Bind(
+            [("Store/ActionHandlers/r", new ActionHandlerRule { Claims = ["k"], Handler = "Store/Review", PublishPermission = "Update" })],
+            Declared, seam.Check);
+
+        Validated(chain, Publication with { Publisher = publisher }).Status.Should().Be(ActionOutcomeStatus.Unauthorized,
+            "the platform's own identity passes every permission check, so it is never a publisher");
+        seam.Asked.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void APureBindingWithNoPermissionSeam_AuthorizesNoPublisher()
+    {
+        var chain = ActionHandlerRules.Bind(
+            [("Store/ActionHandlers/r", new ActionHandlerRule { Claims = ["k"], Handler = "Store/Review", PublishPermission = "Update" })],
+            Declared);
+
+        Validated(chain, Publication).Status.Should().Be(ActionOutcomeStatus.Unauthorized);
+    }
+
+    [Fact]
+    public void AnUndeterminedPermissionFold_IsFailed_NeverAGrantAndNeverADenial()
+    {
+        var chain = ActionHandlerRules.Bind(
+            [("Store/ActionHandlers/r", new ActionHandlerRule { Claims = ["k"], Handler = "Store/Review", PublishPermission = "Update" })],
+            Declared, (_, _, _) => Observable.Return(PermissionCheckOutcome.Undetermined("fold faulted")));
+
+        var outcome = Validated(chain, Publication);
+        outcome.Status.Should().Be(ActionOutcomeStatus.Failed);
+        outcome.Detail.Should().Contain("could not be checked").And.Contain("fold faulted");
+    }
+
+    [Fact]
     public void ARuleBoundHandler_PreparesANavigationToItsHandlerNode_CarryingTheLink()
     {
         var chain = ActionHandlerRules.Bind(
@@ -357,7 +493,7 @@ public class ActionLinkContractTest
     }
 
     [Fact]
-    public void TheDefaultPublicationCheck_IsTheStructuralOne()
+    public void TheDefaultPublicationCheck_IsStructural_ThenFailsClosed()
     {
         IActionHandler handler = new Handler("store.coupon-journey");
         var context = new ActionPublicationContext { Publisher = "alice", Site = Site, PublisherRequestId = "r1" };
@@ -366,8 +502,10 @@ public class ActionLinkContractTest
         using (handler.Validate(Invocation(), context).Subscribe(o => supported = o)) { }
         using (handler.Validate(Invocation(version: 9), context).Subscribe(o => foreign = o)) { }
 
-        supported!.Status.Should().Be(ActionOutcomeStatus.Ready);
-        foreign!.Status.Should().Be(ActionOutcomeStatus.UnsupportedVersion);
+        supported!.Status.Should().Be(ActionOutcomeStatus.Unauthorized,
+            "a handler that states no publisher authorization authorizes nobody — the default never passes a publisher");
+        foreign!.Status.Should().Be(ActionOutcomeStatus.UnsupportedVersion,
+            "the structural answer still comes first, so the refusal names what does not fit");
     }
 
     // ── Outcomes: an unknown word is never a success ────────────────────────────────────────────
@@ -460,6 +598,9 @@ public class ActionLinkContractTest
     [InlineData("anonymous")]
     [InlineData(WellKnownUsers.Public)]
     [InlineData(WellKnownUsers.System)]
+    [InlineData("node/Store/Review")]
+    [InlineData("mesh/portal")]
+    [InlineData(" node/Store/Review ")]
     public void AVisitorWhoIsNotARealSignedInPerson_IsUnauthenticated(string recipient)
     {
         var context = new ActionRecipientContext { Recipient = recipient, Site = Site, LinkId = "6f1c" };
@@ -484,7 +625,8 @@ public class ActionLinkContractTest
         var elsewhere = new ActionSite { SiteId = "other", Origin = "https://other.example.com" };
         var onSite = new ActionRecipientContext { Recipient = "bob", Site = Site, LinkId = "6f1c" };
 
-        onSite.IsAuthenticated.Should().BeTrue();
+        onSite.IsAuthenticated.Should().BeTrue(
+            "the control for the reserved-principal cases: a person's id is admitted");
         onSite.Admission(Site).Should().Be(ActionOutcomeStatus.Ready);
         (onSite with { Site = elsewhere }).Admission(Site).Should().Be(ActionOutcomeStatus.OriginMismatch);
     }
