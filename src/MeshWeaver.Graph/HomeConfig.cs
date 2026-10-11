@@ -36,10 +36,11 @@ public enum HomeCatalogRender
     Grouped,
 }
 
-/// <summary>The default sort order of the home catalog (the user can still switch it).</summary>
+/// <summary>The sort orders an admin may pick as the home catalog's default INSTEAD of the shipped
+/// one, which is by location (<see cref="HomeConfig.DefaultSort"/> unset). The user can still switch.</summary>
 public enum HomeCatalogSort
 {
-    /// <summary>Most-recently-opened first — the user's own access recency (the default).</summary>
+    /// <summary>Most-recently-opened first — the user's own access recency.</summary>
     LastAccessed,
 
     /// <summary>Most-recently-edited first.</summary>
@@ -47,10 +48,6 @@ public enum HomeCatalogSort
 
     /// <summary>Alphabetical, by name.</summary>
     Alphabetical,
-
-    /// <summary>By LOCATION — ordered by path, so each space's content stays together under it, the
-    /// way a folder explorer lists it (the default).</summary>
-    Location,
 }
 
 /// <summary>
@@ -58,7 +55,7 @@ public enum HomeCatalogSort
 /// (in-platform, no code change or image roll) to change how EVERY user's home lists content. Read
 /// reactively from the well-known platform node (<see cref="MeshWeaver.Graph.Configuration.HomeConfigNodeType.ConfigPath"/>);
 /// when the node is absent (or a field is unset) the shipped defaults apply — <b>FirstLevel + Flat +
-/// LastAccessed</b> — so the home behaves identically with or without the node. Kept deliberately small:
+/// by location</b> — so the home behaves identically with or without the node. Kept deliberately small:
 /// this is "the home's display settings live in a node an admin can edit", not a templating engine.
 /// </summary>
 public record HomeConfig
@@ -94,8 +91,11 @@ public record HomeConfig
     [Translation("de", "Wie die Startseite Einträge darstellt. Flat ist eine einzelne Liste; Grouped zeigt einklappbare Abschnitte pro Typ.")]
     public HomeCatalogRender Render { get; init; } = HomeCatalogRender.Flat;
 
-    /// <summary>The default ordering (the user can still change it via the Sort-by control).</summary>
-    [Description("The default ordering. Location orders by path, so each space's content stays together; Last accessed shows your recently-opened items first; Last modified shows recent edits; Alphabetical sorts by name.")]
-    [Translation("de", "Die Standardsortierung. Ort sortiert nach Pfad, sodass der Inhalt eines Space zusammenbleibt; Zuletzt geöffnet zeigt kürzlich geöffnete Einträge zuerst; Zuletzt geändert zeigt kürzliche Änderungen; Alphabetisch sortiert nach Name.")]
-    public HomeCatalogSort DefaultSort { get; init; } = HomeCatalogSort.Location;
+    /// <summary>The default ordering (the user can still change it via the Sort-by control).
+    /// UNSET (null, the shipped default) orders by LOCATION — by path, so each space's content stays
+    /// together the way a folder explorer lists it (policy <c>explorer-navigation</c>). An admin who
+    /// sets a value gets that order first; by location stays in the Sort-by control.</summary>
+    [Description("The default ordering. Leave it empty to order by location (by path, so each space's content stays together). Last accessed shows your recently-opened items first; Last modified shows recent edits; Alphabetical sorts by name.")]
+    [Translation("de", "Die Standardsortierung. Leer lassen, um nach Ort zu sortieren (nach Pfad, sodass der Inhalt eines Space zusammenbleibt). Zuletzt geöffnet zeigt kürzlich geöffnete Einträge zuerst; Zuletzt geändert zeigt kürzliche Änderungen; Alphabetisch sortiert nach Name.")]
+    public HomeCatalogSort? DefaultSort { get; init; }
 }

@@ -22,9 +22,7 @@ again (reported 2026-09-15: "Infra has one; show it, with where we are"). **The 
 a Space is the document and its overview is the title page, so every page under it shows the one
 index of the Space, with the page being read marked and only the groups on the reader's path open.
 
-**The index is an explorer, loaded lazily** (2026-10-11, maintainer: *"more explorer-like
-navigation … let drill in … folder-like nav … don't eager load the whole thing … load max 50 items
-… and load more"*):
+**The index is an explorer, loaded lazily** (policy [`explorer-navigation`](../PolicyNotProse)):
 
 - **Only the reader's path is loaded.** One direct-children query per level
   (`DefaultNodeNavigation.PathLevels`): the Space's children, each ancestor's children, and the

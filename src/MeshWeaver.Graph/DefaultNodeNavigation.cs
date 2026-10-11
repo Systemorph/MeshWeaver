@@ -80,8 +80,8 @@ public static class DefaultNodeNavigation
         var root = IndexRoot(currentPath);
         var logger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Graph.DefaultNodeNavigation");
-        // 🚨 NEVER the whole partition (maintainer, 2026-10-11: "don't eager load the whole
-        // thing"). One DIRECT-CHILDREN query per level on the reader's path — the root's children,
+        // 🚨 NEVER the whole partition (policy explorer-navigation). One DIRECT-CHILDREN query
+        // per level on the reader's path — the root's children,
         // each ancestor's children, the page's own children — so the cost grows with the page's
         // DEPTH, never with the size of the space. A folder off the path is listed but not opened;
         // the reader drills into it by opening it, and its level loads on that page.
@@ -129,8 +129,8 @@ public static class DefaultNodeNavigation
                 root));
     }
 
-    /// <summary>The most children one level of the index lists at first (maintainer, 2026-10-11:
-    /// "load max 50 items … and load more").</summary>
+    /// <summary>The most children one level of the index lists at first; a level that holds more
+    /// ends with a "Load more" entry (policy <c>explorer-navigation</c>).</summary>
     public const int LevelCap = 50;
 
     /// <summary>How many more children one "Load more" adds to its level.</summary>

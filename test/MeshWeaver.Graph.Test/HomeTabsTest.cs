@@ -121,14 +121,28 @@ public class HomeTabsTest
     [Fact]
     public void Content_IsOneFlatList_OrderedByLocation()
     {
-        // "ordering by type is not useful … order by namespace" (maintainer, 2026-10-11): the home
-        // lists its top-level entries as ONE list in path order, each a folder the viewer opens,
-        // never fanned out into per-type sections (which put everything into one "Space (N)").
+        // Policy explorer-navigation: the home lists its top-level entries as ONE list in path
+        // order, each a folder the viewer opens, never fanned out into per-type sections by default
+        // (which put everything into one "Space (N)").
         var content = Content(UserActivityLayoutAreas.BuildHome(NodePath));
 
         content.RenderMode.Should().Be(MeshSearchRenderMode.Flat);
-        content.Grouping.Should().BeNull("no per-type fan-out");
+        content.Grouping.Should().BeNull("no per-type fan-out by default");
         content.HiddenQuery!.ToString().Should().Contain("sort:path-asc", "location order is the default");
+    }
+
+    [Fact]
+    public void Content_HonoursTheAdminsExplicitGroupedRender_AndDefaultSort()
+    {
+        // HomeConfig.Render / DefaultSort are not silent no-ops on the Tabs home: an admin who asks
+        // for per-type sections or another default order gets them.
+        var cfg = new HomeConfig { Render = HomeCatalogRender.Grouped, DefaultSort = HomeCatalogSort.Alphabetical };
+        var content = UserActivityLayoutAreas.BuildContentSection(NodePath, cfg, null, null, null);
+
+        content.RenderMode.Should().Be(MeshSearchRenderMode.Grouped);
+        content.Grouping!.GroupByProperty.Should().Be("NodeType");
+        content.HiddenQuery!.ToString().Should().Contain("sort:Name-asc");
+        content.SortOptions!.Select(o => o.Label).Should().Contain("Location", "location order stays in the Sort control");
     }
 
     [Fact]

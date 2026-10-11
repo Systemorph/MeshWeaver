@@ -776,9 +776,12 @@ public static class UserActivityLayoutAreas
     private const string SortSuffixLastModified = "sort:LastModified-desc";
     private const string SortSuffixAlphabetical = "sort:Name-asc";
     private const string SortSuffixLocation = "sort:path-asc";
-    private static readonly (HomeCatalogSort Sort, string LabelKey, string Suffix)[] CatalogSorts =
+    // The LOCATION order has no enum member (null): it is the shipped default, and widening the
+    // persisted HomeCatalogSort enum would break the open-vocabulary contract
+    // (policy open-vocabulary-string-constants). An unset HomeConfig.DefaultSort selects it.
+    private static readonly (HomeCatalogSort? Sort, string LabelKey, string Suffix)[] CatalogSorts =
     {
-        (HomeCatalogSort.Location, "home.sortLocation", SortSuffixLocation),
+        (null, "home.sortLocation", SortSuffixLocation),
         (HomeCatalogSort.LastAccessed, "home.sortLastAccessed", SortSuffixLastAccessed),
         (HomeCatalogSort.LastModified, "home.sortLastModified", SortSuffixLastModified),
         (HomeCatalogSort.Alphabetical, "home.sortAlphabetical", SortSuffixAlphabetical),
@@ -913,10 +916,11 @@ public static class UserActivityLayoutAreas
                 (_, suffix) =>
                     $"path:{string.Join("|", sharedTargets)} is:main is:content -nodeType:User{SpacesDedupExclusions} {suffix}"));
 
-        // ONE flat list, ordered by LOCATION by default (Store/AppsOnTheInstance, maintainer
-        // 2026-10-11: "ordering by type is not useful … order by namespace"): each entry is a folder
-        // the viewer opens and drills into through its page's side index — never a fan-out into
-        // per-type sections, which put every top-level entry into one "Space (N)" group.
+        // ONE flat list, ordered by LOCATION by default (policy explorer-navigation): each entry is
+        // a folder the viewer opens and drills into through its page's side index. The per-type
+        // fan-out is no longer the shipped shape — it put every top-level entry into one
+        // "Space (N)" group — and stays available only as the admin's explicit HomeConfig.Render
+        // = Grouped.
         var content = Controls.MeshSearch
             .WithTitle(LocalizationCatalog.Get("home.content", locale))
             .WithScopeTabs(scopes.ToArray())
@@ -926,7 +930,9 @@ public static class UserActivityLayoutAreas
             .WithShowSearchBox(true)
             .WithViewOptions(true)
             .WithShowEmptyMessage(true)
-            .WithRenderMode(MeshSearchRenderMode.Flat)
+            .WithRenderMode(cfg.Render == HomeCatalogRender.Grouped
+                ? MeshSearchRenderMode.Grouped
+                : MeshSearchRenderMode.Flat)
             .WithMaxColumns(4)
             // Fill the page. The home is where a viewer looks for something they can already see;
             // a short list makes them search for what should have been on screen. 200 bounds the
@@ -936,6 +942,10 @@ public static class UserActivityLayoutAreas
             .WithMaxRows(24)
             .WithReactiveMode(true)
             .WithCreateHref("/create");
+        // The admin's explicit Grouped: per-type sections, biggest first, with counts.
+        if (cfg.Render == HomeCatalogRender.Grouped)
+            content = content.WithGroupBy("NodeType").WithGroupByFrequency()
+                .WithSectionCounts(true).WithCollapsibleSections(true);
         return content;
     }
 
@@ -1083,8 +1093,8 @@ public static class UserActivityLayoutAreas
     /// <summary>One content tab: localized label + the three catalog sorts (default first), each
     /// option's full query produced by <paramref name="query"/>(sort, suffix).</summary>
     private static MeshSearchScopeTab ContentScope(
-        string labelKey, string? locale, HomeCatalogSort defaultSort,
-        Func<HomeCatalogSort, string, string> query)
+        string labelKey, string? locale, HomeCatalogSort? defaultSort,
+        Func<HomeCatalogSort?, string, string> query)
     {
         var sorts = CatalogSorts
             .OrderByDescending(s => s.Sort == defaultSort)

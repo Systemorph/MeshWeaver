@@ -151,8 +151,7 @@ public static class MarkdownOverviewLayoutArea
     /// Wraps ANY node page with the left-hand index the markdown pages have: the navigation a module
     /// supplied for the page, else core's lazy default tree (<see cref="DefaultNodeNavigation"/>) —
     /// so typed pages read like documents instead of ending in a list of their children
-    /// (maintainer, 2026-10-11: "the default layout should NOT contain this kind of view of children
-    /// at the bottom … the more explorer-like navigation"). An <c>@@</c> embed
+    /// (policy <c>explorer-navigation</c>). An <c>@@</c> embed
     /// (<c>?showHeader=false</c>) never gets a rail, and the page never waits for the index.
     /// </summary>
     /// <param name="host">The layout-area host rendering the page.</param>

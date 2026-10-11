@@ -64,7 +64,7 @@ public class HomeCatalogTest
         var search = UserActivityLayoutAreas.BuildCatalog(NodePath).Should().BeOfType<MeshSearchControl>().Subject;
 
         // Default order = LOCATION (path), so each space's content stays together, the way a folder
-        // explorer lists it ("order by namespace", maintainer 2026-10-11).
+        // explorer lists it (policy explorer-navigation).
         search.HiddenQuery!.ToString().Should().Contain("sort:path-asc");
         search.HiddenQuery!.ToString().Should().NotContain("source:accessed");
     }
@@ -172,7 +172,7 @@ public class HomeCatalogTest
         HomeConfigNodeType.Defaults.Style.Should().Be(HomeStyle.Tabs);
         HomeConfigNodeType.Defaults.Scope.Should().Be(HomeCatalogScope.FirstLevel);
         HomeConfigNodeType.Defaults.Render.Should().Be(HomeCatalogRender.Flat);
-        HomeConfigNodeType.Defaults.DefaultSort.Should().Be(HomeCatalogSort.Location);
+        HomeConfigNodeType.Defaults.DefaultSort.Should().BeNull("unset = by location, the shipped default");
     }
 
     [Fact]
