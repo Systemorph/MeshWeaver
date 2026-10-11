@@ -100,7 +100,25 @@ public static class PublishedBundleCatalogue
     /// does not consume CI bakes.</param>
     /// <param name="targetVersion">The platform version being rolled to.</param>
     /// <param name="logger">Diagnostics.</param>
-    public static ReleaseObservation Read(string? publishedRoot, string? targetVersion, ILogger? logger = null)
+    public static ReleaseObservation Read(string? publishedRoot, string? targetVersion, ILogger? logger = null) =>
+        ReadWithRegistryIdentity(publishedRoot, targetVersion, null, logger);
+
+    /// <summary>
+    /// <see cref="Read(string?, string?, ILogger?)"/>, for a root that carries no marker for the
+    /// target: <paramref name="registryIdentity"/> is the identity the fleet registry records for
+    /// that release (<see cref="RegistryReleaseIdentities"/>; policy
+    /// <c>release-identity-from-registry</c>) and stands in for the marker ONLY when the marker file
+    /// is absent. A marker that exists is read exactly as before and the argument is ignored — the
+    /// publisher's file wins. Everything after the identity is known is unchanged: the bundles are
+    /// still read from the root, so a registry identity nothing is published under clears nothing.
+    /// </summary>
+    /// <param name="publishedRoot">The published bundle root.</param>
+    /// <param name="targetVersion">The platform version being rolled to.</param>
+    /// <param name="registryIdentity">The target's framework identity per the registry, or null
+    /// when it was not asked or names none.</param>
+    /// <param name="logger">Diagnostics.</param>
+    public static ReleaseObservation ReadWithRegistryIdentity(
+        string? publishedRoot, string? targetVersion, string? registryIdentity, ILogger? logger = null)
     {
         if (string.IsNullOrWhiteSpace(targetVersion))
             return new ReleaseObservation(
@@ -116,7 +134,13 @@ public static class PublishedBundleCatalogue
         try
         {
             var markerPath = Path.Combine(publishedRoot, ReleaseMarkerDirectoryName, targetVersion);
-            if (!File.Exists(markerPath))
+            var fromRegistry = !File.Exists(markerPath) && !string.IsNullOrWhiteSpace(registryIdentity);
+            if (fromRegistry)
+                logger?.LogInformation(
+                    "ReleaseAvailability: release {Version} has no marker under {Root}/{Markers}; its "
+                    + "framework identity {Identity} is taken from the registry's release record",
+                    targetVersion, publishedRoot, ReleaseMarkerDirectoryName, registryIdentity);
+            else if (!File.Exists(markerPath))
             {
                 logger?.LogInformation(
                     "ReleaseAvailability: release {Version} has no marker under {Root}/{Markers} — "
@@ -126,7 +150,7 @@ public static class PublishedBundleCatalogue
                     new ReleaseTarget(targetVersion, null), ReleaseArtifacts.Of([]));
             }
 
-            var identity = File.ReadAllText(markerPath).Trim();
+            var identity = fromRegistry ? registryIdentity!.Trim() : File.ReadAllText(markerPath).Trim();
             if (identity.Length == 0)
                 return new ReleaseObservation(
                     new ReleaseTarget(targetVersion, null),
@@ -161,6 +185,26 @@ public static class PublishedBundleCatalogue
             return new ReleaseObservation(
                 new ReleaseTarget(targetVersion, null),
                 ReleaseArtifacts.Unreadable(ex.Message));
+        }
+    }
+
+    /// <summary>Whether the publisher's marker for <paramref name="targetVersion"/> is on this root —
+    /// the question that decides whether the registry is asked at all. False, never a throw, when
+    /// the root cannot be read: the caller then asks the registry, and <see cref="ReadWithRegistryIdentity"/>
+    /// reports the unreadable root by name.</summary>
+    /// <param name="publishedRoot">The published bundle root.</param>
+    /// <param name="targetVersion">The platform version being rolled to.</param>
+    public static bool HasReleaseMarker(string? publishedRoot, string? targetVersion)
+    {
+        if (string.IsNullOrWhiteSpace(publishedRoot) || string.IsNullOrWhiteSpace(targetVersion))
+            return false;
+        try
+        {
+            return File.Exists(Path.Combine(publishedRoot, ReleaseMarkerDirectoryName, targetVersion));
+        }
+        catch (Exception)
+        {
+            return false;
         }
     }
 
