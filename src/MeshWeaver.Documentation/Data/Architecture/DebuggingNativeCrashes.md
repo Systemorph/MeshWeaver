@@ -188,6 +188,16 @@ Its one step is core's `hosting-dump-analyze --namespace <ns> [selector]`
    reports **one gzip+base64 fact** that fits the operations lane's 24 KB log tail. Every cap it
    applies is stated as shown-versus-found.
 
+   **A thread that owns a monitor is never cut.** Each thread `syncblk` names as an owner is a
+   group of its own, ahead of every other, with its whole stack and a first line that names the
+   monitor and how many threads wait on it (`HOLDS MONITOR #2 (21 thread(s) waiting) — thread
+   0x1e, see syncblk`). That is the stack a wedged process is read for. Frames are compared without
+   their own stack address and source path, so threads parked in the same place are one group, and
+   a stack longer than the cap keeps its top frames and its bottom (caller) frames with the count
+   of frames dropped between them. The first real read had none of the three: it named the owner
+   of a monitor 21 threads waited on and cut that thread's stack to fit
+   ([Reading a Silo Eviction](../ReadingASiloEviction)).
+
 The answer lands on the action node (`dumpAnalysis`) and as a Markdown page at `Ops/Dumps/<action id>`.
 The page carries the listing of every dump on the volume (the denominator), the file read with its
 size and write instant, the thread pool, the lock owners, and the stack groups, largest first. The
