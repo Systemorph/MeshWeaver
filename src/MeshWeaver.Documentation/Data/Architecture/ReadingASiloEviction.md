@@ -277,6 +277,35 @@ service as a constructor argument (module lock, then root lock), and a root serv
 construction may ask for a module's service (root lock, then module lock). Both directions exist
 by design; whether they are this incident's two threads is what the owner's stack decides.
 
+### What the second read said: a scoped service built in the root
+
+The repaired read of the same dump (`Ops/Actions/analyzedump-memex-cloud-20261011-ltlwc-3`) shows
+both owners whole, and the pair is NOT the root and a module container. It is the root and the
+**mesh hub's own scope**:
+
+| thread | holds | waits for | how |
+|---|---|---|---|
+| `0x1e` | #2, the root container's lock | #169 | `ApplicationStarted` → the WhatsApp module's `WhatsAppReplySender.Begin()` → from a scope of its OWN container, `GetRequiredService<PortalApplication>()` → the module container's fallback → **the root** builds `PortalApplication` → its constructor reads `hub.ServiceProvider.GetRequiredService<ILayoutClient>()` |
+| `0xf1` | #169, the mesh hub scope's lock | #2 | a grain activation → `MessageHubGrain.ResolveHubConfigurationObservable` → `meshHub.ServiceProvider.GetService<IMeshNodeHubFactory>()` → a constructor argument that is a root singleton not built yet |
+
+`PortalApplication` is a SCOPED registration. The module container's fallback resolved every root
+registration in the root scope itself, so a scoped service asked for from a module scope was built —
+and then shared, for the life of the process — in the root, under the root's lock, and its
+constructor reached into a child scope. Before modules had containers of their own (core #6127) the
+same call resolved it from a root child scope, under that scope's lock, which is why the first wedge
+of this shape is two days younger than #6127.
+
+**The fix**: the fallback resolves a root registration in a root child scope owned by the asking
+module scope and disposed with it (`RootResolutionScope`). A singleton is still the root's one
+instance; a scoped service is that scope's; a transient's disposal ends with the module scope.
+`AScopedRootServiceIsNeverBuiltInTheRootTest` pins it with this dump's two threads forced to
+overlap, and a negative control that builds the scoped service in the root and deadlocks.
+
+**What is still open, and not this incident:** a root SINGLETON whose construction calls a module's
+service (root lock, then module lock) while a module singleton's construction takes a root singleton
+(module lock, then root lock) deadlocks the same way. It was reproduced with real containers while
+reading this dump; no dump has shown it.
+
 ## Procedure
 
 1. **Read the victim's own log first**, not the membership table. `LocalSiloHealthMonitor`
