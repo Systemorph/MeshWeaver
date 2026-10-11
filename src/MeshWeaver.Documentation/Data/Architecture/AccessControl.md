@@ -1254,6 +1254,22 @@ role check beside it that could drift.
 | `lastSeen` | advisory, and **nothing writes it yet** — stamping it on the authentication path is a write per request, so an absent value means *not recorded*, never *never used* |
 | `requestedAction` / `isRevoked` | the stop, below |
 
+### A principal a deployment declares
+
+A deployment may also **declare** a principal in configuration, under
+`Plugins:Registry:BuildPrincipals:<n>` (policy `declared-not-derived`), so an estate provisions the
+same trust on every instance through its deployment records instead of a node created by hand on
+each. It is deliberately narrower than a node: both immutable ids are **required**, every listed
+event needs a ref allow-list, and the only scope it may carry is `verify:combo`. A declaration that
+breaks a rule is refused whole.
+
+The node stays the authority. The authenticator consults a declaration only when **no node exists**
+for the repository, so a node narrows or revokes a declared principal at once, and an unreadable
+node never falls through to it. Because a declared principal is in no node, the search above is no
+longer the complete list on an instance that declares one; the public `/health` body names every
+declaration in force, and every refused one, on its `build_principals` line. Shape and rules:
+[Combo gate wiring](../ComboGateWiring) → *Provisioning an instance*.
+
 **The scope split is the security tie.** The identity that publishes a source is the identity that
 may fetch what it depends on, and it can do neither outside its scopes: SocialMedia's principal holds
 `publish:socialmedia` + `fetch:plugins`, so it can never publish *as* Plugins and never fetch a

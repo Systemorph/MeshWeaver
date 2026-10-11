@@ -25,12 +25,12 @@ public static class BuildPrincipalConfiguration
 {
     /// <summary>Configuration key holding the single accepted audience — usually the registry's own
     /// public URL (<c>https://memex.meshweaver.cloud</c>).</summary>
-    public const string AudienceConfigKey = "Plugins:Registry:BuildPrincipalAudience";
+    public const string AudienceConfigKey = DeclaredBuildPrincipals.AudienceConfigKey;
 
     /// <summary>Configuration section holding several accepted audiences
     /// (<c>…:BuildPrincipalAudiences:0</c>, <c>:1</c>, …), for a registry reachable under more than
     /// one name. Folded together with <see cref="AudienceConfigKey"/>.</summary>
-    public const string AudiencesConfigSection = "Plugins:Registry:BuildPrincipalAudiences";
+    public const string AudiencesConfigSection = DeclaredBuildPrincipals.AudiencesConfigSection;
 
     /// <summary>
     /// The audiences this registry accepts, de-duplicated and trimmed. EMPTY disables the
@@ -38,24 +38,19 @@ public static class BuildPrincipalConfiguration
     /// </summary>
     /// <param name="configuration">The deployment's configuration, or null.</param>
     /// <returns>The accepted audiences; empty when none is configured.</returns>
-    public static IReadOnlyCollection<string> Audiences(IConfiguration? configuration)
-    {
-        if (configuration is null)
-            return [];
+    public static IReadOnlyCollection<string> Audiences(IConfiguration? configuration) =>
+        DeclaredBuildPrincipals.Audiences(configuration);
 
-        var accepted = new List<string>();
-        Add(configuration[AudienceConfigKey]);
-        foreach (var child in configuration.GetSection(AudiencesConfigSection).GetChildren())
-            Add(child.Value);
-        return accepted;
-
-        void Add(string? candidate)
-        {
-            if (string.IsNullOrWhiteSpace(candidate))
-                return;
-            var value = candidate.Trim();
-            if (!accepted.Any(a => string.Equals(a, value, StringComparison.OrdinalIgnoreCase)))
-                accepted.Add(value);
-        }
-    }
+    /// <summary>
+    /// The build principals this deployment DECLARES in configuration
+    /// (<see cref="DeclaredBuildPrincipals.ConfigSection"/>), validated. Consulted by the
+    /// authenticator only for a repository that has NO node under
+    /// <see cref="BuildPrincipal.Namespace"/> — the node, when one exists, decides. The audience
+    /// still gates everything: a declared principal authenticates nothing on a registry with no
+    /// audience configured.
+    /// </summary>
+    /// <param name="configuration">The deployment's configuration, or null.</param>
+    /// <returns>The accepted and refused declarations.</returns>
+    public static BuildPrincipalDeclarations Declared(IConfiguration? configuration) =>
+        DeclaredBuildPrincipals.Read(configuration);
 }
