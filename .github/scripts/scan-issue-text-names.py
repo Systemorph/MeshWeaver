@@ -287,7 +287,12 @@ GRANT_REMEDY = ("the build's service user needs the namecheck.caller.grant on th
 # Anchored refusal formats, matched at the START of the instance's answer only — the rest of a refusal
 # may echo the submitted (user-written) text, so a substring anywhere proves nothing (#6409 review).
 UNKNOWN_MEMBER = re.compile(r"^(?:Error: )?refused (?:create|patch) of [^\s:]+: unknown content member\(s\) ((?:'[^'\n]*'(?:, )?)+) for type ")
-ACCESS_DENIED = re.compile(r"^(?:Error: )?Access denied: Create permission required")
+# The `create` verb answers a refused write as "Error: creating node: <the validator's message>"
+# (MeshOperations.Create), so the access refusal arrives behind that prefix. Without it the one
+# refusal this lane actually meets (measured on run 38115962221: the instance logged "Access denied:
+# Create permission required for node 'Governance/NameChecks/…'") was reported as unclassified.
+ACCESS_DENIED = re.compile(r"^(?:Error: )?(?:creating node: )?Access denied: Create permission required for node '"
+                           + re.escape(NAMESPACE) + r"/")
 
 
 def refusal_reason(text: str) -> str:
@@ -299,8 +304,10 @@ def refusal_reason(text: str) -> str:
         return ("the instance does not know the issue-text request shape — its Governance package predates "
                 "0.11 (MeshWeaver.Plugins#3257); it reaches the instance with the next Governance publication")
     if ACCESS_DENIED.match(t):
-        return "the instance refused it for access — " + GRANT_REMEDY
-    return "the instance refused it for a reason this script does not classify (the instance's log names it); " + GRANT_REMEDY
+        return ("the instance refused it for access: the caller holds no Create on " + NAMESPACE + " — "
+                + GRANT_REMEDY)
+    return ("the instance refused it for a reason this script does not classify (the instance's log names it); "
+            "if it is an access refusal, " + GRANT_REMEDY)
 
 
 def submit_and_wait(mesh: Mesh, repo: str, run_id: int, attempt: str, parts: list[list[dict]]) -> list[dict]:
@@ -476,7 +483,12 @@ def self_test() -> int:
     check("🚨 refusal: 'member' or 'permission' echoed from issue text classifies as NOTHING",
           "does not classify" in refusal_reason("Error: create failed: line 'source member of permission' rejected")
           and "does not classify" in refusal_reason("Error: refused create of x: unknown content member(s) 'other' for type T"))
-    check("refusal: an access refusal names the grant", "namecheck.caller.grant" in refusal_reason("Access denied: Create permission required"))
+    denied = "Access denied: Create permission required for node 'Governance/NameChecks/issue-text-r-1-1-0'"
+    check("🚨 refusal: an access refusal AS THE create VERB ANSWERS IT names the grant",
+          all("refused it for access" in refusal_reason(p + denied) for p in ("Error: creating node: ", "Error: ", "")))
+    check("NEGATIVE CONTROL: a Create refusal on ANOTHER namespace, or one only quoted later in the text, is not classified as the grant",
+          "does not classify" in refusal_reason("Error: creating node: Access denied: Create permission required for node 'Other/x'")
+          and "does not classify" in refusal_reason("Error: creating node: line rejected: " + denied))
     check("🚨 refusal: the instance's text is never echoed", "SECRETWORD" not in refusal_reason("Error: SECRETWORD rejected"))
     saved = {k: os.environ.pop(k, None) for k in ("NAME_CHECK_URL", "NAME_CHECK_TOKEN")}
     try:
