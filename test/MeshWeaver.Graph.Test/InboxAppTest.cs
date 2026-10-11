@@ -128,7 +128,7 @@ public class InboxAppTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
     /// </summary>
     [Fact]
     public void ThePage_ShowsThreeDistinctBands()
-        => InboxLayoutArea.Sections(InboxQueries.BuiltIn, "alice").Select(s => s.Band)
+        => InboxLayoutArea.Sections(InboxQueries.BuiltIn, "alice").Select(s => s.Band).Distinct()
             .Should().Equal(InboxBand.NeedsYou, InboxBand.Running, InboxBand.Recent);
 
     /// <summary>

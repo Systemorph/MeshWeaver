@@ -36,8 +36,9 @@ after the checkout of the repository under test and before anything reads the tr
 
 ```text
 main   = the base tip handed in, or `git ls-remote origin refs/heads/<base>` now
-base   = git merge-base main head          (a shallow checkout deepens over git; REST is the last resort)
-tree   = git merge-tree --write-tree --merge-base=<base> <main> <head>
+bases  = git merge-base --all main head    (a shallow checkout deepens over git; REST is the last resort)
+tree   = git merge-tree --write-tree --merge-base=<base> <main> <head>     (exactly one base)
+tree   = git merge-tree --write-tree <main> <head>                         (several bases: virtual base)
 commit = git commit-tree <tree> -p <main> -p <head>     (fixed identity, the head's commit date)
 git checkout --detach <commit>
 ```
@@ -50,6 +51,14 @@ git checkout --detach <commit>
 - **A conflict is red.** A head that conflicts with the current tip fails with the conflicting
   paths. It cannot merge anyway, and testing the stale merge would paint it green against a main it
   no longer merges onto.
+- **Only a REAL conflict is red.** A branch whose history criss-crosses with main (each merged a
+  commit of the other) has several merge-bases. Naming just one of them to `merge-tree` diffs each
+  side against a commit that is not their common ancestor and reports conflicts that `git merge`
+  does not have, so with several bases the script lets git merge them into a virtual base, exactly
+  as `git merge` does; a shallow checkout first deepens until every base, and the bases' own
+  merge-bases, are walkable. The script's self-test carries such a criss-cross: clean over the
+  virtual base and byte-identical to `git merge`, conflicting over either single base (the control),
+  and still red when the head really conflicts.
 - **It is reported.** Every applying job prints, and adds to its summary:
   *Tested: head `abc…` merged onto `main@def…` → `123…` (merged) (GitHub's merge ref was built on main@456…)*.
 - **A selector sees the right diff.** A scope that diffs `origin/<base>...HEAD` now gets exactly the
