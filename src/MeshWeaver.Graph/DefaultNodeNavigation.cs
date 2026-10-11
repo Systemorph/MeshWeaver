@@ -130,7 +130,18 @@ public static class DefaultNodeNavigation
             : anchors.CombineLatest();
         // The root node (its title and icon head the rail) through the workspace's authoritative
         // partition-root stream, never a by-path query against the index.
-        var rootNode = host.Workspace.ObservePartitionRoot(currentPath).StartWith((MeshNode?)null);
+        // On the root's OWN page the root is the node being read: ObservePartitionRoot answers a
+        // constant null for a single-segment path (no DISTINCT root), which would drop the root's
+        // name and icon from the rail heading exactly there.
+        var rootNode = string.Equals(currentPath, root, StringComparison.Ordinal)
+            ? host.Workspace.GetMeshNodeStream()
+                .Select(node => (MeshNode?)node)
+                .Catch<MeshNode?, Exception>(ex =>
+                    MeshWeaver.Layout.AreaErrorClassifier.IsExpectedUserActionFailure(ex)
+                        ? Observable.Return<MeshNode?>(null)
+                        : Observable.Throw<MeshNode?>(ex))
+                .StartWith((MeshNode?)null)
+            : host.Workspace.ObservePartitionRoot(currentPath).StartWith((MeshNode?)null);
         var loadMore = LocalizationCatalog.Get("common.loadMore", host.ViewerLocale());
         return Guard(
             Observable.Defer(() => levels

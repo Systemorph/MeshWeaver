@@ -29,6 +29,8 @@ public class TypedPageIndexRailTest(ITestOutputHelper output) : MonolithMeshTest
     private const string Space = "RailTyped";
     private const string WidgetPath = "RailTyped/Alpha";
     private const string SiblingPath = "RailTyped/Beta";
+    private const string RootPath = "RailRoot";
+    private const string RootName = "The Rail Root";
 
     /// <summary>The content type the widget NodeType is configured with.</summary>
     public record RailWidget
@@ -49,7 +51,10 @@ public class TypedPageIndexRailTest(ITestOutputHelper output) : MonolithMeshTest
             },
             new MeshNode(Space) { NodeType = "Space", Name = Space },
             new MeshNode("Alpha", Space) { Name = "Alpha", NodeType = WidgetType, Content = new RailWidget { Label = "a" } },
-            new MeshNode("Beta", Space) { Name = "Beta", NodeType = WidgetType, Content = new RailWidget { Label = "b" } });
+            new MeshNode("Beta", Space) { Name = "Beta", NodeType = WidgetType, Content = new RailWidget { Label = "b" } },
+            // A typed node AT a partition root, with a child: its own page heads the rail.
+            new MeshNode(RootPath) { Name = RootName, NodeType = WidgetType, Content = new RailWidget { Label = "r" } },
+            new MeshNode("Leaf", RootPath) { Name = "Leaf", NodeType = WidgetType, Content = new RailWidget { Label = "l" } });
 
     private ISynchronizationStream<JsonElement> Open(string query = "")
     {
@@ -88,6 +93,25 @@ public class TypedPageIndexRailTest(ITestOutputHelper output) : MonolithMeshTest
         Assert.Contains(page.OfType<StackControl>(),
             s => s.DataContext?.Contains(MeshNodeLayoutAreas.HeaderDataId) == true);
         Assert.Empty(page.OfType<NavMenuControl>());
+    }
+
+    [Fact]
+    public async Task OnTheRootsOwnPage_TheRailHeadingCarriesTheRootsName()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var stream = GetClient().GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new Address(RootPath), new LayoutAreaReference(MeshNodeLayoutAreas.OverviewArea));
+        var root = await stream.GetControlStream(MeshNodeLayoutAreas.OverviewArea)
+            .Should().Within(TestTimeouts.Convergence)
+            .Match(c => c is SplitterControl { Areas.Count: 2 }, cancellationToken: ct);
+        var railArea = ((SplitterControl)root!).Areas[0].Area!.ToString()!;
+        var rail = await Observable.Interval(TestTimeouts.Quick / 20).StartWith(0L)
+            .Select(_ => Observable.FromAsync(() => Collect(stream, railArea, ct)))
+            .Concat()
+            .Should().Within(TestTimeouts.Convergence)
+            .Match(r => r.OfType<NavLinkControl>().Any(l => l.Title?.ToString() == RootName),
+                cancellationToken: ct);
+        Assert.Contains(rail.OfType<NavLinkControl>(), l => l.Title?.ToString() == RootName);
     }
 
     [Fact]
