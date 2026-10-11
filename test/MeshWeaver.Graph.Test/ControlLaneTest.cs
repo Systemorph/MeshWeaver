@@ -432,22 +432,25 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
             Row("S/Sub/_GitSync", "Markdown"),                       // named, otherwise typed
             Row("S/Elsewhere/Sync", SpaceDeletion.GitSyncNodeType),  // typed, not named
             Row("S/Gone/_GitSync/state"), Row("S/Gone/_GitSync/state/x"), // beneath a segment that holds no node
+            Row("S/Gone/_GitSync/_Activity/a", "Activity"),               // …and a satellite row there: no untyped query reads its table
             Row("S/Page", "Markdown"),
         };
         var inventory = SpaceDeletion.Fold("S", null, rows, recordExists: true, storeExists: true, [], []);
 
-        inventory.GitSync.Should().HaveCount(7, "the removal is still issued for every row the predicate names");
-        inventory.GitSyncRows.Should().Be(7);
+        inventory.GitSync.Should().HaveCount(8, "the removal is still issued for every row the predicate names");
+        inventory.GitSyncRows.Should().Be(8, "the command's row count covers the satellite row no untyped target can");
         var targets = SpaceDeletion.PlanSteps(inventory).Steps.Single(s => s.Name == "Remove GitSync configuration").Targets;
         targets.Should().HaveCount(3);
         foreach (var planTarget in targets)
         {
             Func<MeshNode, bool> selects = planTarget.Query == SpaceDeletion.GitSyncQuery("S")
                 ? SpaceDeletion.IsGitSyncTyped
+                // The two untyped queries read no satellite table, so neither may count a row in one.
                 : planTarget.Query == SpaceDeletion.GitSyncNamedQuery("S")
-                    ? SpaceDeletion.IsGitSyncNamed
+                    ? row => SpaceDeletion.IsGitSyncNamed(row) && !SatelliteTableMapping.IsSatellitePath(row.Path)
                     : planTarget.Query == SpaceDeletion.GitSyncBeneathQuery("S/Gone/_GitSync")
                         ? row => row.Path.StartsWith("S/Gone/_GitSync/", StringComparison.Ordinal)
+                                 && !SatelliteTableMapping.IsSatellitePath(row.Path)
                         : throw new InvalidOperationException($"unexpected GitSync target query '{planTarget.Query}'");
             planTarget.Count.Should().Be(rows.Count(selects), $"'{planTarget.Query}' must count exactly what it selects");
         }
@@ -459,6 +462,8 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         inventory.GitSync.Should().OnlyContain(
             path => roots.Any(root => path == root || path.StartsWith(root + "/", StringComparison.Ordinal)));
         targets.Should().NotContain(t => t.Count == 0, "a target that selects nothing names no set the step acts on");
+        targets.Single(t => t.Label == SpaceDeletion.TargetGitSyncBeneath).Count.Should().Be(2,
+            "the satellite row beneath the segment is in the command's row count, never in an untyped query's");
 
         // The ordinary space — one typed `_GitSync`, rows beneath it — keeps ONE target, and its count
         // is the one row the typed query selects, never the three rows the removal covers.

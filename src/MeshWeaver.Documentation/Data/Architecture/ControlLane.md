@@ -154,8 +154,11 @@ selects leave with its recursive delete and are the row count in the step's comm
 pre-flight bounds. Rows beneath a `_GitSync` segment that neither query selects (a half-removed space
 leaves the rows and no node at the segment) are a third target per segment, `gitsync-beneath`:
 `namespace:{…/_GitSync} scope:descendants` with the count of rows beneath it. So every row the
-removal is issued for is in a target or beneath a row one selects, and no target is a query that
-selects nothing. `ControlLaneTest.AGitSyncTarget_CountsTheRowsItsOwnQuerySelects` pins the pairing,
+removal is issued for is in a target or beneath a path one names, and no target is a query that
+selects nothing. The named and the beneath query are untyped, and an untyped query reads no satellite
+table, so their counts are over the rows outside the satellite tables; a satellite row at or beneath
+a `_GitSync` path (an activity of a sync run) is in the command's row count, like every other row
+beneath a GitSync node. `ControlLaneTest.AGitSyncTarget_CountsTheRowsItsOwnQuerySelects` pins the pairing,
 and `EveryGitSyncTargetQuery_ReturnsTheCountThePlanBinds` and
 `RowsBeneathAGitSyncSegmentWithNoNode_AreATargetWhoseQuerySelectsThem` run the queries against a
 mesh. No plan offers a `content-roots` target any more: content goes with the store.

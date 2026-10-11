@@ -52,8 +52,18 @@ public sealed record SpaceDeletionInventory
     /// <summary>The rows TYPED as a GitSync configuration — exactly what <see cref="SpaceDeletion.GitSyncQuery"/> selects.</summary>
     public ImmutableList<string> GitSyncTyped { get; init; } = [];
 
-    /// <summary>The rows whose own id is <c>_GitSync</c>, whatever their type — exactly what <see cref="SpaceDeletion.GitSyncNamedQuery"/> selects.</summary>
+    /// <summary>The rows whose own id is <c>_GitSync</c>, whatever their type, outside the satellite
+    /// tables — exactly what <see cref="SpaceDeletion.GitSyncNamedQuery"/> selects (an untyped query
+    /// reads no satellite table).</summary>
     public ImmutableList<string> GitSyncNamed { get; init; } = [];
+
+    /// <summary>
+    /// The rows of <see cref="GitSync"/> an UNTYPED query can select: those outside the satellite
+    /// tables. A satellite row at or beneath a <c>_GitSync</c> path (an activity of a sync run, say)
+    /// is still removed with it and is in <see cref="GitSyncRows"/>, but no untyped target query
+    /// reads its table, so no such target may count it.
+    /// </summary>
+    public ImmutableList<string> GitSyncContent { get; init; } = [];
 
     /// <summary>
     /// How many rows the per-node GitSync removal covers — every row at or under a GitSync path. It is
@@ -254,7 +264,11 @@ public static class SpaceDeletion
             .Select(r => r.Path).OrderBy(p => p, StringComparer.Ordinal).ToImmutableList();
         var gitSync = distinct.Where(IsGitSync).Select(r => r.Path).OrderBy(p => p, StringComparer.Ordinal).ToImmutableList();
         var gitSyncTyped = distinct.Where(IsGitSyncTyped).Select(r => r.Path).OrderBy(p => p, StringComparer.Ordinal).ToImmutableList();
-        var gitSyncNamed = distinct.Where(IsGitSyncNamed).Select(r => r.Path).OrderBy(p => p, StringComparer.Ordinal).ToImmutableList();
+        // What an UNTYPED query reads: the inventory itself reaches a satellite table only through a
+        // `nodeType:` query (InventoryQueries), so a count beside an untyped query is over these rows.
+        bool Untyped(MeshNode r) => !SatelliteTableMapping.IsSatellitePath(r.Path) && !IsCustomSatellite(definition, r.Path);
+        var gitSyncContent = distinct.Where(r => IsGitSync(r) && Untyped(r)).Select(r => r.Path).OrderBy(p => p, StringComparer.Ordinal).ToImmutableList();
+        var gitSyncNamed = distinct.Where(r => IsGitSyncNamed(r) && Untyped(r)).Select(r => r.Path).OrderBy(p => p, StringComparer.Ordinal).ToImmutableList();
         var gitSyncRoots = MinimalRoots(gitSync);
         var gitSyncRows = distinct.Count(r => gitSyncRoots.Any(g =>
             string.Equals(r.Path, g, StringComparison.Ordinal) || r.Path.StartsWith(g + "/", StringComparison.Ordinal)));
@@ -281,6 +295,7 @@ public static class SpaceDeletion
             GitSync = gitSync,
             GitSyncTyped = gitSyncTyped,
             GitSyncNamed = gitSyncNamed,
+            GitSyncContent = gitSyncContent,
             GitSyncRows = gitSyncRows,
             NodeTypes = nodeTypes,
             ContentRoots = MinimalRoots(content),
@@ -459,8 +474,13 @@ public static class SpaceDeletion
     /// <para>🚨 Rows beneath a <c>_GitSync</c> segment that NEITHER query selects — the segment holds
     /// no node (a half-removed space), or one that is neither typed nor named — have no root in the
     /// first two targets, yet the removal is issued for each of them. Every such segment is a target
-    /// of its own (<see cref="GitSyncBeneathQuery"/>), counted by the rows beneath it, so the plan
-    /// never authorizes a delete of rows no target names. Pure.</para>
+    /// of its own (<see cref="GitSyncBeneathQuery"/>), counted by the rows beneath it.</para>
+    ///
+    /// <para>🚨 The named and the beneath query are UNTYPED, and an untyped query reads no satellite
+    /// table. Their counts are therefore over <see cref="SpaceDeletionInventory.GitSyncContent"/>
+    /// alone. A satellite row at or beneath a <c>_GitSync</c> path is removed with it and is stated
+    /// where every row beneath a GitSync node is stated: in the row count of the step's command,
+    /// which the approval binds. Pure.</para>
     /// </summary>
     public static ImmutableList<ControlLanePlanTarget> GitSyncTargets(SpaceDeletionInventory inventory)
     {
@@ -471,7 +491,7 @@ public static class SpaceDeletion
             targets.Add(Target(TargetGitSyncNamed, GitSyncNamedQuery(inventory.Space), inventory.GitSyncNamed.Count));
         foreach (var segment in UnselectedGitSyncSegments(inventory))
             targets.Add(Target(TargetGitSyncBeneath, GitSyncBeneathQuery(segment),
-                inventory.GitSync.Count(p => p.StartsWith(segment + "/", StringComparison.Ordinal))));
+                inventory.GitSyncContent.Count(p => p.StartsWith(segment + "/", StringComparison.Ordinal))));
         return targets.ToImmutable();
     }
 
@@ -482,7 +502,7 @@ public static class SpaceDeletion
     public static ImmutableList<string> UnselectedGitSyncSegments(SpaceDeletionInventory inventory)
     {
         var selected = inventory.GitSyncTyped.Concat(inventory.GitSyncNamed).ToImmutableHashSet(StringComparer.Ordinal);
-        return inventory.GitSync
+        return inventory.GitSyncContent
             .Select(path =>
             {
                 var segments = path.Split('/');
