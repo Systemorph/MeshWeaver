@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Reactive;
 using System.Reactive.Linq;
 using System.Text.Json.Nodes;
@@ -116,6 +117,43 @@ public class StampedFieldsTest(ITestOutputHelper output) : MonolithMeshTestBase(
                 cancellationToken: TestContext.Current.CancellationToken);
         await WaitFor(path, c => c.Title == "renamed" && c.ConfirmedBy == Stamp,
             "the unrelated field landed and the stamp is unchanged");
+    }
+
+    /// <summary>
+    /// A synced subscriber's write-back arrives as a data change, not a merge patch — the data layer's
+    /// half of the guard must refuse it the same way, and the same write-back on a type that declares
+    /// nothing must commit (the control: the refusal is the declaration's doing, not the route's).
+    /// </summary>
+    [Theory(Timeout = 180000)]
+    [InlineData(StampedProbeTypeProvider.Declaring, false)]
+    [InlineData(StampedProbeTypeProvider.NotDeclaring, true)]
+    public async Task DataChange_ChangingAStampedField_IsRefusedOnlyWhereDeclared(string type, bool lands)
+    {
+        var path = await CreateConfirmedAndStamped(type);
+        var current = await WaitFor(path, c => c.ConfirmedBy == Stamp, "stamped");
+
+        var response = await RequestHub
+            .Observe<DataChangeResponse>(
+                DataChangeRequest.Update([current with { Content = ContentOf(current)! with { ConfirmedBy = "victim" } }]),
+                o => o.WithTarget(new Address(path)))
+            .FirstAsync()
+            .Timeout(60.Seconds())
+            .Await(TestContext.Current.CancellationToken);
+
+        if (lands)
+        {
+            response.Message.Status.Should().Be(DataChangeStatus.Committed,
+                "without a declaration the field is an ordinary one");
+            await WaitFor(path, c => c.ConfirmedBy == "victim", "the client value landed");
+            return;
+        }
+
+        response.Message.Status.Should().Be(DataChangeStatus.Failed,
+            "a data change that changes a stamped field must be refused");
+        string.Join(" | ", response.Message.Log.Messages.Select(m => m.Message))
+            .Should().Contain("confirmedBy", "the refusal names the field it refused");
+        var node = await WaitFor(path, c => c.ConfirmedBy == Stamp, "the stored value is still the owner's stamp");
+        ContentOf(node)!.ConfirmedBy.Should().Be(Stamp);
     }
 
     [Fact(Timeout = 180000)]

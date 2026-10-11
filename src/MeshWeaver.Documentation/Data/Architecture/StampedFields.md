@@ -38,12 +38,12 @@ on its own node that writes the field through `GetMeshNodeStream().Update(...)`.
 | Write | Where it is judged | Outcome when it touches a stamped field |
 |---|---|---|
 | A cross-hub patch — `GetMeshNodeStream(path).Update(...)` from any other hub, MCP `update` / `patch` / `edit_content`, the update branch of an upsert, a restore, a GitSync import | a delivery step on the node's own hub, before the merge runs | **refused** when the patch would CHANGE the field (a different value, a removal, a splice); naming it re-asserting the live value is a no-op and passes |
-| A `DataChangeRequest` from another address (a synced subscriber's write-back, a direct data change) | the same delivery step | **refused** when the resulting content differs in the field |
+| A data change from another address (a synced subscriber's write-back, a direct data change) updating the node | `StampedFieldDataValidator`, a validator in the data layer's change pipeline on the same hub | **refused** (a failed `DataChangeResponse` naming the field) when the resulting content differs in the field |
 | A create (`CreateNodeRequest`, an upsert's create branch, a `DataChangeRequest` creation) | `StampedFieldCreateValidator`, a create validator | **refused** when the content carries a non-empty value for the field |
 | The node's own hub writing its own node (`GetMeshNodeStream().Update(...)` on its own workspace) | — | allowed: this is the only path that sets the field |
 | Any read | — | unchanged |
 
-A refusal is a `DeliveryFailure` with `ErrorType.Unauthorized` whose message names the field, the
+A refused patch is a `DeliveryFailure` with `ErrorType.Unauthorized` whose message names the field, the
 node and the type, for example:
 
 > Access denied: the write to 'confirmedBy' on 'Feedback/_Evals/agent/case-1' was refused —
@@ -105,9 +105,13 @@ nightly runner, that the stamped confirmer still holds Update on the case immedi
 - `NodeTypeDefinition.StampedFields` — the declaration.
 - `MeshWeaver.Graph.Security.StampedFields` — the resolver, the change detection, and the node hub's
   delivery step (`AddStampedFieldGuard`, installed with every mesh data source).
+- `MeshWeaver.Graph.Security.StampedFieldDataValidator` — the data-change half: the data layer runs
+  its validators only for a change that ARRIVES as a message, so the owner's own commits never meet
+  it. It shares the hub's declaration (`StampedFieldDeclarationHolder`, a singleton of the node hub's
+  own container) with the delivery step.
 - `MeshWeaver.Graph.Security.StampedFieldCreateValidator` — the create half.
-- Tests: `test/MeshWeaver.Graph.Test/StampedFieldsTest.cs` — a client patch and an `UpdateNode` that
-  change the field are refused naming it, the owner's stamp lands, an unrelated field on the same
+- Tests: `test/MeshWeaver.Graph.Test/StampedFieldsTest.cs` — a client patch, an `UpdateNode` and a
+  data change that change the field are refused naming it, the owner's stamp lands, an unrelated field on the same
   node still lands, a create with a forged value is refused, and the same write on a type that
   declares nothing lands (the negative control).
 

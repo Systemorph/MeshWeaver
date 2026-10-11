@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
+using MeshWeaver.Data.Validation;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -38,10 +39,10 @@ public sealed record StampedFieldDeclaration(ImmutableList<string> Fields, Excep
 /// <list type="bullet">
 ///   <item><b>Cross-hub writes</b> — a <see cref="PatchDataRequest"/> (every
 ///     <c>GetMeshNodeStream(path).Update</c> from another hub, MCP <c>update</c>/<c>patch</c>/
-///     <c>edit_content</c>, an upsert's update branch) and a <see cref="DataChangeRequest"/> (a synced
-///     subscriber's write-back) reaching the node's hub from any other address — refused by a delivery
-///     step on the node's hub (<see cref="AddStampedFieldGuard"/>) BEFORE the merge runs, naming the
-///     field.</item>
+///     <c>edit_content</c>, an upsert's update branch) reaching the node's hub from any other address —
+///     refused by a delivery step on the node's hub (<see cref="AddStampedFieldGuard"/>) BEFORE the
+///     merge runs, naming the field; a synced subscriber's write-back — refused by
+///     <see cref="StampedFieldDataValidator"/>, the data layer's validation seam on the same hub.</item>
 ///   <item><b>Creates</b> — a create carrying a non-empty stamped field is refused by
 ///     <see cref="StampedFieldCreateValidator"/>: the field does not exist until the node's hub
 ///     stamps it.</item>
@@ -192,96 +193,96 @@ public static class StampedFields
 
     /// <summary>
     /// Installs the stamped-field guard on a node hub: every <see cref="PatchDataRequest"/> on its own
-    /// node and every <see cref="DataChangeRequest"/> that reaches it from ANOTHER address is checked
-    /// against the stamped fields the hub's NodeType declares, and refused — naming the field —
-    /// when it would change one. The declaration is read once per activation and kept for the
-    /// hub's life, the same binding the rest of the hub's configuration gets. A type that declares
-    /// no field costs one cached lookup per client write.
+    /// node that reaches it from ANOTHER address is checked against the stamped fields the hub's
+    /// NodeType declares, and refused — naming the field — when it would change one. A synced
+    /// subscriber's write-back answers to <see cref="StampedFieldDataValidator"/> on the same hub. The
+    /// declaration is read once per activation and kept for the hub's life
+    /// (<see cref="StampedFieldDeclarationHolder"/>), the same binding the rest of the hub's
+    /// configuration gets. A type that declares no field costs one cached lookup per client write.
     /// </summary>
     /// <param name="config">The node hub's configuration.</param>
     /// <returns>The configuration with the guard installed.</returns>
     public static MessageHubConfiguration AddStampedFieldGuard(this MessageHubConfiguration config)
-        => config.AddDeliveryPipeline(pipeline =>
-        {
-            var hub = pipeline.Hub;
-            // Instance state of THIS hub's pipeline, built once per hub: the declaration is bound for
-            // the activation's life (a fault is evicted, so the next write reads again).
-            var declaration = new PromiseSlot<StampedFieldDeclaration>();
-            ILogger? logger = null;
-
-            return pipeline.AddPipeline((delivery, ct, next) =>
+        => config
+            .WithServices(services => services
+                .AddSingleton<StampedFieldDeclarationHolder>()
+                .AddScoped<IDataValidator, StampedFieldDataValidator>())
+            .AddDeliveryPipeline(pipeline =>
             {
-                if (!IsClientWriteToThisHub(hub, delivery))
-                    return next.Invoke(delivery, ct);
+                var hub = pipeline.Hub;
+                ILogger? logger = null;
 
-                logger ??= hub.ServiceProvider.GetService<ILoggerFactory>()
-                    ?.CreateLogger("MeshWeaver.Graph.StampedFields");
+                return pipeline.AddPipeline((delivery, ct, next) =>
+                {
+                    if (!IsClientPatchOfThisHub(hub, delivery))
+                        return next.Invoke(delivery, ct);
 
-                var verdicts = declaration
-                    .GetOrCreate(() => Resolve(hub, OwnNodeType(hub)).Replay(1).AutoConnect(1))
-                    .Take(1)
-                    .Select(declared => VerdictFor(hub, delivery, declared));
+                    logger ??= hub.ServiceProvider.GetService<ILoggerFactory>()
+                        ?.CreateLogger("MeshWeaver.Graph.StampedFields");
 
-                // A settled declaration answers synchronously, and the delivery then continues on
-                // THIS call exactly as if the step were not here — only the first write of an
-                // activation, while the declaration is being read, takes the deferred shape (the
-                // same shape the access gate uses for every check it runs).
-                const int Pending = 0, Answered = 1, Deferred = 2;
-                var state = Pending;
-                string? syncRefusal = null;
-                Exception? syncFault = null;
-                verdicts.Subscribe(
-                    refusal =>
-                    {
-                        if (Interlocked.CompareExchange(ref state, Answered, Pending) == Pending)
+                    var verdicts = hub.ServiceProvider.GetRequiredService<StampedFieldDeclarationHolder>()
+                        .Declaration
+                        .Select(declared => VerdictFor(hub, (PatchDataRequest)delivery.Message, declared));
+
+                    // A settled declaration answers synchronously, and the delivery then continues on
+                    // THIS call exactly as if the step were not here — only the first write of an
+                    // activation, while the declaration is being read, takes the deferred shape (the
+                    // same shape the access gate uses for every check it runs).
+                    // 🚨 The verdict is STORED before the state is published: the delivery thread
+                    // reads it the moment it sees Answered, so publishing first would let it read
+                    // "no refusal" and forward a forbidden write.
+                    const int Pending = 0, Answered = 1, Deferred = 2;
+                    var state = Pending;
+                    string? syncRefusal = null;
+                    Exception? syncFault = null;
+                    verdicts.Subscribe(
+                        refusal =>
                         {
                             syncRefusal = refusal;
-                            return;
-                        }
-                        if (refusal is null)
-                            next.Invoke(delivery, ct).Subscribe(
-                                _ => { },
-                                ex => logger?.LogError(ex,
-                                    "StampedFields: downstream pipeline faulted for {MessageType} on {Hub}",
-                                    delivery.Message.GetType().Name, hub.Address));
-                        else
-                            Refuse(hub, delivery, ErrorType.Unauthorized, refusal, logger);
-                    },
-                    ex =>
-                    {
-                        if (Interlocked.CompareExchange(ref state, Answered, Pending) == Pending)
+                            if (Interlocked.CompareExchange(ref state, Answered, Pending) == Pending)
+                                return;
+                            if (refusal is null)
+                                next.Invoke(delivery, ct).Subscribe(
+                                    _ => { },
+                                    ex => logger?.LogError(ex,
+                                        "StampedFields: downstream pipeline faulted for {MessageType} on {Hub}",
+                                        delivery.Message.GetType().Name, hub.Address));
+                            else
+                                Refuse(hub, delivery, ErrorType.Unauthorized, refusal, logger);
+                        },
+                        ex =>
                         {
                             syncFault = ex;
-                            return;
-                        }
-                        Refuse(hub, delivery, ErrorType.Unavailable, Unavailable(hub, ex), logger);
-                    });
+                            if (Interlocked.CompareExchange(ref state, Answered, Pending) == Pending)
+                                return;
+                            Refuse(hub, delivery, ErrorType.Unavailable, Unavailable(hub, ex), logger);
+                        });
 
-                if (Interlocked.CompareExchange(ref state, Deferred, Pending) == Pending)
-                    return Observable.Return(delivery.Forwarded());
+                    if (Interlocked.CompareExchange(ref state, Deferred, Pending) == Pending)
+                        return Observable.Return(delivery.Forwarded());
 
-                if (syncFault is not null)
-                {
-                    Refuse(hub, delivery, ErrorType.Unavailable, Unavailable(hub, syncFault), logger);
-                    return Observable.Return(delivery.Forwarded());
-                }
-                if (syncRefusal is not null)
-                {
-                    Refuse(hub, delivery, ErrorType.Unauthorized, syncRefusal, logger);
-                    return Observable.Return(delivery.Forwarded());
-                }
-                return next.Invoke(delivery, ct);
+                    if (syncFault is not null)
+                    {
+                        Refuse(hub, delivery, ErrorType.Unavailable, Unavailable(hub, syncFault), logger);
+                        return Observable.Return(delivery.Forwarded());
+                    }
+                    if (syncRefusal is not null)
+                    {
+                        Refuse(hub, delivery, ErrorType.Unauthorized, syncRefusal, logger);
+                        return Observable.Return(delivery.Forwarded());
+                    }
+                    return next.Invoke(delivery, ct);
+                });
             });
-        });
 
     /// <summary>
-    /// A write ADDRESSED to this hub's own node that came from anywhere but this hub. The owning hub's
-    /// own writes never arrive as a message (they commit on its own data source), so the sender test
-    /// is exact; a write merely passing through to a hosted hub is not this hub's to judge.
+    /// A merge patch ADDRESSED to this hub's own node that came from anywhere but this hub. The owning
+    /// hub's own writes never arrive as a message (they commit on its own data source), so the sender
+    /// test is exact; a write merely passing through to a hosted hub is not this hub's to judge.
     /// </summary>
-    private static bool IsClientWriteToThisHub(IMessageHub hub, IMessageDelivery delivery)
+    private static bool IsClientPatchOfThisHub(IMessageHub hub, IMessageDelivery delivery)
     {
-        if (delivery.Message is not (PatchDataRequest { Reference: MeshNodeReference } or DataChangeRequest))
+        if (delivery.Message is not PatchDataRequest { Reference: MeshNodeReference })
             return false;
         var ownPath = hub.Address.Path;
         if (delivery.Target is { } target && !string.Equals(target.Path, ownPath, StringComparison.OrdinalIgnoreCase))
@@ -291,11 +292,11 @@ public static class StampedFields
     }
 
     /// <summary>The NodeType whose configuration this hub runs — the type that declares the fields.</summary>
-    private static string? OwnNodeType(IMessageHub hub)
+    internal static string? OwnNodeType(IMessageHub hub)
         => hub.Configuration.Get<NodeTypePathHolder>()?.Path ?? LiveOwnNode(hub)?.NodeType;
 
     /// <summary>The hub's own node as its data source holds it now (null before it has loaded).</summary>
-    private static MeshNode? LiveOwnNode(IMessageHub hub)
+    internal static MeshNode? LiveOwnNode(IMessageHub hub)
     {
         var store = hub.GetWorkspace().DataContext.GetDataSourceForType(typeof(MeshNode))
             ?.GetStreamForPartition(null)?.Current?.Value;
@@ -305,60 +306,57 @@ public static class StampedFields
             .FirstOrDefault(n => string.Equals(n.Path, ownPath, StringComparison.OrdinalIgnoreCase));
     }
 
-    /// <summary>The refusal for <paramref name="delivery"/>, or null when it changes no stamped field.</summary>
-    private static string? VerdictFor(IMessageHub hub, IMessageDelivery delivery, StampedFieldDeclaration declared)
+    /// <summary>The refusal for a merge patch of the hub's own node, or null when it changes no stamped field.</summary>
+    private static string? VerdictFor(IMessageHub hub, PatchDataRequest patchRequest, StampedFieldDeclaration declared)
     {
         if (declared.Fields.IsEmpty)
             return null;
 
         var options = hub.JsonSerializerOptions;
         var live = LiveOwnNode(hub);
-        var liveContent = ContentObject(live, options);
-        var path = live?.Path ?? hub.Address.Path;
-        var nodeType = live?.NodeType ?? OwnNodeType(hub);
+        if (JsonNode.Parse(patchRequest.Patch.Content ?? "{}") is not JsonObject patch)
+            return null; // not an object: the handler refuses it with its own error
+        var contentKey = options.PropertyNamingPolicy?.ConvertName(nameof(MeshNode.Content))
+            ?? nameof(MeshNode.Content);
+        var changed = ChangedByMergePatch(ContentObject(live, options), patch, contentKey, declared.Fields);
+        return changed.IsEmpty
+            ? null
+            : Refusal(live?.Path ?? hub.Address.Path, live?.NodeType ?? OwnNodeType(hub), changed, isCreate: false);
+    }
 
-        switch (delivery.Message)
+    /// <summary>
+    /// The refusal for one entity of a data-change update on the hub's own node — a whole
+    /// <see cref="MeshNode"/> or an <see cref="EntityDeltaUpdate"/> of it — or null when it changes no
+    /// stamped field or is not the hub's own node.
+    /// </summary>
+    internal static string? VerdictForUpdate(IMessageHub hub, object entity, StampedFieldDeclaration declared)
+    {
+        if (declared.Fields.IsEmpty)
+            return null;
+
+        var options = hub.JsonSerializerOptions;
+        var live = LiveOwnNode(hub);
+        var path = live?.Path ?? hub.Address.Path;
+        var after = entity switch
         {
-            case PatchDataRequest patchRequest:
-            {
-                if (JsonNode.Parse(patchRequest.Patch.Content ?? "{}") is not JsonObject patch)
-                    return null; // not an object: the handler refuses it with its own error
-                var contentKey = options.PropertyNamingPolicy?.ConvertName(nameof(MeshNode.Content))
-                    ?? nameof(MeshNode.Content);
-                var changed = ChangedByMergePatch(liveContent, patch, contentKey, declared.Fields);
-                return changed.IsEmpty ? null : Refusal(path, nodeType, changed, isCreate: false);
-            }
-            case DataChangeRequest change:
-            {
-                var changed = ImmutableList<string>.Empty;
-                foreach (var proposed in change.Updates.Concat(change.Creations))
-                {
-                    var after = proposed switch
-                    {
-                        MeshNode node when IsOwn(node.Path, path) => node,
-                        EntityDeltaUpdate delta when live is not null
-                            && delta.Collection == nameof(MeshNode)
-                            && (delta.Id == live.Id || string.Equals(delta.Id, live.Path, StringComparison.OrdinalIgnoreCase))
-                            => EntityDelta.Apply(live, delta, options) as MeshNode,
-                        _ => null
-                    };
-                    if (after is null)
-                        continue;
-                    changed = changed.AddRange(
-                        Changed(liveContent, ContentObject(after, options), declared.Fields)
-                            .Where(f => !changed.Contains(f)));
-                }
-                return changed.IsEmpty ? null : Refusal(path, nodeType, changed, isCreate: false);
-            }
-            default:
-                return null;
-        }
+            EntityDeltaUpdate delta when live is not null
+                && delta.Collection == nameof(MeshNode)
+                && (delta.Id == live.Id || IsOwn(delta.Id, live.Path))
+                => EntityDelta.Apply(live, delta, options) as MeshNode,
+            EntityDeltaUpdate => null,
+            _ when entity.As<MeshNode>(options) is { } node && IsOwn(node.Path, path) => node,
+            _ => null
+        };
+        if (after is null)
+            return null;
+        var changed = Changed(ContentObject(live, options), ContentObject(after, options), declared.Fields);
+        return changed.IsEmpty ? null : Refusal(path, live?.NodeType ?? OwnNodeType(hub), changed, isCreate: false);
     }
 
     private static bool IsOwn(string? candidate, string ownPath)
         => string.Equals(candidate, ownPath, StringComparison.OrdinalIgnoreCase);
 
-    private static string Unavailable(IMessageHub hub, Exception ex)
+    internal static string Unavailable(IMessageHub hub, Exception ex)
         => $"Write to '{hub.Address.Path}' refused: the stamped fields its type declares could not be read, "
            + "so whether this write changes one could not be decided. This is NOT a statement about the "
            + $"caller's rights. Retry shortly. Cause: {ex.GetType().Name}: {ex.Message}";
@@ -437,5 +435,53 @@ public sealed class StampedFieldCreateValidator(IMessageHub hub) : INodeValidato
                 $"Creating '{node.Path}' was refused: the stamped fields of {node.NodeType} could not be read, "
                 + $"so whether the content forges one could not be decided. Retry shortly. Cause: "
                 + $"{ex.GetType().Name}: {ex.Message}")));
+    }
+}
+
+/// <summary>
+/// The stamped-field declaration of the type a node hub runs, read once per activation and kept for
+/// the hub's life — shared by the hub's delivery guard and its data validator. Registered as a
+/// singleton of the node hub's own container, so its lifetime is the hub's; a fault is evicted, so the
+/// next write reads again.
+/// </summary>
+/// <param name="hub">The node hub.</param>
+public sealed class StampedFieldDeclarationHolder(IMessageHub hub)
+{
+    private readonly PromiseSlot<StampedFieldDeclaration> slot = new();
+
+    /// <summary>The declaration: one value, replayed to every later write of this activation.</summary>
+    public IObservable<StampedFieldDeclaration> Declaration
+        => slot.GetOrCreate(() => StampedFields.Resolve(hub, StampedFields.OwnNodeType(hub))
+                .Replay(1)
+                .AutoConnectOwnedBy(hub, nameof(StampedFieldDeclarationHolder)))
+            .Take(1);
+}
+
+/// <summary>
+/// The data layer's half of the stamped-field guard: an update arriving as a data change (a synced
+/// subscriber's write-back of the node) that would change a stamped field of the hub's own node is
+/// refused, naming the field. The data layer runs its validators only for a change that ARRIVES as a
+/// message, so the owning hub's own writes never meet this. Creations answer to
+/// <see cref="StampedFieldCreateValidator"/> through the create-validator chain. See
+/// <see cref="StampedFields"/>.
+/// </summary>
+/// <param name="hub">The node hub.</param>
+internal sealed class StampedFieldDataValidator(IMessageHub hub) : IDataValidator
+{
+    /// <inheritdoc />
+    public IReadOnlyCollection<DataOperation> SupportedOperations => [DataOperation.Update];
+
+    /// <inheritdoc />
+    public IObservable<DataValidationResult> Validate(DataValidationContext context)
+    {
+        if (context.Operation != DataOperation.Update)
+            return Observable.Return(DataValidationResult.Valid());
+
+        return hub.ServiceProvider.GetRequiredService<StampedFieldDeclarationHolder>().Declaration
+            .Select(declared => StampedFields.VerdictForUpdate(hub, context.Entity, declared) is { } refusal
+                ? DataValidationResult.Invalid(refusal, DataValidationRejectionReason.Unauthorized)
+                : DataValidationResult.Valid())
+            .Catch<DataValidationResult, Exception>(ex => Observable.Return(DataValidationResult.Invalid(
+                StampedFields.Unavailable(hub, ex), DataValidationRejectionReason.Unknown)));
     }
 }
