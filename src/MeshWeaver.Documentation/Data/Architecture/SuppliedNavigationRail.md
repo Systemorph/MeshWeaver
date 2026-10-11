@@ -37,9 +37,15 @@ index of the Space, with the page being read marked and only the groups on the r
   (its first path segment), also when a module supplied the index. Submitting it opens the mesh
   search (`/search?ns={space}&q=…`). The Blazor nav menu that renders the box ships in
   MeshWeaver.Plugins.
-- **Every node page has it, not only markdown.** The typed default Overview is wrapped by
-  `MarkdownOverviewLayoutArea.WithIndexRail`. A page's children are navigated in the rail and are
-  never listed at the bottom of the page.
+- **Markdown and typed pages have it.** The typed default Overview is wrapped by
+  `MarkdownOverviewLayoutArea.WithIndexRail`, so a page's children are navigated in the rail and
+  are not listed at the bottom of the page.
+- **Space pages do not have it yet.** A Space's Overview is rendered by `SpaceLayoutAreas` in
+  MeshWeaver.Plugins, which still appends its bottom **Contents** catalog. Wrapping it with the rail
+  and removing that catalog is MeshWeaver.Plugins#3363, which lands after this platform release;
+  until then a Space page has the catalog and no rail.
+- **The default Space welcome text** (`SpaceNodeType.WelcomeMarkdown`) still ends with
+  `## Contents` and an `@@("area/Search")` embed; it is removed once the Space rail is live.
 
 ## The seam
 
