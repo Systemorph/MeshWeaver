@@ -2300,6 +2300,12 @@ jobs:
     - name: "The fresh merge tests head + CURRENT main, and refuses a conflict (self-test)"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/ci-fresh-merge.py --self-test
+    # The issue-taxonomy check (daily lane issue-taxonomy.yml) and the stamp every sentinel calls: a bug
+    # without a severity, two types, an unknown sev:, a violation past page one, an unreadable repository
+    # (never clean), and a person's classification left untouched by a reopened sentinel.
+    - name: "The issue taxonomy is checked past page one and a sentinel never files an untyped bug (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 scripts/check-issue-taxonomy.py --self-test
 
     # main-cd's core image-relevance classifier (policy image-rebuild-own-inputs, #4688) runs on
     # main only, so its first execution would be in production. Proven both ways here: tests /

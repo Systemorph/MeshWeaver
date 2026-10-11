@@ -66,6 +66,12 @@ TITLE = "fleet-unarmed: the promotion gate has left the fleet unarmed"
 MARK = "<!-- fleet-unarmed alert -->"
 FINGERPRINT = re.compile(r"<!-- fleet-unarmed reading: (\S+) -->")
 BOT_LOGIN = "github-actions[bot]"
+# 🏷️ The alert states its own TYPE and SEVERITY (Doc/Architecture/IssueTaxonomy, policy
+# `release-blocker-gate`): an issue without them is invisible to the release gate. A fleet the promotion
+# gate has left unarmed past the threshold receives none of main's builds — the delivery path is
+# broken, like a failed CD — so a bug at sev:H. Both labels exist in core (check-issue-taxonomy.py
+# CANONICAL); POST /issues would create a missing one rather than fail.
+TAXONOMY = ("bug", "sev:H")
 STATES = ("waiting", "refused", "not examined")
 
 
@@ -286,7 +292,7 @@ class GitHub:
         return out
 
     def create(self, body: str) -> int:
-        _, it = self.call("POST", "issues", body={"title": TITLE, "body": body, "labels": [LABEL]})
+        _, it = self.call("POST", "issues", body={"title": TITLE, "body": body, "labels": [LABEL, *TAXONOMY]})
         return int(it["number"])  # type: ignore[index]
 
     def issue(self, number: int) -> Issue:
@@ -399,7 +405,7 @@ class FakeGitHub:
 
     def create(self, body):
         self.next += 1
-        self.issues[self.next] = Issue(self.next, TITLE, "open", body, (LABEL,), BOT_LOGIN, "Bot")
+        self.issues[self.next] = Issue(self.next, TITLE, "open", body, (LABEL, *TAXONOMY), BOT_LOGIN, "Bot")
         return self.next
 
     def edit(self, number, **fields):
@@ -461,6 +467,8 @@ def self_test() -> int:
           and [ln for ln in body.splitlines() if "3.1.10003" in ln and "**waiting**" in ln]
           and not [ln for ln in body.splitlines() if "3.1.10003" in ln and "**refused**" in ln], body)
     check("the issue carries the ownership mark and the newest armed set", MARK in body and "3.1.10000" in body)
+    check("the issue it opens states its type and severity (bug, sev:H)",
+          all(t in next(iter(gh.issues.values())).labels for t in TAXONOMY))
     num = next(iter(gh.issues))
 
     # 2. still stale, same reading → body rewritten, NO comment (no noise per tick)
