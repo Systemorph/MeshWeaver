@@ -407,7 +407,11 @@ on:
           (or the break declares `previousEpochRetired: true`) the `previous` leg has nothing to
           bake: the `epoch-leg` job says so and the bake job does not run. A caller adds ONE more
           call of this lane with `epoch-leg: previous`, both digests empty (the leg resolves its
-          own set) and otherwise the same inputs as its normal call.
+          own set) and otherwise the same inputs as its normal call. On that leg `module-artifacts`
+          only says that this repository OWNS modules: the run's bundles are current-epoch builds and
+          are never downloaded there. The leg carries the previous epoch's own sealed module set
+          forward instead, verified (seal, identity, digest), and refuses a bundle built for any other
+          identity (MeshWeaver#3583).
         required: false
         type: string
         default: 'current'
@@ -1222,7 +1226,8 @@ jobs:
       # minutes, and the publish side re-logs in afterwards rather than relying on a token minted
       # before it. Two cheap OIDC exchanges beat one that can expire mid-job.
       - name: Azure login for the gate / scope decision (OIDC)
-        if: inputs.upstream-sources != '' || inputs.narrow-by-affected
+        # The previous-epoch leg reads its own sealed module set off the share (carry-forward below).
+        if: inputs.upstream-sources != '' || inputs.narrow-by-affected || needs.epoch-leg.outputs.ceiling != ''
         uses: azure/login@v3
         with:
           client-id: ${{ secrets.azure-client-id }}
@@ -1411,8 +1416,13 @@ jobs:
       - name: Pre-bake hook
         if: inputs.pre-bake-script != ''
         run: ${{ inputs.pre-bake-script }}
+      # 🚨 NOT on the previous-epoch leg (MeshWeaver#3583). This run's module bundles were built
+      # against the CURRENT platform; sealed under the previous epoch's key they would hand every
+      # portal that has not rolled bytes built for a platform it does not run. That leg carries the
+      # previous epoch's own sealed set forward instead (next step) — decided, not skipped: the
+      # carry-forward step runs on every leg and says which one it is.
       - name: Download this run's module-bundle artifacts
-        if: inputs.module-artifacts != ''
+        if: inputs.module-artifacts != '' && needs.epoch-leg.outputs.ceiling == ''
         uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main
         with:
           store: ${{ steps.store.outputs.store || 'unresolved' }}
@@ -1420,6 +1430,79 @@ jobs:
           pattern: ${{ inputs.module-artifacts }}
           path: ${{ runner.temp }}/ext-bundles
           merge-multiple: true
+      # ─────────── PREVIOUS EPOCH: CARRY THE SEALED MODULE SET FORWARD, VERIFIED (MeshWeaver#3583) ───────────
+      # Decision (maintainer, MeshWeaver#3583): across a declared break the previous-epoch leg REUSES the
+      # previous epoch's sealed module set — no second build. Accepted consequence: a module fix does
+      # not reach a portal that has not rolled. What it carries is exactly what this repository's own
+      # publication for the ceiling's identity already seals, verified three ways before anything is
+      # sealed again:
+      #   SEAL     — read only from a SEALED publication for that identity (`_complete` present,
+      #              `modules/_index` present), pinned to ONE generation (compose-sealed-modules.sh);
+      #   IDENTITY — every bundle states it was built for the ceiling's identity, by
+      #              ModuleFrameworkIdentity's rule (`mw-plugin-test module-identity --expect`, run by
+      #              the CEILING's own tester). Anything else — this run's current-epoch builds
+      #              included — is REFUSED, never sealed;
+      #   DIGEST   — the sha256 of every carried bundle is recorded here, and the external-modules
+      #              step below seals an own bundle ONLY when its bytes are one of these.
+      # No `if:`: the current leg runs this step too and says so, so "not carried" is always a
+      # sentence in the log and never a grey tick.
+      - name: "Previous epoch: carry the sealed module set forward (verified)"
+        id: carry-forward
+        env:
+          CEILING: ${{ needs.epoch-leg.outputs.ceiling }}
+          MODULE_ARTIFACTS: ${{ inputs.module-artifacts }}
+          BAKE_SOURCE: ${{ inputs.bake-source }}
+          BAKE_PUBLISH_TARGETS: ${{ inputs.bake-publish-targets }}
+          IDENTITY: ${{ steps.identity.outputs.identity }}
+          TESTER_REF: ${{ steps.image.outputs.ref }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CEILING:-}" ]; then
+            echo "epoch leg: current — this run's own module bundles are what this publication seals; nothing is carried forward"
+            exit 0
+          fi
+          if [ -z "${MODULE_ARTIFACTS:-}" ]; then
+            echo "epoch leg: previous (ceiling $CEILING) — this repository builds no module of its own (module-artifacts is empty), so there is no module set to carry forward"
+            exit 0
+          fi
+          [ -n "${IDENTITY:-}" ] || { echo "::error::the previous-epoch leg resolved no framework identity for its ceiling $CEILING — nothing can be verified against an unknown identity"; exit 1; }
+          OUT="${RUNNER_TEMP:-/tmp}/ext-bundles"; mkdir -p "$OUT"
+          shopt -s nullglob
+          set -- "$OUT"/*
+          [ $# -eq 0 ] || { echo "::error::$OUT already holds $# file(s) on the previous-epoch leg — this run's own module builds must never reach this publication (MeshWeaver#3583)"; exit 1; }
+          # shellcheck disable=SC2086 # the first whitespace-separated target is where the seal is read
+          set -- $BAKE_PUBLISH_TARGETS
+          [ $# -ge 1 ] || { echo "::error::bake-publish-targets is empty — the previous epoch's sealed module set has nowhere to be read from"; exit 1; }
+          # SEAL: the whole own set, off the seal, one generation.
+          mw-platform-gate/.github/scripts/compose-sealed-modules.sh --identity "$IDENTITY" --packages '*' \
+            --upstreams "$BAKE_SOURCE" --out "$OUT" --storage-target "$1"
+          set -- "$OUT"/*.module.nupkg
+          if [ $# -eq 0 ]; then
+            echo "::error::the previous epoch's publication of '$BAKE_SOURCE' for identity $IDENTITY (ceiling $CEILING) seals NO module, but this repository builds modules ($MODULE_ARTIFACTS). There is no verified set to carry forward, and this leg never seals the current run's builds under the old key (MeshWeaver#3583). Republish '$BAKE_SOURCE' on the ceiling, or declare the previous epoch retired (previousEpochRetired: true)."
+            exit 1
+          fi
+          # IDENTITY: the ceiling's own tester, the shared rule. A tester without the verb predates
+          # the carry-forward and cannot verify anything — RED, never "assume it matches".
+          if ! usage=$(docker run --rm --init --entrypoint /app/mw-plugin-test "$TESTER_REF" module-identity --help 2>&1) \
+             || ! printf '%s\n' "$usage" | grep -q 'usage: mw-plugin-test module-identity'; then
+            printf '%s\n' "${usage:-}" | head -n 5
+            echo "::error::the ceiling's tester ($TESTER_REF) has no 'module-identity' verb, so the carried-forward module set cannot be verified against identity $IDENTITY. The ceiling ($CEILING) must be a platform build that carries MeshWeaver#3583; until then nothing is sealed for the previous epoch."
+            exit 1
+          fi
+          carried=()
+          for f in "$@"; do carried+=("/carry/$(basename "$f")"); done
+          docker run --rm --init -v "$OUT:/carry:ro" --entrypoint /app/mw-plugin-test "$TESTER_REF" \
+            module-identity "${carried[@]}" --expect "$IDENTITY"
+          # DIGEST: the bytes that may be sealed, and nothing else.
+          DIGESTS="${RUNNER_TEMP:-/tmp}/carried-forward.sha256"; : > "$DIGESTS"
+          for f in "$@"; do
+            if command -v sha256sum >/dev/null 2>&1; then d=$(sha256sum "$f" | cut -d' ' -f1); else d=$(shasum -a 256 "$f" | cut -d' ' -f1); fi
+            printf '%s %s\n' "$d" "$(basename "$f")" >> "$DIGESTS"
+          done
+          echo "CARRIED_FORWARD_DIGESTS=$DIGESTS" >> "$GITHUB_ENV"
+          echo "carried forward: $# module bundle(s) of '$BAKE_SOURCE', sealed for identity $IDENTITY (ceiling $CEILING), every one built for that identity — no module was built for this leg:"
+          cat "$DIGESTS"
+          echo "### previous epoch: carried forward $# sealed module bundle(s) for $IDENTITY (ceiling $CEILING), verified — seal, identity, digest" >> "$GITHUB_STEP_SUMMARY"
       # 🚨 EXTERNAL MODULES (#2541): the tester image ships no modules since #2276, so a module a
       # NodeType binds must be handed in explicitly. Every failure here is RED and NAMED — a bake
       # that quietly ran without a module it needed blames the CONTENT (CS0246), which is exactly
@@ -1646,6 +1729,12 @@ jobs:
               pkg=$(printf '%s' "$stem" | sed -E 's/\.[0-9]+(\.[0-9]+)*([-+][0-9A-Za-z.+-]*)?$//')
             fi
             [ -n "$pkg" ] || { echo "::error::$(basename "$b"): cannot derive the package id this bundle seals under — no manifest plugin id, and the file name is not MeshWeaver.Plugin.<pkg>.<version>.module.nupkg / <pkg>.bundle.zip / <pkg>.module.nupkg"; exit 1; }
+            # 🚨 The previous-epoch leg seals ONLY the carried-forward bytes (MeshWeaver#3583): an own
+            # bundle whose sha256 the carry-forward step did not record is refused, never sealed.
+            if [ "$origin" = "own" ] && [ -n "${CARRIED_FORWARD_DIGESTS:-}" ]; then
+              grep -q "^$(digest_of "$b") " "$CARRIED_FORWARD_DIGESTS" \
+                || { echo "::error::$(basename "$b") is about to be sealed on the previous-epoch leg, but its bytes are not one of the carried-forward module bundles ($CARRIED_FORWARD_DIGESTS). Only the previous epoch's verified set may be sealed under its key (MeshWeaver#3583)."; exit 1; }
+            fi
             if [ "$origin" = "own" ] || [ "$LEGACY_PUBLISHER" = "true" ]; then
               SEAL="${RUNNER_TEMP:-/tmp}/seal-modules"; mkdir -p "$SEAL"
               cp "$b" "$SEAL/$(printf '%s' "$pkg" | tr '[:upper:]' '[:lower:]').module.nupkg"
