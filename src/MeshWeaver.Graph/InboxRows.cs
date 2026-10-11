@@ -33,7 +33,7 @@ public sealed record InboxRow
 
     /// <summary>
     /// Who brought the row, as an identifier — the leg's <see cref="InboxQueryLeg.Source"/>. What
-    /// the source's switch and the by-source order key on, never shown.
+    /// the source's switch keys on, never shown. (The by-source order follows the display name.)
     /// </summary>
     public string SourceId { get; init; } = string.Empty;
 
@@ -82,7 +82,7 @@ public static class InboxOrder
     /// <summary>By title, A to Z.</summary>
     public const string Title = "Title";
 
-    /// <summary>By who brought the row, then newest first.</summary>
+    /// <summary>By the source's display name, then newest first.</summary>
     public const string Source = "Source";
 
     /// <summary>Every ordering, in the order the select lists them.</summary>
@@ -135,15 +135,10 @@ public static class InboxRows
     /// </summary>
     /// <param name="source">The leg's source.</param>
     public static string SourceKey(string source)
-    {
-        // The readable part alone is not unique ("Ops / Approvals" and "Ops Approvals" read the
-        // same), and two sources sharing a key would share one switch — so the key ends in a
-        // stable hash of the exact id. FNV-1a: deterministic across processes, unlike GetHashCode.
-        var hash = 2166136261u;
-        foreach (var c in source)
-            hash = (hash ^ c) * 16777619u;
-        return Slug(source).ToLowerInvariant() + hash.ToString("x8", CultureInfo.InvariantCulture);
-    }
+        // The id itself, hex-encoded: one key per id BY CONSTRUCTION. A readable slug is not unique
+        // ("Ops / Approvals" and "Ops Approvals" read the same) and a hash suffix only makes a
+        // collision rarer — two sources sharing a key would share one switch.
+        => "s" + Convert.ToHexString(System.Text.Encoding.UTF8.GetBytes(source)).ToLowerInvariant();
 
     /// <summary>
     /// <paramref name="filter"/> by VALUE — what the page compares to tell a change the viewer made
@@ -218,7 +213,10 @@ public static class InboxRows
             InboxOrder.Oldest => shown.OrderBy(r => r.Stamp, StringComparer.Ordinal),
             InboxOrder.Title => shown.OrderBy(r => r.Title, StringComparer.OrdinalIgnoreCase)
                 .ThenByDescending(r => r.Stamp, StringComparer.Ordinal),
+            // By the name the viewer READS, so the list is alphabetical in their language; the id
+            // only separates two sources that happen to share a display name.
             InboxOrder.Source => shown.OrderBy(r => r.Source, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(r => r.SourceId, StringComparer.Ordinal)
                 .ThenByDescending(r => r.Stamp, StringComparer.Ordinal),
             // Importance — and anything unrecognised: an unknown stored order must never hide what
             // needs the viewer behind what merely happened last.

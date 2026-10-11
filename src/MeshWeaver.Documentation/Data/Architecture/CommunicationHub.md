@@ -380,7 +380,7 @@ function of the filter and the legs.
 |---|---|---|
 | search box | `search` | the term is appended to EVERY leg and handed to the query engine (free text, field filters, the semantic index) under the owner's identity — never a match over the rows already loaded |
 | order select | `order` | an `InboxOrder` constant: what needs you first (default — band rank, newest within), newest, oldest, by title, by source |
-| one switch per source | `sources/{key}` | shows or hides what one provider brought (Mail, WhatsApp, Notifications, …); a source with no entry is shown, so a leg a package brings later never arrives switched off |
+| one switch per source | `sources/{key}` (the id, hex-encoded) | shows or hides what one provider brought (Mail, WhatsApp, Notifications, …); a source with no entry is shown, so a leg a package brings later never arrives switched off |
 | the grid's checkboxes | `inboxSelection` | the ticked row keys, read by Delete |
 
 Three properties of that binding are load-bearing:
@@ -425,16 +425,23 @@ Three rules follow, and each is pinned by a test in `InboxSelectAndDeleteTest`:
 - **An outcome never quotes an exception.** A handler's `Reason` is shown to the viewer verbatim, so
   it is a refusal the handler chose to state. A write that faults is LOGGED and answers with no
   reason; the page then says only that the item could not be changed.
-- **A source has an id and a display name.** `InboxQueryLeg.Source` keys the switch and the
-  by-source order; `SourceLabelKey` names the catalog text the row and the switch show in the
+- **A source has an id and a display name.** `InboxQueryLeg.Source` keys the switch; `SourceLabelKey` names the catalog text the row and the switch show in the
   viewer's language. A provider gives no key only for a name that is the same in every language.
   The row's date is written in the viewer's time zone AND the viewer's date format.
 - **A bulk act never leaves the owner's partition.** A search runs with the viewer's rights and may
   list a node elsewhere; a ticked row outside `{owner}/` is not a target.
-- **A selection is the viewer's claim, not a grant.** The click re-checks the ticked keys against
-  the rows as they stand (`InboxRows.Targets`) and issues every write under the CLICKER's access
-  context, opened around the handler call — so each write is authorised exactly as if the viewer had
-  made it on the item's own page.
+- **A selection is the viewer's claim, not a grant — and it is the ONLY thing taken from the
+  client.** The data section is two-way, so the click never trusts what is in it: the ticked keys are
+  intersected with the owner's own feed, re-read from the legs at the click (which also supplies the
+  node type that picks each handler), and every write is issued under the CLICKER's access context,
+  opened around the handler call. The Undo batch is a host variable for the same reason — kept in the
+  data section it would be whatever the client says it is.
+- **"The write completed" is not "the item was put away".** A handler answers `Done` from the state
+  the content is in AFTER the write: a change that was a no-op (an outbound mail, an item someone
+  changed first) completes like any other, and must not enter the Undo batch.
+- **A source that cannot be read is named, and read again.** It contributes no rows, is logged, is
+  listed in a notice above the grid, and is re-read after a pause — an unreadable source must never
+  look like an empty one.
 
 🚨 **A default is OMITTED from stored JSON, so a leg negates the STAMPED value it excludes.**
 `Dismissed` defaults to `false`, `Email.Status` to `New`, `Direction` to `Inbound`: a positive match

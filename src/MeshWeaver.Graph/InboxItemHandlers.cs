@@ -33,11 +33,20 @@ public static class InboxItemHandlers
     /// quote the content it could not read, and an outcome's reason is shown to the viewer verbatim.
     /// The page says "could not be changed"; the log says why.</para>
     /// </summary>
+    /// <param name="hub">The hub the inbox renders on.</param>
+    /// <param name="path">The item's node path.</param>
+    /// <param name="change">The change; returns its argument unchanged when the item may not be changed.</param>
+    /// <param name="reached">
+    /// Whether the content AS WRITTEN is in the state the action asked for. A write whose change
+    /// was a no-op (an item that may not be changed, or that someone changed first) completes just
+    /// as a real one does — so "the update completed" is never the answer; the resulting state is.
+    /// </param>
     internal static IObservable<InboxItemOutcome> Write<TContent>(
-        IMessageHub hub, string path, Func<TContent, TContent> change) where TContent : class
+        IMessageHub hub, string path, Func<TContent, TContent> change, Func<TContent, bool> reached) where TContent : class
         => hub.GetMeshNodeStream(path).Update(change)
             .Take(1)
-            .Select(_ => new InboxItemOutcome(path, true))
+            .Select(node => new InboxItemOutcome(path,
+                node.ContentAs<TContent>(hub.JsonSerializerOptions) is { } content && reached(content)))
             .Catch((Exception ex) =>
             {
                 hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(InboxItemHandlers))
@@ -57,11 +66,11 @@ public sealed class NotificationInboxItemHandler : IInboxItemHandler
 
     /// <inheritdoc />
     public IObservable<InboxItemOutcome> Dismiss(IMessageHub hub, string path)
-        => InboxItemHandlers.Write<Notification>(hub, path, n => n with { Dismissed = true });
+        => InboxItemHandlers.Write<Notification>(hub, path, n => n with { Dismissed = true }, n => n.Dismissed);
 
     /// <inheritdoc />
     public IObservable<InboxItemOutcome> Restore(IMessageHub hub, string path)
-        => InboxItemHandlers.Write<Notification>(hub, path, n => n with { Dismissed = false });
+        => InboxItemHandlers.Write<Notification>(hub, path, n => n with { Dismissed = false }, n => !n.Dismissed);
 }
 
 /// <summary>
@@ -80,14 +89,19 @@ public sealed class EmailInboxItemHandler : IInboxItemHandler
 
     /// <inheritdoc />
     public IObservable<InboxItemOutcome> Dismiss(IMessageHub hub, string path)
-        => InboxItemHandlers.Write<Email>(hub, path, mail => CanFile(mail) ? mail with { Status = EmailStatus.Archived } : mail);
+        => InboxItemHandlers.Write<Email>(hub, path,
+            mail => CanFile(mail) ? mail with { Status = EmailStatus.Archived } : mail,
+            // Done only when THIS mail is now a filed inbound one — an outbound mail, or one the
+            // write left alone, was not put away and must never enter the Undo batch.
+            mail => mail is { Direction: EmailDirection.Inbound, Status: EmailStatus.Archived });
 
     /// <inheritdoc />
     public IObservable<InboxItemOutcome> Restore(IMessageHub hub, string path)
         => InboxItemHandlers.Write<Email>(hub, path,
             mail => mail is { Direction: EmailDirection.Inbound, Status: EmailStatus.Archived }
                 ? mail with { Status = EmailStatus.Read }
-                : mail);
+                : mail,
+            mail => mail is { Direction: EmailDirection.Inbound, Status: EmailStatus.New or EmailStatus.Read });
 
     /// <summary>Whether <paramref name="mail"/> may be archived from the inbox — inbound, and not already archived.</summary>
     internal static bool CanFile(Email mail)

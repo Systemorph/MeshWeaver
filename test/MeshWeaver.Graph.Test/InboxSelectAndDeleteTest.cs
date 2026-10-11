@@ -71,9 +71,18 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
         await Listed("both notifications are listed", "keep", "bin");
 
         var pointer = grid.SelectedItems.Should().BeOfType<JsonPointerReference>().Subject.Pointer;
-        stream.UpdatePointer(new JsonArray(JsonValue.Create($"{ns}/bin")), pointer, new JsonPointerReference("keys"));
+        // The selection is the client's claim. Beside the real tick it names a node of the owner's
+        // that NO leg lists (an already put-away notification): a key outside the owner's own feed
+        // is never a target, whatever the client says it ticked.
+        await CreateAsync(new MeshNode("away", ns)
+        {
+            NodeType = NotificationNodeType.NodeType, Name = "away", MainNode = owner, State = MeshNodeState.Active,
+            Content = new Notification { Id = "away", Title = "away", Recipient = owner, Dismissed = true },
+        }, ct);
+        stream.UpdatePointer(new JsonArray(JsonValue.Create($"{ns}/bin"), JsonValue.Create($"{ns}/away")),
+            pointer, new JsonPointerReference("keys"));
         await stream.GetDataStream<DataGridSelectionState>(new JsonPointerReference(pointer))
-            .Should().Within(TestTimeouts.Convergence).Match(s => s is { Keys.Count: 1 }, "the tick reached the owner", ct);
+            .Should().Within(TestTimeouts.Convergence).Match(s => s is { Keys.Count: 2 }, "the ticks reached the owner", ct);
 
         await Click(stream, DeleteArea, "1 moved out of the inbox. Undo brings them back.", ct);
         await Listed("only the ticked row left", "keep");
@@ -81,7 +90,8 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
         (await Content<Notification>($"{ns}/keep", _ => true, ct)).Dismissed.Should().BeFalse("an unticked row is never written");
 
         await Click(stream, UndoArea, "1 back in the inbox.", ct);
-        await Listed("Undo brought it back", "keep", "bin");
+        await Listed("Undo brought it back — and only what Delete put away: the unlisted node stays away", "keep", "bin");
+        (await Content<Notification>($"{ns}/away", _ => true, ct)).Dismissed.Should().BeTrue();
     }
 
     /// <summary>
@@ -210,8 +220,11 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
         (await Ids(leg, ids => ids.Contains("m1"), ct)).Should().Equal("m1");
         (await Content<Email>($"{ns}/m1", m => m.Status == EmailStatus.Read, ct)).Status.Should().Be(EmailStatus.Read, "the viewer has seen it by the time they undo");
 
-        // An outbound mail's status is its SEND state: Delete must not stop a queued mail leaving.
-        (await Run(() => handler.Dismiss(Mesh, $"{ns}/out1"), ct)).Done.Should().BeTrue();
+        // An outbound mail's status is its SEND state: Delete must not stop a queued mail leaving —
+        // and a write that changed nothing is NOT a delete: it answers "not done", so the mail
+        // never enters the Undo batch.
+        (await Run(() => handler.Dismiss(Mesh, $"{ns}/out1"), ct)).Should().Be(new InboxItemOutcome($"{ns}/out1", false));
+        (await Run(() => handler.Restore(Mesh, $"{ns}/out1"), ct)).Done.Should().BeFalse("nothing was put away, so nothing came back");
         (await Content<Email>($"{ns}/out1", _ => true, ct)).Status.Should().Be(EmailStatus.Sending);
     }
 
@@ -431,18 +444,19 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
         => InboxLayoutArea.ViewerCulture(locale).Should().Be(System.Globalization.CultureInfo.InvariantCulture);
 
     /// <summary>
-    /// A source's switch key is unique per source id — two ids that READ the same once punctuation
-    /// is dropped must not share one switch — and carries nothing a pointer segment cannot.
+    /// A source's switch key is unique per source id BY CONSTRUCTION — not merely unlikely to
+    /// collide — and carries nothing a pointer segment cannot. The second pair is one a 32-bit
+    /// hash of the id maps to the same value.
     /// </summary>
-    [Fact]
-    public void ASourcesSwitchKey_IsUniquePerSource_AndPointerSafe()
+    [Theory]
+    [InlineData("Ops / Approvals", "Ops Approvals")]
+    [InlineData("OpsApprov_al sL_o-n/g", "OpsAppro va/l-sL-o-ng")]
+    [InlineData("Mail", "mail")]
+    public void ASourcesSwitchKey_IsUniquePerSource_AndPointerSafe(string one, string other)
     {
-        var spaced = InboxRows.SourceKey("Ops / Approvals");
-
-        spaced.Should().StartWith("opsapprovals");
-        spaced.Should().MatchRegex("^[a-z0-9]+$", "no slash, space or capital");
-        spaced.Should().NotBe(InboxRows.SourceKey("Ops Approvals"));
-        InboxRows.SourceKey("Mail").Should().Be(InboxRows.SourceKey("Mail"), "stable: it is stored in the page's data");
+        InboxRows.SourceKey(one).Should().NotBe(InboxRows.SourceKey(other));
+        InboxRows.SourceKey(one).Should().MatchRegex("^[a-z0-9]+$", "no slash, space or capital");
+        InboxRows.SourceKey(one).Should().Be(InboxRows.SourceKey(one), "stable: it is stored in the page's data");
     }
 
     /// <summary>

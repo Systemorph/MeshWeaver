@@ -1893,6 +1893,7 @@
   "inbox.band.NeedsYou": "Needs you",
   "inbox.band.Running": "Running",
   "inbox.band.Recent": "Recent",
+  "inbox.unread": "Could not be read, trying again shortly: {0}",
   "inbox.source.Notifications": "Notifications",
   "inbox.source.Mail": "Mail",
   "inbox.source.Activities": "Activities",

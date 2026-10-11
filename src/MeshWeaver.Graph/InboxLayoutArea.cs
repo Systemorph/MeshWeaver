@@ -52,8 +52,18 @@ public static class InboxLayoutArea
     /// <summary>The layout area on the User hub — also the app record's id (<c>{user}/_App/Inbox</c>).</summary>
     public const string AreaName = "Inbox";
 
-    /// <summary>The data id holding what the last Delete put away — what Undo brings back.</summary>
+    /// <summary>
+    /// The key of what the last Delete put away — what Undo brings back. A HOST variable, never the
+    /// data section: the data section is two-way, so a batch kept there is whatever the client says
+    /// it is, and Undo would restore paths the viewer never deleted.
+    /// </summary>
     public const string UndoId = "inboxUndo";
+
+    /// <summary>The data id of the notice naming the sources that could not be read; empty when all were.</summary>
+    public const string UnreadId = "inboxUnread";
+
+    /// <summary>How long a source that could not be read is left before it is read again.</summary>
+    internal static readonly TimeSpan RetryAfter = TimeSpan.FromSeconds(30);
 
     /// <summary>How long the page waits after the last keystroke before it asks the query engine.</summary>
     internal static readonly TimeSpan SearchQuiet = TimeSpan.FromMilliseconds(300);
@@ -81,9 +91,11 @@ public static class InboxLayoutArea
             {
                 Sources = sources.ToImmutableDictionary(source => InboxRows.SourceKey(source.Id), _ => true),
             });
-            host.UpdateData(UndoId, ImmutableList<InboxUndoItem>.Empty);
+            host.UpdateData(UnreadId, string.Empty);
         }
         host.SeedRowSelection(InboxRows.SelectionId);
+        // ONE feed, owner-computed: the grid binds it, and Delete re-reads it at the click.
+        var rows = Rows(host, sections, owner, access.ViewerZoneId());
 
         var filterContext = LayoutAreaReference.GetDataPointer(InboxRows.FilterId);
         var switches = Controls.Stack.WithOrientation(Orientation.Horizontal).WithStyle("gap: 16px; flex-wrap: wrap;");
@@ -112,11 +124,14 @@ public static class InboxLayoutArea
             // outcome line that names every item that was not put away (Doc/GUI/ButtonPendingState).
             .WithView(Controls.Toolbar
                 .WithView(Controls.Button(host.Localize("inbox.delete")).WithAppearance(Appearance.Accent)
-                    .WithReactiveClickAction(ctx => Delete(ctx, owner)), "Delete")
+                    .WithReactiveClickAction(ctx => Delete(ctx, owner, rows)), "Delete")
                 .WithView(Controls.Button(host.Localize("inbox.undo")).WithAppearance(Appearance.Neutral)
                     .WithReactiveClickAction(Undo), "Undo"),
                 "Actions")
-            .WithView(Grid(host, Rows(host, sections, owner, access.ViewerZoneId())), "Grid"));
+            // Says which sources could not be read — an unreadable source must never look like an
+            // empty one. Bound: it appears and clears with the reads, with no re-render.
+            .WithView(Controls.Label(new JsonPointerReference(LayoutAreaReference.GetDataPointer(UnreadId))), "Unread")
+            .WithView(Grid(host, rows), "Grid"));
     }
 
     /// <summary>
@@ -125,7 +140,7 @@ public static class InboxLayoutArea
     /// rows and is LOGGED — one provider's failure must not blank the list the others feed.
     /// </summary>
     internal static IObservable<ImmutableList<InboxRow>> Rows(
-        LayoutAreaHost host, IReadOnlyList<InboxSection> sections, string owner, string? zone)
+        LayoutAreaHost host, ImmutableArray<InboxSection> sections, string owner, string? zone)
     {
         var hub = host.Hub;
         var handlers = hub.ServiceProvider.GetServices<IInboxItemHandler>().ToImmutableArray();
@@ -146,20 +161,29 @@ public static class InboxLayoutArea
         var filter = host.GetDataStream<InboxFilter>(InboxRows.FilterId).Select(f => f ?? new InboxFilter())
             .DistinctUntilChanged(InboxRows.Fingerprint, StringComparer.Ordinal);
 
-        IObservable<ImmutableList<InboxRow>> Merged(string term) => sections
-            .Select(section => Nodes(hub, section, term, owner)
-                .Select(nodes => nodes
+        // What each leg last answered: its rows, and whether that answer was a failure. A leg that
+        // cannot be read contributes no rows, is LOGGED, is NAMED above the grid, and is read again
+        // after RetryAfter — one provider's failure must not blank the others, and must not pass
+        // for "nothing here" either.
+        IObservable<(ImmutableList<InboxRow> Rows, string? Unread)> Leg(InboxSection section, string term) =>
+            Nodes(hub, section, term, owner)
+                .Select(nodes => (nodes
                     .Select(node => InboxRows.Of(node, section, zone,
                         BlockedReason(section.Band, InboxItemHandlers.For(handlers, node.NodeType), running, noHandler),
                         bands[section.Band].Title, bands[section.Band].rank, labels[section.Source], culture))
-                    .ToImmutableList())
+                    .ToImmutableList(), (string?)null))
                 .Catch((Exception ex) =>
                 {
                     logger?.LogWarning(ex, "Inbox leg {Source} ({Band}) could not be read", section.Source, section.Band);
-                    return Observable.Return(ImmutableList<InboxRow>.Empty);
-                }))
+                    return Observable.Return((ImmutableList<InboxRow>.Empty, (string?)labels[section.Source]))
+                        .Concat(Observable.Timer(RetryAfter).SelectMany(_ => Leg(section, term)));
+                });
+
+        IObservable<ImmutableList<InboxRow>> Merged(string term) => sections
+            .Select(section => Leg(section, term))
             .CombineLatest()
-            .Select(InboxRows.Merge);
+            .Do(legs => host.UpdateData(UnreadId, UnreadNotice(host, legs.Select(leg => leg.Unread))))
+            .Select(legs => InboxRows.Merge(legs.Select(leg => leg.Rows)));
 
         return filter.Select(f => f.Search.Trim())
             .DistinctUntilChanged(StringComparer.Ordinal)
@@ -170,6 +194,16 @@ public static class InboxLayoutArea
             .Select(Merged)
             .Switch()
             .CombineLatest(filter, InboxRows.Apply);
+    }
+
+    /// <summary>
+    /// The notice for the sources that could not be read: empty when every leg answered, else the
+    /// sentence naming each such source once.
+    /// </summary>
+    internal static string UnreadNotice(LayoutAreaHost host, IEnumerable<string?> unread)
+    {
+        var names = unread.OfType<string>().Distinct(StringComparer.Ordinal).ToImmutableList();
+        return names.IsEmpty ? string.Empty : host.Localize("inbox.unread", string.Join(", ", names));
     }
 
     /// <summary>
@@ -272,11 +306,16 @@ public static class InboxLayoutArea
     }
 
     /// <summary>
-    /// Delete: every ticked row, re-checked against the rows the grid shows and confined to the
-    /// owner's partition, put away by its own type's handler under the CLICKER's identity. What was
-    /// put away becomes the Undo batch; what was not is named in the outcome line.
+    /// Delete: every ticked row that the OWNER's own feed lists right now, confined to the owner's
+    /// partition, put away by its type's handler under the CLICKER's identity. What was put away
+    /// becomes the Undo batch; what was not is named in the outcome line.
+    ///
+    /// <para>🚨 The selection is the only thing taken from the client, and only as a set of keys.
+    /// The rows it is intersected with — and the node type that picks each handler — are
+    /// <paramref name="rows"/>, re-read here from the legs: the grid's rows in the data section are
+    /// two-way, so pruning the client's keys against them would prove nothing.</para>
     /// </summary>
-    private static IObservable<Unit> Delete(UiActionContext ctx, string owner)
+    private static IObservable<Unit> Delete(UiActionContext ctx, string owner, IObservable<ImmutableList<InboxRow>> rows)
     {
         var host = ctx.Host;
         var hub = host.Hub;
@@ -286,9 +325,7 @@ public static class InboxLayoutArea
         var caller = access?.Context;
         var handlers = hub.ServiceProvider.GetServices<IInboxItemHandler>().ToImmutableArray();
         return ctx.SelectedRowKeys(InboxRows.SelectionId)
-            // The rows the grid is SHOWING — what the viewer ticked against — read once.
-            .Zip(host.GetDataStream<ImmutableList<InboxRow>>(InboxRows.GridId).Take(1),
-                (keys, rows) => InboxRows.Targets(rows ?? [], keys, owner))
+            .Zip(rows.Take(1), (keys, current) => InboxRows.Targets(current, keys, owner))
             .SelectMany(targets => targets.Count == 0
                 ? Observable.Throw<Unit>(new InvalidOperationException(host.Localize("inbox.nothingSelected")))
                 : Act(ctx, access, caller, targets.Select(row => new InboxUndoItem(row.Path, row.NodeType)).ToImmutableList(),
@@ -296,7 +333,7 @@ public static class InboxLayoutArea
                     .Do(outcomes =>
                     {
                         var done = outcomes.Where(o => o.Done).Select(o => o.Path).ToImmutableHashSet(StringComparer.Ordinal);
-                        host.UpdateData(UndoId, targets.Where(row => done.Contains(row.Path))
+                        host.SetVariable(UndoId, targets.Where(row => done.Contains(row.Path))
                             .Select(row => new InboxUndoItem(row.Path, row.NodeType)).ToImmutableList());
                         // The rows are gone from the grid; so are their ticks.
                         host.UpdateData(InboxRows.SelectionId, new DataGridSelectionState());
@@ -305,7 +342,11 @@ public static class InboxLayoutArea
                     .Select(_ => Unit.Default));
     }
 
-    /// <summary>Undo: brings back what the last Delete put away, through the same handlers.</summary>
+    /// <summary>
+    /// Undo: brings back what the last Delete put away, through the same handlers. The batch is the
+    /// HOST's own record of what this page deleted — never client data — so Undo can only restore
+    /// what Delete put away.
+    /// </summary>
     private static IObservable<Unit> Undo(UiActionContext ctx)
     {
         var host = ctx.Host;
@@ -313,18 +354,18 @@ public static class InboxLayoutArea
         var access = hub.ServiceProvider.GetService<AccessService>();
         var caller = access?.Context;
         var handlers = hub.ServiceProvider.GetServices<IInboxItemHandler>().ToImmutableArray();
-        return host.GetDataStream<ImmutableList<InboxUndoItem>>(UndoId).Take(1)
-            .SelectMany(batch => batch is not { Count: > 0 }
-                ? Observable.Throw<Unit>(new InvalidOperationException(host.Localize("inbox.nothingToUndo")))
-                : Act(ctx, access, caller, batch, handlers, (handler, path) => handler.Restore(hub, path), "inbox.progress.restoring")
-                    .Do(outcomes =>
-                    {
-                        // Whatever could not be brought back stays undoable — a second click retries it.
-                        var done = outcomes.Where(o => o.Done).Select(o => o.Path).ToImmutableHashSet(StringComparer.Ordinal);
-                        host.UpdateData(UndoId, batch.Where(item => !done.Contains(item.Path)).ToImmutableList());
-                        ctx.ReportSummary(Summary(host, "inbox.summary.restored", outcomes));
-                    })
-                    .Select(_ => Unit.Default));
+        var batch = host.GetVariable<ImmutableList<InboxUndoItem>>(UndoId);
+        return batch is not { Count: > 0 }
+            ? Observable.Throw<Unit>(new InvalidOperationException(host.Localize("inbox.nothingToUndo")))
+            : Act(ctx, access, caller, batch, handlers, (handler, path) => handler.Restore(hub, path), "inbox.progress.restoring")
+                .Do(outcomes =>
+                {
+                    // Whatever could not be brought back stays undoable — a second click retries it.
+                    var done = outcomes.Where(o => o.Done).Select(o => o.Path).ToImmutableHashSet(StringComparer.Ordinal);
+                    host.SetVariable(UndoId, batch.Where(item => !done.Contains(item.Path)).ToImmutableList());
+                    ctx.ReportSummary(Summary(host, "inbox.summary.restored", outcomes));
+                })
+                .Select(_ => Unit.Default);
     }
 
     /// <summary>
@@ -362,7 +403,7 @@ public static class InboxLayoutArea
     /// <summary>The outcome line: how many, and every item that was not done with its reason.</summary>
     internal static string Summary(LayoutAreaHost host, string key, IReadOnlyCollection<InboxItemOutcome> outcomes)
     {
-        var failed = outcomes.Where(o => !o.Done).ToList();
+        var failed = outcomes.Where(o => !o.Done).ToImmutableList();
         var line = host.Localize(key, outcomes.Count - failed.Count);
         return failed.Count == 0
             ? line
@@ -375,17 +416,19 @@ public static class InboxLayoutArea
     /// The legs of the page: every enabled leg resolved for <paramref name="owner"/>, in band
     /// order, each distinct query once. Pure — the page's shape is testable without a hub.
     /// </summary>
-    internal static IReadOnlyList<InboxSection> Sections(IEnumerable<InboxQueryLeg> legs, string owner)
-    {
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        return InboxQueries.Resolve(legs, owner)
-            .OrderBy(leg => BandOrder.IndexOf(leg.Band) is var i and >= 0 ? i : BandOrder.Length)
-            .ThenBy(leg => leg.Band, StringComparer.Ordinal)
-            .ThenBy(leg => leg.Order)
-            .Where(leg => seen.Add(leg.Query))
-            .Select(leg => new InboxSection(leg.Band, leg.Source, leg.Order, leg.Query) { SourceLabelKey = leg.SourceLabelKey })
-            .ToArray();
-    }
+    internal static ImmutableArray<InboxSection> Sections(IEnumerable<InboxQueryLeg> legs, string owner)
+        =>
+        [
+            .. InboxQueries.Resolve(legs, owner)
+                .OrderBy(leg => BandOrder.IndexOf(leg.Band) is var i and >= 0 ? i : BandOrder.Length)
+                .ThenBy(leg => leg.Band, StringComparer.Ordinal)
+                .ThenBy(leg => leg.Order)
+                // Each distinct query once, under the first leg that asked for it (GroupBy keeps
+                // first-occurrence order).
+                .GroupBy(leg => leg.Query, StringComparer.Ordinal)
+                .Select(same => same.First())
+                .Select(leg => new InboxSection(leg.Band, leg.Source, leg.Order, leg.Query) { SourceLabelKey = leg.SourceLabelKey })
+        ];
 
     /// <summary>The localization key of a band's title.</summary>
     internal static string BandTitleKey(string band) => "inbox.band." + band;
