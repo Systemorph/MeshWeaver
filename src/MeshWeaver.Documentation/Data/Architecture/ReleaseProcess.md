@@ -312,6 +312,23 @@ derived from its assembly version rather than typed, so a 4.x adapter cannot shi
 exact version. The package version moves only when the adapter's surface does — 3.0.x for fixes,
 3.1.0 when the API grows — never per image.
 
+### `/next` rides the same train — inside `memex-portal-ai`
+
+Policy [`portal-next-in-platform-image`](../PolicyNotProse).
+
+The Next.js front end (`clients/portal-next` in MeshWeaver.Plugins) is **not an image of its own any
+more**. It used to be `memex-portal-next:3.0.0-next.<run>` — a literal `3.0.0-` on its own run number,
+never promoted by `release.yml`, never moved by any pointer above and never rolled — so every deployment
+that turned `/next` on pinned a tag by hand, and the pin drifted from the portal it talks to.
+
+Now `main-cd.yml`'s portal-ai leg builds it from the same Plugins commit as the portal host and
+publishes it inside `memex-portal-ai` (`/app/portal-next.zip`), and the portal process serves it. So it
+carries **this section's version, this run's sha and every pointer above**: whatever an install rolls
+to, `/next` is that build. A deployment states `portalNext.enabled: true` and **no image**; the chart
+routes `/next` to the portal pod (`templates/memex-portal/_portal-next.tpl`). `portalNext.image` remains
+only as the developer override (a separately built image, memex-local), and an image there is a pin.
+How it is built and why it is one archive: [Continuous Delivery Contract](/Doc/Architecture/ContinuousDeliveryContract).
+
 ## 3. Commands
 
 ```bash

@@ -442,6 +442,14 @@ data:
   # deployment DEFAULT stays Blazor — we deliberately leave Portal:Frontend unset —
   # so enabling the flag is opt-in per user, fully reversible.
   Portal__ReactAppUrl: "/next"
+{{- if eq (include "memex.portalNext.mode" .) "bundled" }}
+  # 🚂 BUNDLED: the portal process starts the Next server from the bundle its OWN image carries
+  # (PortalNextProcess) — so /next is always the build the portal runs. SSR reaches this same
+  # process over loopback; the browser still talks same-origin through the ingress.
+  PortalNext__Bundled: "true"
+  PortalNext__Port: "{{ include "memex.portalNext.port" . }}"
+  PortalNext__PortalOrigin: "http://127.0.0.1:{{ .Values.config.memex_portal.ASPNETCORE_HTTP_PORTS | default 8080 }}"
+{{- end }}
 {{- end }}
   # ---- Embeddings (vector search + content indexing) — optional -------------
   # With an Endpoint set, the portal registers the embedding provider: search-bar queries hit
