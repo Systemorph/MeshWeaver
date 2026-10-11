@@ -180,6 +180,19 @@ public class ADeploymentNamedCommercialPackageInstallsTest(ITestOutputHelper out
             .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
         (await sourceless.Should().ThrowAsync<PackageAuthorizationException>())
             .Which.Message.Should().Contain("without a source");
+        // …and a REQUIREMENT of a named package is no exception: ClaimsCore is admitted only
+        // under its own source, never by id from a source-less (or other-source) listing.
+        var sourcelessRequirement = async () => await PackageEntitlement
+            .Authorize(Mesh, new PackageManifest { Id = "ClaimsCore", ContactEmail = "sales@acme.test" }, Principal)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        await sourcelessRequirement.Should().ThrowAsync<PackageAuthorizationException>();
+        var otherSourceRequirement = async () => await PackageEntitlement
+            .Authorize(Mesh, new PackageManifest { Id = "ClaimsCore", Source = "elsewhere", ContactEmail = "sales@acme.test" }, Principal)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        await otherSourceRequirement.Should().ThrowAsync<PackageAuthorizationException>();
+        await PackageEntitlement
+            .Authorize(Mesh, new PackageManifest { Id = "ClaimsCore", Source = SourceName, ContactEmail = "sales@acme.test" }, Principal)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
     }
 
     [Fact]

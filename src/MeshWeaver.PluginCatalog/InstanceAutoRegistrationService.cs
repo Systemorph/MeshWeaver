@@ -1409,7 +1409,15 @@ public sealed class InstanceAutoRegistrationService(
                 var catalogPackages = catalog.Select(c => c.Package).ToImmutableList();
                 var named = selected.Where(IsNamed).Select(c => c.Package).ToImmutableList();
                 var namedRequirements = ConfigAuthorizedRequirements(catalogPackages, named);
-                hub.ServiceProvider.GetService<DeploymentConfigAuthority>()?.Admit(namedRequirements);
+                // Admitted keyed by SOURCE and id (the catalog stamps every listed manifest's
+                // source), so the gate never authorizes the same id listed by another source.
+                var bySourceId = catalogPackages.ToImmutableDictionary(p => p.Id, p => p.Source ?? "", StringComparer.Ordinal);
+                hub.ServiceProvider.GetService<DeploymentConfigAuthority>()?.Admit(namedRequirements
+                    .Where(kv => bySourceId.TryGetValue(kv.Key, out var src) && src.Length > 0)
+                    .ToImmutableDictionary(
+                        kv => DeploymentConfigAuthority.RequirementKey(bySourceId[kv.Key], kv.Key),
+                        kv => kv.Value,
+                        StringComparer.Ordinal));
                 var configAuthorized = named.Select(p => p.Id)
                     .Concat(namedRequirements.Keys)
                     .ToImmutableHashSet(StringComparer.Ordinal);

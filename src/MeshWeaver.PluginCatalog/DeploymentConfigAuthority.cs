@@ -113,6 +113,11 @@ public sealed class DeploymentConfigAuthority
             .Select(e => e!)
             .ToImmutableList();
 
+    /// <summary>The key a requirement is admitted under: <c>{source}/{id}</c>, source case-insensitive
+    /// like <see cref="PluginGrantEntry.Matches"/>. Pure.</summary>
+    internal static string RequirementKey(string source, string id) =>
+        $"{source.Trim().ToLowerInvariant()}/{id}";
+
     /// <summary>
     /// Records the requirement closure of the explicitly named packages this boot's selection
     /// computed (<see cref="InstanceAutoRegistrationService.ConfigAuthorizedRequirements"/>) —
@@ -120,7 +125,7 @@ public sealed class DeploymentConfigAuthority
     /// authorized. 🚨 INTERNAL: only the catalog's own selection may publish it — a public setter
     /// would let any code in the process add a commercial package to the authorized set.
     /// </summary>
-    /// <param name="closure">Package id → the named package that requires it.</param>
+    /// <param name="closure"><see cref="RequirementKey"/> → the named package that requires it.</param>
     internal void Admit(ImmutableDictionary<string, string> closure) =>
         Volatile.Write(ref requiredBy, closure.WithComparers(StringComparer.Ordinal));
 
@@ -137,7 +142,7 @@ public sealed class DeploymentConfigAuthority
         var expected = Principal;
         if (!string.Equals(principal.Trim(), expected, StringComparison.Ordinal))
             return $"'{principal}' names another instance's configuration — this instance's is '{expected}'";
-        if (string.IsNullOrWhiteSpace(package.Source) && Because(package) is null)
+        if (string.IsNullOrWhiteSpace(package.Source))
             return $"'{package.Id}' was listed without a source, so it cannot be matched to a "
                    + "Source/Package entry of PluginCatalog:InstallByDefault — a package id alone "
                    + "never authorizes, because another source may list the same id";
@@ -159,7 +164,10 @@ public sealed class DeploymentConfigAuthority
         ArgumentNullException.ThrowIfNull(package);
         if (NamingEntry(namingEntries, package) is { } entry)
             return $"named in PluginCatalog:InstallByDefault as '{entry}'";
-        return Volatile.Read(ref requiredBy).TryGetValue(package.Id, out var root)
+        // Keyed by SOURCE and id — a requirement admitted from one source never authorizes a
+        // package of the same id listed by another, and a source-less manifest matches nothing.
+        return !string.IsNullOrWhiteSpace(package.Source)
+               && Volatile.Read(ref requiredBy).TryGetValue(RequirementKey(package.Source!, package.Id), out var root)
             ? $"required by '{root}', which PluginCatalog:InstallByDefault names"
             : null;
     }
