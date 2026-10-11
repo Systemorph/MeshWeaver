@@ -600,20 +600,19 @@ internal sealed class InboxActs : IDisposable
         });
 
     /// <summary>
-    /// Pushes one change. A write can complete after its page was closed; its change then has no
-    /// state left to apply to and is dropped, never thrown into the write's own pipeline.
+    /// Pushes one change. A write can complete after its page was closed; the channel is then
+    /// COMPLETED, and a completed subject ignores what arrives after — so the late change is dropped,
+    /// never thrown into the write's own pipeline. (Checking "disposed?" first would be a race.)
     /// </summary>
-    private void Push(Func<State, State> change)
-    {
-        if (!changes.IsDisposed)
-            changes.OnNext(change);
-    }
+    private void Push(Func<State, State> change) => changes.OnNext(change);
 
-    /// <inheritdoc />
+    /// <summary>
+    /// Closes the channel: completes it — never disposes it, so a late push is ignored rather than
+    /// refused — and ends the fold. The last state stays readable.
+    /// </summary>
     public void Dispose()
     {
+        changes.OnCompleted();
         fold.Dispose();
-        changes.Dispose();
-        state.Dispose();
     }
 }

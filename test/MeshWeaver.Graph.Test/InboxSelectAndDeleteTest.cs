@@ -441,6 +441,23 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
     }
 
     /// <summary>
+    /// A write that completes after its page was closed is dropped, not thrown: the channel is
+    /// completed on close, never disposed, and the last batch stays readable.
+    /// </summary>
+    [Fact]
+    public void AChangeAfterThePageClosed_IsDropped_NotThrown()
+    {
+        var acts = new InboxActs();
+        acts.BeginDelete();
+        acts.PutAway(new InboxUndoItem("a", NotificationNodeType.NodeType));
+        acts.Dispose();
+
+        var late = () => acts.PutAway(new InboxUndoItem("b", NotificationNodeType.NodeType));
+        late.Should().NotThrow();
+        acts.Batch.Select(i => i.Path).Should().Equal(["a"]);
+    }
+
+    /// <summary>
     /// "By title" is alphabetical in the VIEWER's language: for a German viewer Ä sorts with A, not
     /// after Z as it does by code point.
     /// </summary>
