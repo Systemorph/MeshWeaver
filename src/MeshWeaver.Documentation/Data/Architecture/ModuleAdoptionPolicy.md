@@ -200,7 +200,9 @@ half — a module bundle never carrying a `MeshWeaver.*` copy the platform alrea
 the image rather than declared in a list — is
 [The Platform-Shipped Witness](../PlatformShippedWitness), and it probes the same two locations
 `MeshBuilder.ResolveModulePath` does, on purpose. One thing this fallback still cannot reach: the
-sealed-set conflict below HOLDS the roll for the whole fleet whatever one process does at boot. The
+sealed-set conflict below, which the package verdict refuses for the whole fleet whatever one
+process does at boot (on a roll path an advisory naming the affected packages — the platform rolls,
+policy `platform-rolls-independently-of-packages`). The
 other — a riding copy that *does* load, shadowing the image copy so the fallback never runs — is
 what the next section closes.
 
