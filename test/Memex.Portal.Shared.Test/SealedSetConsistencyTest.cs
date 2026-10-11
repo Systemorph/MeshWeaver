@@ -395,7 +395,7 @@ public class SealedSetConsistencyTest
         Assert.True(verdict.IsIndeterminate);
         var package = Assert.Single(verdict.Packages);
         Assert.Equal(PackageAvailabilityKind.Indeterminate, package.Kind);
-        Assert.Contains("not clearance to proceed", package.Reason!, StringComparison.Ordinal);
+        Assert.Contains("never read as consistent", package.Reason!, StringComparison.Ordinal);
     }
 
     [Fact]

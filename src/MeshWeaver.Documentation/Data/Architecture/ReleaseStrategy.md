@@ -19,6 +19,8 @@ Support lifetime and official artifact retention follow the
 [Release Support Policy](/Doc/Architecture/SupportPolicy).
 
 > ✅ **Rule change, 2026-09-07 (maintainer) — [Module Adoption Policy](../ModuleAdoptionPolicy), implemented by [#3648](https://github.com/Systemorph/MeshWeaver/issues/3648), [#3649](https://github.com/Systemorph/MeshWeaver/issues/3649), [#3650](https://github.com/Systemorph/MeshWeaver/issues/3650) and [#3651](https://github.com/Systemorph/MeshWeaver/issues/3651).** This page describes the mechanism as it runs after those changes: a declared floor is advisory, a refused generation falls back to the previous one, a new build is adopted eagerly, and a platform roll is held only by a module that provably cannot load on the target.
+>
+> 🚨 **Superseded for the platform roll** by policy `platform-rolls-independently-of-packages` ([Policy Not Prose](../PolicyNotProse)): no package answer holds the roll any more — it is an advisory; [Release Gates](../ReleaseGates) → "What a refusal does".
 
 The production model in one picture:
 
