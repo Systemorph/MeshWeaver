@@ -100,7 +100,25 @@ public static class PublishedBundleCatalogue
     /// does not consume CI bakes.</param>
     /// <param name="targetVersion">The platform version being rolled to.</param>
     /// <param name="logger">Diagnostics.</param>
-    public static ReleaseObservation Read(string? publishedRoot, string? targetVersion, ILogger? logger = null)
+    public static ReleaseObservation Read(string? publishedRoot, string? targetVersion, ILogger? logger = null) =>
+        ReadWithRegistryIdentity(publishedRoot, targetVersion, null, logger);
+
+    /// <summary>
+    /// <see cref="Read(string?, string?, ILogger?)"/>, for a root that carries no marker for the
+    /// target: <paramref name="registryIdentity"/> is the identity the fleet registry records for
+    /// that release (<see cref="RegistryReleaseIdentities"/>; policy
+    /// <c>release-identity-from-registry</c>) and stands in for the marker ONLY when the marker file
+    /// is absent. A marker that exists is read exactly as before and the argument is ignored — the
+    /// publisher's file wins. Everything after the identity is known is unchanged: the bundles are
+    /// still read from the root, so a registry identity nothing is published under clears nothing.
+    /// </summary>
+    /// <param name="publishedRoot">The published bundle root.</param>
+    /// <param name="targetVersion">The platform version being rolled to.</param>
+    /// <param name="registryIdentity">The target's framework identity per the registry, or null
+    /// when it was not asked or names none.</param>
+    /// <param name="logger">Diagnostics.</param>
+    public static ReleaseObservation ReadWithRegistryIdentity(
+        string? publishedRoot, string? targetVersion, string? registryIdentity, ILogger? logger = null)
     {
         if (string.IsNullOrWhiteSpace(targetVersion))
             return new ReleaseObservation(
@@ -116,7 +134,28 @@ public static class PublishedBundleCatalogue
         try
         {
             var markerPath = Path.Combine(publishedRoot, ReleaseMarkerDirectoryName, targetVersion);
-            if (!File.Exists(markerPath))
+            // The identity becomes a directory name under the root, so it is checked HERE, at the
+            // filesystem boundary, whoever the caller is: one path segment, outside the root's own
+            // underscore namespace. Anything else is treated as not given.
+            registryIdentity = registryIdentity?.Trim();
+            if (!string.IsNullOrEmpty(registryIdentity) && !RegistryReleaseIdentities.IsIdentity(registryIdentity))
+            {
+                logger?.LogWarning(
+                    "ReleaseAvailability: the registry identity given for release {Version} is not a "
+                    + "single path segment — ignored", targetVersion);
+                registryIdentity = null;
+            }
+            // Only an ESTABLISHED absence admits the registry's answer (HasReleaseMarker): a marker
+            // whose presence could not be determined falls through to the read below, which reports
+            // what it found, and is never overridden.
+            var fromRegistry = !string.IsNullOrEmpty(registryIdentity)
+                               && HasReleaseMarker(publishedRoot, targetVersion) == false;
+            if (fromRegistry)
+                logger?.LogInformation(
+                    "ReleaseAvailability: release {Version} has no marker under {Root}/{Markers}; its "
+                    + "framework identity {Identity} is taken from the registry's release record",
+                    targetVersion, publishedRoot, ReleaseMarkerDirectoryName, registryIdentity);
+            else if (!File.Exists(markerPath))
             {
                 logger?.LogInformation(
                     "ReleaseAvailability: release {Version} has no marker under {Root}/{Markers} — "
@@ -126,7 +165,7 @@ public static class PublishedBundleCatalogue
                     new ReleaseTarget(targetVersion, null), ReleaseArtifacts.Of([]));
             }
 
-            var identity = File.ReadAllText(markerPath).Trim();
+            var identity = fromRegistry ? registryIdentity! : File.ReadAllText(markerPath).Trim();
             if (identity.Length == 0)
                 return new ReleaseObservation(
                     new ReleaseTarget(targetVersion, null),
@@ -161,6 +200,43 @@ public static class PublishedBundleCatalogue
             return new ReleaseObservation(
                 new ReleaseTarget(targetVersion, null),
                 ReleaseArtifacts.Unreadable(ex.Message));
+        }
+    }
+
+    /// <summary>
+    /// Whether the publisher's marker for <paramref name="targetVersion"/> is on this root — the
+    /// question that decides whether the registry may stand in for it. Three answers, because
+    /// "absent" and "could not tell" decide opposite things: <c>true</c> present, <c>false</c>
+    /// established ABSENT (the file or its directory does not exist), <c>null</c> undetermined
+    /// (access denied, an I/O fault, no root or version). Only an established absence admits the
+    /// registry's answer; an undetermined marker is never treated as a missing one, so a marker
+    /// that could not be read is never overridden.
+    /// </summary>
+    /// <param name="publishedRoot">The published bundle root.</param>
+    /// <param name="targetVersion">The platform version being rolled to.</param>
+    public static bool? HasReleaseMarker(string? publishedRoot, string? targetVersion)
+    {
+        if (string.IsNullOrWhiteSpace(publishedRoot) || string.IsNullOrWhiteSpace(targetVersion))
+            return null;
+        try
+        {
+            // GetAttributes, not File.Exists: Exists answers false for access-denied and for most
+            // I/O failures, which would report an unreadable marker as an absent one.
+            var attributes = File.GetAttributes(
+                Path.Combine(publishedRoot, ReleaseMarkerDirectoryName, targetVersion));
+            return (attributes & FileAttributes.Directory) == 0 ? true : null;
+        }
+        catch (FileNotFoundException)
+        {
+            return false;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return false;
+        }
+        catch (Exception)
+        {
+            return null;
         }
     }
 
