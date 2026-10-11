@@ -1135,6 +1135,16 @@ public class OrleansRoutingService : IRoutingService, IDisposable
 
         public void Set(Task<StreamSubscriptionHandle<IMessageDelivery>?> next) =>
             Volatile.Write(ref current, next);
+
+        private long latestChange;
+
+        /// <summary>
+        /// The newest membership change this registration has SEEN, whether or not it could act on
+        /// it yet — see <see cref="ReattachOnMembershipChange"/>.
+        /// </summary>
+        public long LatestChange => Volatile.Read(ref latestChange);
+
+        public void Saw(long change) => Volatile.Write(ref latestChange, change);
     }
 
     /// <summary>
@@ -1179,6 +1189,27 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     /// change for which <see cref="ShouldReattach"/> holds. A no-op where membership cannot change
     /// under this process (client, monolith, bare mesh) — there the give-up stays terminal, which is
     /// exactly the behaviour that existed before.
+    ///
+    /// <para>🚨 <b>A change that arrives while an attach is IN FLIGHT is held, not dropped — issue
+    /// #6429.</b> <see cref="ShouldReattach"/> rightly declines an attach that has not finished.
+    /// But the feed is an EDGE: asked once, at the instant the change arrived, "not finished" threw
+    /// the change away, and an attach that then gave up had nothing left to repair it. That is the
+    /// ordinary order of events, not a corner: a silo that stops answering is exactly what makes an
+    /// attach spend its whole budget (six attempts at Orleans' 30 s response timeout), and the
+    /// membership change that buries that silo lands while the budget is still running. The hub was
+    /// then latched until some LATER, unrelated change — the next roll.</para>
+    ///
+    /// <para>So each change first waits for the attach that is current to SETTLE and only then asks
+    /// the question. <c>Concat</c> is what holds it: the changes queue behind the attach in arrival
+    /// order, and nothing polls. It stays edge-driven — an attach that gives up with no membership
+    /// change since it began is still left alone, because nothing has happened that could make a
+    /// second attempt end differently.</para>
+    ///
+    /// <para><b>One re-attach per burst.</b> A roll delivers several changes in a row. Queued behind
+    /// one attach they would each start one in turn, and against a target that is still down each
+    /// would spend a full budget and log its own Critical. Only the NEWEST change seen acts
+    /// (<see cref="StreamAttachSlot.LatestChange"/>); the older ones describe a cluster shape that
+    /// has already been replaced.</para>
     /// </summary>
     private IDisposable ReattachOnMembershipChange(
         Address address, AsyncDelivery callback, StreamAttachSlot slot, CancellationTokenSource cts)
@@ -1189,34 +1220,61 @@ public class OrleansRoutingService : IRoutingService, IDisposable
         // Concat, never Merge: one re-attach at a time per address, so two changes in quick
         // succession cannot have two attaches in flight for the same stream.
         return membershipFeed.Changes
+            .Do(slot.Saw)
             .Select(seq => Observable.Defer(() =>
-            {
-                if (disposed || cts.IsCancellationRequested || !ShouldReattach(slot.Current))
-                    return Observable.Empty<Unit>();
+                    disposed || cts.IsCancellationRequested
+                        ? Observable.Empty<Unit>()
+                        : Settled(slot.Current))
+                .SelectMany(_ =>
+                {
+                    if (disposed || cts.IsCancellationRequested
+                        || seq < slot.LatestChange
+                        || !ShouldReattach(slot.Current))
+                        return Observable.Empty<Unit>();
 
-                OrleansRouteTrace.Write(
-                    $"OrleansRoutingService.SubscribeAsync REATTACH addr={address} membershipChange={seq}");
-                logger.LogInformation(
-                    "Orleans '{Provider}' stream subscription for {Address} is re-attached after a "
-                    + "cluster membership change — its previous attach gave up, which left this hub's "
-                    + "cross-process routing disabled (in-process routing was unaffected throughout).",
-                    StreamProviders.Memory, address);
+                    OrleansRouteTrace.Write(
+                        $"OrleansRoutingService.SubscribeAsync REATTACH addr={address} membershipChange={seq}");
+                    logger.LogInformation(
+                        "Orleans '{Provider}' stream subscription for {Address} is re-attached after a "
+                        + "cluster membership change — its previous attach gave up, which left this hub's "
+                        + "cross-process routing disabled (in-process routing was unaffected throughout).",
+                        StreamProviders.Memory, address);
 
-                var next = SubscribeWhenStreamingReadyAsync(address, callback, cts.Token);
-                slot.Set(next);
-                // The attach never faults (it returns null on give-up); the arm is here because a
-                // cancelled teardown surfaces as OperationCanceledException and must not tear the
-                // trigger sequence down with it.
-                return next.ToObservable()
-                    .Select(_ => Unit.Default)
-                    .Catch<Unit, Exception>(_ => Observable.Empty<Unit>());
-            }))
+                    var next = SubscribeWhenStreamingReadyAsync(address, callback, cts.Token);
+                    slot.Set(next);
+                    return Settled(next).Do(_ =>
+                    {
+                        if (ShouldReattach(next))
+                            return;
+                        // 🚨 Warning, deliberately, and the only line at that level on this path.
+                        // The give-up is a Critical that says cross-process routing is DISABLED;
+                        // this is the line that says it no longer is. At Information it never left
+                        // the pod (the fleet ships Warning and above), so every such Critical read
+                        // as a hub lost for good and could not be closed from the log (#6429). It
+                        // is written at most once per re-attach, and a re-attach needs a give-up.
+                        logger.LogWarning(
+                            "Orleans '{Provider}' stream subscription for {Address} is attached again "
+                            + "after cluster membership change #{Change} — cross-process routing for "
+                            + "this hub is RESTORED. Its previous attach had given up.",
+                            StreamProviders.Memory, address, seq);
+                    });
+                }))
             .Concat()
             .Subscribe(
                 _ => { },
                 ex => logger.LogDebug(ex,
                     "Orleans stream re-attach sequence for {Address} ended", address));
     }
+
+    /// <summary>
+    /// Emits once when <paramref name="attach"/> has stopped attempting, however it ended. The
+    /// attach returns null on give-up and is cancelled by teardown; neither may fault the trigger
+    /// sequence that waits on it.
+    /// </summary>
+    private static IObservable<Unit> Settled(Task<StreamSubscriptionHandle<IMessageDelivery>?> attach) =>
+        attach.ToObservable()
+            .Select(_ => Unit.Default)
+            .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default));
 
     /// <summary>
     /// Tears down one address's Orleans stream subscription, on the mesh's async-teardown queue.
