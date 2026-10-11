@@ -40,6 +40,10 @@ index of the Space, with the page being read marked and only the groups on the r
 - **Markdown and typed pages have it.** The typed default Overview is wrapped by
   `MarkdownOverviewLayoutArea.WithIndexRail`, so a page's children are navigated in the rail and
   are not listed at the bottom of the page.
+- **A page a node type supplies itself does not have it yet.** A type that replaces its landing
+  page through `WithNodePage` (a redirect, an enriched type's own Overview) renders that page
+  without this wrapper. Decorating at the node-page composition boundary, with an opt-out for
+  pages that must stay bare, is owed (policy `explorer-navigation`).
 - **Space pages do not have it yet.** A Space's Overview is rendered by `SpaceLayoutAreas` in
   MeshWeaver.Plugins, which still appends its bottom **Contents** catalog. Wrapping it with the rail
   and removing that catalog is MeshWeaver.Plugins#3363, which lands after this platform release;
