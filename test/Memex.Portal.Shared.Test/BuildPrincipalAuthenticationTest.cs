@@ -109,6 +109,20 @@ public class BuildPrincipalAuthenticationTest(ITestOutputHelper output) : Monoli
         Authenticator().AuthenticateOutcome($"Bearer {token}")
             .FirstAsync().Timeout(TestTimeouts.Convergence).Await(cancellationToken);
 
+    /// <summary>
+    /// The answer once it satisfies <paramref name="seen"/>. The authenticator reads the principal
+    /// from the process-wide node mirror, which the change feed keeps current: an UPDATE of a node
+    /// the mirror already holds is seen when the feed delivers it, not when the write returns. So a
+    /// read that follows an update waits on the answer it is about, never on the write.
+    /// </summary>
+    private Task<InstanceAuthResult> AuthenticateUntil(
+        string token, Func<InstanceAuthResult, bool> seen, CancellationToken cancellationToken = default) =>
+        Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .Select(_ => Authenticator().AuthenticateOutcome($"Bearer {token}").FirstAsync())
+            .Concat()
+            .Where(seen)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(cancellationToken);
+
     /// <summary>Writes a build principal into the Admin partition — the create a global admin
     /// makes. As System, because the Admin partition is exactly what an ordinary identity cannot
     /// write.</summary>
@@ -531,14 +545,15 @@ public class BuildPrincipalAuthenticationTest(ITestOutputHelper output) : Monoli
         Assert.Equal(BuildPrincipal.PathFor(DeclaredRepository), narrowed.Build!.PrincipalPath);
         Assert.False(narrowed.Build.Allows(BuildVerbs.Verify, "combo"));
 
-        // …and a revoking node stops the declared principal at once.
+        // …and a revoking node stops the declared principal with no roll: as soon as the mirror the
+        // authenticator reads has the update, the token is refused — by a verdict, not by a read
+        // that could not be made.
         await Grant(VerificationPrincipal() with
         {
             Repository = DeclaredRepository, RequestedAction = BuildPrincipalActions.Revoke,
         });
-        var revoked = await Authenticate(token);
+        var revoked = await AuthenticateUntil(token, r => r.Build is null, TestContext.Current.CancellationToken);
         Assert.False(revoked.IsUnavailable);
-        Assert.Null(revoked.Build);
     }
 
     private static BuildPrincipal VerificationPrincipal() => Principal() with

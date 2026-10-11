@@ -124,11 +124,18 @@ public static class DeclaredBuildPrincipals
         }
 
         // Two declarations for one repository are ambiguous trust: which one decides would depend on
-        // enumeration order. Neither does.
-        var twice = accepted
-            .GroupBy(d => d.Principal.Repository, StringComparer.OrdinalIgnoreCase)
+        // enumeration order. Neither does. 🚨 A declaration that was REFUSED still names its
+        // repository, so it counts: one valid and one malformed declaration for the same repository
+        // is the same ambiguity (which of the two the estate meant is not this code's to guess —
+        // the malformed one may be the narrower), and the valid one is not left trusted beside it.
+        var declaredTwice = accepted.Select(d => d.Principal.Repository)
+            .Concat(refused.Select(r => r.Repository).Where(r => r.Length > 0))
+            .GroupBy(r => r, StringComparer.OrdinalIgnoreCase)
             .Where(g => g.Count() > 1)
-            .SelectMany(g => g)
+            .Select(g => g.Key)
+            .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+        var twice = accepted
+            .Where(d => declaredTwice.Contains(d.Principal.Repository))
             .ToImmutableList();
         foreach (var duplicate in twice)
         {

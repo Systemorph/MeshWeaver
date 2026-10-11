@@ -172,6 +172,36 @@ public class DeclaredBuildPrincipalTest
         Assert.Null(declarations.Find(Repository));
     }
 
+    /// <summary>
+    /// 🚨 A refused declaration still names its repository. One valid and one malformed declaration
+    /// for the same repository is trusted through neither: which of the two the estate meant is not
+    /// for the reader to guess, and the malformed one may be the narrower.
+    /// </summary>
+    [Fact]
+    public void ARepositoryDeclaredOnceValidAndOnceMalformed_IsTrustedThroughNeither()
+    {
+        var values = Designed(0);
+        foreach (var pair in Designed(1, "systemorph/meshweaver"))
+            values[pair.Key] = pair.Value;
+        values.Remove($"{DeclaredBuildPrincipals.ConfigSection}:1:RepositoryId");
+        foreach (var pair in Designed(2, "Systemorph/Other"))
+            values[pair.Key] = pair.Value;
+
+        var declarations = DeclaredBuildPrincipals.Read(Config(values));
+
+        Assert.Equal("Systemorph/Other", Assert.Single(declarations.Accepted).Principal.Repository);
+        Assert.Null(declarations.Find(Repository));
+        Assert.Equal(2, declarations.Refused.Count);
+        Assert.Contains(declarations.Refused, r => r.Reason.Contains("RepositoryId", StringComparison.Ordinal));
+        Assert.Contains(declarations.Refused, r => r.Reason.Contains("more than once", StringComparison.Ordinal));
+
+        // The control: the same malformed declaration naming ANOTHER repository refuses only itself.
+        values[$"{DeclaredBuildPrincipals.ConfigSection}:1:Repository"] = "Systemorph/Third";
+        var apart = DeclaredBuildPrincipals.Read(Config(values));
+        Assert.NotNull(apart.Find(Repository));
+        Assert.Single(apart.Refused);
+    }
+
     // ── /health ──────────────────────────────────────────────────────────────
 
     [Fact]
