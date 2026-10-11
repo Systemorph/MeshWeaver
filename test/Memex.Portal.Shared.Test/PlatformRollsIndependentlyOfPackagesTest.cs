@@ -201,6 +201,73 @@ public class PlatformRollsIndependentlyOfPackagesTest(ITestOutputHelper output) 
     }
 
     /// <summary>
+    /// 🚨 THE MANUAL "APPLY UPDATE NOW" BUTTON decides as the poller does. This route has drifted
+    /// from the poller before (<c>SelfUpdateMigratesBeforeItRollsTest</c> exists to pin it), so
+    /// both halves are pinned: the decision behaviourally — a refusing availability verdict and a
+    /// recorded combo Red each become advisories on the note, and nothing refuses — and the
+    /// wiring by source order: the tab reads that decision and then reaches BOTH the hand-over
+    /// and the patch, with no early return on a package answer in between.
+    /// </summary>
+    [Fact]
+    public void TheManualRoll_RollsOverARefusalAndARed_AndNamesBothOnTheResultLine()
+    {
+        var red = ComboClearance.For(CandidateTag, new ComboVerification
+        {
+            CandidateTag = CandidateTag,
+            Verdict = ComboVerdictKind.Red,
+            VerifiedAt = DateTimeOffset.UtcNow,
+        });
+        red.Refuses.Should().BeTrue();
+        var none = ComboVerificationGate.NotRegistered(CandidateTag);
+
+        var both = Memex.Portal.Shared.Settings.UpdatePolicySettingsTab.ManualRollDecision(
+            MissingBakeUnderRequirePrebuilt(), red, key => $"<{key}>");
+        both.ProceedsOverPackageAnswer.Should().BeTrue();
+        both.Advisories.Should().HaveCount(2);
+        both.Advisories[0].Should().Contain("independently of packages").And.Contain("Feedback");
+        both.Advisories[1].Should().Be(red.Reason);
+        both.Note.Should().Contain("<ui.updatePackageAdvisoriesManual>").And.Contain("Feedback");
+
+        var availabilityOnly = Memex.Portal.Shared.Settings.UpdatePolicySettingsTab.ManualRollDecision(
+            UnresolvableIdentity(), none, key => $"<{key}>");
+        availabilityOnly.ProceedsOverPackageAnswer.Should().BeTrue();
+        availabilityOnly.Advisories.Should().ContainSingle()
+            .Which.Should().Contain("could NOT be determined");
+
+        var clean = ReleaseAvailability.IsUpdatable(
+            new ReleaseTarget(CandidateTag, "sid"), [new RequiredPackage("Crm", "Crm")], ReleaseArtifacts.Of(["Crm"]));
+        var nothing = Memex.Portal.Shared.Settings.UpdatePolicySettingsTab.ManualRollDecision(clean, none, key => key);
+        nothing.ProceedsOverPackageAnswer.Should().BeFalse();
+        nothing.Note.Should().BeEmpty("a roll with nothing to say appends nothing");
+
+        var source = File.ReadAllText(Path.Combine(
+            RepoRoot(), "memex", "Memex.Portal.Shared", "Settings", "UpdatePolicySettingsTab.cs"));
+        var decided = source.IndexOf("ManualRollDecision(raw, clearance", StringComparison.Ordinal);
+        var handedOver = source.IndexOf("handover.Announce(", decided, StringComparison.Ordinal);
+        var patched = source.IndexOf("PatchToVersionAsync(", decided, StringComparison.Ordinal);
+        decided.Should().BeGreaterThan(-1, "the button reads the shared manual-roll decision");
+        handedOver.Should().BeGreaterThan(decided, "the control-lane hand-over follows the decision");
+        patched.Should().BeGreaterThan(decided, "the patch follows the decision");
+        source[decided..handedOver].Should().NotContain("return;",
+            "no package answer returns before the hand-over — the platform rolls independently of packages");
+        source[handedOver..patched].Should().Contain("outcome.Destination) + note)",
+            "the hand-over result line carries the advisory note");
+        source[patched..].Should().Contain("tag) + note)",
+            "the patch result line carries the advisory note");
+    }
+
+    /// <summary>The repository root — the same probe and skip rule as the other source guards
+    /// (<c>SelfUpdateMigratesBeforeItRollsTest</c>): they run in-repo only.</summary>
+    private static string RepoRoot()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
+            dir = dir.Parent;
+        Assert.SkipWhen(dir is null, "repository tree not reachable — source guard runs in-repo only");
+        return dir!.FullName;
+    }
+
+    /// <summary>
     /// 🚨 THE EXTERNALLY CONSUMED CONTRACT of <c>/api/plugins/is-updatable</c>. The route answers
     /// the ROLL question: with a package verdict that refuses, the body still says
     /// <c>isUpdatable: true</c>, and the refusal is not lost — it is on <c>waivedHold</c>, leads

@@ -186,35 +186,21 @@ public static class UpdatePolicySettingsTab
                     // refusal and a recorded combo Red are ADVISORIES, never a refusal of the
                     // roll — they are logged here and the poller records them on the policy
                     // node; the packages catch up through their own update policy.
-                    var verdict = raw.ForPlatformRoll();
                     var combo = h.Hub.ServiceProvider.GetService<ComboVerificationGate>();
                     var clearance = combo is null
                         ? ComboVerificationGate.NotRegistered(tag)
                         : combo.Recorded(content, tag);
-                    // EVERY advisory the verdict carries, then the combo one. A waived hold leads
-                    // verdict.Advisories (ForPlatformRoll), and an already-updatable verdict
-                    // carries its boot-compile / link / declared-floor advisories there with
-                    // WaivedHold null — reading only WaivedHold would drop those.
-                    ImmutableArray<string> advisories =
-                    [
-                        .. verdict.Advisories.IsDefault ? [] : verdict.Advisories,
-                        .. clearance.Refuses ? new[] { clearance.Reason } : [],
-                    ];
-                    if (verdict.WaivedHold is not null || clearance.Refuses)
+                    var decision = ManualRollDecision(raw, clearance, key => h.Localize(key));
+                    if (decision.ProceedsOverPackageAnswer)
                         h.Hub.ServiceProvider.GetService<ILoggerFactory>()
                             ?.CreateLogger(typeof(UpdatePolicySettingsTab))
                             .LogWarning(
                                 "[SelfUpdate] manual roll to {Tag} proceeds over package advisories — "
                                 + "the platform rolls independently of packages: {Advisories}",
-                                tag, string.Join("; ", advisories));
+                                tag, string.Join("; ", decision.Advisories));
                     // Said on the result line too — the roll the operator just started is one
                     // whose package advisories they must be able to see without a pod log.
-                    var note = advisories.Length == 0
-                        ? ""
-                        : "\n\n" + h.Localize("ui.updatePackageAdvisoriesManual") + "\n\n> "
-                          // Each advisory bounded on its OWN — bounding the joined text would
-                          // cut the first long one short and drop every one after it.
-                          + string.Join("; ", advisories.Select(Sanitize));
+                    var note = decision.Note;
                     if (apply == SelfUpdateApply.ControlLane)
                     {
                         // The same announcement the poller makes, so the control plane cannot
@@ -509,6 +495,49 @@ public static class UpdatePolicySettingsTab
             lines.Add("- " + localize("ui.updateMoreItems", [verdict.Caveats.Count - MaxRenderedCaveats]));
         return string.Join("\n", lines);
     }
+
+    /// <summary>
+    /// What the manual "Apply update now" button decides about the package answers for
+    /// <c>tag</c> — the SAME rule the poller applies (policy
+    /// <c>platform-rolls-independently-of-packages</c>), stated once and pure so it is pinned
+    /// behaviourally rather than through the UI. There is deliberately no "refuse" member: the
+    /// button always goes on to the hand-over or the migrate-then-patch, and this only says what
+    /// it rolls over.
+    /// </summary>
+    /// <param name="availability">The availability gate's PACKAGE verdict (or the unwired /
+    /// not-enforced stand-in), before <see cref="UpdatabilityVerdict.ForPlatformRoll"/>.</param>
+    /// <param name="clearance">The recorded combo answer for the tag.</param>
+    /// <param name="localize">The localizer for the note's heading.</param>
+    internal static ManualRollAdvisories ManualRollDecision(
+        UpdatabilityVerdict availability, ComboClearance clearance, Func<string, string> localize)
+    {
+        var verdict = availability.ForPlatformRoll();
+        // EVERY advisory the verdict carries, then the combo one. A waived hold leads
+        // verdict.Advisories (ForPlatformRoll), and an already-updatable verdict carries its
+        // boot-compile / link / declared-floor advisories there with WaivedHold null — reading
+        // only WaivedHold would drop those.
+        ImmutableArray<string> advisories =
+        [
+            .. verdict.Advisories.IsDefault ? [] : verdict.Advisories,
+            .. clearance.Refuses ? new[] { clearance.Reason } : [],
+        ];
+        var note = advisories.IsEmpty
+            ? ""
+            : "\n\n" + localize("ui.updatePackageAdvisoriesManual") + "\n\n> "
+              // Each advisory bounded on its OWN — bounding the joined text would cut the first
+              // long one short and drop every one after it.
+              + string.Join("; ", advisories.Select(Sanitize));
+        return new(advisories, note, verdict.WaivedHold is not null || clearance.Refuses);
+    }
+
+    /// <summary>The manual roll's package advisories — see <see cref="ManualRollDecision"/>.</summary>
+    /// <param name="Advisories">Every advisory, the verdict's first, then a combo Red's.</param>
+    /// <param name="Note">The markdown appended to the result line; empty when there is none.</param>
+    /// <param name="ProceedsOverPackageAnswer">Whether a package answer that used to refuse the
+    /// button (a waived availability hold or a combo Red) is being rolled over — logged at
+    /// Warning.</param>
+    internal sealed record ManualRollAdvisories(
+        ImmutableArray<string> Advisories, string Note, bool ProceedsOverPackageAnswer);
 
     /// <summary>One markdown-safe line out of a multi-line diagnostic, bounded.</summary>
     private static string Sanitize(string diagnostic)
