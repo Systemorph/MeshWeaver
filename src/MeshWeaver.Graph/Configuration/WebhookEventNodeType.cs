@@ -39,6 +39,21 @@ public record WebhookEvent
     /// <summary>The raw request body, verbatim — the exact bytes signatures are computed over
     /// (as UTF-8 text).</summary>
     public string Body { get; init; } = "";
+
+    /// <summary>
+    /// The value of the header <paramref name="name"/>, or null when the delivery carried none —
+    /// matched IGNORING CASE, which is how a consumer must read a stored delivery (#4066).
+    ///
+    /// <para>🚨 Never <c>Headers.TryGetValue(name, …)</c> on a stored event. Header names are
+    /// case-insensitive on the wire and HTTP/2 delivers them lowercased
+    /// (<c>x-hub-signature-256</c>); the endpoint verifies through a case-insensitive dictionary, but
+    /// that comparer does not survive the store — the event a consumer reads back is re-typed from
+    /// JSON with the default, case-sensitive one. A canonical-case lookup then misses the header the
+    /// endpoint just verified, and the consumer refuses a delivery the sender was told is accepted.</para>
+    /// </summary>
+    /// <param name="name">The header name, in any case.</param>
+    public string? Header(string name) =>
+        Headers.FirstOrDefault(h => string.Equals(h.Key, name, StringComparison.OrdinalIgnoreCase)).Value;
 }
 
 /// <summary>

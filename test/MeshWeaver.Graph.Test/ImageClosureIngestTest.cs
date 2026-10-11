@@ -148,6 +148,77 @@ public class ImageClosureIngestTest(ITestOutputHelper output) : MonolithMeshTest
         (await WaitAbsent(evt.Path, ct)).Should().BeTrue("the delete is the acknowledgement");
     }
 
+    /// <summary>
+    /// The delivery as a replica reads it back from the store: content re-typed from its JSON, so
+    /// <see cref="WebhookEvent.Headers"/> carries the DEFAULT (case-sensitive) comparer — never the
+    /// case-insensitive one <see cref="WebhookInbox.Deliver"/> built in memory.
+    /// </summary>
+    private MeshNode AsReadBackFromTheStore(MeshNode eventNode)
+    {
+        var options = Mesh.JsonSerializerOptions;
+        var content = eventNode.ContentAs<WebhookEvent>(options)!;
+        return eventNode with
+        {
+            Content = JsonSerializer.Deserialize<WebhookEvent>(JsonSerializer.Serialize(content, options), options),
+        };
+    }
+
+    /// <summary>
+    /// The production shape (#4066, measured on the control instance: every delivery the endpoint
+    /// answered <c>accepted</c> + <c>verified</c> was then refused by the ingest as "the signature does
+    /// not verify over the stored body"): HTTP/2 delivers header NAMES lowercased, the endpoint verifies
+    /// through a case-insensitive dictionary, and the stored event comes back with a case-sensitive one.
+    /// The consumer must find the header the endpoint found.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task SignatureHeaderNamedAsTheWireDeliversIt_IsVerifiedFromTheStoredEvent()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var body = Record(DigestA);
+        var signature = Sign(body, Secret);
+        var delivered = await Deliver(body, new(signature.Key.ToLowerInvariant(), signature.Value), ct);
+        var stored = AsReadBackFromTheStore(delivered);
+        // Precondition — without it this test would pass on a dictionary that still ignores case.
+        stored.ContentAs<WebhookEvent>(Mesh.JsonSerializerOptions)!.Headers.ContainsKey(WebhookInbox.SignatureHeader)
+            .Should().BeFalse("the stored dictionary is case-sensitive and the wire name is lowercase");
+
+        var path = await Drain(stored, ct);
+
+        path.Should().Be(ImageClosureNodes.PathOf("memex-portal-ai", DigestA),
+            "the endpoint verified this delivery; the consumer reads the same header whatever its case");
+        (await ReadPresent(path!, ct)).ContentAs<ImageClosure>(Mesh.JsonSerializerOptions)!.Digest.Should().Be(DigestA);
+    }
+
+    /// <summary>Negative control of the test above: the same stored shape with ANOTHER body's signature
+    /// is still refused — the case-insensitive lookup finds the header, it does not waive the check.</summary>
+    [Fact(Timeout = 120000)]
+    public async Task SignatureHeaderNamedAsTheWireDeliversIt_StillRefusesAnotherBodysSignature()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var body = Record(DigestA);
+        var signature = Sign(body, Secret);
+        var delivered = await Deliver(body, new(signature.Key.ToLowerInvariant(), signature.Value), ct);
+        var stored = AsReadBackFromTheStore(delivered);
+        var tampered = stored with
+        {
+            Content = stored.ContentAs<WebhookEvent>(Mesh.JsonSerializerOptions)! with { Body = Record(DigestB) },
+        };
+
+        (await Drain(tampered, ct)).Should().BeNull();
+        (await WaitAbsent(ImageClosureNodes.PathOf("memex-portal-ai", DigestB), ct)).Should().BeTrue();
+    }
+
+    [Fact]
+    public void StoredHeaderLookup_IgnoresCase_AndAnswersNullForAnAbsentHeader()
+    {
+        var stored = new WebhookEvent
+        {
+            Headers = ImmutableDictionary<string, string>.Empty.Add("x-hub-signature-256", "sha256=ab"),
+        };
+        stored.Header(WebhookInbox.SignatureHeader).Should().Be("sha256=ab");
+        stored.Header("X-Other-Signature").Should().BeNull();
+    }
+
     [Fact(Timeout = 120000)]
     public async Task TamperedBody_IsRefused_NothingWritten()
     {
