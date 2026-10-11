@@ -246,7 +246,13 @@ The resolver is built on the public `NuGet.Protocol`, `NuGet.Packaging`, and `Nu
 
 ## Transitive dependencies at runtime
 
-NuGet packages often pull in transitive assemblies that aren't referenced by your code at compile time but are loaded later by the main package. The node's `AssemblyLoadContext` is extended with a probing directory list pointing at every `lib/<tfm>/` folder of every resolved package, so those loads succeed without extra configuration.
+NuGet packages often pull in transitive assemblies that aren't referenced by your code at compile time but are loaded later by the main package. The node's `AssemblyLoadContext` is extended with a probing directory list pointing at every resolved package's **runtime** folder, so those loads succeed without extra configuration. Three rules decide what binds:
+
+- **Runtime assets for the running RID.** Your code compiles against a package's `lib/<tfm>/` assembly, but at run time a package's `runtimes/<rid>/lib/<tfm>/` group replaces it for the nearest RID in the fallback chain (`linux-x64 → linux → unix-x64 → unix → any` on the portal image). This is what makes `Microsoft.Data.SqlClient` work: its `lib/` copy is a "not supported on this platform" stub, and the real client lives under `runtimes/unix/lib/`.
+- **One copy of what the host already ships.** A dependency the portal itself ships at an equal-or-newer version — `System.Text.Json`, `Microsoft.Extensions.*`, `Azure.Core` — binds to the portal's copy, never a second, older copy beside it.
+- **Native libraries** from `runtimes/<rid>/native/` resolve for the package's `DllImport`s.
+
+The design and its edge cases are in [NuGet Runtime Assets](/Doc/Architecture/NuGetRuntimeAssets).
 
 ---
 
@@ -258,6 +264,7 @@ NuGet packages often pull in transitive assemblies that aren't referenced by you
 | NuGet error listing available versions | No matching version | Pin a version that exists on the feed |
 | Timeout from NuGet protocol | Network blocked | Verify ACA egress policy and that `NUGET_PACKAGES` is writable |
 | "type not found" at compilation | Package has no .NET Standard / .NET 8/10 asset | The resolver uses `FrameworkReducer.GetNearest`; if no compatible TFM exists, no DLLs are returned — pick a different package or version |
+| Compiles, then `PlatformNotSupportedException` or `Could not load file or assembly` at render | The package's runtime asset for this RID did not bind | See [NuGet Runtime Assets](/Doc/Architecture/NuGetRuntimeAssets) — check the log line naming the `runtimes/<rid>` group and any "newer than the host's" warning |
 
 ---
 

@@ -709,40 +709,51 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
     /// </summary>
     internal sealed class AssemblyProbingResolver : IDisposable
     {
-        private readonly HashSet<string> probingDirs = new(StringComparer.OrdinalIgnoreCase);
+        // Ordered (managed runtime dirs first, native last — ResolvedPackageSet.ProbingDirectories).
+        private readonly List<string> probingDirs = [];
         private readonly object gate = new();
         private readonly Func<AssemblyLoadContext, System.Reflection.AssemblyName, System.Reflection.Assembly?> handler;
+        private readonly Func<System.Reflection.Assembly, string, IntPtr> nativeHandler;
 
         public AssemblyProbingResolver()
         {
             handler = (ctx, name) =>
             {
-                var dllName = name.Name + ".dll";
+                // The default context only raises Resolving for a name the host does NOT ship, so
+                // host unification is implicit here; the probe skips the native directories.
+                if (string.IsNullOrEmpty(name.Name)) return null;
+                string? candidate;
                 lock (gate)
-                {
-                    foreach (var d in probingDirs)
-                    {
-                        var candidate = Path.Combine(d, dllName);
-                        if (File.Exists(candidate))
-                        {
-                            try { return ctx.LoadFromAssemblyPath(candidate); }
-                            catch { /* try next */ }
-                        }
-                    }
-                }
-                return null;
+                    candidate = MeshWeaver.NuGet.PackageAssemblyProbe.FindManaged(name.Name, probingDirs);
+                if (candidate is null) return null;
+                try { return ctx.LoadFromAssemblyPath(candidate); }
+                catch { return null; }
+            };
+            // A package's runtimes/<rid>/native/ library for a DllImport the default search missed.
+            nativeHandler = (_, libraryName) =>
+            {
+                string[] dirs;
+                lock (gate)
+                    dirs = [.. probingDirs];
+                return MeshWeaver.NuGet.PackageAssemblyProbe.ResolveUnmanaged(libraryName, dirs);
             };
             AssemblyLoadContext.Default.Resolving += handler;
+            AssemblyLoadContext.Default.ResolvingUnmanagedDll += nativeHandler;
         }
 
         public void AddDirectories(IEnumerable<string> dirs)
         {
             lock (gate)
                 foreach (var dir in dirs)
-                    probingDirs.Add(dir);
+                    if (!probingDirs.Contains(dir, StringComparer.OrdinalIgnoreCase))
+                        probingDirs.Add(dir);
         }
 
-        public void Dispose() => AssemblyLoadContext.Default.Resolving -= handler;
+        public void Dispose()
+        {
+            AssemblyLoadContext.Default.Resolving -= handler;
+            AssemblyLoadContext.Default.ResolvingUnmanagedDll -= nativeHandler;
+        }
     }
 
     private void InstallRuntimeProbe(IEnumerable<string> dirs)
