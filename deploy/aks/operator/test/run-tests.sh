@@ -3913,8 +3913,15 @@ da -- --namespace memex-cloud --pod "$_da_pod"
 [ "$_da_rc" -eq 0 ] && ok "dump analysis reads the volume and reports" || bad "dump analysis happy path" "exited ${_da_rc}: ${_da_out}"
 case "$_da_out" in *"::hosting:: dump_listing=2"*"::hosting:: dump_file=${_da_pod}.1791621060/coredump.1.1791621003"*"::hosting:: dump_threads=3"*) ok "…the listing (the denominator), the file read and its thread count" ;; *) bad "summary facts" "said: ${_da_out}" ;; esac
 [ "$(printf '%s\n' "$_da_out" | tail -1 | cut -c1-28)" = "::hosting:: dump_analysis=H4" ] && ok "…and the gzip+base64 analysis is the LAST line, inside the lane's log tail" || bad "analysis is the last line" "last: $(printf '%s\n' "$_da_out" | tail -1 | cut -c1-80)"
-[ "$(printf '%s' "$_da_json" | jq -r '.stacks.threadCount, .stacks.groupCount, .stacks.groups[0].threads, .stacks.groups[0].frames[1]' | tr '\n' '|')" = "3|2|2|Orleans.Runtime.Catalog.GetOrCreateActivation(Orleans.Runtime.GrainId)|" ] \
-  && ok "clrstack -all is grouped by identical stack, largest group first, frames without SP/IP" || bad "stack grouping" "json: ${_da_json}"
+[ "$(printf '%s' "$_da_json" | jq -r '.stacks.threadCount, .stacks.groupCount, .stacks.groups[1].threads, .stacks.groups[1].frames[1]' | tr '\n' '|')" = "3|3|1|Orleans.Runtime.Catalog.GetOrCreateActivation(Orleans.Runtime.GrainId)|" ] \
+  && ok "clrstack -all is grouped by identical stack, frames without SP/IP" || bad "stack grouping" "json: ${_da_json}"
+# The thread syncblk names as a monitor's owner is the stack a wedge is read from: a group of its own
+# (0x2d has the SAME frames and is not folded into it), first, and labelled with who waits on it.
+[ "$(printf '%s' "$_da_json" | jq -r '.stacks.groups[0] | .threads, (.threadIds | join(",")), .frames[0], .frames[2]' | tr '\n' '|')" = "1|0x2c|[LOCK OWNER: holds the monitor 1 thread(s) wait for (syncblk owner System.Object)]|Orleans.Runtime.Catalog.GetOrCreateActivation(Orleans.Runtime.GrainId)|" ] \
+  && ok "…the lock owner syncblk names is its own group, FIRST, labelled with its waiters" || bad "lock owner first" "json: ${_da_json}"
+[ "$(printf '%s' "$_da_json" | jq -c '.lockOwners')" = '[{"thread":"0x2c","waiters":1,"object":"System.Object","stack":"shown"}]' ] \
+  && ok "…and lockOwners says its stack is shown" || bad "lockOwners" "json: ${_da_json}"
+case "$_da_out" in *"lock owner 0x2c: 1 waiting on System.Object — stack shown"*) ok "…and the run log names it" ;; *) bad "lock owner in the log" "said: ${_da_out}" ;; esac
 [ "$(printf '%s' "$_da_json" | jq -r '[.sections[].name] | join(",")')" = "eeversion,threadpool,syncblk,clrthreads,dumpasync" ] \
   && ok "…with the fixed text sections beside it" || bad "sections" "json: ${_da_json}"
 case "$(printf '%s' "$_da_json" | jq -r '.sections[] | select(.name == "syncblk") | .text')" in *"2c  12"*"System.Object"*) ok "…the lock owner (syncblk) survives intact" ;; *) bad "syncblk text" "json: ${_da_json}" ;; esac
@@ -3979,6 +3986,12 @@ _da_large="$(mktemp)"
 {
   printf '@@MW-DUMP listing\n17179869184\t1791622450\tp/coredump.1.1791622450\n'
   printf '@@MW-DUMP selected\tp/coredump.1.1791622450\t17179869184\t1791622450\n'
+  # The first production read (MeshWeaver#6391): ONE thread owns the monitor 21 others wait for, its stack
+  # is shared with nobody, and it is the highest-numbered of 400 — the last place a size-ordered cut keeps.
+  printf '@@MW-DUMP section\tsyncblk\tsyncblk\n'
+  printf 'Index         SyncBlock MonitorHeld Recursion Owning Thread Info          SyncBlock Owner\n'
+  printf '    2 000055F4045B5FD0           43         1 000055F404593ED0 190  13   00007f3fa8d4e5b0 System.Object\n'
+  printf '@@MW-DUMP end\tsyncblk\t0\t200\n'
   printf '@@MW-DUMP section\tclrstack\tclrstack -all\n'
   # A deterministic LCG names every frame, so the text does not compress away and the caps MUST shrink.
   _t=1 _x=12345
@@ -4000,6 +4013,8 @@ _da_fact="$(printf '%s\n' "$_da_out" | sed -n 's/^::hosting:: dump_analysis=//p'
   && ok "a 400-thread dump is condensed into a fact within the lane's budget (${#_da_fact} bytes)" || bad "budget" "rc ${_da_rc}; ${#_da_fact} bytes; out: $(printf '%s' "$_da_out" | head -5)"
 [ "$(printf '%s' "$_da_json" | jq -r '.stacks.threadCount, .stacks.groupCount, (.stacks.groupsShown < .stacks.groupCount), ((.stacks.groups | length) == .stacks.groupsShown), (.stacks.framesCap < 40)' | tr '\n' ' ')" = "400 400 true true true " ] \
   && ok "…stating what it kept: every thread counted, groups shown < groups found, the frame cap shrunk to fit" || bad "caps stated" "json: $(printf '%s' "$_da_json" | jq -c '.stacks | del(.groups)')"
+[ "$(printf '%s' "$_da_json" | jq -r '(.stacks.groups[0].threadIds | join(",")), .stacks.groups[0].frames[0], (((.stacks.groups[0].frames | length) > (.stacks.framesCap + 1)) | tostring), (.lockOwners | tojson)' | tr '\n' '|')" = '0x190|[LOCK OWNER: holds the monitor 21 thread(s) wait for (syncblk owner System.Object)]|true|[{"thread":"0x190","waiters":21,"object":"System.Object","stack":"shown"}]|' ] \
+  && ok "…and the lock owner's stack SURVIVES the cut: first of the groups kept, deeper than the frame cap, 21 waiters named" || bad "the lock owner survives the cut" "groups[0]: $(printf '%s' "$_da_json" | jq -c '.stacks.groups[0] | {threadIds, first: .frames[0]}'); lockOwners: $(printf '%s' "$_da_json" | jq -c '.lockOwners')"
 rm -f "$_da_large"
 
 # ── the IN-POD half, run for real against a stub dotnet-dump ────────────────────────────────────

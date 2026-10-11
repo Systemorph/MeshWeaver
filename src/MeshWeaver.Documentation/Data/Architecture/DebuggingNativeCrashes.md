@@ -188,10 +188,23 @@ Its one step is core's `hosting-dump-analyze --namespace <ns> [selector]`
    reports **one gzip+base64 fact** that fits the operations lane's 24 KB log tail. Every cap it
    applies is stated as shown-versus-found.
 
+🚨 **The thread that owns a contended monitor is never cut.** `syncblk` names the OS thread that
+holds each monitor other threads wait for. That thread's stack is where a wedge is read from, and
+it is usually shared with nobody, so a cut that keeps the largest groups drops exactly it. Measured
+on the first production read (#6391, a portal wedged at boot): 21 threads waited in
+`Autofac.Core.Lifetime.LifetimeScope.CreateSharedInstance` on one monitor, `syncblk` named OS
+thread `0x1e` as its owner, and that thread was among the 46 of 86 stack groups cut to fit. Each
+owner is therefore a group of its own (a waiter with the same frames is not folded into it), sorted
+first with the most-waited-for first, kept at four times the frame cap, and labelled in its first
+frame line: `[LOCK OWNER: holds the monitor 21 thread(s) wait for (syncblk owner System.Object)]`.
+The fact's `lockOwners` list says for each owner whether its stack is `shown`, `cut`, or has
+`no managed stack`, and the run log prints the same line. Only `Monitor` locks appear in `syncblk`;
+a `System.Threading.Lock` owner does not.
+
 The answer lands on the action node (`dumpAnalysis`) and as a Markdown page at `Ops/Dumps/<action id>`.
 The page carries the listing of every dump on the volume (the denominator), the file read with its
-size and write instant, the thread pool, the lock owners, and the stack groups, largest first. The
-raw dump never leaves the cluster. A selector that is not that shape is refused before anything
+size and write instant, the thread pool, the lock owners, and the stack groups, lock owners first and
+then largest first. The raw dump never leaves the cluster. A selector that is not that shape is refused before anything
 reaches the cluster, and so is a pod refusal, a failed Job or a log that never reached the end. None
 of them reports an analysis. The Job needs egress to nuget.org (the tool) and Microsoft's symbol
 server (the DAC matching the dump). A namespace that forbids either fails the read by name.
