@@ -23,7 +23,7 @@ The repos under `meshweaver.azurecr.io`:
 |---|---|---|
 | `memex-portal-ai` | The portal image — one tag per deploy | Where the bloat is; prune aggressively |
 | `memex-migration` | The DB-migration image | A few tags; keep the live one + `latest` |
-| `memex-portal-next` | **Retired 2026-10-11** — `/next` ships inside `memex-portal-ai` now | Keep only tags a deployment still pins (`lock-pinned-digests` holds them) until no overlay names one; then the repository can go |
+| `memex-portal-next` | **Retired** (policy `portal-next-in-platform-image`) — `/next` ships inside `memex-portal-ai` now | Keep only tags a deployment still pins (`lock-pinned-digests` holds them) until no overlay names one; then the repository can go |
 | `mw-plugin-test` | Plugin-CI test image (also published to GHCR) | Keep the newest; not deployment-critical |
 | `memex-portal-ai-base` | The custom runtime **base** image every portal build layers on | **Never delete `latest`** — it breaks every future build |
 

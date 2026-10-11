@@ -834,8 +834,9 @@ the one identity all four images share: the version tag is per-RUN.
 > `3.0.0-ci.<n>` while every .NET leg computed `3.0.0-rc1.ci.<n>`. **Both halves of it are gone.**
 > The rc line is retired, so every leg mints the one continuous shape
 > ([Release Process & Versioning §1](/Doc/Architecture/ReleaseProcess)), and portal-next is no longer
-> built by this lane at all. Kept as a note only so a reader who remembers the wart knows it was
-> resolved rather than overlooked.
+> an image with a tag of its own: the portal-ai leg builds it INTO `memex-portal-ai` (see
+> [the set](#the-set-and-why-partial-is-the-failure-that-hurts)), so it carries that leg's version.
+> Kept as a note only so a reader who remembers the wart knows it was resolved rather than overlooked.
 
 ## The ladder — the platform delivery never waits on a Plugins seal
 

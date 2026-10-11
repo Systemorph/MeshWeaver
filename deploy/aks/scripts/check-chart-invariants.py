@@ -1157,9 +1157,12 @@ if _bundled:
             b.get("name") != "memex-portal-service" or (b.get("port") or {}).get("name") != "next" for b in _next_backends):
         finding(f"/next is BUNDLED but the ingress routes it to {_next_backends!r}",
                 "it must target memex-portal-service port `next`. " + _next_fix)
-    if not str(cfg_data.get("PortalNext__PortalOrigin", "")).startswith("http://127.0.0.1:"):
-        finding(f"PortalNext__PortalOrigin is {cfg_data.get('PortalNext__PortalOrigin')!r}",
-                "the bundled server's SSR reaches its OWN pod's portal over loopback. " + _next_fix)
+    # SSR reaches its OWN pod's portal over loopback, on the port the portal actually listens on.
+    _http = str(cfg_data.get("ASPNETCORE_HTTP_PORTS") or "8080").split(";")[0].strip()
+    _want_origin = f"http://127.0.0.1:{_http}"
+    if str(cfg_data.get("PortalNext__PortalOrigin", "")) != _want_origin:
+        finding(f"PortalNext__PortalOrigin is {cfg_data.get('PortalNext__PortalOrigin')!r}, the portal listens at {_want_origin!r}",
+                "the bundled server's SSR would connect to no portal listener. " + _next_fix)
 elif _next_dep is not None:
     # End to end: ingress port → Service port → targetPort → a port the override container LISTENS on.
     _next_svc = next(iter(by_kind("Service", "portal-next-service")), None)
