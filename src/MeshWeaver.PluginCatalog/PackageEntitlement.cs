@@ -346,45 +346,19 @@ public static class PackageEntitlement
             if (hub.ServiceProvider.GetService(typeof(DeploymentConfigAuthority)) is not DeploymentConfigAuthority authority)
                 return Refuse(manifest, principal, logger,
                     detail: "no deployment configuration authority is registered on this host");
-            return WithRecordedSource(hub, manifest, principal).SelectMany(anchored =>
-            {
-                if (authority.WhyNot(principal, anchored) is { } why)
-                    return Refuse(manifest, principal, logger, detail: why);
-                logger?.LogInformation(
-                    "[PackageEntitlement] commercial package {Package} AUTHORIZED by {Principal}: {Reason}. "
-                    + "Installing grants nobody access — that stays the plan's and the subscriptions'.",
-                    manifest.Id, principal, authority.Because(anchored));
-                return Observable.Return(Unit.Default);
-            });
+            // 🚨 The check binds on the manifest's OWN source. A manifest that names none (one
+            // listed straight off a repository by the update watcher) is refused — fail closed.
+            // Borrowing the source from the install record would bind by package id alone, and a
+            // second watched source listing the same id would then inherit the configured source's
+            // authorization. Such an update is applied by a person's Update click instead.
+            if (authority.WhyNot(principal, manifest) is { } why)
+                return Refuse(manifest, principal, logger, detail: why);
+            logger?.LogInformation(
+                "[PackageEntitlement] commercial package {Package} AUTHORIZED by {Principal}: {Reason}. "
+                + "Installing grants nobody access — that stays the plan's and the subscriptions'.",
+                manifest.Id, principal, authority.Because(manifest));
+            return Observable.Return(Unit.Default);
         });
-
-    /// <summary>
-    /// <paramref name="manifest"/> with the SOURCE it is checked against. The configuration names a
-    /// package as <c>Source/Package</c>, and a manifest listed straight off a repository (the update
-    /// watcher's path) carries no source — so an unattended update of a package this principal
-    /// installed would be refused although the configuration still names it. Where the manifest
-    /// names no source, the one stamped on the INSTALL RECORD is used, and only when that record
-    /// was authorized by this very principal; otherwise the manifest is returned unchanged and the
-    /// check fails closed. An unreadable record is "unchanged" too.
-    /// </summary>
-    private static IObservable<PackageManifest> WithRecordedSource(
-        IMessageHub hub, PackageManifest manifest, string principal)
-    {
-        if (!string.IsNullOrWhiteSpace(manifest.Source)
-            || hub.ServiceProvider.GetService(typeof(IStorageAdapter)) is not IStorageAdapter storage)
-            return Observable.Return(manifest);
-        return storage.Read($"{PackageInstaller.InstalledPartition}/{manifest.Id}", hub.JsonSerializerOptions)
-            .Take(1)
-            .DefaultIfEmpty()
-            .Timeout(ActivityReadWindow)
-            .Select(node => node?.ContentAs<PackageManifest>(hub.JsonSerializerOptions))
-            .Catch<PackageManifest?, Exception>(_ => Observable.Return<PackageManifest?>(null))
-            .Select(record => record is not null
-                              && !string.IsNullOrWhiteSpace(record.Source)
-                              && string.Equals(record.AuthorizedBy?.Trim(), principal, StringComparison.Ordinal)
-                ? manifest with { Source = record.Source }
-                : manifest);
-    }
 
     private static IObservable<Unit> Refuse(
         PackageManifest manifest, string? userId, ILogger? logger, Exception? cause = null, string? detail = null) =>

@@ -164,25 +164,22 @@ public class ADeploymentNamedCommercialPackageInstallsTest(ITestOutputHelper out
     }
 
     /// <summary>
-    /// The update watcher lists manifests straight off a repository — they carry NO source. The
-    /// gate then anchors on the source the install record was stamped with, but only when that
-    /// record was authorized by this principal; a package with no such record still fails closed.
+    /// A manifest that names NO source (one listed straight off a watched repository) is refused
+    /// even for an installed, named package: a package id alone never authorizes, because another
+    /// source may list the same id and would inherit the configured source's authorization.
     /// </summary>
     [Fact(Timeout = 240_000)]
-    public async Task AManifestWithoutASource_IsCheckedAgainstTheInstallRecordsSource()
+    public async Task AManifestWithoutASource_IsRefused_EvenForAnInstalledNamedPackage()
     {
         var ct = TestContext.Current.CancellationToken;
         await Mesh.ServiceProvider.GetRequiredService<InstanceAutoRegistrationService>().Completed
             .FirstAsync().Timeout(TimeSpan.FromSeconds(180)).Await(ct);
 
-        await PackageEntitlement
+        var sourceless = async () => await PackageEntitlement
             .Authorize(Mesh, new PackageManifest { Id = "Claims", Price = 900m, Currency = "CHF" }, Principal)
             .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
-
-        var neverInstalled = async () => await PackageEntitlement
-            .Authorize(Mesh, new PackageManifest { Id = "Other", Price = 490m, Currency = "CHF" }, Principal)
-            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
-        await neverInstalled.Should().ThrowAsync<PackageAuthorizationException>();
+        (await sourceless.Should().ThrowAsync<PackageAuthorizationException>())
+            .Which.Message.Should().Contain("without a source");
     }
 
     [Fact]
@@ -270,4 +267,60 @@ public class ADeploymentNamedCommercialPackageInstallsTest(ITestOutputHelper out
             .Read(LedgerPath, Mesh.JsonSerializerOptions)
             .Select(n => n?.ContentAs<DefaultInstallLedger>(Mesh.JsonSerializerOptions))
             .Take(1).Timeout(TestTimeouts.Convergence).Await();
+}
+
+/// <summary>
+/// An INCOMPLETE commercial package the deployment configuration installed is REPAIRED under that
+/// same authority by the boot repair pass — not classified as unauthorized and skipped on every
+/// boot. Without the authority on the repair's candidates the lost node below never comes back.
+/// </summary>
+public class ADeploymentNamedCommercialPackageIsRepairedTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
+{
+    private const string Principal = PackageEntitlement.DeploymentConfigPrefix + "acme-test";
+
+    private static PackageManifest Commercial() =>
+        ReassertFixture.Candidate() with { Price = 900m, Currency = "CHF" };
+
+    private sealed class CommercialSource : IPackageSource
+    {
+        public IObservable<IReadOnlyList<PackageManifest>> ListPackages(string gitRef) =>
+            Observable.Return<IReadOnlyList<PackageManifest>>(ImmutableList.Create(Commercial()));
+
+        public IObservable<IReadOnlyList<PackageFile>> FetchPackageFiles(PackageManifest package, string gitRef) =>
+            Observable.Return(ReassertFixture.Files());
+    }
+
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+        => base.ConfigureMesh(builder)
+            .AddPluginCatalog()
+            .ConfigureServices(services => services
+                .AddSingleton<IPackageSource>(_ => new CommercialSource())
+                .AddSingleton(new PluginCatalogOptions
+                {
+                    InstanceId = "acme-test",
+                    InstallByDefault = [$"registered-0/{ReassertFixture.Package}"],
+                    InstallPreInstalledPackages = false,
+                }));
+
+    [Fact(Timeout = 300_000)]
+    public async Task ALostNode_ComesBack_UnderTheDeploymentPrincipal()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var first = await Mesh.ServiceProvider.GetRequiredService<InstanceAutoRegistrationService>().Completed
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(180)).Await(ct);
+        first.Delivered.Should().Contain(ReassertFixture.Package, "the named commercial package installs at boot");
+        (await ReassertFixture.WaitForNode(Mesh, ReassertFixture.GuidePath, present: true)).Should().BeTrue();
+
+        await Mesh.ServiceProvider.GetRequiredService<IMeshService>().DeleteNode(ReassertFixture.GuidePath)
+            .Should().Within(TestTimeouts.Convergence).Emit("the loss is the precondition", cancellationToken: ct);
+        (await ReassertFixture.WaitForNode(Mesh, ReassertFixture.GuidePath, present: false)).Should().BeTrue();
+
+        await Mesh.ServiceProvider.GetRequiredService<InstalledPackageRepairService>()
+            .RunRepair().Timeout(TimeSpan.FromSeconds(240)).Await(ct);
+
+        (await ReassertFixture.WaitForNode(Mesh, ReassertFixture.GuidePath, present: true)).Should().BeTrue(
+            "the repair re-asserts a config-authorized commercial package instead of skipping it");
+        (await ReassertFixture.ReadRecord(Mesh))!.AuthorizedBy.Should().Be(Principal,
+            "the repair runs under the same deployment-config principal");
+    }
 }
