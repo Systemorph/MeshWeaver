@@ -41,17 +41,29 @@ namespace Memex.Portal.Shared.Api;
 /// </summary>
 public static class ReleaseGateEndpoints
 {
-    /// <summary>Route the gate is mounted at.</summary>
+    /// <summary>
+    /// Route the gate is mounted at: <c>GET /api/plugins/is-updatable?version=…</c>.
+    ///
+    /// <para>🚨 It answers the ROLL question for that version (policy
+    /// <c>platform-rolls-independently-of-packages</c>): <c>isUpdatable</c> is the platform-roll
+    /// decision and is <c>true</c> even when a package is not available for the version — that
+    /// package answer is waived, kept verbatim on <c>waivedHold</c>, leads <c>advisories</c>, and
+    /// every package keeps its own <c>status</c> in <c>packages</c>. <c>holdReason</c> is then
+    /// null. A consumer that needs the PACKAGE answer ("is every package available for this
+    /// version?") reads <c>waivedHold</c> and the package statuses, never <c>isUpdatable</c>;
+    /// <c>indeterminate</c> still tells "could not determine" apart from a determined refusal, and
+    /// <c>enforced: false</c> means the gate does not apply to this deployment at all.</para>
+    /// </summary>
     public const string Route = "/api/plugins/is-updatable";
 
     /// <summary>
     /// 🚨 Route the SELECTOR is mounted at (#3479): <c>GET /api/plugins/roll-target</c> — <i>which
     /// release should this environment be on?</i>
     ///
-    /// <para><see cref="Route"/> can only confirm or deny a version the caller already chose, so
-    /// every path that rolls had to choose "the newest" by itself and discover completeness
-    /// afterwards. This answers the choice, which is the inversion #3479 asks for. Same auth, same
-    /// scope, same shared predicate — this is the walk over it, not a second one.</para>
+    /// <para><see cref="Route"/> answers about a version the caller already chose; this answers
+    /// the choice: the newest admitted release, with what the packages say about it as advisories
+    /// (policy <c>platform-rolls-independently-of-packages</c>). Same auth, same scope, same shared
+    /// predicate — this is the selection over it, not a second one.</para>
     /// </summary>
     public const string SelectRoute = "/api/plugins/roll-target";
 
@@ -203,7 +215,9 @@ public static class ReleaseGateEndpoints
 
 
 
-    private static IObservable<IResult> Answer(HttpContext http, string? version)
+    /// <summary>The authenticated answer of <see cref="Route"/>. Internal so the JSON contract —
+    /// which CI scripts and operators consume — is pinned by a test without an instance key.</summary>
+    internal static IObservable<IResult> Answer(HttpContext http, string? version)
     {
         if (string.IsNullOrWhiteSpace(version))
             return Observable.Return(Results.Json(
@@ -215,19 +229,30 @@ public static class ReleaseGateEndpoints
             ?.CreateLogger(typeof(ReleaseGateEndpoints));
 
         return service.IsUpdatable(version)
-            .Select(verdict =>
+            .Select(raw =>
             {
-                if (!verdict.IsUpdatable)
-                    // Information, not Debug: a held environment must be findable in the logs
-                    // without turning anything on. A silent hold is the outage this gate exists
-                    // to prevent, not a quiet success.
+                // 🚨 The platform rolls independently of its packages (policy
+                // <c>platform-rolls-independently-of-packages</c>). This endpoint
+                // answers the ROLL question for a manual `kubectl set image` exactly as the poller
+                // and /roll-target do: a package-availability refusal is waived into advisories
+                // (`waivedHold` keeps it verbatim, `packages` still names every lagging package),
+                // never a "no".
+                var verdict = raw.ForPlatformRoll();
+                if (verdict.WaivedHold is { } waived)
+                    // Information, not Debug: the packages that will not follow must be findable
+                    // in the logs without turning anything on.
                     logger?.LogInformation(
-                        "Release gate: HOLD for {Version} — {Reason}", version, verdict.HoldReason);
+                        "Release gate: {Version} rolls; package advisory (the platform rolls independently "
+                        + "of packages) — {Reason}", version, waived);
 
                 return Results.Json(new
                 {
                     version,
                     isUpdatable = verdict.IsUpdatable,
+                    // 🚨 What the package verdict would have held on before policy
+                    // <c>platform-rolls-independently-of-packages</c> — the
+                    // packages that do not follow this roll and catch up on their own.
+                    waivedHold = verdict.WaivedHold,
                     // Distinguishes "the gate does not apply here" from "the gate passed" — the
                     // two must never render as the same tick.
                     enforced = verdict.NotEnforcedReason is null,

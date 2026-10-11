@@ -299,7 +299,13 @@ public record SelfUpdateOptions
     /// <summary>
     /// 🚨 Roll even though the release-availability gate is NOT WIRED into this host.
     ///
-    /// <para>Default <c>false</c>: an unwired gate is a HOLD. The gate answers "does every package
+    /// <para>🚨 <b>Moot under policy <c>platform-rolls-independently-of-packages</c></b>: no
+    /// package-availability answer — an unwired gate included —
+    /// holds the platform roll any more. An unwired gate rolls with a logged, recorded advisory
+    /// whether or not this key is set; the key is kept so existing configuration still binds, and
+    /// the warning names it when set. The paragraphs below are its history.</para>
+    ///
+    /// <para>Default <c>false</c>: an unwired gate was a HOLD. The gate answers "does every package
     /// this environment deploys have a usable artifact for the target release" (#1754), and a host
     /// that has no gate registered has not answered it — it has failed to ask. That is the absence
     /// of a verdict, not a passing one, and this repo has paid for treating the two the same more
@@ -355,7 +361,8 @@ public record SelfUpdateOptions
 
     /// <summary>
     /// 🚨 How long the release-availability gate and the roll selector may take to ANSWER before the
-    /// verdict becomes <c>Indeterminate</c> — which is a HOLD, never clearance.
+    /// verdict becomes <c>Indeterminate</c> — a package answer that could not be determined (an
+    /// advisory on a platform roll), never a statement that the packages are available.
     ///
     /// <para><b>This is a knob for a slow SHARE, and never a remedy for a slow READ</b> (#4742). The
     /// budget was blown on memex.meshweaver.cloud because the gate's denominator re-enumerated every

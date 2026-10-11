@@ -43,8 +43,9 @@ public enum ComboClearanceKind
 
     /// <summary>
     /// The gate ran and at least one module of this instance's combo FAILS against the candidate
-    /// (<see cref="ComboVerdictKind.Red"/>). This is the refusal: the roll is HELD and every
-    /// failing module is named.
+    /// (<see cref="ComboVerdictKind.Red"/>). This is the combo answer's refusal, and every failing
+    /// module is named. It does not stop the platform roll: a roll path reports it as a package
+    /// advisory (policy <c>platform-rolls-independently-of-packages</c>).
     /// </summary>
     Refused,
 
