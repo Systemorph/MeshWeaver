@@ -472,6 +472,57 @@ for d in two none; do
 done
 rm -rf "$TMPR"
 
+# ---- 7. a fieldRef the API server defaulted is the SAME ref ------------------
+# The chart renders `fieldRef: {fieldPath: metadata.name}`; the API server stores it with
+# `apiVersion: v1`. That pair was reported as a SHAPE difference on every environment, every run
+# (MeshWeaver#5844) — a finding nothing could clear. The negative controls keep it honest: another
+# field path, and another API version, are still different refs.
+echo "case: a fieldRef's defaulted apiVersion is not drift"
+TMPF="$(mktemp -d)"
+field_ref_case() {  # field_ref_case <name> <live fieldRef as JSON>
+  python3 - "$DATA/desired.yaml" "$DATA/clean/live-deployment.json" "$TMPF/$1" "$2" <<'PYEOF'
+import json, os, sys, yaml
+desired, live, out, live_ref = sys.argv[1], sys.argv[2], sys.argv[3], json.loads(sys.argv[4])
+os.makedirs(out, exist_ok=True)
+docs = list(yaml.safe_load_all(open(desired)))
+touched = 0
+for doc in docs:
+    if isinstance(doc, dict) and doc.get("kind") == "Deployment" and doc["metadata"]["name"] == "memex-portal-deployment":
+        doc["spec"]["template"]["spec"]["containers"][0].setdefault("env", []).append(
+            {"name": "FIXTURE_POD_NAME", "valueFrom": {"fieldRef": {"fieldPath": "metadata.name"}}})
+        touched += 1
+assert touched == 1, "the fixture render carries exactly one portal Deployment"
+yaml.safe_dump_all(docs, open(os.path.join(out, "desired.yaml"), "w"))
+d = json.load(open(live))
+d["spec"]["template"]["spec"]["containers"][0].setdefault("env", []).append(
+    {"name": "FIXTURE_POD_NAME", "valueFrom": {"fieldRef": live_ref}})
+json.dump(d, open(os.path.join(out, "live-deployment.json"), "w"))
+PYEOF
+  python3 "$CMP" "$TMPF/$1/desired.yaml" "$DATA/clean/live-configmap.json" "$TMPF/$1/live-deployment.json" \
+    "$DATA/clean/expect-patch.json" "$DATA/clean/live-poddisruptionbudgets.json" \
+    "$DATA/clean/live-scaledobjects.json" "$DATA/clean/envfrom-source-keys.txt" \
+    "$DATA/clean/release-manifest.yaml" "$DATA/clean/record.json" 2>&1
+}
+o="$(field_ref_case defaulted '{"apiVersion":"v1","fieldPath":"metadata.name"}')"; rc=$?
+if [ "$rc" -eq 0 ] && echo "$o" | grep -q 'No drift'; then
+  echo "  ok   chart {fieldPath} vs live {apiVersion: v1, fieldPath} → no drift"
+else
+  echo "::error::a fieldRef the API server defaulted was reported as drift (rc=$rc):"; echo "$o" | grep '::error::' | sed 's/^/      /'; fail=1
+fi
+o="$(field_ref_case otherpath '{"apiVersion":"v1","fieldPath":"metadata.namespace"}')"; rc=$?
+if [ "$rc" -ne 0 ] && echo "$o" | grep -qE 'DIFFERS +inline env FIXTURE_POD_NAME'; then
+  echo "  ok   NEGATIVE CONTROL: another fieldPath is still DIFFERS"
+else
+  echo "::error::a fieldRef naming another field was not reported (rc=$rc)"; fail=1
+fi
+o="$(field_ref_case otherversion '{"apiVersion":"v2","fieldPath":"metadata.name"}')"; rc=$?
+if [ "$rc" -ne 0 ] && echo "$o" | grep -qE 'DIFFERS +inline env FIXTURE_POD_NAME'; then
+  echo "  ok   NEGATIVE CONTROL: another apiVersion is still DIFFERS"
+else
+  echo "::error::a fieldRef naming another apiVersion was not reported (rc=$rc)"; fail=1
+fi
+rm -rf "$TMPF"
+
 if [ "$fail" -eq 0 ]; then
   echo ""
   echo "chart-drift comparator: all classification assertions passed."
