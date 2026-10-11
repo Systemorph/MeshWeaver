@@ -16,7 +16,7 @@ namespace MeshWeaver.Graph.Test;
 /// sub-pages, and clicking any of them lost the list — the index was the page's OWN children, and
 /// a sub-page has none. The index is now the tree under the page's <see cref="DefaultNodeNavigation.IndexRoot"/>,
 /// the same on every page of the tree, with the page being read marked as current. Each rule below
-/// is a case here, on the pure <see cref="DefaultNodeNavigation.Build"/>.</para>
+/// is a case here, on the pure <see cref="DefaultNodeNavigation.Build(string, System.Collections.Generic.IReadOnlyCollection{MeshWeaver.Mesh.MeshNode}, string)"/>.</para>
 /// </summary>
 public class DefaultNodeNavigationTest
 {
@@ -266,6 +266,76 @@ public class DefaultNodeNavigationTest
 
         seen.Should().Equal([null, null], "the immediate null, then 'no index' for the fault — never an error into the page");
         faults.Should().Equal([boom], "the fault is seen (logged) before it is swallowed");
+    }
+
+    [Fact]
+    public void TheIndexLoadsOnlyTheLevelsOnTheReadersPath()
+    {
+        // "don't eager load the whole thing": the root's children, each ancestor's, the page's own.
+        DefaultNodeNavigation.PathLevels("Infrastructure", "Infrastructure/Inference/Inceptron")
+            .Should().Equal("Infrastructure", "Infrastructure/Inference", "Infrastructure/Inference/Inceptron");
+        DefaultNodeNavigation.PathLevels("Infrastructure", "Infrastructure")
+            .Should().Equal("Infrastructure");
+        DefaultNodeNavigation.PathLevels("Infrastructure", "Elsewhere/Page")
+            .Should().Equal("Infrastructure");
+    }
+
+    [Fact]
+    public void ALevelWithMoreEndsWithLoadMore_AndMoreRaisesOnlyItsLevel()
+    {
+        var more = ImmutableDictionary<string, string>.Empty
+            .Add("Infrastructure", "Infrastructure/Options?more=Infrastructure:100");
+        var nav = DefaultNodeNavigation.Build("Infrastructure", Space(), "Infrastructure/Options", more, "Mehr laden")!;
+
+        nav.Entries.Last().Label.Should().Be("Mehr laden", "the label is the viewer's, passed in by the page");
+        nav.Entries.Last().Path.Should().Be("Infrastructure/Options?more=Infrastructure:100");
+        nav.Entries.Single(e => e.Path == "Infrastructure/Inference").Children
+            .Should().NotContain(e => e.Label == "Mehr laden", "only the level that holds more gets the entry");
+
+        // The value arrives DECODED (LayoutAreaReference.ParseParameters): a separator is a '/', and
+        // a literal escape in a level name stays as it is.
+        DefaultNodeNavigation.ParseMore("Infrastructure/Inference:100").Should().Be(("Infrastructure/Inference", 100));
+        DefaultNodeNavigation.ParseMore("Odd%2FName:100").Should().Be(("Odd%2FName", 100));
+        DefaultNodeNavigation.ParseMore("Infrastructure:50").Should().BeNull("never below the first batch");
+        DefaultNodeNavigation.ParseMore("garbage").Should().BeNull();
+        DefaultNodeNavigation.ParseMore(null).Should().BeNull();
+        DefaultNodeNavigation.ParseMore("X:999999")!.Value.Cap.Should().Be(DefaultNodeNavigation.MaxCap, "bounded");
+    }
+
+    [Fact]
+    public void TheCapIsAppliedInTheRenderedOrder_NeverInTheStoresRowOrder()
+    {
+        // An Order = 1 page whose path sorts LAST, behind hidden satellites that sort first: it must
+        // lead the level, and the satellites must not use up the budget.
+        ImmutableList<MeshNode> level =
+        [
+            Node("S/_Access", "internal"), Node("S/_Comment", "internal"),
+            Node("S/Alpha", "Alpha"), Node("S/Beta", "Beta"), Node("S/Zulu", "Zulu", 1),
+        ];
+
+        DefaultNodeNavigation.VisibleInOrder(level).Select(n => n.Path)
+            .Should().Equal("S/Zulu", "S/Alpha", "S/Beta");
+    }
+
+    [Fact]
+    public void TheReadersOwnBranch_SurvivesTheCut()
+    {
+        // Sixty siblings; the reader is on the 60th, past the 50-entry cut, and on its child.
+        var siblings = Enumerable.Range(1, 60).Select(i => Node($"S/Item{i:D3}")).ToImmutableList();
+        var page = Node("S/Item060");
+        var child = Node("S/Item060/Detail");
+        var rows = DefaultNodeNavigation.RenderedRows(
+            [(DefaultNodeNavigation.VisibleInOrder(siblings), DefaultNodeNavigation.LevelCap),
+             (DefaultNodeNavigation.VisibleInOrder([child]), DefaultNodeNavigation.LevelCap)],
+            [page, child, Node("S")]);
+
+        rows.Select(n => n.Path).Should().Contain("S/Item060", "the page the reader is on is never cut");
+        rows.Count(n => n.Namespace == "S").Should().Be(DefaultNodeNavigation.LevelCap + 1,
+            "the level still shows its first 50, plus the reader's own entry");
+
+        var nav = DefaultNodeNavigation.Build("S", rows, "S/Item060/Detail")!;
+        Paths(nav.Entries).Should().Contain("S/Item060/Detail",
+            "the reader's child hangs from its parent instead of being orphaned");
     }
 
     private static IEnumerable<string> Paths(IEnumerable<NodeNavigationEntry> entries)

@@ -109,7 +109,7 @@ public sealed class PluginCatalogOptions
     ///
     /// <para>🚨 <b>COMMERCIAL packages: naming one exactly IS the authorization.</b> A commercial
     /// package (a price, or a sales contact) named EXACTLY here — <c>Source/Package</c>, e.g.
-    /// <c>PartnerRe/Claims</c> — is INSTALLED by the unattended pass, together with everything it
+    /// <c>ClientA/Claims</c> — is INSTALLED by the unattended pass, together with everything it
     /// requires (commercial requirements included). The authorizing principal is the deployment
     /// configuration itself, <c>deployment-config:{InstanceId}</c>
     /// (<see cref="DeploymentConfigAuthority"/>): this list lives in the instance's deployment
