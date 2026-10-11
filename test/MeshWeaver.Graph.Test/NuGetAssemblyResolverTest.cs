@@ -122,7 +122,7 @@ public class NuGetAssemblyResolverTest
     /// equal-or-newer version is loaded a second time.
     /// </summary>
     [Fact(Timeout = 300_000)]
-    public async Task Resolve_SqlClient_LoadsTheRuntimeAssetAndOpensAManagedIdentityConnectionObject()
+    public async Task Resolve_SqlClient_LoadsTheRuntimeAssetAndBuildsManagedIdentityAndDefaultConnections()
     {
         await SkipUnlessNuGetOrgReachable(TestContext.Current.CancellationToken);
         var resolver = new NuGetAssemblyResolver(NullLogger<NuGetAssemblyResolver>.Instance);
@@ -142,14 +142,15 @@ public class NuGetAssemblyResolverTest
             d.Replace('\\', '/').Contains("/microsoft.data.sqlclient/") && !d.Replace('\\', '/').Contains("/runtimes/"),
             "the RID group REPLACES the stub's lib/ directory — probing it would load the stub");
 
+        // Both authentication modes the portal uses: Managed Identity, and Active Directory Default
+        // (Azure.Identity's DefaultAzureCredential — AKS workload identity) with the identity's
+        // client id as User Id, the shape of the ESL Office connection string.
         const string source = """
             public static class SqlProbe
             {
-                public static string Run()
+                public static string Run(string connectionString)
                 {
-                    using var connection = new Microsoft.Data.SqlClient.SqlConnection(
-                        "Server=tcp:sql.invalid,1433;Database=ESLOffice;"
-                        + "Authentication=Active Directory Managed Identity;Encrypt=True");
+                    using var connection = new Microsoft.Data.SqlClient.SqlConnection(connectionString);
                     var builder = new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(connection.ConnectionString);
                     return connection.DataSource + "|" + builder.Authentication + "|" + connection.State;
                 }
@@ -174,9 +175,15 @@ public class NuGetAssemblyResolverTest
         {
             image.Position = 0;
             var probe = context.LoadFromStream(image).GetType("SqlProbe")!;
-            var answer = (string)probe.GetMethod("Run")!.Invoke(null, null)!;
-
-            answer.Should().Be("tcp:sql.invalid,1433|ActiveDirectoryManagedIdentity|Closed");
+            var run = probe.GetMethod("Run")!;
+            ((string)run.Invoke(null, [
+                    "Server=tcp:sql.invalid,1433;Database=ESLOffice;"
+                    + "Authentication=Active Directory Managed Identity;Encrypt=True"])!)
+                .Should().Be("tcp:sql.invalid,1433|ActiveDirectoryManagedIdentity|Closed");
+            ((string)run.Invoke(null, [
+                    "Server=tcp:sql.invalid,1433;Database=ESLOffice;Authentication=Active Directory Default;"
+                    + "User Id=00000000-0000-0000-0000-000000000000;Encrypt=True;"])!)
+                .Should().Be("tcp:sql.invalid,1433|ActiveDirectoryDefault|Closed");
             var loadedSqlClient = context.Assemblies.Single(a => a.GetName().Name == "Microsoft.Data.SqlClient");
             loadedSqlClient.Location.Should().Be(runtimeSqlClient);
             foreach (var loaded in context.Assemblies.Where(a => !a.IsDynamic && a.Location.Length > 0))

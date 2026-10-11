@@ -97,8 +97,8 @@ own package directories, so two sessions never bind each other's native binaries
   the host's own `Assembly`; a package-only assembly loads from its directory.
 - `NuGetAssemblyResolverTest.Resolve_SqlClient_…` (live feed, skips when unreachable): resolves
   Microsoft.Data.SqlClient 6.1.1, compiles a snippet against the compile set, loads it into a context
-  that binds like a NodeType's, constructs a `SqlConnection` with
-  `Authentication=Active Directory Managed Identity` (no server contacted), asserts the loaded client
+  that binds like a NodeType's, constructs `SqlConnection`s with
+  `Authentication=Active Directory Managed Identity` and `Active Directory Default` (no server contacted), asserts the loaded client
   is the `runtimes/` asset, and asserts nothing the host ships at an equal-or-newer version was loaded
   a second time.
 
