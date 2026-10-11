@@ -18,6 +18,27 @@ public static class IoPoolNames
     public const string Http = "Http";
 
     /// <summary>
+    /// Range reads against the cluster's LOG STORE (Loki <c>query_range</c>) issued by the control
+    /// plane — a <c>Logs</c> instance action, or anything else that asks the store for a window.
+    ///
+    /// <para>🚨 Deliberately NOT <see cref="Http"/>, and a real throttle. A range read is not one
+    /// request to the store: its query frontend splits the window by time and runs the pieces in
+    /// parallel, and it admits them through a bounded per-tenant queue that answers a full queue
+    /// with <c>429 too many outstanding requests</c>. Through <see cref="Http"/> (cap 16) one
+    /// process could put sixteen such reads on the store at once, so a handful of operators or
+    /// agents each asking for a wide window refused one another — and the reads that were admitted
+    /// spent their whole budget waiting behind the others' pieces (MeshWeaver#5717: three 72-hour
+    /// reads filed within five seconds all answered 429 in the same second). The reads queue HERE
+    /// instead, where a waiting read costs nothing and is refused by nobody; a read's own budget
+    /// starts when it gets its slot, not when it joins the queue.</para>
+    ///
+    /// <para>The store's other readers — the log watcher's short tail polls — are a different
+    /// process and are not behind this pool; the cap is sized against them, see
+    /// <see cref="IoPoolOptions.LogStore"/>.</para>
+    /// </summary>
+    public const string LogStore = "LogStore";
+
+    /// <summary>
     /// AI agent execution rounds — the long-lived LLM streaming round (model turns + inline
     /// tool calls + delegation), driven from <c>ThreadExecution.ExecuteMessageAsync</c>. Distinct
     /// from <see cref="Http"/> so a burst of multi-minute rounds can't starve quick outbound HTTP
@@ -243,6 +264,16 @@ public sealed record IoPoolOptions
     public int Http { get; init; } = 16;
 
     /// <summary>
+    /// Concurrent range reads against the log store per process (the <see cref="IoPoolNames.LogStore"/>
+    /// pool). ONE: a range read already fans out inside the store (its frontend splits the window and
+    /// runs the pieces in parallel), so the reads of one process are run one after another and the
+    /// store's own parallelism is spent on the read in hand. Each replica of a control instance has
+    /// its own pool, so the store sees at most one wide read per replica — a queue here, where waiting
+    /// is free, instead of a refusal there.
+    /// </summary>
+    public int LogStore { get; init; } = 1;
+
+    /// <summary>
     /// Concurrent AI agent rounds. A round holds its slot for the WHOLE round (model turns +
     /// inline tool calls + delegation waits), not a single network call — and because a
     /// delegating round holds its slot while awaiting a sub-thread round (which needs its own
@@ -352,6 +383,7 @@ public sealed record IoPoolOptions
             IoPoolNames.FileSystem => FileSystem,
             IoPoolNames.Blob => Blob,
             IoPoolNames.Http => Http,
+            IoPoolNames.LogStore => LogStore,
             IoPoolNames.Ai => Ai,
             IoPoolNames.Query => Query,
             IoPoolNames.Layout => Layout,
