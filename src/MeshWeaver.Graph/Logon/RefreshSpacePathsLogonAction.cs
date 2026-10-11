@@ -97,13 +97,27 @@ public sealed class RefreshSpacePathsLogonAction : ILogonAction
     /// <summary>
     /// The partition-root space paths from the root read, the owner's own home excluded (it is the
     /// home's own leg), distinct and sorted so an unchanged answer compares equal. Pure.
+    /// <para>🚨 A space is a place PEOPLE work together. The platform's own partitions — the
+    /// <see cref="WellKnownPartitions.Platform"/> set and the <see cref="WellKnownPartitions.Fleet"/>
+    /// partitions every instance runs on (Doc, Ops, Plugins, Agent, Skill, Provider, …) — carry a
+    /// <c>Space</c> root for plumbing reasons, but they are reached through their apps
+    /// (Documentation, Threads, Settings, Administration), never listed as the viewer's spaces.</para>
     /// </summary>
     internal static IReadOnlyList<string> SpacePathsFrom(IEnumerable<MeshNode> roots, string owner) =>
         Normalize(roots
             .Select(n => n.Path?.Trim('/'))
             .Where(p => !string.IsNullOrEmpty(p) && !p!.Contains('/'))
             .Where(p => !string.Equals(p, owner, StringComparison.OrdinalIgnoreCase))
+            .Where(p => !IsPlatformOwnedPartition(p!))
             .Select(p => p!));
+
+    /// <summary>Whether a partition belongs to the platform rather than to people:
+    /// <see cref="WellKnownPartitions.Platform"/> OR <see cref="WellKnownPartitions.Fleet"/>
+    /// (case-insensitive). Deliberately NOT named like
+    /// <c>PlatformAdminGrantRepair.IsPlatformPartition</c>, which answers a narrower question and is
+    /// false for every Fleet partition. Pure.</summary>
+    internal static bool IsPlatformOwnedPartition(string partition) =>
+        WellKnownPartitions.Platform.Contains(partition) || WellKnownPartitions.Fleet.Contains(partition);
 
     /// <summary>
     /// The profile change for a fresh answer: the two lists, written together — or a change that
