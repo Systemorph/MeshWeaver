@@ -1,0 +1,266 @@
+using System.Collections.Immutable;
+using System.ComponentModel.DataAnnotations;
+using System.Reactive.Linq;
+using MeshWeaver.Data;
+
+namespace MeshWeaver.ActionLinks;
+
+/// <summary>
+/// One entry in a portal's chain of action handlers — the content of an <c>ActionHandlerRule</c>
+/// mesh node. A rule CLAIMS handler keys (its own identifiers, never the platform's set), says
+/// which payload versions it reads, where it sits in the chain (<see cref="Order"/>), and which node
+/// acts for it (<see cref="Handler"/>).
+///
+/// <para>🚨 <b>The chain is DURABLE, not a service registration</b> — policy
+/// <c>open-vocabulary-string-constants</c>, Doc/Architecture/OpenVocabulariesAsStringConstants →
+/// "The chain is DURABLE". A package the mesh compiles (a store) is not a compiled module and cannot
+/// put a service into the root container; it CAN write a node. So a handler is contributed by writing
+/// a rule node, the chain is read LIVE from the mesh (a rule added while the portal runs is picked
+/// up on the next resolution, with no recycle), and the platform's own handlers are ordinary rules
+/// with no earlier pass reserved for them.</para>
+///
+/// <para>Init-only properties rather than a positional record, deliberately: a new optional field is
+/// then additive for every module compiled against an earlier build.</para>
+/// </summary>
+public sealed record ActionHandlerRule
+{
+    /// <summary>Identifies the rule node.</summary>
+    [Key]
+    public string Id { get; init; } = Guid.NewGuid().ToString();
+
+    /// <summary>
+    /// The handler keys this rule claims (<see cref="ActionInvocation.HandlerKey"/>), compared
+    /// ordinally — the rule author's OWN identifiers. A rule with no claims claims nothing.
+    /// </summary>
+    public ImmutableArray<string> Claims { get; init; } = [];
+
+    /// <summary>The lowest <see cref="ActionInvocation.HandlerVersion"/> the rule's handler reads.</summary>
+    public int MinVersion { get; init; } = 1;
+
+    /// <summary>The highest <see cref="ActionInvocation.HandlerVersion"/> the rule's handler reads.</summary>
+    public int MaxVersion { get; init; } = 1;
+
+    /// <summary>
+    /// Position in the chain — lower runs first; between two rules claiming the same key and
+    /// version the lower order wins, and an EQUAL order is
+    /// <see cref="ActionOutcomeStatus.AmbiguousHandler"/>. Explicit and durable — never registration,
+    /// load or query order.
+    /// </summary>
+    public int Order { get; init; }
+
+    /// <summary>
+    /// The mesh path of the node that acts for this rule — the handler's own typed node, whose page
+    /// is the review page a recipient is sent to (<see cref="IActionHandler.Prepare"/> answers
+    /// <see cref="ActionOutcomeStatus.Ready"/> with a navigation to it). That page re-validates the
+    /// domain from current state and is where the person confirms; whatever changes is changed there
+    /// through <c>GetMeshNodeStream(path).Update(…)</c>.
+    ///
+    /// <para>🚨 It must lie in the rule's OWN partition (its first path segment): a rule routes a key
+    /// only into the content of whoever wrote it. A rule that names a node elsewhere, or no node, is
+    /// refused at binding and reported (<see cref="ActionHandlerRules.Bind"/>) — never silently
+    /// skipped.</para>
+    /// </summary>
+    public string Handler { get; init; } = string.Empty;
+
+    /// <summary>Whether completing the action changes anything (<see cref="ActionHandlerCapability.Mutates"/>).</summary>
+    public bool Mutates { get; init; }
+
+    /// <summary>
+    /// The capabilities the rule's handler offers on this portal
+    /// (<see cref="ActionHandlerCapability.Capabilities"/>) — <see cref="ActionCapabilities"/> words
+    /// or the author's own.
+    /// </summary>
+    public ImmutableArray<string> Capabilities { get; init; } = [];
+
+    /// <summary>
+    /// The caption of the navigation to <see cref="Handler"/>, as the rule's author wrote it —
+    /// authored content, rendered as authored. Empty falls back to the handler path, an identifier.
+    /// </summary>
+    public string Label { get; init; } = string.Empty;
+
+    /// <summary>The author's own catalog key that renders <see cref="Label"/> in the viewer's language, or null.</summary>
+    public string? LabelKey { get; init; }
+
+    /// <summary>A disabled rule claims nothing, and a deployment may disable one without a build.</summary>
+    public bool Enabled { get; init; } = true;
+}
+
+/// <summary>
+/// A rule node the chain could not use, and why — reported, never dropped in silence.
+/// </summary>
+/// <param name="Path">The rule node's path.</param>
+/// <param name="Reason">An identifier for operators and logs: <c>UnreadableContent</c>, <c>NoHandler</c>, <c>HandlerOutsidePartition</c>, <c>UnsafeHandler</c>.</param>
+public sealed record RejectedActionHandlerRule(string Path, string Reason);
+
+/// <summary>
+/// The chain as one snapshot of the mesh's rule nodes: the handlers it binds, in no implied order
+/// (<see cref="ActionHandlerCapability.Order"/> decides), and the rules it refused.
+/// </summary>
+public sealed record ActionHandlerChain
+{
+    /// <summary>The handlers bound from enabled, well-formed rules — one per claimed key.</summary>
+    public ImmutableArray<IActionHandler> Handlers { get; init; } = [];
+
+    /// <summary>How many rule nodes the snapshot held, enabled or not.</summary>
+    public int RulesRead { get; init; }
+
+    /// <summary>The rules that could not be bound, each with its reason.</summary>
+    public ImmutableArray<RejectedActionHandlerRule> Rejected { get; init; } = [];
+
+    /// <summary>
+    /// Resolves <paramref name="invocation"/> over <see cref="Handlers"/>
+    /// (<see cref="ActionHandlerResolution.Resolve"/>). An UNCLAIMED key is the chain's loud
+    /// terminal: the <see cref="ActionOutcomeStatus.UnknownHandler"/> outcome's
+    /// <see cref="ActionOutcome.Detail"/> says how many rules were read and names every rule that was
+    /// refused, so "nothing claims it" and "the rule that would have claimed it is broken" read
+    /// differently. Pure.
+    /// </summary>
+    /// <param name="invocation">The invocation to resolve.</param>
+    /// <returns>The resolution.</returns>
+    public ActionHandlerResolution Resolve(ActionInvocation invocation)
+    {
+        var resolution = ActionHandlerResolution.Resolve(Handlers, invocation);
+        if (resolution.Outcome.Status != ActionOutcomeStatus.UnknownHandler)
+            return resolution;
+        var refused = Rejected.IsDefaultOrEmpty
+            ? string.Empty
+            : "; refused: " + string.Join(", ", Rejected.Select(r => $"{r.Path} ({r.Reason})"));
+        return resolution with
+        {
+            Outcome = resolution.Outcome with
+            {
+                Detail = $"no enabled rule claims it ({RulesRead} rule(s) read{refused})",
+            },
+        };
+    }
+}
+
+/// <summary>
+/// Binds rule nodes into the handler chain. Pure — the live mesh read lives beside the node type
+/// (<c>ActionHandlerRuleExtensions.ActionHandlerChain</c> in <c>MeshWeaver.Graph</c>), so the same
+/// verdict comes from a test's list of rules and from a running portal.
+/// </summary>
+public static class ActionHandlerRules
+{
+    /// <summary>The handler path does not resolve to a node in the rule's own partition.</summary>
+    public const string HandlerOutsidePartition = "HandlerOutsidePartition";
+
+    /// <summary>The rule names no handler node.</summary>
+    public const string NoHandler = "NoHandler";
+
+    /// <summary>The handler path would not make a local target.</summary>
+    public const string UnsafeHandler = "UnsafeHandler";
+
+    /// <summary>The rule node's content does not read as an <see cref="ActionHandlerRule"/>.</summary>
+    public const string UnreadableContent = "UnreadableContent";
+
+    /// <summary>
+    /// Binds every enabled, well-formed rule into one handler per claimed key, and reports every
+    /// rule that cannot be bound. A disabled rule is neither bound nor refused.
+    /// </summary>
+    /// <param name="rules">Each rule node's path and its content, or null when the content did not read.</param>
+    /// <returns>The chain.</returns>
+    public static ActionHandlerChain Bind(IEnumerable<(string Path, ActionHandlerRule? Rule)> rules)
+    {
+        ArgumentNullException.ThrowIfNull(rules);
+        var handlers = ImmutableArray.CreateBuilder<IActionHandler>();
+        var rejected = ImmutableArray.CreateBuilder<RejectedActionHandlerRule>();
+        var read = 0;
+        foreach (var (path, rule) in rules)
+        {
+            read++;
+            if (rule is null)
+            {
+                rejected.Add(new(path, UnreadableContent));
+                continue;
+            }
+            if (!rule.Enabled)
+                continue;
+            var refusal = Refusal(path, rule);
+            if (refusal is not null)
+            {
+                rejected.Add(new(path, refusal));
+                continue;
+            }
+            foreach (var key in (rule.Claims.IsDefault ? [] : rule.Claims)
+                         .Where(k => !string.IsNullOrWhiteSpace(k))
+                         .Distinct(StringComparer.Ordinal))
+                handlers.Add(new RuleBoundActionHandler(path, rule, key));
+        }
+        return new ActionHandlerChain
+        {
+            Handlers = handlers.ToImmutable(),
+            RulesRead = read,
+            Rejected = rejected.ToImmutable(),
+        };
+    }
+
+    /// <summary>The navigation target for a rule's handler node, carrying the link followed.</summary>
+    /// <param name="handler">The handler node's path.</param>
+    /// <param name="linkId">The link the recipient followed, or null.</param>
+    /// <returns>A path on this site.</returns>
+    public static string Target(string handler, string? linkId)
+    {
+        var target = "/" + handler.Trim().Trim('/');
+        return string.IsNullOrEmpty(linkId) ? target : $"{target}?link={Uri.EscapeDataString(linkId)}";
+    }
+
+    private static string? Refusal(string path, ActionHandlerRule rule)
+    {
+        if (string.IsNullOrWhiteSpace(rule.Handler))
+            return NoHandler;
+        if (!ActivityActionReference.IsLocalTarget(Target(rule.Handler, null)))
+            return UnsafeHandler;
+        return string.Equals(Partition(path), Partition(rule.Handler), StringComparison.Ordinal)
+            ? null
+            : HandlerOutsidePartition;
+    }
+
+    private static string Partition(string path)
+    {
+        var trimmed = path.Trim().Trim('/');
+        var slash = trimmed.IndexOf('/');
+        return slash < 0 ? trimmed : trimmed[..slash];
+    }
+
+    /// <summary>
+    /// A handler declared by a rule node. Validate is the structural check; Prepare sends the
+    /// recipient to the rule's handler node, whose page re-validates the domain and is where the
+    /// person confirms. Read-only — it touches nothing.
+    /// </summary>
+    private sealed class RuleBoundActionHandler(string rulePath, ActionHandlerRule rule, string key) : IActionHandler
+    {
+        public ActionHandlerCapability Capability { get; } = new()
+        {
+            HandlerKey = key,
+            MinVersion = rule.MinVersion,
+            MaxVersion = rule.MaxVersion,
+            Order = rule.Order,
+            Mutates = rule.Mutates,
+            Capabilities = rule.Capabilities.IsDefault ? [] : rule.Capabilities,
+        };
+
+        public IObservable<ActionOutcome> Prepare(ActionInvocation invocation, ActionRecipientContext context) =>
+            Observable.Defer(() =>
+            {
+                var target = Target(rule.Handler, context.LinkId);
+                if (!ActivityActionReference.IsLocalTarget(target))
+                    return Observable.Return(ActionOutcome.Of(ActionOutcomeStatus.Failed, invocation,
+                        $"rule {rulePath}: the link id does not make a local target"));
+                return Observable.Return(ActionOutcome.Of(ActionOutcomeStatus.Ready, invocation) with
+                {
+                    Navigation = new ActivityActionReference
+                    {
+                        Id = "review",
+                        Label = string.IsNullOrWhiteSpace(rule.Label) ? rule.Handler.Trim().Trim('/') : rule.Label,
+                        LabelKey = rule.LabelKey,
+                        Target = target,
+                        HandlerKey = invocation.HandlerKey,
+                        HandlerVersion = invocation.HandlerVersion,
+                    },
+                });
+            });
+
+        public override string ToString() => $"{rulePath} → {key}";
+    }
+}

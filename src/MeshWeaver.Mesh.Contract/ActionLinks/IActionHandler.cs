@@ -1,13 +1,17 @@
 using System.Reactive.Linq;
-using MeshWeaver.Messaging;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.ActionLinks;
 
 /// <summary>
 /// The domain side of a published action: the one thing that knows what an
-/// <see cref="ActionInvocation"/> with its key MEANS. A module registers a handler; a publisher
-/// resolves it by key and version and never learns the domain.
+/// <see cref="ActionInvocation"/> with its key MEANS. A publisher resolves it by key and version and
+/// never learns the domain.
+///
+/// <para>🚨 <b>On a portal a handler is DECLARED as a mesh node, never registered as a service.</b>
+/// Every handler a portal resolves comes from an <see cref="ActionHandlerRule"/> node, read live from
+/// the mesh (<see cref="ActionHandlerRules.Bind"/>), so content the mesh compiles — a package that is
+/// not a compiled module — contributes one by writing a node. This interface is what the pure
+/// <see cref="ActionHandlerResolution.Resolve"/> chooses among; the rule binding implements it.</para>
 ///
 /// <para>🚨 <b>There is no "execute" member, and that is the contract.</b> A handler validates a
 /// publication and prepares a recipient — both READ-ONLY — and answers where the person goes next.
@@ -82,18 +86,20 @@ public sealed record ActionHandlerResolution
     /// <summary>
     /// Chooses the handler for <paramref name="invocation"/> among <paramref name="handlers"/>, by
     /// key and version, and fails CLOSED with a named outcome otherwise. Pure — it reads nothing
-    /// but its arguments, so the same verdict comes from a dependency-injection container, a list
-    /// a test builds, or any other registry.
+    /// but its arguments, so the same verdict comes from the live rule chain, a list a test builds,
+    /// or any other source.
     ///
     /// <para>In order: a foreign envelope version is
     /// <see cref="ActionOutcomeStatus.UnsupportedContract"/>; no handler under the key is
     /// <see cref="ActionOutcomeStatus.UnknownHandler"/>; a key match that does not read the version
     /// is <see cref="ActionOutcomeStatus.UnsupportedVersion"/> (the detail lists what IS
-    /// supported); two handlers claiming the same key and version is
-    /// <see cref="ActionOutcomeStatus.AmbiguousHandler"/> — neither is picked by registration
-    /// order; a missing required capability is <see cref="ActionOutcomeStatus.MissingCapability"/>.</para>
+    /// supported); among the handlers that read the key and version the LOWEST
+    /// <see cref="ActionHandlerCapability.Order"/> is chosen, and two sharing that lowest order is
+    /// <see cref="ActionOutcomeStatus.AmbiguousHandler"/> — neither is picked by registration or
+    /// list order; a missing required capability on the chosen handler is
+    /// <see cref="ActionOutcomeStatus.MissingCapability"/>.</para>
     /// </summary>
-    /// <param name="handlers">Every handler registered on this portal.</param>
+    /// <param name="handlers">Every handler on this portal — on a live mesh, the chain bound from its rule nodes.</param>
     /// <param name="invocation">The invocation to resolve.</param>
     /// <returns>The resolution.</returns>
     public static ActionHandlerResolution Resolve(IEnumerable<IActionHandler> handlers, ActionInvocation invocation)
@@ -119,46 +125,17 @@ public sealed record ActionHandlerResolution
             return Unresolved(ActionOutcome.Of(ActionOutcomeStatus.UnsupportedVersion, invocation,
                 "supported " + string.Join(", ",
                     keyed.Select(x => $"{x.Capability.MinVersion}..{x.Capability.MaxVersion}"))));
-        if (versioned.Length > 1)
+        var first = versioned.Min(x => x.Capability.Order);
+        var chosen = versioned.Where(x => x.Capability.Order == first).ToArray();
+        if (chosen.Length > 1)
             return Unresolved(ActionOutcome.Of(ActionOutcomeStatus.AmbiguousHandler, invocation,
-                $"{versioned.Length} handlers claim this key and version"));
+                $"{chosen.Length} handlers claim this key and version at order {first}"));
 
-        var outcome = versioned[0].Capability.Supports(invocation);
+        var outcome = chosen[0].Capability.Supports(invocation);
         return outcome.Status == ActionOutcomeStatus.Ready
-            ? new ActionHandlerResolution { Handler = versioned[0].Handler, Outcome = outcome }
+            ? new ActionHandlerResolution { Handler = chosen[0].Handler, Outcome = outcome }
             : Unresolved(outcome);
     }
 
     private static ActionHandlerResolution Unresolved(ActionOutcome outcome) => new() { Outcome = outcome };
-}
-
-/// <summary>
-/// How a caller reaches the action handlers registered on this mesh — the ONE resolve, so no
-/// publisher names an implementation and every one of them answers "no such handler here" the same
-/// way.
-/// </summary>
-public static class HubActionExtensions
-{
-    /// <summary>
-    /// Every <see cref="IActionHandler"/> registered in this mesh's services. Empty on a portal
-    /// that mounts no module contributing one — an ordinary, supported configuration in which every
-    /// invocation resolves to <see cref="ActionOutcomeStatus.UnknownHandler"/>.
-    /// </summary>
-    /// <param name="hub">The hub whose services are read.</param>
-    /// <returns>The registered handlers.</returns>
-    public static IReadOnlyCollection<IActionHandler> ActionHandlers(this IMessageHub hub)
-    {
-        ArgumentNullException.ThrowIfNull(hub);
-        return [.. hub.ServiceProvider.GetServices<IActionHandler>()];
-    }
-
-    /// <summary>
-    /// The handler registered for <paramref name="invocation"/> on this mesh, or the named outcome
-    /// that says why there is none (<see cref="ActionHandlerResolution.Resolve"/>).
-    /// </summary>
-    /// <param name="hub">The hub whose services are read.</param>
-    /// <param name="invocation">The invocation to resolve.</param>
-    /// <returns>The resolution.</returns>
-    public static ActionHandlerResolution ResolveActionHandler(this IMessageHub hub, ActionInvocation invocation) =>
-        ActionHandlerResolution.Resolve(hub.ActionHandlers(), invocation);
 }

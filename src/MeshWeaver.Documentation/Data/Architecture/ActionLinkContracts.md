@@ -25,7 +25,7 @@ coupon and no payment behaviour: those belong to the modules that consume the co
 A module that knows a domain (a store's coupon handler) and a module that publishes links and
 resumes sign-in must not depend on each other in both directions. Each depends on the neutral
 record instead: the domain module **emits** an `ActionInvocation`, the publisher **stores** it, and
-the registered `IActionHandler` for its key **interprets** it.
+the handler the portal's **rule chain** names for its key **interprets** it.
 
 It is in `MeshWeaver.Mesh.Contract` for the reason the
 [payment provider contract](../PaymentProviderContract) is: content compiled inside the mesh has to
@@ -67,15 +67,77 @@ registry.
 |---|---|
 | `Ready` | exactly one handler reads this key and version and offers every required capability |
 | `UnsupportedContract` | the envelope was written by a newer contract than this build reads |
-| `UnknownHandler` | nothing is registered under the key — including on a portal that mounts no handler at all |
+| `UnknownHandler` | no enabled rule claims the key — including on a portal with no rules at all; the detail names the rules read and refused |
 | `UnsupportedVersion` | a handler has the key but not the version; the detail lists what is supported |
-| `AmbiguousHandler` | two handlers claim the same key and version; neither is picked by registration order |
+| `AmbiguousHandler` | two handlers claim the same key and version at the same `Order`; neither is picked by list order |
 | `MissingCapability` | the handler lacks a required capability; the detail names it |
 
 A publisher asks **before** it publishes, so an advertised link never depends on a module that
 merely happens to be loaded, and a recipient who follows an old link gets a named outcome rather
-than a blank page. `hub.ResolveActionHandler(invocation)` is the same resolution over the handlers
-registered in the mesh's services.
+than a blank page. Among handlers that read the key and version, the **lowest
+`ActionHandlerCapability.Order`** is chosen; two sharing that lowest order are ambiguous.
+
+## Handlers are rule nodes in the mesh
+
+🚨 **A portal's handlers are DECLARED as `ActionHandlerRule` nodes, never registered as services**
+— policy [`open-vocabulary-string-constants`](../PolicyNotProse), the resolution shape of
+[Open Vocabularies Are String Constants](../OpenVocabulariesAsStringConstants). The package that
+motivated it is the store: it is content the mesh **compiles**, not a compiled module, so it cannot
+put an `IActionHandler` into the root service container. It can write a node.
+
+```json
+{
+  "$type": "ActionHandlerRule",
+  "claims": ["store.coupon-journey"],
+  "minVersion": 1,
+  "maxVersion": 1,
+  "order": 100,
+  "handler": "Store/Coupons/Review",
+  "capabilities": ["PaymentMethodSetup"],
+  "mutates": true,
+  "label": "Review the offer"
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `Claims` | the handler keys the rule claims — the author's **own** identifiers, compared ordinally |
+| `MinVersion` / `MaxVersion` | the payload versions the handler reads |
+| `Order` | lower runs first; between two rules claiming the same key and version the lower wins, an equal order is `AmbiguousHandler` — never registration, load or query order |
+| `Handler` | the handler's own node, **in the rule's own partition**; its page is the review page |
+| `Capabilities` / `Mutates` | what the handler offers and whether completing it changes anything |
+| `Label` / `LabelKey` | the caption of the navigation, as authored |
+| `Enabled` | a disabled rule claims nothing; a deployment disables one without a build |
+
+How it is read and resolved:
+
+- **Live.** `hub.ActionHandlerChain()` is one synced query over every `ActionHandlerRule` node,
+  read as System (which handler acts for a key is platform configuration, never a function of who
+  asks), re-emitted whenever a rule changes. A rule written while the portal runs is used by the next
+  resolution — **no recycle**. `hub.ResolveActionHandler(invocation)` resolves over the current
+  chain; it is cold and emits once.
+- **Pure underneath.** `ActionHandlerRules.Bind(rules)` turns rule nodes into one handler per
+  claimed key and `ActionHandlerResolution.Resolve(handlers, invocation)` chooses among them; neither
+  reads anything but its arguments, so a test's list and a running portal give the same verdict.
+- **Platform handlers are ordinary rules.** There is no earlier pass, no built-in fast path and no
+  service fallback.
+- 🚨 **The terminal is loud.** An unclaimed key resolves to `UnknownHandler` whose detail says how
+  many rules were read and names every rule that was **refused** (`UnreadableContent`, `NoHandler`,
+  `UnsafeHandler`, `HandlerOutsidePartition`), and it is logged at Warning. A broken rule therefore
+  fails *as unclaimed, by name* — it is never skipped in silence.
+- 🚨 **A rule routes only into its own partition.** Rules are authored wherever their package lives,
+  so the read is mesh-wide; a rule whose `Handler` lies outside the rule's own first path segment is
+  refused. Writing a rule needs Create in that partition, under its ordinary access rules.
+
+**What a rule-bound handler does.** `Validate` is the structural check. `Prepare` answers `Ready`
+with a navigation to `/{Handler}?link={linkId}` — the handler node's page, which re-validates the
+domain from current state (the offer exists, the recipient is eligible, the recipient already
+finished) and is where the person confirms. It is read-only like every `Prepare`.
+
+**Not in this stage:** a rule whose `Handler` is a **Code node** the backend compiles and calls for
+`Prepare`. The policy allows it; core has no existing pattern that loads a handler type from a Code
+node into a call, so stage 1a does not invent one — the domain logic sits behind the handler node's
+own page instead, which mesh-compiled content already serves.
 
 `ActionOutcomeStatus` is an **open vocabulary** of string constants (policy
 [`open-vocabulary-string-constants`](../PolicyNotProse)): a handler may answer a word of its own.

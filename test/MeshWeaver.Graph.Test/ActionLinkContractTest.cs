@@ -30,11 +30,14 @@ public class ActionLinkContractTest
 
     private sealed class Handler(string key, int min = 1, int max = 1, params string[] capabilities) : IActionHandler
     {
-        public ActionHandlerCapability Capability { get; } = new()
+        public int Order { get; init; }
+
+        public ActionHandlerCapability Capability => new()
         {
             HandlerKey = key,
             MinVersion = min,
             MaxVersion = max,
+            Order = Order,
             Capabilities = [.. capabilities],
         };
 
@@ -175,13 +178,121 @@ public class ActionLinkContractTest
     }
 
     [Fact]
-    public void TwoHandlersClaimingOneKeyAndVersion_IsAmbiguous_AndNeitherIsPickedByOrder()
+    public void TwoHandlersClaimingOneKeyAndVersion_AtEqualOrder_IsAmbiguous_AndNeitherIsPickedByListOrder()
     {
         var resolution = ActionHandlerResolution.Resolve(
-            [new Handler("store.coupon-journey"), new Handler("store.coupon-journey")], Invocation());
+            [new Handler("store.coupon-journey") { Order = 5 }, new Handler("store.coupon-journey") { Order = 5 }],
+            Invocation());
 
         resolution.Handler.Should().BeNull();
         resolution.Outcome.Status.Should().Be(ActionOutcomeStatus.AmbiguousHandler);
+        resolution.Outcome.Detail.Should().Contain("order 5");
+    }
+
+    [Fact]
+    public void TwoHandlersClaimingOneKeyAndVersion_TheLowerOrderWins_WhicheverComesFirstInTheList()
+    {
+        var first = new Handler("store.coupon-journey") { Order = 10 };
+        var second = new Handler("store.coupon-journey") { Order = 20 };
+
+        ActionHandlerResolution.Resolve([first, second], Invocation()).Handler.Should().BeSameAs(first);
+        ActionHandlerResolution.Resolve([second, first], Invocation()).Handler.Should().BeSameAs(first,
+            "the chain is ordered by the declared Order, never by the order rules were read in");
+    }
+
+    [Fact]
+    public void ALowerOrderHandlerForAnotherVersion_DoesNotShadowTheOneThatReadsTheVersion()
+    {
+        var v1First = new Handler("store.coupon-journey", 1, 1) { Order = 1 };
+        var v2Later = new Handler("store.coupon-journey", 2, 2) { Order = 50 };
+
+        ActionHandlerResolution.Resolve([v1First, v2Later], Invocation(version: 2)).Handler.Should().BeSameAs(v2Later);
+    }
+
+    // ── Rule binding: the chain is rule nodes ───────────────────────────────────────────────────
+
+    [Fact]
+    public void ARule_BindsOneHandlerPerClaimedKey_CarryingItsOrderVersionsAndCapabilities()
+    {
+        var chain = ActionHandlerRules.Bind(
+        [
+            ("Store/ActionHandlers/coupon", new ActionHandlerRule
+            {
+                Claims = ["store.coupon-journey", "store.coupon-preview", "store.coupon-journey"],
+                MinVersion = 1,
+                MaxVersion = 3,
+                Order = 7,
+                Handler = "Store/Coupons/Review",
+                Capabilities = [ActionCapabilities.PaymentMethodSetup],
+                Mutates = true,
+            }),
+        ]);
+
+        chain.RulesRead.Should().Be(1);
+        chain.Rejected.Should().BeEmpty();
+        chain.Handlers.Select(h => h.Capability.HandlerKey).OrderBy(k => k, StringComparer.Ordinal).ToArray().Should()
+            .Equal(["store.coupon-journey", "store.coupon-preview"], "a duplicate claim binds once");
+        var bound = chain.Handlers.First().Capability;
+        bound.Order.Should().Be(7);
+        bound.MaxVersion.Should().Be(3);
+        bound.Mutates.Should().BeTrue();
+        bound.Capabilities.Should().Equal(ActionCapabilities.PaymentMethodSetup);
+    }
+
+    [Fact]
+    public void ADisabledRule_ClaimsNothing_AndIsNotReportedAsBroken()
+    {
+        var chain = ActionHandlerRules.Bind(
+            [("Store/ActionHandlers/coupon", new ActionHandlerRule { Claims = ["k"], Handler = "Store/R", Enabled = false })]);
+
+        chain.Handlers.Should().BeEmpty();
+        chain.Rejected.Should().BeEmpty();
+        chain.Resolve(Invocation("k")).Outcome.Status.Should().Be(ActionOutcomeStatus.UnknownHandler);
+    }
+
+    [Theory]
+    [InlineData("", ActionHandlerRules.NoHandler)]
+    [InlineData("Elsewhere/Review", ActionHandlerRules.HandlerOutsidePartition)]
+    [InlineData("Store/\\evil", ActionHandlerRules.UnsafeHandler)]
+    public void ABrokenRule_IsRefusedByName_AndTheUnclaimedKeySaysWhichRuleBroke(string handler, string reason)
+    {
+        var chain = ActionHandlerRules.Bind(
+        [
+            ("Store/ActionHandlers/coupon", new ActionHandlerRule { Claims = ["store.coupon-journey"], Handler = handler }),
+            ("Store/ActionHandlers/unreadable", null),
+        ]);
+
+        chain.Handlers.Should().BeEmpty();
+        chain.Rejected.Should().Equal(
+            new RejectedActionHandlerRule("Store/ActionHandlers/coupon", reason),
+            new RejectedActionHandlerRule("Store/ActionHandlers/unreadable", ActionHandlerRules.UnreadableContent));
+        var outcome = chain.Resolve(Invocation()).Outcome;
+        outcome.Status.Should().Be(ActionOutcomeStatus.UnknownHandler, "a broken rule fails loudly AS unclaimed");
+        outcome.Detail.Should().Contain("2 rule(s) read").And.Contain($"Store/ActionHandlers/coupon ({reason})");
+    }
+
+    [Fact]
+    public void ARuleBoundHandler_PreparesANavigationToItsHandlerNode_CarryingTheLink()
+    {
+        var chain = ActionHandlerRules.Bind(
+        [
+            ("Store/ActionHandlers/coupon", new ActionHandlerRule
+            {
+                Claims = ["store.coupon-journey"], Handler = "Store/Coupons/Review", Label = "Review the offer",
+            }),
+        ]);
+        var resolution = chain.Resolve(Invocation());
+        resolution.Outcome.Status.Should().Be(ActionOutcomeStatus.Ready);
+
+        var context = new ActionRecipientContext { Recipient = "alice", Site = Site, LinkId = "6f1c2d3e" };
+        ActionOutcome? prepared = null;
+        using (resolution.Handler!.Prepare(Invocation(), context).Subscribe(o => prepared = o)) { }
+        var outcome = prepared!;
+
+        outcome.Status.Should().Be(ActionOutcomeStatus.Ready);
+        outcome.Navigation!.Target.Should().Be("/Store/Coupons/Review?link=6f1c2d3e");
+        outcome.Navigation.Label.Should().Be("Review the offer");
+        outcome.Navigation.IsAvailable.Should().BeTrue();
     }
 
     [Fact]
