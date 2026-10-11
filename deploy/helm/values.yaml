@@ -188,6 +188,17 @@ pluginCatalog:
   # A repoPath may be a URL (needs the GitHub App identity) OR an absolute LOCAL path that exists
   # INSIDE the container — see localRepoMounts below, which is how a local-dev registry serves
   # plugins with no GitHub credential at all.
+  #
+  # A source may name its OWN credential, by reference (never a value):
+  #   tokenKey: PluginCatalog:SourceTokens:<name>  — the configuration key the repository's token is
+  #     read from; deliver the value from the vault with a keyVaultSecrets entry
+  #     {vaultSecret: <vault object>, key: PluginCatalog__SourceTokens__<name>}. A declared key that
+  #     is empty at run time REFUSES the repository by name — no fallback to the App, none to
+  #     anonymous.
+  #   installationOwner: <org-or-user>  — the account whose installation of the instance's GitHub
+  #     App reads the repository (one App installed on several organisations).
+  # Neither → the instance's own App installation, as before. State one, not both.
+  #   sources: [{name: Extensions, repoPath: https://github.com/Northwind/extensions, tokenKey: "PluginCatalog:SourceTokens:Extensions"}]
   sources: []
   # REGISTRY (local/dev): host directories to mount so `sources` can point at a local checkout —
   # [{name, hostPath, mountPath}]. Only meaningful where the node's filesystem is the developer's
