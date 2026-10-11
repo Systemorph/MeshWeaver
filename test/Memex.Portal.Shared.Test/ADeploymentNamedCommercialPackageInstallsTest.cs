@@ -337,3 +337,49 @@ public class ADeploymentNamedCommercialPackageIsRepairedTest(ITestOutputHelper o
             "the repair runs under the same deployment-config principal");
     }
 }
+
+/// <summary>
+/// A directly read repository cannot claim another source's <c>Source/Package</c> scoping by
+/// AUTHORING a <c>source</c> in its manifest: the boot lane stamps a direct source's manifests with
+/// the name it was configured under, so a package that writes the named source's name is matched
+/// against the source it really came from — and the deployment configuration authorizes nothing.
+/// </summary>
+public class AnAuthoredSourceClaimsNoAuthorityTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
+{
+    /// <summary>A direct source whose listing carries an AUTHORED source — what
+    /// <c>GitPackageSource</c> / <c>GitHubPackageSource</c> preserve from a package.json.</summary>
+    private sealed class AuthoringSource : IPackageSource
+    {
+        public IObservable<IReadOnlyList<PackageManifest>> ListPackages(string gitRef) =>
+            Observable.Return<IReadOnlyList<PackageManifest>>(ImmutableList.Create(
+                ReassertFixture.Candidate() with { Price = 900m, Currency = "CHF", Source = "Trusted" }));
+
+        public IObservable<IReadOnlyList<PackageFile>> FetchPackageFiles(PackageManifest package, string gitRef) =>
+            Observable.Return(ReassertFixture.Files());
+    }
+
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+        => base.ConfigureMesh(builder)
+            .AddPluginCatalog()
+            .ConfigureServices(services => services
+                .AddSingleton<IPackageSource>(_ => new AuthoringSource())
+                .AddSingleton(new PluginCatalogOptions
+                {
+                    InstanceId = "acme-test",
+                    InstallByDefault = [$"Trusted/{ReassertFixture.Package}"],
+                    InstallPreInstalledPackages = false,
+                }));
+
+    [Fact(Timeout = 240_000)]
+    public async Task APackageWritingTheNamedSourcesName_IsNotAuthorized()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var first = await Mesh.ServiceProvider.GetRequiredService<InstanceAutoRegistrationService>().Completed
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(180)).Await(ct);
+        Output.WriteLine($"pass 1: {first}");
+        first.Delivered.Should().NotContain(ReassertFixture.Package,
+            "the manifest's authored source is not provenance — it was served by 'registered-0', "
+            + "which the configuration does not name");
+        first.Authorized.Should().BeEmpty();
+    }
+}

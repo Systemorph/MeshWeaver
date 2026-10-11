@@ -1407,11 +1407,15 @@ public sealed class InstanceAutoRegistrationService(
                 // pulls a commercial package in. Installing grants nobody access — the plan and the
                 // subscriptions decide who reads it.
                 var catalogPackages = catalog.Select(c => c.Package).ToImmutableList();
-                var named = selected.Where(IsNamed).Select(c => c.Package).ToImmutableList();
-                var namedRequirements = ConfigAuthorizedRequirements(catalogPackages, named);
+                var trustedPackages = catalog.Where(ProvenanceIsTrusted).Select(c => c.Package).ToImmutableList();
+                // Only a candidate whose source is PROVEN may carry the configuration's authority
+                // (ProvenanceIsTrusted): a manifest a direct repository lists can AUTHOR any
+                // `source`, and must not borrow another configured source's Source/Package naming.
+                var named = selected.Where(c => IsNamed(c) && ProvenanceIsTrusted(c)).Select(c => c.Package).ToImmutableList();
+                var namedRequirements = ConfigAuthorizedRequirements(trustedPackages, named);
                 // Admitted keyed by SOURCE and id (the catalog stamps every listed manifest's
                 // source), so the gate never authorizes the same id listed by another source.
-                var bySourceId = catalogPackages.ToImmutableDictionary(p => p.Id, p => p.Source ?? "", StringComparer.Ordinal);
+                var bySourceId = trustedPackages.ToImmutableDictionary(p => p.Id, p => p.Source ?? "", StringComparer.Ordinal);
                 hub.ServiceProvider.GetService<DeploymentConfigAuthority>()?.Admit(namedRequirements
                     .Where(kv => bySourceId.TryGetValue(kv.Key, out var src) && src.Length > 0)
                     .ToImmutableDictionary(
@@ -1422,7 +1426,8 @@ public sealed class InstanceAutoRegistrationService(
                     .Concat(namedRequirements.Keys)
                     .ToImmutableHashSet(StringComparer.Ordinal);
                 string? ConfigAuthority(InstallCandidate c) =>
-                    IsNamed(c)
+                    !ProvenanceIsTrusted(c) ? null
+                    : IsNamed(c)
                         ? $"named in PluginCatalog:InstallByDefault as '{wanted.First(w => w.PackageId != PluginGrantEntry.AllPackages && w.Matches(c.Package.Source ?? "", c.Package.Id))}'"
                         : namedRequirements.TryGetValue(c.Package.Id, out var root)
                             ? $"required by '{root}', which PluginCatalog:InstallByDefault names"
@@ -1829,6 +1834,20 @@ public sealed class InstanceAutoRegistrationService(
             .OrderBy(p => p.Id, StringComparer.Ordinal)
             .ToList();
     }
+
+    /// <summary>
+    /// Whether <paramref name="candidate"/>'s <see cref="PackageManifest.Source"/> is PROVENANCE
+    /// rather than an authored claim: a registry stamps the source at its own boundary from its
+    /// configured sources, and any other source's manifest is trusted only where its source IS the
+    /// name that source was configured under (the lister stamps that name on every manifest that
+    /// authors none). A directly read repository whose manifest authors ANOTHER source's name gets
+    /// no deployment-configuration authority — it could otherwise claim that source's
+    /// <c>Source/Package</c> entry (policy <c>deployment-config-authorizes-named-commercial</c>).
+    /// Selection itself is unchanged; only the authority is withheld. Pure.
+    /// </summary>
+    private static bool ProvenanceIsTrusted(InstallCandidate candidate) =>
+        candidate.Source.Source is RegistryPackageSource
+        || string.Equals(candidate.Package.Source, candidate.Source.Name, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Every package REQUIRED — directly or transitively, through free and commercial packages
@@ -2509,8 +2528,9 @@ public sealed class InstanceAutoRegistrationService(
                         atRecordedHash.Add(candidate with
                         {
                             Reconciled = true,
-                            ConfigAuthority = hub.ServiceProvider.GetService<DeploymentConfigAuthority>()
-                                ?.Because(candidate.Package),
+                            ConfigAuthority = ProvenanceIsTrusted(candidate)
+                                ? hub.ServiceProvider.GetService<DeploymentConfigAuthority>()?.Because(candidate.Package)
+                                : null,
                         });
                     }
                     if (atRecordedHash.Count == 0)
