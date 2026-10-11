@@ -210,6 +210,30 @@ public static class PackageAssemblyProbe
             .SelectMany(dir => NativeFileNames(name).Select(file => Path.Combine(dir, file)))
             .Where(File.Exists);
 
+    /// <summary>
+    /// The probing directories a native import from <paramref name="requestingAssemblyLocation"/>
+    /// may search, for a context that accumulates several resolutions (a kernel session's
+    /// submissions): only the FIRST closure — one per <see cref="ResolvedPackageSet.ProbingDirectories"/>
+    /// — whose managed directories contain the requesting assembly. A native library that a
+    /// different resolution brought (another version under the same import name) is never offered.
+    /// Empty when the assembly came from none of them.
+    /// </summary>
+    public static ImmutableArray<string> NativeSearchDirectoriesFor(
+        string? requestingAssemblyLocation, IEnumerable<ImmutableArray<string>> closures)
+    {
+        if (string.IsNullOrEmpty(requestingAssemblyLocation)) return [];
+        var origin = Path.GetDirectoryName(requestingAssemblyLocation);
+        if (string.IsNullOrEmpty(origin)) return [];
+        // The FIRST closure that holds it, and only that one: the default context binds a managed
+        // path once, to whichever resolution asked first, so that resolution owns the assembly — and
+        // its native dependencies with it. Closures overlap routinely (each carries its whole
+        // transitive graph); merging them would offer one resolution's native version to another.
+        return closures.FirstOrDefault(closure => closure.Contains(origin, StringComparer.OrdinalIgnoreCase)) is
+            { IsDefaultOrEmpty: false } owner
+            ? owner
+            : [];
+    }
+
     /// <summary>The first of <see cref="FindNativeCandidates"/>, or <c>null</c>.</summary>
     public static string? FindNative(string name, IEnumerable<string> probingDirectories)
         => FindNativeCandidates(name, probingDirectories).FirstOrDefault();

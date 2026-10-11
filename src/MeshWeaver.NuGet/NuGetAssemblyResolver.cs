@@ -156,7 +156,7 @@ public sealed class NuGetAssemblyResolver(
             // 🚨 lib/<tfm>/ alone is NOT the runtime asset. A package may replace it per RID under
             // runtimes/<rid>/lib/<tfm>/ — and for every .NET SQL Server client the lib/ copy is the
             // "not supported on this platform" stub: a NodeType referencing Microsoft.Data.SqlClient
-            // compiled, then failed at render on linux-x64 (partnerre.meshweaver.cloud, 2026-10-11).
+            // compiled, then failed at render on linux-x64 (client-a.meshweaver.cloud, 2026-10-11).
             // Compile against lib/, LOAD the RID group, and surface runtimes/<rid>/native/ too.
             using var reader = new PackageFolderReader(installedPath);
             var assets = RuntimeAssetSelector.Select(installedPath, reader.GetFiles(), framework, ridChain);
