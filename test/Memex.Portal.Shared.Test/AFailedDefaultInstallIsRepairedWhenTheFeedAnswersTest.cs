@@ -41,6 +41,10 @@ public class AFailedDefaultInstallIsRepairedWhenTheFeedAnswersTest(ITestOutputHe
     /// <summary>Whether <c>Flaky</c>'s fetch fails. Flipped by the test; read on a pool thread.</summary>
     private volatile bool flakyFails = true;
 
+    /// <summary>Whether the source's LISTING fails — the source does not answer at all. Flipped by
+    /// the test; read on a pool thread.</summary>
+    private volatile bool listingFails;
+
     private int listings;
 
     /// <summary>How often the default-install source was LISTED — one per pass.</summary>
@@ -54,6 +58,7 @@ public class AFailedDefaultInstallIsRepairedWhenTheFeedAnswersTest(ITestOutputHe
                         (_, _, _, _) => Observable.Return(new RepoSnapshot("commit-repair", Repo)),
                         "https://github.com/acme/plugins"),
                     () => flakyFails,
+                    () => listingFails,
                     () => Interlocked.Increment(ref listings)))
                 // Registered AFTER the scenario's own options, so this is the instance resolved: the
                 // same registry, plus a default-install pattern over the flaky source.
@@ -86,13 +91,16 @@ public class AFailedDefaultInstallIsRepairedWhenTheFeedAnswersTest(ITestOutputHe
                 "Unable to read data from the transport connection: Operation canceled.",
                 new SocketException((int)SocketError.OperationAborted)));
 
-    private sealed class FlakyCatalog(NodeRepoPackageSource inner, Func<bool> fails, Action listed) : IPackageSource
+    private sealed class FlakyCatalog(
+        NodeRepoPackageSource inner, Func<bool> fails, Func<bool> listingFails, Action listed) : IPackageSource
     {
         public IObservable<IReadOnlyList<PackageManifest>> ListPackages(string gitRef)
             => Observable.Defer(() =>
             {
                 listed();
-                return inner.ListPackages(gitRef);
+                return listingFails()
+                    ? Observable.Throw<IReadOnlyList<PackageManifest>>(RegistryStall())
+                    : inner.ListPackages(gitRef);
             });
 
         public IObservable<IReadOnlyList<PackageFile>> FetchPackageFiles(PackageManifest package, string gitRef)
@@ -171,6 +179,76 @@ public class AFailedDefaultInstallIsRepairedWhenTheFeedAnswersTest(ITestOutputHe
         Listings.Should().Be(afterBoot);
     }
 
+    /// <summary>
+    /// A source that did not ANSWER its listing at boot is owed a repair: nothing failed (no package
+    /// was ever named), and the next reconcile lists it again all the same.
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task ASourceThatDidNotAnswerAtBoot_IsListedAgainByTheNextReconcile()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        listingFails = true;
+        flakyFails = false;
+        var boot = await Installer.Completed.FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        Output.WriteLine($"boot: {boot}");
+        boot.Failures.Should().BeEmpty("the premise: no package failed — the listing named none");
+        boot.ListingIncomplete.Should().BeTrue();
+        boot.SourceUnreachable.Should().BeTrue("the source did not answer; it is not held");
+        await Reconciler.BootReconciled.DefaultIfEmpty().Timeout(TestTimeouts.Convergence).Await(ct);
+        var afterBoot = Listings;
+        afterBoot.Should().Be(1);
+
+        await Reconciler.ReconcileNow().Timeout(TestTimeouts.Convergence).Await(ct);
+        Listings.Should().Be(afterBoot + 1, "an unanswered listing is repaired by listing the source again");
+
+        listingFails = false;
+        await Reconciler.ReconcileNow().Timeout(TestTimeouts.Convergence).Await(ct);
+        (await Ledger(l => l.Seeded.Contains("Flaky") && l.Seeded.Contains("Good"), ct)).Failed.Should().BeEmpty();
+        var afterRepair = Listings;
+        afterRepair.Should().Be(afterBoot + 2);
+
+        await Reconciler.ReconcileNow().Timeout(TestTimeouts.Convergence).Await(ct);
+        Listings.Should().Be(afterRepair, "a pass that left nothing undone is not repeated");
+    }
+
+    /// <summary>
+    /// 🚨 A source that is HELD stays held until the next process start: a repair pass — owed here
+    /// for another reason, the failed package — does not list it again, however often a registry
+    /// answers. The counterpart of the test above, which lists an unanswered source again.
+    ///
+    /// <para>The hold is declared through the installer's own hold path
+    /// (<c>ListingFor</c> → <c>ListAtProvenRef(configured, proven)</c> with a seal answer that holds), the one place a
+    /// hold is declared in production. The seal reader produces no holding answer on a healthy
+    /// share, so the fixture cannot stage one on disk at boot.</para>
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task AHeldSource_IsNotListedAgainByARepairPass()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await BootedWithFlakyFailed(ct);
+        var afterBoot = Listings;
+
+        var configured = new ConfiguredPackageSource(
+            Mesh.ServiceProvider.GetRequiredService<IPackageSource>(), "HEAD", SourceName);
+        var held = await Installer
+            .ListingFor(configured, new InstanceAutoRegistrationService.ProvenSource(
+                configured, "the seal is torn", "the seal is torn"))
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        held.Failed.Should().BeTrue();
+        held.Held.Should().BeTrue("a hold is typed apart from a source that did not answer");
+        held.Listed.Should().Be(0);
+        Listings.Should().Be(afterBoot, "declaring a hold lists nothing");
+
+        // The repair is owed (Flaky failed at boot) and the source would now install it.
+        flakyFails = false;
+        await Reconciler.ReconcileNow().Timeout(TestTimeouts.Convergence).Await(ct);
+        Listings.Should().Be(afterBoot, "a held source is not listed again before the next process start");
+        await Reconciler.ReconcileNow().Timeout(TestTimeouts.Convergence).Await(ct);
+        Listings.Should().Be(afterBoot);
+        (await Ledger(_ => true, ct)).Seeded.Should().NotContain("Flaky",
+            "nothing of a held source is installed mid-process");
+    }
+
     /// <summary>What counts as "left undone". Pure.</summary>
     [Fact]
     public void LeftUndone_NamesFailuresAndAnUnlistedSource_AndIsNullForACleanPass()
@@ -180,9 +258,17 @@ public class AFailedDefaultInstallIsRepairedWhenTheFeedAnswersTest(ITestOutputHe
         InstanceAutoRegistrationService.LeftUndone(
                 new DefaultInstallSummary(0, 0, 1, ["A"]) { Failures = ["Anthropic"] })
             .Should().Contain("1 package(s) failed").And.Contain("Anthropic");
-        InstanceAutoRegistrationService.LeftUndone(DefaultInstallSummary.Empty with { ListingIncomplete = true })
+        InstanceAutoRegistrationService.LeftUndone(
+                DefaultInstallSummary.Empty with { ListingIncomplete = true, SourceUnreachable = true })
             .Should().Be("a source could not be listed",
                 "a package a failed listing never named is neither failed nor installed, and is owed all the same");
+        // 🚨 A HELD source makes the listing incomplete and is NOT owed a repair: the hold releases
+        // at the next process start, so re-running the pass could only revisit a source it must not.
+        InstanceAutoRegistrationService.LeftUndone(DefaultInstallSummary.Empty with { ListingIncomplete = true })
+            .Should().BeNull("a held source does not make a later reconcile re-run the default install");
+        InstanceAutoRegistrationService.LeftUndone(
+                new DefaultInstallSummary(0, 0, 1, ["A"]) { Failures = ["Anthropic"], ListingIncomplete = true })
+            .Should().Contain("1 package(s) failed").And.NotContain("could not be listed");
     }
 
     private Task<DefaultInstallLedger> Ledger(Func<DefaultInstallLedger, bool> condition, CancellationToken ct)

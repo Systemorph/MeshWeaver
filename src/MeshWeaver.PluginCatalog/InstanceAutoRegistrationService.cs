@@ -314,18 +314,34 @@ public sealed class InstanceAutoRegistrationService(
     /// boot pass has ended.</summary>
     private volatile string? repairOwed;
 
-    /// <summary>What a pass left undone (pure): the packages it could not install, and a source it
-    /// could not list — packages a listing never named are neither failed nor installed. Null when
-    /// the pass delivered everything it selected.</summary>
+    /// <summary>What a pass left undone that a LATER pass of this process can change (pure): the
+    /// packages it could not install, and a source that did not answer its listing — packages a
+    /// listing never named are neither failed nor installed. Null when the pass delivered
+    /// everything it selected.
+    ///
+    /// <para>🚨 A source that is HELD is not on this list. A hold releases at the next process start
+    /// and nowhere else (<see cref="ListAtProvenRef(ConfiguredPackageSource)"/>), so running the
+    /// pass again cannot list it; counting it as owed would re-run the default install on every
+    /// reconcile for the life of the process, each time against a source this lane must not revisit.
+    /// It still makes the listing incomplete (<see cref="DefaultInstallSummary.ListingIncomplete"/>,
+    /// #4097) — that is a statement about what the pass SAW, not about what a retry can
+    /// repair.</para></summary>
     /// <param name="summary">The pass's outcome.</param>
     internal static string? LeftUndone(DefaultInstallSummary summary) =>
-        summary.Failed > 0 && summary.ListingIncomplete
+        summary.Failed > 0 && summary.SourceUnreachable
             ? $"{summary.Failed} package(s) failed ([{string.Join(", ", summary.Failures)}]) and a source could not be listed"
             : summary.Failed > 0
                 ? $"{summary.Failed} package(s) failed ([{string.Join(", ", summary.Failures)}])"
-                : summary.ListingIncomplete
+                : summary.SourceUnreachable
                     ? "a source could not be listed"
                     : null;
+
+    /// <summary>The sources HELD in this process, by name. A hold releases at the next process
+    /// start (<see cref="ListAtProvenRef(ConfiguredPackageSource)"/>), so every later pass of this
+    /// process — the repair pass above all — answers for such a source from here: its seal is not
+    /// read again and it is not listed. Instance state of this mesh-scoped singleton; swapped
+    /// atomically, never mutated.</summary>
+    private ImmutableHashSet<string> heldSources = ImmutableHashSet.Create<string>(StringComparer.OrdinalIgnoreCase);
 
     /// <inheritdoc />
     public Task StartAsync(CancellationToken cancellationToken)
@@ -916,7 +932,11 @@ public sealed class InstanceAutoRegistrationService(
                             .Where(c => c.Reconciled || !seeded.Contains(c.Package.Id))
                             .Where(c => !HeldForGovernedProvision(c, known, freshInstance: seeded.Count == 0))
                             .ToList())
-                        .Select(summary => summary with { ListingIncomplete = selection.ListingIncomplete }))
+                        .Select(summary => summary with
+                        {
+                            ListingIncomplete = selection.ListingIncomplete,
+                            SourceUnreachable = selection.SourceUnreachable,
+                        }))
                     .SelectMany(summary => RecordSeeded(ledger, summary).Select(_ => summary));
             }));
     }
@@ -1333,7 +1353,32 @@ public sealed class InstanceAutoRegistrationService(
     /// <summary>One pass's selection, and whether every source ANSWERED (#4097): a source whose
     /// listing failed contributes nothing, and a pass with such a source must not read its own
     /// silence as "that source refuses nothing".</summary>
-    private sealed record CandidateSelection(IReadOnlyList<InstallCandidate> Candidates, bool ListingIncomplete);
+    /// <param name="Candidates">What the pass selected.</param>
+    /// <param name="ListingIncomplete">A source contributed nothing — held, or it did not answer.</param>
+    /// <param name="SourceUnreachable">A source did not ANSWER — the half of
+    /// <paramref name="ListingIncomplete"/> a later pass of this process can change. A held source
+    /// is not counted (<see cref="LeftUndone"/>).</param>
+    private sealed record CandidateSelection(
+        IReadOnlyList<InstallCandidate> Candidates, bool ListingIncomplete, bool SourceUnreachable);
+
+    /// <summary>One source's listing: what it listed, whether it contributed nothing
+    /// (<paramref name="Failed"/>), and — when it contributed nothing — whether that is a HOLD
+    /// (<paramref name="Held"/>: released at the next process start only) rather than a source that
+    /// did not answer (retryable).</summary>
+    /// <param name="Candidates">The packages listed; empty for a failed listing.</param>
+    /// <param name="Failed">True when the source contributed nothing this pass.</param>
+    /// <param name="Held">True when <paramref name="Failed"/> is a hold, not an unanswered listing.</param>
+    private readonly record struct SourceListing(List<InstallCandidate> Candidates, bool Failed, bool Held)
+    {
+        /// <summary>A source that listed.</summary>
+        public static SourceListing Of(List<InstallCandidate> candidates) => new(candidates, false, false);
+
+        /// <summary>A source that did not answer its listing — retryable.</summary>
+        public static SourceListing Unreachable { get; } = new([], true, false);
+
+        /// <summary>A source held until the next process start.</summary>
+        public static SourceListing OnHold { get; } = new([], true, true);
+    }
 
     private IObservable<CandidateSelection> Candidates(
         IReadOnlyList<ConfiguredPackageSource> sources,
@@ -1378,6 +1423,7 @@ public sealed class InstanceAutoRegistrationService(
             .Select(answers =>
             {
                 var listingIncomplete = answers.Any(a => a.Failed);
+                var sourceUnreachable = answers.Any(a => a.Failed && !a.Held);
                 var perSource = answers.Select(a => a.Candidates).ToList();
                 var catalog = perSource
                     .SelectMany(list => list)
@@ -1511,7 +1557,7 @@ public sealed class InstanceAutoRegistrationService(
                         // baseline, a flag): such a commercial package is still skipped.
                         ConfigAuthority = ConfigAuthority(c),
                     })
-                    .ToList(), listingIncomplete);
+                    .ToList(), listingIncomplete, sourceUnreachable);
             }));
 
     /// <summary>
@@ -1566,8 +1612,25 @@ public sealed class InstanceAutoRegistrationService(
     /// <param name="configured">The source as configured.</param>
     /// <returns>The candidates listed at the proven ref, or an empty, FAILED listing for a held
     /// source; the tuple shape every other listing outcome uses.</returns>
-    private IObservable<(List<InstallCandidate> Candidates, bool Failed)> ListAtProvenRef(
+    private IObservable<SourceListing> ListAtProvenRef(
         ConfiguredPackageSource configured)
+        => Observable.Defer(() => heldSources.Contains(configured.Name)
+            ? StillHeld(configured)
+            : ListAtFreshlyProvenRef(configured));
+
+    /// <summary>A source already held in this process: answered from the hold, with no read of its
+    /// seal and no listing. The first hold said why at Warning; this is the same fact, repeated by a
+    /// later pass.</summary>
+    private IObservable<SourceListing> StillHeld(ConfiguredPackageSource configured)
+    {
+        logger.LogInformation(
+            "[DefaultInstall] {Name} was held earlier in this process and stays held until the next "
+            + "process start — its seal is not read again and it is not listed "
+            + "(Doc/Architecture/SyncRefContract).", configured.Name);
+        return Observable.Return(SourceListing.OnHold);
+    }
+
+    private IObservable<SourceListing> ListAtFreshlyProvenRef(ConfiguredPackageSource configured)
         => ProvenRef(configured)
             .Catch((Exception exception) =>
             {
@@ -1582,18 +1645,35 @@ public sealed class InstanceAutoRegistrationService(
             })
             .SelectMany(proven => ListAtProvenRef(configured, proven));
 
-    private IObservable<(List<InstallCandidate> Candidates, bool Failed)> ListAtProvenRef(
+    /// <summary>One seal answer's listing as the pass reads it — whether the source contributed
+    /// nothing, whether that is a hold, and how many packages it listed. The pin for
+    /// <c>AFailedDefaultInstallIsRepairedWhenTheFeedAnswersTest</c> (InternalsVisibleTo): it goes
+    /// through the same hold path a seal answer takes in production.</summary>
+    /// <param name="configured">The source as configured.</param>
+    /// <param name="proven">The seal's answer for it.</param>
+    /// <returns>Cold; emits once.</returns>
+    internal IObservable<(bool Failed, bool Held, int Listed)> ListingFor(
+        ConfiguredPackageSource configured, ProvenSource proven)
+        => ListAtProvenRef(configured, proven).Select(l => (l.Failed, l.Held, l.Candidates.Count));
+
+    /// <summary>The listing for one seal answer — the ONE place a hold is declared: it is recorded
+    /// for the rest of this process (<see cref="heldSources"/>) and answered as
+    /// <see cref="SourceListing.OnHold"/>, typed apart from a source that did not answer.</summary>
+    /// <param name="configured">The source as configured.</param>
+    /// <param name="proven">The seal's answer for it.</param>
+    private IObservable<SourceListing> ListAtProvenRef(
         ConfiguredPackageSource configured, ProvenSource proven)
     {
         if (proven.HoldReason is { } hold)
         {
+            ImmutableInterlocked.Update(ref heldSources, static (held, name) => held.Add(name), configured.Name);
             logger.LogWarning(
                 "[DefaultInstall] {Name} is HELD this boot — {Reason}. Its packages are not "
                 + "asserted this boot; this lane runs once per boot, so they are re-attempted at "
                 + "the next process start after the seal lands — an unattended install never "
                 + "resolves the branch instead (Doc/Architecture/SyncRefContract).",
                 configured.Name, hold);
-            return Observable.Return((Candidates: new List<InstallCandidate>(), Failed: true));
+            return Observable.Return(SourceListing.OnHold);
         }
         var source = proven.Source;
         if (!ReferenceEquals(source, configured))
@@ -1613,7 +1693,7 @@ public sealed class InstanceAutoRegistrationService(
             // The WHOLE listing is carried forward, not just the selected packages: a selected
             // package's requirements are resolved against the full catalog below, and a
             // dependency that is neither pre-installed nor pattern-matched exists only here.
-            .Select(packages => (Candidates: packages
+            .Select(packages => SourceListing.Of(packages
                 .Select(p => string.IsNullOrEmpty(p.Source) ? p with { Source = source.Name } : p)
                 .Select(p => new InstallCandidate(source, p)
                 {
@@ -1624,13 +1704,13 @@ public sealed class InstanceAutoRegistrationService(
                     // UnprovenRefHold decides what that may be written into.
                     RefIsProven = !ReferenceEquals(source, configured) || configured.LocalCheckout,
                 })
-                .ToList(), Failed: false))
+                .ToList()))
             .Catch((Exception exception) =>
             {
                 logger.LogWarning(exception,
                     "[DefaultInstall] listing {Name} @ {Ref} failed — its packages are skipped "
                     + "this boot", source.Name, source.GitRef);
-                return Observable.Return((Candidates: new List<InstallCandidate>(), Failed: true));
+                return Observable.Return(SourceListing.Unreachable);
             });
     }
 
@@ -2396,7 +2476,11 @@ public sealed class InstanceAutoRegistrationService(
                 Parse((composition ?? FeatureComposition.Empty).Included),
                 Parse((composition ?? FeatureComposition.Empty).Excluded))
             .SelectMany(selection => InstallAll(selection.Candidates)
-                .Select(summary => summary with { ListingIncomplete = selection.ListingIncomplete }));
+                .Select(summary => summary with
+                {
+                    ListingIncomplete = selection.ListingIncomplete,
+                    SourceUnreachable = selection.SourceUnreachable,
+                }));
 
     /// <summary>
     /// 🚨 <b>RE-ASSERT already-installed packages through the ONE install funnel</b> —
@@ -2462,6 +2546,7 @@ public sealed class InstanceAutoRegistrationService(
                 .SelectMany(answers =>
                 {
                     var listingIncomplete = answers.Any(a => a.Failed);
+                    var sourceUnreachable = answers.Any(a => a.Failed && !a.Held);
                     var catalog = answers
                         .SelectMany(a => a.Candidates)
                         .GroupBy(c => c.Package.Id, StringComparer.Ordinal)
@@ -2521,6 +2606,7 @@ public sealed class InstanceAutoRegistrationService(
                         return Observable.Return(DefaultInstallSummary.Empty with
                         {
                             ListingIncomplete = listingIncomplete,
+                            SourceUnreachable = sourceUnreachable,
                         });
 
                     logger.LogInformation(
@@ -2536,7 +2622,11 @@ public sealed class InstanceAutoRegistrationService(
                         .Select(p => byId[p.Id])
                         .ToList();
                     return InstallAll(ordered)
-                        .Select(summary => summary with { ListingIncomplete = listingIncomplete });
+                        .Select(summary => summary with
+                        {
+                            ListingIncomplete = listingIncomplete,
+                            SourceUnreachable = sourceUnreachable,
+                        });
                 });
         });
     }
@@ -2563,8 +2653,9 @@ public sealed class InstanceAutoRegistrationService(
     /// <summary>
     /// 🚨 <b>The repair of a default package the boot could not install, without waiting for the next
     /// boot</b> (MeshWeaver#5825). When the last pass of this process left something undone
-    /// (<see cref="LeftUndone"/>: a failed package, a source it could not list, or the pass itself
-    /// faulting), runs the default-install pass again — the identical selection and install
+    /// (<see cref="LeftUndone"/>: a failed package, a source that did not answer its listing, or the
+    /// pass itself faulting — never a source that is HELD, which releases at the next process start
+    /// and is not listed again before it), runs the default-install pass again — the identical selection and install
     /// (<see cref="InstallDefaults"/>), which re-attempts what the ledger records as FAILED and skips
     /// what is installed. When the last pass left nothing undone, does nothing at all: no source is
     /// listed.
@@ -2800,6 +2891,15 @@ public readonly record struct DefaultInstallSummary(
     public bool ListingIncomplete { get; init; }
 
     /// <summary>
+    /// True when at least one source did not ANSWER its listing this pass — the part of
+    /// <see cref="ListingIncomplete"/> that a later pass of the same process can change, and so the
+    /// part <c>InstanceAutoRegistrationService.RetryFailedDefaults</c> repairs. A source that is
+    /// HELD makes the listing incomplete without setting this: a hold releases at the next process
+    /// start, so a repair pass neither waits on it nor lists it.
+    /// </summary>
+    public bool SourceUnreachable { get; init; }
+
+    /// <summary>
     /// The ids this pass actually DELIVERED — installed or already current. The ledger's input:
     /// what the seed may stop re-asserting.
     /// </summary>
@@ -2856,6 +2956,7 @@ public readonly record struct DefaultInstallSummary(
         Authorized = (Authorized ?? ImmutableList<DefaultInstallAuthorization>.Empty)
             .AddRange(other.Authorized ?? ImmutableList<DefaultInstallAuthorization>.Empty),
         ListingIncomplete = ListingIncomplete || other.ListingIncomplete,
+        SourceUnreachable = SourceUnreachable || other.SourceUnreachable,
     };
 
     /// <inheritdoc />

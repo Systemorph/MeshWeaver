@@ -577,8 +577,13 @@ the skip is never silent:
   pass on `PluginCatalog:ReconcileSafetyNetInterval`, and a boot reconcile that was deferred and is
   drained by the first feed read) ends by asking
   the installer to run the default install again when its last pass left something undone — a
-  failed package, a source it could not list, or the pass itself faulting
+  failed package, a source that did not answer its listing, or the pass itself faulting
   (`RegistryUpdateReconciler.RetryFailedDefaultInstalls` → `InstanceAutoRegistrationService.RetryFailedDefaults`).
+  A source HELD at boot (a torn or unreadable seal) is not owed a repair and is not listed again by
+  one: a hold releases at the next process start and nowhere else, so the repair skips it and keeps
+  that contract (the maintainer's decision on #6493). It still makes the pass's listing incomplete,
+  which is a statement about what the pass saw (`ListingIncomplete`), kept apart from the retryable
+  half (`SourceUnreachable`).
   It runs on the reconciler's serialized lane, so there is no second writer and no timer of its own;
   it is the same shape as the faulted-reload retry that ends the same pass. A pass that left nothing
   undone is not repeated (no source is listed), and the boot reconcile does not ask, because it runs
