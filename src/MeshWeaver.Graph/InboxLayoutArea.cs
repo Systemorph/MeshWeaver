@@ -265,7 +265,7 @@ public static class InboxLayoutArea
     /// platform that lacks it the viewer reads the provider's own name, never the raw key.
     /// </summary>
     internal static string Label(Func<string, string> localize, string? key, string fallback)
-        => !string.IsNullOrWhiteSpace(key) && LocalizationCatalog.Keys.Contains(key) ? localize(key) : fallback;
+        => !string.IsNullOrWhiteSpace(key) && LocalizationCatalog.ContainsKey(key) ? localize(key) : fallback;
 
     /// <summary>
     /// The culture a row's date is written in. A language tag the runtime does not know falls back

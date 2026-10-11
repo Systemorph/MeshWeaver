@@ -497,6 +497,8 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
         InboxLayoutArea.Label(German, "inbox.source.NotYetShipped", "Approvals").Should().Be("Approvals",
             "a key this platform does not have reads as the provider's name, never as 'inbox.source.NotYetShipped'");
         InboxLayoutArea.Label(German, null, "WhatsApp").Should().Be("WhatsApp");
+        LocalizationCatalog.ContainsKey("inbox.source.Chat").Should().BeTrue();
+        LocalizationCatalog.ContainsKey("inbox.source.NotYetShipped").Should().BeFalse();
     }
 
     /// <summary>
