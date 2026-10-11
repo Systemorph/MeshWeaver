@@ -1678,7 +1678,7 @@ internal class RoutingGrain(
 
         // Defer keeps grainCall COLD so every RetryWhen re-subscribe re-invokes it (fresh grain
         // reference → fresh activation). Never Observable.FromAsync — see AsynchronousCalls.md.
-        return Observable.Defer(() => grainCall().ToObservable())
+        return ObserveGrainCall(grainCall)
             .RetryWhen(errors => errors
                 .Select((ex, i) => (Exception: ex, Attempt: i))
                 .SelectMany(t =>
@@ -1796,6 +1796,8 @@ internal class RoutingGrain(
         Exception ex, Func<bool>? scopeDisposed = null, bool activationErrorRecorded = true) =>
         OrleansRoutingService.IsDirectoryUnstable(ex)
         || IsShutdownShaped(ex)
+        // The message expired while its target grain was still being placed (#5731): no activation ever saw it.
+        || IsPlacementExpired(ex)
         || IsDeactivatedActivation(ex, activationErrorRecorded)
         || IsScopeTeardown(ex, scopeDisposed)
             ? ErrorType.ShuttingDown
@@ -2133,4 +2135,102 @@ internal class RoutingGrain(
     /// <para>A literal of <b>Orleans.Runtime</b>.</para>
     /// </summary>
     internal const string SupersededSiloGenerationMarker = "The target silo is no longer active";
+
+    /// <summary>
+    /// Orleans' own wording from <c>PlacementService.PlacementWorker.ExecutePlacementAsync</c>:
+    /// <c>"Message expired before placement could complete for grain {id}."</c>, raised as an
+    /// <see cref="OperationCanceledException"/> when the message's time-to-live (Orleans'
+    /// <c>ResponseTimeout</c>) ran out while the grain was still being PLACED (issue #5731). Kept
+    /// as the verbatim prefix without the grain id, so it matches whichever grain the expiry names.
+    ///
+    /// <para>A literal of <b>Orleans.Runtime</b>. <c>PlacementExpiryClassificationTest</c> pins it
+    /// against the shipped assembly, so a re-worded Orleans turns that test red instead of turning
+    /// <see cref="IsPlacementExpired"/> silently inert.</para>
+    /// </summary>
+    internal const string PlacementExpiredMarker = "Message expired before placement could complete";
+
+    /// <summary>
+    /// <b>The delivery's message EXPIRED while Orleans was still placing its target grain - issue
+    /// #5731.</b> Orleans' <c>PlacementService</c> gives up on a message whose time-to-live has run out,
+    /// and the caller receives an <see cref="OperationCanceledException"/> carrying
+    /// <see cref="PlacementExpiredMarker"/>. Seen once on memex (2026-09-24 13:43:20Z): two
+    /// <c>IMessageHubGrain.DeliverMessage</c> calls to an ephemeral <c>_Activity/compile-*</c> hub.
+    ///
+    /// <para><b>Why it is a transient verdict for the sender.</b> The message died while being
+    /// ADDRESSED: no activation existed, so it reached no hub and nothing was half-applied. That is a
+    /// statement about the cluster (placement or the grain directory was slower than the message's
+    /// time-to-live, which is what a membership change produces), not about the target, and the
+    /// sender's recovery is bounded the same way <see cref="IsDepartedSiloRejection"/> describes.
+    /// Reported as <see cref="ErrorType.Failed"/> it tore down consumers that ride out
+    /// <see cref="ErrorType.ShuttingDown"/>.</para>
+    ///
+    /// <para><b>Classification only - the delivery is NOT sent again.</b> Each re-attempt can itself
+    /// wait a full time-to-live inside placement while holding a routing-pool slot, so six retries
+    /// under a persistent stall would pin that slot for minutes - the amplification #1172 removed for
+    /// response timeouts. <see cref="IsTransientFailure"/> therefore does not match it, and the sender
+    /// is told on the first attempt.</para>
+    ///
+    /// <para><b>Narrow on purpose.</b> A cancellation is also what a hub raises while it shuts down or
+    /// times out an activation, and those are different statements. Only the one Orleans sentence
+    /// qualifies, and only on an <see cref="OperationCanceledException"/> (an
+    /// <see cref="InvalidOperationException"/> quoting the words stays terminal). It is prose, so
+    /// <c>PlacementExpiryClassificationTest</c> pins it against the shipped Orleans build: if that
+    /// test fails after an upgrade, repair the marker and never delete the test. The exception reaches
+    /// this predicate with its text intact only because <see cref="ObserveGrainCall{T}"/> hands it
+    /// over - see there.</para>
+    /// </summary>
+    /// <param name="ex">The exception the delivery attempt faulted with.</param>
+    /// <returns><c>true</c> when the message expired before its target grain was placed.</returns>
+    internal static bool IsPlacementExpired(Exception ex) =>
+        ExceptionChain.Contains(ex, static e =>
+            e is OperationCanceledException
+            && e.Message.Contains(PlacementExpiredMarker, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// The cold grain call as an observable, with a CANCELLED call's original exception kept intact -
+    /// issue #5731. Orleans completes a call it cannot address (a message that expired in placement)
+    /// with the carried <see cref="OperationCanceledException"/>, which <c>ValueTask.AsTask</c> turns
+    /// into a CANCELLED task that still stores it. Rx's task bridge then replaces that with a fresh
+    /// <see cref="TaskCanceledException"/> whose text is only "A task was canceled." - so every
+    /// classifier downstream, and the sender's NACK, lost the one sentence that says what happened.
+    ///
+    /// <para>This hands over the stored exception instead. Anything else (a fault, a result, a
+    /// cancellation that stored nothing) passes through unchanged, and the retry around it is
+    /// unaffected: only the exception's identity changes, never whether it is retried.</para>
+    /// </summary>
+    /// <typeparam name="T">The grain call's result.</typeparam>
+    /// <param name="grainCall">The grain call; re-invoked from scratch on every subscription.</param>
+    /// <returns>A cold observable of the call's result.</returns>
+    internal static IObservable<T> ObserveGrainCall<T>(Func<Task<T>> grainCall) =>
+        Observable.Defer(() => grainCall().ToObservable())
+            .Catch<T, TaskCanceledException>(canceled => Observable.Throw<T>(OriginalCancellation(canceled)));
+
+    /// <summary>
+    /// The exception a cancelled task stored, or <paramref name="canceled"/> itself when it stored
+    /// none. The task is already complete, so reading it never blocks - it only re-throws what it
+    /// holds.
+    /// </summary>
+    /// <param name="canceled">The exception Rx made from the cancelled task.</param>
+    /// <returns>The task's own cancellation, or <paramref name="canceled"/>.</returns>
+    internal static Exception OriginalCancellation(TaskCanceledException canceled)
+    {
+        var task = canceled.Task;
+        if (task is null || !task.IsCanceled)
+            return canceled;
+
+        try
+        {
+            task.GetAwaiter().GetResult();
+        }
+        catch (OperationCanceledException original)
+        {
+            return original;
+        }
+        catch (Exception)
+        {
+            // Not a cancellation after all: keep the exception Rx made.
+        }
+
+        return canceled;
+    }
 }
