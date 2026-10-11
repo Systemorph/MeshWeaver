@@ -525,7 +525,10 @@ failed message, which the line now names. Pinned by
 That holds for the bounce of a *request*. When the failed delivery is an *answer* the router posted,
 there is no post to fix and the line is not written at all — see "The bounce of an answer the router
 posted" above, pinned by
-`RouterTrafficOnNodeCreateFromTheRootHubTest.TheBounceOfAnAnswerTheRouterPosted_IsNotReported_ButTheBounceOfItsRequestIs`.
+`RouterTrafficOnNodeCreateFromTheRootHubTest.TheBounceOfAnAnswerTheRouterPosted_IsNotReported_ButTheBounceOfItsRequestIs`
+for the origin line and by
+`TheReceiverSide_DoesNotReportTheBounceOfAnAnswerTheRouterPosted_ButReportsTheBounceOfItsRequest`
+for the receiver line, which carries the NACK's own type and so cannot be read off the first test.
 
 The receiver-side line stays, unchanged, and is still the only one that can see a violation posted by
 another process.

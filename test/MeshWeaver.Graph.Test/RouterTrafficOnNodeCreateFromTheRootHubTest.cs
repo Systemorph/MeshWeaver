@@ -762,6 +762,60 @@ public class RouterTrafficOnNodeCreateFromTheRootHubTest : MonolithMeshTestBase
             + "violation, and this is the capture's positive control");
     }
 
+    /// <summary>
+    /// 🚨 <b>The RECEIVER side asks the same question (#5713).</b> The test above reads the origin
+    /// line, which <c>Post</c> writes synchronously and which names the failed message. The
+    /// receiver-side line is written in <c>DeliverMessage</c>, carries the NACK's own type
+    /// (<c>DeliveryFailure</c>) and never the failed message's, and is deduplicated per role and
+    /// type — so nothing in that test can tell whether the receiver site holds the exemption.
+    ///
+    /// <para>Here the NACK is handed to <c>DeliverMessage</c> directly, which writes the line before
+    /// it routes: no barrier is needed and none is slept for. The bounce of the ANSWER goes first
+    /// and must leave no receiver line at all; the bounce of the REQUEST follows and must leave
+    /// exactly one. In that order the dedup cannot hide a false report of the first behind the
+    /// second, and with the receiver-side exemption removed the first assertion is the one that
+    /// fails.</para>
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public void TheReceiverSide_DoesNotReportTheBounceOfAnAnswerTheRouterPosted_ButReportsTheBounceOfItsRequest()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        var client = GetClient();
+        IMessageDelivery typedAnswer = new MessageDelivery<RouterOriginProbe>(
+            Mesh.Address, client.Address, new RouterOriginProbe(), Mesh.JsonSerializerOptions);
+        var answer = typedAnswer
+            .SetProperty(PostOptions.RequestId, "request-the-router-answered")
+            .Package();
+        var request = new MessageDelivery<SecondFailedProbe>(
+            Mesh.Address, client.Address, new SecondFailedProbe(), Mesh.JsonSerializerOptions).Package();
+
+        // The NACK as it reaches the hub it is addressed at: from the mesh hub, to the failed
+        // delivery's sender — the mesh hub — carrying a request-id correlation.
+        IMessageDelivery Nack(IMessageDelivery failed, string correlation) =>
+            ((IMessageDelivery)new MessageDelivery<DeliveryFailure>(
+                Mesh.Address, failed.Sender, new DeliveryFailure(failed, "Host is shutting down, cannot route to client"),
+                Mesh.JsonSerializerOptions))
+            .SetProperty(PostOptions.RequestId, correlation);
+
+        RouterTrafficRecord[] ReceiverNacks() =>
+            Reports().Where(r => r.MessageType == nameof(DeliveryFailure)).ToArray();
+
+        ReceiverNacks().Should().BeEmpty(
+            "the premise: no NACK has been reported by this hub yet, or the dedup would decide the result");
+
+        Mesh.DeliverMessage(Nack(answer, "nack-of-the-answer"));
+        DumpReports();
+        ReceiverNacks().Should().BeEmpty(
+            "the failed delivery was an answer the router posted — the receiver side must rule it "
+            + "out exactly as the origin side does, or it reports what the origin side excluded");
+
+        Mesh.DeliverMessage(Nack(request, "nack-of-the-request"));
+        DumpReports();
+        ReceiverNacks().Should().ContainSingle(r => r.Role == "sender AND target",
+            "the bounce of a REQUEST the router posted is still reported by the receiver side — "
+            + "the positive control, and the proof that the capture sees this site at all");
+    }
+
     /// <summary>The receiver-side lines — <c>ROUTER_TRAFFIC:</c>, logged in <c>DeliverMessage</c>.</summary>
     private RouterTrafficRecord[] Reports() => _capture.Records.Where(r => !r.IsOrigin).ToArray();
 
