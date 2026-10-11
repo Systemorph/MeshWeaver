@@ -369,7 +369,7 @@ control that a different installation's record is NOT joined).
 🚨 **The join takes the record's PORTAL repository only.** It was measured on 2026-10-10, on push run
 `38013647613`, the first run to carry the join. Its first cut joined every in-registry image the
 record's text mentions. A record also pins its operator (`operator.image` →
-`hosting-operator:<sha>`, built from the operator's own commit). So for `pearl` and for the client
+`hosting-operator:<sha>`, built from the operator's own commit). So for `client-b` and for the client
 estate's control/test pair, whose portals live in fleet-unlockable registries, `hosting-operator`
 landed in the running PORTAL set. The *half covered* blocker then fired on all three, and those were
 the run's only reds. The scanner now keeps the record's split `imageRepository` pin apart
@@ -386,7 +386,7 @@ the operator under the chart's `hostingOperator.image`, and the overlay half of 
 every in-registry image the overlay's text mentions. Both installations pin their operator in the
 overlay, in the registry this lane locks (one on a fixed tag, one floating on `main`), while their
 portal and migration images live in their own registry. So `hosting-operator` was still their whole
-running set, and *half covered* fired on both. `pearl` went green because its overlay names no
+running set, and *half covered* fired on both. `client-b` went green because its overlay names no
 operator image. The scanner now records a repository an overlay pins **only** under its top-level
 `hostingOperator:` block (`OverlayScan.overlay_operators`), and the join leaves it out. A repository
 the overlay also pins outside that block stays in the set. AXIS 2 is unchanged: the operator is still

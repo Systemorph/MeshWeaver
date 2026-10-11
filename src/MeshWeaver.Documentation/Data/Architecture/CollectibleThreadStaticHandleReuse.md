@@ -328,10 +328,10 @@ read.
 **Not established:** that this crash is this mechanism. It is compatible with it (a young thread with
 no managed frame, a null-based read) and with others.
 
-The same day's restarts on the `pearl` instance are a **different** defect: all three of its dumps in
+The same day's restarts on the `client-b` instance are a **different** defect: all three of its dumps in
 the 48 h to 16:08Z (2026-10-06 01:07Z and 12:42Z, 2026-10-07 12:49Z) are `signo 6` with
 `Unwind: exception type System.OutOfMemoryException` — a managed out-of-memory abort, not a native
-fault (`Ops/Actions/logs-pearl-20261007-crash-4654`).
+fault (`Ops/Actions/logs-client-b-20261007-crash-4654`).
 
 ## Related
 

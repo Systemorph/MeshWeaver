@@ -664,6 +664,19 @@ if want_repo:
         finding("OFF-RECORD", "image repository (memex-portal)",
                 f"live '{live_repo}' vs {record} imageRepository '{want_repo}'")
 
+# The image verdict is STATED IN BOTH DIRECTIONS (MeshWeaver#4685). An on-record image used to print
+# nothing at all, so "compared, and on record" and "this block never ran" were the same silence in
+# the log — and the first scheduled runs after the comparison landed could only be read as a pass by
+# the ABSENCE of an OFF-RECORD line. Tag-level facts only, the same ones a finding prints.
+off_record = [f for f in findings if f[0] == "OFF-RECORD"]
+if off_record:
+    print(f"image vs record: OFF-RECORD — {len(off_record)} finding(s) below, against {record}")
+else:
+    rule = f"equals pinnedImageTag '{pin}'" if pin else f"matches updatePattern '{pattern}'"
+    repo = (f"repository equals imageRepository '{want_repo}'" if want_repo
+            else "the record states no imageRepository, so the repository was NOT compared")
+    print(f"image vs record: ON RECORD — live tag '{live_tag}' {rule} of {record}; {repo}")
+
 # ---- verdict ---------------------------------------------------------------
 # The evidence assertion: a run that compared (almost) nothing must not read as a pass.
 MIN = 25
