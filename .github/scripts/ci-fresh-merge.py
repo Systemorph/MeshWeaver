@@ -104,21 +104,65 @@ def local_merge_bases(path: str, a: str, b: str) -> list[str]:
     return r.stdout.split() if r.returncode == 0 else []
 
 
-def walkable_merge_bases(path: str, a: str, b: str, deepen_refs: tuple[str, ...], errors: list[str]) -> list[str]:
-    """EVERY merge-base of a and b, deepening a shallow checkout over git until git can walk to them.
+def shallow_boundary(path: str) -> set[str]:
+    """The commits a shallow checkout grafts its history at — git treats each one as a root."""
+    f = git(path, "rev-parse", "--git-path", "shallow").stdout.strip()
+    f = f if os.path.isabs(f) else os.path.join(path, f)
+    if not os.path.exists(f):
+        return set()
+    with open(f) as h:
+        return {line.strip() for line in h if line.strip()}
+
+
+def merge_bases_complete(path: str, a: str, b: str, bases: list[str]) -> bool:
+    """Whether `bases` — git's local answer — is EVERY merge-base of a and b, not just the visible ones.
+
+    In a shallow checkout git treats each boundary commit as a root, so a base beyond the boundary is
+    invisible and `merge-base --all` answers with the rest (#6518). Any hidden common ancestor X lies
+    beyond some boundary commit S reachable from a or b. When every such S is an ancestor of (or equal
+    to) one of `bases`, X is an ancestor of that base too, so X is no merge-base: the answer is complete.
+    A boundary commit reachable from a tip and NOT under any base is exactly where a missing base can
+    hide, so the answer cannot be trusted until the history behind it has been read. Pure read."""
+    boundary = shallow_boundary(path)
+    if not boundary:
+        return bool(bases)
+    above = git(path, "rev-list", a, b, "--not", *bases, check=False)
+    if above.returncode != 0:
+        return False
+    return not (boundary & set(above.stdout.split()))
+
+
+DEEPEN_LADDER = (64, 512, 4096)
+DEEP_RUN = 80  # self-test: a run longer than the first rung, so one base lies past the first deepening
+
+
+def walkable_merge_bases(path: str, a: str, b: str, deepen_refs: tuple[str, ...], errors: list[str],
+                         ladder: tuple[int, ...] = DEEPEN_LADDER) -> list[str]:
+    """EVERY merge-base of a and b, deepening a shallow checkout over git until git can walk to ALL of them.
+
+    A non-empty answer is not enough: in a shallow checkout one criss-cross base can be visible while
+    another is still beyond the boundary (#6518), so deepening continues until the answer is COMPLETE
+    (`merge_bases_complete`). When the ladder runs out with bases seen but completeness not established,
+    this REFUSES — merging over a subset of the bases is the false conflict #6513 removed, and a
+    merge over the wrong base is never tested in place of the real one.
 
     Git transport, not REST — the run's GITHUB_TOKEN shares ONE per-repository REST budget with every
     other PR's run (measured 2026-10-05: every PR-body read of every core PR run failed in the same
     minutes), so the compare read is only the caller's last resort."""
     bases = local_merge_bases(path, a, b)
-    for depth in (64, 512, 4096):
-        if bases:
-            break
+    for depth in ladder:
+        if bases and merge_bases_complete(path, a, b, bases):
+            return bases
         d = git(path, "fetch", "--no-tags", "--quiet", f"--deepen={depth}", "origin", *deepen_refs, check=False)
         if d.returncode != 0:
             errors.append(f"deepen {depth}: {(d.stderr or d.stdout).strip()[:200]}")
             continue
         bases = local_merge_bases(path, a, b)
+    if bases and not merge_bases_complete(path, a, b, bases):
+        raise Refused(f"{a[:12]} and {b[:12]} show {len(bases)} merge-base(s) in this shallow checkout, but a shallow boundary "
+                      f"still lies above them after deepening {ladder[-1] if ladder else 0} — another merge-base may be hidden "
+                      f"behind it, and merging over a subset of the bases reports conflicts the real merge does not have "
+                      f"({'; '.join(errors) or 'history not deep enough'}) — the fresh merge cannot be computed")
     return bases
 
 
@@ -316,6 +360,25 @@ def self_test() -> int:
         git(origin, "checkout", "-q", "cc-main")
         merge(origin, f1, "main merges the pr's y1")                 # M2 = M1 + F1
         cc_main = commit(origin, {"x.txt": "x2\n", "y.txt": "y2\n"}, "main: x2 y2")
+
+        # A criss-cross whose bases STRADDLE the first deepening (#6518): main reaches its base M1 only
+        # through a run of commits longer than the first `--deepen`, while F1 — the other base — sits two
+        # commits from both tips. After deepening 64, git walks main to a shallow boundary on that run and
+        # treats it as a root: `merge-base --all` answers F1 alone, and merging over F1 alone is a false
+        # conflict on x.txt. The real merge (virtual base M1+F1) is clean.
+        git(origin, "checkout", "-q", "-b", "deep-main", base)
+        deep_root = commit(origin, {"x.txt": "x0\n", "y.txt": "y0\n"}, "deep root")
+        dm1 = commit(origin, {"x.txt": "x1\n"}, "main: x1 (the base past the first deepening)")
+        for i in range(DEEP_RUN):
+            git(origin, "commit", "-q", "--allow-empty", "-m", f"main: run {i}",
+                env=dict(IDENTITY, GIT_AUTHOR_DATE="2026-01-01T00:00:00Z", GIT_COMMITTER_DATE="2026-01-01T00:00:00Z"))
+        git(origin, "checkout", "-q", "-b", "deep-feature", deep_root)
+        df1 = commit(origin, {"y.txt": "y1\n"}, "pr: y1")
+        merge(origin, dm1, "pr merges main's x1")                    # F2 = F1 + M1 (M1 two commits deep here)
+        deep_head = commit(origin, {"z.txt": "z by the PR\n"}, "pr: z")
+        git(origin, "checkout", "-q", "deep-main")
+        merge(origin, df1, "main merges the pr's y1")                # M2 = run + F1
+        deep_main = commit(origin, {"x.txt": "x2\n", "y.txt": "y2\n"}, "main: x2 y2")
         git(origin, "checkout", "-q", "main")
 
         def clone(name: str, shallow: bool, tip: str = "") -> str:
@@ -413,6 +476,36 @@ def self_test() -> int:
             check(ccs_merged == cc_merged, "a shallow checkout computes the IDENTICAL criss-cross merge commit")
         except Refused as e:
             check(False, f"a shallow criss-cross checkout is merged, not refused ({e})")
+
+        # 5b'. The bases straddle the first deepening (#6518). Control first: at that depth git really
+        #     does see only ONE base, so a checkout that trusted the first non-empty answer merged over it.
+        straddle_probe = clone("straddle-probe", shallow=True, tip=deep_head)
+        git(straddle_probe, "fetch", "-q", "--depth=1", "origin", deep_main)
+        git(straddle_probe, "fetch", "-q", f"--deepen={DEEPEN_LADDER[0]}", "origin", deep_main, deep_head)
+        seen = local_merge_bases(straddle_probe, deep_main, deep_head)
+        check(seen == [df1], f"control: after the first deepening a shallow checkout sees ONE base (F1), not both (saw {len(seen)})")
+        check(not merge_bases_complete(straddle_probe, deep_main, deep_head, seen),
+              "control: that one-base answer is recognised as INCOMPLETE (a shallow boundary lies above it)")
+        cut = clone("straddle-cut", shallow=True, tip=deep_head)
+        git(cut, "fetch", "-q", "--depth=1", "origin", deep_main)
+        try:
+            walkable_merge_bases(cut, deep_main, deep_head, (deep_main, deep_head), [], ladder=DEEPEN_LADDER[:1])
+            check(False, "a ladder that ends before completeness is established REFUSES")
+        except Refused as e:
+            check("shallow boundary" in str(e), "a ladder that ends before completeness is established REFUSES, naming the boundary")
+        straddle = clone("straddle", shallow=True, tip=deep_head)
+        try:
+            _, straddle_merged = fresh_merge(straddle, deep_main, deep_head, compare)
+            got = {n: open(os.path.join(straddle, n)).read() for n in ("x.txt", "y.txt", "z.txt")}
+            check(got == {"x.txt": "x2\n", "y.txt": "y2\n", "z.txt": "z by the PR\n"},
+                  "a shallow criss-cross whose second base lies past the first deepening is merged over BOTH bases")
+            straddle_real = clone("straddle-real", shallow=False, tip=deep_main)
+            git(straddle_real, "merge", "-q", "--no-edit", deep_head, env=dict(IDENTITY))
+            check(git(straddle_real, "rev-parse", "HEAD^{tree}").stdout.strip()
+                  == git(straddle, "rev-parse", f"{straddle_merged}^{{tree}}").stdout.strip(),
+                  "the straddling merge's tree is byte-identical to what `git merge` produces")
+        except Refused as e:
+            check(False, f"a shallow criss-cross straddling the first deepening is merged, not refused ({e})")
 
         # 5c. A REAL conflict in a criss-cross history is still RED, naming the path.
         ccc = clone("criss-cross-conflict", shallow=False, tip=cc_conflict_head)
