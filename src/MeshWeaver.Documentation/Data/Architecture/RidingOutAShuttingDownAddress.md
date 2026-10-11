@@ -189,6 +189,32 @@ If you write code that must survive a `ShuttingDown` answer:
    timeout, and a timeout points the next engineer at the wrong system entirely. Both give-up paths
    log one Warning naming the owner, the activation and which bound was hit.
 
+## One request type, several producers: `GetDataRequest`
+
+`[ReaskedOnShutdown]` makes a claim about every producer of a type. `GetDataRequest` cannot carry it
+yet, because its producers split:
+
+| Producer | Reference | On a `ShuttingDown` answer |
+|---|---|---|
+| `GetMeshNodeOutcome` (the point read) | `MeshNodeReference` | re-asks at once, then on the pace |
+| `HubStreamProviderFactory.Create` | `ContentCollectionReference` | faults the provider |
+| `ContentStaging`, `ContentFileResolver` | `ContentCollectionReference` | takes it as the answer |
+| `MeshOperations` (`get`, collection reads) | any | takes it as the answer |
+
+So a bring-up discard of a `GetDataRequest` stays an Error (`MessageService.Dispose`, event 7301).
+The sender **is** answered: the drain posts a `ShutdownNack.RetryForTheAuthoritativeAnswer` to every
+deferred delivery that is not self-addressed or declared unanswerable. Whether that answer loses
+the read depends on which producer sent it.
+
+The type name cannot tell the producers apart. The Error therefore carries the request's own
+rendering, bounded (`Request: GetDataRequest { Reference = … }`), and the reference names the
+producer. Measured on one deployment, 2026-10-11 19:16Z (#5718): about 200 such Errors in one module
+live-update, each a partition root discarding a `GetDataRequest` from one of its own NodeType hubs.
+None of those lines could name the read.
+
+Once every producer rides the answer out, mark the type `[ReaskedOnShutdown]` and the line moves to
+Debug by the rule above. Producers in other repositories and in mesh-compiled code count too.
+
 ## Where this is pinned
 
 | Test | What it fails on |
@@ -199,6 +225,7 @@ If you write code that must survive a `ShuttingDown` answer:
 | `RecyclingShapeDiagnosticTest` (`MeshWeaver.Graph.Test`) | the diagnostic naming both shapes at once, or inventing one from zero observations |
 | `ChangeFeedResubscribeCoalesceTest` (`MeshWeaver.Data.Test`) | a burst of owner change events producing one resubscribe per event |
 | `ADrainingSiloDoesNotSilenceItsSubscribersTest` (`MeshWeaver.Hosting.Orleans.Test`) | a grain on a stopping silo accepting a subscribe it can only answer into the void (#5256) |
+| `DeferredDeliveryNackedOnDisposeTest.ADiscardError_NamesTheRequest_SoItsProducerCanBeTold` (`MeshWeaver.Messaging.Hub.Test`) | a bring-up discard Error that names the request type but not its payload (#5718) |
 
 ## See also
 
