@@ -188,11 +188,13 @@ number of failed calls.
 | CD on main failed / incomplete image set (`main-cd.yml`) | `ci-failure` | `bug` `sev:H` |
 | a satellite's red main (`node-repo-ci-failure.yml`) | `ci-main-red` | `bug` `sev:H` |
 | the cluster does not match its chart (`chart-drift.yml`) | `chart-drift-sentinel` | `bug` `sev:H` |
+| the promotion gate left the fleet unarmed (`main-cd.yml` → `.github/scripts/fleet-unarmed-alert.py`) | `fleet-unarmed` | `bug` `sev:H` |
 | control image lane failed (`main-cd.yml`) | `control-image` | `bug` `sev:M` |
 | control behind the newest build (`control-always-latest.yml`) | `control-lag` | `bug` `sev:M` |
 | the issue-text name scan could not check (`issue-text-names.yml`) | `issue-text-names-sentinel` | `bug` `sev:M` |
 | core main breaks a satellite's pin (`node-repo-platform-canary.yml`) | the caller's | `bug` `sev:M` |
 | the platform-pin bump lane is dead (`node-repo-platform-ref-bump.yml`) | `platform-pin-bump-failure` | `bug` `sev:M` |
+| the issue-taxonomy check did not pass (`issue-taxonomy.yml`) | `issue-taxonomy-sentinel` | `bug` `sev:M` |
 
 **And it is measured independently.** `.github/workflows/issue-taxonomy.yml` runs daily and goes RED
 naming every open issue of the triage scope that has violated the taxonomy for more than 24 hours, and

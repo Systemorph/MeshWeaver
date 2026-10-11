@@ -23,6 +23,10 @@ on:
 permissions:
   contents: read
 
+# A scheduled lane has no pull request to turn red, so its state lives in ONE standing issue that
+# `report` opens or updates when a run did not pass — violations found, or a run that could not
+# check — and closes when a run passes again: the sentinel pattern of issue-text-names.yml and
+# chart-drift.yml (.github/scripts/sentinel-issue.py). The run log names the violations.
 concurrency:
   group: issue-taxonomy
   cancel-in-progress: false
@@ -82,3 +86,64 @@ jobs:
             --repo Systemorph/MeshWeaver.Crm --repo Systemorph/MeshWeaver.Education --repo Systemorph/MeshWeaver.Reinsurance \
             --repo Systemorph/MeshWeaver.SocialMedia --repo Systemorph/MeshWeaver.Manufacturing --repo Systemorph/MeshWeaver.FundReporting \
             --older-than-hours 24
+
+  report:
+    name: Publish the standing state
+    needs: [preflight, check]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: issue-taxonomy-report
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            .github/scripts
+            scripts
+      - name: Open, update or close the tracking issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RESULT_PRE: ${{ needs.preflight.result }}
+          RESULT_CHECK: ${{ needs.check.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          LABEL: issue-taxonomy-sentinel
+        run: |
+          set -euo pipefail
+          LOOKUP=$(python3 .github/scripts/sentinel-issue.py find --repo "$REPO" --label "$LABEL" \
+                     --ensure-label --color "d93f0b" \
+                     --description "The ONE standing issue issue-taxonomy.yml updates in place — do not remove")
+          NUM=$(printf '%s' "$LOOKUP" | jq -r '.number // empty')
+          ISSUE_STATE=$(printf '%s' "$LOOKUP" | jq -r '.state // empty')
+          if [ "$RESULT_PRE" = "success" ] && [ "$RESULT_CHECK" = "success" ]; then
+            if [ -n "$NUM" ] && [ "$ISSUE_STATE" = "open" ]; then
+              gh api "repos/$REPO/issues/$NUM/comments" --silent \
+                -f body="The issue-taxonomy check passed again as of $RUN_URL — closing. It reopens on the next run that does not pass."
+              gh api -X PATCH "repos/$REPO/issues/$NUM" -f state=closed --silent
+              echo "closed #$NUM"
+            else
+              echo "Passed, and no tracking issue open. Nothing to do."
+            fi
+            exit 0
+          fi
+          TITLE="Issue taxonomy: the last run did NOT pass (preflight=${RESULT_PRE}, check=${RESULT_CHECK})"
+          BODY=$(printf '**State: not passing** — last run %s ([run](%s)).\n\njob results: preflight=%s check=%s\n\nThe run log names every open issue that has broken the taxonomy for more than 24 hours, every repository missing a severity label, or why the run could not read (a missing credential, a missing Issues: read grant, an unreadable page). An issue the release gate cannot classify is invisible to it — see Doc/Architecture/IssueTaxonomy.\n\n---\nMaintained automatically by `.github/workflows/issue-taxonomy.yml`; closed automatically when a run passes again.\n' \
+            "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$RUN_URL" "$RESULT_PRE" "$RESULT_CHECK")
+          if [ -n "$NUM" ]; then
+            gh api -X PATCH "repos/$REPO/issues/$NUM" -f title="$TITLE" -f body="$BODY" -f state=open --silent
+            echo "updated #$NUM (was $ISSUE_STATE)"
+          else
+            NEW=$(gh api "repos/$REPO/issues" -f title="$TITLE" -f body="$BODY" -f "labels[]=$LABEL" --jq '.number')
+            echo "opened #$NEW"
+            python3 .github/scripts/sentinel-issue.py await-visible --repo "$REPO" --label "$LABEL" --number "$NEW"
+            NUM="$NEW"
+          fi
+          # 🏷️ The sentinel states its own TYPE and SEVERITY, like every other: an unmeasured or broken
+          # taxonomy hides issues from the release gate, which is silently wrong results — but the
+          # classifiers that keep it (triage, the filers' own stamps) still run, so a bug at sev:M.
+          python3 scripts/check-issue-taxonomy.py stamp --repo "$REPO" --number "$NUM" --label bug --label sev:M

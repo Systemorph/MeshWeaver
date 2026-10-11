@@ -7,7 +7,7 @@ outside those four exists on an issue. The release gate counts open `sev:B`/`sev
 that breaks the invariant is INVISIBLE to it: an untyped issue and a bug without a severity both read as
 "nothing blocking".
 
-Two subcommands, one rule:
+Three subcommands, one rule:
 
   check   --repo OWNER/NAME [--repo …] [--older-than-hours H]
           Reads every open issue of every repository (the issues endpoint, every page — never search,
@@ -104,7 +104,7 @@ def violation(labels: list) -> Optional[str]:
     if len(sevs) > 1:
         return "more than one severity (" + ", ".join(sevs) + ")"
     if types[0] != "bug" and sevs:
-        return f"a severity on a {types[0]}"
+        return f"a severity on non-bug type {types[0]}"
     return None
 
 
@@ -196,7 +196,7 @@ def self_test() -> int:
     expect("bug without severity", violation(["bug"]), "a bug without a severity")
     expect("two types", violation(["bug", "chore", "sev:M"]), "more than one type (bug, chore)")
     expect("two severities", violation(["bug", "sev:H", "sev:L"]), "more than one severity (sev:H, sev:L)")
-    expect("severity on a non-bug", violation(["enhancement", "sev:M"]), "a severity on a enhancement")
+    expect("severity on a non-bug", violation(["enhancement", "sev:M"]), "a severity on non-bug type enhancement")
     expect("unknown severity", violation(["bug", "sev:critical"]), "a severity outside sev:B/H/M/L (sev:critical)")
     expect("type case-insensitive", violation(["Bug", "sev:M"]), None)
 
