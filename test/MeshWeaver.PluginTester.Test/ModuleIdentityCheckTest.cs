@@ -21,17 +21,20 @@ public class ModuleIdentityCheckTest : IDisposable
         Path.GetTempPath(), $"mw-module-identity-{Guid.NewGuid():N}");
 
     /// <summary>A real module bundle (the shape module-pack writes) stating <paramref name="frameworkMvid"/>.</summary>
-    private string Bundle(string name, string? frameworkMvid)
-    {
-        Directory.CreateDirectory(_root);
-        var manifest = new PluginManifest(name, "MeshWeaver.Plugin." + name, "1.0.0", name, null, []);
-        var manifestJson = JsonSerializer.Serialize(new
+    private string Bundle(string name, string? frameworkMvid) =>
+        BundleWithManifest(name, JsonSerializer.Serialize(new
         {
             plugin = name,
             version = "1.0.0",
             frameworkMvid,
             module = new { assemblyName = "MeshWeaver." + name, assemblies = new[] { $"MeshWeaver.{name}.dll" } },
-        });
+        }));
+
+    /// <summary>A bundle whose manifest entry carries <paramref name="manifestJson"/> verbatim.</summary>
+    private string BundleWithManifest(string name, string manifestJson)
+    {
+        Directory.CreateDirectory(_root);
+        var manifest = new PluginManifest(name, "MeshWeaver.Plugin." + name, "1.0.0", name, null, []);
         var path = Path.Combine(_root, $"{name.ToLowerInvariant()}.module.nupkg");
         using (var file = File.Create(path))
             NuGetPackageWriter.Write(file, manifest, "3.0.0",
@@ -100,6 +103,26 @@ public class ModuleIdentityCheckTest : IDisposable
     {
         Run("--expect", PreviousEpoch).Exit.Should().Be(2);
         Run(Bundle("AI", PreviousEpoch)).Exit.Should().Be(2, "no --expect");
+    }
+
+    /// <summary>
+    /// An UNREADABLE bundle is exit 2 as documented — a manifest that is not JSON included, which
+    /// used to escape as a <c>JsonException</c> the CLI's outer catch reported as 70.
+    /// </summary>
+    [Fact]
+    public void AnUnreadableBundle_IsExit2_NotAnUnhandledThrow()
+    {
+        var malformed = BundleWithManifest("AI", "{ this is not json");
+        var (exit, _, error) = Run(malformed, "--expect", PreviousEpoch);
+        exit.Should().Be(2, error);
+        error.Should().Contain("cannot read");
+
+        Directory.CreateDirectory(_root);
+        var notAnArchive = Path.Combine(_root, "plain.module.nupkg");
+        File.WriteAllText(notAnArchive, "not a zip");
+        Run(notAnArchive, "--expect", PreviousEpoch).Exit.Should().Be(2);
+
+        Run(Path.Combine(_root, "missing.module.nupkg"), "--expect", PreviousEpoch).Exit.Should().Be(2);
     }
 
     /// <inheritdoc />

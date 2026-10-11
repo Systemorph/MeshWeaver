@@ -152,7 +152,7 @@ missing in 13 of them; the 23 spanned **18 distinct identities**; all 23 were `r
 > bake path has not run in production. Its decision is proven by the script's self-test.
 >
 > **Where that leg's module bundles come from: CARRIED FORWARD, verified — never built a second time**
-> (maintainer decision on #3583). The leg does not download the module bundles the run built: those
+> (policy [`bake-per-live-identity`](../PolicyNotProse), #3583). The leg does not download the module bundles the run built: those
 > are current-epoch builds, and sealed under the old key they would hand every portal that has not
 > rolled bytes built for a platform it does not run. Instead its *carry-forward* step reads the
 > repository's OWN sealed module set for the ceiling's identity off the share

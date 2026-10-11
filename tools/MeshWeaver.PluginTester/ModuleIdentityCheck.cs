@@ -46,18 +46,21 @@ public static class ModuleIdentityCheck
     }
 
     /// <summary>
-    /// Reads one bundle and compares the identity it states with <paramref name="expected"/>.
+    /// Reads one bundle's MANIFEST and compares the identity it states with <paramref name="expected"/>.
+    /// Only the manifest entry is read (<see cref="BundleReader.ReadManifest(string)"/>, streamed off
+    /// disk) — the check needs the recorded framework identity and nothing else, so no assembly is
+    /// decompressed and the bundle's bytes never sit in the managed heap.
     /// </summary>
-    /// <param name="name">The bundle's file name, for the reading.</param>
-    /// <param name="bundle">The bundle's bytes.</param>
+    /// <param name="bundlePath">The bundle on disk.</param>
     /// <param name="expected">The identity the bundle must have been built for.</param>
     /// <returns>The reading.</returns>
-    /// <exception cref="InvalidDataException">The bytes carry no module manifest.</exception>
-    public static Reading Check(string name, byte[] bundle, string expected)
+    /// <exception cref="InvalidDataException">The archive carries no module manifest, or is not an archive.</exception>
+    /// <exception cref="System.Text.Json.JsonException">The manifest is not valid JSON.</exception>
+    public static Reading Check(string bundlePath, string expected)
     {
-        var (manifest, _) = BundleReader.ReadModule(bundle);
-        if (manifest is null)
-            throw new InvalidDataException($"'{name}' carries no module manifest — not a module bundle");
+        var name = Path.GetFileName(bundlePath);
+        var manifest = BundleReader.ReadManifest(bundlePath)
+            ?? throw new InvalidDataException($"'{name}' carries no module manifest — not a module bundle");
         return new Reading(name, manifest.FrameworkMvid,
             ModuleFrameworkIdentity.Compare(manifest.FrameworkMvid, [expected]));
     }
@@ -109,10 +112,12 @@ public static class ModuleIdentityCheck
             Reading reading;
             try
             {
-                reading = Check(Path.GetFileName(path), File.ReadAllBytes(path), expected);
+                reading = Check(path, expected);
             }
+            // An unreadable bundle — missing, not an archive, no manifest, or a manifest that is
+            // not JSON — is exit 2 as documented, never an unhandled throw the CLI reports as 70.
             catch (Exception ex) when (ex is IOException or InvalidDataException
-                                           or UnauthorizedAccessException)
+                                           or UnauthorizedAccessException or System.Text.Json.JsonException)
             {
                 error.WriteLine($"module-identity: cannot read '{path}' — {ex.Message}");
                 return 2;
