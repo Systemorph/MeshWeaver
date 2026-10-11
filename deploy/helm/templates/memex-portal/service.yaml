@@ -18,6 +18,13 @@ spec:
       protocol: "TCP"
       port: 8080
       targetPort: 8080
+{{- if eq (include "memex.portalNext.mode" .) "bundled" }}
+    # 🚂 /next, served inside the portal pod (_portal-next.tpl) — the ingress's /next path targets it.
+    - name: "next"
+      protocol: "TCP"
+      port: {{ include "memex.portalNext.port" . }}
+      targetPort: "next"
+{{- end }}
 {{- if (.Values.grpc).enabled }}
     # Native gRPC (h2c) for foreign-language participants — see .Values.grpc. The trusted
     # loopback port (grpc.trustedPort) is deliberately NOT exposed here: it is same-pod only.

@@ -455,4 +455,28 @@ public class FluentBuilderTest
         Assert.Contains("Continuos", refusal.Message);
         Assert.Contains("SelfUpdate__DefaultPolicy", refusal.Message);
     }
+
+    /// <summary>
+    /// 🚂 /next is served from the portal image when no image is stated (policy
+    /// <c>portal-next-in-platform-image</c>), so a record pinned to an override image must be able to
+    /// move to that bundled shape: an EMPTY image clears the override (its replicas and origin with it),
+    /// while a null one keeps whatever the record states.
+    /// </summary>
+    [Fact]
+    public void WithPortalNext_AnEmptyImage_MovesAPinnedRecordToTheBundledFrontEnd()
+    {
+        var pinned = new DeploymentContent().WithPortalNext(image: "registry.example.test/portal-next:1", replicas: 2, portalOrigin: "http://x:8080");
+        Assert.Equal("registry.example.test/portal-next:1", pinned.PortalNext!.Image);
+
+        var kept = pinned.WithPortalNext();
+        Assert.Equal("registry.example.test/portal-next:1", kept.PortalNext!.Image);
+        Assert.Equal(2, kept.PortalNext.Replicas);
+
+        var bundled = pinned.WithPortalNext(image: "");
+        Assert.True(bundled.PortalNext!.Enabled);
+        Assert.Null(bundled.PortalNext.Image);
+        Assert.Null(bundled.PortalNext.Replicas);
+        Assert.Null(bundled.PortalNext.PortalOrigin);
+        Assert.Equal("registry.example.test/portal-next:1", pinned.PortalNext.Image);
+    }
 }
