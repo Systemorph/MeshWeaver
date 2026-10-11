@@ -181,12 +181,14 @@ public static class PackageDependencyFloorGate
         // RunAsSystem, never Observable.Using (#1790): the install-records partition is System-owned.
         return hub.ServiceProvider.GetRequiredService<AccessService>()
             .RunAsSystem(() => hub.GetMeshNodeStream(recordPath)
-                .Update<PackageManifest>(current => AlreadyAt(current, candidate)
+                .Update<PackageManifest>(current => AlreadyAt(current, candidate) || Moved(current, record)
                     // 🚨 The record this hold was DECIDED on is a read from before this write: another
                     // replica (whose loaded dependency satisfies the floor) or a click may have
                     // installed the candidate in between. A hold stamped then would sit on the
                     // installed version for good — the next reconcile ends at the equal-hash gate,
-                    // before anything clears a hold.
+                    // before anything clears a hold. The same holds when the record moved ANYWHERE
+                    // else (a newer candidate landed): this hold describes an update from the
+                    // version it was decided on, and is stamped only while the record is still there.
                     ? current
                     : current with
                     {
@@ -206,6 +208,17 @@ public static class PackageDependencyFloorGate
                     candidate.Id, recordPath);
                 return Observable.Return(Unit.Default);
             });
+    }
+
+    /// <summary>Whether the live record has moved off the version a decision was taken on — a
+    /// different <see cref="PackageManifest.ModuleVersion"/>. Pure.</summary>
+    /// <param name="current">The install record as it stands now.</param>
+    /// <param name="decidedOn">The install record the decision read.</param>
+    public static bool Moved(PackageManifest current, PackageManifest decidedOn)
+    {
+        ArgumentNullException.ThrowIfNull(current);
+        ArgumentNullException.ThrowIfNull(decidedOn);
+        return !string.Equals(current.ModuleVersion, decidedOn.ModuleVersion, StringComparison.Ordinal);
     }
 
     /// <summary>Whether <paramref name="record"/> already describes <paramref name="candidate"/>'s
@@ -241,7 +254,11 @@ public static class PackageDependencyFloorGate
         var recordPath = $"{PackageInstaller.InstalledPartition}/{record.Id}";
         return hub.ServiceProvider.GetRequiredService<AccessService>()
             .RunAsSystem(() => hub.GetMeshNodeStream(recordPath)
+                // Clears only the hold that was judged met: a record that has since moved, or carries
+                // a different hold (decided for another candidate), is left as it stands.
                 .Update<PackageManifest>(current => IsDependencyHold(current.HeldUpdate)
+                                                    && !Moved(current, record)
+                                                    && string.Equals(current.HeldUpdate, record.HeldUpdate, StringComparison.Ordinal)
                     ? current with { HeldUpdate = null, HeldSince = null }
                     : current))
             .Take(1)

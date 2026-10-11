@@ -1,14 +1,19 @@
 #pragma warning disable CS1591
 
 using System;
+using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using MeshWeaver.GitSync;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Plugin.Packaging;
 using MeshWeaver.PluginCatalog;
 using Microsoft.Extensions.DependencyInjection;
@@ -234,6 +239,146 @@ public class PackageDependencyFloorHoldTest(ITestOutputHelper output) : Monolith
     /// loaded reading would fail a new instance's first boot for every default package whose floor is
     /// above the image's own module copy; the module-set proposal still names such a floor.
     /// </summary>
+    /// <summary>
+    /// The other stale-decision race: the record moved to a version that is NEITHER the one the hold
+    /// was decided on NOR its candidate (a newer candidate landed through another replica). The hold
+    /// describes an update from the decided version, so it is not stamped onto the newer record.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task AHoldDecidedOnAStaleRecord_IsNotStampedOnceTheRecordMovedElsewhere()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await InstallV1(PackageUpdatePolicy.Auto);
+        var staleRecord = await FloorHoldFixture.AwaitRecord(Mesh, r => r.ModuleVersion == FloorHoldFixture.V1Hash, ct);
+        // The candidate this hold was decided for — an older one than what lands next.
+        var olderCandidate = V2Requiring(Requirement) with { ModuleVersion = "older-candidate-hash", Version = "1.5.0" };
+
+        await CatalogLayoutAreas
+            .InstallOrUpdate(Mesh, new FloorHoldFixture.CountingSource(FloorHoldFixture.V2Files()), "HEAD",
+                V2Requiring(Requirement), Logger)
+            .Timeout(180.Seconds()).Await(ct);
+        await FloorHoldFixture.AwaitRecord(Mesh, r => r.ModuleVersion == FloorHoldFixture.V2Hash, ct);
+
+        var unmet = new UnmetPackageDependency(Requirement, Dependency, DependencyModule, "1.11.26");
+        await PackageDependencyFloorGate.RecordHold(Mesh, olderCandidate, staleRecord, unmet, Logger)
+            .Timeout(60.Seconds()).Await(ct);
+
+        var after = await FloorHoldFixture.AwaitRecord(Mesh, r => r.ModuleVersion == FloorHoldFixture.V2Hash, ct);
+        after.HeldUpdate.Should().BeNull("the record moved off the version the hold was decided on");
+        PackageDependencyFloorGate.Moved(after, staleRecord).Should().BeTrue();
+        PackageDependencyFloorGate.AlreadyAt(after, olderCandidate).Should().BeFalse(
+            "the premise: the candidate check alone would have stamped it");
+    }
+
+    /// <summary>
+    /// Clearing a met hold clears THAT hold only: when the live record carries a different dependency
+    /// hold (decided after the clear's read), it stands.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task ClearingAMetHold_LeavesADifferentHoldStanding()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await InstallV1(PackageUpdatePolicy.Auto);
+        var v1 = await FloorHoldFixture.AwaitRecord(Mesh, r => r.ModuleVersion == FloorHoldFixture.V1Hash, ct);
+        var candidate = V2Requiring(Requirement);
+
+        await PackageDependencyFloorGate.RecordHold(Mesh, candidate, v1,
+                new UnmetPackageDependency(Requirement, Dependency, DependencyModule, "1.11.26"), Logger)
+            .Timeout(60.Seconds()).Await(ct);
+        var firstHold = await FloorHoldFixture.AwaitRecord(Mesh, r => r.HeldUpdate is not null, ct);
+
+        // A later decision holds for another reason (another loaded version) — a different sentence.
+        await PackageDependencyFloorGate.RecordHold(Mesh, candidate, firstHold,
+                new UnmetPackageDependency(Requirement, Dependency, DependencyModule, "1.10.0"), Logger)
+            .Timeout(60.Seconds()).Await(ct);
+        var secondHold = await FloorHoldFixture.AwaitRecord(Mesh, r => r.HeldUpdate is { } h && h.Contains("1.10.0"), ct);
+        secondHold.HeldUpdate.Should().NotBe(firstHold.HeldUpdate, "the premise: two different holds");
+
+        // The clear was judged on the FIRST hold.
+        await PackageDependencyFloorGate.ClearMetHold(Mesh, firstHold, Logger).Timeout(60.Seconds()).Await(ct);
+
+        var after = await FloorHoldFixture.AwaitRecord(Mesh, _ => true, ct);
+        after.HeldUpdate.Should().Be(secondHold.HeldUpdate, "the hold standing now was never judged met");
+
+        // The control: a clear judged on the hold that stands does clear it.
+        await PackageDependencyFloorGate.ClearMetHold(Mesh, secondHold, Logger).Timeout(60.Seconds()).Await(ct);
+        (await FloorHoldFixture.AwaitRecord(Mesh, r => r.HeldUpdate is null, ct)).HeldUpdate.Should().BeNull();
+    }
+
+    /// <summary>
+    /// A read of the install record that FAULTS stops the attempt: it is not a fresh install, so the
+    /// gate neither proceeds (which would fetch the candidate and advance the record onto the unmet
+    /// floor) nor answers "nothing written".
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task AFaultedRecordRead_StopsTheAttempt_InsteadOfReadingAsAFreshInstall()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await InstallV1(PackageUpdatePolicy.Auto);
+        loaded.Set(Dependency, DependencyModule, "1.11.26");
+        var store = new FaultingRecordReads(Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>(),
+            $"{PackageInstaller.InstalledPartition}/{FloorHoldFixture.Package}");
+        var proceeded = 0;
+
+        var outcome = await CatalogLayoutAreas
+            .HoldIfADependencyIsBelowItsFloor(Mesh, V2Requiring(Requirement), Logger,
+                () =>
+                {
+                    Interlocked.Increment(ref proceeded);
+                    return Observable.Return(new InstallResult(1, 1));
+                },
+                store)
+            .Select(_ => (Exception?)null)
+            .Catch((Exception ex) => Observable.Return<Exception?>(ex))
+            .Timeout(60.Seconds()).Await(ct);
+
+        store.Faults.Should().BeGreaterThan(0, "the premise: the record read was taken and faulted");
+        outcome.Should().BeOfType<TimeoutException>("the read's fault is the attempt's outcome");
+        Volatile.Read(ref proceeded).Should().Be(0, "an unknown record is not a fresh install");
+        (await FloorHoldFixture.AwaitRecord(Mesh, _ => true, ct)).ModuleVersion.Should().Be(FloorHoldFixture.V1Hash);
+    }
+
+    /// <summary>The real store with the read of one path made to throw.</summary>
+    private sealed class FaultingRecordReads(IStorageAdapter inner, string faultOnPath) : IStorageAdapter
+    {
+        private int faults;
+
+        public int Faults => Volatile.Read(ref faults);
+
+        public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
+            => string.Equals(path, faultOnPath, StringComparison.OrdinalIgnoreCase)
+                ? Observable.Defer(() =>
+                {
+                    Interlocked.Increment(ref faults);
+                    return Observable.Throw<MeshNode?>(new TimeoutException("The operation has timed out."));
+                })
+                : inner.Read(path, options);
+
+        public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)>
+            ListChildPaths(string? parentPath) => inner.ListChildPaths(parentPath);
+
+        public IObservable<DataChangeNotification> Changes => inner.Changes;
+
+        public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options) => inner.Write(node, options);
+
+        public IObservable<string> Delete(string path) => inner.Delete(path);
+
+        public IObservable<bool> Exists(string path) => inner.Exists(path);
+
+        public IObservable<object> GetPartitionObjects(string nodePath, string? subPath, JsonSerializerOptions options)
+            => inner.GetPartitionObjects(nodePath, subPath, options);
+
+        public IObservable<Unit> SavePartitionObjects(
+            string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options)
+            => inner.SavePartitionObjects(nodePath, subPath, objects, options);
+
+        public IObservable<Unit> DeletePartitionObjects(string nodePath, string? subPath = null)
+            => inner.DeletePartitionObjects(nodePath, subPath);
+
+        public IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(string nodePath, string? subPath = null)
+            => inner.GetPartitionMaxTimestamp(nodePath, subPath);
+    }
+
     [Fact(Timeout = 300_000)]
     public async Task AFreshInstall_IsNotHeld()
     {

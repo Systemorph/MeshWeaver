@@ -711,21 +711,37 @@ public static partial class CatalogLayoutAreas
     /// requirement met, a record at the SAME hash (re-landing what is here replaces nothing), and
     /// NO record — a fresh install is not held, the installer orders its dependencies first and
     /// there is no installed version to keep.
+    ///
+    /// <para>🚨 A read of the install record that FAULTS stops the attempt (the fault propagates to
+    /// the caller's per-package handling): only an ANSWERED absence is a fresh install. Reading a
+    /// failed read as "no record" would proceed past the hold on a transient storage fault and
+    /// advance the record onto the very floor this gate exists to keep it off.</para>
     /// </summary>
     private static IObservable<InstallResult> HoldIfADependencyIsBelowItsFloor(
         IMessageHub hub, PackageManifest pkg, ILogger? logger, Func<IObservable<InstallResult>> proceed)
-    {
-        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
-        if (persistence is null)
-            return proceed();
+        => hub.ServiceProvider.GetService<IStorageAdapter>() is { } persistence
+            ? HoldIfADependencyIsBelowItsFloor(hub, pkg, logger, proceed, persistence)
+            : proceed();
 
+    /// <summary>The dependency hold over an explicit store — the production overload resolves the
+    /// mesh's; the pin for <c>PackageDependencyFloorHoldTest</c> (InternalsVisibleTo) passes one
+    /// whose read faults.</summary>
+    /// <param name="hub">The calling hub.</param>
+    /// <param name="pkg">The candidate.</param>
+    /// <param name="logger">Diagnostics.</param>
+    /// <param name="proceed">The install, when nothing holds it.</param>
+    /// <param name="persistence">The store the install record is read from.</param>
+    /// <returns>Cold; the install's result, an empty result when held, or the read's fault.</returns>
+    internal static IObservable<InstallResult> HoldIfADependencyIsBelowItsFloor(
+        IMessageHub hub, PackageManifest pkg, ILogger? logger, Func<IObservable<InstallResult>> proceed,
+        IStorageAdapter persistence)
+    {
         return PackageDependencyFloorGate.Evaluate(hub, pkg, logger).SelectMany(unmet => unmet is null
             ? proceed()
             : persistence.Read($"{PackageInstaller.InstalledPartition}/{pkg.Id}", hub.JsonSerializerOptions)
                 .Take(1)
                 .DefaultIfEmpty()
                 .Select(n => n?.ContentAs<PackageManifest>(hub.JsonSerializerOptions))
-                .Catch<PackageManifest?, Exception>(_ => Observable.Return<PackageManifest?>(null))
                 .SelectMany(record =>
                     record is null
                     || (!string.IsNullOrEmpty(pkg.ModuleVersion)
