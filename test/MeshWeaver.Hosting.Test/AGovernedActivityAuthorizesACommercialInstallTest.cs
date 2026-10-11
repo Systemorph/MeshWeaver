@@ -293,6 +293,75 @@ public class AGovernedActivityAuthorizesACommercialInstallTest(ITestOutputHelper
                 .Should().NotBeNull($"{name} must not authorize the package");
     }
 
+    private static GovernedActivityFacts SetFacts(string packages, string state = "Executing", int consumed = 2) =>
+        new("Governance/Activities/a", "Governance/Standards/" + PackageEntitlement.PackageProvisionSetStandard, state,
+            ImmutableDictionary<string, string>.Empty.Add(PackageEntitlement.PackageSetInput, packages))
+        {
+            NodeType = PackageEntitlement.GovernedActivityNodeType,
+            ConsumedSignatures = consumed,
+        };
+
+    /// <summary>
+    /// A package.provision-set activity — ONE activity signed once for a list (maintainer,
+    /// 2026-10-11: "pls don't give me hundreds of links to click") — authorizes exactly the
+    /// packages its signed list names, under every other check the single standard has.
+    /// </summary>
+    [Fact]
+    public void WhyNotAuthorizingActivity_ASetActivity_AdmitsExactlyThePackagesItsSignedListNames()
+    {
+        const string path = "Governance/Activities/a";
+        foreach (var signed in new[] { "pkg", "Claims, pkg, Pricing", "Claims;pkg", " Claims\npkg ", "pkg,Claims" })
+            PackageEntitlement.WhyNotAuthorizingActivity(SetFacts(signed), path, Commercial("pkg"))
+                .Should().BeNull($"the set '{signed}' names pkg");
+        PackageEntitlement.WhyNotAuthorizingActivity(SetFacts("Claims, pkg", state: "Done"), path, Commercial("pkg"))
+            .Should().BeNull("Done has started — the update's re-check gets the same answer");
+
+        var refusals = new (string Name, GovernedActivityFacts Facts)[]
+        {
+            ("a set without the package", SetFacts("Claims, Pricing")),
+            ("a case-folded member", SetFacts("Claims, PKG")),
+            ("a prefix of a member", SetFacts("pkg2, Claims")),
+            ("a malformed list", SetFacts("Claims, ../pkg, pkg")),
+            ("a list naming an id twice", SetFacts("pkg, PKG")),
+            ("not started", SetFacts("pkg", state: "Gating")),
+            ("no consumed signature", SetFacts("pkg", consumed: 0)),
+        };
+        foreach (var (name, facts) in refusals)
+            PackageEntitlement.WhyNotAuthorizingActivity(facts, path, Commercial("pkg"))
+                .Should().NotBeNull($"{name} must not authorize the package");
+        PackageEntitlement.WhyNotAuthorizingActivity(SetFacts("Claims"), path, Commercial("pkg"))!
+            .Should().Contain("does not name 'pkg'", "the refusal says the set does not cover it");
+        PackageEntitlement.WhyNotAuthorizingActivity(Facts(package: "Claims, pkg"), path, Commercial("pkg"))
+            .Should().NotBeNull("a single-package activity is never read as a list");
+    }
+
+    [Fact]
+    public void PackageSetIds_IsTheStoresRule()
+    {
+        PackageEntitlement.PackageSetIds(" Claims, Underwriting ;Pricing\nSST ").Should().Equal("Claims", "Underwriting", "Pricing", "SST");
+        PackageEntitlement.PackageSetIds("").Should().BeEmpty();
+        PackageEntitlement.PackageSetIds(null).Should().BeEmpty();
+        PackageEntitlement.PackageSetIds("Claims, a/b").Should().BeEmpty("one id that is not plain voids the list");
+        PackageEntitlement.PackageSetIds("Claims, claims").Should().BeEmpty("the same partition twice voids the list");
+    }
+
+    /// <summary>End to end through the installer: a set activity naming the package admits it.</summary>
+    [Fact(Timeout = 180_000)]
+    public async Task AVerifiedSetActivity_InstallsACommercialPackageItNames()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var content = ActivityContent("unused", standard: "Governance/Standards/" + PackageEntitlement.PackageProvisionSetStandard);
+        content["inputs"] = new JsonObject { [PackageEntitlement.PackageSetInput] = "gov-set-a, gov-set-paid" };
+        await WriteActivity(ct, content);
+
+        var result = await Install(ct, Commercial("gov-set-paid"), ActivityPath);
+        result.Written.Should().BeGreaterThan(0, "a started package.provision-set activity whose signed list names the package authorizes it");
+
+        var refused = await Record.ExceptionAsync(() => Install(ct, Commercial("gov-set-other"), ActivityPath));
+        refused.Should().BeOfType<PackageAuthorizationException>("a package outside the signed set is refused");
+        (await Read(ct, $"{PackageInstaller.InstalledPartition}/gov-set-other")).Should().BeNull("and writes nothing");
+    }
+
     [Fact]
     public void FactsRead_CountsConsumedSignatures_AndKeepsTheNodeType()
     {

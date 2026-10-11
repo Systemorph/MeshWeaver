@@ -82,6 +82,10 @@ public static class BroadGrantGuard
         StringComparer.Ordinal,
         "access.grant-broad", "access.revoke", "access.policy-change",
         "package.provision", "package.remove",
+        // package.provision-set (2026-10-11): ONE activity, signed once, installs a list of
+        // packages — the same authority and gates as package.provision; its executor writes the
+        // one Store/Provision request that names the activity.
+        "package.provision-set",
         // The two existing standards that already write a grant for another user as System.
         "store.enroll", "pr.steward.admin-access",
         // Public links (MeshWeaver#4306): link.publish grants its audience (Anonymous, Public or an

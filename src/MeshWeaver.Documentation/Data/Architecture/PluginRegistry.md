@@ -642,10 +642,15 @@ the **action**, not on the screen that triggered it:
   |---|---|
   | the path | it is not exactly `Governance/Activities/{id}`, or nothing readable is stored there |
   | the node type | it is not a `Governance/Activity` |
-  | the standard | it is not `package.provision` |
+  | the standard | it is neither `package.provision` nor `package.provision-set` |
   | the state | it has not started — `Executing`, `Done` or `Failed` are started (gates green, signatures consumed; monotone, so a later update re-check gives the same answer) |
   | the signatures | none is consumed |
   | the package | the signed `package` input is not this package's id (ordinal) |
+  | the package (a set) | for `package.provision-set`: the signed `packages` list does not name this package's id (ordinal). The list is parsed by `PackageEntitlement.PackageSetIds`, the Store's rule: ids separated by commas, semicolons or whitespace, each a plain id. A list holding an id that is not plain, or the same id twice, names nothing |
+
+  `package.provision-set` is ONE activity, signed once, that installs a list of packages. The
+  maintainer, 2026-10-11: *"pls don't give me hundreds of links to click"*. It has the same
+  authority and gates as the single standard, and the Store installs the list in dependency order.
 
   A refusal names which check failed. An admission is logged as
   `[PackageEntitlement] commercial package X AUTHORIZED by governed activity Governance/Activities/…`,
