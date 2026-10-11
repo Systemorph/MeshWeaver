@@ -1898,6 +1898,7 @@
   "inbox.band.NeedsYou": "Needs you",
   "inbox.band.Running": "Running",
   "inbox.band.Recent": "Recent",
+  "inbox.capped": "Showing the newest {0} of each source. Use the search to find older items.",
   "inbox.unread": "Could not be read, trying again shortly: {0}",
   "inbox.source.Notifications": "Notifications",
   "inbox.source.Mail": "Mail",

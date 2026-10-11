@@ -228,6 +228,65 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
         (await Content<Email>($"{ns}/out1", _ => true, ct)).Status.Should().Be(EmailStatus.Sending);
     }
 
+    /// <summary>
+    /// An item someone ELSE already put away is not this click's to count: Dismiss answers "not
+    /// done" (so it never enters this page's Undo batch, where Undo would reverse the other
+    /// writer's act), and Restore of an item that was never put away answers the same.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task OnlyATransitionThisCallMade_CountsAsDone()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string owner = "inbox-raced";
+        await CreateUserAsync(owner, ct);
+        var ns = $"{owner}/{NotificationService.SatelliteSegment}";
+        foreach (var (id, dismissed) in new[] { ("gone", true), ("here", false) })
+            await CreateAsync(new MeshNode(id, ns)
+            {
+                NodeType = NotificationNodeType.NodeType, Name = id, MainNode = owner, State = MeshNodeState.Active,
+                Content = new Notification { Id = id, Title = id, Recipient = owner, Dismissed = dismissed },
+            }, ct);
+        var handler = Handler(NotificationNodeType.NodeType);
+
+        (await Run(() => handler.Dismiss(Mesh, $"{ns}/gone"), ct)).Should().Be(new InboxItemOutcome($"{ns}/gone", false));
+        (await Run(() => handler.Restore(Mesh, $"{ns}/here"), ct)).Should().Be(new InboxItemOutcome($"{ns}/here", false));
+        // Control: the same calls on items they DO change answer done.
+        (await Run(() => handler.Dismiss(Mesh, $"{ns}/here"), ct)).Done.Should().BeTrue();
+        (await Run(() => handler.Restore(Mesh, $"{ns}/gone"), ct)).Done.Should().BeTrue();
+    }
+
+    /// <summary>
+    /// The page asks each source for a bounded number of rows — the newest, every leg sorts newest
+    /// first — and a provider that names its own limit keeps it.
+    /// </summary>
+    [Fact]
+    public void ALeg_IsBoundedByThePage_UnlessItNamesItsOwnLimit()
+    {
+        InboxQueries.Bounded("namespace:alice/_Email nodeType:Email sort:LastModified-desc")
+            .Should().EndWith($" limit:{InboxQueries.LegLimit}");
+        InboxQueries.Bounded("namespace:alice/_X limit:5 sort:LastModified-desc")
+            .Should().Be("namespace:alice/_X limit:5 sort:LastModified-desc");
+        InboxQueries.BuiltIn.Should().OnlyContain(leg => leg.Query.Contains("sort:"),
+            "the bound keeps the NEWEST rows only because every leg sorts newest first");
+    }
+
+    /// <summary>
+    /// "By title" is alphabetical in the VIEWER's language: for a German viewer Ä sorts with A, not
+    /// after Z as it does by code point.
+    /// </summary>
+    [Fact]
+    public void ByTitle_IsAlphabeticalInTheViewersLanguage()
+    {
+        var mail = new InboxSection(InboxBand.NeedsYou, "Mail", 20, "q");
+        ImmutableList<InboxRow> rows = [.. new[] { "Zebra", "Ärger", "apfel" }.Select((title, i) =>
+            InboxRows.Of(new MeshNode("n" + i, "alice/_X") { Name = title }, mail, null, null))];
+
+        InboxRows.Apply(rows, new InboxFilter { Order = InboxOrder.Title }, InboxLayoutArea.ViewerCulture("de-CH"))
+            .Select(r => r.Title).Should().Equal("apfel", "Ärger", "Zebra");
+        // Control: by code point the umlaut lands last, which is what the comparer replaced.
+        rows.Select(r => r.Title).OrderBy(t => t, StringComparer.OrdinalIgnoreCase).Should().Equal("apfel", "Zebra", "Ärger");
+    }
+
     /// <summary>Only an inbound mail that is New or Read may be filed from the inbox.</summary>
     [Theory]
     [InlineData(EmailDirection.Inbound, EmailStatus.New, true)]

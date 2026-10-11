@@ -204,18 +204,23 @@ public static class InboxRows
     /// </summary>
     /// <param name="rows">The merged rows.</param>
     /// <param name="filter">What the viewer asked for.</param>
-    public static ImmutableList<InboxRow> Apply(IEnumerable<InboxRow> rows, InboxFilter filter)
+    /// <param name="culture">
+    /// The viewer's culture — "by title" and "by source" are alphabetical in the VIEWER's language
+    /// (in German, Ä sorts with A, not after Z). Invariant when omitted.
+    /// </param>
+    public static ImmutableList<InboxRow> Apply(IEnumerable<InboxRow> rows, InboxFilter filter, CultureInfo? culture = null)
     {
+        var text = StringComparer.Create(culture ?? CultureInfo.InvariantCulture, ignoreCase: true);
         var shown = rows.Where(row => !filter.Sources.TryGetValue(SourceKey(row.SourceId), out var on) || on);
         var ordered = filter.Order switch
         {
             InboxOrder.Newest => shown.OrderByDescending(r => r.Stamp, StringComparer.Ordinal),
             InboxOrder.Oldest => shown.OrderBy(r => r.Stamp, StringComparer.Ordinal),
-            InboxOrder.Title => shown.OrderBy(r => r.Title, StringComparer.OrdinalIgnoreCase)
+            InboxOrder.Title => shown.OrderBy(r => r.Title, text)
                 .ThenByDescending(r => r.Stamp, StringComparer.Ordinal),
             // By the name the viewer READS, so the list is alphabetical in their language; the id
             // only separates two sources that happen to share a display name.
-            InboxOrder.Source => shown.OrderBy(r => r.Source, StringComparer.OrdinalIgnoreCase)
+            InboxOrder.Source => shown.OrderBy(r => r.Source, text)
                 .ThenBy(r => r.SourceId, StringComparer.Ordinal)
                 .ThenByDescending(r => r.Stamp, StringComparer.Ordinal),
             // Importance — and anything unrecognised: an unknown stored order must never hide what

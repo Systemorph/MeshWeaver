@@ -30,6 +30,26 @@ public static class InboxQueries
     public const string RowProjection = "select:path,name,nodeType,icon,lastModified";
 
     /// <summary>
+    /// How many rows the inbox asks ONE leg for. Every leg sorts newest first, so this is the newest
+    /// <see cref="LegLimit"/> items of each source — what a person works through; anything older is
+    /// found with the search box, which goes to the query engine.
+    ///
+    /// <para>🚨 Without a bound the page folds every historical row of every source into memory and
+    /// into the client's payload, on a surface that is open all day. The bound is the page's, not
+    /// the provider's: a leg that names its own <c>limit:</c> keeps it.</para>
+    /// </summary>
+    public const int LegLimit = 100;
+
+    /// <summary>
+    /// <paramref name="query"/> bounded to <see cref="LegLimit"/> rows, unless it already names a limit.
+    /// </summary>
+    /// <param name="query">A resolved leg query.</param>
+    public static string Bounded(string query)
+        => query.Split(' ', StringSplitOptions.RemoveEmptyEntries).Any(term => term.StartsWith("limit:", StringComparison.OrdinalIgnoreCase))
+            ? query
+            : $"{query} limit:{LegLimit.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+
+    /// <summary>
     /// The terminal <c>ActivityStatus</c> values, as query terms. 🚨 <c>Running</c> is the enum
     /// DEFAULT, and the serializer omits defaults from stored JSON — so a positive
     /// <c>content.status:Running</c> matches nothing that is actually running, and a negated

@@ -62,6 +62,9 @@ public static class InboxLayoutArea
     /// <summary>The data id of the notice naming the sources that could not be read; empty when all were.</summary>
     public const string UnreadId = "inboxUnread";
 
+    /// <summary>The data id of the notice shown when a source answered as many rows as the page asks for; empty otherwise.</summary>
+    public const string CappedId = "inboxCapped";
+
     /// <summary>How long a source that could not be read is left before it is read again.</summary>
     internal static readonly TimeSpan RetryAfter = TimeSpan.FromSeconds(30);
 
@@ -92,6 +95,7 @@ public static class InboxLayoutArea
                 Sources = sources.ToImmutableDictionary(source => InboxRows.SourceKey(source.Id), _ => true),
             });
             host.UpdateData(UnreadId, string.Empty);
+            host.UpdateData(CappedId, string.Empty);
         }
         host.SeedRowSelection(InboxRows.SelectionId);
         // ONE feed, owner-computed: the grid binds it, and Delete re-reads it at the click.
@@ -131,6 +135,9 @@ public static class InboxLayoutArea
             // Says which sources could not be read — an unreadable source must never look like an
             // empty one. Bound: it appears and clears with the reads, with no re-render.
             .WithView(Controls.Label(new JsonPointerReference(LayoutAreaReference.GetDataPointer(UnreadId))), "Unread")
+            // Says when a source has more than the page lists — a capped list must never read as
+            // "that is everything".
+            .WithView(Controls.Label(new JsonPointerReference(LayoutAreaReference.GetDataPointer(CappedId))), "Capped")
             .WithView(Grid(host, rows), "Grid"));
     }
 
@@ -145,6 +152,10 @@ public static class InboxLayoutArea
         var hub = host.Hub;
         var handlers = hub.ServiceProvider.GetServices<IInboxItemHandler>().ToImmutableArray();
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(InboxLayoutArea));
+        // Captured ONCE, on the render turn: the legs are (re)subscribed on data emissions and on
+        // timers, where the ambient context is no longer the viewer's.
+        var access = hub.ServiceProvider.GetService<AccessService>();
+        var caller = access?.Context;
         // Resolved ONCE, on the render turn: every text a row may carry.
         var running = host.Localize("inbox.blocked.running");
         var noHandler = host.Localize("inbox.blocked.noHandler");
@@ -166,7 +177,7 @@ public static class InboxLayoutArea
         // after RetryAfter — one provider's failure must not blank the others, and must not pass
         // for "nothing here" either.
         IObservable<(ImmutableList<InboxRow> Rows, string? Unread)> Leg(InboxSection section, string term) =>
-            Nodes(hub, section, term, owner)
+            Nodes(hub, section, term, owner, access, caller)
                 .Select(nodes => (nodes
                     .Select(node => InboxRows.Of(node, section, zone,
                         BlockedReason(section.Band, InboxItemHandlers.For(handlers, node.NodeType), running, noHandler),
@@ -182,7 +193,13 @@ public static class InboxLayoutArea
         IObservable<ImmutableList<InboxRow>> Merged(string term) => sections
             .Select(section => Leg(section, term))
             .CombineLatest()
-            .Do(legs => host.UpdateData(UnreadId, UnreadNotice(host, legs.Select(leg => leg.Unread))))
+            .Do(legs =>
+            {
+                host.UpdateData(UnreadId, UnreadNotice(host, legs.Select(leg => leg.Unread)));
+                host.UpdateData(CappedId, legs.Any(leg => leg.Rows.Count >= InboxQueries.LegLimit)
+                    ? host.Localize("inbox.capped", InboxQueries.LegLimit)
+                    : string.Empty);
+            })
             .Select(legs => InboxRows.Merge(legs.Select(leg => leg.Rows)));
 
         return filter.Select(f => f.Search.Trim())
@@ -193,7 +210,7 @@ public static class InboxLayoutArea
             .Switch()
             .Select(Merged)
             .Switch()
-            .CombineLatest(filter, InboxRows.Apply);
+            .CombineLatest(filter, (rows, asked) => InboxRows.Apply(rows, asked, culture));
     }
 
     /// <summary>
@@ -232,21 +249,30 @@ public static class InboxLayoutArea
     }
 
     /// <summary>
-    /// One leg's nodes. With no search term it is the leg's SHARED synced query (one subscription
-    /// per leg and viewer, replayed). With a term it is a live read of the leg plus the term — its
-    /// own subscription, ended when the term changes — because a synced query is kept for the
-    /// process's life per distinct query text, and a typed term is unbounded.
+    /// One leg's nodes — the newest <see cref="InboxQueries.LegLimit"/> of them. With no search term
+    /// it is the leg's SHARED synced query (one subscription per leg and viewer, replayed). With a
+    /// term it is a live read of the leg plus the term — its own subscription, ended when the term
+    /// changes — because a synced query is kept for the process's life per distinct query text, and
+    /// a typed term is unbounded.
+    ///
+    /// <para>🚨 BOTH branches name the viewer, neither trusts the ambient identity: this runs on a
+    /// data emission (or a retry timer), where the ambient context is no longer the page's. The
+    /// synced query takes the identity it finds when it is CREATED — with none it hands back the
+    /// System-loaded stream, unfiltered — so the captured caller is re-established around that
+    /// call; the live read takes the viewer as an argument.</para>
     /// </summary>
-    internal static IObservable<IEnumerable<MeshNode>> Nodes(IMessageHub hub, InboxSection section, string term, string owner)
-        => term.Length == 0
-            ? hub.GetQuery(InboxRows.QueryId(section), section.Query)
-            // 🚨 The viewer is an ARGUMENT, never the ambient identity: this is subscribed on a data
-            // emission, where the ambient context is no longer the page's — and the term is the
-            // viewer's own text, so it must be evaluated with exactly the viewer's rights.
-            : hub.ServiceProvider.GetRequiredService<IMeshService>()
-                .Query<MeshNode>(MeshQueryRequest.FromQuery($"{section.Query} {term}", owner))
-                .Scan(ImmutableDictionary<string, MeshNode>.Empty.WithComparers(StringComparer.Ordinal), Fold)
-                .Select(nodes => (IEnumerable<MeshNode>)nodes.Values);
+    internal static IObservable<IEnumerable<MeshNode>> Nodes(
+        IMessageHub hub, InboxSection section, string term, string owner, AccessService? access, AccessContext? caller)
+    {
+        var query = InboxQueries.Bounded(section.Query);
+        if (term.Length == 0)
+            using (access?.SwitchAccessContext(caller))
+                return hub.GetQuery(InboxRows.QueryId(section), query);
+        return hub.ServiceProvider.GetRequiredService<IMeshService>()
+            .Query<MeshNode>(MeshQueryRequest.FromQuery($"{query} {term}", owner))
+            .Scan(ImmutableDictionary<string, MeshNode>.Empty.WithComparers(StringComparer.Ordinal), Fold)
+            .Select(nodes => (IEnumerable<MeshNode>)nodes.Values);
+    }
 
     /// <summary>
     /// A live read answers its first set whole and every later change as a delta; this folds them

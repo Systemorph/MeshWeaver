@@ -1898,6 +1898,7 @@
   "inbox.band.NeedsYou": "Braucht Sie",
   "inbox.band.Running": "Läuft",
   "inbox.band.Recent": "Kürzlich",
+  "inbox.capped": "Angezeigt werden die neuesten {0} je Quelle. Ältere Einträge finden Sie über die Suche.",
   "inbox.unread": "Konnte nicht gelesen werden, neuer Versuch in Kürze: {0}",
   "inbox.source.Notifications": "Benachrichtigungen",
   "inbox.source.Mail": "E-Mail",

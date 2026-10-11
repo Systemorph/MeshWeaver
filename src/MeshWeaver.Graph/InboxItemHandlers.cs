@@ -36,17 +36,30 @@ public static class InboxItemHandlers
     /// <param name="hub">The hub the inbox renders on.</param>
     /// <param name="path">The item's node path.</param>
     /// <param name="change">The change; returns its argument unchanged when the item may not be changed.</param>
-    /// <param name="reached">
-    /// Whether the content AS WRITTEN is in the state the action asked for. A write whose change
-    /// was a no-op (an item that may not be changed, or that someone changed first) completes just
-    /// as a real one does — so "the update completed" is never the answer; the resulting state is.
-    /// </param>
+    /// <param name="reached">Whether the content AS WRITTEN is in the state the action asked for.</param>
+    /// <remarks>
+    /// 🚨 <c>Done</c> needs BOTH: this call changed the content, and the content is now in the
+    /// asked-for state. "The update completed" proves neither — a no-op completes like a real write.
+    /// And the final state alone is not enough: an item someone ELSE already put away is in the
+    /// asked-for state too, and counting it would put it in this click's Undo batch, where Undo
+    /// would reverse the other writer's act. The update lambda can run more than once (a retried
+    /// write), so the flag records its LAST run — the one whose result was written.
+    /// </remarks>
     internal static IObservable<InboxItemOutcome> Write<TContent>(
         IMessageHub hub, string path, Func<TContent, TContent> change, Func<TContent, bool> reached) where TContent : class
-        => hub.GetMeshNodeStream(path).Update(change)
-            .Take(1)
-            .Select(node => new InboxItemOutcome(path,
-                node.ContentAs<TContent>(hub.JsonSerializerOptions) is { } content && reached(content)))
+        => Observable.Defer(() =>
+        {
+            var changed = false;
+            return hub.GetMeshNodeStream(path).Update<TContent>(current =>
+                {
+                    var next = change(current);
+                    changed = !Equals(next, current);
+                    return next;
+                })
+                .Take(1)
+                .Select(node => new InboxItemOutcome(path,
+                    changed && node.ContentAs<TContent>(hub.JsonSerializerOptions) is { } content && reached(content)));
+        })
             .Catch((Exception ex) =>
             {
                 hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(InboxItemHandlers))

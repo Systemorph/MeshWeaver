@@ -379,7 +379,7 @@ function of the filter and the legs.
 | Control | Bound to | What it does |
 |---|---|---|
 | search box | `search` | the term is appended to EVERY leg and handed to the query engine (free text, field filters, the semantic index) under the owner's identity — never a match over the rows already loaded |
-| order select | `order` | an `InboxOrder` constant: what needs you first (default — band rank, newest within), newest, oldest, by title, by source |
+| order select | `order` | an `InboxOrder` constant: what needs you first (default — band rank, newest within), newest, oldest, by title, by source — the last two alphabetical in the viewer's language |
 | one switch per source | `sources/{key}` (the id, hex-encoded) | shows or hides what one provider brought (Mail, WhatsApp, Notifications, …); a source with no entry is shown, so a leg a package brings later never arrives switched off |
 | the grid's checkboxes | `inboxSelection` | the ticked row keys, read by Delete |
 
@@ -436,9 +436,19 @@ Three rules follow, and each is pinned by a test in `InboxSelectAndDeleteTest`:
   node type that picks each handler), and every write is issued under the CLICKER's access context,
   opened around the handler call. The Undo batch is a host variable for the same reason — kept in the
   data section it would be whatever the client says it is.
-- **"The write completed" is not "the item was put away".** A handler answers `Done` from the state
-  the content is in AFTER the write: a change that was a no-op (an outbound mail, an item someone
-  changed first) completes like any other, and must not enter the Undo batch.
+- **"The write completed" is not "the item was put away".** A handler answers `Done` only when THIS
+  call changed the content AND the content is now in the asked-for state. A no-op (an outbound mail)
+  completes like any other write; and an item someone else already put away is in the asked-for
+  state too — counted, it would enter this click's Undo batch and Undo would reverse the other
+  writer's act.
+- **Each source is asked for its newest `InboxQueries.LegLimit` rows, and the page says so when a
+  source has more.** Unbounded, the page folds every historical row into memory and into the
+  client's payload on a surface that is open all day. Older items are found with the search, which
+  goes to the query engine; "oldest first" therefore orders the listed window, not all history.
+- **Both reads name the viewer.** A leg is (re)subscribed on a data emission or a retry timer, where
+  the ambient identity is gone: the synced query is created under the captured caller (with no
+  identity it hands back the System-loaded stream, unfiltered) and the live read takes the viewer as
+  an argument.
 - **A source that cannot be read is named, and read again.** It contributes no rows, is logged, is
   listed in a notice above the grid, and is re-read after a pause — an unreadable source must never
   look like an empty one.
