@@ -108,13 +108,15 @@ public sealed class RefreshSpacePathsLogonAction : ILogonAction
             .Select(n => n.Path?.Trim('/'))
             .Where(p => !string.IsNullOrEmpty(p) && !p!.Contains('/'))
             .Where(p => !string.Equals(p, owner, StringComparison.OrdinalIgnoreCase))
-            .Where(p => !IsPlatformPartition(p!))
+            .Where(p => !IsPlatformOwnedPartition(p!))
             .Select(p => p!));
 
     /// <summary>Whether a partition belongs to the platform rather than to people:
-    /// <see cref="WellKnownPartitions.Platform"/> or <see cref="WellKnownPartitions.Fleet"/>
-    /// (case-insensitive). Pure.</summary>
-    internal static bool IsPlatformPartition(string partition) =>
+    /// <see cref="WellKnownPartitions.Platform"/> OR <see cref="WellKnownPartitions.Fleet"/>
+    /// (case-insensitive). Deliberately NOT named like
+    /// <c>PlatformAdminGrantRepair.IsPlatformPartition</c>, which answers a narrower question and is
+    /// false for every Fleet partition. Pure.</summary>
+    internal static bool IsPlatformOwnedPartition(string partition) =>
         WellKnownPartitions.Platform.Contains(partition) || WellKnownPartitions.Fleet.Contains(partition);
 
     /// <summary>

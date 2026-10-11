@@ -621,7 +621,7 @@ public static class UserActivityLayoutAreas
                 AccessSubjectQueries.Partition(scope), ownerId, StringComparison.OrdinalIgnoreCase))
             // A grant on one of the platform's own partitions (every global admin holds one on
             // Admin and Provider) is not a space somebody shared: it is reached through its app.
-            .Where(scope => !Logon.RefreshSpacePathsLogonAction.IsPlatformPartition(
+            .Where(scope => !Logon.RefreshSpacePathsLogonAction.IsPlatformOwnedPartition(
                 AccessSubjectQueries.Partition(scope)))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(s => s, StringComparer.OrdinalIgnoreCase)
