@@ -396,13 +396,17 @@ public static class InboxLayoutArea
             .Zip(rows.Take(1), (keys, current) => InboxRows.Targets(current, keys, owner))
             .SelectMany(targets => targets.Count == 0
                 ? Observable.Throw<Unit>(new InvalidOperationException(host.Localize("inbox.nothingSelected")))
-                : Act(ctx, access, caller, targets.Select(row => new InboxUndoItem(row.Path, row.NodeType)).ToImmutableList(),
-                        handlers, (handler, path) => handler.Dismiss(hub, path), "inbox.progress.deleting")
+                : Observable.Defer(() =>
+                    {
+                        // Each item enters the Undo batch the moment it is put away — never at the
+                        // end: a click can be cancelled after some items were written, and those
+                        // must stay undoable. The first one put away starts this click's batch.
+                        acts.BeginDelete();
+                        return Act(ctx, access, caller, targets.Select(row => new InboxUndoItem(row.Path, row.NodeType)).ToImmutableList(),
+                            handlers, (handler, path) => handler.Dismiss(hub, path), "inbox.progress.deleting", acts.PutAway);
+                    })
                     .Do(outcomes =>
                     {
-                        var done = outcomes.Where(o => o.Done).Select(o => o.Path).ToImmutableHashSet(StringComparer.Ordinal);
-                        acts.Batch = targets.Where(row => done.Contains(row.Path))
-                            .Select(row => new InboxUndoItem(row.Path, row.NodeType)).ToImmutableList();
                         // The rows are gone from the grid; so are their ticks.
                         host.UpdateData(InboxRows.SelectionId, new DataGridSelectionState());
                         ctx.ReportSummary(Summary(host, "inbox.summary.deleted", outcomes));
@@ -429,12 +433,12 @@ public static class InboxLayoutArea
             var batch = acts.Batch;
             return batch is not { Count: > 0 }
             ? Observable.Throw<Unit>(new InvalidOperationException(host.Localize("inbox.nothingToUndo")))
-            : Act(ctx, access, caller, batch, handlers, (handler, path) => handler.Restore(hub, path), "inbox.progress.restoring")
+            // Each item leaves the batch the moment it is brought back, so a cancelled Undo leaves
+            // exactly what is still away; whatever could not be brought back stays undoable.
+            : Act(ctx, access, caller, batch, handlers, (handler, path) => handler.Restore(hub, path), "inbox.progress.restoring",
+                    acts.BroughtBack)
                 .Do(outcomes =>
                 {
-                    // Whatever could not be brought back stays undoable — a second click retries it.
-                    var done = outcomes.Where(o => o.Done).Select(o => o.Path).ToImmutableHashSet(StringComparer.Ordinal);
-                    acts.Batch = batch.Where(item => !done.Contains(item.Path)).ToImmutableList();
                     ctx.ReportSummary(Summary(host, "inbox.summary.restored", outcomes));
                 })
                 .Select(_ => Unit.Default);
@@ -444,12 +448,15 @@ public static class InboxLayoutArea
     /// <summary>
     /// Runs <paramref name="act"/> for each item in turn, each call opened under the clicker's
     /// access context. An item whose type has no handler, or whose handler faults, answers for
-    /// itself — the batch never stops at the first refusal.
+    /// itself — the batch never stops at the first refusal. <paramref name="done"/> is told of each
+    /// item the moment it is done, so what was written is recorded even if the click is cancelled
+    /// before the batch finishes.
     /// </summary>
     private static IObservable<ImmutableList<InboxItemOutcome>> Act(
         UiActionContext ctx, AccessService? access, AccessContext? caller, ImmutableList<InboxUndoItem> items,
         ImmutableArray<IInboxItemHandler> handlers,
-        Func<IInboxItemHandler, string, IObservable<InboxItemOutcome>> act, string progressKey)
+        Func<IInboxItemHandler, string, IObservable<InboxItemOutcome>> act, string progressKey,
+        Action<InboxUndoItem> done)
     {
         var logger = ctx.Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(InboxLayoutArea));
         return items
@@ -480,6 +487,10 @@ public static class InboxLayoutArea
                         return Faulted(ex);
                     }
                 }
+            }).Do(outcome =>
+            {
+                if (outcome.Done)
+                    done(item);
             }))
             .Concat()
             .Aggregate(ImmutableList<InboxItemOutcome>.Empty, (done, outcome) => done.Add(outcome));
@@ -522,19 +533,34 @@ public static class InboxLayoutArea
 /// <summary>
 /// One inbox page's acts: what the last Delete put away (what Undo brings back), and whether a
 /// Delete or an Undo is running. Shared by the two buttons, and written from whichever thread an
-/// act completes on — so the claim is atomic and the batch is one reference swap.
+/// act completes on — so the claim is atomic and the batch is one reference swap. Only the act that
+/// holds the claim writes the batch, item by item as each write lands.
 /// </summary>
 internal sealed class InboxActs
 {
     private int busy;
     private ImmutableList<InboxUndoItem> batch = ImmutableList<InboxUndoItem>.Empty;
 
-    /// <summary>What the last Delete put away. Written only by the act that holds the page.</summary>
-    public ImmutableList<InboxUndoItem> Batch
-    {
-        get => Volatile.Read(ref batch);
-        set => Volatile.Write(ref batch, value);
-    }
+    private int fresh;
+
+    /// <summary>What the last Delete put away and Undo has not yet brought back.</summary>
+    public ImmutableList<InboxUndoItem> Batch => Volatile.Read(ref batch);
+
+    /// <summary>
+    /// A Delete is starting: the first item it puts away replaces the previous batch. A Delete that
+    /// puts nothing away leaves the previous batch undoable.
+    /// </summary>
+    public void BeginDelete() => Volatile.Write(ref fresh, 1);
+
+    /// <summary>Records one item a Delete has just put away — called per item, as it happens.</summary>
+    /// <param name="item">The item.</param>
+    public void PutAway(InboxUndoItem item)
+        => Volatile.Write(ref batch, Interlocked.Exchange(ref fresh, 0) == 1 ? [item] : Batch.Add(item));
+
+    /// <summary>Records one item an Undo has just brought back — called per item, as it happens.</summary>
+    /// <param name="item">The item.</param>
+    public void BroughtBack(InboxUndoItem item)
+        => Volatile.Write(ref batch, Batch.RemoveAll(i => string.Equals(i.Path, item.Path, StringComparison.Ordinal)));
 
     /// <summary>
     /// Runs <paramref name="act"/> only when no other Delete or Undo is running on this page, and

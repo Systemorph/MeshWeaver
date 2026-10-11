@@ -389,6 +389,36 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
     }
 
     /// <summary>
+    /// The Undo batch is recorded item by item as each write lands, never only when the whole click
+    /// finishes: a click cancelled after its first item keeps that item undoable, and an Undo
+    /// cancelled part-way leaves exactly what is still away.
+    /// </summary>
+    [Fact]
+    public void TheUndoBatch_IsRecordedPerItem_SoACancelledClickKeepsWhatItDid()
+    {
+        var acts = new InboxActs();
+        InboxUndoItem Item(string p) => new(p, NotificationNodeType.NodeType);
+
+        acts.BeginDelete();
+        acts.PutAway(Item("a"));
+        acts.PutAway(Item("b"));
+        // A first Delete completed; a second one is cancelled after its first item.
+        acts.BeginDelete();
+        acts.PutAway(Item("c"));
+        acts.Batch.Select(i => i.Path).Should().Equal(["c"], "the second Delete's batch replaced the first — and holds what it did before the cancel");
+
+        acts.BeginDelete();
+        acts.Batch.Select(i => i.Path).Should().Equal(["c"], "a Delete that puts nothing away leaves the previous batch undoable");
+
+        acts.BeginDelete();
+        acts.PutAway(Item("d"));
+        acts.PutAway(Item("e"));
+        // An Undo cancelled after bringing back one item.
+        acts.BroughtBack(Item("d"));
+        acts.Batch.Select(i => i.Path).Should().Equal(["e"], "only what is still away stays undoable");
+    }
+
+    /// <summary>
     /// "By title" is alphabetical in the VIEWER's language: for a German viewer Ä sorts with A, not
     /// after Z as it does by code point.
     /// </summary>
