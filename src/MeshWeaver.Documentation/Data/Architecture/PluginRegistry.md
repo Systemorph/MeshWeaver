@@ -571,6 +571,28 @@ the skip is never silent:
   per-package catch); this keeps a second one from re-introducing a failed id with nothing beside it.
 - **Kept off the seeded list, and retried by the next pass** (#2254) — the ledger knows the package,
   so the governed-provision hold does not take it for a newly listed one (#5934).
+- **The next pass does not wait for the next boot** (#5825). A boot install fails because a registry
+  did not answer, and the registry answering is the event that changes the outcome. The reconciler
+  already observes it: every reconcile that a feed read after boot made possible (the safety-net
+  pass on `PluginCatalog:ReconcileSafetyNetInterval`, and a boot reconcile that was deferred and is
+  drained by the first feed read) ends by asking
+  the installer to run the default install again when its last pass left something undone — a
+  failed package, a source that did not answer its listing, or the pass itself faulting
+  (`RegistryUpdateReconciler.RetryFailedDefaultInstalls` → `InstanceAutoRegistrationService.RetryFailedDefaults`).
+  A source HELD at boot (a torn or unreadable seal) is not owed a repair and is not listed again by
+  one: a hold releases at the next process start and nowhere else, so the repair skips it and keeps
+  that contract (the maintainer's decision on #6493). It still makes the pass's listing incomplete,
+  which is a statement about what the pass saw (`ListingIncomplete`), kept apart from the retryable
+  half (`SourceUnreachable`).
+  It runs on the reconciler's serialized lane, so there is no second writer and no timer of its own;
+  it is the same shape as the faulted-reload retry that ends the same pass. A pass that left nothing
+  undone is not repeated (no source is listed), and the boot reconcile does not ask, because it runs
+  straight after the pass that failed. A package that fails again stays recorded and logs its cause
+  at Error on each attempt, so one that can never install stays loud at the reconcile's cadence.
+  Before this the only repair was the next boot: measured on the control instance on 2026-09-27,
+  `Anthropic` stayed uninstalled after one stalled HTTPS read until the next image roll. With the
+  safety net disabled (`ReconcileSafetyNetInterval` ≤ 0), the next boot is again the
+  retry. Pinned by `AFailedDefaultInstallIsRepairedWhenTheFeedAnswersTest`.
 - **A snapshot.** `failed` and `failureCauses` describe the last pass that attempted anything: an entry
   leaves the moment its package is delivered or stops being declared.
 - **A bound that expires says which wait it was.** The install chain's internal bounds fault with
