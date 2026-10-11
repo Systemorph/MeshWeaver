@@ -165,8 +165,9 @@ stalls denies credit, so a queued leaf may fail at one budget, as it did before.
 What the credit cannot see is a leaf stuck OUTSIDE every pool while the lanes advance for others. So
 the total credit is capped at **four budgets** (`QueueCreditBudgets`); past that, the watchdog fails
 as before, and the line names the pools (`IoPoolQueueReport`). Pinned by
-`DeleteCommitQueuedBehindAMovingLaneTest`: a leaf queued behind twelve 600 ms writers on a 4 s budget
-completes in its turn, and a leaf admitted and hung in its own lane fails inside two budgets while an
+`DeleteCommitQueuedBehindAMovingLaneTest`: a leaf queued behind at least nine 600 ms writers that are
+at the gate when it asks for its slot (`QueuedAhead` — 5.4 s of queue on a 4 s budget) completes in
+its turn, and a leaf admitted and hung in its own lane fails inside two budgets while an
 unrelated lane keeps advancing. With the stalled-lane condition removed, the second case ran to 27 s.
 
 🚨 **A pool's `Waiting` is not its queue order — read `BehindCap` before claiming a leaf is behind

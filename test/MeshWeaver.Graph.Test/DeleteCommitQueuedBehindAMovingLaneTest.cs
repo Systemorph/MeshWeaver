@@ -29,9 +29,11 @@ namespace MeshWeaver.Graph.Test;
 /// own removals - read the wait as a stall although the lane was advancing the whole time.</para>
 ///
 /// <para><b>The repro.</b> A one-path delete whose store write is admitted through a cap-1 <c>pg:</c> pool that is
-/// kept loaded with <see cref="Holders"/> unrelated writes of <see cref="HoldEach"/> each - about 7 s of queue
-/// against a 4 s stage budget. The lane never stops: a slot is granted every 600 ms. Before the change the
-/// watchdog fires at 4 s; after it, the lane's advance credits the watchdog and the delete completes in its turn.
+/// kept loaded with <see cref="Holders"/> unrelated writes of <see cref="HoldEach"/> each. What the test
+/// GUARANTEES is the part of that load ahead of the leaf: at least <see cref="QueuedAhead"/> holders at the gate
+/// when the leaf asks - 5.4 s of queue against a 4 s stage budget, and more whenever more of them had reached
+/// the gate. While the leaf waits, the lane grants a slot every 600 ms. Before the change the watchdog fires
+/// at 4 s; after it, the lane's advance credits the watchdog and the delete completes in its turn.
 /// The sibling test <c>DeleteCommitTimeoutSeparatesStarvedFromStuckTest</c> pins the other half: a leaf that is
 /// granted and then hangs is still failed at one budget, naming the pool.</para>
 ///
@@ -39,7 +41,8 @@ namespace MeshWeaver.Graph.Test;
 /// which is one ThreadPool hop before the leaf reaches the gate (<see cref="IoPoolAdmission.BeforeGate"/>), and
 /// the gate is first-come-first-served among the leaves that have REACHED it - not among the ones accepted. So
 /// <c>CurrentlyWaiting</c> says nothing about who is ahead of the delete: with the ThreadPool busy (this project
-/// run whole, in one process) the delete's leaf reached the gate behind three of twelve accepted holders, waited
+/// run whole, in one process) the delete's leaf reached the gate behind three of the twelve holders the first
+/// version of this test had accepted, waited
 /// 1.8 s, and the test failed its own discriminator although the watchdog was never involved. The load is
 /// therefore read where the order is decided (<see cref="IoPoolAdmission.BehindCap"/>), it is kept at depth
 /// until the delete's leaf asks for its slot - however long the stages before the commit took - and the wait
