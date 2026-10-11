@@ -41,13 +41,25 @@ public static class InboxQueries
     public const int LegLimit = 100;
 
     /// <summary>
-    /// <paramref name="query"/> bounded to <see cref="LegLimit"/> rows, unless it already names a limit.
+    /// How many rows <paramref name="query"/> is read for: the provider's own limit when it names a
+    /// POSITIVE one no larger than <see cref="LegLimit"/>, else <see cref="LegLimit"/>. Read through
+    /// the query parser, never by spotting a <c>limit:</c> token — <c>limit:all</c> and a
+    /// non-positive limit are UNBOUNDED to the parser, and a larger one would lift the page's cap.
+    /// </summary>
+    /// <param name="query">A resolved leg query.</param>
+    public static int EffectiveLimit(string query)
+        => new QueryParser().Parse(query).Limit is > 0 and var own && own <= LegLimit ? own : LegLimit;
+
+    /// <summary>
+    /// <paramref name="query"/> bounded to <see cref="EffectiveLimit"/> rows. A query whose own limit
+    /// is already that bound is returned as it is; otherwise the bound is appended, and the parser
+    /// takes the LAST <c>limit:</c> it reads.
     /// </summary>
     /// <param name="query">A resolved leg query.</param>
     public static string Bounded(string query)
-        => query.Split(' ', StringSplitOptions.RemoveEmptyEntries).Any(term => term.StartsWith("limit:", StringComparison.OrdinalIgnoreCase))
+        => new QueryParser().Parse(query).Limit == EffectiveLimit(query)
             ? query
-            : $"{query} limit:{LegLimit.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+            : $"{query} limit:{EffectiveLimit(query).ToString(System.Globalization.CultureInfo.InvariantCulture)}";
 
     /// <summary>
     /// The terminal <c>ActivityStatus</c> values, as query terms. 🚨 <c>Running</c> is the enum

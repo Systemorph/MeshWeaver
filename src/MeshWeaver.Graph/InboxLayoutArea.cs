@@ -64,8 +64,14 @@ public static class InboxLayoutArea
     /// <summary>The data id of the notice naming the sources that could not be read; empty when all were.</summary>
     public const string UnreadId = "inboxUnread";
 
-    /// <summary>The data id of the notice shown when a source answered as many rows as the page asks for; empty otherwise.</summary>
+    /// <summary>The data id of the notice shown when a source answered as many rows as it was asked for; empty otherwise.</summary>
     public const string CappedId = "inboxCapped";
+
+    /// <summary>
+    /// The data id of the notice counting the items needing the viewer that the source switches hide;
+    /// empty when they hide none. A switch must never silently hide an obligation.
+    /// </summary>
+    public const string HiddenId = "inboxHidden";
 
     /// <summary>How long the page waits after the last keystroke before it asks the query engine.</summary>
     internal static readonly TimeSpan SearchQuiet = TimeSpan.FromMilliseconds(300);
@@ -95,6 +101,7 @@ public static class InboxLayoutArea
             });
             host.UpdateData(UnreadId, string.Empty);
             host.UpdateData(CappedId, string.Empty);
+            host.UpdateData(HiddenId, string.Empty);
         }
         host.SeedRowSelection(InboxRows.SelectionId);
         // One per page, created on the render turn; the buttons share it.
@@ -143,6 +150,9 @@ public static class InboxLayoutArea
             // Says when a source has more than the page lists — a capped list must never read as
             // "that is everything".
             .WithView(Controls.Label(new JsonPointerReference(LayoutAreaReference.GetDataPointer(CappedId))), "Capped")
+            // Says how many items needing the viewer the switches hide — "nothing here" must never
+            // be a switch's doing.
+            .WithView(Controls.Label(new JsonPointerReference(LayoutAreaReference.GetDataPointer(HiddenId))), "Hidden")
             .WithView(Grid(host, rows), "Grid"));
     }
 
@@ -170,6 +180,8 @@ public static class InboxLayoutArea
         var bands = sections.Select(s => s.Band).Distinct(StringComparer.Ordinal)
             .Select((band, rank) => (band, rank, Title: BandOrder.Contains(band) ? host.Localize(BandTitleKey(band)) : band))
             .ToImmutableDictionary(b => b.band, b => (b.rank, b.Title), StringComparer.Ordinal);
+        // The rank of the band whose rows are obligations, or none when no leg feeds it.
+        int? needsYou = bands.TryGetValue(InboxBand.NeedsYou, out var owed) ? owed.rank : null;
         // 🚨 Distinct by VALUE. The data section re-emits this id whenever ANY id in it changes —
         // the grid's own rows included — and each emission is a freshly deserialized record whose
         // dictionary is a new instance. Without the fingerprint the page would feed on its own
@@ -202,8 +214,9 @@ public static class InboxLayoutArea
             .Do(legs =>
             {
                 host.UpdateData(UnreadId, UnreadNotice(host, legs.Select(leg => leg.Unread)));
-                host.UpdateData(CappedId, legs.Any(leg => leg.Rows.Count >= InboxQueries.LegLimit)
-                    ? host.Localize("inbox.capped", InboxQueries.LegLimit)
+                // Each leg against ITS OWN bound — a provider may ask for fewer than the page's.
+                host.UpdateData(CappedId, sections.Zip(legs).Any(leg => leg.Second.Rows.Count >= InboxQueries.EffectiveLimit(leg.First.Query))
+                    ? host.Localize("inbox.capped")
                     : string.Empty);
             })
             .Select(legs => InboxRows.Merge(legs.Select(leg => leg.Rows)));
@@ -216,7 +229,13 @@ public static class InboxLayoutArea
             .Switch()
             .Select(Merged)
             .Switch()
-            .CombineLatest(filter, (rows, asked) => InboxRows.Apply(rows, asked, culture));
+            .CombineLatest(filter, (rows, asked) =>
+            {
+                var shown = InboxRows.Apply(rows, asked, culture);
+                var hidden = InboxRows.HiddenObligations(rows, asked, needsYou);
+                host.UpdateData(HiddenId, hidden == 0 ? string.Empty : host.Localize("inbox.hidden", hidden));
+                return shown;
+            });
     }
 
     /// <summary>
@@ -281,7 +300,7 @@ public static class InboxLayoutArea
         return hub.ServiceProvider.GetRequiredService<IMeshService>()
             .Query<MeshNode>(MeshQueryRequest.FromQuery($"{query} {SearchText(term)}", owner) with
             {
-                Limit = new QueryParser().Parse(query).Limit ?? InboxQueries.LegLimit,
+                Limit = InboxQueries.EffectiveLimit(section.Query),
             })
             .Scan(ImmutableDictionary<string, MeshNode>.Empty.WithComparers(StringComparer.Ordinal), Fold)
             .Select(nodes => (IEnumerable<MeshNode>)nodes.Values);

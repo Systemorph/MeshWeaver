@@ -231,6 +231,19 @@ public static class InboxRows
     }
 
     /// <summary>
+    /// How many rows of the obligation band the source switches hide — counted BEFORE the switches
+    /// apply, so the count is never filtered away with the rows.
+    /// </summary>
+    /// <param name="rows">The merged rows.</param>
+    /// <param name="filter">What the viewer asked for.</param>
+    /// <param name="needsYouRank">The rank of the "Needs you" band, or null when no leg feeds it.</param>
+    public static int HiddenObligations(IEnumerable<InboxRow> rows, InboxFilter filter, int? needsYouRank)
+        => needsYouRank is not { } rank
+            ? 0
+            : rows.Count(row => row.Rank == rank
+                                && filter.Sources.TryGetValue(SourceKey(row.SourceId), out var on) && !on);
+
+    /// <summary>
     /// The rows a bulk act may touch: the selected keys re-checked against the rows as they stand
     /// now — a selection is the viewer's claim about what they saw, never a grant — and confined to
     /// the OWNER's partition, so a search that reached further can never turn into a write there.

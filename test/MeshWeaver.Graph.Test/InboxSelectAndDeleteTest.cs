@@ -143,8 +143,13 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
 
         Set($"sources/{InboxRows.SourceKey("Mail")}", JsonValue.Create(false));
         await Titles("a source switched off leaves the grid", "Alpha invoice");
+        await stream.GetDataStream<string>(new JsonPointerReference(LayoutAreaReference.GetDataPointer(InboxLayoutArea.HiddenId)))
+            .Should().Within(TestTimeouts.Convergence).Match(t => t != null && t.StartsWith("1 "),
+                "the switch hides a mail that needs the viewer, and the page says so", ct);
         Set($"sources/{InboxRows.SourceKey("Mail")}", JsonValue.Create(true));
         await Titles("and returns when switched on", "Alpha invoice", "Zulu workshop");
+        await stream.GetDataStream<string>(new JsonPointerReference(LayoutAreaReference.GetDataPointer(InboxLayoutArea.HiddenId)))
+            .Should().Within(TestTimeouts.Convergence).Match(t => string.IsNullOrEmpty(t), "nothing is hidden any more", ct);
 
         Set("search", JsonValue.Create("workshop"));
         await Titles("a term is evaluated by the query engine, per leg", "Zulu workshop");
@@ -353,9 +358,34 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
         InboxQueries.Bounded("namespace:alice/_Email nodeType:Email sort:LastModified-desc")
             .Should().EndWith($" limit:{InboxQueries.LegLimit}");
         InboxQueries.Bounded("namespace:alice/_X limit:5 sort:LastModified-desc")
-            .Should().Be("namespace:alice/_X limit:5 sort:LastModified-desc");
+            .Should().Be("namespace:alice/_X limit:5 sort:LastModified-desc", "a smaller bound of the provider's is kept");
+        var parser = new QueryParser();
+        foreach (var unbounded in new[] { "limit:all", "limit:0", "limit:-1", "limit:100000" })
+        {
+            var leg = $"namespace:alice/_X {unbounded} sort:LastModified-desc";
+            parser.Parse(InboxQueries.Bounded(leg)).Limit.Should().Be(InboxQueries.LegLimit,
+                $"'{unbounded}' would read the source unbounded (or past the page's cap) — it is capped");
+            InboxQueries.EffectiveLimit(leg).Should().Be(InboxQueries.LegLimit);
+        }
+        InboxQueries.EffectiveLimit("namespace:alice/_X limit:5").Should().Be(5, "the notice judges a leg by its own bound");
         InboxQueries.BuiltIn.Should().OnlyContain(leg => leg.Query.Contains("sort:"),
             "the bound keeps the NEWEST rows only because every leg sorts newest first");
+    }
+
+    /// <summary>
+    /// A source switched off must never silently hide an obligation: the "Needs you" rows it hides
+    /// are counted before the switches apply. Rows of other bands, and of sources still on, are not.
+    /// </summary>
+    [Fact]
+    public void TheSwitches_CountTheObligationsTheyHide()
+    {
+        InboxRow Row(string path, string source, int rank) => new() { Path = path, SourceId = source, Source = source, Rank = rank };
+        var rows = new[] { Row("a", "Mail", 0), Row("b", "Mail", 0), Row("c", "Mail", 2), Row("d", "Notifications", 0) };
+        var off = new InboxFilter { Sources = ImmutableDictionary<string, bool>.Empty.Add(InboxRows.SourceKey("Mail"), false) };
+
+        InboxRows.HiddenObligations(rows, off, needsYouRank: 0).Should().Be(2, "two Mail rows need the viewer; the finished one is not owed");
+        InboxRows.HiddenObligations(rows, new InboxFilter(), needsYouRank: 0).Should().Be(0, "nothing is switched off");
+        InboxRows.HiddenObligations(rows, off, needsYouRank: null).Should().Be(0, "no leg feeds the obligation band");
     }
 
     /// <summary>

@@ -446,8 +446,10 @@ Three rules follow, and each is pinned by a test in `InboxSelectAndDeleteTest`:
   completes like any other write; and an item someone else already put away is in the asked-for
   state too — counted, it would enter this click's Undo batch and Undo would reverse the other
   writer's act.
-- **Each source is asked for its newest `InboxQueries.LegLimit` rows, and the page says so when a
-  source has more.** Unbounded, the page folds every historical row into memory and into the
+- **Each source is asked for its newest `InboxQueries.LegLimit` rows — or fewer, when its provider
+  names a smaller positive `limit:` — and the page says so when a source answered its full bound.**
+  `limit:all` and a non-positive limit are UNBOUNDED to the parser, so they are capped like a leg that
+  names none; the effective bound is also pinned on the searched read's `MeshQueryRequest.Limit`. Unbounded, the page folds every historical row into memory and into the
   client's payload on a surface that is open all day. Older items are found with the search, which
   goes to the query engine; "oldest first" therefore orders the listed window, not all history.
 - **Both reads name the viewer.** A leg is (re)subscribed on a data emission, where
@@ -501,37 +503,32 @@ and for one reading in high-contrast or dark mode, so emphasis is carried by **p
 glyph and an accessible label together** — colour is the fourth signal, never the only one. This is
 the same rule as the transport marker: the meaning lives in something a screen reader can say.
 
-### The filter bar is `MeshSearchControl` — not a new one
+### The filter bar — what shipped, and why it is not `MeshSearchControl`
 
-🚨 **Do not build an inbox filter bar.** `MeshSearchControl` already is one, and every feature this
-surface needs is in it. Building a second is the hand-rolling the platform rules forbid, and it
-would be a worse one.
+The first design mapped the inbox onto `MeshSearchControl` (bands as scope tabs, ordering as
+`SortOptions`, its own search bar). It was superseded when the inbox became **select many, then
+act**: Delete and Undo need the platform grid's row selection (`DataGridControl.WithRowSelection`),
+which a search result list does not carry, and a person working through their inbox wants every band
+in ONE list rather than one tab at a time. What ships is the contract in
+[Select many, then act](#select-many-then-act--what-ships-today): one `Controls.DataGrid`, with the
+search box, order select and per-source switches as ordinary platform controls bound to ONE
+`InboxFilter` in the page's data section. It is still not a hand-built filter bar — every control is
+the platform's own, and the search still goes to the mesh query engine with each leg.
 
-The mapping is almost exact, which is the tell that this is the right control:
+What carried over from the first design:
 
-| Inbox needs | `MeshSearchControl` gives |
-|---|---|
-| the three **bands** | **scope tabs** — a tab strip above the header, one `MeshSearchScope(Label, Query)` per band, each carrying its band's hidden query |
-| **ordering**, importance first | `SortOptions` — `MeshSearchSortOption(Label, Query)`, **per scope**. Each option is a FULL query, so one can change ordering *and* the result set |
-| a **filter bar** | the control's own search bar |
-| a term that survives switching band | built in — scopes deliberately **share one search bar**, so switching swaps only the hidden query while the typed text stays |
-| how rows render | `MeshSearchRenderMode` |
+- **Importance is the default order** — band rank first, newest within — and an order the page does
+  not recognise falls back to it.
+- **The provider legs ARE the queries.** A provider contributing a leg contributes the query text
+  the page runs; nothing is adapted between them.
+- **The term survives** a change of order or of the source switches: they are fields of the same
+  bound record.
 
-Two consequences worth stating, because both are properties of the control rather than choices we
-get to make later:
-
-- **The first sort option is the default, and it must match the scope's `HiddenQuery`.** So
-  importance-first is not styling applied after the fact — it is the *first* `SortOptions` entry and
-  the hidden query's own ordering, in agreement. If those two disagree the list reorders itself the
-  moment the user touches the dropdown.
-- **The provider legs ARE the hidden queries.** A provider contributing a leg is contributing the
-  scope's query text, so the potluck and the control are the same mechanism seen from two sides —
-  nothing has to be adapted between them.
-
-🚨 **A filter must never silently hide an obligation.** Filtering to *Recent* and seeing an empty
-"Needs you" band is indistinguishable from having nothing to do — the same failure as a tick on a
-pending row, reached a different way. When a filter or scope hides open items, the inbox says so and
-how many: *"3 items needing you are hidden by this filter."* The count is never filtered away with
+🚨 **A filter must never silently hide an obligation.** Switching a source off and seeing no
+"Needs you" row is indistinguishable from having nothing to do — the same failure as a tick on a
+pending row, reached a different way. When the switches hide open items, the inbox says so and how
+many, in a bound notice above the grid (`inboxHidden`): *"3 items needing you are hidden by the
+source switches."* The count is taken before the switches apply, so it is never filtered away with
 the rows.
 
 Built from framework controls only — `Controls.DataGrid` with `PropertyColumnControl<T>`, composed
@@ -734,6 +731,13 @@ twice.
 
 ## 11. What is NOT established here
 
+- **"Done" is judged on the writer's mirror, not on the owner's verdict.** A handler counts an item
+  as put away when its update lambda changed the content it was handed and the written result is in
+  the asked-for state. If the same item was put away in ANOTHER session a moment earlier and this
+  mirror has not seen it yet, the owner applies a no-op while this click counts it — and its Undo can
+  bring back an item the viewer put away elsewhere. Bounded (the viewer's own partition, a soft and
+  repeatable act) but real; closing it needs the write path to report an owner-side no-op, which
+  `Update` does not do today.
 - **Legs contributed as NODES do not exist yet.** A compiled module registers its leg and its
   handler as services; a node-native package (the Hosting approvals, triage items, fleet issues,
   feedback submissions) has no way to bring either. Until it does, those lists stay on their own
