@@ -278,7 +278,13 @@ public sealed class PluginUpdateWatcher : Microsoft.Extensions.Hosting.IHostedSe
     private void ReconcileInstalled(
         IPackageSource source, IReadOnlyList<PackageManifest> packages, BuildCompletion build)
         => PackageUpdateReconciler.ReconcileInstalled(
-                hub, source, build.HeadSha, packages,
+                // 🚨 A manifest listed straight off a watched repository carries whatever `source`
+                // its package.json AUTHORS — never a provenance anybody verified. It is stripped here,
+                // so no authorization that binds on Source/Package (the deployment configuration's,
+                // policy deployment-config-authorizes-named-commercial) can be claimed by a repository
+                // writing the configured source's name. The install record keeps the source it was
+                // stamped with (PackageInstaller.SeedSource carries it forward).
+                hub, source, build.HeadSha, packages.Select(p => p with { Source = null }).ToList(),
                 $"Built from {build.HeadSha[..Math.Min(7, build.HeadSha.Length)]}", logger)
             .Subscribe(
                 _ => { },
