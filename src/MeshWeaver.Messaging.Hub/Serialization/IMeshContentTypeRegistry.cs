@@ -290,12 +290,46 @@ public sealed class MeshContentTypeRegistry(ILogger<MeshContentTypeRegistry>? lo
         if (contentType is null)
             return;
         var declaration = DeclarationOf(contentType, nodeTypePath);
-        ClaimDiscriminator(contentType.Name, contentType, declaration);
-        if (contentType.FullName is { } fullName && !string.Equals(fullName, contentType.Name, StringComparison.Ordinal))
-            ClaimDiscriminator(fullName, contentType, declaration);
-        if (!string.IsNullOrEmpty(nodeTypePath))
-            _byNodeType[nodeTypePath] = contentType;
-        TrackCollectible(contentType);
+        var fullName = contentType.FullName is { } full && !string.Equals(full, contentType.Name, StringComparison.Ordinal)
+            ? full
+            : null;
+        // 🚨 ONE critical section with Evict. Registration and eviction each touch several
+        // entries, and they race: an unload that begins between the strong inserts and the
+        // Unloading subscription would never evict them, and two interleaved evictions could leave
+        // an older generation's shadow entry over a newer one's. Short, synchronous, no callbacks
+        // inside — the announcement below stays outside it.
+        lock (_gate)
+        {
+            // Subscribed BEFORE any strong claim is published. An unload that begins after this
+            // line reaches Evict, which waits for this section and then sweeps the claims made
+            // below; subscribed afterwards, a context's FIRST registration could lose the one-shot
+            // event between its inserts and the subscription.
+            TrackCollectible(contentType);
+            if (IsUnloading(contentType))
+            {
+                // A LATE registration: this generation's Unloading already fired and will not fire
+                // again, so a strong entry would be a permanent root of a generation on its way
+                // out. It goes straight to the weak shadow — resolvable while alive, never
+                // displacing a successor that already holds the strong claim.
+                Demote(contentType.Name, contentType);
+                if (fullName is not null)
+                    Demote(fullName, contentType);
+                if (!string.IsNullOrEmpty(nodeTypePath) && !_byNodeType.ContainsKey(nodeTypePath))
+                    _demotedByNodeType[nodeTypePath] = new WeakReference<Type>(contentType);
+            }
+            else
+            {
+                ClaimDiscriminator(contentType.Name, contentType, declaration);
+                if (fullName is not null)
+                    ClaimDiscriminator(fullName, contentType, declaration);
+                if (!string.IsNullOrEmpty(nodeTypePath))
+                {
+                    _byNodeType[nodeTypePath] = contentType;
+                    // The successor holds the claim now; the superseded generation's shadow entry is done.
+                    _demotedByNodeType.TryRemove(nodeTypePath, out _);
+                }
+            }
+        }
 
         // 🚨 ANNOUNCE LAST — after BOTH maps carry the entry. A subscriber's first act is to
         // re-ask this registry, so publishing earlier would hand it the very "unknown" answer the
@@ -318,6 +352,25 @@ public sealed class MeshContentTypeRegistry(ILogger<MeshContentTypeRegistry>? lo
     /// a heap dump of a retained MeshWeaver.AI generation after a live swap). Evicting on
     /// <c>Unloading</c> removes only entries whose type belongs to the unloading context, so a
     /// successor that already registered keeps its claim.
+    ///
+    /// <para>🚨 <b>Leaving the STRONG maps is not the same as becoming unresolvable
+    /// (Systemorph/MeshWeaver.Plugins#2799).</b> <c>AssemblyLoadContext.Unload()</c> is cooperative:
+    /// <c>Unloading</c> fires when the unload is INITIATED — a hub torn down, a context superseded
+    /// — while the generation is still fully loaded and its typed objects are still held by the
+    /// node-stream cache and by live hubs. Dropping the entries outright at that instant made a
+    /// perfectly loaded type untypeable for every later read until some successor registered — and
+    /// on a replica where none ever does (an outgoing pod during a roll: its hubs are leaving, and
+    /// a build the next generation published is not one it adopts) that was for the rest of the
+    /// process's life. Measured on an outgoing memex-cloud pod, 2026-10-10: fifteen reads of
+    /// <c>Ops/Status/*</c> degraded to untyped content in the 80 s before the host stopped, for a
+    /// type that pod had typed for 45 minutes. The old build must keep working until a newer one
+    /// is bound.</para>
+    ///
+    /// <para>So an evicted entry is DEMOTED to a weak shadow — the same shape, for the same reason,
+    /// as <c>TypeRegistry</c>'s (MeshWeaver#1169): it keeps answering for exactly as long as
+    /// something else keeps the generation alive, roots nothing, and is displaced by the first
+    /// successor registration. Once the generation is collected the weak entry is dead and the
+    /// lookup answers "unknown", exactly as full eviction did.</para>
     /// </summary>
     private void TrackCollectible(Type contentType)
     {
@@ -329,14 +382,92 @@ public sealed class MeshContentTypeRegistry(ILogger<MeshContentTypeRegistry>? lo
         context.Unloading += Evict;
     }
 
+    // The weak shadow: entries demoted from the strong maps when their generation BEGAN unloading.
+    // WeakReference only — nothing here roots a generation. See TrackCollectible.
+    private readonly ConcurrentDictionary<string, WeakReference<Type>> _demotedByDiscriminator = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, WeakReference<Type>> _demotedByNodeType = new(StringComparer.OrdinalIgnoreCase);
+
+    private readonly object _gate = new();
+
+    // Contexts whose Unloading has already fired, so a registration that arrives afterwards is
+    // never given a strong entry. LONG weak references in an immutable list, deliberately not a
+    // ConditionalWeakTable: Evict can run on the finalizer thread after this registry became
+    // unreachable, and a table's own container may be finalized by then (a NullReferenceException
+    // out of GC.RunFinalizers ends the process). A long weak reference survives its target's
+    // finalization, which is exactly the state a finalizer-initiated unload is in.
+    private System.Collections.Immutable.ImmutableList<WeakReference<System.Runtime.Loader.AssemblyLoadContext>> _unloading =
+        System.Collections.Immutable.ImmutableList<WeakReference<System.Runtime.Loader.AssemblyLoadContext>>.Empty;
+
+    /// <summary>Whether <paramref name="contentType"/>'s collectible context has begun unloading.
+    /// Called under <see cref="_gate"/>, on a live registry; prunes markers of collected contexts.</summary>
+    private bool IsUnloading(Type contentType)
+    {
+        if (_unloading.IsEmpty || !contentType.Assembly.IsCollectible)
+            return false;
+        var context = System.Runtime.Loader.AssemblyLoadContext.GetLoadContext(contentType.Assembly);
+        var found = false;
+        var live = _unloading;
+        foreach (var marker in _unloading)
+            if (!marker.TryGetTarget(out var unloading))
+                live = live.Remove(marker);
+            else if (ReferenceEquals(unloading, context))
+                found = true;
+        _unloading = live;
+        return found;
+    }
+
+    // 🚨 This runs on whatever thread initiates the unload — including the FINALIZER thread, when a
+    // context nobody unloaded explicitly is finalized (AssemblyLoadContext.Finalize → InitiateUnload).
+    // An exception there ends the process, and this registry may itself be unreachable by then, so
+    // it reads nothing finalizable: a plain lock, the concurrent maps, an immutable list, and
+    // weak references it CREATES (never ones it reads).
     private void Evict(System.Runtime.Loader.AssemblyLoadContext unloading)
     {
-        foreach (var entry in _byDiscriminator)
-            if (ReferenceEquals(System.Runtime.Loader.AssemblyLoadContext.GetLoadContext(entry.Value.ContentType.Assembly), unloading))
-                _byDiscriminator.TryRemove(entry);
-        foreach (var entry in _byNodeType)
-            if (ReferenceEquals(System.Runtime.Loader.AssemblyLoadContext.GetLoadContext(entry.Value.Assembly), unloading))
-                _byNodeType.TryRemove(entry);
+        lock (_gate)
+        {
+            // Marked FIRST and inside the section, so no registration from this generation can land
+            // a strong entry after the sweep below.
+            _unloading = _unloading.Add(
+                new WeakReference<System.Runtime.Loader.AssemblyLoadContext>(unloading, trackResurrection: true));
+            foreach (var entry in _byDiscriminator)
+                if (ReferenceEquals(System.Runtime.Loader.AssemblyLoadContext.GetLoadContext(entry.Value.ContentType.Assembly), unloading)
+                    && _byDiscriminator.TryRemove(entry)
+                    // A contested name stays unresolvable: the shadow must not hand out the answer
+                    // the strong map was deliberately refusing.
+                    && !entry.Value.Ambiguous)
+                    Demote(entry.Key, entry.Value.ContentType);
+            foreach (var entry in _byNodeType)
+                if (ReferenceEquals(System.Runtime.Loader.AssemblyLoadContext.GetLoadContext(entry.Value.Assembly), unloading)
+                    && _byNodeType.TryRemove(entry))
+                    _demotedByNodeType[entry.Key] = new WeakReference<Type>(entry.Value);
+        }
+    }
+
+    private void Demote(string discriminator, Type contentType)
+    {
+        if (!_byDiscriminator.ContainsKey(discriminator))
+            _demotedByDiscriminator[discriminator] = new WeakReference<Type>(contentType);
+    }
+
+    /// <summary>The demoted type under <paramref name="key"/> while its generation is still alive;
+    /// a dead entry is pruned (pair-exact, so a fresh demotion under the same key survives).
+    /// <para>A hit hands out a strong reference, so a demoted type that keeps being READ stays
+    /// loaded until a successor registers — the intended reading of "the old build keeps working".
+    /// It is bounded at one superseded generation per name: the next registration displaces it.</para></summary>
+    private static bool TryResolveDemoted(
+        ConcurrentDictionary<string, WeakReference<Type>> shadow, string key, out Type contentType)
+    {
+        if (shadow.TryGetValue(key, out var weak))
+        {
+            if (weak.TryGetTarget(out var alive))
+            {
+                contentType = alive;
+                return true;
+            }
+            shadow.TryRemove(new KeyValuePair<string, WeakReference<Type>>(key, weak));
+        }
+        contentType = null!;
+        return false;
     }
 
     private void ClaimDiscriminator(string discriminator, Type contentType, string declaration)
@@ -362,6 +493,8 @@ public sealed class MeshContentTypeRegistry(ILogger<MeshContentTypeRegistry>? lo
         // about a name whose collision was already reported (Copilot review).
         if (claim.Ambiguous && !string.Equals(claim.Declaration, declaration, StringComparison.Ordinal))
             WarnAmbiguous(discriminator, claim.Declaration, declaration);
+        // A strong claim stands for this name now; the superseded generation's shadow entry is done.
+        _demotedByDiscriminator.TryRemove(discriminator, out _);
     }
 
     // Once per (discriminator, second declaration): the collision is a permanent property of the
@@ -386,27 +519,34 @@ public sealed class MeshContentTypeRegistry(ILogger<MeshContentTypeRegistry>? lo
     /// <inheritdoc />
     public bool TryResolveByDiscriminator(string discriminator, out Type contentType)
     {
-        if (!string.IsNullOrEmpty(discriminator)
-            && _byDiscriminator.TryGetValue(discriminator, out var claim)
-            && !claim.Ambiguous)
+        if (string.IsNullOrEmpty(discriminator))
         {
-            contentType = claim.ContentType;
-            return true;
+            contentType = null!;
+            return false;
         }
-        contentType = null!;
-        return false;
+        if (_byDiscriminator.TryGetValue(discriminator, out var claim))
+        {
+            // A strong claim decides alone — a contested one is refused, never answered from the shadow.
+            contentType = claim.Ambiguous ? null! : claim.ContentType;
+            return !claim.Ambiguous;
+        }
+        return TryResolveDemoted(_demotedByDiscriminator, discriminator, out contentType);
     }
 
     /// <inheritdoc />
     public bool TryResolveByNodeType(string nodeTypePath, out Type contentType)
     {
-        if (!string.IsNullOrEmpty(nodeTypePath) && _byNodeType.TryGetValue(nodeTypePath, out var t))
+        if (string.IsNullOrEmpty(nodeTypePath))
+        {
+            contentType = null!;
+            return false;
+        }
+        if (_byNodeType.TryGetValue(nodeTypePath, out var t))
         {
             contentType = t;
             return true;
         }
-        contentType = null!;
-        return false;
+        return TryResolveDemoted(_demotedByNodeType, nodeTypePath, out contentType);
     }
 
     /// <inheritdoc />
