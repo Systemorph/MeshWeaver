@@ -144,7 +144,8 @@ public static class MarkdownOverviewLayoutArea
         => SuppliedNavigation(host)
             .Select(supplied => supplied is { Entries.Count: > 0 }
                 ? (UiControl?)SuppliedNavigationRail.Render(
-                    SuppliedNavigationRail.Plan(supplied, host.Hub.Address.ToString()))
+                    SuppliedNavigationRail.Plan(supplied, host.Hub.Address.ToString()),
+                    searchNamespace: DefaultNodeNavigation.IndexRoot(host.Hub.Address.ToString()))
                 : null);
 
     /// <summary>
@@ -241,8 +242,9 @@ public static class MarkdownOverviewLayoutArea
         // The nav renders NON-collapsible: the Splitter below owns both resize and collapse.
         var nav = SuppliedNavigationRail.Render(
             SuppliedNavigationRail.Plan(navigation, host.Hub.Address.ToString()), collapsible: false,
-            // Explorer and search in one place: the box searches the space this index covers.
-            searchNamespace: navigation.TitlePath ?? DefaultNodeNavigation.IndexRoot(host.Hub.Address.ToString()));
+            // Explorer and search in one place. The box searches the page's SPACE (its first path
+            // segment) — never the supplied index's own root, which may be a course inside it.
+            searchNamespace: DefaultNodeNavigation.IndexRoot(host.Hub.Address.ToString()));
 
         // A SPLITTER, not a Stack — the same idiom as the Settings pages, and for the same reason:
         // the divider is a real, draggable resize handle (FluentMultiSplitter, client-side), and

@@ -191,12 +191,14 @@ The admin-editable platform node (`HomeConfigNodeType`, public-read, live-reload
   `[Browsable(false)]` on the generic content editor — admins edit the node content directly.
 - `Scope`, `Render`, `DefaultSort` — apply to the Spaces/All scopes (and the legacy list).
 - **The content list is ONE flat list in LOCATION order by default** (policy
-  [`explorer-navigation`](../PolicyNotProse)). `DefaultSort` ships UNSET, which orders by path
-  (`sort:path-asc`), so each space's content stays together. `Render` ships `Flat`: the Tabs home no
-  longer fans its entries out into per-type sections, which put every top-level entry into one
-  "Space (N)" group. Each entry is a folder the viewer opens and drills into from its page. An
-  admin may still set `DefaultSort` (Last accessed, Last modified, Alphabetical) or `Render:
-  Grouped`; location order stays in the Sort control either way.
+  [`explorer-navigation`](../PolicyNotProse)). The default order is `SortBy`, an open string value
+  (`HomeSortBy`: `Location`, `LastAccessed`, `LastModified`, `Alphabetical`). It ships UNSET, which
+  means `Location` (`sort:path-asc`), so each space's content stays together. The older
+  `DefaultSort` enum keeps its signature and applies only when `SortBy` is empty and an admin moved
+  it off `LastAccessed` (`HomeConfig.EffectiveSort`). `Render` ships `Flat`: the Tabs home no longer
+  fans its entries out into per-type sections, which put every top-level entry into one "Space (N)"
+  group; `Render: Grouped` stays the admin's explicit choice. Location order stays in the Sort
+  control either way.
 
 **The dedup rule:** an app is represented exactly once. The Spaces scope and the Shared-with-me band
 exclude `-nodeType:Store/Plugin -nodeType:Store/Catalog`; Shared-with-me also excludes

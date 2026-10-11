@@ -172,7 +172,9 @@ public class HomeCatalogTest
         HomeConfigNodeType.Defaults.Style.Should().Be(HomeStyle.Tabs);
         HomeConfigNodeType.Defaults.Scope.Should().Be(HomeCatalogScope.FirstLevel);
         HomeConfigNodeType.Defaults.Render.Should().Be(HomeCatalogRender.Flat);
-        HomeConfigNodeType.Defaults.DefaultSort.Should().BeNull("unset = by location, the shipped default");
+        HomeConfigNodeType.Defaults.SortBy.Should().BeNull("unset = by location, the shipped default");
+        HomeConfigNodeType.Defaults.EffectiveSort().Should().Be(HomeSortBy.Location);
+        HomeConfigNodeType.Defaults.DefaultSort.Should().Be(HomeCatalogSort.LastAccessed, "the legacy member keeps its signature and default");
     }
 
     [Fact]
@@ -224,6 +226,23 @@ public class HomeCatalogTest
         search.HiddenQuery!.ToString().Should().Contain("sort:Name-asc");
         search.SortOptions!.Select(o => o.Label).OrderBy(l => l, StringComparer.Ordinal).Should()
             .Equal("Alphabetical", "Last accessed", "Last modified", "Location");
+    }
+
+    [Fact]
+    public void HomeConfig_EffectiveSort_IsTheOpenValue_ThenTheLegacyOne_ThenLocation()
+    {
+        new HomeConfig().EffectiveSort().Should().Be(HomeSortBy.Location);
+        new HomeConfig { SortBy = " LastModified " }.EffectiveSort().Should().Be(HomeSortBy.LastModified);
+        new HomeConfig { DefaultSort = HomeCatalogSort.Alphabetical }.EffectiveSort().Should().Be(HomeSortBy.Alphabetical,
+            "a legacy value an admin moved off its default still decides");
+        new HomeConfig { SortBy = HomeSortBy.LastAccessed, DefaultSort = HomeCatalogSort.Alphabetical }.EffectiveSort()
+            .Should().Be(HomeSortBy.LastAccessed, "the open value wins");
+        // Open vocabulary: a value this build does not know is passed through, never coerced, and
+        // the home then opens on its own first sort (Location) with every known sort still offered.
+        var unknown = new HomeConfig { SortBy = "ByOwner" };
+        unknown.EffectiveSort().Should().Be("ByOwner");
+        var search = UserActivityLayoutAreas.BuildCatalog(NodePath, unknown).Should().BeOfType<MeshSearchControl>().Subject;
+        search.SortOptions!.Select(o => o.Label).Should().Equal("Location", "Last accessed", "Last modified", "Alphabetical");
     }
 
     [Fact]

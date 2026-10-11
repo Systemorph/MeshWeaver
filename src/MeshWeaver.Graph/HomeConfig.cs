@@ -36,8 +36,9 @@ public enum HomeCatalogRender
     Grouped,
 }
 
-/// <summary>The sort orders an admin may pick as the home catalog's default INSTEAD of the shipped
-/// one, which is by location (<see cref="HomeConfig.DefaultSort"/> unset). The user can still switch.</summary>
+/// <summary>The LEGACY closed set of home sort orders, kept for <see cref="HomeConfig.DefaultSort"/>.
+/// New code names a sort through the open <see cref="HomeSortBy"/> constants
+/// (<see cref="HomeConfig.SortBy"/>); by location, the shipped default, exists only there.</summary>
 public enum HomeCatalogSort
 {
     /// <summary>Most-recently-opened first — the user's own access recency.</summary>
@@ -48,6 +49,23 @@ public enum HomeCatalogSort
 
     /// <summary>Alphabetical, by name.</summary>
     Alphabetical,
+}
+
+/// <summary>The home's sort orders as OPEN string constants (policy
+/// <c>open-vocabulary-string-constants</c>): the platform's starting set, never the permitted set.</summary>
+public static class HomeSortBy
+{
+    /// <summary>By location — ordered by path (the shipped default).</summary>
+    public const string Location = "Location";
+
+    /// <summary>Most-recently-opened first — the user's own access recency.</summary>
+    public const string LastAccessed = "LastAccessed";
+
+    /// <summary>Most-recently-edited first.</summary>
+    public const string LastModified = "LastModified";
+
+    /// <summary>Alphabetical, by name.</summary>
+    public const string Alphabetical = "Alphabetical";
 }
 
 /// <summary>
@@ -91,11 +109,29 @@ public record HomeConfig
     [Translation("de", "Wie die Startseite Einträge darstellt. Flat ist eine einzelne Liste; Grouped zeigt einklappbare Abschnitte pro Typ.")]
     public HomeCatalogRender Render { get; init; } = HomeCatalogRender.Flat;
 
-    /// <summary>The default ordering (the user can still change it via the Sort-by control).
-    /// UNSET (null, the shipped default) orders by LOCATION — by path, so each space's content stays
-    /// together the way a folder explorer lists it (policy <c>explorer-navigation</c>). An admin who
-    /// sets a value gets that order first; by location stays in the Sort-by control.</summary>
-    [Description("The default ordering. Leave it empty to order by location (by path, so each space's content stays together). Last accessed shows your recently-opened items first; Last modified shows recent edits; Alphabetical sorts by name.")]
-    [Translation("de", "Die Standardsortierung. Leer lassen, um nach Ort zu sortieren (nach Pfad, sodass der Inhalt eines Space zusammenbleibt). Zuletzt geöffnet zeigt kürzlich geöffnete Einträge zuerst; Zuletzt geändert zeigt kürzliche Änderungen; Alphabetisch sortiert nach Name.")]
-    public HomeCatalogSort? DefaultSort { get; init; }
+    /// <summary>The LEGACY default ordering, kept with its original signature for consumers compiled
+    /// against it. It decides only when <see cref="SortBy"/> is unset AND an admin moved it off its
+    /// own default; see <see cref="EffectiveSort"/>.</summary>
+    [Description("Legacy default ordering. Use 'Sort by' instead; this value only applies when 'Sort by' is empty and this is not Last accessed.")]
+    [Translation("de", "Frühere Standardsortierung. Stattdessen 'Sortieren nach' verwenden; dieser Wert gilt nur, wenn 'Sortieren nach' leer ist und hier nicht Zuletzt geöffnet steht.")]
+    public HomeCatalogSort DefaultSort { get; init; } = HomeCatalogSort.LastAccessed;
+
+    /// <summary>The home's default ordering, as an OPEN value (<see cref="HomeSortBy"/>; policy
+    /// <c>open-vocabulary-string-constants</c>). Unset (the shipped default) orders by LOCATION — by
+    /// path, so each space's content stays together the way a folder explorer lists it (policy
+    /// <c>explorer-navigation</c>). The user can still change it via the Sort-by control.</summary>
+    [Description("The default ordering: Location (by path, so each space's content stays together), LastAccessed, LastModified or Alphabetical. Empty means Location.")]
+    [Translation("de", "Die Standardsortierung: Location (nach Pfad, sodass der Inhalt eines Space zusammenbleibt), LastAccessed, LastModified oder Alphabetical. Leer bedeutet Location.")]
+    public string? SortBy { get; init; }
+
+    /// <summary>
+    /// The sort the home opens on, as a <see cref="HomeSortBy"/> value: <see cref="SortBy"/> when set;
+    /// else the legacy <see cref="DefaultSort"/> when an admin moved it off its own default; else
+    /// <see cref="HomeSortBy.Location"/>. A value this build does not know is returned AS IS — the
+    /// caller offers the sorts it knows and treats an unknown one as no preference. Pure.
+    /// </summary>
+    public string EffectiveSort() =>
+        !string.IsNullOrWhiteSpace(SortBy) ? SortBy.Trim()
+        : DefaultSort != HomeCatalogSort.LastAccessed ? DefaultSort.ToString()
+        : HomeSortBy.Location;
 }

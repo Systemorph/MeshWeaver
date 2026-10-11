@@ -24,24 +24,22 @@ index of the Space, with the page being read marked and only the groups on the r
 
 **The index is an explorer, loaded lazily** (policy [`explorer-navigation`](../PolicyNotProse)):
 
-- **Only the reader's path is loaded.** One direct-children query per level
+- **Only the reader's path is loaded.** One direct-children read per level
   (`DefaultNodeNavigation.PathLevels`): the Space's children, each ancestor's children, and the
   page's own. The cost grows with the page's depth, never with the size of the Space. A folder off
   the path is listed and not opened; the reader drills in by opening it.
-- **At most 50 entries per level** (`LevelCap`). A level that holds more ends with a **Load more…**
-  entry. It reloads the same page with `?more={level}:{n}`, raising that one level by 50.
-- **A search box sits above the tree** (`NavMenuSkin.SearchNamespace`). Submitting it opens the mesh
-  search scoped to the Space (`/search?ns={space}&q=…`), so browsing and searching share one place.
+- **A level shows at most 50 entries** (`LevelCap`), cut in the order the level is RENDERED
+  (declared `Order`, then name, internal `_` entries left out), so an ordered page is never pushed
+  behind the cut. Each level reads light rows (no content) up to a hard bound of 500. A level that
+  holds more ends with a **Load more** entry (the viewer's `common.loadMore`). It reloads the same
+  page with `?more={level}:{n}`, raising that one level by 50, up to the bound.
+- **A search box sits above the tree** (`NavMenuSkin.SearchNamespace`), scoped to the page's Space
+  (its first path segment), also when a module supplied the index. Submitting it opens the mesh
+  search (`/search?ns={space}&q=…`). The Blazor nav menu that renders the box ships in
+  MeshWeaver.Plugins.
 - **Every node page has it, not only markdown.** The typed default Overview is wrapped by
   `MarkdownOverviewLayoutArea.WithIndexRail`. A page's children are navigated in the rail and are
   never listed at the bottom of the page.
-
-That default is also wrong for a course: a learner standing in lesson 2 must see the whole course,
-not the document tree the lesson happens to sit in, with the course's own notion of what a page is.
-`INodeNavigationProvider` is the seam that fixes it without core having to learn what a lesson is. A
-module that OWNS a family of pages hands core a whole index; core renders it. **The division of
-labour is the contract: the module decides WHAT is in the index and in WHAT ORDER; core decides how
-it looks.** Either way the same rail renders it, so a course and a document tree read alike.
 
 ## The seam
 

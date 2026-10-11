@@ -763,28 +763,28 @@ public static class UserActivityLayoutAreas
             ? $"is:main is:content -nodeType:User{exclusions} {sortSuffix} {ParsedQuery.CrossPartitionQualifier}"
             : FirstLevelUnion(ownerId, sortSuffix, exclusions, spacePaths);
 
-    // The three user-selectable sort orders (the view-options "Sort by" dropdown). LAST ACCESSED:
+    // The four user-selectable sort orders (the view-options "Sort by" dropdown). LOCATION orders by
+    // path and is the shipped default. LAST ACCESSED:
     // source:accessed JOINs the user's UserActivity satellite and projects its timestamp into
     // last_modified, so the list is ordered by the user's own access recency. The scope clauses
     // still apply to accessed queries — the empty-namespace roots leg pushes `namespace = ''`
     // (the 2026-07-21 fix; previously the fan-out dropped it and the "list" became the user's
     // whole access history) and `namespace:X` never matches the node at path X. LAST MODIFIED /
-    // ALPHABETICAL are pure order-bys. Immutable constant lookup — enum · label key · query suffix
+    // ALPHABETICAL are pure order-bys. Immutable constant lookup — sort key · label key · query suffix
     // (labels resolve through the localization catalog; null locale = English, which is what the
     // pure-builder unit tests exercise).
     private const string SortSuffixLastAccessed = "source:accessed sort:LastModified-desc";
     private const string SortSuffixLastModified = "sort:LastModified-desc";
     private const string SortSuffixAlphabetical = "sort:Name-asc";
     private const string SortSuffixLocation = "sort:path-asc";
-    // The LOCATION order has no enum member (null): it is the shipped default, and widening the
-    // persisted HomeCatalogSort enum would break the open-vocabulary contract
-    // (policy open-vocabulary-string-constants). An unset HomeConfig.DefaultSort selects it.
-    private static readonly (HomeCatalogSort? Sort, string LabelKey, string Suffix)[] CatalogSorts =
+    // Keyed by the OPEN HomeSortBy values (policy open-vocabulary-string-constants): a config
+    // value this build does not know matches none of them, and the list keeps its own order.
+    private static readonly (string Sort, string LabelKey, string Suffix)[] CatalogSorts =
     {
-        (null, "home.sortLocation", SortSuffixLocation),
-        (HomeCatalogSort.LastAccessed, "home.sortLastAccessed", SortSuffixLastAccessed),
-        (HomeCatalogSort.LastModified, "home.sortLastModified", SortSuffixLastModified),
-        (HomeCatalogSort.Alphabetical, "home.sortAlphabetical", SortSuffixAlphabetical),
+        (HomeSortBy.Location, "home.sortLocation", SortSuffixLocation),
+        (HomeSortBy.LastAccessed, "home.sortLastAccessed", SortSuffixLastAccessed),
+        (HomeSortBy.LastModified, "home.sortLastModified", SortSuffixLastModified),
+        (HomeSortBy.Alphabetical, "home.sortAlphabetical", SortSuffixAlphabetical),
     };
 
     /// <summary>
@@ -881,7 +881,7 @@ public static class UserActivityLayoutAreas
         var sharedLeg = sharedTargets is { Count: > 0 }
             ? "\n" + $"path:{string.Join("|", sharedTargets)} is:main is:content -nodeType:User{SpacesDedupExclusions}"
             : string.Empty;
-        scopes.Add(ContentScope("home.all", locale, cfg.DefaultSort,
+        scopes.Add(ContentScope("home.all", locale, cfg.EffectiveSort(),
             (_, suffix) => CatalogQuery(cfg.Scope, nodeOwnerId, suffix, SpacesDedupExclusions, spacePaths) + sharedLeg));
 
         // Pinned — the owner's shortcuts, present only when there are pins.
@@ -894,8 +894,8 @@ public static class UserActivityLayoutAreas
         if (pins.Count > 0)
         {
             var pinnedBase = $"path:({string.Join(" OR ", pins)})";
-            scopes.Add(ContentScope("home.pinned", locale, HomeCatalogSort.LastModified,
-                (sort, suffix) => sort == HomeCatalogSort.LastAccessed
+            scopes.Add(ContentScope("home.pinned", locale, HomeSortBy.LastModified,
+                (sort, suffix) => sort == HomeSortBy.LastAccessed
                     // source:accessed is an INNER JOIN — alone it would hide a never-opened pin.
                     ? $"{pinnedBase} {suffix}\n{pinnedBase} {SortSuffixLastModified}"
                     : $"{pinnedBase} {suffix}"));
@@ -904,7 +904,7 @@ public static class UserActivityLayoutAreas
         // Mine — the viewer's OWN partition, which is the second leg of the All union standing on
         // its own. Unconditional: your own space is the one tab that is never empty for you, and a
         // tab that appears and disappears is worse than one that is occasionally short.
-        scopes.Add(ContentScope("home.mine", locale, cfg.DefaultSort,
+        scopes.Add(ContentScope("home.mine", locale, cfg.EffectiveSort(),
             (_, suffix) => $"namespace:{nodeOwnerId} is:main is:content{SpacesDedupExclusions} {suffix}"));
 
         // Spaces — the cross-partition invitations (#385), which All folds in as a union leg. As a
@@ -912,7 +912,7 @@ public static class UserActivityLayoutAreas
         // viewer's side: the workspaces they can reach but do not own. Present only when there is
         // something in it, since the query is a path list and an empty list matches nothing at all.
         if (sharedTargets is { Count: > 0 })
-            scopes.Add(ContentScope("home.spaces", locale, HomeCatalogSort.LastModified,
+            scopes.Add(ContentScope("home.spaces", locale, HomeSortBy.LastModified,
                 (_, suffix) =>
                     $"path:{string.Join("|", sharedTargets)} is:main is:content -nodeType:User{SpacesDedupExclusions} {suffix}"));
 
@@ -936,8 +936,7 @@ public static class UserActivityLayoutAreas
             .WithMaxColumns(4)
             // Fill the page. The home is where a viewer looks for something they can already see;
             // a short list makes them search for what should have been on screen. 200 bounds the
-            // query, and MaxRows is a per-GROUP cap — with the type fan-out that sets the section's
-            // height rather than a hard total.
+            // query; MaxRows caps the rows shown (per section when an admin chose Grouped).
             .WithItemLimit(200)
             .WithMaxRows(24)
             .WithReactiveMode(true)
@@ -1090,11 +1089,11 @@ public static class UserActivityLayoutAreas
             .WithReactiveMode(true);
     }
 
-    /// <summary>One content tab: localized label + the three catalog sorts (default first), each
+    /// <summary>One content tab: localized label + the four catalog sorts (default first), each
     /// option's full query produced by <paramref name="query"/>(sort, suffix).</summary>
     private static MeshSearchScopeTab ContentScope(
-        string labelKey, string? locale, HomeCatalogSort? defaultSort,
-        Func<HomeCatalogSort?, string, string> query)
+        string labelKey, string? locale, string defaultSort,
+        Func<string, string, string> query)
     {
         var sorts = CatalogSorts
             .OrderByDescending(s => s.Sort == defaultSort)
@@ -1291,7 +1290,7 @@ public static class UserActivityLayoutAreas
     /// platform node; <c>null</c> ⇒ <see cref="HomeConfigNodeType.Defaults"/>). The config drives
     /// the depth (first-level top-level entries vs the full subtree), the render (flat list vs
     /// grouped-by-type sections), and the default sort — and a view-options "Sort by" control still
-    /// lets the user pick <b>Last accessed</b> / <b>Last modified</b> / <b>Alphabetical</b> at will.
+    /// lets the user pick <b>Location</b> / <b>Last accessed</b> / <b>Last modified</b> / <b>Alphabetical</b> at will.
     /// <para>The one thing a first-level query can't reach is a module in ANOTHER partition the
     /// caller was specifically invited into (#385): those are resolved from the caller's own
     /// readable <c>AccessAssignment</c> grants (<paramref name="sharedTargets"/>) and appended as an
@@ -1352,7 +1351,7 @@ public static class UserActivityLayoutAreas
         IReadOnlyList<string>? spacePaths = null)
     {
         var sortOptions = CatalogSorts
-            .OrderByDescending(s => s.Sort == cfg.DefaultSort)
+            .OrderByDescending(s => s.Sort == cfg.EffectiveSort())
             .Select(s => new MeshSearchSortOption(
                 LocalizationCatalog.Get(s.LabelKey, locale),
                 CatalogQuery(cfg.Scope, nodeOwnerId, s.Suffix, exclusions, spacePaths)))

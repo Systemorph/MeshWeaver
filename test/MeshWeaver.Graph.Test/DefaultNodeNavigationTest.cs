@@ -283,19 +283,35 @@ public class DefaultNodeNavigationTest
     [Fact]
     public void ALevelWithMoreEndsWithLoadMore_AndMoreRaisesOnlyItsLevel()
     {
-        var more = new Dictionary<string, string> { ["Infrastructure"] = "Infrastructure/Options?more=Infrastructure:100" };
-        var nav = DefaultNodeNavigation.Build("Infrastructure", Space(), "Infrastructure/Options", more)!;
+        var more = ImmutableDictionary<string, string>.Empty
+            .Add("Infrastructure", "Infrastructure/Options?more=Infrastructure:100");
+        var nav = DefaultNodeNavigation.Build("Infrastructure", Space(), "Infrastructure/Options", more, "Mehr laden")!;
 
-        nav.Entries.Last().Label.Should().Be(DefaultNodeNavigation.LoadMoreLabel);
+        nav.Entries.Last().Label.Should().Be("Mehr laden", "the label is the viewer's, passed in by the page");
         nav.Entries.Last().Path.Should().Be("Infrastructure/Options?more=Infrastructure:100");
         nav.Entries.Single(e => e.Path == "Infrastructure/Inference").Children
-            .Should().NotContain(e => e.Label == DefaultNodeNavigation.LoadMoreLabel, "only the level that holds more gets the entry");
+            .Should().NotContain(e => e.Label == "Mehr laden", "only the level that holds more gets the entry");
 
         DefaultNodeNavigation.ParseMore("Infrastructure%2FInference:100").Should().Be(("Infrastructure/Inference", 100));
         DefaultNodeNavigation.ParseMore("Infrastructure:50").Should().BeNull("never below the first batch");
         DefaultNodeNavigation.ParseMore("garbage").Should().BeNull();
         DefaultNodeNavigation.ParseMore(null).Should().BeNull();
-        DefaultNodeNavigation.ParseMore("X:999999")!.Value.Cap.Should().Be(10 * DefaultNodeNavigation.LevelCap, "bounded");
+        DefaultNodeNavigation.ParseMore("X:999999")!.Value.Cap.Should().Be(DefaultNodeNavigation.MaxCap, "bounded");
+    }
+
+    [Fact]
+    public void TheCapIsAppliedInTheRenderedOrder_NeverInTheStoresRowOrder()
+    {
+        // An Order = 1 page whose path sorts LAST, behind hidden satellites that sort first: it must
+        // lead the level, and the satellites must not use up the budget.
+        MeshNode[] level =
+        [
+            Node("S/_Access", "internal"), Node("S/_Comment", "internal"),
+            Node("S/Alpha", "Alpha"), Node("S/Beta", "Beta"), Node("S/Zulu", "Zulu", 1),
+        ];
+
+        DefaultNodeNavigation.VisibleInOrder(level).Select(n => n.Path)
+            .Should().Equal("S/Zulu", "S/Alpha", "S/Beta");
     }
 
     private static IEnumerable<string> Paths(IEnumerable<NodeNavigationEntry> entries)
