@@ -281,8 +281,21 @@ d_cm_by_lower, l_cm_by_lower = by_lower(d_data), by_lower(l_data)
 ext_by_lower = by_lower(envfrom_keys)
 
 def env_shape(e):
-    """The entry minus its literal value — a ref NAME is not a secret, a value may be."""
-    return {k: v for k, v in e.items() if k != "value"}
+    """The entry minus its literal value — a ref NAME is not a secret, a value may be.
+
+    🚨 MINUS ONE API-SERVER DEFAULT. `valueFrom.fieldRef.apiVersion` defaults to `v1` on write, so a
+    chart that renders `fieldRef: {fieldPath: metadata.name}` is stored — and read back — as
+    `{apiVersion: v1, fieldPath: metadata.name}`. Comparing the two verbatim reported the chart's
+    own pod-name entry as `DIFFERS … the entry's SHAPE differs` on every environment, every run
+    (MeshWeaver#5844): a finding no change to the chart, the record or the cluster could clear. An
+    omitted `apiVersion` and an explicit `v1` are the same ref; any OTHER version is kept, so a ref
+    that really names another API version still differs."""
+    shape = {k: v for k, v in e.items() if k != "value"}
+    value_from = shape.get("valueFrom")
+    ref = value_from.get("fieldRef") if isinstance(value_from, dict) else None
+    if isinstance(ref, dict) and ref.get("apiVersion", "v1") == "v1":
+        shape["valueFrom"] = {**value_from, "fieldRef": {k: v for k, v in ref.items() if k != "apiVersion"}}
+    return shape
 
 for n in sorted(d_env | l_env):
     comparisons += 1
