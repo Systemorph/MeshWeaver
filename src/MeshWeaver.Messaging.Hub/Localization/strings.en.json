@@ -1908,6 +1908,8 @@
   "inbox.source.Notifications": "Notifications",
   "inbox.source.Mail": "Mail",
   "inbox.source.Activities": "Activities",
+  "inbox.source.Chat": "Chat",
+  "inbox.source.Conversations": "Conversations",
   "inbox.failed.generic": "could not be changed",
   "inbox.search": "Search",
   "inbox.search.placeholder": "Search the inbox",
