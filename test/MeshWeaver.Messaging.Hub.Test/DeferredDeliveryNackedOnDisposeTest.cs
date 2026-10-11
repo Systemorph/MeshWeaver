@@ -242,6 +242,111 @@ public class DeferredDeliveryNackedOnDisposeTest : HubTestBase
             + "claim of stranded work has no victim");
     }
 
+    /// <summary>A fire-and-forget announcement, the shape of <c>StreamEndedEvent</c>.</summary>
+    [CanBeIgnored]
+    private record IgnorableNotice;
+
+    /// <summary>The same announcement without the declaration. The control.</summary>
+    private record UndeclaredNotice;
+
+    private static readonly Address IgnorableAddress = new("ignorable", "1");
+
+    private static readonly Address UndeclaredAddress = new("undeclared", "1");
+
+    /// <summary>
+    /// #5718, the shape that kept folding in: a <c>sync/{id}</c> sub-hub disposed directly while
+    /// its owner's <c>StreamEndedEvent</c> sat behind <c>[SynchronizationGate]</c>. That event is
+    /// <c>[CanBeIgnored]</c> for exactly this case, and the routing layer already drops it without
+    /// a NACK (<c>AnswerPolicy</c>). This site reported the drop as an Error whose own sentence,
+    /// "the sender is answered ShuttingDown", was false: <c>NackThroughParent</c> declines a
+    /// message nobody awaits.
+    ///
+    /// <para>The discard is still reported, at Debug, with its gate and its teardown.</para>
+    /// </summary>
+    [Fact]
+    public async Task AnIgnorableMessageDiscardedByATeardown_IsTeardownNormal_NotAnError()
+    {
+        var host = GetHost();
+        var gated = host.GetHostedHub(
+            IgnorableAddress,
+            c => c.WithTypes(typeof(IgnorableNotice))
+                .WithInitializationGate("ignorable-gate-never-opens", _ => false)
+                .WithHandler<IgnorableNotice>((_, d) => d.Processed()));
+        gated.Should().NotBeNull();
+
+        host.Post(new IgnorableNotice(), o => o.WithTarget(IgnorableAddress));
+        await WaitForDeferredBacklog(host);
+
+        ((MessageHub)gated!).NoteDirectDisposalBy(
+            "the subscriber releasing its stream", "the view that held it was closed");
+        gated.Dispose();
+
+        await WaitForDiscardLine("ignorable-gate-never-opens");
+
+        log.At(LogLevel.Debug).Should().Contain(
+            m => m.Contains("ignorable-gate-never-opens", StringComparison.Ordinal)
+                 && m.Contains("the subscriber releasing its stream", StringComparison.Ordinal)
+                 && m.Contains(nameof(IgnorableNotice), StringComparison.Ordinal),
+            "the discard is still REPORTED, with the message, its gate and the teardown that "
+            + "dropped it. Not reporting it would be a silenced fault, not a classification");
+        log.At(LogLevel.Error).Should().NotContain(
+            m => m.Contains("ignorable-gate-never-opens", StringComparison.Ordinal),
+            "the message is declared fire-and-forget: no sender awaits a reply, none is posted, "
+            + "and dropping it for a hub that is going away is what the declaration asks for (#5718)");
+        log.Lines.Should().NotContain(
+            l => l.Message.Contains("ignorable-gate-never-opens", StringComparison.Ordinal)
+                 && l.Message.Contains("the sender is answered ShuttingDown", StringComparison.Ordinal),
+            "no answer is sent for a message the routing layer may not answer, so the line must "
+            + "not say one was");
+    }
+
+    /// <summary>
+    /// NEGATIVE CONTROL for the case above: the same announcement WITHOUT the declaration, through
+    /// the same teardown, still reports at Error. The level follows what the message type
+    /// declares, not the fact that it is an event.
+    /// </summary>
+    [Fact]
+    public async Task AnUndeclaredMessageDiscardedByTheSameTeardown_IsStillAnError()
+    {
+        var host = GetHost();
+        var gated = host.GetHostedHub(
+            UndeclaredAddress,
+            c => c.WithTypes(typeof(UndeclaredNotice))
+                .WithInitializationGate("undeclared-gate-never-opens", _ => false)
+                .WithHandler<UndeclaredNotice>((_, d) => d.Processed()));
+        gated.Should().NotBeNull();
+
+        host.Post(new UndeclaredNotice(), o => o.WithTarget(UndeclaredAddress));
+        await WaitForDeferredBacklog(host);
+
+        ((MessageHub)gated!).NoteDirectDisposalBy(
+            "the subscriber releasing its stream", "the view that held it was closed");
+        gated.Dispose();
+
+        await WaitForDiscardLine("undeclared-gate-never-opens");
+
+        log.At(LogLevel.Error).Should().Contain(
+            m => m.Contains("undeclared-gate-never-opens", StringComparison.Ordinal),
+            "a message that does not declare itself ignorable was accepted and then thrown away. "
+            + "That stays an Error; only the declaration moves it");
+    }
+
+    /// <summary>
+    /// Waits for the discard report that names <paramref name="gate"/>, at any level. A message
+    /// nobody awaits produces no reply to wait on, so the report itself is the signal.
+    /// </summary>
+    private async Task WaitForDiscardLine(string gate)
+    {
+        await Observable.Interval(TimeSpan.FromMilliseconds(50))
+            .StartWith(0L)
+            .Where(_ => log.Lines.Any(l =>
+                l.Message.Contains("[DISPOSE-DISCARD]", StringComparison.Ordinal)
+                && l.Message.Contains(gate, StringComparison.Ordinal)))
+            .Take(1)
+            .Timeout(TestTimeouts.Convergence)
+            .Await(TestContext.Current.CancellationToken);
+    }
+
     private static readonly Address AttributedAddress = new("attributed", "1");
 
     private static readonly Address UnattributedAddress = new("unattributed", "1");
