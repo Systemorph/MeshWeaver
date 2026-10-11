@@ -491,7 +491,11 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
     /// registry lists, the channel this instance's update policy admits (<see cref="VersionSelect.SelectCandidates"/>),
     /// the walk over the availability gate (<see cref="FirstRollable"/>), and the gate's verdict on the
     /// chosen tag. "Newest" never means backwards (except the stranded-tag recovery the selection already
-    /// owns), and a held release is never forced: the reboot then restarts on the running image, saying why.
+    /// owns). No package answer keeps the reboot on the running image (policy
+    /// <c>platform-rolls-independently-of-packages</c>): an availability refusal and a recorded combo
+    /// Red are named in the detail as advisories and the newest admitted tag is chosen; the reboot
+    /// restarts on the running image only when the policy is None, nothing is newer, or the
+    /// selection itself failed — and the detail says which.
     /// <paramref name="wedged"/> leaves the combo (dependent-suite) verdict out of the walk and the decision,
     /// and the detail says so — a wedged instance does not wait for it.
     /// </summary>
@@ -1069,7 +1073,14 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
                 // outcome of most checks, and it has to be SAID: it is the only thing that
                 // distinguishes a healthy up-to-date install from one whose checker is dead. Which
                 // of the three "nothing to roll to" states this is, is NothingToRoll's job.
-                ? Observable.Return(NothingToRoll(selection))
+                // 🚨 …and it is where a LEGACY hold has to be cleared. Under policy
+                // <c>platform-rolls-independently-of-packages</c> this service writes no hold, so
+                // a hold on the record was written by an older build — and the instance it froze
+                // only receives this code through an external roll, typically onto the very tag
+                // it held. From then on nothing is newer, this branch is the only one a check
+                // takes, and the candidate path's unconditional clear never runs: the Updates tab
+                // would call the RUNNING build held for ever.
+                ? ClearLegacyHold(policy).Select(_ => NothingToRoll(selection))
                 : FirstRollable([.. selection.Candidates])
                     .SelectMany(target => RecordAvailable(target!)
                         // 🚨 BOOKKEEPING, NOT A GATE (#1020). RecordAvailable writes two cosmetic fields
@@ -1588,6 +1599,38 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
                 + "verdict itself still stands.", target, UpdatePolicyNodeType.NodePath);
             return Observable.Return(Unit.Default);
         };
+
+    /// <summary>
+    /// Clears a hold an OLDER build recorded, on the path where no candidate is evaluated (so
+    /// <see cref="RecordHold"/>'s unconditional clear never runs). Only the hold fields: the
+    /// advisories recorded for the running build stay. Costs no mesh touch when no hold is
+    /// recorded — the happy path of nearly every check — and a failed write is logged and never
+    /// changes the check's verdict, exactly as a failed hold write does not.
+    /// </summary>
+    private IObservable<Unit> ClearLegacyHold(UpdatePolicyContent policy)
+    {
+        if (string.IsNullOrEmpty(policy.HeldTag))
+            return Observable.Return(Unit.Default);
+        var held = policy.HeldTag!;
+        _logger?.LogInformation(
+            "[SelfUpdate] clearing the hold an earlier build recorded on {Tag}: the platform rolls "
+            + "independently of packages, so no package answer holds a roll any more.", held);
+        var accessService = _hub.ServiceProvider.GetService<AccessService>();
+        return accessService.RunAsSystem(
+                () => _hub.GetWorkspace().GetMeshNodeStream(UpdatePolicyNodeType.NodePath)
+                    .Update<UpdatePolicyContent>((node, cur) => cur is null
+                        ? node
+                        : node with
+                        {
+                            Content = cur with
+                            {
+                                HeldTag = null, HeldReason = null,
+                                HeldIndeterminate = false, HeldAt = null,
+                            },
+                        })
+                    .Select(_ => Unit.Default))
+            .Catch(HoldWriteFailed(held));
+    }
 
     /// <summary>
     /// Writes (or clears, on null or on an updatable verdict) the availability hold on the policy

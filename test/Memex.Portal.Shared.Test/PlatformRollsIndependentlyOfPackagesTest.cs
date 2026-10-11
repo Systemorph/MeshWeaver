@@ -197,6 +197,41 @@ public class PlatformRollsIndependentlyOfPackagesTest(ITestOutputHelper output) 
     }
 
     /// <summary>
+    /// 🚨 THE RECOVERY PATH. An instance an older build froze only receives this code through an
+    /// external roll — typically onto the very tag it held. From then on nothing is newer, so the
+    /// check takes the no-candidate exit and never reaches the candidate path's unconditional
+    /// clear: without its own clear there, the Updates tab would call the RUNNING build held for
+    /// ever. The advisories recorded for the running build are not part of the hold and stay.
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task ALegacyHold_IsClearedWhenNothingIsNewer_AndTheAdvisoriesStay()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await Seed(ct, staleHold: true, advisories: "Feedback: no sealed content bake");
+        var updater = new RecordingUpdater();
+        var service = Service(updater, UnresolvableIdentity(), new FakeAcrTagLister([]));
+
+        await service.StartAsync(CancellationToken.None);
+        UpdatePolicyContent content;
+        try
+        {
+            await service.Evaluations.FirstAsync().Timeout(Budget).Await(ct);
+            content = await WaitForContent(c => c.LastCheckVerdict is not null && c.HeldTag is null);
+        }
+        finally
+        {
+            await service.StopAsync(CancellationToken.None);
+        }
+
+        updater.Tags.Should().BeEmpty("nothing is newer than the running build");
+        content.HeldTag.Should().BeNull("a hold an older build wrote is not a state of this build");
+        content.HeldReason.Should().BeNull();
+        content.HeldIndeterminate.Should().BeFalse();
+        content.HeldAt.Should().BeNull();
+        content.Advisories.Should().Be("Feedback: no sealed content bake");
+    }
+
+    /// <summary>
     /// A host with NO availability gate registered still names a recorded combo Red on the reboot's
     /// image step — the poller's unwired path evaluates combo too, and a branch that returned
     /// before consulting it would select the image without saying which modules do not survive it.
@@ -244,8 +279,9 @@ public class PlatformRollsIndependentlyOfPackagesTest(ITestOutputHelper output) 
 
     /// <summary>The service under test; a null <paramref name="verdict"/> is a host with no
     /// availability gate registered.</summary>
-    private GatedSelfUpdateService Service(RecordingUpdater updater, UpdatabilityVerdict? verdict) =>
-        new(Mesh, new FakeAcrTagLister(), updater, FastPoll(),
+    private GatedSelfUpdateService Service(
+        RecordingUpdater updater, UpdatabilityVerdict? verdict, FakeAcrTagLister? registry = null) =>
+        new(Mesh, registry ?? new FakeAcrTagLister(), updater, FastPoll(),
             Mesh.ServiceProvider.GetService<ILogger<SelfUpdateHostedService>>(),
             verdict is null ? null : new FixedVerdict(Mesh, new ConfigurationBuilder().Build(), verdict),
             new ComboVerificationGate(Mesh));
@@ -258,10 +294,12 @@ public class PlatformRollsIndependentlyOfPackagesTest(ITestOutputHelper output) 
         DefaultPattern = "*-ci*",
     };
 
-    private sealed class FakeAcrTagLister : IAcrTagLister
+    /// <summary>The registry's listing — by default the one candidate; an empty listing is "nothing
+    /// is newer than the running build".</summary>
+    private sealed class FakeAcrTagLister(ImmutableArray<string>? tags = null) : IAcrTagLister
     {
         public Task<IReadOnlyList<string>> ListTagsAsync(string repository, CancellationToken ct) =>
-            Task.FromResult<IReadOnlyList<string>>([CandidateTag]);
+            Task.FromResult<IReadOnlyList<string>>(tags ?? [CandidateTag]);
     }
 
     private sealed class RecordingUpdater : IDeploymentUpdater
@@ -322,7 +360,7 @@ public class PlatformRollsIndependentlyOfPackagesTest(ITestOutputHelper output) 
     /// <summary>Seeds the policy node — optionally with the hold the poller wrote, before policy
     /// <c>platform-rolls-independently-of-packages</c>, on
     /// partnerre, so the test also proves the roll CLEARS it.</summary>
-    private Task Seed(CancellationToken cancellationToken, bool staleHold = false, bool comboRed = false)
+    private Task Seed(CancellationToken cancellationToken, bool staleHold = false, bool comboRed = false, string? advisories = null)
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var content = new UpdatePolicyContent { Policy = UpdatePolicyKind.Continuous, Pattern = "*-ci*" };
@@ -334,6 +372,8 @@ public class PlatformRollsIndependentlyOfPackagesTest(ITestOutputHelper output) 
                 HeldIndeterminate = true,
                 HeldAt = DateTimeOffset.UtcNow.AddHours(-1),
             };
+        if (advisories is not null)
+            content = content with { AdvisoriesTag = CandidateTag, Advisories = advisories };
         if (comboRed)
             content = content with
             {

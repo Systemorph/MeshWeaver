@@ -211,7 +211,9 @@ public static class UpdatePolicySettingsTab
                     var note = advisories.Length == 0
                         ? ""
                         : "\n\n" + h.Localize("ui.updatePackageAdvisoriesManual") + "\n\n> "
-                          + Sanitize(string.Join("; ", advisories));
+                          // Each advisory bounded on its OWN — bounding the joined text would
+                          // cut the first long one short and drop every one after it.
+                          + string.Join("; ", advisories.Select(Sanitize));
                     if (apply == SelfUpdateApply.ControlLane)
                     {
                         // The same announcement the poller makes, so the control plane cannot
@@ -422,7 +424,11 @@ public static class UpdatePolicySettingsTab
         if (content.HasAdvisoriesFor(tag))
             available += "\n\n"
                 + localize("ui.updateAdvisories", [tag])
-                + "\n\n> " + Sanitize(content.Advisories!);
+                // The record joins its advisories with "; " — each is bounded on its own, so one
+                // long advisory (a waived package hold) never cuts off the ones after it.
+                + "\n\n> " + string.Join("; ", content.Advisories!
+                    .Split("; ", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .Select(Sanitize));
 
         var verdict = content.VerificationFor(tag);
         if (verdict is null)
