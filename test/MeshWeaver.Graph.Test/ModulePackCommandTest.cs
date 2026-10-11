@@ -657,6 +657,27 @@ public class ModulePackCommandTest : IDisposable
         }
     }
 
+    /// <summary>
+    /// <see cref="PackCapturingErrors"/> with standard OUTPUT captured too — for what the pack
+    /// reports as information (stdout) rather than as a refusal (stderr). Same serialization and
+    /// restore-in-finally guarantees.
+    /// </summary>
+    private static (int Exit, string Output, string Error) PackCapturingBoth(IEnumerable<string> args)
+    {
+        var originalOut = Console.Out;
+        using var output = new StringWriter();
+        Console.SetOut(output);
+        try
+        {
+            var (exit, error) = PackCapturingErrors(args);
+            return (exit, output.ToString(), error);
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+        }
+    }
+
     private List<string> DepsClosurePackArgs(string version, string outDir) =>
     [
         Path.Combine(root, "closure"),
@@ -671,7 +692,7 @@ public class ModulePackCommandTest : IDisposable
     private static string BundleIn(string outDir, string version) =>
         Path.Combine(outDir, $"MeshWeaver.Plugin.WidgetPkg.{version}.module.nupkg");
 
-    private const string RidSpecificManagedAsset = "runtimes/win-x64/lib/net10.0/RidPicky.dll";
+    private const string RidSpecificManagedAsset = "runtimes/linux-x64/lib/net10.0/RidPicky.dll";
 
     /// <summary>A module whose dependency ships a RID-agnostic managed copy AND a RID-specific one
     /// — the choice the flat closure (one slot per assembly name) cannot make at pack time. The
@@ -692,7 +713,7 @@ public class ModulePackCommandTest : IDisposable
                   "RidPicky/1.0.0": {
                     "runtime": { "lib/net10.0/RidPicky.dll": {} },
                     "runtimeTargets": {
-                      "{{RidSpecificManagedAsset}}": { "rid": "win-x64", "assetType": "runtime" }
+                      "{{RidSpecificManagedAsset}}": { "rid": "linux-x64", "assetType": "runtime" }
                     }
                   }
                 }
@@ -773,8 +794,55 @@ public class ModulePackCommandTest : IDisposable
     }
 
     /// <summary>
+    /// 🚨 #4445 — the measured population: a RID-specific managed asset for a RID no bundle
+    /// targets (the Windows <c>ProtectedData</c> implementation) does NOT refuse the pack, and
+    /// nothing has to be named for it. The negative control for the refusal above.
+    /// </summary>
+    [Fact]
+    public void DepsClosure_AnAssetForARidNoBundleTargets_DoesNotRefuseThePack()
+    {
+        File.WriteAllBytes(Path.Combine(root, "closure", "RidPicky.dll"), "AGNOSTIC"u8.ToArray());
+        File.WriteAllText(Path.Combine(root, "closure", "Widget.deps.json"), """
+            {
+              "runtimeTarget": { "name": ".NETCoreApp,Version=v10.0" },
+              "targets": {
+                ".NETCoreApp,Version=v10.0": {
+                  "Widget/1.0.0": {
+                    "dependencies": { "RidPicky": "1.0.0" },
+                    "runtime": { "Widget.dll": {} }
+                  },
+                  "RidPicky/1.0.0": {
+                    "runtime": { "lib/net10.0/RidPicky.dll": {} },
+                    "runtimeTargets": {
+                      "runtimes/win/lib/net10.0/RidPicky.dll": { "rid": "win", "assetType": "runtime" }
+                    }
+                  }
+                }
+              },
+              "libraries": {
+                "Widget/1.0.0": { "type": "project" },
+                "RidPicky/1.0.0": { "type": "package" }
+              }
+            }
+            """);
+        var outDir = Path.Combine(root, "out-rid-foreign");
+
+        var (exit, output, error) = PackCapturingBoth(DepsClosurePackArgs("2.0.2", outDir));
+
+        Assert.True(exit == 0, $"an asset for a RID no bundle targets is information; stderr: {error}");
+        Assert.True(File.Exists(BundleIn(outDir, "2.0.2")));
+        // The information is the CONTRACT, not a by-product: one stdout line naming the package,
+        // the path and the foreign RID — and not a word of it on stderr, where a refusal goes.
+        var info = Assert.Single(output.Split('\n'), l => l.StartsWith("deps-closure: info:", StringComparison.Ordinal));
+        Assert.Contains("'RidPicky'", info, StringComparison.Ordinal);
+        Assert.Contains("runtimes/win/lib/net10.0/RidPicky.dll", info, StringComparison.Ordinal);
+        Assert.Contains("RID 'win'", info, StringComparison.Ordinal);
+        Assert.DoesNotContain("runtimes/win/", error, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// #4367, shape 1 — the SAME deps.json, with the remedy the refusal prescribes followed: the
-    /// win-x64 copy flattened into the module folder root and named with <c>--with</c>. deps.json
+    /// linux-x64 copy flattened into the module folder root and named with <c>--with</c>. deps.json
     /// still declares the RID-specific asset; the pack must now succeed, or the refusal would be
     /// one its own advice cannot lift. And the bytes that ship are the copy the author put there.
     /// </summary>

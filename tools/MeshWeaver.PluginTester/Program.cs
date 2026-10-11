@@ -397,7 +397,10 @@ static string BuildProjectUsage() =>
     + "AssemblyVersion and FileVersion with the IMAGE's own binding identity (immutable globals; an "
     + "explicit -p: still wins), because a module built here loads into this image's process and "
     + "any other identity is a runtime FileNotFoundException — the evaluator runs no MSBuild "
-    + "property functions, so a project cannot derive that value itself.";
+    + "property functions, so a project cannot derive that value itself. "
+    + "Uncarried-asset refusal: ARMED — a module whose private closure declares an asset for the "
+    + "bundle target RID that this lane does not carry is RED; an asset for another RID is named "
+    + "as information (#4445).";
 
 static string BuildUsage() =>
     "usage: mw-plugin-test build <repo-root> [<package>... | all] [--module <dll>]... [--out <dir>] "
