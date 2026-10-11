@@ -859,8 +859,12 @@ public sealed class GitHubSyncService
     /// </summary>
     private IObservable<ResolvedGitHubAuth> ResolveAuthFor(string repositoryUrl, string userId)
     {
+        // 🚨 This is the EXPORT route (a push), and a source's declared credential is a READ
+        // credential — provisioned with Contents: Read, for the import and reconcile call sites
+        // that pass their repository to ResolveAuth. A push therefore keeps the identity it always
+        // had: the user's, else the instance's own App installation.
         if (!GitRepositoryProvider.IsAzureRepos(repositoryUrl))
-            return ResolveAuth(userId, repositoryUrl);
+            return ResolveAuth(userId, repositoryUrl: null);
         return azureRepos is null
             ? Observable.Throw<ResolvedGitHubAuth>(
                 GitSyncRefusal.Of("gitsync.azure.notRegistered").ToException())
@@ -868,7 +872,8 @@ public sealed class GitHubSyncService
     }
 
     /// <summary>
-    /// Resolves the token for a GitHub operation against <paramref name="repositoryUrl"/>: the
+    /// Resolves the token for a GitHub READ of <paramref name="repositoryUrl"/> (null for an
+    /// operation that must not take a source's read credential — the export): the
     /// user's connected credential when present; else the credential the repository's configured
     /// source DECLARED (<see cref="GitSourceCredentials"/> — a vault-delivered token, or the App
     /// installation on a named account); else the platform's <b>GitHub App installation token</b>

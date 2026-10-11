@@ -81,12 +81,13 @@ A declared credential that cannot be produced **refuses the repository**. Nothin
 | `TokenKey` is declared and the key is empty or absent | `GitSourceCredentialException` naming the source, the repository and the key (both spellings); no request reaches GitHub |
 | `InstallationOwner` is declared and the instance has no App | `GitSourceCredentialException` naming the source and the owner |
 | the App has no installation on the named owner | `GitHubAppTokenMintException` (`InstallationDiscovery`) naming the owner — never another installation's token |
+| `TokenKey` is present and blank | `GitSourceCredentialException` — a present key is a declaration, not an absence |
 | a source states BOTH `TokenKey` and `InstallationOwner` in configuration | `GitSourceCredentialException` naming both — no winner is picked |
 | a record names both `secretName` and `installationOwner`, or `installationOwner` on a consumer mount | a spec problem; the mount is not rendered |
 | two mounts whose names derive the same token key (`a-b` and `a_b`) | a spec problem naming both; the second is not rendered, so one repository is never handed the other's token |
 
 The refusals are raised server-side with no viewer in scope, so each carries a catalog key and
-named arguments (`gitsync.source.tokenKeyEmpty`, `.appNotConfigured`, `.twoCredentials`,
+named arguments (`gitsync.source.tokenKeyEmpty`, `.tokenKeyBlank`, `.appNotConfigured`, `.twoCredentials`,
 `.noInstallation`) and is rendered in the viewer's language wherever a sync shows it.
 
 The reason it is not a fallback: the instance's own token reads nothing in the other organisation,
@@ -105,7 +106,8 @@ same answer:
 - `PackageSources` — the configured list, a `PluginCatalog` node over the same URL, the update watcher;
 - `GitHubSyncService` — import, re-import, branch state, branch head. A user's own connected
   GitHub credential still comes first; the declared source credential replaces the instance App
-  only when there is none;
+  only when there is none. **The export (a push) does not take it**: a source credential is a
+  read credential, so a push keeps the user's or the instance's own identity;
 - `GitHubRepoIdentityResolver` — the canonical-name lookup behind webhook matching.
 
 ## Related

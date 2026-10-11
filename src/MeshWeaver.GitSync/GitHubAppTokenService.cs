@@ -263,11 +263,8 @@ public sealed class GitHubAppTokenService
                 break;
         }
 
-        if (total == 0)
-            throw new GitHubAppTokenMintException(
-                GitHubAppTokenMintStage.InstallationDiscovery,
-                "The GitHub App has no installations — install it on the organization (with Contents: Read " +
-                "on the repos to sync) first.");
+        // A NAMED owner is refused by its name first — also when the App has no installation
+        // at all, which is the same answer for that owner and must name it just the same.
         if (required)
         {
             // Localizable where it is SHOWN (a sync's activity, the settings tab): the refusal
@@ -279,6 +276,11 @@ public sealed class GitHubAppTokenService
             missing.Data[GitSyncRefusalException.DataKey] = refusal;
             throw missing;
         }
+        if (total == 0)
+            throw new GitHubAppTokenMintException(
+                GitHubAppTokenMintStage.InstallationDiscovery,
+                "The GitHub App has no installations — install it on the organization (with Contents: Read " +
+                "on the repos to sync) first.");
         if (first is null)
             throw new GitHubAppTokenMintException(
                 GitHubAppTokenMintStage.InstallationDiscovery,

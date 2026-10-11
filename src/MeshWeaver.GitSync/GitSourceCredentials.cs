@@ -12,7 +12,8 @@ namespace MeshWeaver.GitSync;
 /// <param name="SourceName">The source's configured name (<c>Sources:N:Name</c>) — what a refusal names.</param>
 /// <param name="RepositoryUrl">The repository the declaration is for (<c>Sources:N:RepoPath</c>).</param>
 /// <param name="TokenKey">The CONFIGURATION KEY the repository's token is read from
-/// (<c>Sources:N:TokenKey</c>, e.g. <c>PluginCatalog:SourceTokens:Extensions</c>), or null.</param>
+/// (<c>Sources:N:TokenKey</c>, e.g. <c>PluginCatalog:SourceTokens:Extensions</c>); null when the
+/// source states none, EMPTY when it states the key and leaves it blank — which is refused.</param>
 /// <param name="InstallationOwner">The account whose GitHub App installation mints the token
 /// (<c>Sources:N:InstallationOwner</c>), or null.</param>
 public sealed record GitSourceCredential(
@@ -108,7 +109,11 @@ public sealed class GitSourceCredentials
         {
             if (!string.Equals(NormalizeRepository(source["RepoPath"]), wanted, StringComparison.OrdinalIgnoreCase))
                 continue;
-            var tokenKey = Blank(source["TokenKey"]);
+            // A TokenKey that is PRESENT but blank is a declaration, not an absence: whoever wrote
+            // the key meant this source to have its own credential, and reading "" as "none" would
+            // fall back to the very identities the declaration exists to rule out. It is kept as
+            // the empty key and refused by name in Token.
+            var tokenKey = source["TokenKey"] is { } stated ? stated.Trim() : null;
             var owner = Blank(source["InstallationOwner"]);
             if (tokenKey is null && owner is null)
                 return null;
@@ -137,6 +142,11 @@ public sealed class GitSourceCredentials
         // ONE credential per source. The record refuses the pair before it is rendered, but a
         // source can also be written straight into configuration — and picking a winner there
         // would read the repository with an identity nobody can tell from the declaration.
+        if (declared.TokenKey is { Length: 0 })
+            return Refuse(GitSyncRefusal.Of(
+                "gitsync.source.tokenKeyBlank",
+                ("source", declared.SourceName), ("url", declared.RepositoryUrl)));
+
         if (declared.TokenKey is { Length: > 0 } && declared.InstallationOwner is { Length: > 0 })
             return Refuse(GitSyncRefusal.Of(
                 "gitsync.source.twoCredentials",

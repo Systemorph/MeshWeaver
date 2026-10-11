@@ -127,6 +127,37 @@ public class PluginSourceCredentialTest
         Assert.Equal(0, handler.Requests);
     }
 
+    /// <summary>
+    /// <c>TokenKey</c> PRESENT and blank is a declaration, not an absence. Reading it as "none"
+    /// would hand the repository to the instance's App or to an anonymous read — the identities
+    /// the declaration exists to rule out.
+    /// </summary>
+    [Theory]
+    [InlineData("")]
+    [InlineData("  ")]
+    public async Task ATokenKeyThatIsPresentButBlank_IsADeclaration_AndIsRefused(string stated)
+    {
+        using var rsa = RSA.Create(2048);
+        var handler = new InstallationsHandler();
+        var credentials = new GitSourceCredentials(
+            Config(new()
+            {
+                ["PluginCatalog:Sources:0:Name"] = "Extensions",
+                ["PluginCatalog:Sources:0:RepoPath"] = Extensions,
+                ["PluginCatalog:Sources:0:TokenKey"] = stated,
+            }),
+            App(rsa, handler));
+
+        var declared = credentials.TokenFor(Extensions);
+        Assert.NotNull(declared);
+        var refusal = await Assert.ThrowsAsync<GitSourceCredentialException>(
+            () => declared!.FirstAsync().Timeout(Budget).Await());
+
+        Assert.Equal("gitsync.source.tokenKeyBlank", refusal.Refusal.Key);
+        Assert.Contains("'Extensions'", refusal.Message, StringComparison.Ordinal);
+        Assert.Equal(0, handler.Requests);
+    }
+
     [Fact]
     public async Task TwoSourcesOnTwoInstallations_EachGetItsOwnToken_MintedOnce()
     {
@@ -175,6 +206,8 @@ public class PluginSourceCredentialTest
         Assert.Equal(GitHubAppTokenMintStage.InstallationDiscovery, failure.Stage);
         Assert.Contains("'Contoso'", failure.Message, StringComparison.Ordinal);
         Assert.Equal(0, handler.Mints);
+        Assert.True(GitSyncRefusalException.TryGet(failure, out var refusal));
+        Assert.Equal("gitsync.source.noInstallation", refusal.Key);
     }
 
     /// <summary>
@@ -246,6 +279,22 @@ public class PluginSourceCredentialTest
         Assert.Equal("ghs_Fabrikam_1", await app.GetInstallationToken("Fabrikam").FirstAsync().Timeout(Budget).Await());
     }
 
+    /// <summary>The App is installed NOWHERE: a named owner is still refused by its name.</summary>
+    [Fact]
+    public async Task ANamedInstallation_WhenTheAppIsInstalledNowhere_StillFailsByName()
+    {
+        using var rsa = RSA.Create(2048);
+        var handler = new InstallationsHandler { Empty = true };
+        var app = App(rsa, handler);
+
+        var failure = await Assert.ThrowsAsync<GitHubAppTokenMintException>(
+            () => app.GetInstallationToken("Contoso").FirstAsync().Timeout(Budget).Await());
+
+        Assert.Contains("'Contoso'", failure.Message, StringComparison.Ordinal);
+        Assert.True(GitSyncRefusalException.TryGet(failure, out var refusal));
+        Assert.Equal("gitsync.source.noInstallation", refusal.Key);
+    }
+
     [Fact]
     public async Task ANamedInstallationWithoutAnApp_RefusesByName()
     {
@@ -291,6 +340,9 @@ public class PluginSourceCredentialTest
         private int requests;
         private int mints;
 
+        /// <summary>The App is installed on no account at all.</summary>
+        public bool Empty { get; init; }
+
         /// <summary>Unrelated installations listed ahead of the real ones.</summary>
         public int Padding { get; init; }
 
@@ -312,7 +364,7 @@ public class PluginSourceCredentialTest
                 var perPage = int.TryParse(query["per_page"], out var size) ? size : 30;
                 var page = int.TryParse(query["page"], out var number) ? number : 1;
                 var all = Enumerable.Range(0, Padding).Select(i => (Id: 1000L + i, Owner: $"filler-{i}"))
-                    .Concat(Installations);
+                    .Concat(Empty ? [] : Installations);
                 return Json(HttpStatusCode.OK, "[" + string.Join(",", all.Skip((page - 1) * perPage).Take(perPage).Select(i =>
                     $$"""{"id": {{i.Id}}, "account": {"login": "{{i.Owner}}"} }""")) + "]");
             }
