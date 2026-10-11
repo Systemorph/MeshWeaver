@@ -128,6 +128,19 @@ public class HomeSpaceManifestTest
     }
 
     [Fact]
+    public void The_space_manifest_never_lists_the_platforms_own_partitions()
+    {
+        var roots = new[]
+        {
+            new MeshNode("Esl"), new MeshNode("Doc"), new MeshNode("Ops"), new MeshNode("Plugins"),
+            new MeshNode("Agent"), new MeshNode("skill"), new MeshNode("Provider"), new MeshNode("Admin"),
+        };
+
+        RefreshSpacePathsLogonAction.SpacePathsFrom(roots, Owner)
+            .Should().Equal(["Esl"], "a space is a place people work together; platform partitions are reached through their apps");
+    }
+
+    [Fact]
     public void A_fresh_answer_writes_both_lists()
     {
         var user = new User { SpacePaths = ["Old"], SharedPaths = [] };
