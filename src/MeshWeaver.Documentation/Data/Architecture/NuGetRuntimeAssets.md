@@ -91,8 +91,16 @@ released when the context unloads rather than pinned for the life of the process
 The interactive kernel's probe hooks `AssemblyLoadContext.Default.Resolving`, which the runtime raises
 only for names the host cannot bind, so unification is implicit there; it skips native directories
 for managed loads, tries the next candidate when one fails to load, and hooks
-`ResolvingUnmanagedDll` for native ones — answering only for an assembly that session loaded from its
-own package directories, so two sessions never bind each other's native binaries.
+`ResolvingUnmanagedDll` for native ones. Each submission's probing directories are kept as one
+closure, and a native import is answered only from the FIRST closure whose managed directories hold the
+requesting assembly (the resolution that owns that loaded assembly) — a later submission's different version of the same native library is never
+offered to an earlier one's assembly.
+
+**Limitation — the kernel loads into the default context.** That context is process-wide: one managed
+path is one loaded assembly with one native binding, whoever asked first, and packages come from the
+shared global cache. Two sessions that resolve the SAME managed package version but different versions
+of its native dependency therefore share the first binding. Only a NodeType's own collectible context
+isolates fully (its natives are loaded through, and released with, that context).
 
 ## What pins it
 
