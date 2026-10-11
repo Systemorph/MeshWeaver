@@ -29,7 +29,7 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
 {
     private const string DeleteArea = InboxLayoutArea.AreaName + "/Actions/Delete";
     private const string UndoArea = InboxLayoutArea.AreaName + "/Actions/Undo";
-    private const string NeedsYouGrid = InboxLayoutArea.AreaName + "/Grid" + InboxBand.NeedsYou;
+    private const string GridArea = InboxLayoutArea.AreaName + "/Grid";
 
     /// <inheritdoc />
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
@@ -57,12 +57,12 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
 
         var stream = GetClient().GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
             new Address(owner), new LayoutAreaReference(InboxLayoutArea.AreaName));
-        var grid = (DataGridControl)(await stream.GetControlStream(NeedsYouGrid).Should().Within(TestTimeouts.Convergence)
-            .Match(c => c is DataGridControl, "the band renders as a grid", ct))!;
+        var grid = (DataGridControl)(await stream.GetControlStream(GridArea).Should().Within(TestTimeouts.Convergence)
+            .Match(c => c is DataGridControl, "the inbox renders as one grid", ct))!;
         grid.SelectionMode.Should().Be(DataGridRowSelection.Multiple, "the inbox is select-many");
         grid.SelectionKey.Should().Be(InboxRows.KeyProperty);
         var rows = stream.GetDataStream<JsonElement>(
-            new JsonPointerReference(LayoutAreaReference.GetDataPointer(InboxRows.GridId(InboxBand.NeedsYou))));
+            new JsonPointerReference(LayoutAreaReference.GetDataPointer(InboxRows.GridId)));
         Task Listed(string because, params string[] ids) => rows.Should().Within(TestTimeouts.Convergence).Match(
             r => r.ValueKind == JsonValueKind.Array
                  && r.EnumerateArray().Select(x => x.GetProperty("path").GetString()).OrderBy(x => x)
@@ -82,6 +82,61 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
 
         await Click(stream, UndoArea, "1 back in the inbox.", ct);
         await Listed("Undo brought it back", "keep", "bin");
+    }
+
+    /// <summary>
+    /// Everything above the grid is bound to ONE filter in the page's data section — writing a field
+    /// there (what the search box, the order select and a source switch do) re-feeds the grid, with
+    /// no click handler and no re-render. The search goes to the QUERY ENGINE with each leg: a term
+    /// lists only what the mesh finds for it.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task TheSearch_TheOrder_AndTheSourceSwitches_AreBoundToTheGrid()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string owner = "inbox-bound";
+        await CreateUserAsync(owner, ct);
+        var bell = $"{owner}/{NotificationService.SatelliteSegment}";
+        var mail = $"{owner}/{EmailNodeType.UserEmailSegment}";
+        await CreateAsync(new MeshNode("alpha", bell)
+        {
+            NodeType = NotificationNodeType.NodeType, Name = "Alpha invoice", MainNode = owner, State = MeshNodeState.Active,
+            Content = new Notification { Id = "alpha", Title = "Alpha invoice", Recipient = owner },
+        }, ct);
+        await CreateAsync(Mail("zulu", mail, owner, new Email { Id = "zulu", From = "a.buyer@acme.example", Subject = "Zulu workshop" }), ct);
+        TestUsers.DevLogin(Mesh, new AccessContext { ObjectId = owner, Name = owner, Email = $"{owner}@meshweaver.io" });
+
+        var stream = GetClient().GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new Address(owner), new LayoutAreaReference(InboxLayoutArea.AreaName));
+        var rows = stream.GetDataStream<JsonElement>(
+            new JsonPointerReference(LayoutAreaReference.GetDataPointer(InboxRows.GridId)));
+        Task Titles(string because, params string[] titles) => rows.Should().Within(TestTimeouts.Convergence).Match(
+            r => r.ValueKind == JsonValueKind.Array
+                 && r.EnumerateArray().Select(x => x.GetProperty("title").GetString()).SequenceEqual(titles),
+            because, ct);
+        var filter = LayoutAreaReference.GetDataPointer(InboxRows.FilterId);
+        void Set(string field, JsonNode value) => stream.UpdatePointer(value, filter, new JsonPointerReference(field));
+
+        // Both are in "Needs you"; the mail was created last, so it is the newer one.
+        await Titles("the default order lists the newest first within a band", "Zulu workshop", "Alpha invoice");
+
+        // The page must settle: its own row writes re-emit the data section, and a page that read
+        // those as filter changes would rewrite the rows without end (dozens of writes in this window).
+        (await rows.Buffer(TimeSpan.FromMilliseconds(600)).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct))
+            .Count.Should().BeLessThanOrEqualTo(2, "an idle inbox writes nothing");
+
+        Set("order", JsonValue.Create(InboxOrder.Title));
+        await Titles("the order select re-orders the grid", "Alpha invoice", "Zulu workshop");
+
+        Set($"sources/{InboxRows.SourceKey("Mail")}", JsonValue.Create(false));
+        await Titles("a source switched off leaves the grid", "Alpha invoice");
+        Set($"sources/{InboxRows.SourceKey("Mail")}", JsonValue.Create(true));
+        await Titles("and returns when switched on", "Alpha invoice", "Zulu workshop");
+
+        Set("search", JsonValue.Create("name:*workshop*"));
+        await Titles("a term is evaluated by the query engine, per leg", "Zulu workshop");
+        Set("search", JsonValue.Create(""));
+        await Titles("clearing the box restores the list", "Alpha invoice", "Zulu workshop");
     }
 
     private static async Task Click(ISynchronizationStream<JsonElement> stream, string area, string summary, CancellationToken ct)
@@ -216,20 +271,34 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
             new() { Path = "alice/_Activity/b", NodeType = "Activity", BlockedReason = "running" },
         ];
 
-        InboxRows.Targets(rows, ["alice/_Notification/a", "alice/_Activity/b", "alice/_Notification/gone"])
+        InboxRows.Targets(rows, ["alice/_Notification/a", "alice/_Activity/b", "alice/_Notification/gone"], "alice")
             .Select(r => r.Path).Should().Equal("alice/_Notification/a");
     }
 
-    /// <summary>Legs merge into one band: each path once (first leg wins), newest first.</summary>
+    /// <summary>
+    /// A search may reach beyond the owner's partition (it runs with the viewer's rights); a bulk
+    /// act never does — a ticked row elsewhere is not a target, and a partition that merely
+    /// STARTS with the owner's name is elsewhere.
+    /// </summary>
     [Fact]
-    public void LegsMergeIntoOneBand_EachPathOnce_NewestFirst()
+    public void ABulkAct_NeverLeavesTheOwnersPartition()
+    {
+        ImmutableList<InboxRow> rows =
+        [
+            new() { Path = "alice/_Notification/a", NodeType = "Notification" },
+            new() { Path = "alicia/_Notification/b", NodeType = "Notification" },
+            new() { Path = "bob/_Notification/c", NodeType = "Notification" },
+        ];
+
+        InboxRows.Targets(rows, rows.Select(r => r.Path), "alice").Select(r => r.Path).Should().Equal("alice/_Notification/a");
+    }
+
+    /// <summary>Legs merge into one list: each path once, under the first leg that brought it.</summary>
+    [Fact]
+    public void LegsMergeIntoOneList_EachPathOnce_UnderTheFirstLegThatBroughtIt()
     {
         var mail = new InboxSection(InboxBand.NeedsYou, "Mail", 20, "q1");
         var bell = new InboxSection(InboxBand.NeedsYou, "Notifications", 10, "q2");
-        MeshNode Node(string id, int minute) => new(id, "alice/_X")
-        {
-            Name = id, NodeType = "X", LastModified = new DateTimeOffset(2026, 10, 11, 9, minute, 0, TimeSpan.Zero),
-        };
 
         var merged = InboxRows.Merge(
         [
@@ -237,9 +306,101 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
             [InboxRows.Of(Node("both", 2), mail, null, null), InboxRows.Of(Node("new", 3), mail, null, null)],
         ]);
 
-        merged.Select(r => r.Title).Should().Equal("new", "both", "old");
+        merged.Select(r => r.Title).OrderBy(t => t, StringComparer.Ordinal).Should().Equal("both", "new", "old");
         merged.Single(r => r.Title == "both").Source.Should().Be("Notifications");
     }
+
+    /// <summary>
+    /// Every ordering the select offers — and an order the page does not know falls back to
+    /// importance, so a stale stored value can never bury what needs the viewer.
+    /// </summary>
+    [Theory]
+    [InlineData(InboxOrder.Importance, "urgentNew,urgentOld,doneNewest")]
+    [InlineData(InboxOrder.Newest, "doneNewest,urgentNew,urgentOld")]
+    [InlineData(InboxOrder.Oldest, "urgentOld,urgentNew,doneNewest")]
+    [InlineData(InboxOrder.Title, "doneNewest,urgentNew,urgentOld")]
+    [InlineData(InboxOrder.Source, "doneNewest,urgentNew,urgentOld")]
+    [InlineData("SomethingElse", "urgentNew,urgentOld,doneNewest")]
+    public void TheChosenOrder_ArrangesTheRows(string order, string expected)
+    {
+        var needs = new InboxSection(InboxBand.NeedsYou, "Mail", 20, "q1");
+        var recent = new InboxSection(InboxBand.Recent, "Activities", 20, "q2");
+        ImmutableList<InboxRow> rows =
+        [
+            InboxRows.Of(Node("urgentOld", 1), needs, null, null, "Needs you", 0),
+            InboxRows.Of(Node("doneNewest", 9), recent, null, null, "Recent", 2),
+            InboxRows.Of(Node("urgentNew", 5), needs, null, null, "Needs you", 0),
+        ];
+
+        InboxRows.Apply(rows, new InboxFilter { Order = order }).Select(r => r.Title)
+            .Should().Equal(expected.Split(','));
+    }
+
+    /// <summary>
+    /// A source switched off is not listed; a source with no entry IS — a leg a package brings
+    /// later must not arrive switched off.
+    /// </summary>
+    [Fact]
+    public void ASourceSwitchedOff_IsNotListed_AndAnUnknownSourceIs()
+    {
+        ImmutableList<InboxRow> rows =
+        [
+            InboxRows.Of(Node("mail", 1), new InboxSection(InboxBand.NeedsYou, "Mail", 20, "q1"), null, null),
+            InboxRows.Of(Node("wa", 2), new InboxSection(InboxBand.NeedsYou, "WhatsApp", 30, "q2"), null, null),
+        ];
+        var filter = new InboxFilter { Sources = ImmutableDictionary<string, bool>.Empty.Add(InboxRows.SourceKey("Mail"), false) };
+
+        InboxRows.Apply(rows, filter).Select(r => r.Title).Should().Equal("wa");
+        InboxRows.SourceKey("Ops / Approvals").Should().Be("opsapprovals", "a pointer segment carries no slash, space or capital");
+    }
+
+    /// <summary>
+    /// The page tells a change the viewer made from a re-emission of the same state BY VALUE: two
+    /// separately built filters with the same content are the same, and every field moves it.
+    /// Without this the grid's own row writes read as filter changes and the page feeds on itself.
+    /// </summary>
+    [Fact]
+    public void AFiltersFingerprint_IsItsValue_NotItsInstance()
+    {
+        InboxFilter Build() => new()
+        {
+            Search = "acme", Order = InboxOrder.Title,
+            Sources = ImmutableDictionary<string, bool>.Empty.Add("mail", true).Add("chat", false),
+        };
+        var one = InboxRows.Fingerprint(Build());
+
+        InboxRows.Fingerprint(Build()).Should().Be(one);
+        Build().Should().NotBe(Build(), "the control: the record's own equality compares the dictionary by reference");
+        InboxRows.Fingerprint(Build() with { Search = "globex" }).Should().NotBe(one);
+        InboxRows.Fingerprint(Build() with { Order = InboxOrder.Newest }).Should().NotBe(one);
+        InboxRows.Fingerprint(Build() with { Sources = Build().Sources.SetItem("chat", true) }).Should().NotBe(one);
+    }
+
+    /// <summary>
+    /// A live read answers its first set whole and every later change as a delta; folded, it is
+    /// "what the leg selects now" — a removed row leaves, an updated one is replaced, not doubled.
+    /// </summary>
+    [Fact]
+    public void ALiveReadsDeltas_FoldIntoWhatTheLegSelectsNow()
+    {
+        static QueryResultChange<MeshNode> Change(QueryChangeType type, params MeshNode[] items)
+            => new() { ChangeType = type, Items = items };
+        var set = ImmutableDictionary<string, MeshNode>.Empty;
+
+        set = InboxLayoutArea.Fold(set, Change(QueryChangeType.Initial, Node("a", 1), Node("b", 1)));
+        set = InboxLayoutArea.Fold(set, Change(QueryChangeType.Added, Node("c", 2)));
+        set = InboxLayoutArea.Fold(set, Change(QueryChangeType.Updated, Node("a", 3)));
+        set = InboxLayoutArea.Fold(set, Change(QueryChangeType.Removed, Node("b", 1)));
+
+        set.Keys.OrderBy(k => k).Should().Equal("alice/_X/a", "alice/_X/c");
+        set["alice/_X/a"].LastModified.Minute.Should().Be(3, "an update replaces the row");
+        InboxLayoutArea.Fold(set, Change(QueryChangeType.Initial, Node("z", 1))).Keys.Should().Equal("alice/_X/z");
+    }
+
+    private static MeshNode Node(string id, int minute) => new(id, "alice/_X")
+    {
+        Name = id, NodeType = "X", LastModified = new DateTimeOffset(2026, 10, 11, 9, minute, 0, TimeSpan.Zero),
+    };
 
     /// <summary>
     /// A stored instant is shown in the VIEWER's zone — across the date line, and on both sides of
@@ -258,18 +419,6 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
 
         row.When.Should().Be(expected);
         row.Stamp.Should().StartWith(utc[..19], "the sort key is the UTC instant, whatever the viewer's zone");
-    }
-
-    /// <summary>
-    /// A band a provider named itself still yields data ids a client write can reach — no slash, no
-    /// space — and two bands never share one.
-    /// </summary>
-    [Fact]
-    public void ABandsDataIds_CarryNoCharacterAClientWriteCannotReach()
-    {
-        InboxRows.SelectionId("Ops / Approvals").Should().Be("inboxSelectionOpsApprovals");
-        InboxRows.GridId(InboxBand.NeedsYou).Should().NotBe(InboxRows.GridId(InboxBand.Recent));
-        InboxRows.QueryId(new InboxSection("Needs you", "Mail/Work", 20, "q")).Should().Be("Inbox.Needsyou.MailWork.20");
     }
 
     private IInboxItemHandler Handler(string nodeType)

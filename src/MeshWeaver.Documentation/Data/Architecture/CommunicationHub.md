@@ -368,10 +368,36 @@ nothing, and it must never be mistaken for the retention pass that actually boun
 
 ### Select many, then act — what ships today
 
-The Inbox app (`/{user}/Inbox`, `InboxLayoutArea`) renders each band as a `Controls.DataGrid` with
+The Inbox app (`/{user}/Inbox`, `InboxLayoutArea`) is ONE `Controls.DataGrid` over every leg, with
 the platform's own selection column (`WithRowSelection`, [DataGrid](/Doc/GUI/DataGrid) → "Row
-selection"): a checkbox per row, a header checkbox per band, and two toolbar buttons that act on
-every ticked row of every band.
+selection") — and everything above the grid is **data-bound**.
+
+The page holds one piece of view state, an `InboxFilter` in its data section, and each control is
+bound to a field of it. No control has a click handler that re-renders the page; the rows are a
+function of the filter and the legs.
+
+| Control | Bound to | What it does |
+|---|---|---|
+| search box | `search` | the term is appended to EVERY leg and handed to the query engine (free text, field filters, the semantic index) under the owner's identity — never a match over the rows already loaded |
+| order select | `order` | an `InboxOrder` constant: what needs you first (default — band rank, newest within), newest, oldest, by title, by source |
+| one switch per source | `sources/{key}` | shows or hides what one provider brought (Mail, WhatsApp, Notifications, …); a source with no entry is shown, so a leg a package brings later never arrives switched off |
+| the grid's checkboxes | `inboxSelection` | the ticked row keys, read by Delete |
+
+Three properties of that binding are load-bearing:
+
+- **The search is a live read of its own, the idle list is not.** With no term each leg is its
+  shared synced query. A typed term is unbounded text, and a synced query is kept per distinct query
+  for the life of the process — so a term gets its own live read, folded from deltas into "what the
+  leg selects now" and ended when the term changes.
+- 🚨 **The filter is compared by VALUE.** The data section re-emits an id whenever any id in it
+  changes — the grid's own rows included — and each emission is a freshly deserialized record. Read
+  naively, the page feeds on its own writes: rows written, filter "changed", rows written again,
+  without end. `InboxRows.Fingerprint` is what tells a change the viewer made from a re-emission.
+- **Importance stays the default order, in one list.** The bands are a column and a rank rather
+  than three stacked lists, so "what needs you" is still on top — and an order the page does not
+  recognise falls back to it.
+
+The toolbar's two buttons act on every ticked row.
 
 | Button | Does | Never does |
 |---|---|---|
@@ -396,6 +422,8 @@ Three rules follow, and each is pinned by a test in `InboxSelectAndDeleteTest`:
   an instance action) deliberately has no handler and leaves the inbox by being decided.
 - **A row in *Running* is never selectable.** It is not the viewer's to put away; it leaves the band
   by finishing.
+- **A bulk act never leaves the owner's partition.** A search runs with the viewer's rights and may
+  list a node elsewhere; a ticked row outside `{owner}/` is not a target.
 - **A selection is the viewer's claim, not a grant.** The click re-checks the ticked keys against
   the rows as they stand (`InboxRows.Targets`) and issues every write under the CLICKER's access
   context, opened around the handler call — so each write is authorised exactly as if the viewer had

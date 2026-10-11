@@ -8,6 +8,7 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
@@ -17,26 +18,33 @@ namespace MeshWeaver.Graph;
 
 /// <summary>
 /// The <b>Inbox app</b> — <c>/{user}/Inbox</c>, installed for every user by
-/// <c>SeedInboxAppLogonAction</c>: ONE page for everything that reaches a person — notifications,
+/// <c>SeedInboxAppLogonAction</c>: ONE grid for everything that reaches a person — notifications,
 /// mail, conversations from every connected channel, what is running for them and what just
 /// finished. It is the rendered side of <see cref="InboxQueries"/>: every leg (core's own plus each
 /// one a package registered) is resolved for the OWNER of the hub — anchored on their own partition,
-/// projected, the invariants <c>InboxLegsAreAnchoredTest</c> pins — and its rows are merged into the
-/// grid of its band.
+/// projected, the invariants <c>InboxLegsAreAnchoredTest</c> pins — and its rows are merged into
+/// the grid.
 ///
-/// <para><b>Select many, then act.</b> Each band is a <see cref="DataGridControl"/> with the
-/// platform's own selection column (<see cref="DataGridControl.WithRowSelection"/>); the toolbar's
-/// Delete acts on every ticked row of every band and Undo brings the last batch back. What Delete
-/// MEANS is the item type's own business — an <see cref="IInboxItemHandler"/> the type's package
-/// registered — and it is always soft: nothing is removed from the mesh. A row whose type has no
-/// handler, or that is still running, renders a disabled checkbox that says why.</para>
+/// <para><b>Everything above the grid is data-bound.</b> The page holds ONE piece of view state, an
+/// <see cref="InboxFilter"/> in its data section, and each control is bound to a field of it: the
+/// search box, the order select, and one switch per source. The grid's rows are a function of that
+/// state and the legs — nothing is copied, and no control has a click handler that re-renders the
+/// page.</para>
+///
+/// <para><b>The search is the mesh's own.</b> A typed term is appended to every leg and handed to
+/// the query engine (free text, field filters, the semantic index) under the OWNER's identity; it is
+/// not a filter over the rows that happened to be loaded.</para>
+///
+/// <para><b>Select many, then act.</b> The grid carries the platform's own selection column
+/// (<see cref="DataGridControl.WithRowSelection"/>); Delete acts on every ticked row and Undo brings
+/// the last batch back. What Delete MEANS is the item type's own business — an
+/// <see cref="IInboxItemHandler"/> the type's package registered — and it is always soft: nothing is
+/// removed from the mesh. A row whose type has no handler, or that is still running, renders a
+/// disabled checkbox that says why.</para>
 ///
 /// <para>Only the owner sees it. A User node is public-read, so without the owner check anyone could
 /// open another person's inbox address; the legs are RLS-scoped anyway, but the page says "not yours"
 /// instead of rendering someone else's empty shell.</para>
-///
-/// <para>Two legs that resolve to the SAME query are shown once, under the first band that asks for
-/// them — a row listed twice on one page is noise.</para>
 /// </summary>
 public static class InboxLayoutArea
 {
@@ -46,7 +54,10 @@ public static class InboxLayoutArea
     /// <summary>The data id holding what the last Delete put away — what Undo brings back.</summary>
     public const string UndoId = "inboxUndo";
 
-    /// <summary>The order bands are shown in; a provider's own band follows these, alphabetically.</summary>
+    /// <summary>How long the page waits after the last keystroke before it asks the query engine.</summary>
+    internal static readonly TimeSpan SearchQuiet = TimeSpan.FromMilliseconds(300);
+
+    /// <summary>The order bands are ranked in; a provider's own band follows these, alphabetically.</summary>
     internal static readonly ImmutableArray<string> BandOrder = [InboxBand.NeedsYou, InboxBand.Running, InboxBand.Recent];
 
     /// <summary>The page — returned at once as a template; its rows are fed.</summary>
@@ -58,69 +69,134 @@ public static class InboxLayoutArea
         if (string.IsNullOrEmpty(viewer) || !string.Equals(viewer, owner, StringComparison.OrdinalIgnoreCase))
             return Observable.Return<UiControl?>(Controls.Markdown(host.Localize("inbox.notYours")));
 
-        var bands = Bands(host, owner, access.ViewerZoneId());
-        if (host.TryMarkEditStateInitialized("inbox:" + UndoId))
+        var sections = Sections(InboxQueries.All(host.Hub.ServiceProvider), owner);
+        var sources = sections.Select(section => section.Source).Distinct(StringComparer.Ordinal).ToImmutableList();
+        // Seeded ONCE per session: a re-render must not reset what the viewer typed, switched or ticked.
+        if (host.TryMarkEditStateInitialized("inbox:" + InboxRows.FilterId))
+        {
+            host.UpdateData(InboxRows.FilterId, new InboxFilter
+            {
+                Sources = sources.ToImmutableDictionary(InboxRows.SourceKey, _ => true),
+            });
             host.UpdateData(UndoId, ImmutableList<InboxUndoItem>.Empty);
-        foreach (var band in bands)
-            host.SeedRowSelection(InboxRows.SelectionId(band.Band));
+        }
+        host.SeedRowSelection(InboxRows.SelectionId);
 
-        var stack = Controls.Stack.WithWidth("100%").WithVerticalGap(16)
+        var filterContext = LayoutAreaReference.GetDataPointer(InboxRows.FilterId);
+        var switches = Controls.Stack.WithOrientation(Orientation.Horizontal).WithStyle("gap: 16px; flex-wrap: wrap;");
+        foreach (var source in sources)
+            // A source is named by the package that brought it — its id is its label.
+            switches = switches.WithView(
+                Controls.Switch(new JsonPointerReference($"sources/{InboxRows.SourceKey(source)}")) with
+                {
+                    DataContext = filterContext, Label = source,
+                }, "Show" + InboxRows.SourceKey(source));
+
+        return Observable.Return<UiControl?>(Controls.Stack.WithWidth("100%").WithVerticalGap(12)
             .WithView(Controls.H2(host.Localize("inbox.title")).WithStyle("margin: 0;"), "Title")
+            .WithView(Controls.Stack.WithOrientation(Orientation.Horizontal).WithStyle("gap: 12px; flex-wrap: wrap; align-items: end;")
+                .WithView(Controls.Text(new JsonPointerReference("search")) with
+                {
+                    DataContext = filterContext, Label = host.Localize("inbox.search"),
+                    Placeholder = host.Localize("inbox.search.placeholder"),
+                }, "Search")
+                .WithView(Controls.Select(new JsonPointerReference("order"),
+                    InboxOrder.All.Select(order => (Option)new Option<string>(order, host.Localize("inbox.order." + order))).ToArray()) with
+                {
+                    DataContext = filterContext, Label = host.Localize("inbox.order"),
+                }, "Order"), "Find")
+            .WithView(switches, "Sources")
             // Ordinary buttons: the framework keeps each busy while its bulk act runs and shows the
             // outcome line that names every item that was not put away (Doc/GUI/ButtonPendingState).
             .WithView(Controls.Toolbar
                 .WithView(Controls.Button(host.Localize("inbox.delete")).WithAppearance(Appearance.Accent)
-                    .WithReactiveClickAction(ctx => Delete(ctx, bands)), "Delete")
+                    .WithReactiveClickAction(ctx => Delete(ctx, owner)), "Delete")
                 .WithView(Controls.Button(host.Localize("inbox.undo")).WithAppearance(Appearance.Neutral)
                     .WithReactiveClickAction(Undo), "Undo"),
-                "Actions");
-        foreach (var band in bands)
-            stack = stack
-                // A provider's own band has no catalog key: its id is its title.
-                .WithView(Controls.H3(BandOrder.Contains(band.Band) ? host.Localize(BandTitleKey(band.Band)) : band.Band)
-                    .WithStyle("margin: 8px 0 0;"), "Band" + band.Band)
-                .WithView(Grid(host, band), "Grid" + band.Band);
-        return Observable.Return<UiControl?>(stack);
+                "Actions")
+            .WithView(Grid(host, Rows(host, sections, owner, access.ViewerZoneId())), "Grid"));
     }
 
-    /// <summary>One band of the page: its id and its live rows.</summary>
-    /// <param name="Band">The band.</param>
-    /// <param name="Rows">Its rows, merged from every leg that feeds it.</param>
-    internal sealed record BandFeed(string Band, IObservable<ImmutableList<InboxRow>> Rows);
-
     /// <summary>
-    /// The bands of <paramref name="owner"/>'s page, each fed by its legs. A leg that cannot be read
-    /// contributes no rows and is LOGGED — one provider's failure must not blank the band the
-    /// others feed.
+    /// The grid's rows: every leg's result for the term the viewer typed, merged, then narrowed to
+    /// the sources switched on and put in the chosen order. A leg that cannot be read contributes no
+    /// rows and is LOGGED — one provider's failure must not blank the list the others feed.
     /// </summary>
-    internal static ImmutableList<BandFeed> Bands(LayoutAreaHost host, string owner, string? zone)
+    internal static IObservable<ImmutableList<InboxRow>> Rows(
+        LayoutAreaHost host, IReadOnlyList<InboxSection> sections, string owner, string? zone)
     {
         var hub = host.Hub;
         var handlers = hub.ServiceProvider.GetServices<IInboxItemHandler>().ToImmutableArray();
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(InboxLayoutArea));
-        // Resolved ONCE, on the render turn: the texts a row may carry in its disabled checkbox.
+        // Resolved ONCE, on the render turn: every text a row may carry.
         var running = host.Localize("inbox.blocked.running");
         var noHandler = host.Localize("inbox.blocked.noHandler");
-        return Sections(InboxQueries.All(hub.ServiceProvider), owner)
-            .GroupBy(section => section.Band, StringComparer.Ordinal)
-            .Select(band => new BandFeed(band.Key, band
-                .Select(section => hub.GetQuery(InboxRows.QueryId(section), section.Query)
-                    .Select(nodes => nodes
-                        .Select(node => InboxRows.Of(node, section, zone,
-                            BlockedReason(section.Band, InboxItemHandlers.For(handlers, node.NodeType), running, noHandler)))
-                        .ToImmutableList())
-                    .Catch((Exception ex) =>
-                    {
-                        logger?.LogWarning(ex, "Inbox leg {Source} ({Band}) could not be read", section.Source, section.Band);
-                        return Observable.Return(ImmutableList<InboxRow>.Empty);
-                    }))
-                .CombineLatest()
-                // Deliberately NOT multicast: each leg's synced query is already shared and replays
-                // its current set, so the grid's feed and a click's one-off read each subscribe
-                // cheaply — and no connection is left for a teardown to miss.
-                .Select(InboxRows.Merge)))
-            .ToImmutableList();
+        var bands = sections.Select(s => s.Band).Distinct(StringComparer.Ordinal)
+            .Select((band, rank) => (band, rank, Title: BandOrder.Contains(band) ? host.Localize(BandTitleKey(band)) : band))
+            .ToImmutableDictionary(b => b.band, b => (b.rank, b.Title), StringComparer.Ordinal);
+        // 🚨 Distinct by VALUE. The data section re-emits this id whenever ANY id in it changes —
+        // the grid's own rows included — and each emission is a freshly deserialized record whose
+        // dictionary is a new instance. Without the fingerprint the page would feed on its own
+        // writes: rows written → filter "changes" → rows written again, without end.
+        var filter = host.GetDataStream<InboxFilter>(InboxRows.FilterId).Select(f => f ?? new InboxFilter())
+            .DistinctUntilChanged(InboxRows.Fingerprint, StringComparer.Ordinal);
+
+        IObservable<ImmutableList<InboxRow>> Merged(string term) => sections
+            .Select(section => Nodes(hub, section, term, owner)
+                .Select(nodes => nodes
+                    .Select(node => InboxRows.Of(node, section, zone,
+                        BlockedReason(section.Band, InboxItemHandlers.For(handlers, node.NodeType), running, noHandler),
+                        bands[section.Band].Title, bands[section.Band].rank))
+                    .ToImmutableList())
+                .Catch((Exception ex) =>
+                {
+                    logger?.LogWarning(ex, "Inbox leg {Source} ({Band}) could not be read", section.Source, section.Band);
+                    return Observable.Return(ImmutableList<InboxRow>.Empty);
+                }))
+            .CombineLatest()
+            .Select(InboxRows.Merge);
+
+        return filter.Select(f => f.Search.Trim())
+            .DistinctUntilChanged(StringComparer.Ordinal)
+            // The first read and a cleared box answer at once; a term waits for the typing to pause,
+            // and Switch drops the read a newer keystroke superseded.
+            .Select(term => term.Length == 0 ? Observable.Return(term) : Observable.Return(term).Delay(SearchQuiet))
+            .Switch()
+            .Select(Merged)
+            .Switch()
+            .CombineLatest(filter, InboxRows.Apply);
     }
+
+    /// <summary>
+    /// One leg's nodes. With no search term it is the leg's SHARED synced query (one subscription
+    /// per leg and viewer, replayed). With a term it is a live read of the leg plus the term — its
+    /// own subscription, ended when the term changes — because a synced query is kept for the
+    /// process's life per distinct query text, and a typed term is unbounded.
+    /// </summary>
+    internal static IObservable<IEnumerable<MeshNode>> Nodes(IMessageHub hub, InboxSection section, string term, string owner)
+        => term.Length == 0
+            ? hub.GetQuery(InboxRows.QueryId(section), section.Query)
+            // 🚨 The viewer is an ARGUMENT, never the ambient identity: this is subscribed on a data
+            // emission, where the ambient context is no longer the page's — and the term is the
+            // viewer's own text, so it must be evaluated with exactly the viewer's rights.
+            : hub.ServiceProvider.GetRequiredService<IMeshService>()
+                .Query<MeshNode>(MeshQueryRequest.FromQuery($"{section.Query} {term}", owner))
+                .Scan(ImmutableDictionary<string, MeshNode>.Empty.WithComparers(StringComparer.Ordinal), Fold)
+                .Select(nodes => (IEnumerable<MeshNode>)nodes.Values);
+
+    /// <summary>
+    /// A live read answers its first set whole and every later change as a delta; this folds them
+    /// into "what the leg selects now".
+    /// </summary>
+    internal static ImmutableDictionary<string, MeshNode> Fold(ImmutableDictionary<string, MeshNode> current, QueryResultChange<MeshNode> change)
+        => change.ChangeType switch
+        {
+            QueryChangeType.Removed => current.RemoveRange(change.Items.Select(n => n.Path)),
+            QueryChangeType.Added or QueryChangeType.Updated => current.SetItems(change.Items.Select(n => KeyValuePair.Create(n.Path, n))),
+            // Initial — and a reset: the set itself.
+            _ => ImmutableDictionary<string, MeshNode>.Empty.WithComparers(StringComparer.Ordinal)
+                .SetItems(change.Items.Select(n => KeyValuePair.Create(n.Path, n))),
+        };
 
     /// <summary>
     /// Why a row of <paramref name="band"/> cannot be selected, or null when it can. A running item
@@ -133,21 +209,26 @@ public static class InboxLayoutArea
             : null;
 
     /// <summary>
-    /// One band's grid: the selection column, what the row is, who brought it, when — and Open,
-    /// which hands off to the item's own page. The inbox lists and hands off; it is not a second
-    /// mail client or chat client.
+    /// The grid: the selection column, what the row is, who brought it, which band it is in, when —
+    /// and Open, which hands off to the item's own page. The inbox lists and hands off; it is not a
+    /// second mail client or chat client.
     /// </summary>
-    private static DataGridControl Grid(LayoutAreaHost host, BandFeed band)
-        => band.Rows.Select(rows => (IEnumerable<InboxRow>)rows)
-            .BindGrid(InboxRows.GridId(band.Band), host.Localize("inbox.band.empty"),
-                reason => host.Localize("inbox.listFailed", reason))
-            .WithRowSelection(InboxRows.SelectionId(band.Band), InboxRows.KeyProperty, InboxRows.BlockedReasonProperty)
-            .WithColumn(new PropertyColumnControl<string> { Property = nameof(InboxRow.Title).ToCamelCase() }
-                .WithTitle(host.Localize("inbox.column.item")))
-            .WithColumn(new PropertyColumnControl<string> { Property = nameof(InboxRow.Source).ToCamelCase() }
-                .WithTitle(host.Localize("inbox.column.source")))
-            .WithColumn(new PropertyColumnControl<string> { Property = nameof(InboxRow.When).ToCamelCase() }
-                .WithTitle(host.Localize("inbox.column.when")))
+    private static DataGridControl Grid(LayoutAreaHost host, IObservable<ImmutableList<InboxRow>> rows)
+    {
+        var grid = rows.Select(set => (IEnumerable<InboxRow>)set)
+            .BindGrid(InboxRows.GridId, host.Localize("inbox.band.empty"), reason => host.Localize("inbox.listFailed", reason))
+            .WithRowSelection(InboxRows.SelectionId, InboxRows.KeyProperty, InboxRows.BlockedReasonProperty);
+        foreach (var (property, key) in new[]
+                 {
+                     (nameof(InboxRow.Title), "inbox.column.item"),
+                     (nameof(InboxRow.Source), "inbox.column.source"),
+                     (nameof(InboxRow.Band), "inbox.column.status"),
+                     (nameof(InboxRow.When), "inbox.column.when"),
+                 })
+            // The order is the select's: a header sort would be a second, unbound ordering.
+            grid = grid.WithColumn(new PropertyColumnControl<string> { Property = property.ToCamelCase() }
+                .WithTitle(host.Localize(key)).WithSortable(false));
+        return grid
             .WithColumn(new TemplateColumnControl(
                     Controls.Button(host.Localize("inbox.open")).WithAppearance(Appearance.Lightweight)
                         .WithReactiveClickAction(ctx =>
@@ -158,13 +239,14 @@ public static class InboxLayoutArea
                         }))
                 .WithTitle(host.Localize("inbox.column.open")).WithSortable(false))
             .Resizable();
+    }
 
     /// <summary>
-    /// Delete: every ticked row of every band, re-checked against the rows as they stand, put away
-    /// by its own type's handler under the CLICKER's identity. What was put away becomes the Undo
-    /// batch; what was not is named in the outcome line.
+    /// Delete: every ticked row, re-checked against the rows the grid shows and confined to the
+    /// owner's partition, put away by its own type's handler under the CLICKER's identity. What was
+    /// put away becomes the Undo batch; what was not is named in the outcome line.
     /// </summary>
-    private static IObservable<Unit> Delete(UiActionContext ctx, ImmutableList<BandFeed> bands)
+    private static IObservable<Unit> Delete(UiActionContext ctx, string owner)
     {
         var host = ctx.Host;
         var hub = host.Hub;
@@ -173,12 +255,10 @@ public static class InboxLayoutArea
         // thread that read answers on, where the ambient context is no longer the clicker's.
         var caller = access?.Context;
         var handlers = hub.ServiceProvider.GetServices<IInboxItemHandler>().ToImmutableArray();
-        return bands
-            .Select(band => ctx.SelectedRowKeys(InboxRows.SelectionId(band.Band))
-                .Zip(band.Rows.Take(1), (keys, rows) => InboxRows.Targets(rows, keys)))
-            .Concat()
-            .ToList()
-            .Select(perBand => perBand.SelectMany(rows => rows).ToImmutableList())
+        return ctx.SelectedRowKeys(InboxRows.SelectionId)
+            // The rows the grid is SHOWING — what the viewer ticked against — read once.
+            .Zip(host.GetDataStream<ImmutableList<InboxRow>>(InboxRows.GridId).Take(1),
+                (keys, rows) => InboxRows.Targets(rows ?? [], keys, owner))
             .SelectMany(targets => targets.Count == 0
                 ? Observable.Throw<Unit>(new InvalidOperationException(host.Localize("inbox.nothingSelected")))
                 : Act(ctx, access, caller, targets.Select(row => new InboxUndoItem(row.Path, row.NodeType)).ToImmutableList(),
@@ -188,9 +268,8 @@ public static class InboxLayoutArea
                         var done = outcomes.Where(o => o.Done).Select(o => o.Path).ToImmutableHashSet(StringComparer.Ordinal);
                         host.UpdateData(UndoId, targets.Where(row => done.Contains(row.Path))
                             .Select(row => new InboxUndoItem(row.Path, row.NodeType)).ToImmutableList());
-                        // The rows are gone from the grids; so are their ticks.
-                        foreach (var band in bands)
-                            host.UpdateData(InboxRows.SelectionId(band.Band), new DataGridSelectionState());
+                        // The rows are gone from the grid; so are their ticks.
+                        host.UpdateData(InboxRows.SelectionId, new DataGridSelectionState());
                         ctx.ReportSummary(Summary(host, "inbox.summary.deleted", outcomes));
                     })
                     .Select(_ => Unit.Default));

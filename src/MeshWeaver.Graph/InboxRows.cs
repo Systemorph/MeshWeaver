@@ -30,6 +30,12 @@ public sealed record InboxRow
     /// <summary>The item's node type — what picks its <see cref="IInboxItemHandler"/>.</summary>
     public string NodeType { get; init; } = string.Empty;
 
+    /// <summary>The band the row belongs to, as the viewer reads it ("Needs you", "Running", …).</summary>
+    public string Band { get; init; } = string.Empty;
+
+    /// <summary>The band's rank — what needs the viewer first. The importance order, never shown.</summary>
+    public int Rank { get; init; }
+
     /// <summary>When the item last changed, in the VIEWER's time zone.</summary>
     public string When { get; init; } = string.Empty;
 
@@ -48,6 +54,51 @@ public sealed record InboxRow
 /// <param name="NodeType">Its node type, so Undo finds the same handler.</param>
 public sealed record InboxUndoItem(string Path, string NodeType);
 
+/// <summary>
+/// The orderings the inbox offers. An open vocabulary of string constants: the chosen one is STORED
+/// in the page's data section and bound to the order select.
+/// </summary>
+public static class InboxOrder
+{
+    /// <summary>What needs the viewer first, then what is running, then what finished — newest first within each. The default.</summary>
+    public const string Importance = "Importance";
+
+    /// <summary>Newest change first, whatever the band.</summary>
+    public const string Newest = "Newest";
+
+    /// <summary>Oldest change first.</summary>
+    public const string Oldest = "Oldest";
+
+    /// <summary>By title, A to Z.</summary>
+    public const string Title = "Title";
+
+    /// <summary>By who brought the row, then newest first.</summary>
+    public const string Source = "Source";
+
+    /// <summary>Every ordering, in the order the select lists them.</summary>
+    public static ImmutableArray<string> All { get; } = [Importance, Newest, Oldest, Title, Source];
+}
+
+/// <summary>
+/// What the viewer asked the inbox to show — the page's ONE piece of view state, held in the layout
+/// area's data section and bound, field by field, to the controls above the grid: the search box,
+/// the order select and one switch per source. The page never keeps a copy of it.
+/// </summary>
+public sealed record InboxFilter
+{
+    /// <summary>The search text. It is handed to the mesh query engine with every leg — not matched against the rows already loaded.</summary>
+    public string Search { get; init; } = string.Empty;
+
+    /// <summary>An <see cref="InboxOrder"/> constant.</summary>
+    public string Order { get; init; } = InboxOrder.Importance;
+
+    /// <summary>
+    /// Which sources are shown, by <see cref="InboxRows.SourceKey"/>. A source with no entry is
+    /// shown: a leg a package brings later must not arrive switched off.
+    /// </summary>
+    public ImmutableDictionary<string, bool> Sources { get; init; } = ImmutableDictionary<string, bool>.Empty;
+}
+
 /// <summary>The rows of the inbox, as pure functions of the nodes the legs returned.</summary>
 public static class InboxRows
 {
@@ -57,17 +108,33 @@ public static class InboxRows
     /// <summary>The row property that carries why a row is not selectable.</summary>
     public const string BlockedReasonProperty = "blockedReason";
 
-    /// <summary>
-    /// The selection data id of <paramref name="band"/>'s grid. A provider may name its own band, so
-    /// anything that is not a letter or digit is dropped — a client write into a data id containing
-    /// <c>/</c> does not reach the owner (Doc/GUI/DataGrid → "Row selection").
-    /// </summary>
-    /// <param name="band">The band.</param>
-    public static string SelectionId(string band) => "inboxSelection" + Slug(band);
+    /// <summary>The data id of the grid's selection. No <c>/</c>: a client write into such an id does not reach the owner.</summary>
+    public const string SelectionId = "inboxSelection";
 
-    /// <summary>The rows data id of <paramref name="band"/>'s grid.</summary>
-    /// <param name="band">The band.</param>
-    public static string GridId(string band) => "inboxRows" + Slug(band);
+    /// <summary>The data id of the grid's rows.</summary>
+    public const string GridId = "inboxRows";
+
+    /// <summary>The data id of the <see cref="InboxFilter"/> the controls above the grid are bound to.</summary>
+    public const string FilterId = "inboxFilter";
+
+    /// <summary>
+    /// The key of <paramref name="source"/> in <see cref="InboxFilter.Sources"/> — and so the last
+    /// segment of the pointer its switch is bound to. Lower-case letters and digits only: a source is
+    /// named by its provider, a pointer segment must not contain <c>/</c>, and a serializer that
+    /// re-cases dictionary keys must not move it.
+    /// </summary>
+    /// <param name="source">The leg's source.</param>
+    public static string SourceKey(string source) => Slug(source).ToLowerInvariant();
+
+    /// <summary>
+    /// <paramref name="filter"/> by VALUE — what the page compares to tell a change the viewer made
+    /// from a re-emission of the same state. The record's own equality cannot: its dictionary is
+    /// compared by reference, and every read of the data section deserializes a new one.
+    /// </summary>
+    /// <param name="filter">The filter.</param>
+    public static string Fingerprint(InboxFilter filter)
+        => string.Join('\n', new[] { filter.Search, filter.Order }
+            .Concat(filter.Sources.OrderBy(s => s.Key, StringComparer.Ordinal).Select(s => $"{s.Key}={s.Value}")));
 
     /// <summary>The synced-query id of one leg — stable per leg, never composed per call.</summary>
     /// <param name="section">The leg.</param>
@@ -83,13 +150,18 @@ public static class InboxRows
     /// <param name="section">The leg that returned it.</param>
     /// <param name="zone">The viewer's time zone, resolved once on the render turn.</param>
     /// <param name="blockedReason">Why the row cannot be selected, or null when it can.</param>
-    public static InboxRow Of(MeshNode node, InboxSection section, string? zone, string? blockedReason)
+    /// <param name="band">The band's title as the viewer reads it; the band id when omitted.</param>
+    /// <param name="rank">The band's rank in the importance order.</param>
+    public static InboxRow Of(MeshNode node, InboxSection section, string? zone, string? blockedReason,
+        string? band = null, int rank = 0)
         => new()
         {
             Path = node.Path,
             Title = string.IsNullOrWhiteSpace(node.Name) ? node.Id : node.Name,
             Source = section.Source,
             NodeType = node.NodeType ?? string.Empty,
+            Band = band ?? section.Band,
+            Rank = rank,
             // A stored instant, shown where the viewer is — never the container's UTC.
             When = DisplayTimeExtensions.ToDisplayTime(node.LastModified, zone)
                 .ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture),
@@ -98,24 +170,50 @@ public static class InboxRows
         };
 
     /// <summary>
-    /// One band's rows from its legs' results: each path once (the first leg that brought it wins),
-    /// newest first.
+    /// Every leg's rows as one list: each path once — the first leg that brought it wins, and legs
+    /// arrive in band order, so an item two bands select is listed under the more urgent one.
     /// </summary>
     /// <param name="legs">The rows each leg produced, in leg order.</param>
     public static ImmutableList<InboxRow> Merge(IEnumerable<IEnumerable<InboxRow>> legs)
         => legs.SelectMany(rows => rows)
             .GroupBy(row => row.Path, StringComparer.Ordinal)
             .Select(group => group.First())
-            .OrderByDescending(row => row.Stamp, StringComparer.Ordinal)
-            .ThenBy(row => row.Path, StringComparer.Ordinal)
             .ToImmutableList();
 
     /// <summary>
-    /// The rows a bulk act may touch: the selected keys re-checked against the rows as they stand
-    /// now — a selection is the viewer's claim about what they saw, never a grant.
+    /// The rows the viewer asked for: the sources switched on, in the chosen order. The search is
+    /// NOT applied here — it went to the query engine with each leg.
     /// </summary>
-    /// <param name="rows">The band's current rows.</param>
+    /// <param name="rows">The merged rows.</param>
+    /// <param name="filter">What the viewer asked for.</param>
+    public static ImmutableList<InboxRow> Apply(IEnumerable<InboxRow> rows, InboxFilter filter)
+    {
+        var shown = rows.Where(row => !filter.Sources.TryGetValue(SourceKey(row.Source), out var on) || on);
+        var ordered = filter.Order switch
+        {
+            InboxOrder.Newest => shown.OrderByDescending(r => r.Stamp, StringComparer.Ordinal),
+            InboxOrder.Oldest => shown.OrderBy(r => r.Stamp, StringComparer.Ordinal),
+            InboxOrder.Title => shown.OrderBy(r => r.Title, StringComparer.OrdinalIgnoreCase)
+                .ThenByDescending(r => r.Stamp, StringComparer.Ordinal),
+            InboxOrder.Source => shown.OrderBy(r => r.Source, StringComparer.OrdinalIgnoreCase)
+                .ThenByDescending(r => r.Stamp, StringComparer.Ordinal),
+            // Importance — and anything unrecognised: an unknown stored order must never hide what
+            // needs the viewer behind what merely happened last.
+            _ => shown.OrderBy(r => r.Rank).ThenByDescending(r => r.Stamp, StringComparer.Ordinal),
+        };
+        return ordered.ThenBy(r => r.Path, StringComparer.Ordinal).ToImmutableList();
+    }
+
+    /// <summary>
+    /// The rows a bulk act may touch: the selected keys re-checked against the rows as they stand
+    /// now — a selection is the viewer's claim about what they saw, never a grant — and confined to
+    /// the OWNER's partition, so a search that reached further can never turn into a write there.
+    /// </summary>
+    /// <param name="rows">The grid's current rows.</param>
     /// <param name="selected">The keys the client reported.</param>
-    public static ImmutableList<InboxRow> Targets(IEnumerable<InboxRow> rows, IEnumerable<string> selected)
-        => MeshWeaver.Layout.DataGrid.DataGridRowSelection.Prune(rows, selected, r => r.Path, r => r.BlockedReason);
+    /// <param name="owner">The inbox's owner.</param>
+    public static ImmutableList<InboxRow> Targets(IEnumerable<InboxRow> rows, IEnumerable<string> selected, string owner)
+        => MeshWeaver.Layout.DataGrid.DataGridRowSelection.Prune(
+            rows.Where(row => row.Path.StartsWith(owner + "/", StringComparison.Ordinal)),
+            selected, r => r.Path, r => r.BlockedReason);
 }
