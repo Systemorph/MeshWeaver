@@ -4079,6 +4079,9 @@ jobs:
             PACKAGE="$(bk get --module "$MODULE" package)"
             VERSION="$(bk get --module "$MODULE" version)"
             OWED="$(bk get --module "$MODULE" need_publish)"
+            # A withheld package is not owed for a DIFFERENT reason than a ledger-served key, and
+            # the staged record is what the publication lane prints: it must say which.
+            WITHHELD="$(bk get --module "$MODULE" withheld --default false)"
             DECISION="$(bk get --module "$MODULE" decision)"
             HOLDER="$(bk get --module "$MODULE" holder)"
             LEDGER_KEY="$(bk get --module "$MODULE" key)"
@@ -4101,6 +4104,8 @@ jobs:
               if [ "$OWED" = "true" ]; then
                 cp "$BUNDLE" "$RUNNER_TEMP/staged/$name"
                 echo "staged $MODULE@$VERSION ($name, sha256 $sha, built against $identity) — the publication lane hands it over once this run's validation is green"
+              elif [ "$WITHHELD" = "true" ]; then
+                reason="no hand-over owed: the caller withholds package '$PACKAGE' from this run's publication (publish-withhold) — the registry does NOT serve this key yet; a later run of the caller hands it over"
               else
                 reason="no hand-over owed: the module build ledger already serves this key (decision '$DECISION'${HOLDER:+, holder $HOLDER})"
                 echo "staged $MODULE@$VERSION as NOT OWED — $reason"

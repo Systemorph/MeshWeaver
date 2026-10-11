@@ -681,6 +681,8 @@ WITHHOLD_PLAN = 'withheld=true; need_publish=false'
 WITHHOLD_MATCH = ('grep -qxF "$(bk get --module "$MODULE" package)" "$RUNNER_TEMP/publish-withhold.txt"')
 WITHHOLD_PUBLISHED = '[ "$NEWER" != true ] && [ "$WITHHELD" != true ]; then PUBLISHED=true; fi'
 WITHHOLD_RECEIPT = 'elif [ "$WITHHELD" = true ]; then PUBLICATION=withheld'
+WITHHOLD_STAGED = ('elif [ "$WITHHELD" = "true" ]; then\n'
+                   '                reason="no hand-over owed: the caller withholds package')
 
 
 def workflow_publish_withhold_problems(workflow: str) -> list[str]:
@@ -711,6 +713,10 @@ def workflow_publish_withhold_problems(workflow: str) -> list[str]:
     if workflow.count(WITHHOLD_RECEIPT) != 1:
         problems.append("the receipt must name the reason (`publication: withheld`) — a withheld module must "
                         "never read as `direct`, `staged` or `superseded`")
+    if workflow.count(WITHHOLD_STAGED) != 1:
+        problems.append("the STAGED record of a withheld module must state its own reason (the caller withholds "
+                        "the package) before the ledger branch — otherwise the publication lane prints 'the module "
+                        "build ledger already serves this key' for a key no registry serves")
     return problems
 
 
@@ -835,6 +841,9 @@ def self_test(workflow_path: Path | None = None) -> int:
         check("NEGATIVE CONTROL: a receipt that does not name `withheld` is caught",
               any("publication: withheld" in w for w in workflow_publish_withhold_problems(
                   workflow.replace(WITHHOLD_RECEIPT, 'elif false; then :', 1))))
+        check("NEGATIVE CONTROL: a staged record that blames the ledger for a withheld module is caught",
+              any("STAGED record" in w for w in workflow_publish_withhold_problems(
+                  workflow.replace('elif [ "$WITHHELD" = "true" ]; then\n', 'elif false; then\n', 1))))
         check("NEGATIVE CONTROL: a lane without the input is caught",
               any("declares no" in w for w in workflow_publish_withhold_problems(
                   workflow.replace("      publish-withhold:\n", "      publish-withheld:\n", 1))))
