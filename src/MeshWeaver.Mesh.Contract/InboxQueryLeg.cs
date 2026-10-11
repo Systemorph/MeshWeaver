@@ -48,6 +48,14 @@ public record InboxQueryLeg
     /// </summary>
     public string Source { get; init; } = string.Empty;
 
+    /// <summary>
+    /// The catalog key of the source's DISPLAY name — what the row's "From" cell and the source's
+    /// switch show, in the viewer's language. <see cref="Source"/> is an identifier (it keys the
+    /// switch and the order) and is shown only when a provider gives no key, which is right for a
+    /// name that is the same in every language (a product or a channel) and wrong for a word.
+    /// </summary>
+    public string? SourceLabelKey { get; init; }
+
     /// <summary>An <see cref="InboxBand"/> constant, or a band the provider defined itself.</summary>
     public string Band { get; init; } = InboxBand.NeedsYou;
 

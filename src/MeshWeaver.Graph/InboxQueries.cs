@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Graph;
 
@@ -29,6 +30,26 @@ public static class InboxQueries
     public const string RowProjection = "select:path,name,nodeType,icon,lastModified";
 
     /// <summary>
+    /// How many rows the inbox asks ONE leg for. Every leg sorts newest first, so this is the newest
+    /// <see cref="LegLimit"/> items of each source — what a person works through; anything older is
+    /// found with the search box, which goes to the query engine.
+    ///
+    /// <para>🚨 Without a bound the page folds every historical row of every source into memory and
+    /// into the client's payload, on a surface that is open all day. The bound is the page's, not
+    /// the provider's: a leg that names its own <c>limit:</c> keeps it.</para>
+    /// </summary>
+    public const int LegLimit = 100;
+
+    /// <summary>
+    /// <paramref name="query"/> bounded to <see cref="LegLimit"/> rows, unless it already names a limit.
+    /// </summary>
+    /// <param name="query">A resolved leg query.</param>
+    public static string Bounded(string query)
+        => query.Split(' ', StringSplitOptions.RemoveEmptyEntries).Any(term => term.StartsWith("limit:", StringComparison.OrdinalIgnoreCase))
+            ? query
+            : $"{query} limit:{LegLimit.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+
+    /// <summary>
     /// The terminal <c>ActivityStatus</c> values, as query terms. 🚨 <c>Running</c> is the enum
     /// DEFAULT, and the serializer omits defaults from stored JSON — so a positive
     /// <c>content.status:Running</c> matches nothing that is actually running, and a negated
@@ -50,14 +71,33 @@ public static class InboxQueries
         new()
         {
             Source = "Notifications",
+            SourceLabelKey = "inbox.source.Notifications",
             Band = InboxBand.NeedsYou,
             Order = 10,
+            // Not put away. `Dismissed` defaults to false and is therefore OMITTED from stored
+            // JSON, so the leg negates the stamped `true` — a positive match on `false` would
+            // select nothing (the same trap as the activity legs below).
             Query = $"namespace:{ViewerToken}/{NotificationService.SatelliteSegment} "
-                    + $"nodeType:{NotificationNodeType.NodeType} sort:CreatedAt-desc {RowProjection}",
+                    + $"nodeType:{NotificationNodeType.NodeType} -content.dismissed:true "
+                    + $"sort:CreatedAt-desc {RowProjection}",
+        },
+        new()
+        {
+            Source = "Mail",
+            SourceLabelKey = "inbox.source.Mail",
+            Band = InboxBand.NeedsYou,
+            Order = 20,
+            // The viewer's own stored mail, inbound and not archived. Both defaults (Inbound, New)
+            // are omitted from stored JSON, so the leg negates the two stamped values it excludes.
+            Query = $"namespace:{ViewerToken}/{EmailNodeType.UserEmailSegment} "
+                    + $"nodeType:{EmailNodeType.NodeType} -content.status:{nameof(EmailStatus.Archived)} "
+                    + $"-content.direction:{nameof(EmailDirection.Outbound)} "
+                    + $"sort:LastModified-desc {RowProjection}",
         },
         new()
         {
             Source = "Activities",
+            SourceLabelKey = "inbox.source.Activities",
             Band = InboxBand.Running,
             Order = 10,
             // Not terminal — every stamped terminal state negated (Running itself is omitted).
@@ -68,6 +108,7 @@ public static class InboxQueries
         new()
         {
             Source = "Activities",
+            SourceLabelKey = "inbox.source.Activities",
             Band = InboxBand.Recent,
             Order = 20,
             // Terminal — any stamped terminal state.
@@ -76,6 +117,15 @@ public static class InboxQueries
                     + $" sort:LastModified-desc {RowProjection}",
         },
     ];
+
+    /// <summary>
+    /// Every leg on this mesh: core's own plus each one a package registered as a service
+    /// (<c>services.AddSingleton(new InboxQueryLeg { … })</c>). The inbox runs what it is handed —
+    /// it carries no list of the packages it knows.
+    /// </summary>
+    /// <param name="services">The hub's service provider.</param>
+    public static ImmutableArray<InboxQueryLeg> All(IServiceProvider services)
+        => [.. BuiltIn, .. services.GetServices<InboxQueryLeg>()];
 
     /// <summary>
     /// Substitutes the viewer into every enabled leg, ordered by band then <see cref="InboxQueryLeg.Order"/>.
