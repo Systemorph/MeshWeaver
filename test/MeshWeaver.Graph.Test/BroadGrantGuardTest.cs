@@ -159,7 +159,7 @@ public class BroadGrantGuardTest
         // …only while executing, and a look-alike id is not on the list.
         ["Ready", "link.publish", false],
         ["Executing", "link.publish-anything", false],
-        // package.provision-set (2026-10-11): one signed activity writes the request for a set.
+        // package.provision-set (policy package-set-one-signature-round): one signed activity writes the request for a set.
         ["Executing", "Governance/Standards/package.provision-set", true],
         ["Ready", "package.provision-set", false],
         ["Executing", "package.provision-sets", false],

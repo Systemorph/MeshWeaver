@@ -82,7 +82,7 @@ public static class BroadGrantGuard
         StringComparer.Ordinal,
         "access.grant-broad", "access.revoke", "access.policy-change",
         "package.provision", "package.remove",
-        // package.provision-set (2026-10-11): ONE activity, signed once, installs a list of
+        // package.provision-set (policy package-set-one-signature-round): ONE activity, signed once, installs a list of
         // packages — the same authority and gates as package.provision; its executor writes the
         // one Store/Provision request that names the activity.
         "package.provision-set",

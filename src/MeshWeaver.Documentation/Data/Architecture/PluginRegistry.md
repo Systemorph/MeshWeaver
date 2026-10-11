@@ -619,7 +619,7 @@ the **action**, not on the screen that triggered it:
 | Package | Access / sync |
 |---|---|
 | **Free** — `price` null or `0` | Installs and auto-updates with **no special permission**. This is what lets a fresh installation pick up the platform baseline unattended. |
-| **Commercial** — a non-zero `price` (positive = purchasable, negative = coupon-only), or a sales contact (`contactEmail`) | Requires **Global Admin** on the installing instance, or a **verified governed `package.provision` activity** signed for the package, to install or update. |
+| **Commercial** — a non-zero `price` (positive = purchasable, negative = coupon-only), or a sales contact (`contactEmail`) | Requires **Global Admin** on the installing instance, or a **verified governed `package.provision` activity** signed for the package (or a `package.provision-set` activity whose signed list names it), to install or update. |
 
 `PackageEntitlement.Authorize` is the single rule, and it runs inside `PackageInstaller.Install` /
 `InstallNodeRepoDelta` — so the machine paths are gated exactly like a click:
@@ -631,8 +631,9 @@ the **action**, not on the screen that triggered it:
   applying a commercial delta: a PERSON must *still* be a global admin, so revoking the admin stops the
   syncing; a governed ACTIVITY must still verify for this package (below).
 - **A governed activity is an authorizing principal.** Installing a package on an instance goes
-  through a governed `package.provision` activity signed by people, not through a person's standing
-  rights, so the Store's provision control plane hands the activity (`Governance/Activities/{id}`)
+  through a governed `package.provision` activity signed by people (or, for several packages at
+  once, one `package.provision-set` activity whose signed list names them), not through a person's
+  standing rights, so the Store's provision control plane hands the activity (`Governance/Activities/{id}`)
   over as the principal once it has verified the request. The gate does not take the path on trust:
   it reads the activity **authoritatively from storage** (`ReadGovernedActivity` — the same
   identity-independent read the broad-grant guard uses, so core needs no reference to the Governance
@@ -648,9 +649,9 @@ the **action**, not on the screen that triggered it:
   | the package | the signed `package` input is not this package's id (ordinal) |
   | the package (a set) | for `package.provision-set`: the signed `packages` list does not name this package's id (ordinal). The list is parsed by `PackageEntitlement.PackageSetIds`, the Store's rule: ids separated by commas, semicolons or whitespace, each a plain id. A list holding an id that is not plain, or the same id twice, names nothing |
 
-  `package.provision-set` is ONE activity, signed once, that installs a list of packages. The
-  maintainer, 2026-10-11: *"pls don't give me hundreds of links to click"*. It has the same
-  authority and gates as the single standard, and the Store installs the list in dependency order.
+  `package.provision-set` is ONE activity, signed once, that installs a list of packages (policy
+  `package-set-one-signature-round`). It has the same authority and gates as the single standard,
+  and the Store installs the list in dependency order.
 
   A refusal names which check failed. An admission is logged as
   `[PackageEntitlement] commercial package X AUTHORIZED by governed activity Governance/Activities/…`,

@@ -93,8 +93,7 @@ public static class PackageEntitlement
 
     /// <summary>
     /// The governed standard whose ONE activity installs a SET of packages — one review and one
-    /// signature round for the whole list (maintainer, 2026-10-11: "pls don't give me hundreds of
-    /// links to click"). Its activity authorizes a package exactly when the package is in the
+    /// signature round for the whole list (policy <c>package-set-one-signature-round</c>). Its activity authorizes a package exactly when the package is in the
     /// signed list (<see cref="PackageSetInput"/>, read by <see cref="PackageSetIds"/>).
     /// </summary>
     public const string PackageProvisionSetStandard = "package.provision-set";
@@ -102,7 +101,8 @@ public static class PackageEntitlement
     /// <summary>The set activity's input: the package ids two people signed, separated by commas, semicolons or whitespace.</summary>
     public const string PackageSetInput = "packages";
 
-    private static readonly char[] PackageSetSeparators = [',', ';', ' ', '\t', '\r', '\n'];
+    /// <summary>The separators between ids in a signed set — a constant, so nothing can widen the rule.</summary>
+    private const string PackageSetSeparators = ",; \t\r\n";
 
     /// <summary>
     /// The ids of a signed package set — the SAME rule the Store's provision control plane reads it
@@ -116,7 +116,7 @@ public static class PackageEntitlement
     public static ImmutableList<string> PackageSetIds(string? signed)
     {
         var ids = (signed ?? "")
-            .Split(PackageSetSeparators, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Split(PackageSetSeparators.ToCharArray(), StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .ToImmutableList();
         var plain = ids.All(id => id.Length is > 0 and <= 120
                                   && id.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '-' or '_'));

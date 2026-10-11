@@ -302,8 +302,8 @@ public class AGovernedActivityAuthorizesACommercialInstallTest(ITestOutputHelper
         };
 
     /// <summary>
-    /// A package.provision-set activity — ONE activity signed once for a list (maintainer,
-    /// 2026-10-11: "pls don't give me hundreds of links to click") — authorizes exactly the
+    /// A package.provision-set activity — ONE activity signed once for a list (policy
+    /// <c>package-set-one-signature-round</c>) — authorizes exactly the
     /// packages its signed list names, under every other check the single standard has.
     /// </summary>
     [Fact]
