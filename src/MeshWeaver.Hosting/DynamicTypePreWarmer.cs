@@ -8,6 +8,7 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -505,7 +506,7 @@ public static class DynamicTypePreWarmer
 
                     var store = ResolveAssemblyStore(mesh);
                     IObservable<NodeTypeBakeReport> ProbeStore() => NodeTypeBakeStatus
-                        .Probe(classified, store, logger: logger,
+                        .ProbeThrough(StoreProbePool(mesh), classified, store, logger: logger,
                             liveDependencyIdOf: NodeTypeCompilationHelpers.DependencyIdResolverOf(mesh),
                             liveToolchainId: NodeTypeCompilationHelpers.ProcessToolchainId);
                     return ProbeStore()
@@ -539,6 +540,17 @@ public static class DynamicTypePreWarmer
                 // for it in Loki.
                 );
     }
+
+    /// <summary>
+    /// The I/O pool a bake probe's per-type store read runs in: the mesh's <c>FileSystem</c> pool,
+    /// the one the registration-only pass reads the same assembly files through. Never null, so an
+    /// in-process probe never reads the share on the thread that delivered the enumeration: a mesh
+    /// with no pool registry gets <see cref="IoPool.Unbounded"/>, the same fallback the
+    /// registration pass and the shipped-build refetch use for these files.
+    /// </summary>
+    /// <param name="mesh">The mesh hub.</param>
+    internal static IIoPool StoreProbePool(IMessageHub mesh) =>
+        mesh.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded;
 
     /// <summary>
     /// The DYNAMIC NodeTypes of an enumeration snapshot: the active nodes that carry compilable
@@ -660,7 +672,8 @@ public static class DynamicTypePreWarmer
                         change.Items, mesh.JsonSerializerOptions, logger);
                     var (nodes, definitions) = (dynamicTypes.Nodes, dynamicTypes.Definitions);
                     var overlay = OverlayThisProcessAdoptions(mesh, definitions, nodes, logger);
-                    return NodeTypeBakeStatus.Probe(
+                    return NodeTypeBakeStatus.ProbeThrough(
+                            StoreProbePool(mesh),
                             overlay.Definitions,
                             ResolveAssemblyStore(mesh),
                             logger: logger,
@@ -1155,9 +1168,10 @@ public static class DynamicTypePreWarmer
             logger?.LogWarning(
                 "DynamicTypePreWarmer: {Count} NodeType(s) claim a usable build for the live "
                 + "framework but the assembly store has NO bytes for them — the shared cache was "
-                + "cleared or replaced. Rebuilding: {Types}",
+                + "cleared or replaced, or a record names a build that never reached the store "
+                + "(Plugins#2799; each entry says which). Rebuilding: {Types}",
                 report.BytesMissing.Count,
-                string.Join(", ", report.BytesMissing.Select(e => e.TypePath)));
+                string.Join(", ", report.BytesMissing.Select(e => $"{e.TypePath} ({e.Detail})")));
 
         // 🚨 DEPENDENCIES FIRST, ONE AT A TIME. A NodeType can compile ANOTHER type's
         // Code into its own assembly (Store/Plugin declares shared=@Store/Coupon/Source,

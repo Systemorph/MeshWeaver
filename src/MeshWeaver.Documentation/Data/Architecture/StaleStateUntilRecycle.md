@@ -354,6 +354,7 @@ suite references the loading, compilation, adoption and disposal projects direct
 | 8 | rollback N+1 → N, including to a build sharing N+1's key | `NodeTypeUpdateTest.ARollback_…`, `BundleUpdateTest.ARollbackToABuildSharingItsKey_…` — the latter **red with a version-keyed lookup** |
 | 9 | content written under N survives N+1 and the rollback | `NodeTypeUpdateTest.ARollback_RebindsTheOldBuild_AndTheDataSurvivesBothWays` |
 | 10 | no dispose, no change | `NodeTypeUpdateTest.WithoutADispose_ALiveHubNeverSwitchesBuilds` |
+| 11 | a record left naming a build the store does not hold (the first-write-wins residue) is rebuilt by the boot sweep, not counted as baked | `RecordNamesABuildTheStoreLacksTest.ARecordNamingABuildTheStoreLacks_IsRebuiltByTheSweep_AndThenRegisters` — **red with a version-keyed bake probe**; see [Dynamic Content Type Registration](../DynamicContentTypeRegistration) |
 
 The store-level half is pinned in `FileSystemAssemblyStoreTest`
 (`Put_same_version_different_bytes_publishes_the_new_bytes_under_their_own_name`,

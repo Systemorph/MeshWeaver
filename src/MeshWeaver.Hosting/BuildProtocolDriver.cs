@@ -773,7 +773,7 @@ public static class BuildProtocolDriver
         IReadOnlyDictionary<string, NodeTypeDefinition?> definitions,
         IAssemblyStore store,
         ILogger? logger)
-        => NodeTypeBakeStatus.Probe(definitions, store, logger: logger,
+        => NodeTypeBakeStatus.ProbeThrough(DynamicTypePreWarmer.StoreProbePool(mesh), definitions, store, logger: logger,
                 liveDependencyIdOf: NodeTypeCompilationHelpers.DependencyIdResolverOf(mesh),
                 liveToolchainId: NodeTypeCompilationHelpers.ProcessToolchainId)
             // #5544: this report decides refusals too (GateRelevant, OutcomesOf), so it carries

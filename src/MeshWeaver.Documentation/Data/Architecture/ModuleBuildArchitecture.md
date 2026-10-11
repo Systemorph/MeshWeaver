@@ -569,6 +569,15 @@ keeps the supersede model in the next section.
    `publication: superseded`, naming the tip): that commit's own never-cancelled run builds the
    module from a tree that contains this one. A module never goes backwards and never waits for an
    unrelated module.
+   **A caller may withhold packages (`publish-withhold`).** A caller whose publication is decided per
+   package passes the names of the packages this run must not hand over. Their modules are still
+   built, inspected and tested, and their bundle artifacts still reach the caller's gates; only the
+   hand-over is left out, and the receipt says `publication: withheld`, which the lane's verdict
+   names beside `superseded`. The lane executes the list and does not derive it: which packages
+   wait, and that everything depending on a waiting package waits with it, is the caller's
+   decision. MeshWeaver.Plugins uses it so that a package whose lock is not settled or whose
+   platform floor is not stamped for its sources holds back only its own dependency network,
+   instead of the whole tree (`Hosting/PackageFloors` in that repository).
 5. **The seal never goes backwards.** The same reordering reaches the NodeType bake. A bake whose
    commit is an ancestor of the commit already sealed answers `scope=none` at decision time
    (`bake-scope.sh`) and skips at write time (`publish-bake-bundles.sh`, through the compare API):
