@@ -331,6 +331,45 @@ public class DeferredDeliveryNackedOnDisposeTest : HubTestBase
             + "That stays an Error; only the declaration moves it");
     }
 
+    /// <summary>A request whose payload names the read it is — the shape of a GetDataRequest's reference.</summary>
+    private record ReferencedRead(string Reference) : IRequest<GatedResponse>;
+
+    private static readonly Address ReferencedAddress = new("referenced", "1");
+
+    /// <summary>
+    /// Systemorph/MeshWeaver#5718 — whether a discard strands anyone depends on the PRODUCER of the
+    /// request, and one type has several (GetDataRequest: the point read re-asks on ShuttingDown,
+    /// the content-collection reads do not). The type name cannot tell them apart; the payload
+    /// can. So the Error carries the request's own rendering, and the CONTROL is the same line
+    /// before the change: it names the type and never the reference.
+    /// </summary>
+    [Fact]
+    public async Task ADiscardError_NamesTheRequest_SoItsProducerCanBeTold()
+    {
+        var host = GetHost();
+        var gated = host.GetHostedHub(
+            ReferencedAddress,
+            c => c.WithTypes(typeof(ReferencedRead), typeof(GatedResponse))
+                .WithInitializationGate("referenced-gate-never-opens", _ => false)
+                .WithHandler<ReferencedRead>((_, d) => d.Processed()));
+        gated.Should().NotBeNull();
+
+        host.Post(new ReferencedRead("ContentCollectionReference-content"),
+            o => o.WithTarget(ReferencedAddress));
+        await WaitForDeferredBacklog(host);
+
+        ((MessageHub)gated!).NoteDirectDisposalBy("a module live-update", "a recycle cascade");
+        gated.Dispose();
+
+        await WaitForDiscardLine("referenced-gate-never-opens");
+
+        log.At(LogLevel.Error).Should().Contain(
+            m => m.Contains("referenced-gate-never-opens", StringComparison.Ordinal)
+                 && m.Contains("ContentCollectionReference-content", StringComparison.Ordinal),
+            "the discard Error must carry the request's payload, which is what names the producer "
+            + "that may or may not re-ask on the ShuttingDown NACK");
+    }
+
     /// <summary>
     /// Waits for the discard report that names <paramref name="gate"/>, at any level. A message
     /// nobody awaits produces no reply to wait on, so the report itself is the signal.

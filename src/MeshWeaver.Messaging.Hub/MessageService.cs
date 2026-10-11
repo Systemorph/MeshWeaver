@@ -349,6 +349,24 @@ public class MessageService : IMessageService
     /// nothing reads to the next person as "there was nothing to report" — the very defect this
     /// issue was filed on.</para>
     /// </summary>
+    /// <summary>
+    /// The discarded message as the discard Error prints it: its own rendering (a record prints its
+    /// members, so a <c>GetDataRequest</c> names its reference and through it the producer that
+    /// issued it — #5718), bounded so a large payload cannot flood the line.
+    /// </summary>
+    /// <param name="message">The discarded message.</param>
+    /// <returns>At most <see cref="MaxDiscardedMessageRendering"/> characters.</returns>
+    internal static string DescribeDiscardedMessage(object message)
+    {
+        var rendered = message.ToString() ?? message.GetType().Name;
+        return rendered.Length <= MaxDiscardedMessageRendering
+            ? rendered
+            : rendered[..MaxDiscardedMessageRendering] + "…";
+    }
+
+    /// <summary>The bound on <see cref="DescribeDiscardedMessage"/>.</summary>
+    internal const int MaxDiscardedMessageRendering = 300;
+
     private string DisposalAttribution() =>
         (hub as MessageHub)?.DisposalAttribution
         ?? "not attributable (this hub is not a MessageHub, so it records no disposal cause)";
@@ -3406,15 +3424,26 @@ public class MessageService : IMessageService
                     + "nothing is lost.",
                     Address, delivery.Message.GetType().Name, delivery.Id, delivery.Sender,
                     gatesAtDeferral, hub.RunLevel, disposal, delivery.Message.GetType().Name);
+            // 🚨 …AND IT NAMES THE REQUEST, not only its type (#5718). Whether this Error strands
+            // anyone depends on the PRODUCER: a sender that rides the ShuttingDown NACK out loses
+            // nothing, one that takes it as final loses the read. One message type has several
+            // producers — GetDataRequest is issued by the point read (GetMeshNodeOutcome, which
+            // re-asks), by the content-collection reads (HubStreamProviderFactory, ContentStaging,
+            // ContentFileResolver) and by MeshOperations' `get`, which do not. The type name alone
+            // cannot tell them apart, and the payload can: its reference (MeshNodeReference vs
+            // ContentCollectionReference …) names the producer. MEASURED on memex-cloud,
+            // 2026-10-11 19:16Z: ~200 of these in one module live-update, every one a partition
+            // root discarding a GetDataRequest from one of its own NodeType hubs, and no line could
+            // say which read it was.
             else
                 logger.LogError(DisposalDiscardedDeferredDelivery,
                     "[DISPOSE-DISCARD] Hub {Address} is disposing with {MessageType} (id={MessageId}, from {Sender}) "
                     + "still deferred; initialization gates closed at deferral: [{Gates}] — the message is NOT processed; "
                     + "the sender is answered ShuttingDown. RunLevel={RunLevel}. This teardown was {Disposal}. "
                     + "Accepted work must be drained before a hub goes down — that attribution is who to ask why "
-                    + "this hub went down with work still parked behind its gates.",
+                    + "this hub went down with work still parked behind its gates. Request: {Request}",
                     Address, delivery.Message.GetType().Name, delivery.Id, delivery.Sender,
-                    gatesAtDeferral, hub.RunLevel, disposal);
+                    gatesAtDeferral, hub.RunLevel, disposal, DescribeDiscardedMessage(delivery.Message));
             // 🚨 COMPOSED THROUGH ShutdownNack, never hand-written (#4866). This was the one
             // ShuttingDown NACK this service minted without the seam, and the cost was invisible:
             // the ENVELOPE said transient (NackThroughParent stamps ErrorType.ShuttingDown) while
