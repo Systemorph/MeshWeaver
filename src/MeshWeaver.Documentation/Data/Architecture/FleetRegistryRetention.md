@@ -48,7 +48,7 @@ able to match something.
 | `registry garbage-collect` (blob GC) | **NO** — no `Job`, no `CronJob`, nothing under `deploy/helm/templates/registry/` (8 rendered objects, none of them a Job) and no invocation anywhere in `deploy/` or `.github/` | unreferenced blobs, permanently | never runs. Storage therefore grows without bound, which is the other half of §1's answer |
 | an explicit registry `DELETE` | **NO CALLER** — zero matches over the 409-file hand sweep for an HTTP DELETE (`-X DELETE`, `-XDELETE`, `--request=DELETE`) or a crane / skopeo / regctl / oras / `az acr repository` deletion | any manifest or tag | CD only ever **pushes** here (`mirror-image-to-registry.sh` for images, `node-repo-publish-bake.yml` for bundles) |
 | anything authenticating as a non-publisher account | **NO** — by the ACL, not by a grep | — | `docker_auth`'s ACL grants `delete` to **exactly one account**, the publisher. Every other authenticated account matches a `pull`-only rule, and anonymous matches no rule at all. An installation holding an instance key **cannot** delete, whatever it asks |
-| an Azure blob lifecycle / management policy on the registry's storage container | **UNVERIFIED** — and that is a state of its own in the record, not a `false` | any blob, including a referenced one | 🚨 **the one remaining unknown, and it is a maintainer read.** The storage account is `registry.storage.accountName`, provisioned outside this chart; `storage.bicep` in this repo is pgBackRest's, not the registry's. See §7 |
+| an Azure blob lifecycle / management policy on the registry's storage container | **NO — measured absent 2026-10-11**, by the governed read (§7 item 1). It was `"unverified"` until then, a state of its own in the record and not a `false` | any blob, including a referenced one | The storage account is `registry.storage.accountName`, provisioned outside this chart (`storage.bicep` in this repo is pgBackRest's, not the registry's), so no committed file re-derives this row: it is a reading at a date, re-taken by every `RegistryRetention` verify |
 
 🚨 **One row's PROVENANCE is different from the rest, and it is load-bearing.** Everything above is
 read off committed files except the *meaning* of `maintenance.uploadpurging`: what that key deletes
@@ -109,10 +109,12 @@ consequences fix its shape before a line of it is written:
    `DELETE` and never a blob lifecycle policy on the storage account: a lifecycle rule over a
    content-addressed store cannot see references at all (§1's last row).
 3. **R0 stays the recorded state until the cleanup exists.** The record keeps `rule:
-   nothing-deletes` and `cleanupAuthorized: false`; the gate (§6) refuses `true` while the lifecycle
-   row is unverified. The first governed step is therefore the READ that answers that row — the
-   registry storage account's management policy — taken by the same action kind in its read-only
-   mode, not a person's `az` call.
+   nothing-deletes` and `cleanupAuthorized: false`. The first governed step was the READ that
+   answers the lifecycle row — the registry storage account's management policy — taken by the same
+   action kind in its read-only mode, not a person's `az` call. It has been taken (§7 item 1: no
+   policy exists), so the gate's refusal of `true` over an unverified row no longer applies here;
+   what keeps the authorization `false` now is this rule itself, until the cleanup of items 1 and 2
+   exists.
 
 The ACR's half of the same decision is policy `registry-retention` (#3438): a 30-day window by age,
 no build-count quota, and the purge changed only through the governed `RegistryRetention` action.
@@ -131,12 +133,13 @@ record must name at least one mechanism that IS present — today `uploadpurging
 #3438 is made of.
 
 🚨 **And `present` has THREE states, because "measured, and it is not there" and "nobody could look"
-are different facts.** The lifecycle row of §1 is the second kind: the storage account is
-provisioned outside this chart, so no committed file can answer it. Filing that as `false` would let
-the declaration read as *fully measured* over an open question — the same
-not-checked-spelled-as-clean confusion one level down. So it is `"unverified"`, it must name a
-`verifiedBy` (what would answer it), and it is **printed on its own line on every run whatever the
-verdict**.
+are different facts.** The lifecycle row of §1 was the second kind until it was read: the storage
+account is provisioned outside this chart, so no committed file can answer it. Filing that as
+`false` before anybody had looked would have let the declaration read as *fully measured* over an
+open question — the same not-checked-spelled-as-clean confusion one level down. So an unanswered row
+is `"unverified"`, it must name a `verifiedBy` (what would answer it), and it is **printed on its
+own line on every run whatever the verdict**. The row became `false` only with the measurement that
+answered it, and its `verdict` names that measurement (the request, the run, the printed line).
 
 **What the unknown blocks is the ACT, not the gate.** `cleanupAuthorized` is the record's own
 statement that deleting here would be safe, and it **may not be `true` while any mechanism is
@@ -375,14 +378,25 @@ because of what the first live run found** ([run 34852827116](https://github.com
 
 ## 7. What is the maintainer's
 
-1. **The blob lifecycle question (§1, the one UNVERIFIED row).** Does the registry's storage account
-   or container carry an Azure management policy? A lifecycle rule deleting blobs under a
-   *content-addressed* store is not "old data expiring" — it is deleting a layer that a current
-   manifest still names, and the image reads as present until something pulls it. This needs one
-   read on the account named by `registry.storage.accountName` — taken through the governed
-   `RegistryRetention` action's read-only mode (`registryMode: verify`), which runs it as the
-   operator identity on the estate's lane. What stays the maintainer's is the identity's READ grant
-   on that account.
+1. ~~**The blob lifecycle question (§1, the one UNVERIFIED row).**~~ **Answered 2026-10-11: no
+   management policy exists.** The question was whether the registry's storage account or container
+   carries an Azure management policy — a lifecycle rule deleting blobs under a *content-addressed*
+   store is not "old data expiring", it is deleting a layer that a current manifest still names,
+   and the image reads as present until something pulls it. The read was taken through the governed
+   `RegistryRetention` action's read-only mode (`dryRun: true`), as the operator identity on the
+   estate's lane: request `Ops/Actions/registry-retention-verify-20261011-3438` on the control
+   instance, lane run `38141799080`, which printed
+
+   ```
+   ::hosting:: step=Read the storage management policy of meshweaverregistry
+   ::hosting:: registry_lifecycle=meshweaverregistry present=false
+   ```
+
+   The lane prints `present=false` only on Azure's own `ManagementPolicyNotFound` answer; a read it
+   cannot make is a red run naming the account. The same run read the ACR's two purge tasks against
+   their record (`registry-retention`, #3438). The record's row is now `present: false` and names
+   this measurement. It is a reading at a date: every later verify re-takes it, and a
+   `present=true` there is corrected into the record with the policy quoted.
 2. ~~**Whether unbounded growth is accepted.**~~ **Decided: it is not** — policy
    `fleet-registry-bounded`, §3 → *The decided rule*. A lifecycle rule that never deletes a
    referenced artifact, derived protected set first, through the governed path.
