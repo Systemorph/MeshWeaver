@@ -385,10 +385,11 @@ function of the filter and the legs.
 
 Three properties of that binding are load-bearing:
 
-- **The search is a live read of its own, the idle list is not.** With no term each leg is its
-  shared synced query. A typed term is unbounded text, and a synced query is kept per distinct query
-  for the life of the process — so a term gets its own live read, folded from deltas into "what the
-  leg selects now" and ended when the term changes.
+- **Every leg is a live read bound to the page.** Idle or searched, a leg is an `IMeshService.Query`
+  folded from deltas into "what the leg selects now", ended when the term changes or the page closes.
+  Never the process-wide synced query (`GetQuery`): that cache lives as long as the process, per
+  distinct query text, and every leg is resolved for its owner — so it would keep a subscription and
+  a snapshot per leg for everyone who ever opened their inbox.
 - 🚨 **The term is free text, never grammar.** It is handed over as one quoted phrase with its quote
   characters removed, and the leg's bound is pinned on the request (`MeshQueryRequest.Limit`, which
   wins over any `limit:` in the string). Spliced in raw, `OR content.status:Archived` would parse as
@@ -465,10 +466,8 @@ Three rules follow, and each is pinned by a test in `InboxSelectAndDeleteTest`:
   names none; the effective bound is also pinned on the searched read's `MeshQueryRequest.Limit`. Unbounded, the page folds every historical row into memory and into the
   client's payload on a surface that is open all day. Older items are found with the search, which
   goes to the query engine; "oldest first" therefore orders the listed window, not all history.
-- **Both reads name the viewer.** A leg is (re)subscribed on a data emission, where
-  the ambient identity is gone: the synced query is created under the captured caller (with no
-  identity it hands back the System-loaded stream, unfiltered) and the live read takes the viewer as
-  an argument.
+- **The read names the viewer.** A leg is (re)subscribed on a data emission, where the ambient
+  identity is gone, so the live read takes the viewer as an argument.
 - **A source that cannot be read is named — and read again only when the viewer asks.** It
   contributes no rows, is logged, and is listed in a notice above the grid: an unreadable source must
   never look like an empty one. It is re-read when the search changes or the page is reopened, never

@@ -175,10 +175,6 @@ public static class InboxLayoutArea
         var hub = host.Hub;
         var handlers = hub.ServiceProvider.GetServices<IInboxItemHandler>().ToImmutableArray();
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(InboxLayoutArea));
-        // Captured ONCE, on the render turn: the legs are (re)subscribed on data emissions, where
-        // the ambient context is no longer the viewer's.
-        var access = hub.ServiceProvider.GetService<AccessService>();
-        var caller = access?.Context;
         // Resolved ONCE, on the render turn: every text a row may carry.
         var running = host.Localize("inbox.blocked.running");
         var noHandler = host.Localize("inbox.blocked.noHandler");
@@ -204,7 +200,7 @@ public static class InboxLayoutArea
         // provider that stays broken would otherwise be re-queried, and re-logged, for as long as
         // any inbox is open.
         IObservable<(ImmutableList<InboxRow> Rows, string? Unread)> Leg(InboxSection section, string term) =>
-            Nodes(hub, section, term, owner, access, caller)
+            Nodes(hub, section, term, owner)
                 .Select(nodes => (nodes
                     .Select(node => InboxRows.Of(node, section, zone,
                         BlockedReason(section.Band, InboxItemHandlers.For(handlers, node.NodeType), running, noHandler),
@@ -282,37 +278,30 @@ public static class InboxLayoutArea
     }
 
     /// <summary>
-    /// One leg's nodes — the newest <see cref="InboxQueries.LegLimit"/> of them. With no search term
-    /// it is the leg's SHARED synced query (one subscription per leg and viewer, replayed). With a
-    /// term it is a live read of the leg plus the term — its own subscription, ended when the term
-    /// changes — because a synced query is kept for the process's life per distinct query text, and
-    /// a typed term is unbounded.
+    /// One leg's nodes — the newest <see cref="InboxQueries.LegLimit"/> of them, as a live read of
+    /// the leg (plus the term, when there is one) that lives exactly as long as the page's
+    /// subscription: it ends when the term changes or the page closes.
+    ///
+    /// <para>🚨 Never the process-wide synced query (<c>GetQuery</c>): that cache is kept for the
+    /// process's life per distinct query text, and every leg here is resolved for its OWNER — so it
+    /// would keep one live subscription and snapshot per leg for every person who ever opened their
+    /// inbox, growing with cumulative visitors rather than open pages.</para>
     ///
     /// <para>🚨 The term is FREE TEXT (<see cref="SearchText"/>) and the bound is pinned on the
     /// request (<see cref="MeshQueryRequest.Limit"/>, which wins over any <c>limit:</c> in the
-    /// string): what the viewer types can narrow a leg, never widen it.</para>
-    ///
-    /// <para>🚨 BOTH branches name the viewer, neither trusts the ambient identity: this runs on a
-    /// data emission, where the ambient context is no longer the page's. The
-    /// synced query takes the identity it finds when it is CREATED — with none it hands back the
-    /// System-loaded stream, unfiltered — so the captured caller is re-established around that
-    /// call; the live read takes the viewer as an argument.</para>
+    /// string): what the viewer types can narrow a leg, never widen it. The read names the viewer as
+    /// an argument — it runs on a data emission, where the ambient identity is no longer the page's.</para>
     /// </summary>
-    internal static IObservable<IEnumerable<MeshNode>> Nodes(
-        IMessageHub hub, InboxSection section, string term, string owner, AccessService? access, AccessContext? caller)
-    {
-        var query = InboxQueries.Bounded(section.Query);
-        if (term.Length == 0)
-            using (access?.SwitchAccessContext(caller))
-                return hub.GetQuery(InboxRows.QueryId(section), query);
-        return hub.ServiceProvider.GetRequiredService<IMeshService>()
-            .Query<MeshNode>(MeshQueryRequest.FromQuery($"{query} {SearchText(term)}", owner) with
+    internal static IObservable<IEnumerable<MeshNode>> Nodes(IMessageHub hub, InboxSection section, string term, string owner)
+        => hub.ServiceProvider.GetRequiredService<IMeshService>()
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(
+                term.Length == 0 ? InboxQueries.Bounded(section.Query) : $"{InboxQueries.Bounded(section.Query)} {SearchText(term)}",
+                owner) with
             {
                 Limit = InboxQueries.EffectiveLimit(section.Query),
             })
             .Scan(ImmutableDictionary<string, MeshNode>.Empty.WithComparers(StringComparer.Ordinal), Fold)
             .Select(nodes => (IEnumerable<MeshNode>)nodes.Values);
-    }
 
     /// <summary>
     /// <paramref name="term"/> as one quoted free-text phrase. The quote characters are removed

@@ -156,13 +156,6 @@ public static class InboxRows
         => string.Join('\n', new[] { filter.Search, filter.Order }
             .Concat(filter.Sources.OrderBy(s => s.Key, StringComparer.Ordinal).Select(s => $"{s.Key}={s.Value}")));
 
-    /// <summary>The synced-query id of one leg — stable per leg, never composed per call.</summary>
-    /// <param name="section">The leg.</param>
-    public static string QueryId(InboxSection section)
-        => $"Inbox.{Slug(section.Band)}.{Slug(section.Source)}.{section.Order.ToString(CultureInfo.InvariantCulture)}";
-
-    private static string Slug(string value) => new([.. value.Where(char.IsLetterOrDigit)]);
-
     /// <summary>
     /// The row for <paramref name="node"/>, brought by <paramref name="section"/>.
     /// </summary>
