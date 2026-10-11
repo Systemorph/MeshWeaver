@@ -431,10 +431,42 @@ At-least-once, and deliberately so:
 | Read window | `[cursor, now − IngestLag)` | Promtail ships with a delay; reading to `now` would step the cursor past lines that had not landed yet, losing them for good. |
 | Queue reports | **before** delivery | A crash between detection and delivery costs a redelivery, not an un-ticketed error. |
 | Advance cursor | **after** queueing | Same reason, one level up. |
+| Split | every queued report into pieces under `LogIncidentDelivery.MaxReportBytes` | A report of any size is delivered; see below. |
 | Deliver | oldest first, stop at first retryable failure | A wedged portal is retried next tick, not hammered once per queued report. |
 
-A `4xx` other than `429` is permanent — a malformed or unauthorized report will not become valid by
-being resent — so it is dropped with an ERROR log rather than retried until the disk fills.
+Only a status that describes the PAYLOAD is permanent (`LogIncidentDelivery.IsPermanent`: 400, 414,
+415, 422) — a malformed report will not become valid by being resent, so it is dropped and the drop
+is filed as a finding (below). Every status that describes the portal's STATE (401 mid token
+rotation, 404 from a pod being rolled, 408, 425, 429, 5xx) keeps the report queued.
+
+### 🚨 A report too large for one request is SPLIT, never dropped
+
+The ingest endpoint takes at most `LogIncidentDelivery.MaxReportBytes` (256 KiB) per request. That
+bound is **declared in the contract**, so the watcher knows it before it sends anything, rather than
+learning it by losing a report to it. It bounds a request, not a report: a report's shape ledger
+grows with the flood it describes (one `ShapeCount` per path shape, each with a representative
+line), so no fixed limit holds every report whole. Measured on 2026-10-11 (MeshWeaver#6521): a module
+live-update recycle cascade produced 275 `[DISPOSE-DISCARD]` bursts in one window, the report
+serialised past 256 KiB, the portal answered 413, and the watcher — which then counted 413 as
+permanent — dropped it. Raising the limit would only move the flood that loses evidence.
+
+So the drain first runs `LogIncidentReportChunking.Split` over the durable queue, in one write:
+
+| Property | How |
+|---|---|
+| Every request fits | the shape ledger is divided between pieces; each piece serialises (with the watcher's own wire options) to at most the declared limit |
+| The pieces sum to the report | each piece's `Occurrences` and window are its own subset's; together they count exactly the bursts the report counted |
+| Every piece lands on the same incident | each piece carries the report's identity fields and samples unchanged, and the portal votes the identity over the samples |
+| A single entry too large to fit is cut, not refused | the longest text field is cut (halving, down to 256 characters) and ends `…[truncated N bytes]`, naming the bytes dropped; `IsCut` recognises it beside the sample cut `…[truncated]` |
+| A retried piece is counted once | each piece carries a `DeliveryId` hashed from its own content (the same piece always gets the same id, after any restart); the portal remembers each incident's last 256 ids in `RecentDeliveries` and folds a known id as a no-op |
+
+A 413 that still happens — an ingress enforcing a smaller limit, or a contract that declares a
+different one — is **not** a loss. The watcher logs it at Critical, keeps the report, re-splits it in
+place at half its own size (down to 16 KiB) and moves on to the next report; the pieces go next
+pass. A report that cannot be made smaller stays queued and is retried every pass, loudly. The portal
+still answers a 413 at Error and files its own `log-ingest-refused-{ns}` finding, because a current
+watcher never sends more than the declared limit: a 413 there means a watcher image that predates
+the split (and drops the report) or a contract mismatch.
 
 ## The watcher tickets its own blind spots
 
@@ -469,7 +501,7 @@ job is to make faults visible.
 Three properties make the finding sound, and each is pinned by `RejectedReportIsTicketedTest`:
 
 - **It is not subject to the cause it reports.** It copies none of the rejected payload's samples
-  forward (so a 413 cannot recur), and it carries a fingerprint and a category by construction (so
+  forward (so it stays far below the body limit), and it carries a fingerprint and a category by construction (so
   the 400 for a missing one cannot recur).
 - **It stops at one.** `LogPipelineGap.IsRejectionFinding` is a guard, not a budget: a finding about
   a rejected finding would be refused for the same reason and mint its own successor, growing the
