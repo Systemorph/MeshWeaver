@@ -22,12 +22,34 @@ again (reported 2026-09-15: "Infra has one; show it, with where we are"). **The 
 a Space is the document and its overview is the title page, so every page under it shows the one
 index of the Space, with the page being read marked and only the groups on the reader's path open.
 
-That default is also wrong for a course: a learner standing in lesson 2 must see the whole course,
-not the document tree the lesson happens to sit in, with the course's own notion of what a page is.
-`INodeNavigationProvider` is the seam that fixes it without core having to learn what a lesson is. A
-module that OWNS a family of pages hands core a whole index; core renders it. **The division of
-labour is the contract: the module decides WHAT is in the index and in WHAT ORDER; core decides how
-it looks.** Either way the same rail renders it, so a course and a document tree read alike.
+**The index is an explorer, loaded lazily** (policy [`explorer-navigation`](../PolicyNotProse)):
+
+- **Only the reader's path is loaded.** One direct-children read per level
+  (`DefaultNodeNavigation.PathLevels`): the Space's children, each ancestor's children, and the
+  page's own. The cost grows with the page's depth, never with the size of the Space. A folder off
+  the path is listed and not opened; the reader drills in by opening it.
+- **A level shows at most 50 entries** (`LevelCap`), cut in the order the level is RENDERED
+  (declared `Order`, then name, internal `_` entries left out), so an ordered page is never pushed
+  behind the cut. Each level reads light rows (no content) up to a hard bound of 500. A level that
+  holds more ends with a **Load more** entry (the viewer's `common.loadMore`). It reloads the same
+  page with `?more={level}:{n}`, raising that one level by 50, up to the bound.
+- **A search box sits above the tree** (`NavMenuSkin.SearchNamespace`), scoped to the page's Space
+  (its first path segment), also when a module supplied the index. Submitting it opens the mesh
+  search (`/search?ns={space}&q=…`). The Blazor nav menu that renders the box ships in
+  MeshWeaver.Plugins.
+- **Markdown and typed pages have it.** The typed default Overview is wrapped by
+  `MarkdownOverviewLayoutArea.WithIndexRail`, so a page's children are navigated in the rail and
+  are not listed at the bottom of the page.
+- **A page a node type supplies itself does not have it yet.** A type that replaces its landing
+  page through `WithNodePage` (a redirect, an enriched type's own Overview) renders that page
+  without this wrapper. Decorating at the node-page composition boundary, with an opt-out for
+  pages that must stay bare, is owed (policy `explorer-navigation`).
+- **Space pages do not have it yet.** A Space's Overview is rendered by `SpaceLayoutAreas` in
+  MeshWeaver.Plugins, which still appends its bottom **Contents** catalog. Wrapping it with the rail
+  and removing that catalog is MeshWeaver.Plugins#3363, which lands after this platform release;
+  until then a Space page has the catalog and no rail.
+- **The default Space welcome text** (`SpaceNodeType.WelcomeMarkdown`) still ends with
+  `## Contents` and an `@@("area/Search")` embed; it is removed once the Space rail is live.
 
 ## The seam
 
@@ -192,6 +214,7 @@ assertions live.
 | Surface | How |
 |---|---|
 | A markdown page's Overview | automatic — `MarkdownOverviewLayoutArea` asks every registered provider, and falls back to the default index (the tree under the page's index root, `DefaultNodeNavigation`) when none claims the page |
+| A typed node's default Overview | automatic — `MeshNodeLayoutAreas.Overview` wraps the page with `MarkdownOverviewLayoutArea.WithIndexRail`, same providers, same default |
 | A layout that composes its own page | embed the standalone area by name: `new LayoutAreaControl(address, new LayoutAreaReference(MarkdownOverviewLayoutArea.SuppliedNavArea))` |
 
 The standalone area renders nothing when no provider claims the page, so embedding it on a
