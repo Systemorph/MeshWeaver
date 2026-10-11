@@ -72,8 +72,8 @@ public class ReleaseIdentityFromRegistryTest(ITestOutputHelper output) : Monolit
 
     private RegistryReleaseIdentities Identities => new(Mesh);
 
-    private Task<RegistryReleaseIdentities.ReleaseRecord?> Resolve(string version) =>
-        Identities.Resolve(version).FirstAsync().Timeout(Budget).Await(TestContext.Current.CancellationToken);
+    private Task<RegistryReleaseIdentities.ReleaseRecord?> Resolve(string version, CancellationToken ct) =>
+        Identities.Resolve(version).FirstAsync().Timeout(Budget).Await(ct);
 
     // ── the record ────────────────────────────────────────────────────────────────────────────
 
@@ -107,9 +107,10 @@ public class ReleaseIdentityFromRegistryTest(ITestOutputHelper output) : Monolit
     [Fact(Timeout = 120_000)]
     public async Task TheIdentityIsReadFromTheHostTheRegistryMountDeclares_WithThisInstallationsKey()
     {
+        var ct = TestContext.Current.CancellationToken;
         records.Publish(Release, $$"""{"identity":"{{Identity}}","version":"{{Release}}","expectedDbVersion":61}""");
 
-        var record = await Resolve(Release);
+        var record = await Resolve(Release, ct);
 
         Assert.NotNull(record);
         Assert.Equal(Identity, record.Identity);
@@ -121,10 +122,11 @@ public class ReleaseIdentityFromRegistryTest(ITestOutputHelper output) : Monolit
     [Fact(Timeout = 120_000)]
     public async Task ARegistryThatDeclaresNoArtifactHost_IsNotGuessedAt()
     {
+        var ct = TestContext.Current.CancellationToken;
         records.Publish(Release, $$"""{"identity":"{{Identity}}","version":"{{Release}}"}""");
         index.ArtifactRegistry = null;
 
-        Assert.Null(await Resolve(Release));
+        Assert.Null(await Resolve(Release, ct));
         // The key was never presented anywhere but the mount it belongs to.
         Assert.Empty(records.Requests);
     }
@@ -132,36 +134,50 @@ public class ReleaseIdentityFromRegistryTest(ITestOutputHelper output) : Monolit
     [Fact(Timeout = 120_000)]
     public async Task EveryWayOfNotKnowing_AnswersNothing_AndNeverFaults()
     {
+        var ct = TestContext.Current.CancellationToken;
         // No record for the release at all — published before the record existed.
-        Assert.Null(await Resolve(Release));
+        Assert.Null(await Resolve(Release, ct));
 
         // A record that names another release.
         records.Publish(Release, $$"""{"identity":"{{Identity}}","version":"3.1.1"}""");
-        Assert.Null(await Resolve(Release));
+        Assert.Null(await Resolve(Release, ct));
 
         // Something else under the tag — not a release record.
         records.Publish(Release, $$"""{"identity":"{{Identity}}","version":"{{Release}}"}""", mediaType: OciRegistryClient.PublicationConfigMediaType);
-        Assert.Null(await Resolve(Release));
+        Assert.Null(await Resolve(Release, ct));
 
         // Bytes that do not hash to the digest the manifest names.
         records.Publish(Release, $$"""{"identity":"{{Identity}}","version":"{{Release}}"}""");
         records.TamperConfig = true;
-        Assert.Null(await Resolve(Release));
+        Assert.Null(await Resolve(Release, ct));
         records.TamperConfig = false;
+
+        // A body far larger than a record, under a descriptor that claims a small one.
+        records.Publish(Release, $$"""{"identity":"{{Identity}}","version":"{{Release}}","pad":"{{new string('x', 64 * 1024)}}"}""", claimedSize: 64);
+        Assert.Null(await Resolve(Release, ct));
+        records.Publish(Release, $$"""{"identity":"{{Identity}}","version":"{{Release}}"}""");
 
         // The registry mount is down.
         index.Status = HttpStatusCode.ServiceUnavailable;
-        Assert.Null(await Resolve(Release));
+        Assert.Null(await Resolve(Release, ct));
         index.Status = null;
 
         // A version that is not a tag is never sent anywhere.
         var before = records.Requests.Count;
-        Assert.Null(await Resolve("../3.1.10517"));
-        Assert.Null(await Resolve("3.1.10517+abc"));
+        Assert.Null(await Resolve("../3.1.10517", ct));
+        Assert.Null(await Resolve("3.1.10517+abc", ct));
         Assert.Equal(before, records.Requests.Count);
 
         // And with the record intact again, the same reader answers.
-        Assert.Equal(Identity, (await Resolve(Release))!.Identity);
+        Assert.Equal(Identity, (await Resolve(Release, ct))!.Identity);
+    }
+
+    [Fact]
+    public void ARegistryIsNamedInALogByHostOnly()
+    {
+        Assert.Equal("registry.example.test:8443", RegistryReleaseIdentities.HostOf("https://user:secret@registry.example.test:8443/path"));
+        Assert.DoesNotContain("secret", RegistryReleaseIdentities.HostOf("https://user:secret@registry.example.test"));
+        Assert.DoesNotContain("secret", RegistryReleaseIdentities.HostOf("user:secret@not a url"));
     }
 
     // ── the catalogue ─────────────────────────────────────────────────────────────────────────
@@ -187,6 +203,11 @@ public class ReleaseIdentityFromRegistryTest(ITestOutputHelper output) : Monolit
         var elsewhere = PublishedBundleCatalogue.ReadWithRegistryIdentity(root, Release, "d00dfeed");
         Assert.Equal("d00dfeed", elsewhere.Target.FrameworkIdentity);
         Assert.DoesNotContain(Package, elsewhere.Artifacts.SealedBundles);
+
+        // The identity is a directory name: anything that is not one segment under the root is
+        // treated as not given, whoever the caller is.
+        foreach (var hostile in new[] { "../" + Identity, "..", "a/b", "_releases", " " })
+            Assert.Null(PublishedBundleCatalogue.ReadWithRegistryIdentity(root, Release, hostile).Target.FrameworkIdentity);
 
         // The publisher's marker wins over whatever the registry says.
         Seal(root, "published", "plugins", [Package]);
@@ -229,7 +250,10 @@ public class ReleaseIdentityFromRegistryTest(ITestOutputHelper output) : Monolit
 
         var held = await gate.IsUpdatable(Release).FirstAsync().Timeout(Budget).Await(ct);
         Assert.False(held.IsUpdatable);
-        Output.WriteLine($"held: {held.HoldReason}");
+        // The sentence an operator reads on such an estate — the hold is the IDENTITY one, not a
+        // completeness or a link hold that would point somewhere else.
+        Assert.Contains($"the framework identity of release {Release} is not resolvable", held.HoldReason);
+        Assert.True(held.IsIndeterminate);
 
         records.Publish(Release, $$"""{"identity":"{{Identity}}","version":"{{Release}}"}""");
 
@@ -312,7 +336,7 @@ public class ReleaseIdentityFromRegistryTest(ITestOutputHelper output) : Monolit
 
         public bool Serves(string candidate) => string.Equals(candidate, host, StringComparison.OrdinalIgnoreCase);
 
-        public void Publish(string tag, string record, string mediaType = RegistryReleaseIdentities.ReleaseConfigMediaType)
+        public void Publish(string tag, string record, string mediaType = RegistryReleaseIdentities.ReleaseConfigMediaType, int? claimedSize = null)
         {
             var config = Encoding.UTF8.GetBytes(record);
             var manifest = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new
@@ -320,7 +344,7 @@ public class ReleaseIdentityFromRegistryTest(ITestOutputHelper output) : Monolit
                 schemaVersion = 2,
                 mediaType = OciRegistryClient.ImageManifestMediaType,
                 artifactType = mediaType,
-                config = new { mediaType, digest = OciDigest.Of(config), size = config.Length },
+                config = new { mediaType, digest = OciDigest.Of(config), size = claimedSize ?? config.Length },
                 layers = Array.Empty<object>(),
             }));
             ImmutableInterlocked.Update(ref tags, t => t.SetItem(tag, (manifest, config)));

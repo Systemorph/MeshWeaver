@@ -103,7 +103,7 @@ public sealed class RegistryReleaseIdentities
                 {
                     logger?.LogInformation(
                         "ReleaseIdentity: {Registry} declares no artifact registry, so it cannot name "
-                        + "release {Version}'s identity", mount.Url, version);
+                        + "release {Version}'s identity", HostOf(mount.Url), version);
                     return Observable.Return<ReleaseRecord?>(null);
                 }
 
@@ -125,9 +125,14 @@ public sealed class RegistryReleaseIdentities
                         return Observable.Return<ReleaseRecord?>(null);
                     }
 
-                    var buffer = new MemoryStream();
+                    // The descriptor's size is the registry's CLAIM; the bound is enforced on the
+                    // bytes as they arrive, so a body larger than a record is refused while it is
+                    // read rather than after it has been held in memory.
+                    var buffer = new BoundedBuffer(MaxRecordBytes);
                     return oci.GetBlob(ReleaseRepository, config.Digest, () => buffer)
-                        .Select(_ => ReleaseRecord.Parse(buffer.ToArray(), version))
+                        .Select(receipt => receipt.Size == config.Size
+                            ? ReleaseRecord.Parse(buffer.ToArray(), version)
+                            : null)
                         .Do(record =>
                         {
                             if (record is null)
@@ -144,16 +149,70 @@ public sealed class RegistryReleaseIdentities
         {
             logger?.LogInformation(
                 "ReleaseIdentity: {Registry} holds no identity for release {Version} ({Cause})",
-                mount.Url, version, ex.Message);
+                HostOf(mount.Url), version, ex.Message);
             return Observable.Return<ReleaseRecord?>(null);
         })
         .Catch((Exception ex) =>
         {
             logger?.LogWarning(ex,
                 "ReleaseIdentity: reading release {Version}'s identity through {Registry} failed. Cause: {Cause}",
-                version, mount.Url, ex.Message);
+                version, HostOf(mount.Url), ex.Message);
             return Observable.Return<ReleaseRecord?>(null);
         });
+
+    /// <summary>A registry mount as a log line may name it: host and port only. A configured URL may
+    /// carry userinfo, which must never reach a log.</summary>
+    internal static string HostOf(string? url) =>
+        Uri.TryCreate((url ?? "").Trim(), UriKind.Absolute, out var parsed) && parsed.Authority.Length > 0
+            ? parsed.Authority
+            : "(unparseable registry URL)";
+
+    /// <summary>Whether <paramref name="value"/> can be a framework-identity directory under the
+    /// published root: one safe path segment, outside the root's own underscore namespace
+    /// (<c>_releases</c>).</summary>
+    public static bool IsIdentity(string? value) => IsSegment(value) && !value!.StartsWith('_');
+
+    /// <summary>A memory buffer that refuses to grow past a limit — the write that would exceed it
+    /// throws, which faults the transfer.</summary>
+    private sealed class BoundedBuffer(long limit) : MemoryStream
+    {
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            Guard(count);
+            base.Write(buffer, offset, count);
+        }
+
+        public override void Write(ReadOnlySpan<byte> buffer)
+        {
+            Guard(buffer.Length);
+            base.Write(buffer);
+        }
+
+        public override void WriteByte(byte value)
+        {
+            Guard(1);
+            base.WriteByte(value);
+        }
+
+        public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        {
+            Guard(count);
+            return base.WriteAsync(buffer, offset, count, cancellationToken);
+        }
+
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            Guard(buffer.Length);
+            return base.WriteAsync(buffer, cancellationToken);
+        }
+
+        private void Guard(int count)
+        {
+            if (Length + count > limit)
+                throw new InvalidDataException(
+                    $"the release record is larger than {limit} byte(s) — not a release record");
+        }
+    }
 
     /// <summary>Whether <paramref name="value"/> is one safe path segment and a legal registry tag.</summary>
     internal static bool IsSegment(string? value) =>
@@ -182,7 +241,7 @@ public sealed class RegistryReleaseIdentities
                     return null;
                 var id = identity.GetString()!;
                 // A leading underscore is the marker directory's own namespace under the root.
-                if (!IsSegment(id) || id.StartsWith('_')
+                if (!IsIdentity(id)
                     || !string.Equals(version.GetString(), expectedVersion, StringComparison.Ordinal))
                     return null;
                 int? schema = root.TryGetProperty("expectedDbVersion", out var expected)

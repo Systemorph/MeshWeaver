@@ -134,7 +134,18 @@ public static class PublishedBundleCatalogue
         try
         {
             var markerPath = Path.Combine(publishedRoot, ReleaseMarkerDirectoryName, targetVersion);
-            var fromRegistry = !File.Exists(markerPath) && !string.IsNullOrWhiteSpace(registryIdentity);
+            // The identity becomes a directory name under the root, so it is checked HERE, at the
+            // filesystem boundary, whoever the caller is: one path segment, outside the root's own
+            // underscore namespace. Anything else is treated as not given.
+            registryIdentity = registryIdentity?.Trim();
+            if (!string.IsNullOrEmpty(registryIdentity) && !RegistryReleaseIdentities.IsIdentity(registryIdentity))
+            {
+                logger?.LogWarning(
+                    "ReleaseAvailability: the registry identity given for release {Version} is not a "
+                    + "single path segment — ignored", targetVersion);
+                registryIdentity = null;
+            }
+            var fromRegistry = !File.Exists(markerPath) && !string.IsNullOrEmpty(registryIdentity);
             if (fromRegistry)
                 logger?.LogInformation(
                     "ReleaseAvailability: release {Version} has no marker under {Root}/{Markers}; its "
@@ -150,7 +161,7 @@ public static class PublishedBundleCatalogue
                     new ReleaseTarget(targetVersion, null), ReleaseArtifacts.Of([]));
             }
 
-            var identity = fromRegistry ? registryIdentity!.Trim() : File.ReadAllText(markerPath).Trim();
+            var identity = fromRegistry ? registryIdentity! : File.ReadAllText(markerPath).Trim();
             if (identity.Length == 0)
                 return new ReleaseObservation(
                     new ReleaseTarget(targetVersion, null),
