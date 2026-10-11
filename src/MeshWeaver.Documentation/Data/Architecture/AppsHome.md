@@ -7,8 +7,8 @@ what you see first is what you *use*, not everything the mesh can show you. The 
 |---|---|---|---|
 | **Pinned** | the caller has pins | the owner's content shortcuts (`User.PinnedPaths`) | last modified |
 | **Apps** | always | the APP DIRECTORY (the apps the viewer can see through access, `{owner}/_Apps`) — every app exactly once, as an ICON grid; the viewer's own `{owner}/_App` records only under the explicit `Home:AppSource = Records` compatibility path | last used |
-| **Spaces** | always | the catalog **without** store items | last accessed |
-| **All** | always | everything the viewer can read, at every depth | last accessed |
+| **Spaces** | always | the catalog **without** store items | location (path) — `HomeConfig.SortBy` |
+| **All** | always | everything the viewer can read, at every depth | location (path) — `HomeConfig.SortBy` |
 
 **Shared with me** is not a tab: cross-partition invitations (#385) are a distinct kind of content,
 not another lens on the catalog, so they render as their own titled band BELOW the search surface —
@@ -190,6 +190,15 @@ The admin-editable platform node (`HomeConfigNodeType`, public-read, live-reload
   not what existing viewers have. Until a list-capable edit-form field ships it is
   `[Browsable(false)]` on the generic content editor — admins edit the node content directly.
 - `Scope`, `Render`, `DefaultSort` — apply to the Spaces/All scopes (and the legacy list).
+- **The content list is ONE flat list in LOCATION order by default** (policy
+  [`explorer-navigation`](../PolicyNotProse)). The default order is `SortBy`, an open string value
+  (`HomeSortBy`: `Location`, `LastAccessed`, `LastModified`, `Alphabetical`). It ships UNSET, which
+  means `Location` (`sort:path-asc`), so each space's content stays together. The older
+  `DefaultSort` enum keeps its signature and applies only when `SortBy` is empty and an admin moved
+  it off `LastAccessed` (`HomeConfig.EffectiveSort`). `Render` ships `Flat`: the Tabs home no longer
+  fans its entries out into per-type sections, which put every top-level entry into one "Space (N)"
+  group; `Render: Grouped` stays the admin's explicit choice. Location order stays in the Sort
+  control either way.
 
 **The dedup rule:** an app is represented exactly once. The Spaces scope and the Shared-with-me band
 exclude `-nodeType:Store/Plugin -nodeType:Store/Catalog`; Shared-with-me also excludes

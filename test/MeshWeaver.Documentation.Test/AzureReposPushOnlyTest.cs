@@ -30,11 +30,11 @@ public class AzureReposPushOnlyTest
     // ── URL recognition ──────────────────────────────────────────────────────
 
     [Theory]
-    [InlineData("https://dev.azure.com/partnerre/Memex/_git/content", "partnerre", "Memex", "content")]
-    [InlineData("https://partnerre@dev.azure.com/partnerre/Memex/_git/content", "partnerre", "Memex", "content")]
-    [InlineData("https://dev.azure.com/partnerre/My%20Project/_git/content.git", "partnerre", "My Project", "content")]
-    [InlineData("https://partnerre.visualstudio.com/Memex/_git/content", "partnerre", "Memex", "content")]
-    [InlineData("https://partnerre.visualstudio.com/DefaultCollection/Memex/_git/content", "partnerre", "Memex", "content")]
+    [InlineData("https://dev.azure.com/client-a/Memex/_git/content", "client-a", "Memex", "content")]
+    [InlineData("https://client-a@dev.azure.com/client-a/Memex/_git/content", "client-a", "Memex", "content")]
+    [InlineData("https://dev.azure.com/client-a/My%20Project/_git/content.git", "client-a", "My Project", "content")]
+    [InlineData("https://client-a.visualstudio.com/Memex/_git/content", "client-a", "Memex", "content")]
+    [InlineData("https://client-a.visualstudio.com/DefaultCollection/Memex/_git/content", "client-a", "Memex", "content")]
     public void AnAzureReposUrl_IsRecognised(string url, string org, string project, string repo)
     {
         AzureReposRepository.TryParse(url, out var parsed).Should().BeTrue();
@@ -45,9 +45,9 @@ public class AzureReposPushOnlyTest
     [Theory]
     [InlineData("https://github.com/Systemorph/MeshWeaver", "GitHub")]
     [InlineData("https://github.com/Systemorph/MeshWeaver.git", "GitHub")]
-    [InlineData("https://dev.azure.com/partnerre/Memex", "Git")]                 // no _git segment
-    [InlineData("https://dev.azure.com/partnerre/Memex/_git/content/extra", "Git")] // too deep
-    [InlineData("http://dev.azure.com/partnerre/Memex/_git/content", "Git")]     // not https
+    [InlineData("https://dev.azure.com/client-a/Memex", "Git")]                 // no _git segment
+    [InlineData("https://dev.azure.com/client-a/Memex/_git/content/extra", "Git")] // too deep
+    [InlineData("http://dev.azure.com/client-a/Memex/_git/content", "Git")]     // not https
     [InlineData("https://gitlab.example.com/a/b", "Git")]
     [InlineData("/tmp/local-remote.git", "Git")]
     [InlineData("", "Git")]
@@ -59,7 +59,7 @@ public class AzureReposPushOnlyTest
 
     // ── Push-only ────────────────────────────────────────────────────────────
 
-    private const string AzureUrl = "https://dev.azure.com/partnerre/Memex/_git/content";
+    private const string AzureUrl = "https://dev.azure.com/client-a/Memex/_git/content";
     private const string GitHubUrl = "https://github.com/Systemorph/Content";
 
     [Theory]
@@ -370,7 +370,7 @@ public class AzureReposPushOnlyTest
         => name == AzureReposTokenService.FederatedTokenFileVariable ? "/var/run/secrets/azure/tokens/azure-identity-token" : null;
 
     [Theory]
-    [InlineData("https://dev.azure.com/partnerre/Memex/_git/content", "ui.gitSync.provider.AzureRepos")]
+    [InlineData("https://dev.azure.com/client-a/Memex/_git/content", "ui.gitSync.provider.AzureRepos")]
     [InlineData("https://github.com/Systemorph/Content", "ui.gitSync.provider.GitHub")]
     [InlineData("/tmp/remote.git", "ui.gitSync.provider.Git")]
     public void TheSettingsTab_NamesTheProvider_WithAKeyBothLanguagesCarry(string url, string key)
