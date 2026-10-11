@@ -192,6 +192,17 @@ public class ADeploymentNamedCommercialPackageInstallsTest(ITestOutputHelper out
             .Authorize(Mesh, new PackageManifest { Id = "Claims" }, Principal)
             .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
         await sourcelessFree.Should().ThrowAsync<PackageAuthorizationException>();
+        // A source-STAMPED manifest that has genuinely become free takes the free path — even for a
+        // package the configuration does not name.
+        await PackageEntitlement
+            .Authorize(Mesh, new PackageManifest { Id = "Other", Source = SourceName, Price = 0m }, Principal)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        // …and a source-less price-0 refusal does not call it "price 0".
+        var zero = async () => await PackageEntitlement
+            .Authorize(Mesh, new PackageManifest { Id = "Claims", Price = 0m }, Principal)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        (await zero.Should().ThrowAsync<PackageAuthorizationException>())
+            .Which.Message.Should().NotContain("commercial (price 0)");
         var otherSourceRequirement = async () => await PackageEntitlement
             .Authorize(Mesh, new PackageManifest { Id = "ClaimsCore", Source = "elsewhere", ContactEmail = "sales@acme.test" }, Principal)
             .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
