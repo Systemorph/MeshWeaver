@@ -56,6 +56,20 @@ namespace MeshWeaver.PluginCatalog;
 /// nothing else: the registry still serves only what the instance's plan tier covers, and the
 /// licence and parameter gates still run.</para>
 ///
+/// <para><b>The third authority: the deployment configuration.</b> A package named EXACTLY in
+/// <c>PluginCatalog:InstallByDefault</c> (<c>Source/Package</c>, never a whole-source
+/// <c>Source/*</c>) — or required by one that is — is authorized by the deployment record that names
+/// it, because that record changes only through a reviewed pull request the auto-merge App merges
+/// in the deployment repository (maintainer, 2026-10-11: "it should not skip them for crying out
+/// loud"). The unattended default install hands the gate the explicitly named principal
+/// <c>deployment-config:{instance}</c> (<see cref="DeploymentConfigPrincipal"/>); the gate does not
+/// take that on trust either — <see cref="DeploymentConfigAuthority.WhyNot"/> re-reads the CURRENT
+/// configuration, so the principal authorizes only what the configuration names now, only on this
+/// instance. The principal is logged, stamped on the install record and on the default-install
+/// ledger. Like the activity, it widens WHO may authorize the install and nothing else: installing
+/// grants nobody access (that stays the plan's / a subscription's), and the licence and parameter
+/// gates still run.</para>
+///
 /// <para>A refusal is never silent — it logs and it FAULTS the install observable with a
 /// <see cref="PackageAuthorizationException"/> carrying the reason, so the caller surfaces it
 /// (the catalog logs it; the update watcher turns it into a notification on the install record).</para>
@@ -91,6 +105,34 @@ public static class PackageEntitlement
     public const string PackageInput = "package";
 
     /// <summary>
+    /// The prefix of the deployment-configuration principal — <c>deployment-config:{instance}</c>.
+    /// A colon never appears in a user id or a mesh path, so the principal cannot be confused with
+    /// either.
+    /// </summary>
+    public const string DeploymentConfigPrefix = "deployment-config:";
+
+    /// <summary>The deployment-configuration principal for <paramref name="instance"/>. Pure.</summary>
+    /// <param name="instance">The instance whose configuration authorizes (its <c>PluginCatalog:InstanceId</c>).</param>
+    /// <returns><c>deployment-config:{instance}</c>.</returns>
+    public static string DeploymentConfigPrincipal(string instance) =>
+        DeploymentConfigPrefix + (instance ?? "").Trim();
+
+    /// <summary>
+    /// Whether <paramref name="principal"/> names a deployment configuration
+    /// (<c>deployment-config:{instance}</c>, non-empty instance). Pure. Says nothing about whether
+    /// that configuration authorizes anything — that is <see cref="DeploymentConfigAuthority.WhyNot"/>.
+    /// </summary>
+    /// <param name="principal">The authorizing principal as handed to the gate.</param>
+    /// <returns><c>true</c> for a deployment-config principal.</returns>
+    public static bool IsDeploymentConfigPrincipal(string? principal)
+    {
+        var trimmed = principal?.Trim();
+        return trimmed is not null
+               && trimmed.StartsWith(DeploymentConfigPrefix, StringComparison.Ordinal)
+               && trimmed.Length > DeploymentConfigPrefix.Length;
+    }
+
+    /// <summary>
     /// True when the package is COMMERCIAL — it carries a non-zero
     /// <see cref="PackageManifest.Price"/> (positive = purchasable, negative = coupon-only) OR it
     /// names a sales contact (<see cref="PackageManifest.ContactEmail"/>: sold with a person in the
@@ -120,7 +162,8 @@ public static class PackageEntitlement
     /// <param name="manifest">The package being installed or updated.</param>
     /// <param name="authorizingUserId">The principal that authorized the action — the clicking user
     /// for a catalog install, a verified governed activity (<c>Governance/Activities/{id}</c>) for a
-    /// governed provision, the install record's <see cref="PackageManifest.AuthorizedBy"/> for an
+    /// governed provision, the deployment configuration (<c>deployment-config:{instance}</c>) for the
+    /// default install of a package that configuration names exactly, the install record's <see cref="PackageManifest.AuthorizedBy"/> for an
     /// unattended update, null when nobody authorized it (boot-time provisioning).</param>
     /// <param name="logger">Diagnostics; a refusal is logged here as a warning.</param>
     /// <returns>A cold observable that emits <see cref="Unit"/> on allow and faults on refusal.</returns>
@@ -141,6 +184,11 @@ public static class PackageEntitlement
         // is a global admin: it is not a person, and its authority is its signatures.
         if (IsGovernedActivityPrincipal(authorizingUserId))
             return AuthorizeByActivity(hub, manifest, authorizingUserId!.Trim(), logger);
+
+        // The deployment configuration is verified against the CURRENT configuration — never
+        // trusted by its string, and never asked whether it is a global admin.
+        if (IsDeploymentConfigPrincipal(authorizingUserId))
+            return AuthorizeByDeploymentConfig(hub, manifest, authorizingUserId!.Trim(), logger);
 
         // Wait for the POSITIVE confirmation, not the first emission (see AdminConfirmationWindow).
         // TakeDecisionOutsideGate leaves the evaluator's Rx gate before the install's real work
@@ -241,6 +289,29 @@ public static class PackageEntitlement
                     exception is TimeoutException ? null : exception,
                     detail: $"the activity at '{activityPath}' could not be read"));
 
+    /// <summary>
+    /// The deployment-configuration half of <see cref="Authorize"/>: admits when
+    /// <see cref="DeploymentConfigAuthority.WhyNot"/> is null — the package is named exactly in this
+    /// instance's <c>PluginCatalog:InstallByDefault</c>, or required by one that is — logging the
+    /// principal and the reason; refuses otherwise with that reason in the sentence. No authority
+    /// registered (a host without the plugin catalog) is a refusal: fail closed.
+    /// </summary>
+    private static IObservable<Unit> AuthorizeByDeploymentConfig(
+        IMessageHub hub, PackageManifest manifest, string principal, ILogger? logger) =>
+        Observable.Defer(() =>
+        {
+            if (hub.ServiceProvider.GetService(typeof(DeploymentConfigAuthority)) is not DeploymentConfigAuthority authority)
+                return Refuse(manifest, principal, logger,
+                    detail: "no deployment configuration authority is registered on this host");
+            if (authority.WhyNot(principal, manifest) is { } why)
+                return Refuse(manifest, principal, logger, detail: why);
+            logger?.LogInformation(
+                "[PackageEntitlement] commercial package {Package} AUTHORIZED by {Principal}: {Reason}. "
+                + "Installing grants nobody access — that stays the plan's and the subscriptions'.",
+                manifest.Id, principal, authority.Because(manifest));
+            return Observable.Return(Unit.Default);
+        });
+
     private static IObservable<Unit> Refuse(
         PackageManifest manifest, string? userId, ILogger? logger, Exception? cause = null, string? detail = null) =>
         Observable.Defer(() =>
@@ -287,8 +358,10 @@ public static class PackageEntitlement
             ? "no authorizing principal (unattended install)"
             : $"'{userId}'";
         return $"Package '{manifest.Id}' is commercial ({terms}) — installing or auto-updating "
-               + "it requires Global Admin on this instance or a verified governed "
-               + $"{PackageProvisionStandard} activity signed for it, and {who} is neither"
+               + "it requires Global Admin on this instance, a verified governed "
+               + $"{PackageProvisionStandard} activity signed for it, or naming it exactly "
+               + "(Source/Package) in this deployment's PluginCatalog:InstallByDefault, and "
+               + $"{who} is none of these"
                + (string.IsNullOrWhiteSpace(detail) ? "" : $" ({detail})")
                + ". Free packages (no price and no sales contact, or price 0) need no special "
                + "permission.";

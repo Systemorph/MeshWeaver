@@ -138,6 +138,11 @@ public static class PluginCatalogConfigurationExtensions
                 // the /api/instances/register endpoint. Mesh-scoped like everything above.
                 .AddSingleton<RegistrationKeyService>()
                 .AddSingleton<InstanceRegistrationClient>()
+                // The deployment configuration as an authorizing principal
+                // (deployment-config:{instance}): what PackageEntitlement verifies a commercial
+                // package named EXACTLY in InstallByDefault against. Mesh-scoped — the requirement
+                // closure the boot selection admits dies with the mesh.
+                .AddSingleton(sp => new DeploymentConfigAuthority(sp))
                 // 🚨 THE ONE DEFAULT-INSTALL PATH. Two phases in one service, deliberately: phase 1
                 // auto-registers this installation at the configured registry when
                 // PluginCatalog:BootstrapKey is set and no instance key is stored yet, and phase 2
