@@ -186,6 +186,12 @@ public class ADeploymentNamedCommercialPackageInstallsTest(ITestOutputHelper out
             .Authorize(Mesh, new PackageManifest { Id = "ClaimsCore", ContactEmail = "sales@acme.test" }, Principal)
             .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
         await sourcelessRequirement.Should().ThrowAsync<PackageAuthorizationException>();
+        // …and a source-less manifest that OMITS the commercial fields (reads as free) is still
+        // verified under this principal: the free fast path never applies to it.
+        var sourcelessFree = async () => await PackageEntitlement
+            .Authorize(Mesh, new PackageManifest { Id = "Claims" }, Principal)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        await sourcelessFree.Should().ThrowAsync<PackageAuthorizationException>();
         var otherSourceRequirement = async () => await PackageEntitlement
             .Authorize(Mesh, new PackageManifest { Id = "ClaimsCore", Source = "elsewhere", ContactEmail = "sales@acme.test" }, Principal)
             .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
@@ -340,9 +346,11 @@ public class ADeploymentNamedCommercialPackageIsRepairedTest(ITestOutputHelper o
 
 /// <summary>
 /// A directly read repository cannot claim another source's <c>Source/Package</c> scoping by
-/// AUTHORING a <c>source</c> in its manifest: the boot lane stamps a direct source's manifests with
-/// the name it was configured under, so a package that writes the named source's name is matched
-/// against the source it really came from — and the deployment configuration authorizes nothing.
+/// AUTHORING a <c>source</c> in its manifest. The boot lane keeps the authored value (selection is
+/// unchanged), but the fail-closed provenance check withholds the deployment configuration's
+/// authority from any candidate whose source is neither a registry's stamp nor the name its source
+/// was configured under — so this package is selected, classified commercial-without-authority, and
+/// skipped.
 /// </summary>
 public class AnAuthoredSourceClaimsNoAuthorityTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {

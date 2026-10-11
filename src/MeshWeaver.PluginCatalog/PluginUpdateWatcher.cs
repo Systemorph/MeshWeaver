@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Collections.Concurrent;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
@@ -284,7 +285,7 @@ public sealed class PluginUpdateWatcher : Microsoft.Extensions.Hosting.IHostedSe
                 // policy deployment-config-authorizes-named-commercial) can be claimed by a repository
                 // writing the configured source's name. The install record keeps the source it was
                 // stamped with (PackageInstaller.SeedSource carries it forward).
-                hub, source, build.HeadSha, packages.Select(p => p with { Source = null }).ToList(),
+                hub, source, build.HeadSha, packages.Select(p => p with { Source = null }).ToImmutableList(),
                 $"Built from {build.HeadSha[..Math.Min(7, build.HeadSha.Length)]}", logger)
             .Subscribe(
                 _ => { },
