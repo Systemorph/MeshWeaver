@@ -18,7 +18,7 @@ namespace MeshWeaver.Graph.Configuration;
 /// write, and is <b>public-read</b> so every user's home can read it. The home reads it REACTIVELY (via
 /// the shared, per-user-RLS, empty-on-absent <c>GetQuery</c> cache — never a point-read that could
 /// NotFound-storm), so an admin's edit updates every open home live. When the node is absent — or any
-/// field is unset — the shipped <see cref="Defaults"/> apply (<b>FirstLevel + Flat + LastAccessed</b>),
+/// field is unset — the shipped <see cref="Defaults"/> apply (<b>FirstLevel + Flat + by location</b>),
 /// so nothing regresses without the node. See <see cref="HomeConfig"/>.
 /// </summary>
 public static class HomeConfigNodeType
