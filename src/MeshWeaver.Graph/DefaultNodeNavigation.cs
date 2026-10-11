@@ -110,7 +110,24 @@ public static class DefaultNodeNavigation
                 // Each level paints on its own: a slow level never holds the others back.
                 .StartWith(ImmutableDictionary<string, MeshNode>.Empty)
                 .Select(nodes => (ns, nodes));
-        var levels = PathLevels(root, currentPath).Select(Level).ToImmutableList();
+        var pathLevels = PathLevels(root, currentPath);
+        var levels = pathLevels.Select(Level).ToImmutableList();
+        // The reader's own branch: every node on the path below the root, read BY PATH (one light
+        // row each, depth-bound like the levels). A level shows its first LevelCap entries, and the
+        // page being read may sit beyond that cut — or beyond the level's read window — so its
+        // ancestors and itself are always added, or the branch the reader is on would vanish and
+        // its children would have no parent to hang from.
+        IObservable<MeshNode?> Anchor(string path) =>
+            meshService
+                .Query<MeshNode>(MeshQueryRequest.FromQuery(
+                    $"path:{path} select:path,id,namespace,name,nodeType,order,icon"))
+                .Scan(ImmutableDictionary<string, MeshNode>.Empty, Fold)
+                .Select(rows => rows.TryGetValue(path, out var row) ? row : null)
+                .StartWith((MeshNode?)null);
+        var anchors = pathLevels.Skip(1).Select(Anchor).ToImmutableList();
+        var anchorRows = anchors.IsEmpty
+            ? Observable.Return((IList<MeshNode?>)ImmutableList<MeshNode?>.Empty)
+            : anchors.CombineLatest();
         // The root node (its title and icon head the rail) through the workspace's authoritative
         // partition-root stream, never a by-path query against the index.
         var rootNode = host.Workspace.ObservePartitionRoot(currentPath).StartWith((MeshNode?)null);
@@ -118,7 +135,7 @@ public static class DefaultNodeNavigation
         return Guard(
             Observable.Defer(() => levels
                 .CombineLatest()
-                .CombineLatest(rootNode, (read, rootRow) =>
+                .CombineLatest(rootNode, anchorRows, (read, rootRow, onPath) =>
                 {
                     var shown = read.Select(l => (l.Level, Cap: CapOf(l.Level), Visible: VisibleInOrder(l.Nodes.Values))).ToImmutableList();
                     var moreLinks = shown
@@ -128,18 +145,31 @@ public static class DefaultNodeNavigation
                             l => l.Level,
                             l => $"{currentPath}?{MoreParameter}={Uri.EscapeDataString(l.Level)}:{Math.Min(l.Cap + MoreStep, MaxCap)}",
                             StringComparer.Ordinal);
-                    var nodes = shown
-                        .SelectMany(l => l.Visible.Take(l.Cap))
-                        .Concat(rootRow is null ? [] : new[] { rootRow })
-                        .GroupBy(n => n.Path, StringComparer.Ordinal)
-                        .Select(g => g.First())
-                        .ToImmutableList();
+                    var nodes = RenderedRows(
+                        shown.Select(l => (l.Visible, l.Cap)),
+                        onPath.OfType<MeshNode>().Concat(rootRow is null ? [] : [rootRow]));
                     return Build(root, nodes, currentPath, moreLinks, loadMore);
                 })),
             ex => logger?.LogWarning(ex,
                 "The default index query for {Root} faulted — the page renders without its index",
                 root));
     }
+
+    /// <summary>
+    /// The rows the rail renders: each level's first <c>Cap</c> visible entries, plus the rows that
+    /// are always shown whatever the cut — the reader's own branch and the root. Duplicates are
+    /// dropped by path. Pure.
+    /// </summary>
+    /// <param name="levels">Each level's visible entries in rendered order, and its cap.</param>
+    /// <param name="alwaysShown">The rows on the reader's path and the root row.</param>
+    public static ImmutableList<MeshNode> RenderedRows(
+        IEnumerable<(IReadOnlyList<MeshNode> Visible, int Cap)> levels, IEnumerable<MeshNode> alwaysShown) =>
+        levels
+            .SelectMany(l => l.Visible.Take(l.Cap))
+            .Concat(alwaysShown)
+            .GroupBy(n => n.Path, StringComparer.Ordinal)
+            .Select(g => g.First())
+            .ToImmutableList();
 
     /// <summary>The most children one level of the index lists at first; a level that holds more
     /// ends with a "Load more" entry (policy <c>explorer-navigation</c>).</summary>

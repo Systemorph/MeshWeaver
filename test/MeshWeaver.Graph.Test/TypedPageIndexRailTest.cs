@@ -68,7 +68,16 @@ public class TypedPageIndexRailTest(ITestOutputHelper output) : MonolithMeshTest
             .Match(c => c is SplitterControl { Areas.Count: 2 }, cancellationToken: ct);
         var splitter = Assert.IsType<SplitterControl>(root);
 
-        var rail = await Collect(stream, splitter.Areas[0].Area!.ToString()!, ct);
+        // The rail paints progressively: the reader's own branch first, each level as it arrives.
+        // Wait for the level that holds the sibling.
+        var railArea = splitter.Areas[0].Area!.ToString()!;
+        var rail = await Collect(stream, railArea, ct);
+        for (var attempt = 0; attempt < 60
+             && !rail.OfType<NavLinkControl>().Any(l => l.Url?.ToString() == $"/{SiblingPath}"); attempt++)
+        {
+            await Task.Delay(250, ct);
+            rail = await Collect(stream, railArea, ct);
+        }
         var menu = Assert.Single(rail.OfType<NavMenuControl>());
         Assert.Equal(Space, menu.Skins.OfType<NavMenuSkin>().Single().SearchNamespace);
         Assert.Contains($"/{SiblingPath}", rail.OfType<NavLinkControl>().Select(l => l.Url?.ToString()));

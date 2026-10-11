@@ -314,6 +314,27 @@ public class DefaultNodeNavigationTest
             .Should().Equal("S/Zulu", "S/Alpha", "S/Beta");
     }
 
+    [Fact]
+    public void TheReadersOwnBranch_SurvivesTheCut()
+    {
+        // Sixty siblings; the reader is on the 60th, past the 50-entry cut, and on its child.
+        var siblings = Enumerable.Range(1, 60).Select(i => Node($"S/Item{i:D3}")).ToImmutableList();
+        var page = Node("S/Item060");
+        var child = Node("S/Item060/Detail");
+        var rows = DefaultNodeNavigation.RenderedRows(
+            [(DefaultNodeNavigation.VisibleInOrder(siblings), DefaultNodeNavigation.LevelCap),
+             (DefaultNodeNavigation.VisibleInOrder([child]), DefaultNodeNavigation.LevelCap)],
+            [page, child, Node("S")]);
+
+        rows.Select(n => n.Path).Should().Contain("S/Item060", "the page the reader is on is never cut");
+        rows.Count(n => n.Namespace == "S").Should().Be(DefaultNodeNavigation.LevelCap + 1,
+            "the level still shows its first 50, plus the reader's own entry");
+
+        var nav = DefaultNodeNavigation.Build("S", rows, "S/Item060/Detail")!;
+        Paths(nav.Entries).Should().Contain("S/Item060/Detail",
+            "the reader's child hangs from its parent instead of being orphaned");
+    }
+
     private static IEnumerable<string> Paths(IEnumerable<NodeNavigationEntry> entries)
         => entries.SelectMany(e => new[] { e.Path }.Concat(Paths(e.Children)));
 }
