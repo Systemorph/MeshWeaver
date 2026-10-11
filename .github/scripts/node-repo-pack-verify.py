@@ -224,10 +224,18 @@ def verify(expected: list[str], receipts: dict[str, dict], broken: list[str],
         superseded = sorted(m for m, r in receipts.items() if r.get("publication") == "superseded")
         stood_down = (f"; {len(superseded)} stood down for a newer trunk commit that reaches them "
                       f"(its own run publishes them): " + ", ".join(superseded)) if superseded else ""
+        # `withheld` is a FIFTH (`publish-withhold`, per-package publication): the caller's
+        # publication leaves the module's package out of this run — its lock is not settled, its
+        # platform floor is not stamped, or it depends on a package in that state — so the leg
+        # built and tested it and handed nothing over. Named, for the same reason as the others.
+        withheld = sorted(m for m, r in receipts.items() if r.get("publication") == "withheld")
+        if withheld:
+            stood_down += (f"; {len(withheld)} WITHHELD by the caller's per-package publication "
+                           f"(built and tested, handed over by a later run): " + ", ".join(withheld))
         if published:
             notes.append(f"{len(want)} of {len(want)} selected module bundle(s) built; "
                          f"{len(published)} published to the registry{stood_down}")
-        elif superseded and not staged:
+        elif (superseded or withheld) and not staged:
             notes.append(f"{len(want)} of {len(want)} selected module bundle(s) built; none published "
                          f"from this run{stood_down}")
         elif staged:
@@ -862,6 +870,23 @@ def self_test() -> int:
     check("…and a run whose only leg stood down says so — not 'not a trunk/release run'",
           code == 0 and any("none published from this run" in n for n in nts)
           and not any("not a trunk/release run" in n for n in nts), f"{errs} {nts}")
+
+    print("publish-withhold — a package the caller withholds is NAMED, never read as unpublished:")
+    code, errs, nts = verify(["A", "B"], {"A": {"module": "A", "published": True, "publication": "direct"},
+                                         "B": {"module": "B", "published": False, "publication": "withheld"}},
+                             [], "success", True)
+    check("one published + one withheld is green, and the note names the withheld module",
+          code == 0 and any("1 published" in n and "1 WITHHELD" in n and n.rstrip().endswith("B") for n in nts),
+          f"{errs} {nts}")
+    code, errs, nts = verify(["B"], {"B": {"module": "B", "published": False, "publication": "withheld"}},
+                             [], "success", True)
+    check("…and a run whose only leg was withheld says so — not 'not a trunk/release run'",
+          code == 0 and any("none published from this run" in n and "WITHHELD" in n for n in nts)
+          and not any("not a trunk/release run" in n for n in nts), f"{errs} {nts}")
+    code, errs, nts = verify(["A"], {"A": {"module": "A", "published": True, "publication": "direct"}},
+                             [], "success", True)
+    check("NEGATIVE CONTROL: with nothing withheld the note does not mention it",
+          code == 0 and not any("WITHHELD" in n for n in nts), f"{errs} {nts}")
 
     if failures:
         print(f"\n::error title=node-repo-pack-verify self-test failed::{len(failures)} case(s) — "
