@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Net.Sockets;
 using System.Reactive.Linq;
 using System.Threading;
@@ -65,7 +66,7 @@ public class AFailedDefaultInstallIsRepairedWhenTheFeedAnswersTest(ITestOutputHe
                     ReconcileSafetyNetInterval = TimeSpan.Zero,
                 }));
 
-    private static readonly IReadOnlyList<RepoFile> Repo =
+    private static readonly ImmutableArray<RepoFile> Repo =
     [
         new("Good/index.json",
             """{"$type":"MeshNode","id":"Good","namespace":"","path":"Good","mainNode":"Good","name":"Good","nodeType":"Space","state":"Active","content":{"$type":"PluginManifest","description":"Installs fine.","minMeshVersion":"1.0.0"}}"""),
@@ -115,6 +116,10 @@ public class AFailedDefaultInstallIsRepairedWhenTheFeedAnswersTest(ITestOutputHe
         boot.Delivered.Should().Contain("Good");
         (await Ledger(l => l.Failed.Contains("Flaky"), ct)).Seeded.Should().NotContain("Flaky");
         await Reconciler.BootReconciled.DefaultIfEmpty().Timeout(TestTimeouts.Convergence).Await(ct);
+        // 🚨 The boot reconcile itself must NOT repair: it runs straight after the pass that failed,
+        // against the same registry state. Read here, before any baseline is taken — a repair pass
+        // inside the boot would otherwise be absorbed into "afterBoot" and every later +1 would hold.
+        Listings.Should().Be(1, "the source is listed by the boot pass alone; the boot reconcile runs no repair pass");
         return boot;
     }
 

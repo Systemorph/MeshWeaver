@@ -2535,9 +2535,12 @@ public record DefaultInstallLedger
 
 /// <summary>
 /// What one default-install pass did: how many packages were written, how many were already
-/// current, how many failed, and which packages the pass covered. Emitted once per pass on
-/// <see cref="InstanceAutoRegistrationService.Completed"/>, so both the boot log line and a test
-/// read the same outcome.
+/// current, how many failed, and which packages the pass covered. The BOOT pass's summary is
+/// emitted once on <see cref="InstanceAutoRegistrationService.Completed"/>, so both the boot log
+/// line and a test read the same outcome. A later repair pass
+/// (<c>InstanceAutoRegistrationService.RetryFailedDefaults</c>) produces one too and does NOT emit
+/// it there — <c>Completed</c> stays the boot's answer; the repair's outcome is its log line and
+/// the ledger.
 /// </summary>
 /// <param name="Installed">Packages that actually wrote content this pass.</param>
 /// <param name="UpToDate">Packages already at the catalog's content version.</param>
