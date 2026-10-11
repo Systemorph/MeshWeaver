@@ -1676,9 +1676,8 @@ internal class RoutingGrain(
         var sch = scheduler ?? Scheduler.Default;
         var delay = backoff ?? (attempt => TimeSpan.FromMilliseconds(Math.Min(250 * Math.Pow(2, attempt), 3_000)));
 
-        // Defer keeps grainCall COLD so every RetryWhen re-subscribe re-invokes it (fresh grain
-        // reference → fresh activation). Never Observable.FromAsync — see AsynchronousCalls.md.
-        return Observable.Defer(() => grainCall().ToObservable())
+        // ObserveGrainCall keeps grainCall COLD, so every RetryWhen re-subscribe re-invokes it.
+        return ObserveGrainCall(grainCall)
             .RetryWhen(errors => errors
                 .Select((ex, i) => (Exception: ex, Attempt: i))
                 .SelectMany(t =>
@@ -2133,4 +2132,61 @@ internal class RoutingGrain(
     /// <para>A literal of <b>Orleans.Runtime</b>.</para>
     /// </summary>
     internal const string SupersededSiloGenerationMarker = "The target silo is no longer active";
+
+    /// <summary>
+    /// The cold grain call as an observable, with a CANCELLED call's own exception kept - issue
+    /// #5731. A grain call Orleans cancels (for one, a message that expired while its target grain
+    /// was still being placed: <c>OperationCanceledException: Message expired before placement could
+    /// complete for grain ...</c>) completes as a CANCELLED task that still stores that exception.
+    /// Rx's task bridge reports a cancelled task as a fresh <see cref="TaskCanceledException"/>
+    /// whose text is only "A task was canceled.", so the log line, the trace and the sender's NACK
+    /// all lost the one sentence that says what happened.
+    ///
+    /// <para><b>Diagnostics only.</b> This hands over the stored exception instead of Rx's stand-in.
+    /// A result, a fault and a cancellation that stored nothing pass through unchanged, and no
+    /// predicate is added or widened: a placement expiry is still not re-sent and is still reported
+    /// to the sender as <see cref="ErrorType.Failed"/> - only the text it is reported with changes.
+    /// None of the types <see cref="ClassifyDeliveryException"/> reads as a lifecycle transition is
+    /// an <see cref="OperationCanceledException"/>, so none of them arrives through a cancelled task.
+    /// <c>GrainCallKeepsItsCancellationTest</c> pins the text, the unchanged verdict and that last
+    /// fact.</para>
+    /// </summary>
+    /// <typeparam name="T">The grain call's result.</typeparam>
+    /// <param name="grainCall">The grain call; re-invoked from scratch on every subscription.</param>
+    /// <returns>A cold observable of the call's result.</returns>
+    internal static IObservable<T> ObserveGrainCall<T>(Func<Task<T>> grainCall) =>
+        // Defer keeps grainCall COLD so every RetryWhen re-subscribe re-invokes it (fresh grain
+        // reference → fresh activation). Never Observable.FromAsync — see AsynchronousCalls.md.
+        Observable.Defer(() => grainCall().ToObservable())
+            .Catch<T, TaskCanceledException>(canceled => Observable.Throw<T>(OriginalCancellation(canceled)));
+
+    /// <summary>
+    /// The exception a cancelled task stored, or <paramref name="canceled"/> itself when the task
+    /// stored none (or there is no task).
+    ///
+    /// <para>The task is read only once it <see cref="Task.IsCanceled"/>, i.e. after it completed:
+    /// its awaiter then returns at once and re-throws what the task holds, which is the only public
+    /// way to reach a cancelled task's stored exception (<see cref="Task.Exception"/> is null for a
+    /// cancellation). Nothing waits here and nothing can park.</para>
+    /// </summary>
+    /// <param name="canceled">The exception Rx made from the cancelled task.</param>
+    /// <returns>The task's own cancellation, or <paramref name="canceled"/>.</returns>
+    internal static Exception OriginalCancellation(TaskCanceledException canceled)
+    {
+        var task = canceled.Task;
+        if (task is null || !task.IsCanceled)
+            return canceled;
+
+        var completed = task.GetAwaiter();
+        try
+        {
+            completed.GetResult();
+        }
+        catch (OperationCanceledException original)
+        {
+            return original;
+        }
+
+        return canceled;
+    }
 }

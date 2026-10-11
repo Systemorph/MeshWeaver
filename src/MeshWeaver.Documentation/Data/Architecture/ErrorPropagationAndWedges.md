@@ -109,6 +109,27 @@ answered flag first, then read the CARRIED verdict, and fall back to the shared 
 `MeshNodeStreamCache.IsTransientOwnerFailure` use) rather than to a terminal default.** A verdict
 that cannot be read is not evidence of a permanent failure.
 
+#### A cancelled grain call is reported in Orleans' words (#5731)
+
+A grain call Orleans **cancels** arrives as a CANCELLED task that still stores Orleans' own
+`OperationCanceledException`. The case that was measured: a message that expired while its target
+grain was still being placed, `Message expired before placement could complete for grain
+messagehub/…/_Activity/compile-…`. Rx's task bridge reports any cancelled task as a fresh
+`TaskCanceledException`, so the warning, the trace and the sender's NACK all read
+*"Delivery to '…' failed: A task was canceled."* and named nothing.
+
+`RoutingGrain.ObserveGrainCall` is the bridge both forward legs (per-node hub and pod hub) now use.
+It hands over the exception the task stored, so the NACK carries Orleans' sentence. A result, a
+fault and a cancellation that stored nothing pass through as before.
+
+**This changes the text, not the verdict.** A placement expiry is still `ErrorType.Failed` and is
+still sent once: why placement stalled is not established, and a consumer told `ShuttingDown`
+resubscribes without bound. None of the types `ClassifyDeliveryException` reads as a lifecycle
+transition is a cancellation, so none of them arrives on this path.
+`GrainCallKeepsItsCancellationTest` pins the text, the unchanged verdict and that last fact. If you
+see *"A task was canceled."* in a delivery NACK again, a grain call is reaching Rx without this
+bridge.
+
 #### A transport timeout on a view is a bounded retry, not an error (#5599, #5605, #5624)
 
 The same rule applies on the GUI side, and one class of routed NACK missed it. Orleans'
