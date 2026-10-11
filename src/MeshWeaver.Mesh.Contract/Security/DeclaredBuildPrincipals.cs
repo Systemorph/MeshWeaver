@@ -204,6 +204,8 @@ public static class DeclaredBuildPrincipals
             .ToImmutableList();
         if (!unknown.IsEmpty)
             return (null, $"unknown key(s) {string.Join(", ", unknown)} — a declaration is read whole or not at all");
+        if (ShapeError(section) is { } shape)
+            return (null, $"{shape} — a declaration is read whole or not at all");
 
         var slash = repository.IndexOf('/');
         if (slash <= 0 || slash == repository.Length - 1 || repository.IndexOf('/', slash + 1) >= 0)
@@ -265,6 +267,55 @@ public static class DeclaredBuildPrincipals
             Notes = section[nameof(BuildPrincipal.Notes)],
         }, null);
     }
+
+    private static readonly ImmutableArray<string> ScalarKeys =
+    [
+        nameof(BuildPrincipal.Repository), nameof(BuildPrincipal.RepositoryId),
+        nameof(BuildPrincipal.RepositoryOwnerId), nameof(BuildPrincipal.Notes),
+    ];
+
+    /// <summary>
+    /// The first place the declaration's SHAPE departs from the one this reader understands, or
+    /// null. The key check above sees only a declaration's immediate children, so a key nested
+    /// under a known one — <c>RepositoryId:Typo</c> beside a valid <c>RepositoryId</c> — would
+    /// otherwise be ignored while the scalar is read. Every leaf the reader does not consume is
+    /// refused, so an unknown key at any depth refuses the declaration. Pure.
+    /// </summary>
+    private static string? ShapeError(IConfigurationSection section)
+    {
+        foreach (var key in ScalarKeys)
+            if (NestedKeys(section.GetSection(key)) is { IsEmpty: false } nested)
+                return $"'{key}' is a single value, but carries nested key(s) {string.Join(", ", nested)}";
+
+        // A list: a value of its own, or children that are values — never deeper.
+        if (Deeper(section.GetSection(nameof(BuildPrincipal.Scopes)), 1) is { } scopes)
+            return $"'{nameof(BuildPrincipal.Scopes)}' is a list of values, but carries nested key {scopes}";
+        // A map of event → list: one level of event names, then a list each.
+        foreach (var map in new[] { nameof(BuildPrincipal.Events), nameof(BuildPrincipal.EventRefs) })
+        {
+            var mapSection = section.GetSection(map);
+            if (!string.IsNullOrEmpty(mapSection.Value))
+                return $"'{map}' is a map of event → list, but carries a value of its own";
+            if (Deeper(mapSection, 2) is { } nested)
+                return $"'{map}' is a map of event → list, but carries nested key {nested}";
+        }
+        return null;
+    }
+
+    /// <summary>The paths of every key below <paramref name="section"/>, relative to it.</summary>
+    private static ImmutableList<string> NestedKeys(IConfigurationSection section) =>
+        section.GetChildren()
+            .SelectMany(c => NestedKeys(c).Select(k => $"{c.Key}:{k}").Prepend(c.Key))
+            .ToImmutableList();
+
+    /// <summary>The first key more than <paramref name="depth"/> levels below
+    /// <paramref name="section"/>, as a path relative to it, or null.</summary>
+    private static string? Deeper(IConfigurationSection section, int depth) =>
+        section.GetChildren()
+            .Select(c => depth <= 1
+                ? c.GetChildren().Select(g => $"{c.Key}:{g.Key}").FirstOrDefault()
+                : Deeper(c, depth - 1) is { } below ? $"{c.Key}:{below}" : null)
+            .FirstOrDefault(found => found is not null);
 
     private static bool IsNumericId(string value) =>
         value.Length > 0 && value.All(c => c is >= '0' and <= '9');

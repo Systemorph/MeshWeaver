@@ -32,10 +32,14 @@ namespace MeshWeaver.Mesh.Security;
 /// wildcard. Same discipline as <see cref="MeshWeaverInstanceIndex"/>, and for the same reason: an
 /// index that has drifted must not authenticate anybody.</para>
 ///
-/// <para><b>Revocation is immediate, not deferred.</b> Setting <see cref="RequestedAction"/> to
-/// <see cref="BuildPrincipalActions.Revoke"/> stops this principal authenticating on the very next
-/// request, on every replica, before any watcher has folded it into <see cref="IsRevoked"/>. A
-/// security stop that waits for a reactor is a security stop with a window.</para>
+/// <para><b>Revocation does not wait for a watcher.</b> Setting <see cref="RequestedAction"/> to
+/// <see cref="BuildPrincipalActions.Revoke"/> stops this principal authenticating as soon as the
+/// authenticator reads the revoking node — before any watcher has folded it into
+/// <see cref="IsRevoked"/>, because the authenticator honours the request itself. The authenticator
+/// reads the node from the process-wide node mirror the change feed keeps current, so on each
+/// replica the revoke decides from the moment that feed has delivered the write, not the instant
+/// the write returns. A security stop that waited for a reactor would add a window on top of that
+/// propagation; this one adds none.</para>
 /// </summary>
 public record BuildPrincipal
 {

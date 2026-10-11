@@ -129,6 +129,14 @@ public class DeclaredBuildPrincipalTest
         { "EventRefs:pull_request:0", "refs/heads/main", "that Events does not list" },
         { "IsRevoked", "false", "unknown key" },
         { "Scope", "verify:combo", "unknown key" },
+        // An unknown key at ANY depth refuses the declaration, not only an immediate child.
+        { "RepositoryId:Typo", "1", "'RepositoryId' is a single value" },
+        { "Repository:Alias", "Systemorph/Other", "'Repository' is a single value" },
+        { "Notes:Extra", "x", "'Notes' is a single value" },
+        { "Scopes:0:Extra", "fetch:plugins", "'Scopes' is a list of values" },
+        { "Events", "verify", "carries a value of its own" },
+        { "Events:workflow_run:0:Extra", "publish", "'Events' is a map of event → list" },
+        { "EventRefs:workflow_run:0:Extra", "refs/heads/feature", "'EventRefs' is a map of event → list" },
     };
 
     [Theory]
