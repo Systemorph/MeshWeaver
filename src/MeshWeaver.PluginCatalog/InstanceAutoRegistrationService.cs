@@ -964,12 +964,12 @@ public sealed class InstanceAutoRegistrationService(
     {
         var byPackage = (previous ?? ImmutableList<DefaultInstallAuthorization>.Empty)
             .GroupBy(a => a.Package, StringComparer.Ordinal)
-            .ToDictionary(g => g.Key, g => g.Last(), StringComparer.Ordinal);
+            .ToImmutableDictionary(g => g.Key, g => g.Last(), StringComparer.Ordinal);
         foreach (var entry in fresh ?? ImmutableList<DefaultInstallAuthorization>.Empty)
             if (!byPackage.TryGetValue(entry.Package, out var existing)
                 || !string.Equals(existing.InstalledBy, entry.InstalledBy, StringComparison.Ordinal)
                 || !string.Equals(existing.Reason, entry.Reason, StringComparison.Ordinal))
-                byPackage[entry.Package] = entry;
+                byPackage = byPackage.SetItem(entry.Package, entry);
         return byPackage.Values.OrderBy(a => a.Package, StringComparer.Ordinal).ToImmutableList();
     }
 
@@ -1397,8 +1397,8 @@ public sealed class InstanceAutoRegistrationService(
                         + "Source/* pattern cannot match — it fails closed rather than guessing.",
                         string.Join(", ", wanted), selected.Count);
 
-                // 🚨 THE DEPLOYMENT CONFIGURATION AUTHORIZES WHAT IT NAMES (maintainer, 2026-10-11:
-                // "it should not skip them for crying out loud"). A package named EXACTLY in
+                // 🚨 THE DEPLOYMENT CONFIGURATION AUTHORIZES WHAT IT NAMES — policy
+                // `deployment-config-authorizes-named-commercial`. A package named EXACTLY in
                 // PluginCatalog:InstallByDefault (Source/Package — never a whole-source Source/*) is
                 // named in the instance's deployment record, which changes only through a reviewed,
                 // App-merged pull request; that record is the authorizing principal
@@ -1406,9 +1406,9 @@ public sealed class InstanceAutoRegistrationService(
                 // requires, commercial requirements included. A wildcard names nothing and still never
                 // pulls a commercial package in. Installing grants nobody access — the plan and the
                 // subscriptions decide who reads it.
-                var named = selected.Where(IsNamed).Select(c => c.Package).ToList();
-                var namedRequirements = ConfigAuthorizedRequirements(
-                    catalog.Select(c => c.Package).ToList(), named);
+                var catalogPackages = catalog.Select(c => c.Package).ToImmutableList();
+                var named = selected.Where(IsNamed).Select(c => c.Package).ToImmutableList();
+                var namedRequirements = ConfigAuthorizedRequirements(catalogPackages, named);
                 hub.ServiceProvider.GetService<DeploymentConfigAuthority>()?.Admit(namedRequirements);
                 var configAuthorized = named.Select(p => p.Id)
                     .Concat(namedRequirements.Keys)
@@ -1430,8 +1430,8 @@ public sealed class InstanceAutoRegistrationService(
                 // was found in on 2026-08-10. The closure is taken over the FULL catalog, so a
                 // dependency outside the selection is pulled in rather than silently ignored.
                 var withDependencies = DependencyClosure(
-                    catalog.Select(c => c.Package).ToList(),
-                    selected.Select(c => c.Package).ToList(),
+                    catalogPackages,
+                    selected.Select(c => c.Package).ToImmutableList(),
                     logger,
                     configAuthorized);
 
@@ -1842,28 +1842,29 @@ public sealed class InstanceAutoRegistrationService(
     {
         var byId = catalog
             .GroupBy(p => p.Id, StringComparer.Ordinal)
-            .ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
-        var namedIds = named.Select(p => p.Id).ToHashSet(StringComparer.Ordinal);
-        var result = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.Ordinal);
+            .ToImmutableDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
+        var namedIds = named.Select(p => p.Id).ToImmutableHashSet(StringComparer.Ordinal);
+        var result = ImmutableDictionary<string, string>.Empty.WithComparers(StringComparer.Ordinal);
         foreach (var root in named.OrderBy(p => p.Id, StringComparer.Ordinal))
         {
-            var seen = new HashSet<string>(StringComparer.Ordinal) { root.Id };
-            var pending = new Stack<PackageManifest>();
-            pending.Push(root);
-            while (pending.Count > 0)
+            var seen = ImmutableHashSet.Create(StringComparer.Ordinal, root.Id);
+            var pending = ImmutableStack.Create(root);
+            while (!pending.IsEmpty)
             {
-                foreach (var requirement in pending.Pop().Requires ?? [])
+                pending = pending.Pop(out var package);
+                foreach (var requirement in package.Requires ?? [])
                 {
                     var id = PackageDependencyGraph.DependencyId(requirement);
-                    if (id.Length == 0 || !seen.Add(id) || !byId.TryGetValue(id, out var dependency))
+                    if (id.Length == 0 || seen.Contains(id) || !byId.TryGetValue(id, out var dependency))
                         continue;
-                    if (!namedIds.Contains(id))
-                        result.TryAdd(id, root.Id);
-                    pending.Push(dependency);
+                    seen = seen.Add(id);
+                    if (!namedIds.Contains(id) && !result.ContainsKey(id))
+                        result = result.Add(id, root.Id);
+                    pending = pending.Push(dependency);
                 }
             }
         }
-        return result.ToImmutable();
+        return result;
     }
 
     /// <summary>
@@ -1893,8 +1894,8 @@ public sealed class InstanceAutoRegistrationService(
     /// <see cref="TerminalSkipReason(PackageManifest)"/> for a candidate the deployment
     /// configuration may authorize. 🚨 A commercial package the configuration names EXACTLY (or
     /// that such a package requires) is NOT skipped: the deployment record is its authorizing
-    /// principal (<see cref="DeploymentConfigAuthority"/>; maintainer, 2026-10-11: "it should not
-    /// skip them for crying out loud"). A plan-tier refusal still wins — the registry does not serve
+    /// principal (<see cref="DeploymentConfigAuthority"/>, policy
+    /// <c>deployment-config-authorizes-named-commercial</c>). A plan-tier refusal still wins — the registry does not serve
     /// what the instance's plan does not cover, and no configuration on the instance changes that.
     /// Pure.
     /// </summary>

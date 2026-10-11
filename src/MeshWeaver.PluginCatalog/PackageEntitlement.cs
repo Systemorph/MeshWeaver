@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Linq;
 using MeshWeaver.Mesh;
@@ -60,8 +61,7 @@ namespace MeshWeaver.PluginCatalog;
 /// <c>PluginCatalog:InstallByDefault</c> (<c>Source/Package</c>, never a whole-source
 /// <c>Source/*</c>) — or required by one that is — is authorized by the deployment record that names
 /// it, because that record changes only through a reviewed pull request the auto-merge App merges
-/// in the deployment repository (maintainer, 2026-10-11: "it should not skip them for crying out
-/// loud"). The unattended default install hands the gate the explicitly named principal
+/// in the deployment repository (policy <c>deployment-config-authorizes-named-commercial</c>). The unattended default install hands the gate the explicitly named principal
 /// <c>deployment-config:{instance}</c> (<see cref="DeploymentConfigPrincipal"/>); the gate does not
 /// take that on trust either — <see cref="DeploymentConfigAuthority.WhyNot"/> re-reads the CURRENT
 /// configuration, so the principal authorizes only what the configuration names now, only on this
@@ -98,7 +98,7 @@ public static class PackageEntitlement
     /// <summary>The node type the Governance package writes an activity as.</summary>
     public const string GovernedActivityNodeType = "Governance/Activity";
 
-    /// <summary>The ONE governed standard whose activity may authorize installing a package.</summary>
+    /// <summary>The governed standard whose activity authorizes installing ONE package (a set: <see cref="PackageProvisionSetStandard"/>).</summary>
     public const string PackageProvisionStandard = "package.provision";
 
     /// <summary>The activity input that names the package two people signed for.</summary>
@@ -130,6 +130,41 @@ public static class PackageEntitlement
         return trimmed is not null
                && trimmed.StartsWith(DeploymentConfigPrefix, StringComparison.Ordinal)
                && trimmed.Length > DeploymentConfigPrefix.Length;
+    }
+
+    /// <summary>
+    /// The governed standard whose ONE activity installs a SET of packages — one review and one
+    /// signature round for the whole list (policy <c>package-set-one-signature-round</c>). Its activity authorizes a package exactly when the package is in the
+    /// signed list (<see cref="PackageSetInput"/>, read by <see cref="PackageSetIds"/>).
+    /// </summary>
+    public const string PackageProvisionSetStandard = "package.provision-set";
+
+    /// <summary>The set activity's input: the package ids two people signed, separated by commas, semicolons or whitespace.</summary>
+    public const string PackageSetInput = "packages";
+
+    /// <summary>The separators between ids in a signed set — a constant, so nothing can widen the rule.</summary>
+    private const string PackageSetSeparators = ",; \t\r\n";
+
+    /// <summary>
+    /// The ids of a signed package set — the SAME rule the Store's provision control plane reads it
+    /// by (MeshWeaver.Plugins <c>Store/Provision PackageSet.Parse</c>): ids separated by commas,
+    /// semicolons or whitespace, each a plain id (letters, digits, <c>.</c>, <c>-</c>, <c>_</c>; never
+    /// <c>.</c> or <c>..</c>, which are path navigation).
+    /// A list with any id that is not plain, or the same id twice, authorizes NOTHING — empty, so
+    /// a malformed signature can never be read as covering a package. Pure.
+    /// </summary>
+    /// <param name="signed">The signed input as stored on the activity.</param>
+    /// <returns>The ids in signed order, or empty.</returns>
+    public static ImmutableList<string> PackageSetIds(string? signed)
+    {
+        var ids = (signed ?? "")
+            .Split(PackageSetSeparators.ToCharArray(), StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToImmutableList();
+        var plain = ids.All(id => id.Length is > 0 and <= 120
+                                  && id is not ("." or "..")
+                                  && id.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '-' or '_'));
+        var distinct = ids.Distinct(StringComparer.OrdinalIgnoreCase).Count() == ids.Count;
+        return plain && distinct ? ids : ImmutableList<string>.Empty;
     }
 
     /// <summary>
@@ -247,12 +282,20 @@ public static class PackageEntitlement
             return $"'{activityPath}' resolved to '{facts.Path}', not to itself";
         if (!string.Equals(facts.NodeType, GovernedActivityNodeType, StringComparison.Ordinal))
             return $"'{activityPath}' is a {facts.NodeType ?? "(untyped)"} node, not a {GovernedActivityNodeType}";
-        if (!string.Equals(facts.StandardId, PackageProvisionStandard, StringComparison.Ordinal))
-            return $"'{activityPath}' runs {facts.StandardId}, not {PackageProvisionStandard}";
+        var isSet = string.Equals(facts.StandardId, PackageProvisionSetStandard, StringComparison.Ordinal);
+        if (!isSet && !string.Equals(facts.StandardId, PackageProvisionStandard, StringComparison.Ordinal))
+            return $"'{activityPath}' runs {facts.StandardId}, not {PackageProvisionStandard} or {PackageProvisionSetStandard}";
         if (!facts.HasStarted)
             return $"'{activityPath}' is {(facts.State.Length == 0 ? "(no state)" : facts.State)} — it has not started, so its signatures were never consumed";
         if (facts.ConsumedSignatures < 1)
             return $"'{activityPath}' carries no consumed signature";
+        if (isSet)
+        {
+            var signedSet = facts.Input(PackageSetInput);
+            if (!PackageSetIds(signedSet).Contains(manifest.Id?.Trim() ?? "", StringComparer.Ordinal))
+                return $"'{activityPath}' was signed for the package set '{signedSet ?? "(none)"}', which does not name '{manifest.Id}'";
+            return null;
+        }
         var signedFor = facts.Input(PackageInput);
         if (!string.Equals(signedFor, manifest.Id?.Trim(), StringComparison.Ordinal))
             return $"'{activityPath}' was signed for package '{signedFor ?? "(none)"}', not '{manifest.Id}'";
@@ -280,7 +323,7 @@ public static class PackageEntitlement
                     "[PackageEntitlement] commercial package {Package} AUTHORIZED by governed activity {Activity} "
                     + "({Standard}, {State}, {Signatures} consumed signature(s), signed for {SignedFor})",
                     manifest.Id, activityPath, facts!.StandardId, facts.State, facts.ConsumedSignatures,
-                    facts.Input(PackageInput));
+                    facts.Input(PackageInput) ?? facts.Input(PackageSetInput));
                 return Observable.Return(Unit.Default);
             })
             .Catch<Unit, Exception>(exception => exception is PackageAuthorizationException

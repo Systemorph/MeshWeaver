@@ -17,9 +17,7 @@ namespace Memex.Portal.Shared.Test;
 
 /// <summary>
 /// 🚨 <b>A commercial package the DEPLOYMENT CONFIGURATION names exactly is INSTALLED at boot</b>
-/// (maintainer, 2026-10-11: "can you update deployment config so that first install in partner re
-/// automatically has these modules" — and, on hearing the boot install skips commercial packages:
-/// "it should not skip them for crying out loud").
+/// — policy <c>deployment-config-authorizes-named-commercial</c>.
 ///
 /// <para>The deployment record (<c>PluginCatalog:InstallByDefault</c>) changes only by a reviewed,
 /// App-merged pull request, so it is the authorizing principal —
@@ -63,7 +61,7 @@ public class ADeploymentNamedCommercialPackageInstallsTest(ITestOutputHelper out
     /// Free installs anyway; Claims (priced) is NAMED and requires ClaimsCore (contact-sales, so
     /// commercial without a price); Other (priced) is covered only by the wildcard.
     /// </summary>
-    private static readonly IReadOnlyList<RepoFile> Repo =
+    private static readonly ImmutableList<RepoFile> Repo =
     [
         Index("Free", ""), Page("Free"),
         Index("Claims", ",\"price\":900,\"currency\":\"CHF\",\"requires\":[\"ClaimsCore\"]"), Page("Claims"),
@@ -85,8 +83,7 @@ public class ADeploymentNamedCommercialPackageInstallsTest(ITestOutputHelper out
         first.Failed.Should().Be(0);
         first.Delivered.Should().Contain("Free");
         first.Delivered.Should().Contain("Claims",
-            "a commercial package the deployment configuration names exactly is authorized by it — "
-            + "\"it should not skip them for crying out loud\"");
+            "a commercial package the deployment configuration names exactly is authorized by it");
         first.Delivered.Should().Contain("ClaimsCore",
             "a commercial REQUIREMENT of a named package is authorized with it — the named module "
             + "does not work without it");
@@ -120,7 +117,11 @@ public class ADeploymentNamedCommercialPackageInstallsTest(ITestOutputHelper out
         claims.Reason.Should().Contain($"'{SourceName}/Claims'", "the reason quotes the entry that named it");
         ledger.Authorized.Single(a => a.Package == "ClaimsCore").Reason.Should().Contain("required by 'Claims'");
 
-        // THE OPERATOR REMOVES IT — the seed must not fight that.
+        // THE PACKAGE IS GONE — the seed must not bring it back. The record is removed straight
+        // from storage ON PURPOSE: the uninstall lifecycle (PackageUninstallExecutor) also writes an
+        // "uninstalled here" marker that blocks every unattended lane by itself, which would make
+        // this leg pass without the LEDGER — the thing under test — doing anything. Nothing below
+        // reads the record through a hub or a cache: the seeded package is dropped before any read.
         await Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>()
             .Delete($"{PackageInstaller.InstalledPartition}/Claims")
             .Take(1).Timeout(TestTimeouts.Convergence).Await(ct);
@@ -206,14 +207,14 @@ public class ADeploymentNamedCommercialPackageInstallsTest(ITestOutputHelper out
         {
             Id = id, Source = SourceName, Requires = requires.ToImmutableList(),
         };
-        var catalog = new[]
-        {
+        ImmutableList<PackageManifest> catalog =
+        [
             M("Claims", "ClaimsCore@^1.0.0"),
             M("ClaimsCore", "Pricing") with { ContactEmail = "sales@acme.test" },
             M("Pricing") with { Price = 10m },
             M("Course", "PaidCourse"),
             M("PaidCourse") with { Price = 49m },
-        };
+        ];
 
         var closure = InstanceAutoRegistrationService.ConfigAuthorizedRequirements(catalog, [catalog[0]]);
 
@@ -222,7 +223,7 @@ public class ADeploymentNamedCommercialPackageInstallsTest(ITestOutputHelper out
 
         // The closure decides what DependencyClosure may pull in: Claims' commercial chain, never
         // the commercial requirement of a package nothing named.
-        var authorized = closure.Keys.Append("Claims").ToHashSet(StringComparer.Ordinal);
+        var authorized = closure.Keys.Append("Claims").ToImmutableHashSet(StringComparer.Ordinal);
         var withDependencies = InstanceAutoRegistrationService.DependencyClosure(
             catalog, [catalog[0], catalog[3]], null, authorized);
         withDependencies.Select(p => p.Id).Should().Equal("Claims", "ClaimsCore", "Course", "Pricing");

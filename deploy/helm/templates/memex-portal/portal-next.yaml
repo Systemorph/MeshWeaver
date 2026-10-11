@@ -1,5 +1,8 @@
-{{- if (.Values.portalNext).enabled }}
-# ---- Next.js React portal (FEATURE-FLAGGED frontend) -----------------------
+{{- if eq (include "memex.portalNext.mode" .) "image" }}
+# ---- Next.js React portal — the DEVELOPER OVERRIDE (a separately built image) ----
+# 🚂 Rendered ONLY when portalNext.image is set. The normal shape is BUNDLED: the front end ships
+# inside the platform portal image and the portal process serves it (_portal-next.tpl says why), so
+# no Deployment of its own exists. This one is for a locally built image (memex-local).
 # A Next.js streaming-SSR build of clients/portal-next, served at /next beside the
 # Blazor portal (the portal ingress routes /next → this Service; see ingress.yaml).
 # STATELESS by design: every request mints a short-lived token from the forwarded

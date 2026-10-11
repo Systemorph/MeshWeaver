@@ -1,14 +1,11 @@
 using System.Collections.Immutable;
 using MeshWeaver.Mesh.Security;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.PluginCatalog;
 
 /// <summary>
 /// 🚨 <b>The deployment configuration as an AUTHORIZING PRINCIPAL</b> for the unattended default
-/// install (maintainer, 2026-10-11: "can you update deployment config so that first install in
-/// partner re automatically has these modules" — and, on hearing the boot install skips commercial
-/// packages: "it should not skip them for crying out loud").
+/// install — policy <c>deployment-config-authorizes-named-commercial</c>.
 ///
 /// <para><b>Why the configuration may authorize a commercial install.</b> A package named EXACTLY
 /// in <see cref="PluginCatalogOptions.InstallByDefault"/> (<c>Source/Package</c>) is named in the
@@ -36,31 +33,52 @@ namespace MeshWeaver.PluginCatalog;
 /// </list>
 ///
 /// <para><b>Verified, never trusted by its string.</b> <see cref="PackageEntitlement.Authorize"/>
-/// asks <see cref="WhyNot"/>, which re-reads the CURRENT configuration: the package must be named
-/// exactly in <see cref="PluginCatalogOptions.InstallByDefault"/>, or be a requirement (direct or
-/// transitive) of a package that is, as computed by this boot's default-install selection
-/// (<see cref="Admit"/>). So the stamped principal is re-verified by every unattended update, and a
-/// package the configuration stops naming stops being authorized by it.</para>
+/// asks <see cref="WhyNot"/>: the package must be named exactly in the configuration this process
+/// BOOTED with, or be a requirement (direct or transitive) of a package that is, as computed by
+/// this boot's default-install selection (<see cref="Admit"/>). So the stamped principal is
+/// re-verified by every unattended update, and a package the configuration stops naming stops
+/// being authorized by it at the next boot — which is when a changed deployment record takes
+/// effect anyway.</para>
+///
+/// <para><b>The trust boundary is the constructor.</b> The exact entries and the instance id are
+/// captured ONCE, into private immutable state, from the options the host bound from its
+/// deployment configuration. The public, mutable <see cref="PluginCatalogOptions"/> object is never
+/// consulted again, so code running in the process cannot widen the authority by appending to its
+/// list; and only the catalog itself can publish the requirement closure (<see cref="Admit"/> is
+/// internal).</para>
 /// </summary>
-/// <param name="services">The mesh's service provider — options are read lazily, on each question.</param>
-public sealed class DeploymentConfigAuthority(IServiceProvider services)
+public sealed class DeploymentConfigAuthority
 {
+    /// <summary>The entries that name ONE package exactly, as captured at construction.</summary>
+    private readonly ImmutableList<PluginGrantEntry> namingEntries;
+
+    /// <summary>
+    /// Captures what the deployment configuration names, once.
+    /// </summary>
+    /// <param name="options">The catalog options as bound from the deployment configuration; null = nothing named.</param>
+    public DeploymentConfigAuthority(PluginCatalogOptions? options)
+    {
+        options ??= new PluginCatalogOptions();
+        Principal = PackageEntitlement.DeploymentConfigPrincipal(InstanceName(options));
+        namingEntries = ExactEntries(options.InstallByDefault);
+    }
+
     /// <summary>What the principal is called when the instance has no configured id.</summary>
     public const string UnnamedInstance = "unnamed-instance";
 
     /// <summary>Requirements of an explicitly named package, admitted by this boot's selection:
     /// package id → the named package that requires it.</summary>
+    /// <remarks>An immutable snapshot, published with <see cref="Volatile"/>: the boot installer
+    /// writes it and the update / reconcile pipelines read it on other scheduler threads.</remarks>
     private ImmutableDictionary<string, string> requiredBy =
         ImmutableDictionary<string, string>.Empty.WithComparers(StringComparer.Ordinal);
-
-    private PluginCatalogOptions Options => services.GetService<PluginCatalogOptions>() ?? new PluginCatalogOptions();
 
     /// <summary>
     /// The principal the default install acts as — <c>deployment-config:{instance}</c>. Logged at
     /// every install it authorizes, stamped on the install record
     /// (<see cref="PackageManifest.AuthorizedBy"/>) and on the default-install ledger.
     /// </summary>
-    public string Principal => PackageEntitlement.DeploymentConfigPrincipal(InstanceName(Options));
+    public string Principal { get; }
 
     /// <summary>The instance a deployment-config principal names: <see cref="PluginCatalogOptions.InstanceId"/>,
     /// or <see cref="UnnamedInstance"/>. Pure.</summary>
@@ -80,23 +98,31 @@ public sealed class DeploymentConfigAuthority(IServiceProvider services)
     public static string? NamingEntry(IEnumerable<string>? installByDefault, PackageManifest package)
     {
         ArgumentNullException.ThrowIfNull(package);
-        return (installByDefault ?? [])
-            .Select(PluginGrantEntry.TryParse)
-            .FirstOrDefault(e => e is not null
-                                 && e.PackageId != PluginGrantEntry.AllPackages
-                                 && e.Matches(package.Source ?? "", package.Id))
-            ?.ToString();
+        return NamingEntry(ExactEntries(installByDefault), package);
     }
+
+    private static string? NamingEntry(ImmutableList<PluginGrantEntry> exact, PackageManifest package) =>
+        exact.FirstOrDefault(e => e.Matches(package.Source ?? "", package.Id))?.ToString();
+
+    /// <summary>The configured patterns that name ONE package (<c>Source/Package</c>) — a
+    /// whole-source <c>Source/*</c> and a malformed entry are dropped. Pure.</summary>
+    private static ImmutableList<PluginGrantEntry> ExactEntries(IEnumerable<string>? installByDefault) =>
+        (installByDefault ?? [])
+            .Select(PluginGrantEntry.TryParse)
+            .Where(e => e is not null && e.PackageId != PluginGrantEntry.AllPackages)
+            .Select(e => e!)
+            .ToImmutableList();
 
     /// <summary>
     /// Records the requirement closure of the explicitly named packages this boot's selection
     /// computed (<see cref="InstanceAutoRegistrationService.ConfigAuthorizedRequirements"/>) —
     /// REPLACING the previous one, so a requirement the configuration stopped reaching stops being
-    /// authorized.
+    /// authorized. 🚨 INTERNAL: only the catalog's own selection may publish it — a public setter
+    /// would let any code in the process add a commercial package to the authorized set.
     /// </summary>
     /// <param name="closure">Package id → the named package that requires it.</param>
-    public void Admit(IReadOnlyDictionary<string, string> closure) =>
-        requiredBy = closure.ToImmutableDictionary(StringComparer.Ordinal);
+    internal void Admit(ImmutableDictionary<string, string> closure) =>
+        Volatile.Write(ref requiredBy, closure.WithComparers(StringComparer.Ordinal));
 
     /// <summary>
     /// Why the configuration does NOT authorize <paramref name="package"/>, or null when it does —
@@ -127,9 +153,9 @@ public sealed class DeploymentConfigAuthority(IServiceProvider services)
     public string? Because(PackageManifest package)
     {
         ArgumentNullException.ThrowIfNull(package);
-        if (NamingEntry(Options.InstallByDefault, package) is { } entry)
+        if (NamingEntry(namingEntries, package) is { } entry)
             return $"named in PluginCatalog:InstallByDefault as '{entry}'";
-        return requiredBy.TryGetValue(package.Id, out var root)
+        return Volatile.Read(ref requiredBy).TryGetValue(package.Id, out var root)
             ? $"required by '{root}', which PluginCatalog:InstallByDefault names"
             : null;
     }

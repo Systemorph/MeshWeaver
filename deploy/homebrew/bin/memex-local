@@ -51,8 +51,10 @@ readonly PORTAL_IMAGE="ghcr.io/systemorph/memex-portal-ai:latest"
 readonly MIGRATION_IMAGE="ghcr.io/systemorph/memex-migration:latest"
 # The Next.js React GUI (clients/portal-next), served at /next as a FEATURE-FLAGGED
 # opt-in frontend beside the Blazor portal. Built locally into Colima's Docker store
-# (arm64) and loaded IfNotPresent; helm_deploy flips portalNext.enabled=true whenever
-# this image is present. Matches the chart's portalNext.image default (deploy/helm/values.yaml).
+# (arm64) and loaded IfNotPresent; helm_deploy flips portalNext.enabled=true and passes it as
+# portalNext.image whenever this image is present — the chart's DEVELOPER OVERRIDE. Deployments
+# leave portalNext.image empty: there /next ships inside the platform portal image (the chart's
+# templates/memex-portal/_portal-next.tpl).
 readonly PORTAL_NEXT_IMAGE="meshweaver/portal-next:local"
 # The portal-ai BASE image (ASP.NET runtime + the co-hosted CLIs: Claude Code + GitHub Copilot,
 # npm -g). The local portal image layers the published app ON this base so the CLIs are PACKAGED into

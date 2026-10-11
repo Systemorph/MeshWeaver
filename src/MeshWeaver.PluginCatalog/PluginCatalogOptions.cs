@@ -114,8 +114,8 @@ public sealed class PluginCatalogOptions
     /// configuration itself, <c>deployment-config:{InstanceId}</c>
     /// (<see cref="DeploymentConfigAuthority"/>): this list lives in the instance's deployment
     /// record, which changes only through a reviewed pull request the auto-merge App merges, so
-    /// naming a package here is a reviewed decision on record (maintainer, 2026-10-11: "it should
-    /// not skip them for crying out loud"). The principal is logged, stamped on the install record
+    /// naming a package here is a reviewed decision on record (policy
+    /// <c>deployment-config-authorizes-named-commercial</c>). The principal is logged, stamped on the install record
     /// (<see cref="PackageManifest.AuthorizedBy"/>) and on the ledger (<c>authorized</c>), and the
     /// entitlement gate re-verifies it against the CURRENT list, so a package this list stops naming
     /// stops being authorized by it. Installing grants nobody access — the plan
