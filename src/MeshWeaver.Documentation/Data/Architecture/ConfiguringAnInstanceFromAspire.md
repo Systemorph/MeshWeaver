@@ -184,6 +184,7 @@ resolves this column against `DeploymentRecordExtensions` alone — it asserts n
 | `WithApprovalStepUp(enabled, entraAuthenticationContext, entraTenantId)` | `ApprovalStepUp` | `config.memex_portal.Authentication__StepUp__*` | `Authentication__StepUp__Enabled`, `Authentication__StepUp__Entra__AuthenticationContext`, `Authentication__StepUp__Entra__TenantId` |
 | `WithSelfPatch(enabled)` | `SelfPatch` | `selfUpdate.canPatch` (one value for the self-patch Role and `SelfUpdate__CanPatch`, rendered by the chart — the control instance's own declaration, [SelfUpdateControlLane](../SelfUpdateControlLane)) | — |
 | `WithPluginRepo(name, url, gitRef, isRegistrySource, secretName)` | `PluginRepos[].Name`, `PluginRepos[].Url`, `PluginRepos[].Ref`, `PluginRepos[].IsRegistrySource`, `PluginRepos[].SecretName` | `pluginCatalog.sources` (the operator's catalog file) | `PluginCatalog__*` (Aspire only) |
+| `WithPluginSource(name, url, gitRef, secretName, installationOwner)` | `PluginRepos[].Name`, `PluginRepos[].Url`, `PluginRepos[].Ref`, `PluginRepos[].IsRegistrySource`, `PluginRepos[].SecretName`, `PluginRepos[].InstallationOwner` | `pluginCatalog.sources[].tokenKey` / `.installationOwner`, `keyVaultSecrets.secrets[]` | `PluginCatalog__*` (Aspire only) |
 | `ClearPluginRepos()` | `PluginRepos` | `pluginCatalog.sources` | — |
 | `PreInstall(packageIds)` | `PreInstall` | `pluginCatalog.installByDefault` | `PluginCatalog__*` (Aspire only) |
 | `ClearPreInstall()` | `PreInstall` | `pluginCatalog.installByDefault` | — |
