@@ -1,4 +1,3 @@
-using System.Reactive.Threading.Tasks;
 using System.Reactive.Linq;
 using System;
 using System.Collections.Generic;
@@ -7,6 +6,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
+using MeshWeaver.Fixture;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Layout;
@@ -58,7 +58,7 @@ public class TypedPageIndexRailTest(ITestOutputHelper output) : MonolithMeshTest
             .GetRemoteStream<JsonElement, LayoutAreaReference>(new Address(WidgetPath), reference);
     }
 
-    [Fact(Timeout = 60000)]
+    [Fact]
     public async Task ATypedPageWithNeighbours_IsWrappedWithTheIndexRail_AndItsSearchIsScopedToTheSpace()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -66,20 +66,19 @@ public class TypedPageIndexRailTest(ITestOutputHelper output) : MonolithMeshTest
 
         // The page paints first and the index arrives a beat later: wait for the two-pane wrapper.
         var root = await stream.GetControlStream(MeshNodeLayoutAreas.OverviewArea)
-            .Should().Within(30.Seconds())
+            .Should().Within(TestTimeouts.Convergence)
             .Match(c => c is SplitterControl { Areas.Count: 2 }, cancellationToken: ct);
         var splitter = Assert.IsType<SplitterControl>(root);
 
         // The rail paints progressively: the reader's own branch first, each level as it arrives.
         // Wait for the level that holds the sibling.
         var railArea = splitter.Areas[0].Area!.ToString()!;
-        var rail = await Observable.Interval(TimeSpan.FromMilliseconds(250)).StartWith(0L)
+        var rail = await Observable.Interval(TestTimeouts.Quick / 20).StartWith(0L)
             .Select(_ => Observable.FromAsync(() => Collect(stream, railArea, ct)))
             .Concat()
-            .Where(r => r.OfType<NavLinkControl>().Any(l => l.Url?.ToString() == $"/{SiblingPath}"))
-            .FirstAsync()
-            .Timeout(TimeSpan.FromSeconds(30))
-            .ToTask(ct);
+            .Should().Within(TestTimeouts.Convergence)
+            .Match(r => r.OfType<NavLinkControl>().Any(l => l.Url?.ToString() == $"/{SiblingPath}"),
+                cancellationToken: ct);
         var menu = Assert.Single(rail.OfType<NavMenuControl>());
         Assert.Equal(Space, menu.Skins.OfType<NavMenuSkin>().Single().SearchNamespace);
         Assert.Contains($"/{SiblingPath}", rail.OfType<NavLinkControl>().Select(l => l.Url?.ToString()));
@@ -91,14 +90,14 @@ public class TypedPageIndexRailTest(ITestOutputHelper output) : MonolithMeshTest
         Assert.Empty(page.OfType<NavMenuControl>());
     }
 
-    [Fact(Timeout = 60000)]
+    [Fact]
     public async Task AnEmbeddedTypedPage_GetsNoRail()
     {
         var ct = TestContext.Current.CancellationToken;
         var stream = Open("?showHeader=false");
 
         var root = await stream.GetControlStream(MeshNodeLayoutAreas.OverviewArea)
-            .Should().Within(30.Seconds()).Match(c => c is not null, cancellationToken: ct);
+            .Should().Within(TestTimeouts.Convergence).Match(c => c is not null, cancellationToken: ct);
         Assert.IsNotType<SplitterControl>(root);
         var all = await Collect(stream, MeshNodeLayoutAreas.OverviewArea, ct);
         Assert.Empty(all.OfType<NavMenuControl>());
@@ -110,7 +109,7 @@ public class TypedPageIndexRailTest(ITestOutputHelper output) : MonolithMeshTest
         if (depth > 8)
             return ImmutableList<UiControl>.Empty;
         var control = await stream.GetControlStream(areaName)
-            .Should().Within(15.Seconds()).Match(c => c != null, cancellationToken: ct);
+            .Should().Within(TestTimeouts.Convergence).Match(c => c != null, cancellationToken: ct);
         if (control is null)
             return ImmutableList<UiControl>.Empty;
         var found = ImmutableList.Create(control);
