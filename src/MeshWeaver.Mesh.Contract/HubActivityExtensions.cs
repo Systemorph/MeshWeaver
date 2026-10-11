@@ -45,6 +45,48 @@ public static class HubActivityExtensions
         => hub.RequestActivityStatus(activityPath, ActivityStatus.Cancelled, onError);
 
     // ═════════════════════════════════════════════════════════════════════
+    // Durable action references
+    // ═════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Records a durable action on the activity at <paramref name="activityPath"/> — the caption and
+    /// local target a reader can still open after the execution hub has unloaded
+    /// (<see cref="ActivityLog.Actions"/>). Written through the canonical activity write
+    /// (<see cref="ActivityLogAppender.Append"/>), so it shares one writer discipline with the
+    /// transcript and cannot clobber a concurrent status write.
+    ///
+    /// <para>Idempotent on <see cref="ActivityActionReference.Id"/>: recording the same action
+    /// again replaces the entry. Cold — the write runs on Subscribe and emits the updated activity
+    /// node once.</para>
+    ///
+    /// <para>🚨 A reference this build could not offer is REFUSED here, at the write, with an
+    /// <see cref="ArgumentException"/> naming the verdict: an absolute or otherwise non-local
+    /// target, an unknown kind or a foreign contract version is never persisted for a later reader
+    /// to trip over.</para>
+    /// </summary>
+    /// <param name="hub">The hub performing the write, under the caller's own access context.</param>
+    /// <param name="activityPath">Path of the activity node.</param>
+    /// <param name="action">The action to record.</param>
+    /// <returns>A cold observable emitting the updated activity node.</returns>
+    /// <exception cref="ArgumentException">The reference is not structurally available.</exception>
+    public static IObservable<MeshNode> RecordActivityAction(
+        this IMessageHub hub,
+        string activityPath,
+        ActivityActionReference action)
+    {
+        ArgumentNullException.ThrowIfNull(hub);
+        ArgumentException.ThrowIfNullOrEmpty(activityPath);
+        ArgumentNullException.ThrowIfNull(action);
+        ArgumentException.ThrowIfNullOrWhiteSpace(action.Id, nameof(action));
+        var availability = action.Availability();
+        if (availability != ActivityActionAvailability.Available)
+            throw new ArgumentException(
+                $"Activity action '{action.Id}' cannot be recorded: {availability}.", nameof(action));
+
+        return ActivityLogAppender.Append(hub, activityPath, [], log => log.WithAction(action));
+    }
+
+    // ═════════════════════════════════════════════════════════════════════
     // Generic status request (the underlying primitive)
     // ═════════════════════════════════════════════════════════════════════
 
