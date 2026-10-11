@@ -52,8 +52,8 @@ public static class DefaultNodeNavigation
 
     /// <summary>
     /// The live index for the page <paramref name="host"/> renders — null while the tree has no
-    /// entries (a page with nothing beside or below it shows no rail). One <c>scope:subtree
-    /// is:main</c> query on the <see cref="IndexRoot"/> through the UNIFIED
+    /// entries (a page with nothing beside or below it shows no rail). One direct-children query
+    /// per level on the reader's path (<see cref="PathLevels"/>) through the UNIFIED
     /// <see cref="IMeshService"/> — a hub-scoped query answers from the page's own snapshot on a
     /// distributed mesh and would never see the siblings. The query is a CHANGE FEED — only
     /// Initial/Reset carry the whole tree; Added/Updated/Removed carry the rows that changed — so
@@ -80,14 +80,102 @@ public static class DefaultNodeNavigation
         var root = IndexRoot(currentPath);
         var logger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Graph.DefaultNodeNavigation");
-        return Guard(
-            Observable.Defer(() => meshService
-                .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{root} scope:subtree is:main"))
+        // 🚨 NEVER the whole partition (maintainer, 2026-10-11: "don't eager load the whole
+        // thing"). One DIRECT-CHILDREN query per level on the reader's path — the root's children,
+        // each ancestor's children, the page's own children — so the cost grows with the page's
+        // DEPTH, never with the size of the space. A folder off the path is listed but not opened;
+        // the reader drills into it by opening it, and its level loads on that page.
+        // At most LevelCap children per level; "Load more" raises ONE level's cap by MoreStep through
+        // the page's own ?more={level}:{n} parameter, so the next page render loads that many.
+        var more = ParseMore(host.Reference.HasParameter(MoreParameter)
+            ? host.Reference.GetParameterValue(MoreParameter) : null);
+        int CapOf(string ns) => more is { } m && string.Equals(m.Level, ns, StringComparison.Ordinal) ? m.Cap : LevelCap;
+        IObservable<(string Level, ImmutableDictionary<string, MeshNode> Nodes)> Level(string query, string level) =>
+            meshService
+                .Query<MeshNode>(MeshQueryRequest.FromQuery(query))
                 .Scan(ImmutableDictionary<string, MeshNode>.Empty, Fold)
-                .Select(tree => Build(root, tree.Values.ToList(), currentPath))),
+                // Each level paints on its own: a slow level never holds the others back.
+                .StartWith(ImmutableDictionary<string, MeshNode>.Empty)
+                .Select(nodes => (level, nodes));
+        // The root node itself (its title and icon head the rail) — one exact read, not its subtree.
+        var reads = PathLevels(root, currentPath)
+            // One extra row is asked for, so "there is more" is a fact, not a guess.
+            .Select(ns => Level($"namespace:{ns} is:main sort:path-asc limit:{CapOf(ns) + 1}", ns))
+            .Prepend(Level($"path:{root} is:main", ""))
+            .ToList();
+        return Guard(
+            Observable.Defer(() => reads
+                .CombineLatest()
+                .Select(levels =>
+                {
+                    var moreLinks = levels
+                        .Where(l => l.Level.Length > 0 && l.Nodes.Count > CapOf(l.Level))
+                        .ToImmutableDictionary(
+                            l => l.Level,
+                            l => $"{currentPath}?{MoreParameter}={Uri.EscapeDataString(l.Level)}:{CapOf(l.Level) + MoreStep}",
+                            StringComparer.Ordinal);
+                    var nodes = levels
+                        .SelectMany(l => l.Level.Length == 0
+                            ? l.Nodes.Values
+                            // The extra row only proved there is more; the level shows its cap.
+                            : l.Nodes.Values.OrderBy(n => n.Path, StringComparer.Ordinal).Take(CapOf(l.Level)))
+                        .GroupBy(n => n.Path, StringComparer.Ordinal)
+                        .Select(g => g.First())
+                        .ToList();
+                    return Build(root, nodes, currentPath, moreLinks);
+                })),
             ex => logger?.LogWarning(ex,
                 "The default index query for {Root} faulted — the page renders without its index",
                 root));
+    }
+
+    /// <summary>The most children one level of the index lists at first (maintainer, 2026-10-11:
+    /// "load max 50 items … and load more").</summary>
+    public const int LevelCap = 50;
+
+    /// <summary>How many more children one "Load more" adds to its level.</summary>
+    public const int MoreStep = 50;
+
+    /// <summary>The page parameter a "Load more" link sets: <c>{level}:{cap}</c>.</summary>
+    public const string MoreParameter = "more";
+
+    /// <summary>The label of the entry that loads more of a level.</summary>
+    public const string LoadMoreLabel = "Load more…";
+
+    /// <summary>Reads <c>?more={level}:{cap}</c>: the one level whose cap is raised, and to what —
+    /// null for a missing or malformed value, and a cap below <see cref="LevelCap"/> is never
+    /// applied. Pure.</summary>
+    public static (string Level, int Cap)? ParseMore(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+        var raw = Uri.UnescapeDataString(value);
+        var colon = raw.LastIndexOf(':');
+        if (colon <= 0 || !int.TryParse(raw[(colon + 1)..], out var cap) || cap <= LevelCap)
+            return null;
+        return (raw[..colon], Math.Min(cap, 10 * LevelCap));
+    }
+
+    /// <summary>
+    /// The namespaces whose DIRECT children the index loads for the page at
+    /// <paramref name="currentPath"/>: the root, every ancestor down from it, and the page itself —
+    /// in that order, each once. A page outside <paramref name="root"/> loads the root alone. Pure.
+    /// </summary>
+    /// <param name="root">The index root (<see cref="IndexRoot"/>).</param>
+    /// <param name="currentPath">The page being read.</param>
+    public static IReadOnlyList<string> PathLevels(string root, string currentPath)
+    {
+        var levels = new List<string> { root };
+        if (!currentPath.StartsWith(root + "/", StringComparison.Ordinal))
+            return levels;
+        var segments = currentPath[(root.Length + 1)..].Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var path = root;
+        foreach (var segment in segments)
+        {
+            path = $"{path}/{segment}";
+            levels.Add(path);
+        }
+        return levels;
     }
 
     /// <summary>
@@ -154,10 +242,12 @@ public static class DefaultNodeNavigation
     /// <param name="root">The index root (<see cref="IndexRoot"/>).</param>
     /// <param name="subtree">The root's subtree — the root itself included when it exists.</param>
     /// <param name="currentPath">The page being read.</param>
-    public static NodeNavigation? Build(string root, IReadOnlyCollection<MeshNode> subtree, string currentPath)
+    public static NodeNavigation? Build(
+        string root, IReadOnlyCollection<MeshNode> subtree, string currentPath,
+        IReadOnlyDictionary<string, string>? moreLinks = null)
     {
         ArgumentNullException.ThrowIfNull(subtree);
-        var entries = ChildrenOf(root, subtree, currentPath);
+        var entries = ChildrenOf(root, subtree, currentPath, moreLinks);
         if (entries.Count == 0)
             return null;
 
@@ -171,8 +261,10 @@ public static class DefaultNodeNavigation
     }
 
     private static IReadOnlyList<NodeNavigationEntry> ChildrenOf(
-        string parent, IReadOnlyCollection<MeshNode> subtree, string currentPath)
-        => MarkdownOverviewLayoutArea
+        string parent, IReadOnlyCollection<MeshNode> subtree, string currentPath,
+        IReadOnlyDictionary<string, string>? moreLinks)
+    {
+        var children = MarkdownOverviewLayoutArea
             .OrderSubNodes(subtree.Where(n => IsChildOf(n.Path, parent) && !LastSegment(n.Path).StartsWith('_')))
             .Select(n => new NodeNavigationEntry(
                 n.Name ?? n.Id,
@@ -180,9 +272,14 @@ public static class DefaultNodeNavigation
                 string.Equals(n.Path, currentPath, StringComparison.Ordinal),
                 MeshNodeImageHelper.ResolveNodeIcon(n))
             {
-                Children = ChildrenOf(n.Path, subtree, currentPath),
+                Children = ChildrenOf(n.Path, subtree, currentPath, moreLinks),
             })
             .ToList();
+        // A level that holds more than it shows ends with the entry that loads the next batch.
+        if (children.Count > 0 && moreLinks is not null && moreLinks.TryGetValue(parent, out var more))
+            children.Add(new NodeNavigationEntry(LoadMoreLabel, more, false, null));
+        return children;
+    }
 
     private static bool IsChildOf(string path, string parent)
         => path.Length > parent.Length + 1

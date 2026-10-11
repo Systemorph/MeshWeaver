@@ -319,7 +319,10 @@ public static class MeshNodeLayoutAreas
             .SelectMany(gate =>
             {
                 if (gate.Read)
-                    return Observable.Return((UiControl?)host.BuildDetailsTemplate(gate.Update));
+                    // The left-hand index, as on every document page: children are navigated in the
+                    // rail, never listed at the bottom of the page.
+                    return MarkdownOverviewLayoutArea.WithIndexRail(host,
+                        Observable.Return((UiControl?)host.BuildDetailsTemplate(gate.Update)));
                 // Read denied: the partition's declared funnel page (RedirectOnDenied — e.g.
                 // a product's glossy marketing brochure) takes the viewer there instead of a
                 // dead-end Request-Access wall. Rendering the denial INSIDE the area used to

@@ -268,6 +268,36 @@ public class DefaultNodeNavigationTest
         faults.Should().Equal([boom], "the fault is seen (logged) before it is swallowed");
     }
 
+    [Fact]
+    public void TheIndexLoadsOnlyTheLevelsOnTheReadersPath()
+    {
+        // "don't eager load the whole thing": the root's children, each ancestor's, the page's own.
+        DefaultNodeNavigation.PathLevels("Infrastructure", "Infrastructure/Inference/Inceptron")
+            .Should().Equal("Infrastructure", "Infrastructure/Inference", "Infrastructure/Inference/Inceptron");
+        DefaultNodeNavigation.PathLevels("Infrastructure", "Infrastructure")
+            .Should().Equal("Infrastructure");
+        DefaultNodeNavigation.PathLevels("Infrastructure", "Elsewhere/Page")
+            .Should().Equal("Infrastructure");
+    }
+
+    [Fact]
+    public void ALevelWithMoreEndsWithLoadMore_AndMoreRaisesOnlyItsLevel()
+    {
+        var more = new Dictionary<string, string> { ["Infrastructure"] = "Infrastructure/Options?more=Infrastructure:100" };
+        var nav = DefaultNodeNavigation.Build("Infrastructure", Space(), "Infrastructure/Options", more)!;
+
+        nav.Entries.Last().Label.Should().Be(DefaultNodeNavigation.LoadMoreLabel);
+        nav.Entries.Last().Path.Should().Be("Infrastructure/Options?more=Infrastructure:100");
+        nav.Entries.Single(e => e.Path == "Infrastructure/Inference").Children
+            .Should().NotContain(e => e.Label == DefaultNodeNavigation.LoadMoreLabel, "only the level that holds more gets the entry");
+
+        DefaultNodeNavigation.ParseMore("Infrastructure%2FInference:100").Should().Be(("Infrastructure/Inference", 100));
+        DefaultNodeNavigation.ParseMore("Infrastructure:50").Should().BeNull("never below the first batch");
+        DefaultNodeNavigation.ParseMore("garbage").Should().BeNull();
+        DefaultNodeNavigation.ParseMore(null).Should().BeNull();
+        DefaultNodeNavigation.ParseMore("X:999999")!.Value.Cap.Should().Be(10 * DefaultNodeNavigation.LevelCap, "bounded");
+    }
+
     private static IEnumerable<string> Paths(IEnumerable<NodeNavigationEntry> entries)
         => entries.SelectMany(e => new[] { e.Path }.Concat(Paths(e.Children)));
 }

@@ -176,12 +176,15 @@ public static class SuppliedNavigationRail
     /// <param name="rail">The plan to render.</param>
     /// <param name="width">Menu width in pixels.</param>
     /// <param name="collapsible">Whether the menu offers the collapse toggle.</param>
-    public static NavMenuControl Render(Rail rail, int width = 240, bool collapsible = true)
+    /// <param name="searchNamespace">The namespace the menu's search box searches; null shows no box.</param>
+    public static NavMenuControl Render(Rail rail, int width = 240, bool collapsible = true, string? searchNamespace = null)
     {
         ArgumentNullException.ThrowIfNull(rail);
 
         var menu = Controls.NavMenu
-            .WithSkin(s => s.WithWidth(width).WithCollapsible(collapsible))
+            // The search box searches the space the index covers: the tree is for where you are,
+            // the box is for everything under it.
+            .WithSkin(s => s.WithWidth(width).WithCollapsible(collapsible).WithSearchNamespace(searchNamespace))
             .WithNavLink(RenderLink(rail.Home));
 
         // ONE walk, in plan order. WithNavLink and WithNavGroup both append to the container's

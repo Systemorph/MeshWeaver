@@ -30,6 +30,20 @@ public record NavMenuSkin : Skin<NavMenuSkin>
     public NavMenuSkin WithWidth(int width) => this with { Width = width };
 
     /// <summary>
+    /// The namespace this menu's SEARCH BOX searches: when set, the menu shows a search box above
+    /// its entries and submitting it opens the mesh search scoped to this namespace
+    /// (<c>/search?ns={namespace}&amp;q={text}</c>). Null (the default) shows no box.
+    /// </summary>
+    public string? SearchNamespace { get; init; }
+
+    /// <summary>
+    /// Gives the menu a search box that searches <paramref name="ns"/> in the mesh search.
+    /// </summary>
+    /// <param name="ns">The namespace to search, e.g. the space the index covers.</param>
+    /// <returns>A new <see cref="NavMenuSkin"/> with the search box.</returns>
+    public NavMenuSkin WithSearchNamespace(string? ns) => this with { SearchNamespace = ns };
+
+    /// <summary>
     /// Sets whether the menu is expanded.
     /// </summary>
     public object? Expanded { get; init; } = true;

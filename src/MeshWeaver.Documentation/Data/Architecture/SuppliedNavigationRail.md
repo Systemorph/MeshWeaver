@@ -22,6 +22,22 @@ again (reported 2026-09-15: "Infra has one; show it, with where we are"). **The 
 a Space is the document and its overview is the title page, so every page under it shows the one
 index of the Space, with the page being read marked and only the groups on the reader's path open.
 
+**The index is an explorer, loaded lazily** (2026-10-11, maintainer: *"more explorer-like
+navigation … let drill in … folder-like nav … don't eager load the whole thing … load max 50 items
+… and load more"*):
+
+- **Only the reader's path is loaded.** One direct-children query per level
+  (`DefaultNodeNavigation.PathLevels`): the Space's children, each ancestor's children, and the
+  page's own. The cost grows with the page's depth, never with the size of the Space. A folder off
+  the path is listed and not opened; the reader drills in by opening it.
+- **At most 50 entries per level** (`LevelCap`). A level that holds more ends with a **Load more…**
+  entry. It reloads the same page with `?more={level}:{n}`, raising that one level by 50.
+- **A search box sits above the tree** (`NavMenuSkin.SearchNamespace`). Submitting it opens the mesh
+  search scoped to the Space (`/search?ns={space}&q=…`), so browsing and searching share one place.
+- **Every node page has it, not only markdown.** The typed default Overview is wrapped by
+  `MarkdownOverviewLayoutArea.WithIndexRail`. A page's children are navigated in the rail and are
+  never listed at the bottom of the page.
+
 That default is also wrong for a course: a learner standing in lesson 2 must see the whole course,
 not the document tree the lesson happens to sit in, with the course's own notion of what a page is.
 `INodeNavigationProvider` is the seam that fixes it without core having to learn what a lesson is. A
@@ -192,6 +208,7 @@ assertions live.
 | Surface | How |
 |---|---|
 | A markdown page's Overview | automatic — `MarkdownOverviewLayoutArea` asks every registered provider, and falls back to the default index (the tree under the page's index root, `DefaultNodeNavigation`) when none claims the page |
+| A typed node's default Overview | automatic — `MeshNodeLayoutAreas.Overview` wraps the page with `MarkdownOverviewLayoutArea.WithIndexRail`, same providers, same default |
 | A layout that composes its own page | embed the standalone area by name: `new LayoutAreaControl(address, new LayoutAreaReference(MarkdownOverviewLayoutArea.SuppliedNavArea))` |
 
 The standalone area renders nothing when no provider claims the page, so embedding it on a
