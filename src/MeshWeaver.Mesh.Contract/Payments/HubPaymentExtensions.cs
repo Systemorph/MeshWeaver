@@ -31,6 +31,17 @@ public static class HubPaymentExtensions
     public static bool Sells(this IMessageHub hub) => hub.PaymentProvider() is { Sells: true };
 
     /// <summary>
+    /// The provider this mesh can save payment methods through, or <c>null</c> when it has none —
+    /// an ordinary, supported configuration meaning "this site cannot save a payment method",
+    /// including on a portal whose <see cref="PaymentProvider"/> sells but offers no setup.
+    ///
+    /// <para>🚨 A caller that gets null says so. It never falls back to a checkout, and never
+    /// waives a setup an offer requires.</para>
+    /// </summary>
+    public static IPaymentMethodSetupProvider? PaymentMethodSetupProvider(this IMessageHub hub) =>
+        hub.ServiceProvider.GetService<IPaymentMethodSetupProvider>();
+
+    /// <summary>
     /// This portal's public base URL, trimmed of its trailing slash; empty when it declares none.
     /// Read from <see cref="PaymentSettings.BaseUrlConfig"/>, independent of which provider (if
     /// any) is mounted — a portal states its own URL once.
