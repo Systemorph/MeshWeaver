@@ -83,6 +83,11 @@ platform (`MeshWeaver.*`) bind and before the module registry, decides for a nam
    from the host's, which is worth knowing when something crosses the boundary.
 3. **The host does not ship it** → load the package's runtime asset from the probing directories.
 
+A satellite reference (`Pkg.resources, Culture=de`) is probed in the culture subfolder of each runtime
+directory. Native libraries are tried candidate by candidate (`X`, `libX.so`, …) and, in a NodeType's
+collectible context, loaded through the context's own `LoadUnmanagedDllFromPath`, so the handle is
+released when the context unloads rather than pinned for the life of the process.
+
 The interactive kernel's probe hooks `AssemblyLoadContext.Default.Resolving`, which the runtime raises
 only for names the host cannot bind, so unification is implicit there; it skips native directories
 for managed loads, tries the next candidate when one fails to load, and hooks

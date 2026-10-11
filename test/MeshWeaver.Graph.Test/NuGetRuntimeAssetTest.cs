@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -160,6 +161,37 @@ public class NuGetRuntimeAssetTest : IDisposable
     }
 
     [Fact]
+    public void Probe_FindsSatellitesInTheCultureFolder_AndEveryNativeSpelling()
+    {
+        Layout(
+            "sat/lib/net8.0/Pkg.dll",
+            "sat/lib/net8.0/de/Pkg.resources.dll",
+            "sat/runtimes/linux-x64/native/pkg",
+            "sat/runtimes/linux-x64/native/libpkg.so",
+            "sat/runtimes/linux-x64/native/libpkg.dylib",
+            "sat/runtimes/linux-x64/native/pkg.dll");
+        var lib = Path.Combine(_root, "sat", "lib", "net8.0");
+        var native = Path.Combine(_root, "sat", "runtimes", "linux-x64", "native");
+
+        PackageAssemblyProbe.FindManagedCandidates("Pkg.resources", [lib, native], "de").Should()
+            .Equal(Path.Combine(lib, "de", "Pkg.resources.dll"));
+        PackageAssemblyProbe.FindManagedCandidates("Pkg.resources", [lib, native], "fr").Should().BeEmpty();
+
+        // More than one spelling exists: all are offered, so a candidate that fails to load does
+        // not hide the next one.
+        var candidates = PackageAssemblyProbe.FindNativeCandidates("pkg", [lib, native]).ToArray();
+        candidates.Length.Should().BeGreaterThan(1);
+        candidates[0].Should().Be(Path.Combine(native, "pkg"));
+        var attempted = ImmutableList<string>.Empty;
+        PackageAssemblyProbe.ResolveUnmanaged("pkg", [lib, native], load: path =>
+        {
+            attempted = attempted.Add(path);
+            throw new BadImageFormatException("not a library");
+        }).Should().Be(IntPtr.Zero);
+        attempted.Should().Equal(candidates);
+    }
+
+    [Fact]
     public void Unification_RequiresTheSamePublicKeyToken()
     {
         var host = typeof(JsonSerializer).Assembly.GetName();
@@ -235,6 +267,6 @@ public class NuGetRuntimeAssetTest : IDisposable
             => PackageAssemblyProbe.Resolve(this, assemblyName, probingDirectories);
 
         protected override IntPtr LoadUnmanagedDll(string unmanagedDllName)
-            => PackageAssemblyProbe.ResolveUnmanaged(unmanagedDllName, probingDirectories);
+            => PackageAssemblyProbe.ResolveUnmanaged(unmanagedDllName, probingDirectories, load: LoadUnmanagedDllFromPath);
     }
 }

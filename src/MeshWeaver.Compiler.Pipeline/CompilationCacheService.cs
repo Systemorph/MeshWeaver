@@ -903,7 +903,10 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
     {
         var dirs = _probingDirs;
         if (dirs.IsDefaultOrEmpty) return IntPtr.Zero;
-        return MeshWeaver.NuGet.PackageAssemblyProbe.ResolveUnmanaged(unmanagedDllName, dirs, _logger);
+        // LoadUnmanagedDllFromPath, not NativeLibrary.Load: the handle then belongs to THIS collectible
+        // context and is released when it unloads, instead of pinning the binary for the process.
+        return MeshWeaver.NuGet.PackageAssemblyProbe.ResolveUnmanaged(
+            unmanagedDllName, dirs, _logger, LoadUnmanagedDllFromPath);
     }
 
     public void Dispose()

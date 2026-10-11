@@ -130,12 +130,18 @@ public static class PackageAssemblyProbe
 
     /// <summary>
     /// Every <c>{dir}/{name}.dll</c> among the MANAGED <paramref name="probingDirectories"/>
-    /// (native directories skipped), in probing order — a caller tries the next when one fails to load.
+    /// (native directories skipped), in probing order — a caller tries the next when one fails to
+    /// load. A satellite reference (<paramref name="cultureName"/> set, e.g.
+    /// <c>Humanizer.resources, Culture=de</c>) is looked up in the culture subfolder,
+    /// <c>{dir}/{culture}/{name}.dll</c>, where packages ship their resources.
     /// </summary>
-    public static IEnumerable<string> FindManagedCandidates(string simpleName, IEnumerable<string> probingDirectories)
+    public static IEnumerable<string> FindManagedCandidates(
+        string simpleName, IEnumerable<string> probingDirectories, string? cultureName = null)
         => probingDirectories
             .Where(dir => !IsNativeDirectory(dir))
-            .Select(dir => Path.Combine(dir, simpleName + ".dll"))
+            .Select(dir => string.IsNullOrEmpty(cultureName)
+                ? Path.Combine(dir, simpleName + ".dll")
+                : Path.Combine(dir, cultureName, simpleName + ".dll"))
             .Where(File.Exists);
 
     /// <summary>The first of <see cref="FindManagedCandidates"/>, or <c>null</c>.</summary>
@@ -152,7 +158,7 @@ public static class PackageAssemblyProbe
         ILogger? logger = null)
     {
         if (string.IsNullOrEmpty(requested.Name) || probingDirectories.Count == 0) return null;
-        var candidates = FindManagedCandidates(requested.Name, probingDirectories).ToImmutableArray();
+        var candidates = FindManagedCandidates(requested.Name, probingDirectories, requested.CultureName).ToImmutableArray();
         // Only a name the PACKAGES supply is this probe's business; anything else keeps the
         // context's own resolution order untouched.
         if (candidates.IsEmpty) return null;
@@ -194,37 +200,48 @@ public static class PackageAssemblyProbe
         }
     }
 
-    /// <summary>The first native library for <paramref name="name"/> among the native probing directories.</summary>
+    /// <summary>
+    /// Every native library file for <paramref name="name"/> among the native probing directories, in
+    /// probing order and, within a directory, in <see cref="NativeFileNames"/> order.
+    /// </summary>
+    public static IEnumerable<string> FindNativeCandidates(string name, IEnumerable<string> probingDirectories)
+        => probingDirectories
+            .Where(IsNativeDirectory)
+            .SelectMany(dir => NativeFileNames(name).Select(file => Path.Combine(dir, file)))
+            .Where(File.Exists);
+
+    /// <summary>The first of <see cref="FindNativeCandidates"/>, or <c>null</c>.</summary>
     public static string? FindNative(string name, IEnumerable<string> probingDirectories)
-    {
-        foreach (var dir in probingDirectories)
-        {
-            if (!IsNativeDirectory(dir)) continue;
-            foreach (var file in NativeFileNames(name))
-            {
-                var candidate = Path.Combine(dir, file);
-                if (File.Exists(candidate)) return candidate;
-            }
-        }
-        return null;
-    }
+        => FindNativeCandidates(name, probingDirectories).FirstOrDefault();
 
     /// <summary>
-    /// Loads the native library <paramref name="name"/> from the package native directories;
-    /// <see cref="IntPtr.Zero"/> when none supplies it (the runtime's default search then applies).
+    /// Loads the native library <paramref name="name"/> from the package native directories, trying
+    /// each candidate until one loads; <see cref="IntPtr.Zero"/> when none does (the runtime's
+    /// default search then applies).
     /// </summary>
-    public static IntPtr ResolveUnmanaged(string name, IEnumerable<string> probingDirectories, ILogger? logger = null)
+    /// <param name="name">The <c>DllImport</c> library name.</param>
+    /// <param name="probingDirectories">The probing directories; only the native ones are read.</param>
+    /// <param name="logger">Receives a warning per candidate that failed to load.</param>
+    /// <param name="load">How to load a path. A COLLECTIBLE load context passes its own
+    /// <c>LoadUnmanagedDllFromPath</c>, so the handle belongs to the context and is released with
+    /// it; the default, <see cref="NativeLibrary.Load(string)"/>, yields a process-owned handle —
+    /// right only for the default context.</param>
+    public static IntPtr ResolveUnmanaged(
+        string name, IEnumerable<string> probingDirectories, ILogger? logger = null, Func<string, IntPtr>? load = null)
     {
-        var path = FindNative(name, probingDirectories);
-        if (path is null) return IntPtr.Zero;
-        try
+        load ??= NativeLibrary.Load;
+        foreach (var path in FindNativeCandidates(name, probingDirectories))
         {
-            return NativeLibrary.Load(path);
+            try
+            {
+                var handle = load(path);
+                if (handle != IntPtr.Zero) return handle;
+            }
+            catch (Exception ex) when (ex is DllNotFoundException or BadImageFormatException)
+            {
+                logger?.LogWarning(ex, "Native library {Library} from {Path} failed to load; trying the next", name, path);
+            }
         }
-        catch (Exception ex) when (ex is DllNotFoundException or BadImageFormatException)
-        {
-            logger?.LogWarning(ex, "Native library {Library} from {Path} failed to load", name, path);
-            return IntPtr.Zero;
-        }
+        return IntPtr.Zero;
     }
 }

@@ -725,7 +725,7 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                 ImmutableList<string> dirs;
                 lock (gate)
                     dirs = probingDirs;
-                foreach (var candidate in MeshWeaver.NuGet.PackageAssemblyProbe.FindManagedCandidates(name.Name, dirs))
+                foreach (var candidate in MeshWeaver.NuGet.PackageAssemblyProbe.FindManagedCandidates(name.Name, dirs, name.CultureName))
                 {
                     try { return ctx.LoadFromAssemblyPath(candidate); }
                     catch { /* try the next candidate */ }
