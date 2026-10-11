@@ -539,28 +539,47 @@ public static class InboxLayoutArea
 internal sealed class InboxActs
 {
     private int busy;
-    private ImmutableList<InboxUndoItem> batch = ImmutableList<InboxUndoItem>.Empty;
 
-    private int fresh;
+    /// <summary>The batch and whether the next item put away starts a new one — swapped as ONE value.</summary>
+    private sealed record State(ImmutableList<InboxUndoItem> Batch, bool Fresh);
+
+    private State state = new(ImmutableList<InboxUndoItem>.Empty, false);
 
     /// <summary>What the last Delete put away and Undo has not yet brought back.</summary>
-    public ImmutableList<InboxUndoItem> Batch => Volatile.Read(ref batch);
+    public ImmutableList<InboxUndoItem> Batch => Volatile.Read(ref state).Batch;
 
     /// <summary>
     /// A Delete is starting: the first item it puts away replaces the previous batch. A Delete that
     /// puts nothing away leaves the previous batch undoable.
     /// </summary>
-    public void BeginDelete() => Volatile.Write(ref fresh, 1);
+    public void BeginDelete() => Mutate(s => s with { Fresh = true });
 
     /// <summary>Records one item a Delete has just put away — called per item, as it happens.</summary>
     /// <param name="item">The item.</param>
     public void PutAway(InboxUndoItem item)
-        => Volatile.Write(ref batch, Interlocked.Exchange(ref fresh, 0) == 1 ? [item] : Batch.Add(item));
+        => Mutate(s => new State(s.Fresh ? [item] : s.Batch.Add(item), false));
 
     /// <summary>Records one item an Undo has just brought back — called per item, as it happens.</summary>
     /// <param name="item">The item.</param>
     public void BroughtBack(InboxUndoItem item)
-        => Volatile.Write(ref batch, Batch.RemoveAll(i => string.Equals(i.Path, item.Path, StringComparison.Ordinal)));
+        => Mutate(s => s with { Batch = s.Batch.RemoveAll(i => string.Equals(i.Path, item.Path, StringComparison.Ordinal)) });
+
+    /// <summary>
+    /// 🚨 Every change is ONE compare-and-swap of the whole state, retried on contention. A write
+    /// lands on whatever thread its owner answers on — and one still in flight when its click was
+    /// cancelled can land after the claim is released, alongside the next click's. Read-modify-write
+    /// without the swap would let either overwrite the other; with it, each change applies on top of
+    /// the other, so every item actually put away stays undoable and every item brought back leaves.
+    /// </summary>
+    private void Mutate(Func<State, State> change)
+    {
+        while (true)
+        {
+            var current = Volatile.Read(ref state);
+            if (ReferenceEquals(Interlocked.CompareExchange(ref state, change(current), current), current))
+                return;
+        }
+    }
 
     /// <summary>
     /// Runs <paramref name="act"/> only when no other Delete or Undo is running on this page, and

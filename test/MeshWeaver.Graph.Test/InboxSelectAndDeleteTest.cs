@@ -419,6 +419,28 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
     }
 
     /// <summary>
+    /// Batch changes from many threads at once — a cancelled click's late write landing beside the
+    /// next click's — never lose one another: every item put away and not brought back is in the
+    /// batch afterwards.
+    /// </summary>
+    [Fact]
+    public void ConcurrentBatchChanges_NeverLoseOneAnother()
+    {
+        var acts = new InboxActs();
+        acts.BeginDelete();
+        acts.PutAway(new InboxUndoItem("seed", NotificationNodeType.NodeType));
+        Parallel.For(0, 2000, i =>
+        {
+            var item = new InboxUndoItem($"p{i}", NotificationNodeType.NodeType);
+            acts.PutAway(item);
+            if (i % 2 == 0)
+                acts.BroughtBack(item);
+        });
+        acts.Batch.Select(i => i.Path).Order(StringComparer.Ordinal).Should().Equal(
+            new[] { "seed" }.Concat(Enumerable.Range(0, 2000).Where(i => i % 2 == 1).Select(i => $"p{i}")).Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>
     /// "By title" is alphabetical in the VIEWER's language: for a German viewer Ä sorts with A, not
     /// after Z as it does by code point.
     /// </summary>
