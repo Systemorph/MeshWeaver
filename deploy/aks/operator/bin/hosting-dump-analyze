@@ -253,10 +253,27 @@ cleanup
 # One jq program: parse the sentinels, group `clrstack -all` threads by identical stack, cap each
 # text section, redact key=value secrets. The caps shrink until the encoded fact fits the budget;
 # every cap is STATED in the result (shown vs total), so a cut is never silent.
+#
+# 🚨 THE THREAD THAT HOLDS A MONITOR IS NEVER CUT, and it comes FIRST. A wedged process is read by
+# asking "who holds the lock everyone waits on, and what is that thread doing" — `syncblk` names the
+# owner by OS thread id, and that thread's stack is the answer. Measured on the first real read
+# (memex-cloud, the 2026-10-10 18:16Z dump, MeshWeaver#6432): `syncblk` named thread 0x1e as the owner
+# of a monitor 21 threads waited on, and its stack was among the 46 groups "cut to fit" — the read
+# named the lock and withheld the one stack that explains it. Three things caused that, all fixed here:
+#   • a frame carried its own stack address (`[InlinedCallFrame: 00007f3d…]`) and source path, so 91
+#     threads made 86 "distinct" stacks and nothing grouped — frames are normalised (`norm`);
+#   • groups of one were kept in the order of those addresses, i.e. NEWEST thread first, so the
+#     long-lived thread that took the lock at boot was the first one dropped — owners are now their
+#     own groups, ahead of every other, outside the group cap;
+#   • a stack kept its TOP frames only, where every waiter reads `Monitor.Enter` and the container;
+#     the CALLER is at the bottom — a capped stack keeps its head AND its tail (`clip`).
 # shellcheck disable=SC2016  # a jq program, not shell
 condense='
 def redact: gsub("(?<k>(?i:password|passwd|pwd|secret|token|apikey|api_key|connectionstring|accountkey|sharedaccesskey|clientsecret))(?<s>\\s*[=:]\\s*)[^\\s;\"'"'"',]+"; "\(.k)\(.s)<redacted>");
 def epoch: tonumber | todate;
+def norm: sub("\\s+\\[/[^\\]]*\\]\\s*$"; "") | gsub("\\[(?<k>[A-Za-z0-9_]+): [0-9a-fA-F]{6,}\\]"; "[\(.k)]");
+def clip($n): if length <= $n then . else (($n * 2 / 3) | floor) as $h | ($n - $h - 1) as $t
+  | .[:$h] + ["… \(length - $h - $t) frame(s) cut …"] + .[length - $t:] end;
 (split("\n") | reduce .[] as $l ({cur: null, listing: [], sections: [], selected: null};
   if ($l | startswith("@@MW-DUMP ")) then
     ($l[10:] | split("\t")) as $f
@@ -271,13 +288,26 @@ def epoch: tonumber | todate;
   elif .cur == "section" then .sections[(.sections | length) - 1].lines += [$l]
   else . end)) as $r
 | ($r.sections | map(select(.name == "clrstack")) | first // {lines: []}) as $cs
+| ($r.sections | map(select(.name == "syncblk")) | first // {lines: []}) as $sb
+# syncblk: Index SyncBlock MonitorHeld Recursion <thread object> <OS id, hex> <managed id> <object> <type>.
+# MonitorHeld counts 1 for the owner and 2 per waiter.
+| ([ $sb.lines[]
+     | capture("^\\s*(?<index>[0-9]+)\\s+[0-9a-fA-F]{8,}\\s+(?<held>[0-9]+)\\s+[0-9]+\\s+[0-9a-fA-F]{8,}\\s+(?<osid>[0-9a-fA-F]+)\\s+[0-9]+\\s")
+     | {id: ("0x" + (.osid | ascii_downcase)), index, waiting: (((.held | tonumber) - 1) / 2 | floor)} ]
+   | group_by(.id)
+   | map({key: .[0].id, value: ("HOLDS MONITOR " + (map("#\(.index) (\(.waiting) thread(s) waiting)") | join(", ")) + " — thread \(.[0].id), see syncblk")})
+   | from_entries) as $owners
 | ($cs.lines | reduce .[] as $l ([];
     if ($l | test("^OS Thread Id: ")) then . + [{id: ($l | capture("OS Thread Id: (?<id>0x[0-9a-fA-F]+)").id // $l), frames: []}]
     elif length > 0 and ($l | test("^\\s*[0-9a-fA-F]{8,}\\s+[0-9a-fA-F]{8,}\\s+\\S")) then
-      .[length - 1].frames += [$l | sub("^\\s*[0-9a-fA-F]{8,}\\s+[0-9a-fA-F]{8,}\\s+"; "") | sub("\\s+$"; "") | redact]
+      .[length - 1].frames += [$l | sub("^\\s*[0-9a-fA-F]{8,}\\s+[0-9a-fA-F]{8,}\\s+"; "") | sub("\\s+$"; "") | norm | redact]
     else . end)) as $threads
-| ($threads | group_by(.frames[:$frames]) | map({threads: length, threadIds: (map(.id)[:$ids]), frames: .[0].frames[:$frames]})
-   | sort_by(-.threads)) as $groups
+| ([ $threads[] | select($owners[.id | ascii_downcase] != null)
+     | {threads: 1, threadIds: [.id], frames: ([$owners[.id | ascii_downcase]] + (.frames | clip($ownerFrames)))} ]) as $ownerGroups
+| ([ $threads[] | select($owners[.id | ascii_downcase] == null) ]
+   | group_by(.frames | clip($frames)) | map({threads: length, threadIds: (map(.id)[:$ids]), frames: (.[0].frames | clip($frames))})
+   | sort_by(-.threads)) as $otherGroups
+| ($ownerGroups + $otherGroups[:([$maxGroups - ($ownerGroups | length), 0] | max)]) as $shown
 | {
     namespace: $ns, claim: $claim, root: $root, analyzedAt: (now | todate),
     analyzer: {image: $image, dotnetDump: $version},
@@ -287,16 +317,18 @@ def epoch: tonumber | todate;
                   {name, command, exit, bytes, truncated: true, omitted: true, text: ""}
                 else (.lines | join("\n") | redact) as $t
                   | {name, command, exit, bytes, truncated: ((.bytes // 0) > $sectionBytes or ($t | length) > (if $text == 0 then 1200 else $text end)), text: $t[:(if $text == 0 then 1200 else $text end)]} end ],
-    stacks: {exit: $cs.exit, bytes: $cs.bytes, threadCount: ($threads | length), groupCount: ($groups | length),
-             groupsShown: ([$groups | length, $maxGroups] | min), framesCap: $frames, groups: $groups[:$maxGroups]}
+    stacks: {exit: $cs.exit, bytes: $cs.bytes, threadCount: ($threads | length),
+             groupCount: (($ownerGroups | length) + ($otherGroups | length)), lockOwners: ($ownerGroups | length),
+             groupsShown: ($shown | length), framesCap: $frames, ownerFramesCap: $ownerFrames, groups: $shown}
   }'
 
 fact="" analysis=""
-for caps in "6000 40 80 8" "3000 25 40 6" "1500 15 25 4" "800 10 15 3" "0 8 10 2"; do
-  read -r text frames groups ids <<< "$caps"
+# text bytes · frames per stack · groups · thread ids per group · frames of a LOCK OWNER's stack.
+for caps in "6000 40 80 8 240" "3000 25 40 6 240" "1500 15 25 4 160" "800 10 15 3 120" "0 8 10 2 80"; do
+  read -r text frames groups ids owner_frames <<< "$caps"
   analysis="$(printf '%s' "$pod_log" | jq -R -s -c \
     --arg ns "$namespace" --arg claim "$claim" --arg root "$root" --arg image "$ANALYZER_IMAGE" --arg version "$DOTNET_DUMP_VERSION" \
-    --argjson sectionBytes "$SECTION_BYTES" --argjson text "$text" --argjson frames "$frames" --argjson maxGroups "$groups" --argjson ids "$ids" "$condense")" \
+    --argjson sectionBytes "$SECTION_BYTES" --argjson text "$text" --argjson frames "$frames" --argjson maxGroups "$groups" --argjson ids "$ids" --argjson ownerFrames "$owner_frames" "$condense")" \
     || hosting::die "the analysis text of ${job} could not be condensed (jq failed) — nothing is reported"
   fact="$(printf '%s' "$analysis" | gzip -9 -n | base64 | tr -d '\n')"
   [ "${#fact}" -gt "$FACT_BUDGET" ] || break
@@ -309,7 +341,7 @@ file_read="$(printf '%s' "$analysis" | jq -r '.dump.path // ""')"
 threads="$(printf '%s' "$analysis" | jq -r '.stacks.threadCount')"
 listing="$(printf '%s' "$analysis" | jq -r '.listingCount')"
 hosting::log "read ${file_read} ($(printf '%s' "$analysis" | jq -r '.dump.bytes') bytes, written $(printf '%s' "$analysis" | jq -r '.dump.modifiedAt')) — one of ${listing} dump(s) on the volume"
-hosting::log "${threads} managed thread(s) in $(printf '%s' "$analysis" | jq -r '.stacks.groupCount') distinct stack(s); largest groups:"
+hosting::log "${threads} managed thread(s) in $(printf '%s' "$analysis" | jq -r '.stacks.groupCount') distinct stack(s), $(printf '%s' "$analysis" | jq -r '.stacks.lockOwners') of them a monitor's owner (shown first, never cut); first groups:"
 printf '%s' "$analysis" | jq -r '.stacks.groups[:5][] | "    \(.threads) × \(.frames[0] // "(no managed frame)")"'
 hosting::say dump_listing "$listing"
 hosting::say dump_file "$file_read"
