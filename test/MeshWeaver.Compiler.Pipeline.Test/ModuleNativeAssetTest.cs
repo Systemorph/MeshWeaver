@@ -6,6 +6,7 @@ using System.Reflection;
 using System.Reflection.Emit;
 using System.Runtime.InteropServices;
 using MeshWeaver.Mesh;
+using MeshWeaver.Utils;
 using Xunit;
 
 namespace MeshWeaver.Graph.Test;
@@ -49,21 +50,79 @@ public class ModuleNativeAssetTest
     }
 
     [Fact]
-    public void RuntimeIdentifierCandidates_AddThePortableForm_AndNeverCrossTheLibcBoundary()
+    public void RuntimeIdentifierCandidates_WalkTheRidFallbackChain_AndNeverCrossTheLibcBoundary()
     {
-        Assert.Equal(["linux-x64"], ModuleNativeAssets.RuntimeIdentifierCandidates("linux-x64"));
+        // The fleet RID probes its whole .NET fallback chain — the same folders the module layout
+        // check counts as "carried" for linux-x64. Before, only runtimes/linux-x64 was probed, so a
+        // library shipped under runtimes/unix/native or runtimes/linux/native was counted carried
+        // and then failed with DllNotFoundException.
+        Assert.Equal(["linux-x64", "linux", "unix-x64", "unix", "any"],
+            ModuleNativeAssets.RuntimeIdentifierCandidates("linux-x64"));
+        Assert.Equal(RuntimeIdentifierGraph.FallbackChain("linux-x64"),
+            ModuleNativeAssets.RuntimeIdentifierCandidates("linux-x64"));
 
-        // A versioned RID (what older runtimes reported) falls back to the portable form native
-        // packages actually publish.
-        Assert.Equal(["osx.14-arm64", "osx-arm64"],
-            ModuleNativeAssets.RuntimeIdentifierCandidates("osx.14-arm64"));
+        // A versioned RID (what older runtimes reported) reaches the portable form native
+        // packages actually publish, after its own rungs.
+        var versioned = ModuleNativeAssets.RuntimeIdentifierCandidates("osx.14-arm64");
+        Assert.Equal("osx.14-arm64", versioned[0]);
+        Assert.True(versioned.ToList().IndexOf("osx-arm64") > 0, string.Join(" → ", versioned));
+        Assert.Contains("unix", versioned);
 
-        // 🚨 musl must NEVER fall back to glibc: the binaries are not interchangeable, so a graph
-        // walk between them would load something that cannot run — a crash at the first P/Invoke
-        // instead of a clean "not found" that leaves the runtime's own message intact.
-        Assert.Equal(["linux-musl-x64"], ModuleNativeAssets.RuntimeIdentifierCandidates("linux-musl-x64"));
+        // Another platform's folder is never on the chain.
+        Assert.DoesNotContain("win-x64", ModuleNativeAssets.RuntimeIdentifierCandidates("linux-x64"));
+        Assert.DoesNotContain("win", ModuleNativeAssets.RuntimeIdentifierCandidates("linux-x64"));
+        Assert.DoesNotContain(ModuleNativeAssets.RuntimeIdentifierCandidates("win-x64"),
+            rid => rid.StartsWith("linux", StringComparison.Ordinal) || rid.StartsWith("unix", StringComparison.Ordinal));
+
+        // 🚨 musl must NEVER fall back to glibc: NuGet's graph walks linux-musl-x64 → linux-x64,
+        // but native binaries are not interchangeable across C libraries — loading one would crash
+        // at the first P/Invoke instead of a clean "not found".
+        Assert.Equal(["linux-musl-x64", "linux-musl", "unix-x64", "unix", "any"],
+            ModuleNativeAssets.RuntimeIdentifierCandidates("linux-musl-x64"));
 
         Assert.Empty(ModuleNativeAssets.RuntimeIdentifierCandidates(""));
+    }
+
+    /// <summary>
+    /// For the fleet RID, a library under ANY folder of its fallback chain resolves — and when
+    /// several exist, the most specific one wins; a library only under another platform's folder
+    /// resolves to nothing. Files on disk, independent of the machine the test runs on.
+    /// </summary>
+    [Fact]
+    public void ExistingCandidatePaths_PickTheMostSpecificFallbackFolder_AndIgnoreAnotherPlatform()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mw-native-" + Guid.NewGuid().ToString("N"));
+        var module = Path.Combine(root, "modules", "Probe");
+        const string fileName = "libprobe.so";
+        string Place(string rid)
+        {
+            var directory = Path.Combine(module, "runtimes", rid, "native");
+            Directory.CreateDirectory(directory);
+            var path = Path.Combine(directory, fileName);
+            File.WriteAllText(path, rid);
+            return path;
+        }
+        string? Resolved(string rid) => ModuleNativeAssets.ExistingCandidatePaths(module, fileName, rid).FirstOrDefault();
+
+        try
+        {
+            // Another platform's folder alone: nothing resolves for linux-x64.
+            var foreign = Place("win-x64");
+            Assert.Null(Resolved("linux-x64"));
+
+            // Each fallback folder, added from the most general inwards: each time the newly added,
+            // more specific one wins.
+            foreach (var rid in new[] { "any", "unix", "unix-x64", "linux", "linux-x64" })
+                Assert.Equal(Place(rid), Resolved("linux-x64"));
+
+            // The win-x64 copy stays unreachable for linux-x64, and is exactly what win-x64 resolves.
+            Assert.DoesNotContain(foreign, ModuleNativeAssets.ExistingCandidatePaths(module, fileName, "linux-x64"));
+            Assert.Equal(foreign, Resolved("win-x64"));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     [Fact]
@@ -111,6 +170,30 @@ public class ModuleNativeAssetTest
     /// </summary>
     [Fact]
     public void AnAssemblyInAModuleFolder_ResolvesANativeLibraryFromItsOwnRidTree()
+        => AssertModuleNativeResolution(RuntimeInformation.RuntimeIdentifier, expectLoaded: true);
+
+    /// <summary>
+    /// The same end-to-end claim for every FALLBACK folder of the running RID's chain
+    /// (<c>runtimes/unix/native</c>, <c>runtimes/linux/native</c>, … on Linux): a library a package ships
+    /// there loads through the runtime's own P/Invoke resolution. Against the exact-RID-only probe
+    /// this threw <see cref="DllNotFoundException"/> for every entry but the first.
+    /// </summary>
+    [Fact]
+    public void AnAssemblyInAModuleFolder_ResolvesANativeLibraryFromEveryFallbackFolder()
+    {
+        var chain = ModuleNativeAssets.RuntimeIdentifierCandidates(RuntimeInformation.RuntimeIdentifier);
+        Assert.True(chain.Count > 1, $"the running RID {RuntimeInformation.RuntimeIdentifier} has no fallback chain");
+        foreach (var rid in chain.Skip(1))
+            AssertModuleNativeResolution(rid, expectLoaded: true);
+    }
+
+    /// <summary>NEGATIVE CONTROL: a library only under ANOTHER platform's folder is never loaded.</summary>
+    [Fact]
+    public void AnAssemblyInAModuleFolder_DoesNotResolveANativeLibraryForAnotherPlatform()
+        => AssertModuleNativeResolution(
+            RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "linux-x64" : "win-x64", expectLoaded: false);
+
+    private static void AssertModuleNativeResolution(string ridFolder, bool expectLoaded)
     {
         ModuleNativeAssets.EnsureRegistered();
 
@@ -119,8 +202,7 @@ public class ModuleNativeAssetTest
         var probeName = $"meshweaver_probe_{Guid.NewGuid():N}";
         var moduleName = $"NativeProbe{Guid.NewGuid():N}";
         var moduleDirectory = Path.Combine(AppContext.BaseDirectory, "modules", moduleName);
-        var nativeDirectory = Path.Combine(
-            moduleDirectory, "runtimes", RuntimeInformation.RuntimeIdentifier, "native");
+        var nativeDirectory = Path.Combine(moduleDirectory, "runtimes", ridFolder, "native");
         Directory.CreateDirectory(nativeDirectory);
 
         try
@@ -142,7 +224,14 @@ public class ModuleNativeAssetTest
             Assert.Throws<DllNotFoundException>(
                 () => NativeLibrary.Load(probeName, typeof(ModuleNativeAssetTest).Assembly, null));
 
-            // THE claim — this is what throws DllNotFoundException against main.
+            if (!expectLoaded)
+            {
+                Assert.Throws<DllNotFoundException>(() => NativeLibrary.Load(probeName, moduleAssembly, null));
+                return;
+            }
+
+            // THE claim — for a fallback folder, this is what threw DllNotFoundException before
+            // the loader walked the chain.
             var handle = NativeLibrary.Load(probeName, moduleAssembly, null);
             Assert.NotEqual(IntPtr.Zero, handle);
             NativeLibrary.Free(handle);

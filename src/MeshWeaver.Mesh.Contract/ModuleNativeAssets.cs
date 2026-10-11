@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Runtime.Loader;
+using MeshWeaver.Utils;
 
 namespace MeshWeaver.Mesh;
 
@@ -61,8 +62,8 @@ public static class ModuleNativeAssets
         if (moduleDirectory is null)
             return IntPtr.Zero;
 
-        foreach (var candidate in CandidatePaths(moduleDirectory, libraryName, RuntimeInformation.RuntimeIdentifier))
-            if (File.Exists(candidate) && NativeLibrary.TryLoad(candidate, out var handle))
+        foreach (var candidate in ExistingCandidatePaths(moduleDirectory, libraryName, RuntimeInformation.RuntimeIdentifier))
+            if (NativeLibrary.TryLoad(candidate, out var handle))
                 return handle;
 
         return IntPtr.Zero;
@@ -107,12 +108,11 @@ public static class ModuleNativeAssets
     /// Every path this resolver will try for <paramref name="libraryName"/>, in order — the pure
     /// half, so the ordering and the RID policy are unit-testable without loading anything.
     ///
-    /// <para>RID candidates are the running RID and, when it carries an OS VERSION
-    /// (<c>osx.14-arm64</c> — the shape older runtimes reported), the portable form
-    /// (<c>osx-arm64</c>) that native packages actually publish. 🚨 There is deliberately NO wider
-    /// fallback: <c>linux-musl-x64</c> and <c>linux-x64</c> are different C libraries, so a graph
-    /// walk between them would load a binary that cannot run — a crash at first P/Invoke rather
-    /// than a clean "not found" that leaves the runtime's own error message intact.</para>
+    /// <para>RID candidates are the running RID's .NET fallback chain
+    /// (<see cref="RuntimeIdentifierCandidates"/>): on the fleet image <c>linux-x64 → linux → unix-x64 →
+    /// unix → any</c>, so a library a package ships under <c>runtimes/unix/native/</c> or
+    /// <c>runtimes/linux/native/</c> loads, exactly as the module layout check counts it carried. The
+    /// most specific folder holding the library wins.</para>
     ///
     /// <para>Flat placement (the library directly in the module folder) is tried last, so the
     /// landing step's option of laying a single RID's payload flat keeps working without the tree.</para>
@@ -135,8 +135,31 @@ public static class ModuleNativeAssets
     }
 
     /// <summary>
-    /// The RIDs to probe, most specific first: the running one, plus its OS-version-stripped
-    /// portable form when they differ.
+    /// The <see cref="CandidatePaths"/> that exist on disk, in probe order — what the resolver
+    /// actually tries to load, so its first entry is the library this module's
+    /// <paramref name="libraryName"/> resolves to on <paramref name="runtimeIdentifier"/>.
+    /// </summary>
+    /// <param name="moduleDirectory">The module folder (<c>…/modules/&lt;Name&gt;</c>).</param>
+    /// <param name="libraryName">The library name as the P/Invoke declared it.</param>
+    /// <param name="runtimeIdentifier">The running RID.</param>
+    /// <returns>Existing candidate absolute paths, most specific first.</returns>
+    public static IEnumerable<string> ExistingCandidatePaths(
+        string moduleDirectory, string libraryName, string runtimeIdentifier)
+        => CandidatePaths(moduleDirectory, libraryName, runtimeIdentifier).Where(File.Exists);
+
+    /// <summary>
+    /// The RIDs to probe, most specific first: the running RID's .NET fallback chain
+    /// (<see cref="RuntimeIdentifierGraph.FallbackChain"/> — the same chain the NuGet runtime-asset
+    /// selector reads, and the one the module layout check counts an asset "carried" by), so
+    /// <c>linux-x64</c> probes <c>linux-x64</c>, <c>linux</c>, <c>unix-x64</c>, <c>unix</c>, <c>any</c>, and a
+    /// versioned RID (<c>osx.14-arm64</c>, the shape older runtimes reported) reaches the portable form
+    /// (<c>osx-arm64</c>) native packages actually publish.
+    ///
+    /// <para>🚨 One deliberate departure from the graph, for NATIVE code only: a musl RID never
+    /// falls back to the glibc rungs (<c>linux-&lt;arch&gt;</c>, <c>linux</c>). NuGet's graph does walk
+    /// <c>linux-musl-x64 → linux-x64</c>, which is harmless for managed assets, but the native
+    /// binaries are linked against different C libraries — loading one would crash at the first
+    /// P/Invoke instead of leaving the runtime's own clean "not found".</para>
     /// </summary>
     /// <param name="runtimeIdentifier">The running RID.</param>
     /// <returns>The RID probe order.</returns>
@@ -144,22 +167,17 @@ public static class ModuleNativeAssets
     {
         if (string.IsNullOrWhiteSpace(runtimeIdentifier))
             return [];
-        var portable = PortableForm(runtimeIdentifier);
-        return string.Equals(portable, runtimeIdentifier, StringComparison.OrdinalIgnoreCase)
-            ? [runtimeIdentifier]
-            : [runtimeIdentifier, portable];
+        var chain = RuntimeIdentifierGraph.FallbackChain(runtimeIdentifier);
+        if (!RuntimeIdentifierGraph.IsMusl(runtimeIdentifier))
+            return chain;
+        return [.. chain.Where(rid => !IsGlibcLinuxRung(rid))];
     }
 
-    private static string PortableForm(string runtimeIdentifier)
-    {
-        // `osx.14-arm64` → `osx-arm64`; `linux-musl-x64` (no dot) is returned unchanged.
-        var dash = runtimeIdentifier.IndexOf('-');
-        var head = dash < 0 ? runtimeIdentifier : runtimeIdentifier[..dash];
-        var dot = head.IndexOf('.');
-        if (dot < 0)
-            return runtimeIdentifier;
-        return dash < 0 ? head[..dot] : string.Concat(head.AsSpan(0, dot), runtimeIdentifier.AsSpan(dash));
-    }
+    // `linux` or `linux-<arch>` — the glibc rungs a musl RID's graph walks through.
+    private static bool IsGlibcLinuxRung(string rid)
+        => string.Equals(rid, "linux", StringComparison.OrdinalIgnoreCase)
+           || (rid.StartsWith("linux-", StringComparison.OrdinalIgnoreCase)
+               && !RuntimeIdentifierGraph.IsMusl(rid));
 
     /// <summary>
     /// The file names a P/Invoke name can take on this platform, most specific first: the name as

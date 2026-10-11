@@ -1474,14 +1474,27 @@ public sealed class InstanceAutoRegistrationService(
                 // pulls a commercial package in. Installing grants nobody access — the plan and the
                 // subscriptions decide who reads it.
                 var catalogPackages = catalog.Select(c => c.Package).ToImmutableList();
-                var named = selected.Where(IsNamed).Select(c => c.Package).ToImmutableList();
-                var namedRequirements = ConfigAuthorizedRequirements(catalogPackages, named);
-                hub.ServiceProvider.GetService<DeploymentConfigAuthority>()?.Admit(namedRequirements);
+                var trustedPackages = catalog.Where(ProvenanceIsTrusted).Select(c => c.Package).ToImmutableList();
+                // Only a candidate whose source is PROVEN may carry the configuration's authority
+                // (ProvenanceIsTrusted): a manifest a direct repository lists can AUTHOR any
+                // `source`, and must not borrow another configured source's Source/Package naming.
+                var named = selected.Where(c => IsNamed(c) && ProvenanceIsTrusted(c)).Select(c => c.Package).ToImmutableList();
+                var namedRequirements = ConfigAuthorizedRequirements(trustedPackages, named);
+                // Admitted keyed by SOURCE and id (the catalog stamps every listed manifest's
+                // source), so the gate never authorizes the same id listed by another source.
+                var bySourceId = trustedPackages.ToImmutableDictionary(p => p.Id, p => p.Source ?? "", StringComparer.Ordinal);
+                hub.ServiceProvider.GetService<DeploymentConfigAuthority>()?.Admit(namedRequirements
+                    .Where(kv => bySourceId.TryGetValue(kv.Key, out var src) && src.Length > 0)
+                    .ToImmutableDictionary(
+                        kv => DeploymentConfigAuthority.RequirementKey(bySourceId[kv.Key], kv.Key),
+                        kv => kv.Value,
+                        StringComparer.Ordinal));
                 var configAuthorized = named.Select(p => p.Id)
                     .Concat(namedRequirements.Keys)
                     .ToImmutableHashSet(StringComparer.Ordinal);
                 string? ConfigAuthority(InstallCandidate c) =>
-                    IsNamed(c)
+                    !ProvenanceIsTrusted(c) ? null
+                    : IsNamed(c)
                         ? $"named in PluginCatalog:InstallByDefault as '{wanted.First(w => w.PackageId != PluginGrantEntry.AllPackages && w.Matches(c.Package.Source ?? "", c.Package.Id))}'"
                         : namedRequirements.TryGetValue(c.Package.Id, out var root)
                             ? $"required by '{root}', which PluginCatalog:InstallByDefault names"
@@ -1922,6 +1935,25 @@ public sealed class InstanceAutoRegistrationService(
             .OrderBy(p => p.Id, StringComparer.Ordinal)
             .ToList();
     }
+
+    /// <summary>
+    /// Whether <paramref name="candidate"/>'s <see cref="PackageManifest.Source"/> is PROVENANCE
+    /// rather than an authored claim: a registry stamps the source at its own boundary from its
+    /// configured sources, and any other source's manifest is trusted only where its source IS the
+    /// name that source was configured under (the lister stamps that name on every manifest that
+    /// authors none). A directly read repository whose manifest authors ANOTHER source's name gets
+    /// no deployment-configuration authority — it could otherwise claim that source's
+    /// <c>Source/Package</c> entry (policy <c>deployment-config-authorizes-named-commercial</c>).
+    /// Selection itself is unchanged; only the authority is withheld. Pure.
+    /// </summary>
+    private static bool ProvenanceIsTrusted(InstallCandidate candidate) =>
+        candidate.Source.Source is RegistryPackageSource
+        || string.Equals(candidate.Package.Source, candidate.Source.Name, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Whether two source names are the same non-empty source (case-insensitive, like
+    /// <see cref="PluginGrantEntry.Matches"/>). Pure.</summary>
+    private static bool SameSource(string? a, string? b) =>
+        !string.IsNullOrWhiteSpace(a) && string.Equals(a.Trim(), b?.Trim(), StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Every package REQUIRED — directly or transitively, through free and commercial packages
@@ -2526,6 +2558,8 @@ public sealed class InstanceAutoRegistrationService(
             t => t.PackageId, t => t.ModuleVersion, StringComparer.Ordinal);
         var recordedPartitions = targets.ToImmutableDictionary(
             t => t.PackageId, t => t.Partition, StringComparer.Ordinal);
+        var recordedSources = targets.ToImmutableDictionary(
+            t => t.PackageId, t => t.Source, StringComparer.Ordinal);
         var options = hub.ServiceProvider.GetService<PluginCatalogOptions>() ?? new PluginCatalogOptions();
         return Sources(options).SelectMany(sources =>
         {
@@ -2547,10 +2581,17 @@ public sealed class InstanceAutoRegistrationService(
                 {
                     var listingIncomplete = answers.Any(a => a.Failed);
                     var sourceUnreachable = answers.Any(a => a.Failed && !a.Held);
+                    // Bound by (source, id), not id alone: where several sources list the same id,
+                    // the one the install record was stamped with is preferred, so a repair never
+                    // re-asserts another source's files over the package that is installed.
                     var catalog = answers
                         .SelectMany(a => a.Candidates)
                         .GroupBy(c => c.Package.Id, StringComparer.Ordinal)
-                        .ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
+                        .ToImmutableDictionary(
+                            g => g.Key,
+                            g => g.FirstOrDefault(c => SameSource(c.Package.Source, recordedSources.GetValueOrDefault(g.Key)))
+                                 ?? g.First(),
+                            StringComparer.Ordinal);
 
                     var atRecordedHash = ImmutableList.CreateBuilder<InstallCandidate>();
                     foreach (var (id, recorded) in recordedModuleVersions.OrderBy(kv => kv.Key, StringComparer.Ordinal))
@@ -2600,7 +2641,20 @@ public sealed class InstanceAutoRegistrationService(
                                 id, recorded, candidate.Package.ModuleVersion ?? "(none)");
                             continue;
                         }
-                        atRecordedHash.Add(candidate with { Reconciled = true });
+                        // A commercial package the deployment configuration authorized is REPAIRED
+                        // under that same authority — re-derived here, after the default pass has
+                        // published its requirement closure — instead of being classified as
+                        // unauthorized and skipped on every boot. The gate re-verifies it.
+                        atRecordedHash.Add(candidate with
+                        {
+                            Reconciled = true,
+                            // …and the configuration's authority only from the RECORDED source:
+                            // another source listing the same id derives none.
+                            ConfigAuthority = ProvenanceIsTrusted(candidate)
+                                              && SameSource(candidate.Package.Source, recordedSources.GetValueOrDefault(id))
+                                ? hub.ServiceProvider.GetService<DeploymentConfigAuthority>()?.Because(candidate.Package)
+                                : null,
+                        });
                     }
                     if (atRecordedHash.Count == 0)
                         return Observable.Return(DefaultInstallSummary.Empty with
@@ -2639,7 +2693,10 @@ public sealed class InstanceAutoRegistrationService(
     /// <param name="PackageId">The package id — the record's node id.</param>
     /// <param name="Partition">The partition the record was installed into.</param>
     /// <param name="ModuleVersion">The module version the record carries.</param>
-    internal sealed record ReassertTarget(string PackageId, string Partition, string ModuleVersion);
+    /// <param name="Source">The source the install record was stamped with — the repair re-asserts
+    /// from a listing of THAT source when one lists the package, and derives the deployment
+    /// configuration's authority only from it. Null when the record names none.</param>
+    internal sealed record ReassertTarget(string PackageId, string Partition, string ModuleVersion, string? Source = null);
 
     /// <summary>
     /// Runs the PRODUCTION default-install pass on demand — the identical selection, ordering and
