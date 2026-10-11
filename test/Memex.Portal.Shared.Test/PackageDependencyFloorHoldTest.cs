@@ -196,6 +196,39 @@ public class PackageDependencyFloorHoldTest(ITestOutputHelper output) : Monolith
     }
 
     /// <summary>
+    /// A hold is DECIDED on a record read before it is written. When the candidate lands in between
+    /// (another replica whose loaded dependency meets the floor, or a click), the late hold must not
+    /// be stamped on the installed version: the next reconcile ends at the equal-hash gate, before
+    /// anything clears a hold, so it would stay for good.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task AHoldDecidedOnAStaleRecord_IsNotStampedOnceTheCandidateHasLanded()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await InstallV1(PackageUpdatePolicy.Auto);
+        var staleRecord = await FloorHoldFixture.AwaitRecord(Mesh, r => r.ModuleVersion == FloorHoldFixture.V1Hash, ct);
+        var candidate = V2Requiring(Requirement);
+
+        // The candidate lands while the hold is in flight (no loaded reading for the dependency here).
+        await CatalogLayoutAreas
+            .InstallOrUpdate(Mesh, new FloorHoldFixture.CountingSource(FloorHoldFixture.V2Files()), "HEAD", candidate, Logger)
+            .Timeout(180.Seconds()).Await(ct);
+        await FloorHoldFixture.AwaitRecord(Mesh, r => r.ModuleVersion == FloorHoldFixture.V2Hash, ct);
+
+        var unmet = new UnmetPackageDependency(Requirement, Dependency, DependencyModule, "1.11.26");
+        await PackageDependencyFloorGate.RecordHold(Mesh, candidate, staleRecord, unmet, Logger)
+            .Timeout(60.Seconds()).Await(ct);
+
+        var after = await FloorHoldFixture.AwaitRecord(Mesh, r => r.ModuleVersion == FloorHoldFixture.V2Hash, ct);
+        after.HeldUpdate.Should().BeNull("the candidate is what is installed — there is no update left to hold");
+        after.HeldSince.Should().BeNull();
+
+        // The control: on a record still at the installed version the same call does stamp the hold.
+        PackageDependencyFloorGate.AlreadyAt(staleRecord, candidate).Should().BeFalse();
+        PackageDependencyFloorGate.AlreadyAt(after, candidate).Should().BeTrue();
+    }
+
+    /// <summary>
     /// A FRESH install is not held: there is no installed version to keep, and the installer orders
     /// a package's dependencies before it. Holding it would leave a default package uninstalled.
     /// </summary>

@@ -176,14 +176,21 @@ public static class PackageDependencyFloorGate
         // RunAsSystem, never Observable.Using (#1790): the install-records partition is System-owned.
         return hub.ServiceProvider.GetRequiredService<AccessService>()
             .RunAsSystem(() => hub.GetMeshNodeStream(recordPath)
-                .Update<PackageManifest>(current => current with
-                {
-                    HeldUpdate = sentence,
-                    // A hold for ANOTHER reason that this one replaces had its own ticket; this one has none.
-                    HeldUpdateDispatch = null,
-                    HeldUpdateDispatchedAt = null,
-                    HeldSince = IsDependencyHold(current.HeldUpdate) ? current.HeldSince ?? now : now,
-                }))
+                .Update<PackageManifest>(current => AlreadyAt(current, candidate)
+                    // 🚨 The record this hold was DECIDED on is a read from before this write: another
+                    // replica (whose loaded dependency satisfies the floor) or a click may have
+                    // installed the candidate in between. A hold stamped then would sit on the
+                    // installed version for good — the next reconcile ends at the equal-hash gate,
+                    // before anything clears a hold.
+                    ? current
+                    : current with
+                    {
+                        HeldUpdate = sentence,
+                        // A hold for ANOTHER reason that this one replaces had its own ticket; this one has none.
+                        HeldUpdateDispatch = null,
+                        HeldUpdateDispatchedAt = null,
+                        HeldSince = IsDependencyHold(current.HeldUpdate) ? current.HeldSince ?? now : now,
+                    }))
             .Take(1)
             .Select(_ => Unit.Default)
             .DefaultIfEmpty(Unit.Default)
@@ -194,6 +201,18 @@ public static class PackageDependencyFloorGate
                     candidate.Id, recordPath);
                 return Observable.Return(Unit.Default);
             });
+    }
+
+    /// <summary>Whether <paramref name="record"/> already describes <paramref name="candidate"/>'s
+    /// content — the candidate has landed, so there is no update left to hold. Pure.</summary>
+    /// <param name="record">The install record as it stands now.</param>
+    /// <param name="candidate">The candidate a hold was decided for.</param>
+    public static bool AlreadyAt(PackageManifest record, PackageManifest candidate)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        ArgumentNullException.ThrowIfNull(candidate);
+        return !string.IsNullOrEmpty(candidate.ModuleVersion)
+            && string.Equals(record.ModuleVersion, candidate.ModuleVersion, StringComparison.Ordinal);
     }
 
     /// <summary>
