@@ -299,6 +299,63 @@ live until the owner goes down. Whether anything should end such a read earlier 
 `Observe` completes on the first answer) is a separate question, not measured here. A read that ends
 EMPTY on a healthy hub also stays registered on purpose: its caller is still owed the teardown NACK.
 
+## 9. The 2026-10-11 census: every `sync/` hub is the fixed complement of a live owner
+
+Three in-process, read-only censuses on images carrying every fix this page names (core
+`e438ab89e7`, image `3.1.10517`). They walk the live hosted-hub tree by field reads and resolve
+nothing from DI. This is the reading #3432 was closed on, and it is the issue's own third outcome
+row: **the population is per-hub cost, not retention.**
+
+| replica | uptime | hubs | `sync/` | node hubs | last-GC heap |
+|---|---:|---:|---:|---:|---:|
+| instance A, pod `…5c74fb9855-d9wfp` | 26.7 min | 276 | 228 | 48 | 974 MiB (`GC.GetTotalMemory`) |
+| instance B, pod `…688f5555d6-pzvwj` | 30.9 min | 670 | 569 | 101 | 1 303 MiB |
+| instance B, pod `…688f5555d6-8f2g5` (the FIRST replica of its generation to boot) | 32.9 min | 4 795 | 3 736 | 1 059 | 5 563 MiB, of which 1 779 MiB fragmented |
+
+**Attribution, instance A** (the v7.2 census, identity exact — a stream counts only when its
+`ClientId` equals the hub's `Address.Id`): `sync=228 attributed=228`, every other bucket zero. All
+228 read `Started / <not started>` except one `Starting`. Each is one of the owner hub's own
+data-source reduces (`MeshNodeReference`, `CollectionReference`, `CollectionsReference` on
+`host=X, owner=ds/X`) or one mesh-node cache hydration (`host=cache/…`, 68 of them). The duplicate
+discriminator reads `streams=228 distinctPairs=197 excess=31`, and **every** duplicate group reads
+`refsEqual=YES hash=SAME`, the configured (deliberately uncached) branch. No group reads
+`refsEqual=NO`: the reference that could not be a cache key (`ContentCollectionReference`, 24 of the
+80 excess on 2026-09-16) is gone.
+
+**Shape, instance B, the busy replica** — `sync/` hubs per parent:
+
+| `sync/` children | parents | hubs |
+|---:|---:|---:|
+| 1 | 1 | 1 |
+| 3 | 696 | 2 088 |
+| 4 | 284 | 1 136 |
+| 5–12 | 65 | 354 |
+| 157 | 1 (`cache/…`, one per cached path) | 157 |
+
+980 of 1 047 parents hold exactly three or four. A hub that accumulated streams per read, per write
+or per subscriber would stand out of that histogram, and the only parent above twelve is the cache
+hub, whose count is its entry count. **So the number of `sync/` hubs is (live node hubs × 3–4) + cache
+entries, and nothing else.**
+
+🚨 **What decides the heap is therefore how many node hubs are live, and on the first replica of a
+generation that is the boot.** The 1 059 node hubs on `8f2g5` thirty minutes after it started are
+not traffic: 403 are two-segment addresses (NodeType definitions, the bake), 128 are partition
+roots, 115 are `…/_Policy`, 115 `…/_Entitlements`, 43 `…/_GitSync`, 82 `Admin/Build/…`, 44
+`MeshWeaver/samples/…`. Its sibling, booted ninety seconds later and serving the same instance,
+holds 101. At about 5 MB of live heap per node hub (its own scope, type registry, workspace and its
+three or four `sync/` hubs) that fan-out is the multi-GiB `[HEAPSTEP]` series every roll prints in
+its first minutes — the sampled allocation of those steps is `System.String`, `System.Byte[]`,
+`Entry[System.String][]` and Autofac's `IResolvePipelineBuilder` handlers and
+`MiddlewareDeclaration`, which is hub construction.
+
+🚨 **NOT established:** whether those boot-activated hubs retire once idle. The replica was replaced
+by the next roll 20 minutes after the reading (the instance rolled twice inside one hour), so no
+second reading on the same process exists, and at 33 minutes an idle activation is only just past
+the keep-alive window plus the collection age. The 2026-09-25 reading on a 30 h process (post-GC
+floor level at about 3.3 GiB from hour 18) is the newest evidence that the population plateaus. A
+replica that lives a day is the instrument; `HubCensusByOwner` (a `Code` node in the operator's own
+partition, the script behind the tables above) is the reading to repeat on it.
+
 ## Related
 
 - [Stream Liveness and the Hub Reference](../StreamLivenessAndTheHubReference) — #3321 step 3, the
