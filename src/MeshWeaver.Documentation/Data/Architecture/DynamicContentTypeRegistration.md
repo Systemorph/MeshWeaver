@@ -338,8 +338,151 @@ could not register, which its own Warning lines name, plus the deferred settle l
 types. Each boot also logs one `ContentTypeOnDemandRegistration: <type> → Registered` line per type a
 boot reader needed.
 
+## `StaleBytes` on every boot: a record that names a build the store does not hold
+
+After the two fixes above, the `memex` deployment still logged this boot after boot:
+
+> `DynamicContentTypeRegistration: 15 baked dynamic NodeType(s) could NOT be registered on this replica — their content stays untyped here until an instance activates here`
+
+Each of the fifteen was `StaleBytes`: the record's `LatestAssemblyMvid` was not the MVID of the file
+the store held under the record's version. What the governed `Logs` reads established
+(`Ops/Actions/w14c-memex-*` on the control instance, 2026-10-10):
+
+| reading | value |
+|---|---|
+| boots that logged the line | 13, across five consecutive generations, in a 240 min window |
+| the types | the same fifteen, with the same pair of MVIDs each, in two lines read in full: 16:53Z and 20:43Z, four generations apart |
+| rebuilt in between? | no: an unchanged pair means neither the record nor the store's file moved in those four hours |
+| effect on a reader | `content for nodeType … was NEVER resolvable on this replica — 2 read(s) degraded` for one of them |
+
+So it is not a roll race and not a previous image's bake. It is a **standing record**: version, path
+and MVID are one reference, and these records carry a version and a path that resolve to build N
+with the MVID of a build N+1. That is what the first-write-wins store produced when a type was
+recompiled, or a bundle adopted, at an unchanged node version: the store kept N's file and handed N's path back, and the
+caller stamped the MVID of the bytes it had in hand
+([Stale State Until Recycle](../StaleStateUntilRecycle), `BundleUpdateTest`). The store is
+content-addressed now, so no new record gets into this state.
+
+**Why nothing healed the old ones.** Three components asked three different questions about the
+same record:
+
+| component | question | answer for such a record |
+|---|---|---|
+| activation (bind-time check) | are these the bytes the record names? | no — recompile, per instance, and only if an instance activates |
+| the registration-only pass, and the on-demand route | are these the bytes the record names? | no — `StaleBytes`, nothing registered |
+| the boot sweep's bake probe (`NodeTypeBakeStatus.ProbeOne`) | does the store hold *a* file under `(path, LastCompiledVersion)`? | yes — `Baked` |
+
+The sweep is the only pass that rebuilds without an instance, and it takes its work list from the
+probe. A type with few instances, read through queries and never activated, therefore stayed
+untypeable on every replica, on every boot, under a bake report that counted it baked.
+
+**The fix is at the probe.** When a record claims a build for the live framework and states an MVID,
+the probe resolves by identity (`IAssemblyStore.TryGetBuildPath` with the record's content path and
+MVID) and compares the MVID of the file it got. A different build under the record's version is
+`BytesMissing`, with a detail that names both MVIDs. The sweep then does what it does for any store
+miss: re-fetch the shipped build if a source has exactly that MVID, else rebuild on the owner. The
+rebuild stores its bytes and stamps version, path and MVID from that one upload, so the record is
+coherent, the next boot's probe reads `Baked`, and the pass registers the type. Two boundaries are
+kept on purpose:
+
+- A record that names **another framework** keeps the key-only question. "Bytes win over the record"
+  is about a live-framework build sitting under a record whose write-back lagged; that build is by
+  construction not the one such a record names.
+- An MVID that **cannot be read** (a store that hands out no local file) is not a mismatch.
+- The per-type store read (the lookup and the MVID read) is blocking file I/O on a network share. The
+  in-process callers run it through the mesh's `FileSystem` I/O pool
+  (`NodeTypeBakeStatus.ProbeThrough`), the pool the registration pass reads the same files through,
+  or `IoPool.Unbounded` on a mesh with no pool registry. The public `Probe` keeps its signature and
+  reads inline, for a caller with no mesh.
+- An entry whose foreign bytes sit **at the record's own content path** is **never a regression
+  baseline** (`NodeTypeBakeEntry.RecordNamesABuildTheStoreLacks`, read by `IsRegressionBaselineFor`).
+  That is the residue. A record whose own file is *gone*, with a sibling of the version answering
+  for it, named a working build and lost it: it is an ordinary store miss and keeps its baseline
+  (`AForeignSiblingIsNotAlwaysTheLegacyResidueTest`). The build the record names was available to no replica, so a
+  rebuild that fails takes nothing away. It is reported and stamped like any failed compile, and it
+  does not refuse the new replica's readiness. Without this, one long-incoherent record whose source
+  no longer compiles would stall the first roll that looked at it.
+
+The pass and the read route stay non-compiling and non-writing. Nothing was added to them.
+
+**Pinned by** `RecordNamesABuildTheStoreLacksTest` (MeshWeaver.Updates.Test). It compiles a type,
+stamps its record with an MVID no file carries, and asserts the pass's `StaleBytes` (the symptom),
+the probe's `BytesMissing`, the sweep's rebuild, the coherent record after it, and that the pass no
+longer answers `StaleBytes`. Its control is the same probe on the untouched record: `Baked`. The pooled
+read is pinned by `BakeProbeReadsTheStoreThroughThePoolTest`.
+
+**Acceptance on a portal:** on the first boot that carries this, one
+`DynamicTypePreWarmer: N NodeType(s) claim a usable build … Rebuilding:` Warning names the fifteen
+with both MVIDs. On every boot after it, the `could NOT be registered` Warning no longer names them.
+A type that is named on a *second* boot was re-broken by something live, and that is a new finding.
+
+## A registration can end
+
+The mesh-wide registry holds types from collectible load contexts, and a context is unloaded when
+its hub is disposed (`MeshDataSource` → `ICompilationCacheService.UnloadNodeContexts`) or a newer
+build supersedes it. `AssemblyLoadContext.Unload()` only **starts** an unload: `Unloading` fires
+while the generation is fully loaded, and it stays loaded for as long as anything holds one of its
+objects. The registry used to drop the generation's entries at that instant.
+
+Measured on an outgoing memex-cloud pod (`6dc5db759b-786n6`, booted 19:51Z, 2026-10-10,
+`Ops/Actions/w14c-cloud-786n6-*` on the control instance):
+
+| instant (UTC) | event |
+|---|---|
+| 20:34:49 | another replica of its generation stops |
+| 20:34:53 – 20:36:03 | fifteen `GetStream: Content for Ops/Status/… stayed an untyped JsonElement` lines, three rounds over five nodes |
+| 20:36:10 | `Application is shutting down...` on this pod |
+| 20:36:11 | `giving up on owner Hosting/DeploymentStatus — 4 DISTINCT owner activations have refused this stream`, and `content for nodeType Hosting/DeploymentStatus was NEVER resolvable on this replica — 15 read(s) degraded` |
+
+The degraded-read count is exactly the fifteen lines, so the pod typed every earlier read of that
+type, for 45 minutes. It lost the type before its own host began to stop, while the type's owner
+address was being re-activated and torn down again. No successor registered on that pod. The
+on-demand route could not put the type back either: its verdict is kept for the process, and the
+kept verdict said `Registered`.
+
+**The registry demotes instead of dropping** (`MeshContentTypeRegistry`). On `Unloading`, a
+generation's entries leave the strong maps and enter a weak shadow, the same shape `TypeRegistry`
+has had since MeshWeaver#1169. A demoted type answers for as long as something else keeps its
+generation alive, roots nothing, never answers for a contested discriminator, and is displaced by
+the first successor registration. Once the generation is collected the entry is dead and the lookup
+says "unknown", as before. Registration and eviction share one short
+lock, so an unload cannot begin between a type's strong inserts and its `Unloading` subscription. A
+type that registers after its context began unloading goes to the shadow directly: the event fires
+once, so a strong entry would never be evicted. The eviction runs wherever the unload is initiated,
+which can be the finalizer thread after the registry itself became unreachable, so it reads nothing
+finalizable. The "already unloading" marker is a long weak reference in an immutable list, not a
+`ConditionalWeakTable`, whose container can be finalized first. A lookup that finds the type alive hands out a strong reference, so a demoted type
+that keeps being read stays loaded until a successor registers: at most one superseded generation
+per name.
+
+**Pinned by** `ContentTypeRegistryReleasesAnUnloadedGenerationTest` (MeshWeaver.Compiler.Pipeline.Test:
+a type whose context began unloading still resolves while an object of it is held; a successor
+displaces it; a late registration is never rooted; a context that is finalized instead of unloaded
+does not fault the finalizer; a collected generation is released, the pre-existing case) and
+`AReadAfterTheTypesHubLeftIsStillTypedTest` (MeshWeaver.Graph.Test: a baked type is registered
+through the read route, its contexts are unloaded the way a hub's disposal unloads them, and the
+next read is typed).
+
+**Acceptance on a portal:** during a roll, the outgoing replicas log no
+`GetStream: Content for Ops/Status/… stayed an untyped JsonElement` line between the first new
+replica's boot and their own shutdown line.
+
 ## What this does not establish
 
+- **The fifteen records themselves were not read.** The MCP connection to the control instance's
+  own mesh was down while this was written, so the record fields (`lastCompiledVersion`,
+  `latestAssemblyPath`, `lastCompileSucceededAt`) are inferred from the log line's two MVIDs staying
+  the same across four generations. The store's own Information lines (`Cached assembly at …`,
+  `no file … carries the published MVID`) are not shipped to the log store, so their absence from a
+  `Logs` read says nothing. That they date from the first-write-wins store is the
+  explanation that fits every reading; their stamp dates would confirm it.
+- **What tears the hubs down on an outgoing replica** was not traced past the owner-refusal line. The
+  registry change does not depend on it.
+- **A registration that ended because its generation was COLLECTED is not re-established by a
+  read.** `ContentTypeOnDemandRegistration` keeps its verdict for the process, so a kept
+  `Registered` is replayed over a registry that no longer answers. Releasing a lapsed verdict was
+  written and withdrawn: a test mesh could not be brought to collect the generation, so the state
+  could not be reproduced and the change could not be shown to fix it.
 - **The pass is shipped; production verification is not.** What is established is the mechanism,
   the measurements that separate it from a declined bundle, that the cheap fix is unsafe, and — in
   a test mesh — that the pass registers a baked type without compiling or writing.

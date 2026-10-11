@@ -114,6 +114,22 @@ public sealed record NodeTypeBakeEntry(string TypePath, BakeState State, string?
     public string? ProducedByPlatformBuild { get; init; }
 
     /// <summary>
+    /// 🚨 The file AT THE RECORD'S OWN PATH is not the build the record names: it carries a different
+    /// MVID (Systemorph/MeshWeaver.Plugins#2799) — the first-write-wins residue. A record whose path
+    /// is simply gone, with a sibling of the version still in the store, is NOT this state: it named
+    /// a working build and lost it, and it stays an ordinary store miss. The entry is
+    /// <see cref="BakeState.BytesMissing"/> and is rebuilt like any store miss.
+    ///
+    /// <para><b>It is never a regression baseline</b> (<see cref="IsRegressionBaselineFor"/>). A
+    /// regression needs a working build to regress FROM, and the build this record names was not
+    /// available to any replica — every binder was already refusing the bytes in its place. If the
+    /// rebuild fails, this image has taken nothing away, and refusing readiness for it would let a
+    /// handful of long-incoherent records stall the first roll that looks at them. The failure is
+    /// reported and stamped like any other; it does not gate.</para>
+    /// </summary>
+    public bool RecordNamesABuildTheStoreLacks { get; init; }
+
+    /// <summary>
     /// 🚨 Whether a WORKING BUILD of this type is on record at all — the thing a regression
     /// regresses FROM (#5544).
     ///
@@ -148,6 +164,7 @@ public sealed record NodeTypeBakeEntry(string TypePath, BakeState State, string?
     /// <param name="livePlatformVersion">The running platform build, or <c>null</c> when unknown.</param>
     public bool IsRegressionBaselineFor(string? livePlatformVersion)
         => HadWorkingBuild
+           && !RecordNamesABuildTheStoreLacks
            && !(ProducedByPlatformBuild is { Length: > 0 } producer
                 && !string.IsNullOrWhiteSpace(livePlatformVersion)
                 && (string.Equals(producer, livePlatformVersion, StringComparison.Ordinal)
@@ -571,6 +588,35 @@ public static class NodeTypeBakeStatus
         ILogger? logger = null,
         Func<string, string?>? liveDependencyIdOf = null,
         string? liveToolchainId = null)
+        => ProbeThrough(null, definitions, store, liveFrameworkVersion, logger, liveDependencyIdOf, liveToolchainId);
+
+    /// <summary>
+    /// <see cref="Probe"/> with each type's store read run through <paramref name="pool"/>. A
+    /// different NAME on purpose: a second <c>Probe</c> overload would make every existing
+    /// <c>cref="…Probe"</c> ambiguous (CS0419), which is an error under warnings-as-errors.
+    ///
+    /// <para>🚨 The store read is blocking file I/O — a directory listing, an open, and (when the
+    /// record names an MVID) a PE-header read of the file the store answered with — against what is
+    /// a network share on a deployed portal. Subscribed inline it runs on whatever thread delivered
+    /// the enumeration, once per type. Every in-process caller that has a mesh passes its
+    /// <c>FileSystem</c> pool (the same pool the registration pass reads the same files through);
+    /// the public overload keeps the inline read for a caller with no pool to give.</para>
+    /// </summary>
+    /// <param name="pool">The I/O pool the per-type store read runs in, or null to read inline.</param>
+    /// <param name="definitions">Dynamic NodeTypes to probe, keyed by mesh path.</param>
+    /// <param name="store">The shared assembly store to interrogate.</param>
+    /// <param name="liveFrameworkVersion">Framework identity to compare against; defaults to the live one.</param>
+    /// <param name="logger">Optional logger for per-type probe outcomes.</param>
+    /// <param name="liveDependencyIdOf">Resolves a dependency's live surface id.</param>
+    /// <param name="liveToolchainId">The live toolchain id.</param>
+    internal static IObservable<NodeTypeBakeReport> ProbeThrough(
+        Mesh.Threading.IIoPool? pool,
+        IReadOnlyDictionary<string, NodeTypeDefinition?> definitions,
+        IAssemblyStore store,
+        string? liveFrameworkVersion = null,
+        ILogger? logger = null,
+        Func<string, string?>? liveDependencyIdOf = null,
+        string? liveToolchainId = null)
     {
         ArgumentNullException.ThrowIfNull(definitions);
         ArgumentNullException.ThrowIfNull(store);
@@ -581,7 +627,7 @@ public static class NodeTypeBakeStatus
             .Where(kvp => kvp.Value is not null && !string.IsNullOrEmpty(kvp.Key))
             .OrderBy(kvp => kvp.Key, StringComparer.OrdinalIgnoreCase)
             .Select(kvp => ProbeOne(
-                kvp.Key, kvp.Value!, store, framework, logger, liveDependencyIdOf, liveToolchainId))
+                kvp.Key, kvp.Value!, store, framework, logger, liveDependencyIdOf, liveToolchainId, pool))
             .ToList();
 
         return probes.Count == 0
@@ -602,7 +648,8 @@ public static class NodeTypeBakeStatus
         string framework,
         ILogger? logger,
         Func<string, string?>? liveDependencyIdOf,
-        string? liveToolchainId)
+        string? liveToolchainId,
+        Mesh.Threading.IIoPool? pool)
         => Observable.Defer(() =>
         {
             // Probe whenever there is a version to probe WITH — not only when the record already
@@ -625,14 +672,92 @@ public static class NodeTypeBakeStatus
                     ClassifyDetailed(
                         definition, false, framework, liveDependencyIdOf, liveToolchainId)));
 
-            return store
-                .TryGetAssemblyPath(typePath, definition.LastCompiledVersion!.Value)
-                .Take(1)
-                .Select(path => Describe(
-                    typePath, definition,
-                    ClassifyDetailed(
-                        definition, !string.IsNullOrEmpty(path), framework,
-                        liveDependencyIdOf, liveToolchainId)))
+            // 🚨 BY IDENTITY when the record claims a build for THIS framework and names its MVID
+            // (Systemorph/MeshWeaver.Plugins#2799). The version key is not an identity: several
+            // builds can share it, and a record can name one the store does not hold — the standing
+            // residue of the first-write-wins store (before the store became content-addressed, a
+            // recompile at an unchanged node version kept build N's file while the record was
+            // stamped with N+1's MVID). Asked by key alone, that type is "Baked" here on every
+            // boot, while every binder refuses the very bytes this probe counted: activation's
+            // bind-time check recompiles per instance, and the registration-only pass reports
+            // StaleBytes and leaves the type untypeable on this replica. Nothing ever rebuilt it,
+            // because the one pass that rebuilds takes its work list from this probe. So the probe
+            // asks the question the binders ask — "does the store hold the build the record
+            // NAMES?" — and a no is BytesMissing, which the sweep re-fetches or rebuilds on the
+            // owner, re-stamping one coherent (version, path, MVID) triple.
+            //
+            // A record naming ANOTHER framework keeps the key-only question: "bytes win over the
+            // record" (ClassifyAgainst) is about a live-framework build sitting under a record
+            // whose write-back lagged, and that build is by construction not the one such a
+            // record names. An MVID that cannot be read (a store that hands out no local file) is
+            // "I do not know" and never a mismatch, exactly as ServedBuildIdentity treats it.
+            var namesLiveBuild =
+                string.Equals(definition.CompiledFrameworkVersion, framework, StringComparison.Ordinal)
+                && !string.IsNullOrEmpty(definition.LatestAssemblyMvid);
+            // The whole store read — the lookup (a store may list and open when CALLED, not only
+            // when subscribed) and the MVID read of what it answered — is one leaf, so it is one
+            // pool slot when a pool is given.
+            IObservable<(string? Path, string? Foreign, string? AtOwnPath)> ReadTheStore()
+                => (namesLiveBuild
+                        ? store.TryGetBuildPath(
+                            typePath, definition.LastCompiledVersion!.Value,
+                            definition.LatestAssemblyPath, definition.LatestAssemblyMvid)
+                        : store.TryGetAssemblyPath(typePath, definition.LastCompiledVersion!.Value))
+                    .Take(1)
+                    .Select(path =>
+                    {
+                        var foreign = namesLiveBuild && !string.IsNullOrEmpty(path)
+                            ? ForeignBuildAtTheRecordsKey(definition.LatestAssemblyMvid!, path)
+                            : null;
+                        // The record's OWN file is asked about by itself, never inferred from which
+                        // file the store's fallback happened to answer with: that fallback is the
+                        // version's newest file, which can be a sibling while the own file is there
+                        // too, holding the wrong bytes.
+                        return (path, foreign, foreign is null
+                            ? null
+                            : ForeignBuildAtTheRecordsOwnPath(
+                                path!, definition.LatestAssemblyPath!, definition.LatestAssemblyMvid!));
+                    });
+
+            return (pool is null ? Observable.Defer(ReadTheStore) : pool.InvokeObservable(_ => ReadTheStore()))
+                .Select(read =>
+                {
+                    var (path, foreign, atOwnPath) = read;
+                    var entry = Describe(
+                        typePath, definition,
+                        ClassifyDetailed(
+                            definition, !string.IsNullOrEmpty(path) && foreign is null, framework,
+                            liveDependencyIdOf, liveToolchainId));
+                    if (foreign is null || entry.State is not BakeState.BytesMissing)
+                        return entry;
+                    // 🚨 TWO different states answer with a foreign sibling, and only one of them
+                    // is "this record never named a build the store held":
+                    //   • the file AT THE RECORD'S OWN PATH carries another MVID — the
+                    //     first-write-wins residue: the store handed back the standing file's path
+                    //     and the record was stamped with the identity of bytes that never landed;
+                    //   • the record's path is GONE and a sibling of the version answered instead —
+                    //     the record did name a working build, and it has since been lost.
+                    // The second is an ordinary store miss: it keeps its regression baseline, so an
+                    // image that cannot rebuild a type that WAS working is still refused.
+                    return atOwnPath is not null
+                        ? entry with
+                        {
+                            RecordNamesABuildTheStoreLacks = true,
+                            Detail =
+                                $"record names build MVID {definition.LatestAssemblyMvid} at "
+                                + $"{definition.LatestAssemblyCollection}/{definition.LatestAssemblyPath}, "
+                                + $"but the file at that path is MVID {atOwnPath} — "
+                                + "the build the record names never reached the store",
+                        }
+                        : entry with
+                        {
+                            Detail =
+                                $"record names build MVID {definition.LatestAssemblyMvid} at "
+                                + $"{definition.LatestAssemblyCollection}/{definition.LatestAssemblyPath}, "
+                                + $"and that file is gone; a sibling of the version (MVID {foreign}) "
+                                + "is not the build the record names",
+                        };
+                })
                 // Fail SAFE, never fail OPEN: an unreadable store must mean "bake it", not "trust
                 // the record and serve bytes that may not exist".
                 .Catch<NodeTypeBakeEntry, Exception>(ex =>
@@ -644,6 +769,33 @@ public static class NodeTypeBakeStatus
                         typePath, BakeState.BytesMissing, $"store probe failed: {ex.Message}"));
                 });
         });
+
+    /// <summary>
+    /// The MVID of the file the store answered with, when it is readable and is NOT the build the
+    /// record names; null when it is that build or cannot be read. Metadata only — nothing is
+    /// loaded (<see cref="ServedBuildIdentity.OfFile"/>).
+    /// </summary>
+    private static string? ForeignBuildAtTheRecordsKey(string recordedMvid, string resolvedPath) =>
+        ServedBuildIdentity.OfFile(resolvedPath) is { } found
+        && !string.Equals(found, recordedMvid, StringComparison.OrdinalIgnoreCase)
+            ? found
+            : null;
+
+    /// <summary>
+    /// The MVID of the file at the record's OWN content path, when that file exists and is not the
+    /// build the record names; null when it is gone, unreadable, or is that build. The store's
+    /// answer is used only to locate the type's directory: every build of a type sits beside its
+    /// siblings, and the record's content path ends in its own file name.
+    /// </summary>
+    private static string? ForeignBuildAtTheRecordsOwnPath(
+        string resolvedPath, string recordContentPath, string recordedMvid)
+    {
+        var directory = System.IO.Path.GetDirectoryName(resolvedPath);
+        var fileName = System.IO.Path.GetFileName(recordContentPath.Replace('\\', '/'));
+        return string.IsNullOrEmpty(directory) || string.IsNullOrEmpty(fileName)
+            ? null
+            : ForeignBuildAtTheRecordsKey(recordedMvid, System.IO.Path.Combine(directory, fileName));
+    }
 
     private static NodeTypeBakeEntry Describe(
         string typePath,
