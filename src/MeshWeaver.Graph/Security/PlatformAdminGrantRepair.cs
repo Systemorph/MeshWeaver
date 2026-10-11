@@ -17,7 +17,7 @@ namespace MeshWeaver.Graph.Security;
 /// (<c>AccessAssignmentGuard.IsForbiddenOnSystemOwned</c> refuses every Admin/Editor grant and
 /// <c>SystemOwnedAccessRetractionHandler</c> retracts the ones that predate the sync). A platform
 /// admin is deliberately NOT a data superuser, so their Admin-partition grant reaches nothing there
-/// either. Measured on partnerre-control 2026-09-29/30: Space <c>Deployments</c>, created over MCP and
+/// either. Measured on client-a-control 2026-09-29/30: Space <c>Deployments</c>, created over MCP and
 /// GitSynced a moment later, recorded no grant; the refusal told the platform admin that "a platform
 /// admin" must grant access under <c>Deployments/_Access</c> — and refused that very grant. Every
 /// Hosting InstanceAction reading <c>Deployments/*</c> as its approver then became unapprovable.</para>

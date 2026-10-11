@@ -71,11 +71,11 @@ refusal itself is the input to the declaration.
 
 Inferring the bootstrap from the control instance's history — the record's earlier versions, or the
 `renderedValues` of the last successful action for the deployment — was considered and measured
-against the first two cases, and it does not cover them. On 2026-10-10 the pearl Provision
-(`Ops/Actions/provision-pearl-20261010-values-half`) refused on
-`config.memex_portal.OpenRouter__Models__0..3`. The control instance holds pearl's record from
+against the first two cases, and it does not cover them. On 2026-10-10 the client-b Provision
+(`Ops/Actions/provision-client-b-20261010-values-half`) refused on
+`config.memex_portal.OpenRouter__Models__0..3`. The control instance holds client-b's record from
 version 1 (2026-10-08), and version 1 already renders the EU route instead of those keys; the only
-`Done` action for pearl there is a secret-status read with no render. The keys were rendered by a
+`Done` action for client-b there is a secret-status read with no render. The keys were rendered by a
 record version that predates the control instance's copy, so no control-side history names them,
 while a declaration on the record covers that case and every other one. History that exists for
 one instance and not another is a guess about provenance; the declaration is not.

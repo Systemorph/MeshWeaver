@@ -23,7 +23,7 @@ public class NewlyListedPackageWaitsForGovernedProvisionTest
         InstanceAutoRegistrationService.HoldsForGovernedProvision(
             wildcardOnly: true, reconciled: false, recordedInLedger: false, freshInstance: true).Should().BeFalse();
 
-    /// <summary>An entry that names the package exactly is a reviewed decision (a deployment PR) — PartnerRe's explicit list.</summary>
+    /// <summary>An entry that names the package exactly is a reviewed decision (a deployment PR) — ClientA's explicit list.</summary>
     [Fact]
     public void AnExactlyNamedPackage_Installs() =>
         InstanceAutoRegistrationService.HoldsForGovernedProvision(
