@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Text.Json;
@@ -80,8 +81,78 @@ internal sealed class LatentDeleteStorageAdapter(InMemoryStorageAdapter inner) :
     /// </summary>
     public bool HangInsideLane { get; set; }
 
+    private long _laneAsked;
+
+    private long _laneAdmittedAt;
+
+    private long _longestLaneWaitTicks;
+
+    /// <summary>
+    /// How many deletes under <see cref="LatencyRoot"/> have ASKED <see cref="DeleteLane"/> for a slot so far.
+    /// Asked is not queued: the pool counts a leaf as waiting from here, one ThreadPool hop before it reaches
+    /// the gate, so a test that needs the leaf BEHIND other work reads this to know the leaf is on its way and
+    /// the pool's own admission split to know who is at the gate.
+    /// </summary>
+    public long LaneAsked => Interlocked.Read(ref _laneAsked);
+
+    /// <summary>
+    /// The longest a delete under <see cref="LatencyRoot"/> waited between asking <see cref="DeleteLane"/> for
+    /// a slot and being granted it - the leaf's OWN queue time, which is what a no-progress watchdog over the
+    /// commit stage has to outlast. Measured where it happens, so it carries none of the stages before the
+    /// commit and none of the test's own continuation latency.
+    /// </summary>
+    public TimeSpan LongestLaneWait => TimeSpan.FromTicks(Interlocked.Read(ref _longestLaneWaitTicks));
+
+    /// <summary>
+    /// <see cref="Stopwatch.GetTimestamp"/> of the first grant <see cref="DeleteLane"/> gave a delete under
+    /// <see cref="LatencyRoot"/>, or 0 while none was granted - the instant a hung leaf started holding its lane.
+    /// </summary>
+    public long LaneAdmittedAt => Interlocked.Read(ref _laneAdmittedAt);
+
     private IObservable<T> WithLane<T>(IObservable<T> served)
-        => DeleteLane is { } lane ? lane.InvokeObservable(ct => served) : served;
+    {
+        if (DeleteLane is not { } lane)
+            return served;
+
+        var askedAt = Stopwatch.GetTimestamp();
+        Interlocked.Increment(ref _laneAsked);
+        var admitted = lane.InvokeObservable(ct =>
+        {
+            var grantedAt = Stopwatch.GetTimestamp();
+            Interlocked.CompareExchange(ref _laneAdmittedAt, grantedAt, 0);
+            var waited = Stopwatch.GetElapsedTime(askedAt, grantedAt).Ticks;
+            long seen;
+            do
+            {
+                seen = Interlocked.Read(ref _longestLaneWaitTicks);
+            }
+            while (waited > seen
+                   && Interlocked.CompareExchange(ref _longestLaneWaitTicks, waited, seen) != seen);
+            return served;
+        });
+        return Observable.Create<T>(observer =>
+        {
+            // Before the pool has heard of this leaf: whatever is at the gate now is AHEAD of it.
+            OnLaneAsking?.Invoke();
+            var subscription = admitted.Subscribe(observer);
+            // The pool has accepted the leaf (it counts as waiting), and it may not have reached the gate yet.
+            OnLaneAccepted?.Invoke();
+            return subscription;
+        });
+    }
+
+    /// <summary>
+    /// Runs on the asking thread immediately BEFORE a delete under <see cref="LatencyRoot"/> is handed to
+    /// <see cref="DeleteLane"/>. The leaf is not in the pool yet, so a reading of the gate taken here counts
+    /// only work the leaf is certain to be behind.
+    /// </summary>
+    public Action? OnLaneAsking { get; set; }
+
+    /// <summary>
+    /// Runs on the asking thread immediately AFTER <see cref="DeleteLane"/> accepted a delete under
+    /// <see cref="LatencyRoot"/>: from here the pool counts the leaf as waiting, before the gate or at it.
+    /// </summary>
+    public Action? OnLaneAccepted { get; set; }
 
     private bool UnderLatencyRoot(string path)
         => LatencyRoot is { Length: > 0 } root
