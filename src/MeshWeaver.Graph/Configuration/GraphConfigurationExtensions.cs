@@ -368,6 +368,9 @@ public static class GraphConfigurationExtensions
                 // resolves INodeTypeInstanceLocations with GetService, so this registration is what
                 // arms it). One per mesh: the static fold plus the live definitions on this process.
                 services.AddSingleton<NodeTypeInstanceLocations>();
+
+                // A recycle wave shares each dependency-network read while it is in flight (#6520).
+                services.AddSingleton<RecycleCascadeReads>();
                 services.AddSingleton<INodeTypeInstanceLocations>(sp =>
                     sp.GetRequiredService<NodeTypeInstanceLocations>());
 
