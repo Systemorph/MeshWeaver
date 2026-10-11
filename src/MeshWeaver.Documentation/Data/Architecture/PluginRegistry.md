@@ -97,9 +97,14 @@ and they are independent:
   on the next boot. A package **newly listed** in a source this instance already seeded from, and
   covered only by a whole-source pattern such as `Plugins/*`, is **held**: it lands through a
   governed `package.provision` activity, or by being named exactly — and a held package gets **no**
-  ledger entry. A **commercial** package (a price or a sales contact) that passes the hold is never
-  installed by this unattended pass — it has no authorizing principal — and is recorded under
-  `skipped` on the ledger with its reason. Our deployments set
+  ledger entry. A **commercial** package (a price or a sales contact) **named exactly**
+  (`Source/Package`) is **installed**, together with what it requires (commercial requirements
+  included), on the authority of the deployment configuration — the principal
+  `deployment-config:{InstanceId}`, see
+  [the deployment configuration authorizes what it names](#the-deployment-configuration-authorizes-what-it-names).
+  A commercial package covered only by a whole-source pattern names nothing: it is never installed
+  (nor pulled in as a requirement) by this pass and is recorded under `skipped` on the ledger with
+  its reason. Our deployments set
   `["Plugins/*"]`, so a new portal comes up with the platform plugins — the Store included — already
   present and (per `AutoUpdateByDefault`) tracking their repo. 🚨 Over a **local checkout** — a
   `PluginCatalog:Sources:N:RepoPath` that is a directory on the host, which is what a self-registry
@@ -613,7 +618,7 @@ lists image tags with, so an installation speaks to the fleet's registry through
 one credential, for images and bundles alike. The design is
 [Plugin Bundles in the Registry](../PluginBundlesInTheRegistry).
 
-## Free syncs freely, commercial needs a Global Admin or a governed activity
+## Free syncs freely, commercial needs a Global Admin, a governed activity or the deployment configuration
 
 Who may bring a package onto an installation is decided by its **price**, and the decision is made on
 the **action**, not on the screen that triggered it:
@@ -621,7 +626,7 @@ the **action**, not on the screen that triggered it:
 | Package | Access / sync |
 |---|---|
 | **Free** — `price` null or `0` | Installs and auto-updates with **no special permission**. This is what lets a fresh installation pick up the platform baseline unattended. |
-| **Commercial** — a non-zero `price` (positive = purchasable, negative = coupon-only), or a sales contact (`contactEmail`) | Requires **Global Admin** on the installing instance, or a **verified governed `package.provision` activity** signed for the package (or a `package.provision-set` activity whose signed list names it), to install or update. |
+| **Commercial** — a non-zero `price` (positive = purchasable, negative = coupon-only), or a sales contact (`contactEmail`) | Requires **Global Admin** on the installing instance, a **verified governed `package.provision` activity** signed for the package (or a `package.provision-set` activity whose signed list names it), or the **deployment configuration** naming it exactly in `PluginCatalog:InstallByDefault` (for the unattended default install), to install or update. |
 
 `PackageEntitlement.Authorize` is the single rule, and it runs inside `PackageInstaller.Install` /
 `InstallNodeRepoDelta` — so the machine paths are gated exactly like a click:
@@ -661,11 +666,53 @@ the **action**, not on the screen that triggered it:
   activity authorized it, and the unattended update re-verifies that same activity. Only WHO may
   authorize widens: the registry still serves only what the instance's plan tier covers, and the
   licence and parameter gates still run.
-- **Unattended paths carry no principal**, so a commercial package cannot ride in on the boot-time
-  default install — it fails closed: held if newly listed under a whole-source pattern (no ledger
-  entry), otherwise recorded on the ledger under `skipped`.
+- **The deployment configuration is an authorizing principal** — see the next section. It is the
+  ONLY principal the boot-time default install carries, and only for a commercial package named
+  exactly in `PluginCatalog:InstallByDefault` (or required by one that is). Every other unattended
+  path carries no principal, so a commercial package cannot ride in on a wildcard — it fails closed:
+  held if newly listed under a whole-source pattern (no ledger entry), otherwise recorded on the
+  ledger under `skipped`.
 - **A refusal is never silent**: it logs a speaking reason and, on the auto-update path, raises a
   notification on the install record. The manual Update button stays.
+
+### The deployment configuration authorizes what it names
+
+Policy [`deployment-config-authorizes-named-commercial`](../PolicyNotProse).
+
+`PluginCatalog:InstallByDefault` lives in the instance's **deployment record**, and that record
+changes only through a reviewed pull request in the deployment repository, merged by the auto-merge
+App — a merge there *is* the release. Naming `PartnerRe/Claims` there is therefore a decision people
+took, reviewed and put on record: the same kind of decision a governed `package.provision` activity
+records. So the unattended default install carries an explicitly named principal for it,
+**`deployment-config:{PluginCatalog:InstanceId}`** (`DeploymentConfigAuthority`), and
+`PackageEntitlement.Authorize` admits a commercial package under it when
+(`DeploymentConfigAuthority.WhyNot`):
+
+| check | refused when |
+|---|---|
+| the instance | the principal names another instance than this one's `PluginCatalog:InstanceId` |
+| the naming | the package is not named **exactly** (`Source/Package`) in the CURRENT `InstallByDefault` — a whole-source `Source/*` names nothing — and is not a requirement (direct or transitive) of a package that is, as this boot's selection computed it |
+
+The principal is verified, never trusted by its string: the gate re-reads the current configuration,
+so the install record's `authorizedBy: deployment-config:…` is re-verified by every unattended update,
+and a package the configuration stops naming stops being authorized by it. An admission is logged as
+`[PackageEntitlement] commercial package X AUTHORIZED by deployment-config:… : named in
+PluginCatalog:InstallByDefault as 'Source/X'`, the boot logs the same, and the default-install ledger
+records it under **`authorized`** — `{package, installedBy, reason, installedAt}` — beside `seeded`.
+
+What does NOT change:
+
+- **Installing grants nobody anything.** Access to the installed package still follows the plan
+  (`Store:InstancePlan`) and the subscriptions — the Store's `PluginGate` keeps its content dark
+  until a user's plan admits them. No sweep, no bulk grant, no notification.
+- **Wildcards still never pull in a commercial package**, newly listed packages under `Plugins/*`
+  are still held, and a commercial requirement of a wildcard-selected or baseline package is still
+  not pulled in.
+- **Seed once.** The ledger still records the package as seeded, so an operator who removes it is
+  not fought by the next restart.
+- **The registry's plan tier still wins** (a package the plan does not cover is not served), and a
+  licence that requires **acceptance** is still skipped: a configuration cannot accept terms on a
+  person's behalf (`LicenseAcceptanceGate`).
 
 The registry side needs nothing extra: `/api/plugins` already requires a registered instance key and
 scopes every listing and file fetch to that instance's `PluginGrant`, so an unauthenticated caller
