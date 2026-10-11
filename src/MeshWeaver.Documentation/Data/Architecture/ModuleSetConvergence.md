@@ -398,6 +398,16 @@ item and it is now SAFE to build — the adoption record guarantees the mesh's `
 has a live holder, so the rule can never reach zero eligible writers — but it changes who compiles
 and belongs in its own change with its own falsification. It is not in this one.
 
+## An unmet dependency floor holds the dependent back, not the whole wave (MeshWeaver#6192)
+
+The proposal is checked against the declared requirements of the installed packages (MeshWeaver#6067). Until #6192 one unmet requirement refused the WHOLE wave: measured on memex on 2026-10-06, `OpenAI` 1.5.9 declared `AI@^1.23.0` while the set loaded `AI` 1.21.1, so every module that landed beside OpenAI waited, and every reconcile (boot, the module-published broadcast, the safety-net pass) re-landed nothing new and logged the same error again.
+
+The module lane cannot prevent that skew by itself. A consumer's index entry names a module version but not its requirements, there is no per-adopt range check, and the registry's publish validation never reads `requires`; a package whose install record already declares the new floor therefore lands its module while the dependency's shelf is still behind. Publishing a dependency network atomically (the Plugins publish lane) is what closes the skew at the source; the landing side must not be frozen by it in the meantime.
+
+Now the proposal holds back ONLY the dependent (`ModuleSetHoldBack`). The dependent stays at its previous generation, the one the mesh ran before the landing that brought the unmet version (`ModuleActivationEntry.PreviousDirectory`), and the rest of the wave is proposed. The held-back bytes stay landed, so the next wave that lands a satisfying dependency proposes the new generation. A warning names the held module and the floor; the set is proposed once, and a repeat wave that derives the same set writes nothing.
+
+The wave is still refused, as before, when the dependent has no previous generation on the volume, or when its previous version breaks another installed package's declared requirement (the violation would only move).
+
 ## Related
 
 [Mesh Admission](/Doc/Architecture/MeshAdmission) ·
