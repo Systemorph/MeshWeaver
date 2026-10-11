@@ -91,10 +91,31 @@ public class InboxLegsAreAnchoredTest
             Query = "nodeType:Notification sort:CreatedAt-desc",
         };
 
-        var resolved = InboxQueries.Resolve([rogue], Viewer);
-
-        Assert.False(Anchored.IsMatch(resolved.Single().Query),
+        Assert.False(Anchored.IsMatch(rogue.Query),
             "the anchor check must be able to FAIL, or it proves nothing about the built-ins");
+        Assert.Empty(InboxQueries.Resolve([rogue], Viewer));
+        Assert.Equal("Rogue", Assert.Single(InboxQueries.Refused([rogue], Viewer)).Source);
+    }
+
+    /// <summary>
+    /// The runtime guard, not only the test's regex: a contributed leg is RUN only when it reads
+    /// exactly the viewer's own partition. Another person's partition, a wildcard, an alternation and
+    /// a declared fan-out are all refused; the viewer's own partition is not.
+    /// </summary>
+    [Theory]
+    [InlineData("namespace:{viewer}/_Thread nodeType:Thread", true)]
+    [InlineData("path:{viewer}/_Email nodeType:Email", true)]
+    [InlineData("namespace:someone-else/_Thread nodeType:Thread", false)]
+    [InlineData("namespace:*/_Thread nodeType:Thread", false)]
+    [InlineData("namespace:{viewer}|someone-else nodeType:Thread", false)]
+    [InlineData("namespace:{viewer}/_Thread partitions:all nodeType:Thread", false)]
+    [InlineData("nodeType:Thread namespace:{viewer}/_Thread", false)]
+    [InlineData("namespace:{viewer}x/_Thread", false)]
+    public void OnlyALegReadingTheViewersOwnPartition_IsRun(string query, bool run)
+    {
+        var leg = new InboxQueryLeg { Source = "Contributed", Band = InboxBand.NeedsYou, Query = query };
+        Assert.Equal(run, InboxQueries.Resolve([leg], Viewer).Length == 1);
+        Assert.Equal(!run, InboxQueries.Refused([leg], Viewer).Length == 1);
     }
 
     /// <summary>

@@ -60,6 +60,13 @@ public record InboxQueryLeg
     public string Band { get; init; } = InboxBand.NeedsYou;
 
     /// <summary>
+    /// The catalog key of a provider-defined band's DISPLAY name, in the viewer's language. Ignored
+    /// for the <see cref="InboxBand"/> constants, which core names itself; a provider band with no
+    /// key shows its identifier, which is right only for a name that is the same in every language.
+    /// </summary>
+    public string? BandLabelKey { get; init; }
+
+    /// <summary>
     /// The query text, with <c>{viewer}</c> where the viewer's partition belongs. Substituted by
     /// <c>InboxQueries.Resolve</c>; a leg is stored as a template so it is durable and viewer-agnostic.
     /// </summary>

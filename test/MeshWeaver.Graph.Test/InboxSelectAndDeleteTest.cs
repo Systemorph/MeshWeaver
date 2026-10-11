@@ -355,11 +355,11 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
     [Fact]
     public void ALeg_IsBoundedByThePage_UnlessItNamesItsOwnLimit()
     {
-        InboxQueries.Bounded("namespace:alice/_Email nodeType:Email sort:LastModified-desc")
-            .Should().EndWith($" limit:{InboxQueries.LegLimit}");
-        InboxQueries.Bounded("namespace:alice/_X limit:5 sort:LastModified-desc")
-            .Should().Be("namespace:alice/_X limit:5 sort:LastModified-desc", "a smaller bound of the provider's is kept");
         var parser = new QueryParser();
+        parser.Parse(InboxQueries.Bounded("namespace:alice/_Email nodeType:Email sort:LastModified-desc"))
+            .Limit.Should().Be(InboxQueries.LegLimit);
+        parser.Parse(InboxQueries.Bounded("namespace:alice/_X limit:5 sort:LastModified-desc"))
+            .Limit.Should().Be(5, "a smaller bound of the provider's is kept");
         foreach (var unbounded in new[] { "limit:all", "limit:0", "limit:-1", "limit:100000" })
         {
             var leg = $"namespace:alice/_X {unbounded} sort:LastModified-desc";
@@ -368,6 +368,13 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
             InboxQueries.EffectiveLimit(leg).Should().Be(InboxQueries.LegLimit);
         }
         InboxQueries.EffectiveLimit("namespace:alice/_X limit:5").Should().Be(5, "the notice judges a leg by its own bound");
+
+        // The projection is the page's, whatever the provider wrote: none, or a wider one.
+        foreach (var leg in new[] { "namespace:alice/_Thread nodeType:Thread", "namespace:alice/_Thread select:path,content" })
+            parser.Parse(InboxQueries.Bounded(leg)).Select.Should().BeEquivalentTo(InboxQueries.RowFields, new JsonSerializerOptions(),
+                because: $"'{leg}' must not fetch whole bodies to render one row");
+        var built = InboxQueries.BuiltIn.Select(l => l.Query.Replace(InboxQueries.ViewerToken, "alice")).First();
+        InboxQueries.Bounded(built).Should().Be($"{built} limit:{InboxQueries.LegLimit}", "a leg already projected is not re-projected");
         InboxQueries.BuiltIn.Should().OnlyContain(leg => leg.Query.Contains("sort:"),
             "the bound keeps the NEWEST rows only because every leg sorts newest first");
     }
@@ -722,6 +729,13 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
             .Should().BeEmpty("the switch is keyed on the id, not on what the cell shows");
         InboxQueries.BuiltIn.Should().OnlyContain(leg => !string.IsNullOrEmpty(leg.SourceLabelKey));
         InboxLayoutArea.Sections(InboxQueries.BuiltIn, "alice").Should().OnlyContain(s => !string.IsNullOrEmpty(s.SourceLabelKey));
+        // A provider band carries its own catalog key through to the page.
+        InboxLayoutArea.Sections([new InboxQueryLeg
+            {
+                Source = "Ops", Band = "Approvals", BandLabelKey = "ops.band.approvals",
+                Query = $"namespace:{InboxQueries.ViewerToken}/_Approval nodeType:Approval",
+            }], "alice")
+            .Should().ContainSingle().Which.BandLabelKey.Should().Be("ops.band.approvals");
     }
 
     /// <summary>

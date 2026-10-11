@@ -14,6 +14,9 @@ public sealed record InboxSection(string Band, string Source, int Order, string 
 {
     /// <summary>The catalog key of the source's display name, when the provider gave one.</summary>
     public string? SourceLabelKey { get; init; }
+
+    /// <summary>The catalog key of a provider band's display name, when the provider gave one.</summary>
+    public string? BandLabelKey { get; init; }
 }
 
 /// <summary>
@@ -65,8 +68,11 @@ public sealed record InboxRow
 public sealed record InboxUndoItem(string Path, string NodeType);
 
 /// <summary>
-/// The orderings the inbox offers. An open vocabulary of string constants: the chosen one is STORED
-/// in the page's data section and bound to the order select.
+/// The orderings the inbox offers — a CLOSED set, owned by the page: the select lists exactly
+/// <see cref="All"/>, and no package adds one. String constants only because the chosen one is
+/// STORED in the page's data section and bound to the select. A stored value outside the set (one a
+/// later version retired) is read as <see cref="Importance"/>, so a stale preference can never hide
+/// what needs the viewer behind what merely happened last.
 /// </summary>
 public static class InboxOrder
 {

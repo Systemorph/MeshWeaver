@@ -412,7 +412,9 @@ The toolbar's two buttons act on every ticked row.
 🚨 **Delete is SOFT, and what it means belongs to the item's type, not to the inbox.** The action
 half of the potluck mirrors the query half: a package that brings a leg brings, as a singleton
 service, the `IInboxItemHandler` for the node type its leg selects. "Put away" moves the item into a
-state the package's OWN leg excludes — and Undo is the exact inverse:
+state the package's OWN leg excludes — and Undo brings it back into that leg. Not the exact inverse:
+the inbox keeps no record of the prior state, so Undo returns the item to a state its leg selects
+again, chosen by the handler (an archived mail comes back as Read, whether it was New or Read):
 
 | Item type | Brought by | Delete | Undo | The leg excludes |
 |---|---|---|---|---|
@@ -430,6 +432,17 @@ Three rules follow, and each is pinned by a test in `InboxSelectAndDeleteTest`:
 - **An outcome never quotes an exception.** A handler's `Reason` is shown to the viewer verbatim, so
   it is a refusal the handler chose to state. A write that faults is LOGGED and answers with no
   reason; the page then says only that the item could not be changed.
+- **A leg that does not read exactly the viewer's own partition is never run.** `InboxQueries.Resolve`
+  drops it — its first term must be a `namespace:` or `path:` whose first segment is the viewer,
+  literally, with no `partitions:all` — and the page logs it as an error naming the source. A
+  provider's mistake is loud, and it can never become a fan-out over every schema on every render.
+- **Every leg is read through the row projection.** The page appends `InboxQueries.RowProjection`
+  (and the bound) to whatever a provider wrote: a leg with no `select:` would fetch whole thread and
+  message bodies to render one line each.
+- **A provider band has a display name too.** `InboxQueryLeg.BandLabelKey` names its catalog text;
+  core's own three bands are named by core.
+- **The orderings are a closed set**, owned by the page; a stored order outside it reads as
+  importance.
 - **A source has an id and a display name.** `InboxQueryLeg.Source` keys the switch; `SourceLabelKey` names the catalog text the row and the switch show in the
   viewer's language. A provider gives no key only for a name that is the same in every language.
   The row's date is written in the viewer's time zone AND the viewer's date format.

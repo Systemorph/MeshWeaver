@@ -51,15 +51,57 @@ public static class InboxQueries
         => new QueryParser().Parse(query).Limit is > 0 and var own && own <= LegLimit ? own : LegLimit;
 
     /// <summary>
-    /// <paramref name="query"/> bounded to <see cref="EffectiveLimit"/> rows. A query whose own limit
-    /// is already that bound is returned as it is; otherwise the bound is appended, and the parser
-    /// takes the LAST <c>limit:</c> it reads.
+    /// <paramref name="query"/> as the page runs it: bounded to <see cref="EffectiveLimit"/> rows and
+    /// projected onto <see cref="RowProjection"/>. Whatever a provider wrote, the page reads only
+    /// what a row shows — a contributed leg with no <c>select:</c>, or a wider one, would otherwise
+    /// fetch whole thread and message bodies to render one line each. A term already right is left as
+    /// it is; otherwise the page's is appended, and the parser takes the LAST one it reads.
     /// </summary>
     /// <param name="query">A resolved leg query.</param>
     public static string Bounded(string query)
-        => new QueryParser().Parse(query).Limit == EffectiveLimit(query)
-            ? query
-            : $"{query} limit:{EffectiveLimit(query).ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+    {
+        var parsed = new QueryParser().Parse(query);
+        var limit = EffectiveLimit(query);
+        var projected = parsed.Select is { } select && select.Order(StringComparer.Ordinal)
+            .SequenceEqual(RowFields.Order(StringComparer.Ordinal), StringComparer.Ordinal);
+        return query
+               + (parsed.Limit == limit ? string.Empty : $" limit:{limit.ToString(System.Globalization.CultureInfo.InvariantCulture)}")
+               + (projected ? string.Empty : " " + RowProjection);
+    }
+
+    /// <summary>The fields a row reads — <see cref="RowProjection"/> as a list.</summary>
+    internal static ImmutableArray<string> RowFields { get; } = [.. RowProjection["select:".Length..].Split(',')];
+
+    /// <summary>
+    /// Whether a RESOLVED leg reads exactly one partition, and that partition is the
+    /// <paramref name="viewer"/>'s: its first term is a <c>namespace:</c> or <c>path:</c> whose first
+    /// segment is the viewer, literally — no wildcard, no alternation — and it does not declare
+    /// <c>partitions:all</c>. A leg that fails is never run (<see cref="Resolve"/> drops it): an
+    /// unanchored query is a fan-out over every partition schema, on every render of every inbox.
+    /// </summary>
+    /// <param name="resolvedQuery">The leg's query with the viewer substituted.</param>
+    /// <param name="viewer">The viewer's partition.</param>
+    public static bool IsAnchored(string resolvedQuery, string viewer)
+        => AnchorPattern.Match(resolvedQuery) is { Success: true } anchor
+           && string.Equals(anchor.Groups[1].Value, viewer, StringComparison.OrdinalIgnoreCase)
+           && !resolvedQuery.Contains(ParsedQuery.CrossPartitionQualifier, StringComparison.OrdinalIgnoreCase);
+
+    private static readonly System.Text.RegularExpressions.Regex AnchorPattern =
+        new(@"^(?:namespace|path):([A-Za-z0-9_.\-]+)(?=/|\s|$)", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>
+    /// The enabled legs <see cref="Resolve"/> refuses to run because they are not anchored on
+    /// <paramref name="viewer"/>'s partition — for the page to LOG, so a provider's mistake is loud
+    /// rather than a silently missing source.
+    /// </summary>
+    /// <param name="legs">The contributed legs.</param>
+    /// <param name="viewer">The viewer's partition.</param>
+    public static ImmutableArray<InboxQueryLeg> Refused(IEnumerable<InboxQueryLeg> legs, string viewer)
+        => [.. Substituted(legs, viewer).Where(leg => !IsAnchored(leg.Query, viewer))];
+
+    private static IEnumerable<InboxQueryLeg> Substituted(IEnumerable<InboxQueryLeg> legs, string viewer)
+        => legs.Where(leg => leg.Enabled && !string.IsNullOrWhiteSpace(leg.Query))
+            .Select(leg => leg with { Query = leg.Query.Replace(ViewerToken, viewer, StringComparison.Ordinal) });
 
     /// <summary>
     /// The terminal <c>ActivityStatus</c> values, as query terms. 🚨 <c>Running</c> is the enum
@@ -161,8 +203,9 @@ public static class InboxQueries
 
         return
         [
-            .. legs.Where(leg => leg.Enabled && !string.IsNullOrWhiteSpace(leg.Query))
-                .Select(leg => leg with { Query = leg.Query.Replace(ViewerToken, viewer, StringComparison.Ordinal) })
+            // 🚨 A leg that does not read exactly the viewer's own partition is never run.
+            .. Substituted(legs, viewer)
+                .Where(leg => IsAnchored(leg.Query, viewer))
                 .OrderBy(leg => leg.Band, StringComparer.Ordinal)
                 .ThenBy(leg => leg.Order)
                 .ThenBy(leg => leg.Source, StringComparer.Ordinal)

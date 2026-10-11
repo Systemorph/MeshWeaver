@@ -89,7 +89,13 @@ public static class InboxLayoutArea
         if (string.IsNullOrEmpty(viewer) || !string.Equals(viewer, owner, StringComparison.OrdinalIgnoreCase))
             return Observable.Return<UiControl?>(Controls.Markdown(host.Localize("inbox.notYours")));
 
-        var sections = Sections(InboxQueries.All(host.Hub.ServiceProvider), owner);
+        var legs = InboxQueries.All(host.Hub.ServiceProvider);
+        // A leg that does not read exactly the owner's partition is never run — and never silently.
+        foreach (var refused in InboxQueries.Refused(legs, owner))
+            host.Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(InboxLayoutArea))
+                .LogError("Inbox leg {Source} ({Band}) refused: it does not read exactly the viewer's own partition: {Query}",
+                    refused.Source, refused.Band, refused.Query);
+        var sections = Sections(legs, owner);
         var sources = sections.GroupBy(section => section.Source, StringComparer.Ordinal)
             .Select(source => (Id: source.Key, Label: SourceLabel(host, source.First())))
             .ToImmutableList();
@@ -180,7 +186,7 @@ public static class InboxLayoutArea
         var labels = sections.GroupBy(s => s.Source, StringComparer.Ordinal)
             .ToImmutableDictionary(s => s.Key, s => SourceLabel(host, s.First()), StringComparer.Ordinal);
         var bands = sections.Select(s => s.Band).Distinct(StringComparer.Ordinal)
-            .Select((band, rank) => (band, rank, Title: BandOrder.Contains(band) ? host.Localize(BandTitleKey(band)) : band))
+            .Select((band, rank) => (band, rank, Title: BandTitle(host, band, sections)))
             .ToImmutableDictionary(b => b.band, b => (b.rank, b.Title), StringComparer.Ordinal);
         // The rank of the band whose rows are obligations, or none when no leg feeds it.
         int? needsYou = bands.TryGetValue(InboxBand.NeedsYou, out var owed) ? owed.rank : null;
@@ -525,8 +531,21 @@ public static class InboxLayoutArea
                 // first-occurrence order).
                 .GroupBy(leg => leg.Query, StringComparer.Ordinal)
                 .Select(same => same.First())
-                .Select(leg => new InboxSection(leg.Band, leg.Source, leg.Order, leg.Query) { SourceLabelKey = leg.SourceLabelKey })
+                .Select(leg => new InboxSection(leg.Band, leg.Source, leg.Order, leg.Query)
+                {
+                    SourceLabelKey = leg.SourceLabelKey, BandLabelKey = leg.BandLabelKey,
+                })
         ];
+
+    /// <summary>
+    /// A band's title in the viewer's language: core's own bands from core's catalog, a provider's
+    /// band from the key its leg gave, else its identifier.
+    /// </summary>
+    internal static string BandTitle(LayoutAreaHost host, string band, IEnumerable<InboxSection> sections)
+        => BandOrder.Contains(band) ? host.Localize(BandTitleKey(band))
+            : sections.FirstOrDefault(s => s.Band == band && !string.IsNullOrWhiteSpace(s.BandLabelKey))?.BandLabelKey is { } key
+                ? host.Localize(key)
+                : band;
 
     /// <summary>The localization key of a band's title.</summary>
     internal static string BandTitleKey(string band) => "inbox.band." + band;
