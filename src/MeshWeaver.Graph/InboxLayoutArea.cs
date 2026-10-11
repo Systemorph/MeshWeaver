@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Globalization;
 using System.Reactive;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
@@ -109,6 +110,7 @@ public static class InboxLayoutArea
         {
             acts = new InboxActs();
             host.SetVariable(UndoId, acts);
+            host.RegisterForDisposal(acts);
         }
         // ONE feed, owner-computed: the grid binds it, and Delete re-reads it at the click.
         var rows = Rows(host, sections, owner, access.ViewerZoneId());
@@ -532,66 +534,86 @@ public static class InboxLayoutArea
 
 /// <summary>
 /// One inbox page's acts: what the last Delete put away (what Undo brings back), and whether a
-/// Delete or an Undo is running. Shared by the two buttons, and written from whichever thread an
-/// act completes on — so the claim is atomic and the batch is one reference swap. Only the act that
-/// holds the claim writes the batch, item by item as each write lands.
+/// Delete or an Undo is running. Shared by the two buttons, and changed from whichever thread a write
+/// completes on — a write still in flight when its click was cancelled can land beside the next
+/// click's.
+///
+/// <para>🚨 Every change goes through ONE serialized reactive channel — a subject of changes, folded
+/// in arrival order into the state the page reads (<c>Synchronize().Scan(...)</c>). No change is a
+/// read-modify-write of shared state, and none is coordinated by hand: each applies on top of the
+/// one before, so every item actually put away stays undoable and every item brought back leaves.
+/// The fold runs inside the call that pushes the change, so a caller reads its own change at once.</para>
 /// </summary>
-internal sealed class InboxActs
+internal sealed class InboxActs : IDisposable
 {
-    private int busy;
+    /// <summary>The batch, whether the next item put away starts a new one, and whether an act runs.</summary>
+    private sealed record State(ImmutableList<InboxUndoItem> Batch, bool Fresh, bool Busy);
 
-    /// <summary>The batch and whether the next item put away starts a new one — swapped as ONE value.</summary>
-    private sealed record State(ImmutableList<InboxUndoItem> Batch, bool Fresh);
+    private static readonly State Initial = new(ImmutableList<InboxUndoItem>.Empty, false, false);
+    private readonly Subject<Func<State, State>> changes = new();
+    private readonly BehaviorSubject<State> state = new(Initial);
+    private readonly IDisposable fold;
 
-    private State state = new(ImmutableList<InboxUndoItem>.Empty, false);
+    /// <summary>Opens the page's channel.</summary>
+    public InboxActs()
+        => fold = changes.Synchronize().Scan(Initial, (current, change) => change(current)).Subscribe(state);
 
     /// <summary>What the last Delete put away and Undo has not yet brought back.</summary>
-    public ImmutableList<InboxUndoItem> Batch => Volatile.Read(ref state).Batch;
+    public ImmutableList<InboxUndoItem> Batch => state.Value.Batch;
 
     /// <summary>
     /// A Delete is starting: the first item it puts away replaces the previous batch. A Delete that
     /// puts nothing away leaves the previous batch undoable.
     /// </summary>
-    public void BeginDelete() => Mutate(s => s with { Fresh = true });
+    public void BeginDelete() => Push(s => s with { Fresh = true });
 
     /// <summary>Records one item a Delete has just put away — called per item, as it happens.</summary>
     /// <param name="item">The item.</param>
     public void PutAway(InboxUndoItem item)
-        => Mutate(s => new State(s.Fresh ? [item] : s.Batch.Add(item), false));
+        => Push(s => s with { Batch = s.Fresh ? [item] : s.Batch.Add(item), Fresh = false });
 
     /// <summary>Records one item an Undo has just brought back — called per item, as it happens.</summary>
     /// <param name="item">The item.</param>
     public void BroughtBack(InboxUndoItem item)
-        => Mutate(s => s with { Batch = s.Batch.RemoveAll(i => string.Equals(i.Path, item.Path, StringComparison.Ordinal)) });
-
-    /// <summary>
-    /// 🚨 Every change is ONE compare-and-swap of the whole state, retried on contention. A write
-    /// lands on whatever thread its owner answers on — and one still in flight when its click was
-    /// cancelled can land after the claim is released, alongside the next click's. Read-modify-write
-    /// without the swap would let either overwrite the other; with it, each change applies on top of
-    /// the other, so every item actually put away stays undoable and every item brought back leaves.
-    /// </summary>
-    private void Mutate(Func<State, State> change)
-    {
-        while (true)
-        {
-            var current = Volatile.Read(ref state);
-            if (ReferenceEquals(Interlocked.CompareExchange(ref state, change(current), current), current))
-                return;
-        }
-    }
+        => Push(s => s with { Batch = s.Batch.RemoveAll(i => string.Equals(i.Path, item.Path, StringComparison.Ordinal)) });
 
     /// <summary>
     /// Runs <paramref name="act"/> only when no other Delete or Undo is running on this page, and
     /// refuses it — with a line that says so — when one is. The two are separate buttons, so the
-    /// click framework would run them side by side, and each rewrites the batch when it finishes:
-    /// interleaved, whichever finished last would be the batch, and the newest deletion could not be
-    /// undone. The claim is taken on subscription and released however the act ends.
+    /// click framework would run them side by side. The claim is a change on the same channel, taken
+    /// on subscription and released however the act ends.
     /// </summary>
     /// <param name="refusal">What the refused click says, in the viewer's language.</param>
     /// <param name="act">The Delete or the Undo.</param>
     public IObservable<Unit> Exclusive(string refusal, IObservable<Unit> act)
-        => Observable.Defer(() => Interlocked.CompareExchange(ref busy, 1, 0) != 0
-            ? Observable.Throw<Unit>(new InvalidOperationException(refusal))
-            : act.Finally(() => Volatile.Write(ref busy, 0)));
+        => Observable.Defer(() =>
+        {
+            var claimed = false;
+            Push(s =>
+            {
+                claimed = !s.Busy;
+                return s.Busy ? s : s with { Busy = true };
+            });
+            return claimed
+                ? act.Finally(() => Push(s => s with { Busy = false }))
+                : Observable.Throw<Unit>(new InvalidOperationException(refusal));
+        });
+
+    /// <summary>
+    /// Pushes one change. A write can complete after its page was closed; its change then has no
+    /// state left to apply to and is dropped, never thrown into the write's own pipeline.
+    /// </summary>
+    private void Push(Func<State, State> change)
+    {
+        if (!changes.IsDisposed)
+            changes.OnNext(change);
+    }
+
+    /// <inheritdoc />
+    public void Dispose()
+    {
+        fold.Dispose();
+        changes.Dispose();
+        state.Dispose();
+    }
 }

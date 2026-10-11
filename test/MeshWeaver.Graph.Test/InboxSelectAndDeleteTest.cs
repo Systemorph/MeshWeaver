@@ -336,7 +336,7 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
     [Fact]
     public void ASecondAct_WhileOneRuns_IsRefused_AndTheClaimIsReleased()
     {
-        var acts = new InboxActs();
+        using var acts = new InboxActs();
         var first = new Subject<System.Reactive.Unit>();
         var firstDone = false;
         using var running = acts.Exclusive("busy", first).Subscribe(_ => { }, _ => { }, () => firstDone = true);
@@ -396,7 +396,7 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
     [Fact]
     public void TheUndoBatch_IsRecordedPerItem_SoACancelledClickKeepsWhatItDid()
     {
-        var acts = new InboxActs();
+        using var acts = new InboxActs();
         InboxUndoItem Item(string p) => new(p, NotificationNodeType.NodeType);
 
         acts.BeginDelete();
@@ -426,7 +426,7 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
     [Fact]
     public void ConcurrentBatchChanges_NeverLoseOneAnother()
     {
-        var acts = new InboxActs();
+        using var acts = new InboxActs();
         acts.BeginDelete();
         acts.PutAway(new InboxUndoItem("seed", NotificationNodeType.NodeType));
         Parallel.For(0, 2000, i =>
