@@ -485,7 +485,8 @@ def self_test() -> int:
           and "does not classify" in refusal_reason("Error: refused create of x: unknown content member(s) 'other' for type T"))
     denied = "Access denied: Create permission required for node 'Governance/NameChecks/issue-text-r-1-1-0'"
     check("🚨 refusal: an access refusal AS THE create VERB ANSWERS IT names the grant",
-          all("refused it for access" in refusal_reason(p + denied) for p in ("Error: creating node: ", "Error: ", "")))
+          all("refused it for access" in refusal_reason(p + denied) and "namecheck.caller.grant" in refusal_reason(p + denied)
+              for p in ("Error: creating node: ", "Error: ", "")))
     check("NEGATIVE CONTROL: a Create refusal on ANOTHER namespace, or one only quoted later in the text, is not classified as the grant",
           "does not classify" in refusal_reason("Error: creating node: Access denied: Create permission required for node 'Other/x'")
           and "does not classify" in refusal_reason("Error: creating node: line rejected: " + denied))
