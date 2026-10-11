@@ -233,6 +233,30 @@ public static class DeploymentRecordExtensions
             }),
         };
 
+    /// <summary>
+    /// Mount a GIT repository this deployment reads its packages from directly (a registry source),
+    /// with the source's OWN credential by reference: <paramref name="secretName"/> — the Key Vault
+    /// secret NAME holding a token for that repository — or <paramref name="installationOwner"/> —
+    /// the account whose installation of the instance's GitHub App reads it. State at most one;
+    /// neither means the instance's own App installation. This is how one instance reads
+    /// repositories in more than one organisation.
+    /// </summary>
+    public static DeploymentContent WithPluginSource(
+        this DeploymentContent d,
+        string name,
+        string url,
+        string? gitRef = null,
+        string? secretName = null,
+        string? installationOwner = null) =>
+        d with
+        {
+            PluginRepos = d.PluginRepos.Add(new PluginRepoMount
+            {
+                Name = name, Url = url, Ref = gitRef, IsRegistrySource = true,
+                SecretName = secretName, InstallationOwner = installationOwner,
+            }),
+        };
+
     /// <summary>Removes every plugin mount.</summary>
     public static DeploymentContent ClearPluginRepos(this DeploymentContent d) => d with { PluginRepos = ImmutableList<PluginRepoMount>.Empty };
 
