@@ -410,6 +410,7 @@ public static class DeploymentPortalConfig
         var usable = ImmutableList.CreateBuilder<PluginRepoMount>();
         var problems = ImmutableList.CreateBuilder<string>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var tokenKeys = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var mount in mounts ?? Enumerable.Empty<PluginRepoMount>())
         {
             if (mount is null)
@@ -423,6 +424,21 @@ public static class DeploymentPortalConfig
             {
                 problems.Add($"plugin mount '{mount.NormalizedName}' is declared twice");
                 continue;
+            }
+            // Two source names may differ and still key their token identically (`a-b` and `a_b`
+            // are both `a_b`): one repository would then be handed the other's vault token. The
+            // second is refused by name; nothing is rendered for it.
+            if (mount.SourceTokenConfigKey is { } tokenKey)
+            {
+                if (tokenKeys.TryGetValue(tokenKey, out var holder))
+                {
+                    problems.Add(
+                        $"plugin mount '{mount.NormalizedName}' keys its token as '{tokenKey}', which mount "
+                        + $"'{holder}' already uses — rename one so each source's token has its own key");
+                    seen.Remove(mount.NormalizedName);
+                    continue;
+                }
+                tokenKeys[tokenKey] = mount.NormalizedName;
             }
             usable.Add(mount);
         }
@@ -452,11 +468,37 @@ public static class DeploymentPortalConfig
             entries.Add($"{CatalogSection}:Sources:{i}:Name={sources[i].NormalizedName}");
             entries.Add($"{CatalogSection}:Sources:{i}:RepoPath={sources[i].NormalizedUrl}");
             entries.Add($"{CatalogSection}:Sources:{i}:Ref={sources[i].EffectiveRef}");
+            // The source's OWN credential, by reference: the configuration key its token lands in
+            // (the value comes from the vault — SourceCredentialSecrets), or the account whose
+            // App installation reads it. Neither stated → neither key, and the source is read
+            // with the instance's own installation exactly as before.
+            if (sources[i].SourceTokenConfigKey is { } tokenKey)
+                entries.Add($"{CatalogSection}:Sources:{i}:TokenKey={tokenKey}");
+            if (sources[i].NormalizedInstallationOwner is { } owner)
+                entries.Add($"{CatalogSection}:Sources:{i}:InstallationOwner={owner}");
         }
         var patterns = InstallPatterns(mounts, preInstall);
         for (var i = 0; i < patterns.Count; i++)
             entries.Add($"{CatalogSection}:InstallByDefault:{i}={patterns[i]}");
         return entries.ToImmutable();
+    }
+
+    /// <summary>
+    /// The vault objects the git sources' own tokens are delivered from, as secret mappings: one
+    /// per usable registry-source mount naming a <see cref="PluginRepoMount.SecretName"/> — the
+    /// vault object, landing as the environment key
+    /// (<see cref="PluginRepoMount.SourceTokenEnvKey"/>) the portal reads through
+    /// <c>PluginCatalog:Sources:N:TokenKey</c>. A renderer adds these to the record's declared
+    /// vault secrets, so naming the secret ON THE MOUNT is the whole declaration: the record never
+    /// repeats it under <c>keyVaultSecrets</c>, and the two can never disagree. Names only. Pure.
+    /// </summary>
+    public static ImmutableList<KeyVaultSecretRef> SourceCredentialSecrets(IEnumerable<PluginRepoMount>? mounts)
+    {
+        var (usable, _) = Validate(mounts);
+        return usable
+            .Where(m => m.SourceTokenEnvKey is not null)
+            .Select(m => new KeyVaultSecretRef { Key = m.SourceTokenEnvKey!, VaultSecret = m.NormalizedSecretName })
+            .ToImmutableList();
     }
 
     /// <summary>

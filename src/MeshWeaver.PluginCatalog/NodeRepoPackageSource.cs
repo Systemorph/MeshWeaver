@@ -39,7 +39,7 @@ public sealed class NodeRepoPackageSource : IPackageSource
     /// <summary>
     /// Creates a node-repo source that resolves its access token FRESH before each fetch via
     /// <paramref name="tokenProvider"/> — so the registry hands in
-    /// <see cref="GitHubAppTokenService.GetInstallationToken"/>, whose short-lived (1h) installation
+    /// <see cref="GitHubAppTokenService.GetInstallationToken()"/>, whose short-lived (1h) installation
     /// token is re-minted transparently and never captured stale. The provider may emit an empty
     /// string for anonymous (public-repo) access.
     /// </summary>

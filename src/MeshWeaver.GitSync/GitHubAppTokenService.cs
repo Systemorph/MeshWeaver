@@ -22,7 +22,7 @@ namespace MeshWeaver.GitSync;
 /// (ReplaySubject-backed via <c>IIoPool.Run</c>), so concurrent callers share one HTTP
 /// round-trip; a failed fetch invalidates itself so the next caller retries.</para>
 ///
-/// <para>🚨 <b>Every fault out of <see cref="GetInstallationToken"/> is a
+/// <para>🚨 <b>Every fault out of <see cref="GetInstallationToken()"/> is a
 /// <see cref="GitHubAppTokenMintException"/></b> (only a cancellation passes as itself). A caller
 /// therefore never has to read a message to know it is looking at a credential that was NEVER
 /// OBTAINED rather than one GitHub REJECTED — the two look identical once a mint failure has
@@ -40,9 +40,14 @@ public sealed class GitHubAppTokenService
     private readonly ILogger? logger;
 
     // Promise-cache (instance, never static): the current fetch, replayed to every caller.
-    // Refreshed when the delivered token nears expiry; nulled on error so failures don't stick.
-    private readonly object gate = new();
-    private IObservable<InstallationToken>? cached;
+    // Refreshed when the delivered token nears expiry; evicted on error so failures don't stick.
+    // ONE promise per INSTALLATION: the key is the installation owner a caller
+    // named, "" for the instance's own (GitHub:App:InstallationId / InstallationOwner). One App can
+    // be installed on several organisations, and a token minted for one installation reads nothing
+    // in another — so a single slot made a second organisation's source unreadable by construction.
+    // The shared primitive owns the concurrency: one build per stored entry, a fault evicts
+    // exactly the entry that faulted (so a failure never sticks and never drops a replacement).
+    private readonly PromiseCache<string, InstallationToken> cached = new(StringComparer.OrdinalIgnoreCase);
     private readonly Func<DateTimeOffset> now;
 
     /// <summary>Initializes the service.</summary>
@@ -75,8 +80,25 @@ public sealed class GitHubAppTokenService
     /// The current installation token — cached across callers, transparently re-fetched when the
     /// cached one is within five minutes of expiry.
     /// </summary>
-    public IObservable<string> GetInstallationToken()
+    public IObservable<string> GetInstallationToken() => GetInstallationToken(null);
+
+    /// <summary>
+    /// The current installation token of the installation on <paramref name="installationOwner"/>
+    /// (an organisation or user login) — the App installed on SEVERAL accounts reads each account's
+    /// repositories with that account's own installation token. Cached per installation, refreshed
+    /// exactly like <see cref="GetInstallationToken()"/>. Null/blank is the instance's own
+    /// installation (<c>GitHub:App:InstallationId</c> / <c>GitHub:App:InstallationOwner</c>).
+    ///
+    /// <para>🚨 A NAMED owner fails closed: when the App has no installation on that account the
+    /// mint faults (<see cref="GitHubAppTokenMintStage.InstallationDiscovery"/>) naming the owner.
+    /// It never falls back to another installation — a token for the wrong organisation would be
+    /// reported one layer later as a missing repository.</para>
+    /// </summary>
+    /// <param name="installationOwner">The account the installation lives on, or null/blank for
+    /// the instance's own installation.</param>
+    public IObservable<string> GetInstallationToken(string? installationOwner)
     {
+        var owner = (installationOwner ?? "").Trim();
         if (!IsConfigured)
             return Observable.Throw<string>(new GitHubAppTokenMintException(
                 GitHubAppTokenMintStage.NotConfigured,
@@ -91,14 +113,12 @@ public sealed class GitHubAppTokenService
         // "Bad credentials" until the process restarted (Systemorph/Memex#165).
         return Observable.Defer(() =>
         {
-            IObservable<InstallationToken> source;
-            lock (gate)
-                source = cached ??= CreateFetch();
+            var source = cached.GetOrAdd(owner, CreateFetch);
 
             return source.SelectMany(tok =>
                 tok.ExpiresAt > now().AddMinutes(5)
                     ? Observable.Return(tok.Token)
-                    : Refresh(source).Select(t => t.Token));
+                    : Refresh(owner, source).Select(t => t.Token));
         })
         // 🚨 EVERY fault out of this method is a GitHubAppTokenMintException — translate all of it
         // or let it through, never half. A caller degrading to an anonymous fetch (the Store's
@@ -124,29 +144,24 @@ public sealed class GitHubAppTokenService
             exception),
     };
 
-    /// <summary>Swap the stale promise for a fresh fetch (only once — concurrent refreshers share it).</summary>
-    private IObservable<InstallationToken> Refresh(IObservable<InstallationToken> stale)
+    /// <summary>
+    /// Swap the stale promise for a fresh fetch — only once: the release is pair-exact, so of
+    /// several concurrent refreshers one removes the stale entry and all of them share the single
+    /// replacement; a replacement already installed is never dropped.
+    /// </summary>
+    private IObservable<InstallationToken> Refresh(string owner, IObservable<InstallationToken> stale)
     {
-        lock (gate)
-        {
-            if (ReferenceEquals(cached, stale))
-                cached = CreateFetch();
-            return cached!;
-        }
+        cached.Release(owner, stale);
+        return cached.GetOrAdd(owner, CreateFetch);
     }
 
-    private IObservable<InstallationToken> CreateFetch() =>
-        Http.Run(ct => FetchInstallationTokenAsync(ct))
-            .Catch((Exception ex) =>
-            {
-                lock (gate)
-                    cached = null;   // never cache a failure — the next caller retries
-                return Observable.Throw<InstallationToken>(AsMintFailure(ex));
-            });
+    private IObservable<InstallationToken> CreateFetch(string owner) =>
+        Http.Run(ct => FetchInstallationTokenAsync(owner, ct))
+            .Catch((Exception ex) => Observable.Throw<InstallationToken>(AsMintFailure(ex)));
 
     // ── HTTP leaves (run inside the I/O pool) ────────────────────────────────
 
-    private async Task<InstallationToken> FetchInstallationTokenAsync(CancellationToken ct)
+    private async Task<InstallationToken> FetchInstallationTokenAsync(string owner, CancellationToken ct)
     {
         string jwt;
         try
@@ -164,8 +179,13 @@ public sealed class GitHubAppTokenService
                 exception);
         }
 
-        var installationId = options.InstallationId
-            ?? await DiscoverInstallationIdAsync(jwt, ct).ConfigureAwait(false);
+        // A NAMED owner is always discovered by that name: GitHub:App:InstallationId pins the
+        // instance's OWN installation and says nothing about another account's.
+        var installationId = owner.Length > 0
+            ? await DiscoverInstallationIdAsync(jwt, owner, required: true, ct).ConfigureAwait(false)
+            : options.InstallationId
+              ?? await DiscoverInstallationIdAsync(jwt, options.InstallationOwner, required: false, ct)
+                  .ConfigureAwait(false);
 
         using var req = new HttpRequestMessage(
             HttpMethod.Post,
@@ -193,55 +213,81 @@ public sealed class GitHubAppTokenService
                         && DateTimeOffset.TryParse(e.GetString(), out var dto)
             ? dto
             : now().AddMinutes(50);   // GitHub's documented lifetime is 1h
-        logger?.LogInformation("Minted GitHub App installation token (installation {Id}, expires {Exp})",
-            installationId, expiresAt);
+        logger?.LogInformation(
+            "Minted GitHub App installation token (installation {Id}{Owner}, expires {Exp})",
+            installationId, owner.Length > 0 ? $" on '{owner}'" : "", expiresAt);
         return new InstallationToken(token, expiresAt);
     }
 
-    private async Task<long> DiscoverInstallationIdAsync(string jwt, CancellationToken ct)
+    private async Task<long> DiscoverInstallationIdAsync(
+        string jwt, string? wantedOwner, bool required, CancellationToken ct)
     {
-        using var req = new HttpRequestMessage(
-            HttpMethod.Get, $"{options.ApiBaseUrl.TrimEnd('/')}/app/installations");
-        req.Headers.Accept.ParseAdd("application/vnd.github+json");
-        req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", jwt);
-        using var resp = await http.SendAsync(req, ct).ConfigureAwait(false);
-        var json = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-        if (!resp.IsSuccessStatusCode)
-            throw new GitHubAppTokenMintException(
-                GitHubAppTokenMintStage.InstallationDiscovery,
-                $"GitHub App installation discovery failed ({(int)resp.StatusCode}): {Truncate(json)}")
-            {
-                StatusCode = (int)resp.StatusCode,
-            };
+        // Paged to the end: an App installed on more accounts than one page holds would otherwise
+        // report a real installation as missing — and, for a NAMED owner, refuse a repository the
+        // App can read. The loop ends on the first short page.
+        const int pageSize = 100;
+        long? first = null;
+        var total = 0;
+        for (var page = 1; ; page++)
+        {
+            using var req = new HttpRequestMessage(
+                HttpMethod.Get,
+                $"{options.ApiBaseUrl.TrimEnd('/')}/app/installations?per_page={pageSize}&page={page}");
+            req.Headers.Accept.ParseAdd("application/vnd.github+json");
+            req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", jwt);
+            using var resp = await http.SendAsync(req, ct).ConfigureAwait(false);
+            var json = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            if (!resp.IsSuccessStatusCode)
+                throw new GitHubAppTokenMintException(
+                    GitHubAppTokenMintStage.InstallationDiscovery,
+                    $"GitHub App installation discovery failed ({(int)resp.StatusCode}): {Truncate(json)}")
+                {
+                    StatusCode = (int)resp.StatusCode,
+                };
 
-        using var doc = JsonDocument.Parse(json);
-        if (doc.RootElement.ValueKind != JsonValueKind.Array || doc.RootElement.GetArrayLength() == 0)
+            using var doc = JsonDocument.Parse(json);
+            var count = doc.RootElement.ValueKind == JsonValueKind.Array ? doc.RootElement.GetArrayLength() : 0;
+            total += count;
+            foreach (var inst in count == 0 ? [] : doc.RootElement.EnumerateArray().ToArray())
+            {
+                if (!inst.TryGetProperty("id", out var idEl) || !idEl.TryGetInt64(out var id))
+                    continue;
+                first ??= id;
+                if (wantedOwner is { Length: > 0 } owner
+                    && inst.TryGetProperty("account", out var account)
+                    && account.TryGetProperty("login", out var login)
+                    && string.Equals(login.GetString(), owner, StringComparison.OrdinalIgnoreCase))
+                    return id;
+            }
+            if (count < pageSize)
+                break;
+        }
+
+        if (total == 0)
             throw new GitHubAppTokenMintException(
                 GitHubAppTokenMintStage.InstallationDiscovery,
                 "The GitHub App has no installations — install it on the organization (with Contents: Read " +
                 "on the repos to sync) first.");
-
-        long? first = null;
-        foreach (var inst in doc.RootElement.EnumerateArray())
+        if (required)
         {
-            if (!inst.TryGetProperty("id", out var idEl) || !idEl.TryGetInt64(out var id))
-                continue;
-            first ??= id;
-            if (options.InstallationOwner is { Length: > 0 } owner
-                && inst.TryGetProperty("account", out var account)
-                && account.TryGetProperty("login", out var login)
-                && string.Equals(login.GetString(), owner, StringComparison.OrdinalIgnoreCase))
-                return id;
+            // Localizable where it is SHOWN (a sync's activity, the settings tab): the refusal
+            // rides in Data, the way a legacy GitSync refusal does, and the thrown type and its
+            // English message stay what every other mint stage throws.
+            var refusal = GitSyncRefusal.Of("gitsync.source.noInstallation", ("owner", wantedOwner!));
+            var missing = new GitHubAppTokenMintException(
+                GitHubAppTokenMintStage.InstallationDiscovery, refusal.Render(null));
+            missing.Data[GitSyncRefusalException.DataKey] = refusal;
+            throw missing;
         }
         if (first is null)
             throw new GitHubAppTokenMintException(
                 GitHubAppTokenMintStage.InstallationDiscovery,
                 "GitHub App installation list carried no usable id.");
-        if (doc.RootElement.GetArrayLength() > 1)
+        if (total > 1)
             logger?.LogWarning(
                 "GitHub App has {Count} installations and none matched InstallationOwner '{Owner}' — using the first. " +
                 "Set GitHub:App:InstallationId or GitHub:App:InstallationOwner to pin one.",
-                doc.RootElement.GetArrayLength(), options.InstallationOwner);
+                total, wantedOwner);
         return first.Value;
     }
 

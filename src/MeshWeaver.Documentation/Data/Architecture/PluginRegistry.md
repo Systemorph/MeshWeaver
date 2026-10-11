@@ -160,7 +160,9 @@ merges all sources' packages (on an id collision the first configured source win
 resolves an id in the same order. With several sources one failing repo degrades to an empty
 contribution (logged), never a broken catalog. The legacy single-source keys
 (`PluginCatalog:SourceRepoPath`/`SourceSubdir`/`SourceRef`/`SourceFormat`) keep working when no
-`Sources` list is set. The registry is authoritative on each source's git ref; a consumer's `ref`
+`Sources` list is set. A source in another organisation, or one the instance's App does not
+reach, states its own credential by reference (`TokenKey` / `InstallationOwner`) —
+[Plugin Source Credentials](/Doc/Architecture/PluginSourceCredentials). The registry is authoritative on each source's git ref; a consumer's `ref`
 is advisory. The wire shapes are produced by `PluginRegistryPayloads` and parsed by
 `RegistryPackageSource`, one place each, so producer and consumer cannot drift.
 

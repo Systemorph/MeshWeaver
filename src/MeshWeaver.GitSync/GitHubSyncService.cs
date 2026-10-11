@@ -384,7 +384,7 @@ public sealed class GitHubSyncService
         var ctx = accessService?.Context ?? accessService?.CircuitContext;
         if (AzureReposPushPolicy.RefuseInbound(repositoryUrl, AzureReposPushPolicy.InboundOperation.Import) is { } azureRefusal)
             return Observable.Throw<StaticRepoImportResult>(azureRefusal.ToException());
-        return ResolveAuth(userId).SelectMany(auth =>
+        return ResolveAuth(userId, repositoryUrl).SelectMany(auth =>
         {
             var token = auth.Token;
             // Pre-create the Space under the USER so they become its admin and the
@@ -465,7 +465,7 @@ public sealed class GitHubSyncService
             {
                 Reconcile = reconcile,
             };
-            return ResolveAuth(userId).SelectMany(auth =>
+            return ResolveAuth(userId, repoUrl).SelectMany(auth =>
             {
                 var token = auth.Token;
                 logger?.LogInformation("Re-importing {Space} at {Ref} (twoWay={TwoWay}, force={Force})",
@@ -818,7 +818,7 @@ public sealed class GitHubSyncService
                     "No GitHub repository configured for this Space."));
             if (AzureReposPushPolicy.RefuseInbound(repoUrl, AzureReposPushPolicy.InboundOperation.CheckBranch) is { } azureRefusal)
                 return Observable.Throw<BranchState>(azureRefusal.ToException());
-            return ResolveAuth(userId).SelectMany(auth =>
+            return ResolveAuth(userId, repoUrl).SelectMany(auth =>
             {
                 var token = auth.Token;
                 var branch = string.IsNullOrWhiteSpace(config.Branch) ? "main" : config.Branch;
@@ -846,7 +846,7 @@ public sealed class GitHubSyncService
     public IObservable<string> GetBranchHead(string repositoryUrl, string branch, string userId)
         => AzureReposPushPolicy.RefuseInbound(repositoryUrl, AzureReposPushPolicy.InboundOperation.BranchHead) is { } azureRefusal
             ? Observable.Throw<string>(azureRefusal.ToException())
-            : ResolveAuth(userId).SelectMany(auth => repoClient.GetHeadSha(repositoryUrl, branch, auth.Token));
+            : ResolveAuth(userId, repositoryUrl).SelectMany(auth => repoClient.GetHeadSha(repositoryUrl, branch, auth.Token));
 
     /// <summary>A resolved GitHub authentication: the token plus the user credential when the token is theirs (null = App identity).</summary>
     private sealed record ResolvedGitHubAuth(string Token, GitHubCredential? Credential);
@@ -860,7 +860,7 @@ public sealed class GitHubSyncService
     private IObservable<ResolvedGitHubAuth> ResolveAuthFor(string repositoryUrl, string userId)
     {
         if (!GitRepositoryProvider.IsAzureRepos(repositoryUrl))
-            return ResolveAuth(userId);
+            return ResolveAuth(userId, repositoryUrl);
         return azureRepos is null
             ? Observable.Throw<ResolvedGitHubAuth>(
                 GitSyncRefusal.Of("gitsync.azure.notRegistered").ToException())
@@ -868,15 +868,24 @@ public sealed class GitHubSyncService
     }
 
     /// <summary>
-    /// Resolves the token for a GitHub operation: the user's connected credential when present,
-    /// else the platform's <b>GitHub App installation token</b> (the machine identity — server-side
-    /// operations like the plugin registry's sync never require a personal login). Errors only when
-    /// neither identity is available.
+    /// Resolves the token for a GitHub operation against <paramref name="repositoryUrl"/>: the
+    /// user's connected credential when present; else the credential the repository's configured
+    /// source DECLARED (<see cref="GitSourceCredentials"/> — a vault-delivered token, or the App
+    /// installation on a named account); else the platform's <b>GitHub App installation token</b>
+    /// (the machine identity — server-side operations like the plugin registry's sync never
+    /// require a personal login). Errors only when no identity is available.
+    ///
+    /// <para>🚨 A DECLARED source credential that cannot be produced FAULTS
+    /// (<see cref="GitSourceCredentialException"/>) — it never falls through to the instance's own
+    /// installation, whose token reads nothing in another organisation and would report the
+    /// missing credential as a missing repository.</para>
     /// </summary>
-    private IObservable<ResolvedGitHubAuth> ResolveAuth(string userId) =>
+    private IObservable<ResolvedGitHubAuth> ResolveAuth(string userId, string? repositoryUrl) =>
         credentials.Get(userId).Take(1).SelectMany(cred =>
             cred?.AccessToken is { Length: > 0 } token
                 ? Observable.Return(new ResolvedGitHubAuth(token, cred))
+                : hub.ServiceProvider.GetService<GitSourceCredentials>()?.TokenFor(repositoryUrl) is { } declared
+                    ? declared.Select(t => new ResolvedGitHubAuth(t, null))
                 : appTokens is { IsConfigured: true }
                     ? appTokens.GetInstallationToken().Select(t => new ResolvedGitHubAuth(t, null))
                     : Observable.Throw<ResolvedGitHubAuth>(new InvalidOperationException(

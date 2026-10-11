@@ -203,7 +203,15 @@ public static class PackageSources
             // Credentials, so any configured URL source 500'd the /api/plugins endpoint. When the App
             // is unconfigured (or absent) the provider yields an empty token → anonymous access to a
             // public repo (no throw, thanks to the Client("") anonymous fallback).
-            var tokenProvider = AppInstallationTokenProvider(hub);
+            //
+            // 🚨 A source that DECLARED its own credential (PluginCatalog:Sources:N:TokenKey — a
+            // vault-delivered token — or :InstallationOwner — the App installation on another
+            // account) is read with THAT and nothing else: GitSourceCredentials fails closed and by
+            // name when the declared credential cannot be produced, so a private repository in a
+            // second organisation is never retried with the instance's own installation token nor
+            // anonymously. Resolved by repository URL, which is why every caller of this factory —
+            // the configured list, a catalog node, the update watcher — gets the same answer.
+            var tokenProvider = SourceTokenProvider(hub, src);
             // 🚨 The LISTING gets the client's FILTERED fetch (#4222): it parses each package's
             // manifest and nothing else, and the git client now selects those blobs BEFORE the
             // transfer instead of pulling the repository and discarding 98% of it. Measured
@@ -370,6 +378,25 @@ public static class PackageSources
         Path.GetExtension(relativePath).ToLowerInvariant() is
             ".json" or ".md" or ".cs" or ".csx" or ".txt" or ".yml" or ".yaml" or ".xml"
             or ".js" or ".ts" or ".css" or ".html" or ".svg" or ".sql" or ".py" or ".lock" or "";
+
+    /// <summary>
+    /// The token provider for the URL source <paramref name="repositoryUrl"/>: the credential its
+    /// configured source declared (<see cref="GitSourceCredentials"/>), else the instance's own
+    /// App installation (<see cref="AppInstallationTokenProvider"/>). The declaration is looked up
+    /// on EACH call, like the token itself, so it follows the configuration rather than the moment
+    /// this source was built. A mesh that registers no <see cref="GitSourceCredentials"/> (a bare
+    /// test mesh) reads the declaration straight from its <see cref="IConfiguration"/>.
+    /// </summary>
+    private static Func<IObservable<string>> SourceTokenProvider(IMessageHub hub, string repositoryUrl)
+    {
+        var services = hub.ServiceProvider;
+        var declared = services.GetService<GitSourceCredentials>()
+                       ?? new GitSourceCredentials(
+                           services.GetService<IConfiguration>(),
+                           services.GetService<GitHubAppTokenService>());
+        var fallback = AppInstallationTokenProvider(hub);
+        return () => declared.TokenFor(repositoryUrl) ?? fallback();
+    }
 
     /// <summary>
     /// A token provider that yields the GitHub App INSTALLATION token when the App identity is
