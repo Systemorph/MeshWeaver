@@ -775,8 +775,10 @@ public static class UserActivityLayoutAreas
     private const string SortSuffixLastAccessed = "source:accessed sort:LastModified-desc";
     private const string SortSuffixLastModified = "sort:LastModified-desc";
     private const string SortSuffixAlphabetical = "sort:Name-asc";
+    private const string SortSuffixLocation = "sort:path-asc";
     private static readonly (HomeCatalogSort Sort, string LabelKey, string Suffix)[] CatalogSorts =
     {
+        (HomeCatalogSort.Location, "home.sortLocation", SortSuffixLocation),
         (HomeCatalogSort.LastAccessed, "home.sortLastAccessed", SortSuffixLastAccessed),
         (HomeCatalogSort.LastModified, "home.sortLastModified", SortSuffixLastModified),
         (HomeCatalogSort.Alphabetical, "home.sortAlphabetical", SortSuffixAlphabetical),
@@ -911,11 +913,10 @@ public static class UserActivityLayoutAreas
                 (_, suffix) =>
                     $"path:{string.Join("|", sharedTargets)} is:main is:content -nodeType:User{SpacesDedupExclusions} {suffix}"));
 
-        // ONE list that FANS OUT by the node's own type — Spaces, Clients, Courses, … — with the
-        // biggest group first (GroupByFrequency), so the page opens on what the viewer actually
-        // works with. That is what "Spaces" was reaching for and failing to say: the categories
-        // are not a fixed taxonomy the home invents, they are whatever types the viewer's
-        // top-level nodes happen to have.
+        // ONE flat list, ordered by LOCATION by default (Store/AppsOnTheInstance, maintainer
+        // 2026-10-11: "ordering by type is not useful … order by namespace"): each entry is a folder
+        // the viewer opens and drills into through its page's side index — never a fan-out into
+        // per-type sections, which put every top-level entry into one "Space (N)" group.
         var content = Controls.MeshSearch
             .WithTitle(LocalizationCatalog.Get("home.content", locale))
             .WithScopeTabs(scopes.ToArray())
@@ -925,11 +926,7 @@ public static class UserActivityLayoutAreas
             .WithShowSearchBox(true)
             .WithViewOptions(true)
             .WithShowEmptyMessage(true)
-            .WithRenderMode(MeshSearchRenderMode.Grouped)
-            .WithGroupBy("NodeType")
-            .WithGroupByFrequency()
-            .WithSectionCounts(true)
-            .WithCollapsibleSections(true)
+            .WithRenderMode(MeshSearchRenderMode.Flat)
             .WithMaxColumns(4)
             // Fill the page. The home is where a viewer looks for something they can already see;
             // a short list makes them search for what should have been on screen. 200 bounds the

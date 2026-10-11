@@ -236,6 +236,7 @@
   "home.sortLastAccessed": "Zuletzt geöffnet",
   "home.sortLastModified": "Zuletzt geändert",
   "home.sortAlphabetical": "Alphabetisch",
+  "home.sortLocation": "Ort",
   "home.noApps": "Noch keine Apps — Apps lassen sich im Store installieren.",
   "home.newGroup": "Neue Gruppe",
   "home.groupName": "Gruppenname",

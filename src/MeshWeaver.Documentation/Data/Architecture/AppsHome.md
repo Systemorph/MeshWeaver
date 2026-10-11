@@ -190,6 +190,14 @@ The admin-editable platform node (`HomeConfigNodeType`, public-read, live-reload
   not what existing viewers have. Until a list-capable edit-form field ships it is
   `[Browsable(false)]` on the generic content editor — admins edit the node content directly.
 - `Scope`, `Render`, `DefaultSort` — apply to the Spaces/All scopes (and the legacy list).
+- **The content list is ONE flat list in LOCATION order** (2026-10-11, maintainer: *"ordering by
+  type is not useful … order by namespace"*). `DefaultSort` ships as `Location` (`sort:path-asc`), so
+  each space's content stays together. The Tabs home no longer fans its entries out into per-type
+  sections: that put every top-level entry into one "Space (N)" group. Each entry is a folder the
+  viewer opens and drills into from its page. Last accessed, Last modified and Alphabetical stay
+  available in the Sort control. The platform's own partitions (Doc, Ops, Plugins, Agent, Skill,
+  Provider) are not listed as spaces at all: a space is a place people work together, and those
+  partitions are reached through their apps.
 
 **The dedup rule:** an app is represented exactly once. The Spaces scope and the Shared-with-me band
 exclude `-nodeType:Store/Plugin -nodeType:Store/Catalog`; Shared-with-me also excludes

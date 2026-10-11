@@ -119,18 +119,16 @@ public class HomeTabsTest
     }
 
     [Fact]
-    public void Content_FansOutByNodeType_BiggestGroupFirst()
+    public void Content_IsOneFlatList_OrderedByLocation()
     {
-        // "All and then fan out in different types, sorted by frequency … get the top level
-        // partition node type and bring category by this ⇒ then you get Spaces, Clients, …":
-        // the categories are whatever types the viewer's own top-level nodes have, not a taxonomy
-        // the home invents, and the type you have most of leads.
+        // "ordering by type is not useful … order by namespace" (maintainer, 2026-10-11): the home
+        // lists its top-level entries as ONE list in path order, each a folder the viewer opens,
+        // never fanned out into per-type sections (which put everything into one "Space (N)").
         var content = Content(UserActivityLayoutAreas.BuildHome(NodePath));
 
-        content.RenderMode.Should().Be(MeshSearchRenderMode.Grouped);
-        content.Grouping!.GroupByProperty.Should().Be("NodeType");
-        content.GroupByFrequency.Should().Be(true);
-        content.Sections!.ShowCounts.Should().Be(true, "a frequency order is only readable with counts");
+        content.RenderMode.Should().Be(MeshSearchRenderMode.Flat);
+        content.Grouping.Should().BeNull("no per-type fan-out");
+        content.HiddenQuery!.ToString().Should().Contain("sort:path-asc", "location order is the default");
     }
 
     [Fact]

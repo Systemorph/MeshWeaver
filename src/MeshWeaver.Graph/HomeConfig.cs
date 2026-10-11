@@ -47,6 +47,10 @@ public enum HomeCatalogSort
 
     /// <summary>Alphabetical, by name.</summary>
     Alphabetical,
+
+    /// <summary>By LOCATION — ordered by path, so each space's content stays together under it, the
+    /// way a folder explorer lists it (the default).</summary>
+    Location,
 }
 
 /// <summary>
@@ -91,7 +95,7 @@ public record HomeConfig
     public HomeCatalogRender Render { get; init; } = HomeCatalogRender.Flat;
 
     /// <summary>The default ordering (the user can still change it via the Sort-by control).</summary>
-    [Description("The default ordering. Last accessed shows your recently-opened items first; Last modified shows recent edits; Alphabetical sorts by name.")]
-    [Translation("de", "Die Standardsortierung. Zuletzt geöffnet zeigt kürzlich geöffnete Einträge zuerst; Zuletzt geändert zeigt kürzliche Änderungen; Alphabetisch sortiert nach Name.")]
-    public HomeCatalogSort DefaultSort { get; init; } = HomeCatalogSort.LastAccessed;
+    [Description("The default ordering. Location orders by path, so each space's content stays together; Last accessed shows your recently-opened items first; Last modified shows recent edits; Alphabetical sorts by name.")]
+    [Translation("de", "Die Standardsortierung. Ort sortiert nach Pfad, sodass der Inhalt eines Space zusammenbleibt; Zuletzt geöffnet zeigt kürzlich geöffnete Einträge zuerst; Zuletzt geändert zeigt kürzliche Änderungen; Alphabetisch sortiert nach Name.")]
+    public HomeCatalogSort DefaultSort { get; init; } = HomeCatalogSort.Location;
 }
