@@ -473,7 +473,7 @@ public static class ModuleSetStore
 
     /// <summary>
     /// <see cref="Propose"/> for an already-derived generation map (MeshWeaver#6192): the checked proposal
-    /// proposes the landed generations with an unmet dependent held back at its previous generation. Identical
+    /// proposes the landed generations with an unmet dependent held back at the accepted set's generation. Identical
     /// rules: a no-op when the map is byte-identical to the newest proposal, otherwise one write-once record.
     /// </summary>
     /// <param name="baseDirectory">The deployment root the <c>modules/</c> tree lives under.</param>

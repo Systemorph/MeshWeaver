@@ -367,7 +367,7 @@ entry and only the version its image build stamped into the DLL, and nothing gua
 schemes are comparable. Picking "the newer one" across them would be a guess presented as a rule;
 refusing loudly names the fix instead.
 
-**The cost, stated.** While a floor is unmet, every consumer wave on that deployment proposes
+**The cost, stated (until #6192, which holds back only the dependent - see the section on it below).** While a floor is unmet, every consumer wave on that deployment proposes
 nothing — including modules unrelated to the unmet pair. That is the set rule applied
 consistently (a set is proposed whole or not at all), and the Error lines name exactly which
 dependency has to land to release it.
@@ -404,9 +404,9 @@ The proposal is checked against the declared requirements of the installed packa
 
 The module lane cannot prevent that skew by itself. A consumer's index entry names a module version but not its requirements, there is no per-adopt range check, and the registry's publish validation never reads `requires`; a package whose install record already declares the new floor therefore lands its module while the dependency's shelf is still behind. Publishing a dependency network atomically (the Plugins publish lane) is what closes the skew at the source; the landing side must not be frozen by it in the meantime.
 
-Now the proposal holds back ONLY the dependent (`ModuleSetHoldBack`). The dependent stays at its previous generation, the one the mesh ran before the landing that brought the unmet version (`ModuleActivationEntry.PreviousDirectory`), and the rest of the wave is proposed. The held-back bytes stay landed, so the next wave that lands a satisfying dependency proposes the new generation. A warning names the held module and the floor; the set is proposed once, and a repeat wave that derives the same set writes nothing.
+Now the proposal holds back ONLY the dependent (`ModuleSetHoldBack`). The dependent is held at the generation the mesh's last ACCEPTED module set runs (`ModuleSetIndex.Current`, the newest proposal a replica has booted onto), the one generation of it known to have run coherently, and the rest of the wave is proposed. Not at `ModuleActivationEntry.PreviousDirectory`: that is only the generation the latest landing displaced, and after two refused waves (OpenAI 1.5.8, then 1.5.9, both requiring AI@^1.23.0) it names 1.5.8, which no set ever carried. The held-back bytes stay landed, so the next wave that lands a satisfying dependency proposes the new generation. A warning names the held module and the floor; the set is proposed once, and a repeat wave that derives the same set writes nothing.
 
-The wave is still refused, as before, when the dependent has no previous generation on the volume, or when its previous version breaks another installed package's declared requirement (the violation would only move).
+The held version's own requirements are not on record (an install record states the NEW version's), so the hold is taken only where its safety can be established, and the wave is refused, as before, when any of these holds: the mesh has no accepted set, the accepted set does not name the module or already runs the generation that fails; the replica that adopted the accepted set ran another generation of it; the accepted generation's entry assembly is not on the volume; a dependency the package declares would be proposed at another generation than the one the accepted set ran it beside; another installed package's declared requirement is not met by the held version, or that version is not recorded and the requirement states a range (the violation would only move); or the set records could not be read whole. A dependency only the older version declared is not visible to this check: the accepted set is the evidence that the held generation ran with what it needed, and boot's link probe still measures it against what loads.
 
 ## Related
 
