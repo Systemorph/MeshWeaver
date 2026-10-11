@@ -483,6 +483,23 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
     }
 
     /// <summary>
+    /// A label key the catalog defines is shown in the viewer's language; a key it does not define
+    /// (a package ahead of this platform) falls back to the provider's own name — never the raw key.
+    /// The Threads app's two word-like sources are in the catalog.
+    /// </summary>
+    [Fact]
+    public void ALabelKey_IsLocalized_OnlyWhenTheCatalogDefinesIt()
+    {
+        string German(string key) => LocalizationCatalog.Get(key, "de");
+
+        InboxLayoutArea.Label(German, "inbox.source.Conversations", "Conversations").Should().Be("Unterhaltungen");
+        InboxLayoutArea.Label(German, "inbox.source.Chat", "Chat").Should().Be("Chat");
+        InboxLayoutArea.Label(German, "inbox.source.NotYetShipped", "Approvals").Should().Be("Approvals",
+            "a key this platform does not have reads as the provider's name, never as 'inbox.source.NotYetShipped'");
+        InboxLayoutArea.Label(German, null, "WhatsApp").Should().Be("WhatsApp");
+    }
+
+    /// <summary>
     /// "By title" is alphabetical in the VIEWER's language: for a German viewer Ä sorts with A, not
     /// after Z as it does by code point.
     /// </summary>
