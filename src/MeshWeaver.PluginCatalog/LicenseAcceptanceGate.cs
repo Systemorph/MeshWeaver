@@ -109,6 +109,15 @@ public static class LicenseAcceptanceGate
                     return Refuse(manifest, spdxId!, null,
                         "no principal is present to accept them", logger);
 
+                // The deployment configuration may AUTHORIZE an install (PackageEntitlement) but it
+                // is not a person and cannot ACCEPT terms on anyone's behalf — and it has no
+                // partition an acceptance could live in. Refused here, by name, so the default
+                // install records a terminal skip instead of a failed read retried every boot.
+                if (PackageEntitlement.IsDeploymentConfigPrincipal(acceptingUserId))
+                    return Refuse(manifest, spdxId!, acceptingUserId,
+                        "a deployment configuration cannot accept licence terms on a person's behalf — "
+                        + "a Global Admin accepts them from the catalog", logger);
+
                 var expected = BodyHash(license.Body);
                 return ReadAcceptance(hub, acceptingUserId!, manifest.Id, logger)
                     .SelectMany(acceptance =>
