@@ -815,6 +815,13 @@ The evaluator holds **no per-process mutable state**: no `_permissionCache`, no 
 
 Creating or editing a grant is `workspace.GetMeshNodeStream(path).Update(...)` (or `CreateNodeRequest` / `DeleteNodeRequest` for lifecycle) — exactly like every other MeshNode; see [`GetMeshNodeStream().Update()` is the only mutation API](/Doc/Architecture/RequestViaStreamUpdate). The write goes through the usual validator chain (`RlsNodeValidator`, `AccessAssignmentGuard`) and the usual persistence path; the shared `$security-access:{partition}` query then re-emits and subsequent checks reflect it.
 
+### Narrower than Update: stamped fields
+
+Update on a node lets a caller write its content — except a field the node's type declares
+**stamped** (`NodeTypeDefinition.StampedFields`): that one only the node's own hub writes, and a
+client patch, data change or create that would set or change it is refused, naming the field. See
+[Stamped Fields](../StampedFields).
+
 ---
 
 # Anonymous and Public access

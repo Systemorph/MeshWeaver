@@ -428,6 +428,11 @@ public static class GraphConfigurationExtensions
                 // slot and encryption checked, then written as system); a direct write is refused.
                 services.AddScoped<INodeValidator, InstanceSecretWriteGuard>();
 
+                // A create may not bring a field its type declares STAMPED — only the node's own hub
+                // writes it, once the node exists (the update half is the node hub's delivery guard,
+                // StampedFields.AddStampedFieldGuard). Doc/Architecture/StampedFields.
+                services.AddScoped<INodeValidator, Security.StampedFieldCreateValidator>();
+
                 // A service principal never holds platform administration: no Admin-partition grant
                 // may name one, and a service caller writes nothing in the Admin partition.
                 services.AddScoped<INodeValidator, Security.ServicePrincipalAdminGuard>();
