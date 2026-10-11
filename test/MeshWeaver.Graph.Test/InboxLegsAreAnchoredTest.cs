@@ -111,6 +111,9 @@ public class InboxLegsAreAnchoredTest
     [InlineData("namespace:{viewer}/_Thread partitions:all nodeType:Thread", false)]
     [InlineData("nodeType:Thread namespace:{viewer}/_Thread", false)]
     [InlineData("namespace:{viewer}x/_Thread", false)]
+    [InlineData("namespace:{viewer}/_Thread namespace:someone-else/_Thread", false)]
+    [InlineData("namespace:{viewer}/_Thread path:someone-else/_Thread", false)]
+    [InlineData("path:{viewer}/_Email nodeType:Email path:someone-else/_Email", false)]
     public void OnlyALegReadingTheViewersOwnPartition_IsRun(string query, bool run)
     {
         var leg = new InboxQueryLeg { Source = "Contributed", Band = InboxBand.NeedsYou, Query = query };

@@ -75,16 +75,41 @@ public static class InboxQueries
     /// <summary>
     /// Whether a RESOLVED leg reads exactly one partition, and that partition is the
     /// <paramref name="viewer"/>'s: its first term is a <c>namespace:</c> or <c>path:</c> whose first
-    /// segment is the viewer, literally — no wildcard, no alternation — and it does not declare
-    /// <c>partitions:all</c>. A leg that fails is never run (<see cref="Resolve"/> drops it): an
+    /// segment is the viewer, literally — no wildcard, no alternation — it is the query's ONLY
+    /// <c>namespace:</c>/<c>path:</c> term, and the path the PARSER resolves (and any path list) lies
+    /// in the viewer's partition with no <c>partitions:all</c>. A leg that fails is never run (<see cref="Resolve"/> drops it): an
     /// unanchored query is a fan-out over every partition schema, on every render of every inbox.
     /// </summary>
     /// <param name="resolvedQuery">The leg's query with the viewer substituted.</param>
     /// <param name="viewer">The viewer's partition.</param>
     public static bool IsAnchored(string resolvedQuery, string viewer)
-        => AnchorPattern.Match(resolvedQuery) is { Success: true } anchor
-           && string.Equals(anchor.Groups[1].Value, viewer, StringComparison.OrdinalIgnoreCase)
-           && !resolvedQuery.Contains(ParsedQuery.CrossPartitionQualifier, StringComparison.OrdinalIgnoreCase);
+    {
+        if (AnchorPattern.Match(resolvedQuery) is not { Success: true } anchor
+            || !string.Equals(anchor.Groups[1].Value, viewer, StringComparison.OrdinalIgnoreCase)
+            // ONE structural anchor: the parser lets a later namespace:/path: replace the first,
+            // so a leg that names two could pass on its first and run on its second.
+            || resolvedQuery.Split(' ', StringSplitOptions.RemoveEmptyEntries).Count(IsStructural) != 1)
+            return false;
+        // And what the PARSER will run — not only what the text says first.
+        var parsed = new QueryParser().Parse(resolvedQuery);
+        return !parsed.CrossPartition
+               && parsed.Path is { } path && InPartition(path, viewer)
+               && (parsed.Paths is null || parsed.Paths.All(p => InPartition(p, viewer)));
+    }
+
+    private static bool IsStructural(string term)
+    {
+        var bare = term.TrimStart('-', '!');
+        return bare.StartsWith("namespace:", StringComparison.OrdinalIgnoreCase)
+               || bare.StartsWith("path:", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool InPartition(string path, string viewer)
+    {
+        var trimmed = path.TrimStart('/');
+        return trimmed.Equals(viewer, StringComparison.OrdinalIgnoreCase)
+               || trimmed.StartsWith(viewer + "/", StringComparison.OrdinalIgnoreCase);
+    }
 
     private static readonly System.Text.RegularExpressions.Regex AnchorPattern =
         new(@"^(?:namespace|path):([A-Za-z0-9_.\-]+)(?=/|\s|$)", System.Text.RegularExpressions.RegexOptions.Compiled);
