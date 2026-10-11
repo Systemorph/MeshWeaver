@@ -77,8 +77,8 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
 
         await Click(stream, DeleteArea, "1 moved out of the inbox. Undo brings them back.", ct);
         await Listed("only the ticked row left", "keep");
-        (await Content<Notification>($"{ns}/bin", ct)).Dismissed.Should().BeTrue();
-        (await Content<Notification>($"{ns}/keep", ct)).Dismissed.Should().BeFalse("an unticked row is never written");
+        (await Content<Notification>($"{ns}/bin", n => n.Dismissed, ct)).Dismissed.Should().BeTrue();
+        (await Content<Notification>($"{ns}/keep", _ => true, ct)).Dismissed.Should().BeFalse("an unticked row is never written");
 
         await Click(stream, UndoArea, "1 back in the inbox.", ct);
         await Listed("Undo brought it back", "keep", "bin");
@@ -175,7 +175,7 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
 
         (await Run(() => handler.Dismiss(Mesh, path), ct)).Should().Be(new InboxItemOutcome(path, true));
         (await Ids(leg, ids => !ids.Contains("n1"), ct)).Should().NotContain("n1", "a put-away notification leaves the list");
-        (await Content<Notification>(path, ct)).Dismissed.Should().BeTrue("Delete is soft: the node stays, flagged");
+        (await Content<Notification>(path, n => n.Dismissed, ct)).Dismissed.Should().BeTrue("Delete is soft: the node stays, flagged");
 
         (await Run(() => handler.Restore(Mesh, path), ct)).Done.Should().BeTrue();
         (await Ids(leg, ids => ids.Contains("n1"), ct)).Should().Contain("n1", "Undo brings it back");
@@ -204,15 +204,15 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
 
         (await Run(() => handler.Dismiss(Mesh, $"{ns}/m1"), ct)).Done.Should().BeTrue();
         (await Ids(leg, ids => !ids.Contains("m1"), ct)).Should().BeEmpty("an archived mail leaves the list");
-        (await Content<Email>($"{ns}/m1", ct)).Status.Should().Be(EmailStatus.Archived);
+        (await Content<Email>($"{ns}/m1", m => m.Status == EmailStatus.Archived, ct)).Status.Should().Be(EmailStatus.Archived);
 
         (await Run(() => handler.Restore(Mesh, $"{ns}/m1"), ct)).Done.Should().BeTrue();
         (await Ids(leg, ids => ids.Contains("m1"), ct)).Should().Equal("m1");
-        (await Content<Email>($"{ns}/m1", ct)).Status.Should().Be(EmailStatus.Read, "the viewer has seen it by the time they undo");
+        (await Content<Email>($"{ns}/m1", m => m.Status == EmailStatus.Read, ct)).Status.Should().Be(EmailStatus.Read, "the viewer has seen it by the time they undo");
 
         // An outbound mail's status is its SEND state: Delete must not stop a queued mail leaving.
         (await Run(() => handler.Dismiss(Mesh, $"{ns}/out1"), ct)).Done.Should().BeTrue();
-        (await Content<Email>($"{ns}/out1", ct)).Status.Should().Be(EmailStatus.Sending);
+        (await Content<Email>($"{ns}/out1", _ => true, ct)).Status.Should().Be(EmailStatus.Sending);
     }
 
     /// <summary>Only an inbound mail that is New or Read may be filed from the inbox.</summary>
@@ -516,12 +516,18 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
             .Where(until)
             .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
 
-    private async Task<T> Content<T>(string path, CancellationToken ct) where T : class
-        => (await Mesh.ServiceProvider.GetService<AccessService>()
-                .RunAsSystem(() => Mesh.GetMeshNodeStream(path).Take(1))
-                .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct))
-            .ContentAs<T>(Mesh.JsonSerializerOptions)
-           ?? throw new InvalidOperationException($"{path} does not carry {typeof(T).Name}");
+    /// <summary>
+    /// The node's content once it satisfies <paramref name="until"/>. The first emission of a node
+    /// read can still be the value from before a write that has already been answered, so content
+    /// asserted right after a write is WAITED for, never sampled.
+    /// </summary>
+    private async Task<T> Content<T>(string path, Func<T, bool> until, CancellationToken ct) where T : class
+        => await Mesh.ServiceProvider.GetService<AccessService>()
+            .RunAsSystem(() => Mesh.GetMeshNodeStream(path)
+                .Select(node => node.ContentAs<T>(Mesh.JsonSerializerOptions))
+                .OfType<T>()
+                .Where(until))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
 
     private async Task<InboxItemOutcome> Run(Func<IObservable<InboxItemOutcome>> act, CancellationToken ct)
         => await Mesh.ServiceProvider.GetService<AccessService>().RunAsSystem(act)
