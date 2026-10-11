@@ -52,6 +52,11 @@ namespace Memex.Portal.Shared.Test;
 /// mode, which is the arm the laziness and "behind current" cases below run on because those
 /// shapes need a decline to exist. The decline that exists everywhere now — an UNLOADABLE module —
 /// is pinned in <see cref="ReleaseLinkGateTest"/>.</para>
+///
+/// <para>🚨 <b>Since 2026-10-11 nothing declines a candidate</b> (maintainer: <i>"again, we want to
+/// roll platform independently of packages"</i>): the newest admitted release is always selected,
+/// and what the strict policy, an unread or empty plugin list, or an unloadable module would have
+/// declined it for is carried on the outcome's advisories and summary instead.</para>
 /// </summary>
 public class RollSelectionTest : IDisposable
 {
@@ -119,12 +124,15 @@ public class RollSelectionTest : IDisposable
     }
 
     /// <summary>
-    /// 🚨 THE ALGORITHM under the opt-in strict mode (<c>Modules:RequirePrebuilt</c>), which is
-    /// what it was everywhere before #3651: the newest release is declined — <b>naming
-    /// Feedback</b> — and the complete one is selected.
+    /// 🚨 THE PLATFORM ROLLS INDEPENDENTLY OF ITS PACKAGES (maintainer, 2026-10-11: <i>"again, we
+    /// want to roll platform independently of packages"</i>). Under the opt-in strict mode
+    /// (<c>Modules:RequirePrebuilt</c>) the predicate still REFUSES the newest release for the eight
+    /// missing bakes — and until 2026-10-11 the walk declined it and selected the complete one below.
+    /// Now the newest admitted release is selected regardless, and the refusal survives as what it
+    /// is: a statement about packages, <b>naming Feedback</b>, on the advisories and the summary.
     /// </summary>
     [Fact]
-    public async Task UnderRequirePrebuilt_SelectsTheLatestReleaseThatShipsEveryInstalledPlugin()
+    public async Task UnderRequirePrebuilt_TheNewestIsStillSelected_AndTheMissingBakesBecomeAdvisories()
     {
         var root = MeasuredRoot();
 
@@ -132,36 +140,34 @@ public class RollSelectionTest : IDisposable
             .Should().Within(TestTimeouts.Convergence).Emit();
 
         Assert.Equal(RollSelectionKind.Update, outcome.Kind);
-        Assert.Equal(CompleteVersion, outcome.SelectedVersion);
+        Assert.Equal(IncompleteVersion, outcome.SelectedVersion);
+        Assert.True(outcome.ShouldUpdate);
+        Assert.Empty(outcome.Declined);
         Assert.Equal(AllPackages.Length, outcome.RequiredPlugins);
-        Assert.Equal(AllPackages.Length, outcome.SatisfiedPlugins);
-        Assert.Empty(outcome.BootCompiles);
+        // The denominator stays honest: only the four published packages are SATISFIED — the
+        // eight that are not follow on their own, and the count says so.
+        Assert.Equal(NotNamedInTheHold.Length, outcome.SatisfiedPlugins);
 
-        var declined = Assert.Single(outcome.Declined);
-        Assert.Equal(IncompleteVersion, declined.Version);
-        Assert.Contains("Feedback", declined.Reason);
-        Assert.Contains(IncompleteIdentity, declined.Reason);
-        Assert.Equal(
-            NamedInTheHold.Order(StringComparer.Ordinal),
-            declined.Blockers.Select(b => b.Package).Order(StringComparer.Ordinal));
-        Assert.All(
-            declined.Blockers,
-            b => Assert.Equal(PackageAvailabilityKind.ContentBakeMissing, b.Kind));
+        var advisory = outcome.Advisories[0];
+        Assert.Contains("independently of packages", advisory);
+        Assert.Contains("Feedback", advisory);
+        Assert.Contains(IncompleteIdentity, advisory);
+        Assert.Contains("not following this roll", outcome.Summary);
+        Assert.Contains("Feedback", outcome.Summary);
     }
 
     /// <summary>
-    /// 🚨 THE NEGATIVE CONTROL, and the reason the assertion above could have failed. Run the SAME
-    /// fixture with an empty denominator — which is what a selector that tolerates "no plugins to
-    /// check" effectively has — and the incomplete release passes the shared predicate outright.
-    /// A vacuity-tolerant walk therefore takes the newest, which is precisely the order #3479
-    /// inverts.
+    /// 🚨 THE NEGATIVE CONTROL. Run the SAME fixture with an empty denominator and the incomplete
+    /// release passes the shared predicate outright — "no plugins to check" and "all plugins
+    /// present" look alike to the predicate.
     ///
-    /// <para>So the selector refuses it by name instead: <see cref="RollSelectionKind.NoPluginsKnown"/>
-    /// selects NOTHING and says why. "No plugins to check" and "all plugins present" are not spelled
-    /// the same way here.</para>
+    /// <para>Since 2026-10-11 an empty plugin list no longer stops the PLATFORM (it is a statement
+    /// about packages), so the newest admitted release is selected — but the two states are still
+    /// never spelled the same way: the summary and the advisory say that NO package was checked,
+    /// and the denominator printed is zero.</para>
     /// </summary>
     [Fact]
-    public async Task AnEmptyDenominatorRefusesInsteadOfTakingTheNewest()
+    public async Task AnEmptyDenominatorSelectsTheNewest_AndSaysNoPackageWasChecked()
     {
         var root = MeasuredRoot();
 
@@ -182,21 +188,24 @@ public class RollSelectionTest : IDisposable
                 version => Verdict(root, [], version))
             .Should().Within(TestTimeouts.Convergence).Emit();
 
-        Assert.Equal(RollSelectionKind.NoPluginsKnown, outcome.Kind);
-        Assert.Null(outcome.SelectedVersion);
-        Assert.True(outcome.IsIndeterminate);
-        Assert.False(outcome.ShouldUpdate);
+        Assert.Equal(RollSelectionKind.Update, outcome.Kind);
+        Assert.Equal(IncompleteVersion, outcome.SelectedVersion);
+        Assert.False(outcome.IsIndeterminate);
+        Assert.True(outcome.ShouldUpdate);
         Assert.Equal(0, outcome.RequiredPlugins);
+        Assert.Equal(0, outcome.SatisfiedPlugins);
         Assert.Contains("0 plugins required", outcome.Summary);
-        Assert.Contains("vacuous", outcome.Summary);
+        Assert.Contains("no package was checked", outcome.Summary);
+        Assert.Contains(outcome.Advisories, a => a.Contains("no package was checked", StringComparison.Ordinal));
     }
 
     /// <summary>
-    /// A plugin list that could not be READ is a different answer again, and it holds. Collapsing it
-    /// into "nothing to check" is the same defect one step earlier.
+    /// A plugin list that could not be READ is a different answer again — and since 2026-10-11 it
+    /// does not hold the platform either. It is still never collapsed into "nothing to check": the
+    /// reason the read failed is in the summary and the advisory.
     /// </summary>
     [Fact]
-    public async Task AnUnreadableInventoryHoldsAndIsNotAnEmptyOne()
+    public async Task AnUnreadableInventorySelectsTheNewest_AndSaysItCouldNotBeRead()
     {
         var root = MeasuredRoot();
 
@@ -209,20 +218,20 @@ public class RollSelectionTest : IDisposable
                 version => Verdict(root, Installed, version))
             .Should().Within(TestTimeouts.Convergence).Emit();
 
-        Assert.Equal(RollSelectionKind.Indeterminate, outcome.Kind);
-        Assert.Null(outcome.SelectedVersion);
-        Assert.True(outcome.IsIndeterminate);
+        Assert.Equal(RollSelectionKind.Update, outcome.Kind);
+        Assert.Equal(IncompleteVersion, outcome.SelectedVersion);
         Assert.Contains("the query timed out", outcome.Summary);
-        Assert.Contains("not clearance", outcome.Summary);
+        Assert.Contains("could not be read", outcome.Summary);
+        Assert.Contains(outcome.Advisories, a => a.Contains("the query timed out", StringComparison.Ordinal));
     }
 
     /// <summary>
-    /// When NO release ships all plugins, a strict instance stays put and NAMES the plugin — an
-    /// alert, never a silent hold and never "the closest one". (By default the same fixture
-    /// selects the newest and names the eight as its boot compile — the first test above.)
+    /// When NO release ships all plugins, a strict instance used to stay put. Since 2026-10-11 the
+    /// platform rolls to the newest admitted release anyway and NAMES the plugin that does not
+    /// follow — an advisory, never a silent one and never a hold.
     /// </summary>
     [Fact]
-    public async Task UnderRequirePrebuilt_WhenNoReleaseShipsEveryPluginNothingIsSelectedAndThePluginIsNamed()
+    public async Task UnderRequirePrebuilt_WhenNoReleaseShipsEveryPlugin_TheNewestIsSelectedAndThePluginIsNamed()
     {
         var root = Track(NewRoot());
         Mark(root, IncompleteVersion, IncompleteIdentity);
@@ -234,25 +243,26 @@ public class RollSelectionTest : IDisposable
         var outcome = await Select(root, RunningVersion, [IncompleteVersion, CompleteVersion], Strict)
             .Should().Within(TestTimeouts.Convergence).Emit();
 
-        Assert.Equal(RollSelectionKind.NoCompleteRelease, outcome.Kind);
-        Assert.Null(outcome.SelectedVersion);
-        Assert.False(outcome.ShouldUpdate);
-        // 🚨 NOT indeterminate: the selector looked, and the answer is about the publications.
+        Assert.Equal(RollSelectionKind.Update, outcome.Kind);
+        Assert.Equal(IncompleteVersion, outcome.SelectedVersion);
+        Assert.True(outcome.ShouldUpdate);
         Assert.False(outcome.IsIndeterminate);
-        Assert.Equal(2, outcome.Declined.Length);
+        Assert.Empty(outcome.Declined);
         Assert.Contains("Feedback", outcome.Summary);
         Assert.Contains($"{AllPackages.Length} plugin(s) required", outcome.Summary);
         Assert.Contains(RunningVersion, outcome.Summary);
+        Assert.Contains(outcome.Advisories, a => a.Contains("Feedback", StringComparison.Ordinal));
     }
 
     /// <summary>
-    /// 🚨 The newest complete release sits BEHIND what the environment runs. That is reported and
-    /// never applied: the environment is running something that does not ship all its plugins, which
-    /// an operator must know, but rolling backwards is a separate decision (a schema migration is
-    /// not reversible) and the selector does not take it.
+    /// 🚨 The running release does not ship all its plugins, and older releases do. Until
+    /// 2026-10-11 the walk reported the older complete release as BEHIND current; now no package
+    /// verdict walks the platform past anything, so the environment is told it already runs the
+    /// newest admitted release — and the packages that do not follow it are named. Rolling
+    /// backwards is still never selected.
     /// </summary>
     [Fact]
-    public async Task TheNewestCompleteReleaseBehindTheRunningOneIsReportedNeverRolled()
+    public async Task ARunningReleaseMissingPackagesIsNeverWalkedPast_ThePackagesAreNamed()
     {
         var root = MeasuredRoot();
         // The running version publishes nothing at all — a marker with an identity that holds no
@@ -266,11 +276,11 @@ public class RollSelectionTest : IDisposable
                 root, RunningVersion, [RunningVersion, IncompleteVersion, CompleteVersion], Strict)
             .Should().Within(TestTimeouts.Convergence).Emit();
 
-        Assert.Equal(RollSelectionKind.BehindCurrent, outcome.Kind);
-        Assert.Equal(CompleteVersion, outcome.SelectedVersion);
+        Assert.Equal(RollSelectionKind.AlreadyCurrent, outcome.Kind);
+        Assert.Equal(RunningVersion, outcome.SelectedVersion);
         Assert.False(outcome.ShouldUpdate);
-        Assert.Contains("BEHIND", outcome.Summary);
-        Assert.Contains("never taken here", outcome.Summary);
+        Assert.Contains("already runs", outcome.Summary);
+        Assert.Contains("not following this roll", outcome.Summary);
     }
 
     /// <summary>
@@ -346,12 +356,13 @@ public class RollSelectionTest : IDisposable
     }
 
     /// <summary>
-    /// The walk is LAZY: the candidate below the first acceptance is never asked about. That is what
-    /// keeps a selection over a long publication history one directory read rather than hundreds on
-    /// a network share against a bounded budget.
+    /// The walk is LAZY: since 2026-10-11 every verdict is accepted (a package refusal becomes an
+    /// advisory), so exactly ONE verdict is asked — about the newest admitted release — even when
+    /// the strict policy refuses it. That keeps a selection over a long publication history one
+    /// directory read rather than hundreds on a network share against a bounded budget.
     /// </summary>
     [Fact]
-    public async Task TheWalkStopsAtTheFirstCompleteRelease()
+    public async Task TheWalkAsksExactlyOneVerdict_AboutTheNewest()
     {
         var root = MeasuredRoot();
         var asked = ImmutableList.CreateBuilder<string>();
@@ -372,8 +383,8 @@ public class RollSelectionTest : IDisposable
                 })
             .Should().Within(TestTimeouts.Convergence).Emit();
 
-        Assert.Equal(CompleteVersion, outcome.SelectedVersion);
-        Assert.Equal([IncompleteVersion, CompleteVersion], asked.ToImmutable());
+        Assert.Equal(IncompleteVersion, outcome.SelectedVersion);
+        Assert.Equal([IncompleteVersion], asked.ToImmutable());
     }
 
     // ── driving the SHARED predicate ────────────────────────────────────────────────────────────

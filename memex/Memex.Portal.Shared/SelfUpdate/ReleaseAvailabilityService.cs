@@ -17,6 +17,14 @@ namespace Memex.Portal.Shared.SelfUpdate;
 /// <summary>
 /// 🚨 <b>The deployment gate (#1754): may this environment be rolled to that release?</b>
 ///
+/// <para>🚨 <b>Since 2026-10-11 its answer is a PACKAGE answer and never holds the platform</b>
+/// (maintainer: <i>"again, we want to roll platform independently of packages"</i>). This service
+/// still answers truthfully — "cannot determine" is still not "available" — and every roll path
+/// (the poller, the reboot, the manual button, <c>/api/plugins/is-updatable</c>,
+/// <see cref="SelectRollTarget"/>) waives a refusal into advisories through
+/// <see cref="UpdatabilityVerdict.ForPlatformRoll"/> and rolls to the newest admitted tag. Read
+/// "HOLD" below as "the package verdict, reported as an advisory on the roll".</para>
+///
 /// <para>An image is not rollable just because its version is newer — but since #3651 (maintainer
 /// rule of 2026-09-07, <c>Doc/Architecture/ModuleAdoptionPolicy</c>) the ONLY thing that holds it
 /// is MEASURED: a module this environment has landed, for which the target publishes no build,
@@ -219,12 +227,10 @@ public class ReleaseAvailabilityService(
     /// <see cref="UpdatePolicyKind.Continuous"/>: the question "which release ships all plugins" is
     /// about the PUBLICATIONS, and whether this install would apply the answer is a separate
     /// decision that stays with the poller.</param>
-    /// <param name="condemned">Optional second opinion applied to each candidate BEFORE it can be
-    /// selected — in production the combo gate's recorded refusal, which answers the question an
-    /// artifact cannot: whether the candidate's assemblies can still serve the modules this
-    /// instance has landed. Returns the refusal, or null when it has nothing against the candidate.
-    /// 🚨 Only a REFUSAL removes a candidate; "not verified" is neither preferred nor condemned, so
-    /// an unwired verifier can never empty the candidate list.</param>
+    /// <param name="condemned">Optional second opinion about each candidate — e.g. the combo gate's
+    /// recorded refusal. Returns the refusal, or null when it has nothing against the candidate.
+    /// 🚨 Since 2026-10-11 a refusal is an ADVISORY on the candidate, never a reason to walk past it
+    /// (maintainer: "again, we want to roll platform independently of packages").</param>
     /// <param name="requireCiGreen">Exclude unverified <c>edge</c> builds when deriving candidates.</param>
     public virtual IObservable<RollSelectionOutcome> SelectRollTarget(
         string? currentVersion,
@@ -253,7 +259,21 @@ public class ReleaseAvailabilityService(
                     // as a root that genuinely serves none — and they mean opposite things. See
                     // Verdict() for the full reasoning; this is the same order, one level up.
                     f.Refusal is { } refusal
-                        ? Observable.Return(Indeterminate(environment, currentVersion, refusal))
+                        // 🚨 An unreadable root is a PACKAGE question that could not be asked, so
+                        // it holds nothing (maintainer, 2026-10-11: "again, we want to roll
+                        // platform independently of packages"). With the candidates in hand the
+                        // newest admitted one is selected and the advisory says nothing was
+                        // checked; without them (they would have come from that very root) there
+                        // is nothing to select, and that is still said as Indeterminate.
+                        ? Observable.Return(candidatesNewestFirst is { Count: > 0 }
+                            ? RollSelection.Unjudged(
+                                new RollSelectionInputs(environment, currentVersion,
+                                    [.. candidatesNewestFirst],
+                                    PluginInventory.Unreadable(InventorySource, refusal)),
+                                $"the published bundle root could not be read ({refusal}), so no "
+                                + "package was checked against this release; the packages catch up "
+                                + "through their own update policy")
+                            : Indeterminate(environment, currentVersion, refusal))
                         : !f.ServesBakes
                             ? Observable.Return(NotEnforced(
                                 environment, currentVersion, NoPublicationsReason(publishedRoot)))
@@ -311,15 +331,19 @@ public class ReleaseAvailabilityService(
         Func<string, string?>? condemned) =>
         Judge(publishedRoot, required, version)
             .Do(LogAdvisories)
-            .Select(verdict => verdict.IsUpdatable && condemned?.Invoke(version) is { } refusal
-                // Folded into the SAME verdict shape rather than kept beside it, so the walk has
-                // one notion of "this candidate is out" and the refusal travels with its reason.
+            .Select(verdict => condemned?.Invoke(version) is { } refusal
+                // 🚨 The second opinion (the combo gate's recorded Red) is a statement about the
+                // modules this instance has landed — a PACKAGE question — so since 2026-10-11 it
+                // is an ADVISORY on the candidate, never a reason to walk past it (maintainer:
+                // "again, we want to roll platform independently of packages").
                 ? verdict with
                 {
-                    IsUpdatable = false,
-                    Packages = verdict.Packages.Add(new PackageAvailability(
-                        "(combo)", PackageAvailabilityKind.ComboVerificationFailed, refusal)),
-                    HoldReason = refusal,
+                    Advisories =
+                    [
+                        .. verdict.Advisories.IsDefault ? [] : verdict.Advisories,
+                        $"the platform rolls independently of packages — {refusal}; those modules "
+                        + "keep their previous generation and catch up through their own update policy",
+                    ],
                 }
                 : verdict);
 

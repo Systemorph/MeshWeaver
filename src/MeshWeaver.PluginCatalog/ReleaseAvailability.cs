@@ -954,8 +954,71 @@ public sealed record UpdatabilityVerdict(
             [new PackageAvailability("(gate)", PackageAvailabilityKind.Indeterminate, reason)],
             reason);
 
-    /// <summary>The packages that block the roll.</summary>
-    public IEnumerable<PackageAvailability> Blockers => Packages.Where(p => !p.IsAvailable);
+    /// <summary>The packages that block the roll — none, by construction, on an updatable verdict
+    /// (including one that <see cref="ForPlatformRoll"/> turned into advisories: those packages are
+    /// in <see cref="Lagging"/>, not here).</summary>
+    public IEnumerable<PackageAvailability> Blockers => IsUpdatable ? [] : Lagging;
+
+    /// <summary>
+    /// The packages that are NOT available for the target — whether or not that decides the roll.
+    /// On a package-availability verdict these are the blockers; on a verdict
+    /// <see cref="ForPlatformRoll"/> produced they are the packages that do not follow the platform
+    /// roll and catch up on their own.
+    /// </summary>
+    public IEnumerable<PackageAvailability> Lagging => Packages.Where(p => !p.IsAvailable);
+
+    /// <summary>
+    /// 🚨 The hold this verdict WOULD have been before the platform rolled independently of its
+    /// packages (maintainer, 2026-10-11) — the package-availability reason
+    /// <see cref="ForPlatformRoll"/> waived, kept verbatim so every surface can still say which
+    /// packages will not follow the roll and why. Null when nothing was waived. Init-only: the
+    /// positional constructor is binary API.
+    /// </summary>
+    public string? WaivedHold { get; init; }
+
+    /// <summary>
+    /// 🚨 <b>THE PLATFORM ROLLS INDEPENDENTLY OF ITS PACKAGES</b> (maintainer, 2026-10-11:
+    /// <i>"again, we want to roll platform independently of packages"</i>).
+    ///
+    /// <para>The package-availability question — is there a sealed bake for the target's framework
+    /// identity, can that identity be resolved at all, does every installed package have an artifact
+    /// for it, could the catalogue be read — is a question about the PACKAGES, and its answer is
+    /// never a hold on the platform roll. A verdict that is not updatable is turned into an updatable
+    /// one whose <see cref="Advisories"/> lead with the waived reason (kept on
+    /// <see cref="WaivedHold"/>) and whose <see cref="Lagging"/> names every package that will not
+    /// follow: they keep their previous generation or recompile at boot, and catch up through their
+    /// own update policy (the held-update lane). Packages follow the platform — never the reverse.
+    /// Measured on partnerre.meshweaver.cloud 2026-10-11: the platform held on 3.1.10502 because no
+    /// content bake was published for its identity, while every package update was held because it
+    /// needed that very platform — a deadlock only this direction breaks.</para>
+    ///
+    /// <para>Applied at every place that DECIDES a platform roll (the self-update poller, the
+    /// reboot's image step, the manual roll button, the roll selection that CD reads through
+    /// <c>/api/plugins/roll-target</c>), never inside the pure predicate: the predicate still answers
+    /// the package question truthfully, which is what the CI build gate (#1755) and the surfaces that
+    /// list package availability need. Idempotent; an updatable verdict comes back unchanged.</para>
+    /// </summary>
+    public UpdatabilityVerdict ForPlatformRoll()
+    {
+        if (IsUpdatable)
+            return this;
+        var lagging = Lagging.ToImmutableArray();
+        var reason = HoldReason ?? "package availability was not stated";
+        var advisory = (IsIndeterminate
+                ? "the platform rolls independently of packages — package availability for this release "
+                  + "could NOT be determined, and that decides nothing about the platform roll: "
+                : $"the platform rolls independently of packages — {lagging.Length} package(s) are not "
+                  + "available for this release, so they do not follow this roll and catch up through "
+                  + "their own update policy: ")
+            + reason;
+        return this with
+        {
+            IsUpdatable = true,
+            HoldReason = null,
+            WaivedHold = reason,
+            Advisories = [advisory, .. Advisories.IsDefault ? [] : Advisories],
+        };
+    }
 
     /// <summary>
     /// 🚨 What the verdict SAYS without deciding on it — logged by every caller, recorded on the

@@ -136,6 +136,20 @@ public static class AboutSettingsTab
     /// a function so the wording is unit-testable without a hub.
     /// </summary>
     internal static string? UpdateStatusMarkdown(PlatformUpdateStatus status, Func<string, string> localize) =>
+        StatusLine(status, localize) is { } line
+            // 🚨 The platform rolls independently of packages (maintainer, 2026-10-11: "again, we
+            // want to roll platform independently of packages"). When it rolls — or rolled — past
+            // packages that are not available for the build, the About tab SAYS so and lists them,
+            // rather than reading "update held" for a hold that no longer exists.
+            ? line + (string.IsNullOrEmpty(status.Advisories)
+                ? ""
+                : "\n\n" + localize("about.platformRolls") + "\n\n"
+                  + string.Join("\n", status.Advisories!
+                      .Split("; ", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                      .Select(advisory => "- " + advisory.Replace("\n", " ").Replace("\r", " "))))
+            : null;
+
+    private static string? StatusLine(PlatformUpdateStatus status, Func<string, string> localize) =>
         status.Availability switch
         {
             PlatformUpdateAvailability.UpdateAvailable =>

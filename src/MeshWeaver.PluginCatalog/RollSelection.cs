@@ -10,6 +10,22 @@ namespace MeshWeaver.PluginCatalog;
 /// each environment which is the latest platform version shipping all plugins, if different from
 /// current version ⇒ update."</i></blockquote>
 ///
+/// <blockquote>🚨 Superseded for the PLATFORM roll — maintainer, 2026-10-11: <i>"again, we want to
+/// roll platform independently of packages"</i>.</blockquote>
+///
+/// <para>🚨 <b>Since 2026-10-11 the walk selects the NEWEST ADMITTED candidate, always.</b> A package
+/// verdict — a missing bake, an unresolvable framework identity, a package without an artifact for
+/// the target, an unreadable catalogue, an unloadable landed module, an unread or empty plugin list —
+/// is never a reason to walk past a release: it becomes the selected release's ADVISORIES
+/// (<see cref="UpdatabilityVerdict.ForPlatformRoll"/>, <see cref="RollSelectionOutcome.Advisories"/>)
+/// and the summary names every package that will not follow the roll. Packages catch up through
+/// their own update policy, never the reverse; the deadlock this removes was measured on
+/// partnerre.meshweaver.cloud (the platform held for want of a content bake, every package held for
+/// want of that platform). The paragraphs below describe the walk as it was built (#3479/#3651);
+/// what changed is only that no verdict DECLINES a candidate any more, so
+/// <see cref="RollSelectionKind.NoCompleteRelease"/>, <see cref="RollSelectionKind.BehindCurrent"/>
+/// and <see cref="RollSelectionKind.NoPluginsKnown"/> are no longer produced by the walk.</para>
+///
 /// <para><b>It is an INVERSION of the order this fleet used to roll in.</b> Before, an environment
 /// took the newest published set, booted onto it, and only then discovered a plugin missing or
 /// regressed — at which point the readiness gate refused and the rollout stalled. Completeness was
@@ -74,38 +90,33 @@ public static class RollSelection
         Func<string, IObservable<UpdatabilityVerdict>> verdictOf) =>
         Observable.Defer(() =>
         {
-            // 🚨 ORDER MATTERS, and every one of these is spelled DIFFERENTLY from "all plugins
-            // present". Each is a state in which the selector cannot see, and a selector that
-            // cannot see must never answer "take the newest".
-
-            // 1. We could not establish WHAT this environment carries. A HOLD, named.
-            if (inputs.Inventory.Refusal is { Length: > 0 } refusal)
-                return One(new RollSelectionOutcome(
-                    RollSelectionKind.Indeterminate,
-                    null, inputs.CurrentVersion, 0, 0, [],
-                    $"{inputs.Environment}: the plugin list could not be read from "
-                    + $"{inputs.Inventory.Source} ({refusal}) — cannot determine which release ships "
-                    + "all plugins, which is not clearance to roll to the newest one."));
-
-            // 2. 🚨 THE VACUITY REFUSAL. Zero plugins makes every release vacuously complete.
-            if (inputs.Inventory.Plugins.IsDefaultOrEmpty)
-                return One(new RollSelectionOutcome(
-                    RollSelectionKind.NoPluginsKnown,
-                    null, inputs.CurrentVersion, 0, 0, [],
-                    $"{inputs.Environment}: 0 plugins required — {inputs.Inventory.Source} named "
-                    + "none. Every release would ship all zero of them, so the selection is vacuous "
-                    + "and nothing is selected. Either this environment genuinely deploys no "
-                    + "packages (in which case the release-availability gate does not apply to it "
-                    + "at all and should not be configured), or its plugin list is not being read — "
-                    + "which is the failure this refusal exists to make visible."));
-
-            // 3. Nothing to walk. Not an incident; still said out loud rather than completing empty.
+            // 🚨 Nothing to walk. Not an incident; still said out loud rather than completing empty.
+            // Checked FIRST since 2026-10-11: with the platform rolling independently of its
+            // packages, the candidate list is the only thing that can leave nothing to select.
             if (inputs.CandidatesNewestFirst.IsDefaultOrEmpty)
                 return One(new RollSelectionOutcome(
                     RollSelectionKind.NoCandidates,
                     null, inputs.CurrentVersion, inputs.Inventory.Plugins.Length, 0, [],
                     $"{inputs.Environment}: {inputs.Inventory.Plugins.Length} plugin(s) required "
                     + $"(from {inputs.Inventory.Source}); no release was offered to choose from."));
+
+            // 🚨 The plugin list could not be read, or named none. Both are statements about the
+            // PACKAGES, so neither holds the platform (maintainer, 2026-10-11: "again, we want to
+            // roll platform independently of packages"): the newest admitted candidate is
+            // selected, and the summary and the advisory SAY that no package was checked — an
+            // unread denominator is reported, never dressed up as "all plugins present".
+            if (inputs.Inventory.Refusal is { Length: > 0 } refusal)
+                return One(Unjudged(inputs,
+                    $"the plugin list could not be read from {inputs.Inventory.Source} ({refusal}) — "
+                    + "package availability for this release is unknown, which decides nothing about "
+                    + "the platform roll; the packages catch up through their own update policy"));
+
+            if (inputs.Inventory.Plugins.IsDefaultOrEmpty)
+                return One(Unjudged(inputs,
+                    $"0 plugins required — {inputs.Inventory.Source} named none, so no package was "
+                    + "checked against this release (either this environment genuinely deploys no "
+                    + "packages, or its plugin list is not being read — which is what this line exists "
+                    + "to make visible)"));
 
             return Walk(inputs, verdictOf).Select(walk => Conclude(inputs, walk));
         });
@@ -175,7 +186,12 @@ public static class RollSelection
                    + (bootCompiles.IsDefaultOrEmpty
                        ? string.Empty
                        : $"; {bootCompiles.Length} package(s) would recompile at boot: "
-                         + string.Join(", ", bootCompiles));
+                         + string.Join(", ", bootCompiles))
+                   // 🚨 The platform rolls independently of its packages (2026-10-11): what the
+                   // package verdict would have held on is said on the same line as the choice.
+                   + (walk.Verdict?.WaivedHold is { } waived
+                       ? $"; the platform rolls independently of packages — not following this roll: {waived}"
+                       : string.Empty);
 
         return new RollSelectionOutcome(
             kind, selected, inputs.CurrentVersion, required, satisfied, walk.Declined,
@@ -194,6 +210,41 @@ public static class RollSelection
         {
             Advisories = advisories,
             BootCompiles = bootCompiles,
+        };
+    }
+
+    /// <summary>
+    /// 🚨 The newest admitted candidate, selected WITHOUT a package verdict, with
+    /// <paramref name="advisory"/> saying why none was asked — the platform rolls independently of
+    /// its packages (maintainer, 2026-10-11), so a package question that could not be asked is
+    /// reported, never a reason to stay. Used by this walk for an unread or empty plugin list, and
+    /// by the caller (<c>ReleaseAvailabilityService.SelectRollTarget</c>) when the published root
+    /// could not be read.
+    /// </summary>
+    /// <param name="inputs">The environment, what it runs, and the candidates (non-empty).</param>
+    /// <param name="advisory">Why no package verdict was asked, in one sentence.</param>
+    public static RollSelectionOutcome Unjudged(RollSelectionInputs inputs, string advisory)
+    {
+        ArgumentNullException.ThrowIfNull(inputs);
+        if (inputs.CandidatesNewestFirst.IsDefaultOrEmpty)
+            return new RollSelectionOutcome(
+                RollSelectionKind.NoCandidates, null, inputs.CurrentVersion,
+                inputs.Inventory.Plugins.IsDefault ? 0 : inputs.Inventory.Plugins.Length, 0, [],
+                $"{inputs.Environment}: no release was offered to choose from ({advisory}).");
+
+        var selected = inputs.CandidatesNewestFirst[0];
+        var kind = Position(inputs, selected);
+        var required = inputs.Inventory.Plugins.IsDefault ? 0 : inputs.Inventory.Plugins.Length;
+        var head = $"{inputs.Environment}: {required} plugin(s) required (from "
+                   + $"{inputs.Inventory.Source}); {selected} is the newest admitted release; "
+                   + $"the platform rolls independently of packages — {advisory}";
+        return new RollSelectionOutcome(
+            kind, selected, inputs.CurrentVersion, required, 0, [],
+            kind == RollSelectionKind.AlreadyCurrent
+                ? $"{head}. That is what this environment already runs — no update."
+                : $"{head}. Different from {Describe(inputs.CurrentVersion)} ⇒ update.")
+        {
+            Advisories = [$"the platform rolls independently of packages — {advisory}"],
         };
     }
 
@@ -247,16 +298,14 @@ public static class RollSelection
     {
         public static WalkState Empty { get; } = new([], null, null);
 
+        /// <summary>
+        /// 🚨 Every candidate verdict is ACCEPTED (maintainer, 2026-10-11: <i>"again, we want to
+        /// roll platform independently of packages"</i>): a package-availability refusal becomes
+        /// the accepted verdict's advisories (<see cref="UpdatabilityVerdict.ForPlatformRoll"/>),
+        /// so the walk selects the newest admitted candidate and asks exactly one verdict.
+        /// </summary>
         public WalkState Add(string version, UpdatabilityVerdict verdict) =>
-            verdict.IsUpdatable
-                ? this with { Accepted = version, Verdict = verdict }
-                : this with
-                {
-                    Declined = Declined.Add(new DeclinedRelease(
-                        version,
-                        verdict.HoldReason ?? "declined without a stated reason",
-                        [.. verdict.Blockers])),
-                };
+            this with { Accepted = version, Verdict = verdict.ForPlatformRoll() };
     }
 }
 

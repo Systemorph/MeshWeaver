@@ -102,18 +102,59 @@ public record PlatformUpdateStatus(PlatformUpdateAvailability Availability, stri
             // frozen at whatever the last evaluation said and would render "update held" forever,
             // naming an incompatibility that may have been fixed days ago. A Red verification is
             // unaffected: that is a recorded FACT about the build, not a note about the poller.
-            var blocked = policy.VerificationFor(latest)?.Verdict == ComboVerdictKind.Red;
+            //
+            // 🚨 SUPERSEDED 2026-10-11 for the combo half (maintainer: "again, we want to roll
+            // platform independently of packages"): a Red verification names modules that do not
+            // survive the build — a statement about PACKAGES — and the poller rolls over it, so
+            // rendering it as "held" would be the lie the paragraph above warns about, inverted.
+            // It reaches this surface as a package ADVISORY instead (Advisories below).
             return new(
-                policy.IsHoldOperative(latest) || blocked
+                policy.IsHoldOperative(latest)
                     ? PlatformUpdateAvailability.UpdateHeld
                     : PlatformUpdateAvailability.UpdateAvailable,
-                latest);
+                latest)
+            {
+                Advisories = AdvisoriesFor(policy, latest),
+            };
         }
 
         return policy.Policy == UpdatePolicyKind.None
             ? Unknown
-            : new(PlatformUpdateAvailability.UpToDate, null);
+            // 🚨 The platform ROLLED (the running build is the one the advisories describe): the
+            // packages that did not follow it are still worth saying until they catch up.
+            : new(PlatformUpdateAvailability.UpToDate, null)
+            {
+                Advisories = AdvisoriesFor(policy, runningVersion.Split('+')[0]),
+            };
     }
+
+    /// <summary>
+    /// The package advisories recorded for <paramref name="tag"/> — what the release check said about
+    /// it without holding it (the boot-compile cost, the packages that do not follow the platform
+    /// roll, a combo Red), plus the failing modules of a Red verification — or null when there is
+    /// nothing to say. 🚨 Package NAMES and reasons only: the plugin inventory is already on the About
+    /// page, and these lines are what makes "the platform rolled while a package stayed behind" a
+    /// visible state for everyone rather than a fact only an admin tab knows.
+    /// </summary>
+    private static string? AdvisoriesFor(UpdatePolicyContent policy, string? tag)
+    {
+        var lines = new List<string>();
+        if (policy.HasAdvisoriesFor(tag))
+            lines.Add(policy.Advisories!);
+        if (policy.VerificationFor(tag) is { Verdict: ComboVerdictKind.Red } red)
+            lines.AddRange(red.FailedModules.Count == 0
+                ? [$"the combo gate recorded RED for {tag}"]
+                : red.FailedModules.Select(m => $"{m.ModuleId}: does not compile or test against {tag}"));
+        return lines.Count == 0 ? null : string.Join("; ", lines);
+    }
+
+    /// <summary>
+    /// 🚨 What the release check said about the build this status is about WITHOUT holding it — the
+    /// packages that do not follow the platform roll and catch up on their own (maintainer,
+    /// 2026-10-11: <i>"again, we want to roll platform independently of packages"</i>). Null when
+    /// there is nothing to say. Init-only, so the positional shape stays what it was.
+    /// </summary>
+    public string? Advisories { get; init; }
 
     /// <summary>
     /// The status for the CURRENT build, read off <c>Admin/UpdatePolicy</c> as System and projected to

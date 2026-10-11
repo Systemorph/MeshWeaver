@@ -142,16 +142,14 @@ public class PlatformUpdateStatusTest
     }
 
     /// <summary>
-    /// 🚨 A combo REFUSAL (#2274) renders as held too, off the recorded verdict itself — not only
-    /// off the poller's <c>HeldTag</c> note about it.
-    ///
-    /// <para>The verdict is the FACT; the hold field is bookkeeping the poller writes beside it, and
-    /// that write is deliberately allowed to fail without gating the roll. Reading only the note
-    /// would therefore leave a build that the gate blocked rendering as an unqualified "update
-    /// available" forever — a control covering the empty state and never the populated one.</para>
+    /// 🚨 A combo RED (#2274) is read off the recorded verdict itself — not only off the poller's
+    /// notes — and since 2026-10-11 it renders as what it is: an ADVISORY about packages, never a
+    /// hold (maintainer: <i>"again, we want to roll platform independently of packages"</i>). The
+    /// build stays "available" (the poller rolls to it) and the failing modules are named on the
+    /// status, so it never reads as an unqualified "update available" either.
     /// </summary>
     [Fact]
-    public void ACandidateRefusedByTheComboGate_RendersAsHeld_EvenWithNoHoldFieldWritten()
+    public void ACandidateTheComboGateRecordedRed_RendersAsAvailable_WithTheModulesAsAdvisories()
     {
         var status = PlatformUpdateStatus.Derive(
             new UpdatePolicyContent
@@ -161,8 +159,69 @@ public class PlatformUpdateStatusTest
             },
             Running);
 
-        Assert.Equal(PlatformUpdateAvailability.UpdateHeld, status.Availability);
+        Assert.Equal(PlatformUpdateAvailability.UpdateAvailable, status.Availability);
         Assert.Equal("3.0.0-ci.2400", status.LatestVersion);
+        Assert.Contains("RED", status.Advisories);
+    }
+
+    /// <summary>
+    /// 🚨 THE ABOUT TAB AFTER THE 2026-10-11 DECISION. memex reached partnerre.meshweaver.cloud's
+    /// exact state: the poller found 3.1.10502, the availability check could not resolve its
+    /// framework identity, and — before the change — the record said HELD and the About tab read
+    /// "Update held — a package this deployment runs is not available for that build". Now the
+    /// poller records no hold, only the advisory, and the About line says the platform rolls and
+    /// lists what does not follow.
+    /// </summary>
+    [Fact]
+    public void AWaivedPackageHold_RendersAsAvailable_AndTheAboutLineListsThePackageAdvisories()
+    {
+        const string Tag = "3.1.10502";
+        const string Advisory =
+            "the platform rolls independently of packages — package availability for this release could NOT "
+            + "be determined, and that decides nothing about the platform roll: the framework identity of "
+            + "release 3.1.10502 is not resolvable";
+        var status = PlatformUpdateStatus.Derive(
+            new UpdatePolicyContent
+            {
+                Policy = UpdatePolicyKind.Continuous,
+                LatestAvailableTag = Tag,
+                AdvisoriesTag = Tag,
+                Advisories = Advisory,
+            },
+            "3.1.10490");
+
+        Assert.Equal(PlatformUpdateAvailability.UpdateAvailable, status.Availability);
+        Assert.Equal(Advisory, status.Advisories);
+
+        var markdown = Memex.Portal.Shared.Settings.AboutSettingsTab.UpdateStatusMarkdown(status, key => $"<{key}>");
+        Assert.NotNull(markdown);
+        Assert.DoesNotContain("<about.updateHeld>", markdown);
+        Assert.Contains("<about.updateAvailable>", markdown);
+        Assert.Contains("<about.platformRolls>", markdown);
+        Assert.Contains("- the platform rolls independently of packages", markdown);
+        Assert.Contains("framework identity of release 3.1.10502 is not resolvable", markdown);
+    }
+
+    /// <summary>
+    /// After the roll, the running build is the one the advisories describe: the About tab reads
+    /// "up to date" and still names the packages that have not caught up yet.
+    /// </summary>
+    [Fact]
+    public void AfterTheRoll_UpToDate_StillListsThePackagesThatHaveNotCaughtUp()
+    {
+        var status = PlatformUpdateStatus.Derive(
+            new UpdatePolicyContent
+            {
+                Policy = UpdatePolicyKind.Continuous,
+                AdvisoriesTag = "3.1.10502",
+                Advisories = "Feedback: no sealed content bake",
+            },
+            "3.1.10502+abc123");
+
+        Assert.Equal(PlatformUpdateAvailability.UpToDate, status.Availability);
+        Assert.Equal("Feedback: no sealed content bake", status.Advisories);
+        Assert.Contains("<about.platformRolls>",
+            Memex.Portal.Shared.Settings.AboutSettingsTab.UpdateStatusMarkdown(status, key => $"<{key}>"));
     }
 
     /// <summary>

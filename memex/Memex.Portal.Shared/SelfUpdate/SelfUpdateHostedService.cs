@@ -510,15 +510,8 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
                     .Select(tags => VersionSelect.SelectCandidates(tags, installed, policy.Policy, policy.RequireCiGreen, policy.Pattern))
                     .SelectMany(selection => selection.Candidates.Length == 0
                         ? Observable.Return(new RebootImageChoice(installed, null, NothingToRoll(selection).Message + waived))
-                        : FirstRollable(policy, [.. selection.Candidates], ignoreCombo: wedged)
-                            // The walk answers null when EVERY admitted candidate is condemned (each one
-                            // already recorded RED by the combo gate) — a hold, named as one; a held
-                            // release is never forced and never reported as an Image-step failure.
-                            .SelectMany(target => target is { } rollable
-                                ? ChooseGated(policy, rollable, installed, wedged, waived)
-                                : Observable.Return(new RebootImageChoice(installed, null,
-                                    $"every release the update policy admits ({string.Join(", ", selection.Candidates)}) is already "
-                                    + "recorded RED in the combo gate for this instance's modules — restart on the running image." + waived))));
+                        : FirstRollable([.. selection.Candidates])
+                            .SelectMany(target => ChooseGated(policy, target ?? selection.Candidates[0], installed, wedged, waived)));
             })
             .Catch((Exception ex) => Observable.Return(new RebootImageChoice(installed, null,
                 $"the image could not be selected ({ex.GetType().Name}: {ex.Message}) — restart on the running image", Failed: true)));
@@ -529,20 +522,25 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
     {
         var gate = ResolveAvailabilityGate();
         if (gate is null)
-            return Observable.Return(new RebootImageChoice(installed, null,
-                $"{target} is the newest admitted release, but no release-availability gate is registered on this host — "
-                + "an unverified image is not rolled by a reboot; restart on the running image." + waived));
-        return gate.IsUpdatable(target).Select(verdict =>
+            return Observable.Return(new RebootImageChoice(installed, target,
+                $"{target} is the newest admitted release. No release-availability gate is registered on this host, so "
+                + "package availability was not checked — which does not hold the platform (it rolls independently of packages)." + waived));
+        // 🚨 The platform rolls independently of its packages (maintainer, 2026-10-11): neither the
+        // availability verdict nor a recorded combo Red keeps the reboot on the running image —
+        // both are package answers, and the detail names them so the choice is never silent.
+        return gate.IsUpdatable(target).Select(raw =>
         {
-            if (!verdict.IsUpdatable)
-                return new RebootImageChoice(installed, null,
-                    $"{target} is the newest admitted release and is HELD by the availability gate: {verdict.HoldReason} — restart on the running image." + waived);
-            if (!wedged && ResolveComboGate() is { } combo && combo.Recorded(policy, target) is { Refuses: true } red)
-                return new RebootImageChoice(installed, null,
-                    $"{target} is RED in the combo gate for this instance's modules ({red.Reason}) — restart on the running image.");
+            var verdict = raw.ForPlatformRoll();
+            var packages = verdict.WaivedHold is { } lagging
+                ? $" Package availability does not hold the platform (it rolls independently of packages): {lagging}."
+                : "";
+            var red = !wedged && ResolveComboGate() is { } combo && combo.Recorded(policy, target) is { Refuses: true } refused
+                ? $" The combo gate recorded RED for this instance's modules ({refused.Reason}) — an advisory: those modules keep their previous generation and catch up on their own."
+                : "";
             return new RebootImageChoice(installed, target,
-                $"{target} is the newest release the update policy admits ({policy.Policy}{(policy.Pattern is null ? "" : $", pattern {policy.Pattern}")}) "
-                + $"and the availability gate clears{(verdict.NotEnforcedReason is { } why ? $" (not enforced: {why})" : "")}." + waived);
+                $"{target} is the newest release the update policy admits ({policy.Policy}{(policy.Pattern is null ? "" : $", pattern {policy.Pattern}")})"
+                + (verdict.NotEnforcedReason is { } why ? $" (availability gate not enforced: {why})" : "")
+                + "." + packages + red + waived);
         });
     }
 
@@ -1062,7 +1060,7 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
                 // distinguishes a healthy up-to-date install from one whose checker is dead. Which
                 // of the three "nothing to roll to" states this is, is NothingToRoll's job.
                 ? Observable.Return(NothingToRoll(selection))
-                : FirstRollable(policy, [.. selection.Candidates])
+                : FirstRollable([.. selection.Candidates])
                     .SelectMany(target => RecordAvailable(target!)
                         // 🚨 BOOKKEEPING, NOT A GATE (#1020). RecordAvailable writes two cosmetic fields
                         // (LatestAvailableTag / CheckedAt) that drive the admin tab; the ROLL-FORWARD does not
@@ -1148,87 +1146,43 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
     /// than to an exception that kills the tick.</para>
     /// </summary>
     /// <summary>
-    /// The newest candidate the availability gate accepts — or, when it accepts none, the newest
-    /// candidate anyway so the caller records the hold against the release an operator is actually
-    /// waiting for.
+    /// 🚨 The NEWEST admitted candidate — the platform rolls independently of its packages
+    /// (maintainer, 2026-10-11: <i>"again, we want to roll platform independently of packages"</i>).
     ///
-    /// <para>Sequential and LAZY by construction (<c>Concat</c> over a deferred enumerable): the
-    /// common case asks the gate exactly once, about the head. Only a held head costs a second
-    /// question, and only about the release below it.</para>
-    ///
-    /// <para>🚨 Returning the newest on total failure is deliberate, not a fallback that rolls
-    /// something unwanted: the caller re-gates whatever comes back, so an all-held list still ends
-    /// in a HOLD — with the newest tag's reason, which is the one that explains why the fleet is
-    /// not moving. Reporting the OLDEST candidate's reason instead would be true and useless.</para>
+    /// <para>This used to walk past every candidate the availability gate declined and past every
+    /// one the combo gate had recorded RED. Both are answers about PACKAGES — a missing bake, an
+    /// unresolvable framework identity, a module that does not compile against the candidate — and
+    /// since 2026-10-11 neither decides which platform build an instance runs: they are recorded as
+    /// advisories by <see cref="GateThenApply"/> and the packages catch up through their own update
+    /// policy. Holding the platform for a package's sake is exactly how partnerre.meshweaver.cloud
+    /// deadlocked: the platform waited for a content bake while every package update waited for
+    /// that platform.</para>
     /// </summary>
     /// <remarks>
-    /// 🚨 The walk itself is <see cref="RollSelection"/> (#3479), reached through
+    /// 🚨 The selection itself is still <see cref="RollSelection"/> (#3479), reached through
     /// <see cref="ReleaseAvailabilityService.SelectRollTarget"/> — <b>the algorithm is stated once,
     /// and the poller is one of its callers, not a second copy of it.</b> The endpoint
     /// (<c>/api/plugins/roll-target</c>) that answers for CD and for an operator rolling by hand
     /// asks the same method, so the three roll paths cannot select differently.
     /// </remarks>
-    private IObservable<string?> FirstRollable(UpdatePolicyContent policy, string[] candidates, bool ignoreCombo = false)
+    private IObservable<string?> FirstRollable(string[] candidates)
     {
         if (candidates.Length == 0)
             return Observable.Return<string?>(null);
 
         var gate = ResolveAvailabilityGate();
-        // A wedged reboot does not wait for (or step past) a dependent-suite verdict — it says so itself.
-        var combo = ignoreCombo ? null : ResolveComboGate();
-        // Neither gate wired: preserve today's behaviour exactly — the head, and GateThenApply
-        // reports the not-wired case itself.
-        if (gate is null && combo is null)
+        if (gate is null)
             return Observable.Return<string?>(candidates[0]);
 
-        // 🚨 The combo half reads only what is RECORDED (ComboVerificationGate.Recorded) — a pure
-        // read of the policy content this tick already holds, so the walk costs neither an extra
-        // mesh touch nor a docker run per candidate. A verdict is PRODUCED exactly once, in
-        // GateThenApply, about the candidate actually chosen; if that comes back Red the tick holds,
-        // and the now-recorded Red makes the very next walk step past it.
-        //
-        // 🚨 Only a REFUSAL removes a candidate. One with no verdict, or one whose verdict could not
-        // answer, is neither preferred nor condemned — treating "unknown" as disqualifying would
-        // empty the candidate list on every instance in the fleet, which is the freeze this gate
-        // exists to avoid causing, not to cause.
-        var condemned = combo is null
-            ? null
-            : (Func<string, string?>)(tag => combo.Recorded(policy, tag).Refuses
-                ? $"the combo gate has already recorded {tag} as RED for this instance's modules"
-                : null);
-
-        // The availability gate not being wired leaves no completeness question to ask, so what is
-        // left of the walk is the combo half alone — the same rule, minus the half nobody wired.
-        if (gate is null)
-            return Observable.Return<string?>(FirstNotCondemned(candidates, condemned));
-
         return gate
-            .SelectRollTarget(ShippedReleaseSeed.InstalledPlatformVersion, candidates, condemned)
-            .Select(outcome => outcome.SelectedVersion ?? (
-                // 🚨 The completeness question does not APPLY to this deployment (it consumes no CI
-                // bakes), so the walk that is left is the combo half — exactly what this method did
-                // before the selector existed, and the state in which a combo Red must still remove
-                // a candidate.
-                outcome.Kind == RollSelectionKind.NotEnforced
-                    ? FirstNotCondemned(candidates, condemned)
-                    // 🚨 Falling back to the NEWEST when the gate applies and selected nothing is
-                    // deliberate, not a fallback that rolls something unwanted: the caller re-gates
-                    // whatever comes back, so an all-declined list still ends in a HOLD — with the
-                    // newest tag's reason, which is the one that explains why the fleet is not
-                    // moving. Reporting the OLDEST candidate's reason instead would be true and
-                    // useless.
-                    : candidates[0]))
-            // A gate that faults must not kill the tick: fall back to the head and let
-            // GateThenApply take the fail-safe hold it already knows how to take.
+            .SelectRollTarget(ShippedReleaseSeed.InstalledPlatformVersion, candidates)
+            // NotEnforced (a deployment that consumes no CI bakes) and Indeterminate (the selector
+            // could not answer in its budget) select nothing — and the newest admitted candidate is
+            // still the target, because nothing about packages holds the platform.
+            .Select(outcome => outcome.SelectedVersion ?? candidates[0])
+            // A selector that faults must not kill the tick: the head, which GateThenApply judges.
             .Catch((Exception _) => Observable.Return<string?>(candidates[0]));
     }
-
-    /// <summary>The newest candidate the combo gate has not already condemned, or the newest one
-    /// when it has condemned them all — the caller re-gates either way.</summary>
-    private static string FirstNotCondemned(string[] candidates, Func<string, string?>? condemned) =>
-        condemned is null
-            ? candidates[0]
-            : candidates.FirstOrDefault(tag => condemned(tag) is null) ?? candidates[0];
 
     private IObservable<SelfUpdateVerdict> GateThenApply(SelfUpdateTrigger trigger, UpdatePolicyContent policy, string target) =>
         Observable.Defer(() =>
@@ -1238,39 +1192,43 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
                 return GateNotWired(trigger, policy, target);
 
             return gate.IsUpdatable(target)
-                .SelectMany(verdict =>
+                .SelectMany(raw =>
                 {
-                    if (verdict.IsUpdatable)
-                    {
-                        if (verdict.NotEnforcedReason is { } notEnforced)
-                            _logger?.LogInformation(
-                                "[SelfUpdate] release-availability gate not enforced for {Tag}: {Reason}",
-                                target, notEnforced);
-                        // 🚨 The advisories ride beside the verdict, never inside it (#3651,
-                        // #3648): the packages this roll would recompile at boot, a landed module
-                        // whose loadability on the target could not be measured, a declared floor
-                        // the target does not rank above. The floor sentences were the hold reasons
-                        // on 2026-09-07; they are logged so an operator can still read them, and
-                        // the roll proceeds on what the link probe measured — here against the
-                        // published surface, and again at boot.
-                        if (!verdict.Advisories.IsDefaultOrEmpty)
-                            _logger?.LogInformation(
-                                "[SelfUpdate] rolling to {Tag} with {Count} advisory line(s) — "
-                                + "reported, never a hold: {Advisories}",
-                                target, verdict.Advisories.Length,
-                                string.Join("; ", verdict.Advisories));
-                        // 🚨 The availability gate answered "nothing of yours is unloadable there".
-                        // The combo gate answers the question the bytes on the shelf cannot:
-                        // whether the candidate's assemblies can still serve the module content
-                        // this instance has landed. Both have to clear before anything is patched.
-                        return ComboThenApply(trigger, policy, target, verdict);
-                    }
-
-                    return RecordHold(target, verdict).Catch(HoldWriteFailed(target))
-                        .IgnoreElements()
-                        .Select(_ => SelfUpdateVerdict.NoOutcome())
-                        .Concat(Observable.Return(
-                            SelfUpdateVerdict.Held(target, verdict.HoldReason)));
+                    // 🚨 THE PLATFORM ROLLS INDEPENDENTLY OF ITS PACKAGES (maintainer, 2026-10-11:
+                    // "again, we want to roll platform independently of packages"). A package-
+                    // availability verdict — a missing bake, an unresolvable framework identity, a
+                    // package without an artifact for the target, an unreadable catalogue — is
+                    // NEVER a hold on this roll: it becomes an ADVISORY, logged here, recorded on
+                    // Admin/UpdatePolicy beside the (cleared) hold so the Updates and About tabs
+                    // name every package that will not follow, and carried on the check verdict.
+                    // The packages catch up through their own update policy and the held-update
+                    // lane — never the reverse. Holding here deadlocked partnerre.meshweaver.cloud
+                    // on 2026-10-11: the platform waited for a content bake of 3.1.10502 while
+                    // every package update waited for platform >= 3.1.10493.
+                    var verdict = raw.ForPlatformRoll();
+                    if (verdict.WaivedHold is { } waived)
+                        _logger?.LogWarning(
+                            "[SelfUpdate] package availability does NOT hold the platform roll to {Tag} "
+                            + "(the platform rolls independently of packages; {Count} package(s) catch up "
+                            + "on their own{Indeterminate}): {Reason}",
+                            target, verdict.Lagging.Count(),
+                            raw.IsIndeterminate ? ", availability could not be determined" : "",
+                            waived);
+                    if (verdict.NotEnforcedReason is { } notEnforced)
+                        _logger?.LogInformation(
+                            "[SelfUpdate] release-availability gate not enforced for {Tag}: {Reason}",
+                            target, notEnforced);
+                    // 🚨 The advisories ride beside the verdict, never inside it (#3651, #3648):
+                    // the packages this roll would recompile at boot, a landed module whose
+                    // loadability on the target could not be measured, a declared floor the
+                    // target does not rank above — and, since 2026-10-11, the waived package hold.
+                    if (!verdict.Advisories.IsDefaultOrEmpty)
+                        _logger?.LogInformation(
+                            "[SelfUpdate] rolling to {Tag} with {Count} advisory line(s) — "
+                            + "reported, never a hold: {Advisories}",
+                            target, verdict.Advisories.Length,
+                            string.Join("; ", verdict.Advisories));
+                    return ComboThenApply(trigger, policy, target, verdict);
                 });
         });
 
@@ -1289,10 +1247,11 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
     /// <list type="bullet">
     /// <item><b>Green</b> ⇒ cleared. The roll proceeds and the clearance is logged with its
     /// caveats.</item>
-    /// <item><b>Red</b> ⇒ REFUSED. The roll is held, every failing module is NAMED on
-    /// <c>Admin/UpdatePolicy</c> where the Updates tab reads it, and the refusal is logged at Error.
-    /// Re-evaluated from scratch every tick, so a re-verified candidate clears with nothing to
-    /// un-stick by hand.</item>
+    /// <item><b>Red</b> ⇒ ADVISORY since 2026-10-11 (maintainer: <i>"again, we want to roll
+    /// platform independently of packages"</i>) — it used to hold the roll. Every failing module is
+    /// still NAMED on <c>Admin/UpdatePolicy</c> where the Updates tab reads it, logged at Warning
+    /// and carried on the check verdict, and the roll proceeds: those modules keep their previous
+    /// generation and catch up through their own update policy.</item>
     /// <item><b>NotVerifiable — and its sibling, no verdict at all</b> ⇒ NEITHER. It does not clear
     /// (that would reproduce the outage, treating "we could not find out" as "all clear") and it
     /// does not refuse (that would freeze every instance the moment this shipped, since producing a
@@ -1316,32 +1275,41 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
                 : combo.Clearance(policy, target, _options.PortalImage(target)))
             .SelectMany(clearance =>
             {
+                // 🚨 A RED combo verdict is an ADVISORY since 2026-10-11, not a hold (maintainer:
+                // "again, we want to roll platform independently of packages"). It names modules
+                // this instance has landed that do not survive the candidate — a statement about
+                // PACKAGES. Each failing module is named on Admin/UpdatePolicy (the Updates tab),
+                // logged at Warning, and carried on the check verdict; the module keeps its
+                // previous generation (the boot-time probe and keep-the-previous-generation
+                // fallback are the safety net) and catches up through its own update policy.
+                var advised = availability;
                 if (clearance.Refuses)
                 {
-                    _logger?.LogError(
-                        "[SelfUpdate] HOLDING update to {Tag} (staying on {Current}) — {Reason}",
-                        target, ShippedReleaseSeed.InstalledPlatformVersion, clearance.Reason);
-                    return RecordHold(target, ComboHold(clearance))
-                        .Catch(HoldWriteFailed(target))
-                        .IgnoreElements()
-                        .Select(_ => SelfUpdateVerdict.NoOutcome())
-                        .Concat(Observable.Return(
-                            SelfUpdateVerdict.ComboBlocked(target, clearance.Reason)));
+                    _logger?.LogWarning(
+                        "[SelfUpdate] the combo gate recorded RED for {Tag} — an ADVISORY, not a hold: "
+                        + "the platform rolls independently of packages and the named modules catch up "
+                        + "on their own — {Reason}",
+                        target, clearance.Reason);
+                    advised = WithComboAdvisory(availability, clearance);
                 }
-
-                if (clearance.IsCleared)
+                else if (clearance.IsCleared)
                     _logger?.LogInformation(
                         "[SelfUpdate] combo gate cleared {Tag}: {Reason}", target, clearance.Reason);
 
                 // Clearing is unconditional, exactly as on the availability path: a previous hold
                 // that no longer applies must disappear from the admin tab the moment it is
                 // resolved. The availability verdict rides along so what it SAID about this tag
-                // (the boot-compile cost, an unmeasurable module — #3651) is recorded with the
-                // clear rather than lost with it.
-                return RecordHold(target, availability).Catch(HoldWriteFailed(target))
+                // (the boot-compile cost, an unmeasurable module — #3651; the packages that do not
+                // follow the roll and a combo Red — 2026-10-11) is recorded with the clear rather
+                // than lost with it.
+                return RecordHold(target, advised).Catch(HoldWriteFailed(target))
                     .IgnoreElements()
                     .Select(_ => SelfUpdateVerdict.NoOutcome())
-                    .Concat(Apply(trigger, policy, target).Select(verdict => Qualify(verdict, clearance)));
+                    .Concat(Apply(trigger, policy, target)
+                        .Select(verdict => Qualify(verdict, clearance))
+                        .Select(verdict => advised?.WaivedHold is { } waived
+                            ? verdict.WithPackageAdvisory(waived)
+                            : verdict));
             });
     }
 
@@ -1354,6 +1322,15 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
     {
         if (clearance.IsCleared)
             return verdict;
+        if (clearance.Refuses)
+        {
+            if (verdict.Outcome == SelfUpdateOutcome.Applied)
+                _logger?.LogWarning(
+                    "[SelfUpdate] rolled {Tag} although the combo gate recorded RED — the platform rolls "
+                    + "independently of packages: {Reason}",
+                    clearance.CandidateTag, clearance.Reason);
+            return verdict.WithPackageAdvisory($"the combo gate recorded RED — {clearance.Reason}");
+        }
         if (verdict.Outcome == SelfUpdateOutcome.Applied)
             _logger?.LogWarning(
                 "[SelfUpdate] rolled {Tag} WITHOUT combo clearance — {Reason}",
@@ -1362,26 +1339,48 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
     }
 
     /// <summary>
-    /// The combo refusal expressed as the hold the admin surfaces already render: one blocker per
-    /// FAILING MODULE, so <c>HeldReason</c> names them all, and NOT indeterminate — the gate looked
-    /// and found an incompatibility, which is a candidate to re-verify rather than an availability
-    /// incident to fix.
+    /// The combo Red expressed as what it is since 2026-10-11 — an ADVISORY on the availability
+    /// verdict the roll records: one <see cref="PackageAvailabilityKind.ComboVerificationFailed"/>
+    /// per FAILING MODULE (so the Updates tab can name them all) and one advisory line naming the
+    /// refusal, leading. The verdict stays updatable: a module that does not survive the candidate
+    /// keeps its previous generation and catches up on its own; it never holds the platform.
     /// </summary>
-    private static UpdatabilityVerdict ComboHold(ComboClearance clearance) =>
-        new(false,
+    private static UpdatabilityVerdict WithComboAdvisory(UpdatabilityVerdict? availability, ComboClearance clearance)
+    {
+        var current = availability ?? new UpdatabilityVerdict(true, [], null);
+        var existing = current.Advisories.IsDefault ? [] : current.Advisories;
+        return current with
+        {
+            Packages =
             [
+                .. current.Packages.IsDefault ? [] : current.Packages,
                 .. (clearance.Verdict?.FailedModules ?? []).Select(module =>
                     new PackageAvailability(
                         module.ModuleId,
                         PackageAvailabilityKind.ComboVerificationFailed,
                         module.Failures.Count > 0 ? module.Failures[0] : clearance.Reason)),
             ],
-            clearance.Reason);
+            Advisories =
+            [
+                "the platform rolls independently of packages — the combo gate recorded RED for this "
+                + $"release: {clearance.Reason}; those modules keep their previous generation and catch "
+                + "up through their own update policy",
+                .. existing,
+            ],
+        };
+    }
 
     /// <summary>
-    /// 🚨 <b>No gate is registered on this host — so the roll HOLDS.</b>
+    /// 🚨 <b>No gate is registered on this host — the roll proceeds, SAYING that package
+    /// availability was not checked.</b>
     ///
-    /// <para>This branch used to log at Information and roll anyway. That is the trap this whole
+    /// <para>🚨 Since 2026-10-11 (maintainer: <i>"again, we want to roll platform independently of
+    /// packages"</i>) this is an ADVISORY rather than the hold the paragraphs below describe: the
+    /// gate answers a question about PACKAGES, and no answer to it — not even its absence — holds
+    /// the platform. What survives of the reasoning below is that the state is never SILENT: it is
+    /// logged at Warning, recorded on the policy node and carried on the check verdict.</para>
+    ///
+    /// <para>History: this branch used to log at Information and roll anyway. That is the trap this whole
     /// area keeps falling into: a gate that cannot run must never look like a gate that passed. The
     /// gate answers "does every package this environment deploys have a usable artifact for the
     /// target release"; a host with no gate registered has not answered it — it has failed to ask.
@@ -1435,37 +1434,28 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
                 return ComboThenApply(trigger, policy, target);
             }
 
-            if (_options.AllowUnverifiedRoll)
-            {
-                _logger?.LogWarning(
-                    "[SelfUpdate] rolling {Tag} UNVERIFIED — no release-availability gate is "
-                    + "registered on this host and '{Key}:{Property}' is set, so nothing checked "
-                    + "whether the packages this environment deploys have artifacts for it. Unset "
-                    + "that key to make the missing gate a hold again.",
-                    target, SelfUpdateOptions.SectionName, nameof(SelfUpdateOptions.AllowUnverifiedRoll));
-                // 🚨 AllowUnverifiedRoll waives the AVAILABILITY gate that could not run. It is not
-                // a waiver of a gate that DID run, and the combo gate's Red is exactly that — so it
-                // still refuses here. A key that could wave away a produced refusal would be the
-                // skip-trapdoor this whole area exists to keep out.
-                return ComboThenApply(trigger, policy, target);
-            }
-
+            // 🚨 The unanswered package question is an ADVISORY since 2026-10-11, like every other
+            // package-availability answer (maintainer: "again, we want to roll platform
+            // independently of packages"). It is still never silent: logged at Warning on every
+            // tick, recorded on Admin/UpdatePolicy beside the cleared hold, carried on the check
+            // verdict — and the combo gate still runs. AllowUnverifiedRoll is no longer needed to
+            // roll here; it only quietens nothing, by design.
             var verdict = UpdatabilityVerdict.Unavailable(
-                "no release-availability gate is registered on this host, so nothing could check "
+                "no release-availability gate is registered on this host, so nothing checked "
                 + "whether the packages this environment deploys have usable artifacts for this "
-                + $"release — that is a hold, not clearance to proceed. Register "
-                + $"{nameof(ReleaseAvailabilityService)} (it is wired by AddSelfUpdate), or set "
-                + $"'{SelfUpdateOptions.SectionName}:{nameof(SelfUpdateOptions.AllowUnverifiedRoll)}'"
-                + " to roll unverified on purpose.");
+                + $"release. Register {nameof(ReleaseAvailabilityService)} (it is wired by "
+                + "AddSelfUpdate) to have the packages that will not follow the roll named.")
+                .ForPlatformRoll();
 
-            _logger?.LogError(
-                "[SelfUpdate] HOLDING update to {Tag} (staying on {Current}) — {Reason}",
-                target, ShippedReleaseSeed.InstalledPlatformVersion, verdict.HoldReason);
+            _logger?.LogWarning(
+                "[SelfUpdate] rolling {Tag} with package availability UNCHECKED{Allowed} — {Reason}",
+                target,
+                _options.AllowUnverifiedRoll
+                    ? $" ('{SelfUpdateOptions.SectionName}:{nameof(SelfUpdateOptions.AllowUnverifiedRoll)}' is set)"
+                    : "",
+                verdict.WaivedHold);
 
-            return RecordHold(target, verdict).Catch(HoldWriteFailed(target))
-                .IgnoreElements()
-                .Select(_ => SelfUpdateVerdict.NoOutcome())
-                .Concat(Observable.Return(SelfUpdateVerdict.Held(target, verdict.HoldReason)));
+            return ComboThenApply(trigger, policy, target, verdict);
         });
 
     /// <summary>

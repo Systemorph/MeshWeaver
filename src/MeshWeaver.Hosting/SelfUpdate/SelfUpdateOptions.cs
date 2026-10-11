@@ -299,7 +299,13 @@ public record SelfUpdateOptions
     /// <summary>
     /// 🚨 Roll even though the release-availability gate is NOT WIRED into this host.
     ///
-    /// <para>Default <c>false</c>: an unwired gate is a HOLD. The gate answers "does every package
+    /// <para>🚨 <b>Moot since 2026-10-11</b> (maintainer: <i>"again, we want to roll platform
+    /// independently of packages"</i>): no package-availability answer — an unwired gate included —
+    /// holds the platform roll any more. An unwired gate rolls with a logged, recorded advisory
+    /// whether or not this key is set; the key is kept so existing configuration still binds, and
+    /// the warning names it when set. The paragraphs below are its history.</para>
+    ///
+    /// <para>Default <c>false</c>: an unwired gate was a HOLD. The gate answers "does every package
     /// this environment deploys have a usable artifact for the target release" (#1754), and a host
     /// that has no gate registered has not answered it — it has failed to ask. That is the absence
     /// of a verdict, not a passing one, and this repo has paid for treating the two the same more

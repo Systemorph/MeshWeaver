@@ -159,30 +159,52 @@ applies the update.
 | **Monolith** (non-k8s) | No self-patch (no service-account token) → detect-only: records `LatestAvailableTag` for visibility; the operator updates the binary. |
 | **MAUI app** | **Detect + notify.** A sandboxed app can't replace its own binary, so on connecting to a remote mesh that runs a newer platform version it shows an in-app alert: update from the store and relaunch. |
 
-### The availability gate — "newer" is not sufficient
+### The platform rolls independently of its packages
 
-Whichever target it is, a newer tag is **not** on its own a reason to roll. Before patching
-anything, the poller asks the [release availability gate](../ReleaseGates) whether a module this
-deployment has landed provably cannot load on that release — the landed bytes linked against the
-surface the release published ([the link gate](../ModulePlatformLinkGate), MeshWeaver#3651). If
-one cannot, the update is **held**: the poller stays on the current image, writes the refusal to
-`Admin/UpdatePolicy` (`HeldTag`, `HeldReason`, `HeldAt`), and the Updates tab reports it — the
-About tab shows `⏸️ Update held` rather than `⬆️ Update available`, because an install that has
-refused a build must not look like one that is about to take it.
+> 🚨 **Rule, 2026-10-11 (maintainer): _"again, we want to roll platform independently of
+> packages"_.** A package-availability verdict is **never** a hold on the platform roll. It is an
+> **advisory**: logged, recorded on `Admin/UpdatePolicy`, shown on the Updates and About tabs — and
+> the roll proceeds to the newest admitted tag. Packages catch up on their own (their own update
+> policy, the held-update lane), never the reverse.
 
-What the gate reports **without** holding — a course with no prebuilt bake for that build, which
-compiles when the new build starts; a module whose loadability could not be measured, which the
-platform decides at start-up and keeps the previous version of if the new one cannot load — is
-written to the same node (`AdvisoriesTag`, `Advisories`) and shown on the tab beneath the available
-line. Only `Modules:RequirePrebuilt` turns the missing bake back into a hold.
+Whichever target it is, the poller still asks the [release availability gate](../ReleaseGates)
+about the newest tag the update policy admits: does every package this deployment runs have a usable
+artifact for it, can its framework identity be resolved, can the catalogue be read, can every landed
+module load against the surface it published ([the link gate](../ModulePlatformLinkGate)), and —
+from the [combo gate](../ComboGateWiring) — do the landed modules compile and test against it. Those
+are questions about **packages**, and since 2026-10-11 their answers never decide which platform build
+an instance runs:
 
-A hold is not sticky. It is re-evaluated on every poll and every green-build event and clears itself
-the moment the missing artifact is published, so nothing has to be un-stuck by hand. The manual
-**Apply update now** button consults the same verdict — a gate the unattended path respects and the
-manual one does not is no gate at all.
+- **The gate answers yes** — the roll proceeds, with whatever it reported without holding (a course
+  with no prebuilt bake for that build, which compiles when the new build starts; a module whose
+  loadability could not be measured, which the platform decides at start-up and keeps the previous
+  version of if the new one cannot load).
+- **The gate answers no or "cannot determine"** — a missing bake under `Modules:RequirePrebuilt`, an
+  unresolvable framework identity, a package without an artifact, an unreadable catalogue, an
+  unloadable module, a recorded combo **Red**, even an unregistered gate — the roll **still
+  proceeds**. The refusal becomes the first advisory line ("the platform rolls independently of
+  packages — N package(s) … catch up through their own update policy: …"), every package that does
+  not follow is named, and the check verdict says `PACKAGE ADVISORY`. No `HeldTag` is written, and a
+  hold recorded by an older build is cleared on the roll.
 
-🚨 "Cannot determine" is a hold too, and it says so distinctly: an unreadable artifact catalogue is
-an availability incident to fix, not an incompatible release to re-bake.
+Everything is written to the same node (`AdvisoriesTag`, `Advisories`) and shown on the Updates tab
+beneath the available line; the About tab says the platform rolls (or rolled) and lists the package
+advisories, and no longer reads `⏸️ Update held — a package … is not available`. The roll selection
+CD reads (`/api/plugins/roll-target`), the manual-roll check (`/api/plugins/is-updatable`, which now
+returns the waived reason as `waivedHold`), the reboot's image step and the **Apply update now**
+button all apply the same rule, so no roll path selects differently from the poller.
+
+**Why.** Measured on partnerre.meshweaver.cloud on 2026-10-11: `Admin/UpdatePolicy` read
+`HOLDING 3.1.10502 — the framework identity of release 3.1.10502 is not resolvable — no content bake
+has been published for it …` (`heldIndeterminate=true`), while every package update on the same
+instance was held because it needed platform `>= 3.1.10493`. The platform waited for the packages and
+the packages waited for the platform — a deadlock only one direction can break. memex.systemorph.com
+ran 3.1.10502 fine.
+
+The pure predicate (`ReleaseAvailability.IsUpdatable`) still answers the package question truthfully
+— "cannot determine" is still not "available" — because the CI build gate and every surface that
+lists package availability need that answer. Only the platform roll waives it
+(`UpdatabilityVerdict.ForPlatformRoll`).
 
 ### Postgres ("auto-update pg")
 

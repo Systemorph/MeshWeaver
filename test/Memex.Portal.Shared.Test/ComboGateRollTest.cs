@@ -38,13 +38,14 @@ namespace Memex.Portal.Shared.Test;
 /// <see cref="ComboClearanceTest"/>) — it is that a RED verdict actually STOPS a roll, and that the
 /// verifier is genuinely RUN and its verdict RECORDED where an admin looks.</para>
 ///
-/// <para>So the assertions here are positive and observable in both directions: a refusal is
-/// asserted as a HOLD written to <c>Admin/UpdatePolicy</c> plus an unpatched updater (never as "no
-/// patch happened", which passes against a poller that simply died), and every non-refusing state is
-/// asserted as a roll that DID land. Delete the wiring in
+/// <para>🚨 <b>Since 2026-10-11 a Red is an ADVISORY, not a hold</b> (maintainer: <i>"again, we
+/// want to roll platform independently of packages"</i>). The assertions stay positive and
+/// observable: a Red is asserted as a roll that DID land PLUS the failing module named in the
+/// advisories on <c>Admin/UpdatePolicy</c> and on the check verdict (never as "a roll happened",
+/// which a poller that ignores the gate also produces). Delete the wiring in
 /// <c>SelfUpdateHostedService.ComboThenApply</c> and
-/// <see cref="ARedVerdict_BlocksTheRoll_AndNamesTheModuleThatWouldBreak"/> plus
-/// <see cref="TheVerifierIsRun_ItsRedVerdictIsRecorded_AndTheRollIsRefused"/> both go red.</para>
+/// <see cref="ARedVerdict_IsAnAdvisory_TheRollLands_AndTheModuleIsNamed"/> plus
+/// <see cref="TheVerifierIsRun_ItsRedVerdictIsRecorded_AndBecomesAnAdvisory"/> both go red.</para>
 ///
 /// <para>Only the documented seams are injected: the availability gate (so the OTHER gate never
 /// decides anything here), the ACR list and the k8s PATCH. The hub, the workspace, the policy node,
@@ -72,14 +73,15 @@ public class ComboGateRollTest(ITestOutputHelper output) : MonolithMeshTestBase(
     // ══════════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// 🚨 <b>The acceptance criterion.</b> A candidate whose recorded verdict says a module this
-    /// instance RUNS fails against it must not be rolled — and the refusal must be visible where an
-    /// admin looks, naming the module. This is the exact state memex.systemorph.com was in: rolling
-    /// forward aborted the host with a <c>MissingMethodException</c>, and nothing asked the question
-    /// that would have said so.
+    /// 🚨 <b>A Red is an ADVISORY since 2026-10-11</b> (maintainer: <i>"again, we want to roll
+    /// platform independently of packages"</i>). It used to hold the roll; a module that does not
+    /// survive the candidate is a statement about a PACKAGE, so the platform rolls and the module
+    /// keeps its previous generation and catches up on its own. What must survive is the
+    /// visibility: the failing module is NAMED where an admin looks (the advisories on
+    /// <c>Admin/UpdatePolicy</c>) and on the check verdict — never a silent roll.
     /// </summary>
     [Fact(Timeout = 240_000)]
-    public async Task ARedVerdict_BlocksTheRoll_AndNamesTheModuleThatWouldBreak()
+    public async Task ARedVerdict_IsAnAdvisory_TheRollLands_AndTheModuleIsNamed()
     {
         await Seed(TestContext.Current.CancellationToken);
         await Record(Red());
@@ -87,18 +89,16 @@ public class ComboGateRollTest(ITestOutputHelper output) : MonolithMeshTestBase(
 
         var content = await RunOneCheck(updater, ComboGate());
 
-        content.IsHeld(CandidateTag).Should().BeTrue(
-            "a refusal that leaves no trace is the silent freeze this gate must never become");
-        content.HeldReason.Should().Contain("Widget",
-            "an unnamed refusal is unactionable — the operator has to know WHICH module breaks");
-        content.HeldReason.Should().Contain("AddTracking");
-        content.HeldIndeterminate.Should().BeFalse(
-            "the gate LOOKED and found an incompatibility — that is a candidate to re-verify, not "
-            + "an availability incident to fix");
-        content.LastCheckVerdict.Should().Contain("BLOCKED by the combo gate");
-
-        updater.Tags.Should().BeEmpty(
-            "an image that cannot serve this instance's modules must not be rolled");
+        updater.Tags.Should().Contain(CandidateTag,
+            "the platform rolls independently of packages — a combo Red names modules, it does not hold");
+        content.IsHeld(CandidateTag).Should().BeFalse("nothing package-shaped holds the platform any more");
+        content.HasAdvisoriesFor(CandidateTag).Should().BeTrue(
+            "a roll over a Red that leaves no trace is the silent state this gate must never become");
+        content.Advisories.Should().Contain("Widget",
+            "an unnamed advisory is unactionable — the operator has to know WHICH module does not follow");
+        content.Advisories.Should().Contain("AddTracking");
+        content.LastCheckVerdict.Should().Contain("PACKAGE ADVISORY");
+        content.LastCheckVerdict.Should().Contain("the combo gate recorded RED");
     }
 
     /// <summary>
@@ -217,7 +217,7 @@ public class ComboGateRollTest(ITestOutputHelper output) : MonolithMeshTestBase(
     /// filter keyed on), so a test that triggered one would pass either way.</para>
     /// </summary>
     [Fact(Timeout = 240_000)]
-    public async Task AVerdictRecordedAfterTheFirstCheck_RefusesTheNextRoll()
+    public async Task AVerdictRecordedAfterTheFirstCheck_IsHonouredByTheNextCheck()
     {
         var ct = TestContext.Current.CancellationToken;
         await Seed(TestContext.Current.CancellationToken);
@@ -241,20 +241,21 @@ public class ComboGateRollTest(ITestOutputHelper output) : MonolithMeshTestBase(
             await Record(Red());
 
             // The check's own verdict stamp is the LAST write of a check, so a content carrying it
-            // carries every earlier write of that check — the hold included. Waiting on IsHeld
-            // alone returns the content BETWEEN the two writes and reads a previous check's stamp.
-            var held = await WaitForContent(
-                c => c.LastCheckVerdict?.Contains("BLOCKED by the combo gate") == true);
+            // carries every earlier write of that check — the advisories included.
+            var advised = await WaitForContent(
+                c => c.LastCheckVerdict?.Contains("the combo gate recorded RED") == true);
 
-            held.IsHeld(CandidateTag).Should().BeTrue(
-                "the verdict arrived while the poller was running, and a refusal that leaves no "
-                + "trace is the silent freeze this gate must never become");
-            held.HeldReason.Should().Contain("Widget",
-                "the refusal must name the module that breaks, exactly as it does when the verdict "
-                + "was there from the start");
-            held.HeldIndeterminate.Should().BeFalse(
-                "the gate LOOKED and found an incompatibility — that is a candidate to re-verify, "
-                + "not an availability incident");
+            // 🚨 Since 2026-10-11 the honoured verdict is an ADVISORY, not a hold (maintainer:
+            // "again, we want to roll platform independently of packages") — but it must still be
+            // SEEN by the running poller, naming the module, exactly as when it was there from the
+            // start.
+            advised.IsHeld(CandidateTag).Should().BeFalse();
+            advised.HasAdvisoriesFor(CandidateTag).Should().BeTrue(
+                "the verdict arrived while the poller was running, and an advisory that leaves no "
+                + "trace is the silent state this gate must never become");
+            advised.Advisories.Should().Contain("Widget",
+                "the advisory must name the module that does not follow, exactly as it does when the "
+                + "verdict was there from the start");
         }
         finally
         {
@@ -280,7 +281,7 @@ public class ComboGateRollTest(ITestOutputHelper output) : MonolithMeshTestBase(
     /// test: no recorded verdict, or a roll that lands.</para>
     /// </summary>
     [Fact(Timeout = 240_000)]
-    public async Task TheVerifierIsRun_ItsRedVerdictIsRecorded_AndTheRollIsRefused()
+    public async Task TheVerifierIsRun_ItsRedVerdictIsRecorded_AndBecomesAnAdvisory()
     {
         await Seed(TestContext.Current.CancellationToken);
         var workRoot = Path.Combine(
@@ -293,7 +294,8 @@ public class ComboGateRollTest(ITestOutputHelper output) : MonolithMeshTestBase(
             var content = await RunOneCheck(
                 updater,
                 new ProducingComboGate(Mesh, runner, OneModuleCombo()),
-                c => c.VerificationFor(CandidateTag) is not null);
+                c => c.VerificationFor(CandidateTag) is not null
+                     && c.LastCheckVerdict?.Contains("the combo gate recorded RED") == true);
 
             // 1. The verifier RAN — a verdict exists that nothing but the fold could have produced.
             var verdict = content.VerificationFor(CandidateTag);
@@ -310,10 +312,11 @@ public class ComboGateRollTest(ITestOutputHelper output) : MonolithMeshTestBase(
                 "the verdict names its exact input — these files, at this commit");
             module.Failures.Should().ContainSingle().Which.Should().Contain("AddTracking");
 
-            // 2. And that verdict REFUSED the roll.
-            updater.Tags.Should().BeEmpty();
-            content.IsHeld(CandidateTag).Should().BeTrue();
-            content.HeldReason.Should().Contain("Widget");
+            // 2. And that verdict is an ADVISORY on the roll (2026-10-11): the platform rolled, the
+            //    module is named.
+            updater.Tags.Should().Contain(CandidateTag);
+            content.IsHeld(CandidateTag).Should().BeFalse();
+            content.Advisories.Should().Contain("Widget");
         }
         finally
         {

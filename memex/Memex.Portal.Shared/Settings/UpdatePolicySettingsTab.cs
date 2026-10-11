@@ -14,6 +14,7 @@ using MeshWeaver.Messaging;
 using MeshWeaver.PluginCatalog;
 using Memex.Portal.Shared.SelfUpdate;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using MeshWeaver.Hosting.SelfUpdate;
 
 namespace Memex.Portal.Shared.Settings;
@@ -145,6 +146,11 @@ public static class UpdatePolicySettingsTab
                 // button is exactly the moment an operator, seeing an update that never
                 // applied, would force the roll the poller refused for good reason.
                 //
+                // 🚨 Since 2026-10-11 nothing the gate answers refuses this button — the
+                // platform rolls independently of its packages, so a refusal is turned into
+                // advisories below (ForPlatformRoll), exactly as the poller does. The paragraphs
+                // that follow are why the UNWIRED gate is still reported rather than read as a pass.
+                //
                 // 🚨 An UNWIRED gate is a HOLD here too. It used to resolve to NotEnforced,
                 // which is `IsUpdatable: true` — so the one host where nothing checks anything
                 // was also the one host where this button never refused. NotEnforced is the
@@ -169,30 +175,34 @@ public static class UpdatePolicySettingsTab
                                 + "nothing could check whether the packages it deploys have "
                                 + "usable artifacts for this release — that is a hold, not "
                                 + "clearance to proceed"));
-                decision.Subscribe(verdict =>
+                decision.Subscribe(raw =>
                 {
-                    if (!verdict.IsUpdatable)
-                    {
-                        h.UpdateData(ResultId,
-                            h.Localize("ui.updateHeldManual", tag) + "\n\n> " + verdict.HoldReason);
-                        return;
-                    }
-                    // 🚨 The manual roll honours the COMBO gate as the poller does (#2274): a
-                    // candidate whose recorded verdict says a module this instance runs fails
-                    // against it is refused here too, naming the reason — the button is exactly
-                    // the moment an operator would force what the poller refused for good reason.
-                    // A pure read of what is RECORDED on the policy content, like the poller's
-                    // candidate walk; an unregistered gate grants nothing and refuses nothing.
+                    // 🚨 The platform rolls independently of its packages (maintainer,
+                    // 2026-10-11: "again, we want to roll platform independently of packages").
+                    // The button decides exactly as the poller does: a package-availability
+                    // refusal and a recorded combo Red are ADVISORIES, never a refusal of the
+                    // roll — they are logged here and the poller records them on the policy
+                    // node; the packages catch up through their own update policy.
+                    var verdict = raw.ForPlatformRoll();
                     var combo = h.Hub.ServiceProvider.GetService<ComboVerificationGate>();
                     var clearance = combo is null
                         ? ComboVerificationGate.NotRegistered(tag)
                         : combo.Recorded(content, tag);
-                    if (clearance.Refuses)
-                    {
-                        h.UpdateData(ResultId,
-                            h.Localize("ui.updateComboHeldManual", tag) + "\n\n> " + clearance.Reason);
-                        return;
-                    }
+                    if (verdict.WaivedHold is not null || clearance.Refuses)
+                        h.Hub.ServiceProvider.GetService<ILoggerFactory>()
+                            ?.CreateLogger(typeof(UpdatePolicySettingsTab))
+                            .LogWarning(
+                                "[SelfUpdate] manual roll to {Tag} proceeds over package advisories — "
+                                + "the platform rolls independently of packages: {Availability} {Combo}",
+                                tag, verdict.WaivedHold ?? "", clearance.Refuses ? clearance.Reason : "");
+                    // Said on the result line too — the roll the operator just started is one
+                    // whose lagging packages they must be able to see without a pod log.
+                    var advisories = new[] { verdict.WaivedHold, clearance.Refuses ? clearance.Reason : null }
+                        .OfType<string>().ToArray();
+                    var note = advisories.Length == 0
+                        ? ""
+                        : "\n\n" + h.Localize("ui.updatePackageAdvisoriesManual") + "\n\n> "
+                          + Sanitize(string.Join("; ", advisories));
                     if (apply == SelfUpdateApply.ControlLane)
                     {
                         // The same announcement the poller makes, so the control plane cannot
@@ -211,7 +221,7 @@ public static class UpdatePolicySettingsTab
                                 DetectedAt = SelfUpdateHandover.Stamp(DateTimeOffset.UtcNow),
                             })
                             .Subscribe(
-                                outcome => h.UpdateData(ResultId, h.Localize("ui.updateHandedOver", tag, outcome.Destination)),
+                                outcome => h.UpdateData(ResultId, h.Localize("ui.updateHandedOver", tag, outcome.Destination) + note),
                                 ex => h.UpdateData(ResultId, h.Localize("ui.updateHandoverFailed", ex.Message)));
                         return;
                     }
@@ -273,7 +283,7 @@ public static class UpdatePolicySettingsTab
                                     outcome == MigrationRunOutcome.NotSupported && !step.KeepsSchema
                                         ? "ui.updateRollingUnmigrated"
                                         : "ui.updateRolling",
-                                    tag)),
+                                    tag) + note),
                                 ex => h.UpdateData(ResultId, h.Localize("ui.updateApplyFailed", ex.Message)));
                         },
                         ex => h.UpdateData(ResultId, h.Localize("ui.updateApplyFailed", ex.Message)));
@@ -421,8 +431,13 @@ public static class UpdatePolicySettingsTab
                 + localize("ui.updateVerifiedGreen", [verdict.Modules.Count])
                 + " " + verifiedAt
                 + CaveatBlock(verdict, localize),
+            // 🚨 A Red is an ADVISORY since 2026-10-11 (maintainer: "again, we want to roll
+            // platform independently of packages"): the availability line stays — the build IS
+            // what this install rolls to — and the failing modules are named beneath it as the
+            // packages that will not follow, never as a reason the platform stays.
             ComboVerdictKind.Red =>
-                localize("ui.updateBlocked", [tag]) + "\n\n"
+                available + "\n\n"
+                + localize("ui.updateBlocked", [tag]) + "\n\n"
                 + FailedModuleList(verdict, localize)
                 + CaveatBlock(verdict, localize) + "\n\n" + verifiedAt,
             _ =>

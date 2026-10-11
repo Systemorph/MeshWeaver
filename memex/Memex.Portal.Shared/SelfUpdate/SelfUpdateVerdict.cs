@@ -393,6 +393,20 @@ public sealed record SelfUpdateVerdict(SelfUpdateOutcome Outcome, string Message
         this with { Message = $"{Message} UNVERIFIED — {reason}" };
 
     /// <summary>
+    /// 🚨 The roll went ahead over a PACKAGE answer that used to hold it — a waived availability
+    /// hold or a recorded combo Red (maintainer, 2026-10-11: <i>"again, we want to roll platform
+    /// independently of packages"</i>). Said on the verdict, the durable half, so the Updates tab
+    /// and the next session read which packages did not follow, not only a pod log.
+    /// </summary>
+    /// <param name="advisory">What the package answer said.</param>
+    public SelfUpdateVerdict WithPackageAdvisory(string advisory) =>
+        this with
+        {
+            Message = $"{Message} PACKAGE ADVISORY (the platform rolls independently of packages; "
+                      + $"they catch up through their own update policy) — {advisory}",
+        };
+
+    /// <summary>
     /// 🚨 The roll was refused: the migration Job for <paramref name="tag"/> ended
     /// <paramref name="outcome"/>, so the schema did not move and the image stays where it is.
     /// Names the Job so an operator can read its log.

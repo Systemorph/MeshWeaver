@@ -662,14 +662,15 @@ public class ReleaseLinkGateTest : IDisposable
     // ── the walk ────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// 🚨 <see cref="RollSelection"/> walks newest-first and stops at the first release with no
-    /// UNLOADABLE module. The newest publishes a surface the landed view pack cannot link against
-    /// (and, for good measure, no bake for the content package); the one below it publishes a
-    /// surface it links against. The newest is declined NAMING the module; the older is selected,
-    /// and the cost it carries is said on the outcome.
+    /// 🚨 Until 2026-10-11 <see cref="RollSelection"/> walked past a release with an UNLOADABLE
+    /// module. An unloadable module is a statement about a PACKAGE, and the platform rolls
+    /// independently of its packages (maintainer, 2026-10-11: <i>"again, we want to roll platform
+    /// independently of packages"</i>): the newest is selected after exactly one verdict, and the
+    /// module that will not load there is NAMED on the advisories — it keeps its previous
+    /// generation and catches up on its own.
     /// </summary>
     [Fact]
-    public async Task TheWalkStopsAtTheFirstReleaseWithNoUnloadableModule()
+    public async Task AnUnloadableModuleIsAnAdvisory_TheNewestIsSelected()
     {
         var published = PublishedRoot(Version, Identity, surface: OlderPlatformSurface(Identity));
         AddRelease(published, OlderVersion, OlderIdentity, surface: ThisPlatformSurface(OlderIdentity), bundles: []);
@@ -694,23 +695,19 @@ public class ReleaseLinkGateTest : IDisposable
             .Should().Within(TestTimeouts.Convergence).Emit();
 
         Assert.Equal(RollSelectionKind.Update, outcome.Kind);
-        Assert.Equal(OlderVersion, outcome.SelectedVersion);
-        Assert.Equal([Version, OlderVersion], asked.ToImmutable());
-        var declined = Assert.Single(outcome.Declined);
-        Assert.Equal(Version, declined.Version);
-        Assert.Contains(ViewPack, declined.Reason, StringComparison.Ordinal);
-        Assert.Equal(PackageAvailabilityKind.ModuleUnloadable, Assert.Single(declined.Blockers).Kind);
-        // The older release seals no Widget bake: a COST the outcome names, not a reason to walk on.
-        Assert.Equal(["Widget"], outcome.BootCompiles);
-        Assert.Contains("would recompile at boot: Widget", outcome.Summary, StringComparison.Ordinal);
+        Assert.Equal(Version, outcome.SelectedVersion);
+        Assert.Equal([Version], asked.ToImmutable());
+        Assert.Empty(outcome.Declined);
+        Assert.Contains(outcome.Advisories, a => a.Contains("independently of packages", StringComparison.Ordinal)
+                                                 && a.Contains(ViewPack, StringComparison.Ordinal));
         Assert.Contains(ViewPack, outcome.Summary, StringComparison.Ordinal);
     }
 
-    /// <summary>"No complete release" — every candidate's surface lacks the type — stays put and
-    /// NAMES the module. Not Indeterminate: the selector looked, and the answer is about the
-    /// publications.</summary>
+    /// <summary>"No complete release" — every candidate's surface lacks the type — used to stay put.
+    /// Since 2026-10-11 the newest is selected and the module is NAMED as the package that does not
+    /// follow the platform.</summary>
     [Fact]
-    public async Task WhenEveryCandidateCannotLoadTheModule_NothingIsSelected_AndTheModuleIsNamed()
+    public async Task WhenEveryCandidateCannotLoadTheModule_TheNewestIsSelected_AndTheModuleIsNamed()
     {
         var published = PublishedRoot(Version, Identity, surface: OlderPlatformSurface(Identity));
         AddRelease(published, OlderVersion, OlderIdentity, surface: OlderPlatformSurface(OlderIdentity), bundles: ["Widget"]);
@@ -729,14 +726,13 @@ public class ReleaseLinkGateTest : IDisposable
                 version => Observable.Return(Judge(published, version, required)))
             .Should().Within(TestTimeouts.Convergence).Emit();
 
-        Assert.Equal(RollSelectionKind.NoCompleteRelease, outcome.Kind);
-        Assert.Null(outcome.SelectedVersion);
+        Assert.Equal(RollSelectionKind.Update, outcome.Kind);
+        Assert.Equal(Version, outcome.SelectedVersion);
         Assert.False(outcome.IsIndeterminate);
-        Assert.Equal(2, outcome.Declined.Length);
-        Assert.All(outcome.Declined, d =>
-            Assert.Equal(PackageAvailabilityKind.ModuleUnloadable, Assert.Single(d.Blockers).Kind));
+        Assert.Empty(outcome.Declined);
         Assert.Contains(ViewPack, outcome.Summary, StringComparison.Ordinal);
         Assert.Contains("3.0.0-ci.8009", outcome.Summary, StringComparison.Ordinal);
+        Assert.Contains(outcome.Advisories, a => a.Contains(ViewPack, StringComparison.Ordinal));
     }
 
     /// <summary>A release whose surface is unpublished is walked PAST nothing and INTO nothing on

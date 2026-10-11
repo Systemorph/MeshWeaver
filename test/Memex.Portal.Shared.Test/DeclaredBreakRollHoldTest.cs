@@ -194,12 +194,14 @@ public class DeclaredBreakRollHoldTest
     // ─────────────────────────────── the walk: a held newest release is walked past
 
     /// <summary>
-    /// The selection walks newest-first, so a declared break held on the newest candidate lands the
-    /// environment on the newest release its plugins still cover — the last build of the old epoch —
-    /// rather than staying put, and the declined candidate names the plugin.
+    /// 🚨 A declared break is a statement about a PACKAGE, so since 2026-10-11 it no longer walks the
+    /// platform back to the last build of the old epoch (maintainer: <i>"again, we want to roll
+    /// platform independently of packages"</i>). The newest admitted release is selected, the plugin
+    /// that does not cover it is NAMED on the advisories, and it catches up through its own update
+    /// policy. The predicate itself still refuses (the tests above) — the waiver is the roll's.
     /// </summary>
     [Fact]
-    public async Task TheWalk_StopsAtTheNewestCoveredRelease_AndNamesTheBlockingPlugin()
+    public async Task TheWalk_SelectsTheNewest_AndNamesThePluginThatDoesNotCoverIt()
     {
         const string LastOfEpoch1 = "3.0.0-ci.9399";
         var inputs = new RollSelectionInputs(
@@ -213,7 +215,9 @@ public class DeclaredBreakRollHoldTest
                 : Gate(new ReleaseTarget(LastOfEpoch1, Key1), Store(), NothingSealed())))
             .Should().Within(TestTimeouts.Convergence).Emit();
 
-        outcome.SelectedVersion.Should().Be(LastOfEpoch1);
-        outcome.Declined.Should().ContainSingle().Which.Reason.Should().Contain("Plugins/Store").And.Contain(Key2);
+        outcome.SelectedVersion.Should().Be(Target);
+        outcome.Declined.Should().BeEmpty();
+        outcome.Advisories.Should().NotBeEmpty();
+        outcome.Advisories[0].Should().Contain("independently of packages").And.Contain("Plugins/Store").And.Contain(Key2);
     }
 }

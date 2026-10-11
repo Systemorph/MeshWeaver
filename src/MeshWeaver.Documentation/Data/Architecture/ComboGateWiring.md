@@ -7,6 +7,16 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 # Combo Gate Wiring
 
+> 🚨 **Rule change, 2026-10-11 (maintainer): _"again, we want to roll platform independently of
+> packages"_.** A recorded **Red** is no longer a hold. It names modules this instance has landed that
+> do not survive the candidate — a statement about packages — so the roll proceeds, the failing
+> modules are named on `Admin/UpdatePolicy` (the advisories, which the Updates and About tabs render)
+> and on the check verdict (`PACKAGE ADVISORY … the combo gate recorded RED`), and the modules keep
+> their previous generation and catch up through their own update policy. The candidate walk no longer
+> steps past a recorded Red, the manual button and the reboot no longer refuse on it, and the About
+> tab no longer renders it as "held". Green and NotVerifiable behave as below. Where this page says
+> Red "refuses" or "holds", read "is reported as an advisory".
+
 An image being **newer** says nothing about whether it can **serve** what an instance already runs.
 A framework-identity change invalidates the whole assembly cache by design, and an optional
 parameter added to a record's primary constructor *replaces* the signature — so a portal can roll to

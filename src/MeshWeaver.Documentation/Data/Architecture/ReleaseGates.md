@@ -8,6 +8,18 @@ icon: "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><rect width='
 
 # Release Availability Gates
 
+> 🚨 **Rule change, 2026-10-11 (maintainer): _"again, we want to roll platform independently of
+> packages"_.** For the **deployment** gate (#1754) a package-availability verdict is never a hold
+> on the platform roll any more — not a missing bake, not an unresolvable framework identity, not an
+> unreadable catalogue, not an unloadable module. Every roll path (the self-update poller, the
+> reboot's image step, the **Apply update now** button, `/api/plugins/roll-target`,
+> `/api/plugins/is-updatable`) waives it into an **advisory** (`UpdatabilityVerdict.ForPlatformRoll`:
+> the reason leads `Advisories`, verbatim on `WaivedHold`, every lagging package on `Lagging`),
+> records it on `Admin/UpdatePolicy` and rolls to the newest admitted tag; the packages catch up on
+> their own. The **predicate** below is unchanged and still answers the package question truthfully
+> — the build gate (#1755) still exits on it. Read the "holds" in the deployment-gate sections below
+> as "reports as an advisory". See [Release & Self-Update Strategy](../ReleaseStrategy).
+
 > ✅ **Rule change, 2026-09-07 (maintainer) — [Module Adoption Policy](../ModuleAdoptionPolicy), implemented by [#3648](https://github.com/Systemorph/MeshWeaver/issues/3648), [#3649](https://github.com/Systemorph/MeshWeaver/issues/3649), [#3650](https://github.com/Systemorph/MeshWeaver/issues/3650) and [#3651](https://github.com/Systemorph/MeshWeaver/issues/3651).** This page describes the mechanism as it runs after those changes: a declared floor is advisory, a refused generation falls back to the previous one, a new build is adopted eagerly, and a platform roll is held only by a module that provably cannot load on the target.
 
 A release is not safe to act on just because its version is newer. Two questions have the same

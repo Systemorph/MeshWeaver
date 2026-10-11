@@ -7,6 +7,19 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 # Roll Selection
 
+> 🚨 **Rule change, 2026-10-11 (maintainer): _"again, we want to roll platform independently of
+> packages"_.** The selection now takes the **newest admitted candidate, always**. No package verdict
+> — a missing bake, an unresolvable framework identity, a package without an artifact, an unreadable
+> catalogue or plugin list, an empty denominator, an unloadable module, a recorded combo Red — walks
+> past a release any more: it becomes the selected release's **advisories** (`RollSelectionOutcome.Advisories`,
+> led by the waived reason) and the summary names every package that does not follow the roll. The
+> packages catch up through their own update policy; the platform never waits for them. The walk
+> asks exactly one verdict. `NoCompleteRelease`, `BehindCurrent` and `NoPluginsKnown` are no longer
+> produced by the walk; `Indeterminate` remains only for a candidate universe that could not be
+> listed at all. What follows describes the selection as it was built (#3479, #3651) — read every
+> "declines" / "stays put" below as "reports as an advisory". See
+> [Release & Self-Update Strategy](../ReleaseStrategy) for the measured deadlock this removed.
+
 > ✅ **Rule change, 2026-09-07 (maintainer) — [Module Adoption Policy](../ModuleAdoptionPolicy), implemented by [#3648](https://github.com/Systemorph/MeshWeaver/issues/3648), [#3649](https://github.com/Systemorph/MeshWeaver/issues/3649), [#3650](https://github.com/Systemorph/MeshWeaver/issues/3650) and [#3651](https://github.com/Systemorph/MeshWeaver/issues/3651).** This page describes the mechanism as it runs after those changes: a declared floor is advisory, a refused generation falls back to the previous one, a new build is adopted eagerly, and a platform roll is held only by a module that provably cannot load on the target.
 
 > **"Whenever a new platform / plugin is published, check for each environment which is the latest

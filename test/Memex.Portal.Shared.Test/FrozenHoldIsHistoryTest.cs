@@ -132,12 +132,14 @@ public class FrozenHoldIsHistoryTest
     }
 
     /// <summary>
-    /// 🚨 The positive control on the OTHER half. A Red combo verification is a recorded FACT about
-    /// the build, not a note about the poller — so it keeps holding even with checking off, and a
-    /// change that made "checking is off" swallow every refusal would fail here.
+    /// 🚨 The OTHER half. A Red combo verification is a recorded FACT about the build, not a note
+    /// about the poller — but since 2026-10-11 it is a fact about PACKAGES, and the platform rolls
+    /// independently of them (maintainer: <i>"again, we want to roll platform independently of
+    /// packages"</i>). So it never renders as "held"; it renders as an advisory naming what does not
+    /// follow — with checking off as with checking on.
     /// </summary>
     [Fact]
-    public void ARedComboVerdict_StillHolds_EvenWithCheckingOff()
+    public void ARedComboVerdict_IsAnAdvisory_NeverAHold()
     {
         var content = new UpdatePolicyContent
         {
@@ -153,8 +155,10 @@ public class FrozenHoldIsHistoryTest
             ],
         };
 
-        PlatformUpdateStatus.Derive(content, Running).Availability
-            .Should().Be(PlatformUpdateAvailability.UpdateHeld,
-                "the verdict is the fact; only the poller's NOTE about a hold goes stale");
+        var status = PlatformUpdateStatus.Derive(content, Running);
+        status.Availability.Should().Be(PlatformUpdateAvailability.UpdateAvailable,
+            "a Red names modules that do not follow the build — it does not hold the platform");
+        status.Advisories.Should().NotBeNull(
+            "the verdict is still the fact, and it is surfaced as the advisory it now is");
     }
 }

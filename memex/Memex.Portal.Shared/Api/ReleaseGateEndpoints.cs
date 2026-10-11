@@ -215,19 +215,29 @@ public static class ReleaseGateEndpoints
             ?.CreateLogger(typeof(ReleaseGateEndpoints));
 
         return service.IsUpdatable(version)
-            .Select(verdict =>
+            .Select(raw =>
             {
-                if (!verdict.IsUpdatable)
-                    // Information, not Debug: a held environment must be findable in the logs
-                    // without turning anything on. A silent hold is the outage this gate exists
-                    // to prevent, not a quiet success.
+                // 🚨 The platform rolls independently of its packages (maintainer, 2026-10-11:
+                // "again, we want to roll platform independently of packages"). This endpoint
+                // answers the ROLL question for a manual `kubectl set image` exactly as the poller
+                // and /roll-target do: a package-availability refusal is waived into advisories
+                // (`waivedHold` keeps it verbatim, `packages` still names every lagging package),
+                // never a "no".
+                var verdict = raw.ForPlatformRoll();
+                if (verdict.WaivedHold is { } waived)
+                    // Information, not Debug: the packages that will not follow must be findable
+                    // in the logs without turning anything on.
                     logger?.LogInformation(
-                        "Release gate: HOLD for {Version} — {Reason}", version, verdict.HoldReason);
+                        "Release gate: {Version} rolls; package advisory (the platform rolls independently "
+                        + "of packages) — {Reason}", version, waived);
 
                 return Results.Json(new
                 {
                     version,
                     isUpdatable = verdict.IsUpdatable,
+                    // 🚨 What the package verdict would have held on before 2026-10-11 — the
+                    // packages that do not follow this roll and catch up on their own.
+                    waivedHold = verdict.WaivedHold,
                     // Distinguishes "the gate does not apply here" from "the gate passed" — the
                     // two must never render as the same tick.
                     enforced = verdict.NotEnforcedReason is null,
