@@ -139,8 +139,8 @@ public sealed class NuGetAssemblyResolver(
         var assemblyPaths = ImmutableArray.CreateBuilder<string>();
         var runtimePaths = ImmutableArray.CreateBuilder<string>();
         var nativePaths = ImmutableArray.CreateBuilder<string>();
-        var managedDirs = new List<string>();
-        var nativeDirs = new List<string>();
+        var managedDirs = ImmutableArray.CreateBuilder<string>();
+        var nativeDirs = ImmutableArray.CreateBuilder<string>();
         var versions = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.OrdinalIgnoreCase);
         // The runtime this process IS — the portal image is linux-x64, a developer box osx-arm64 or
         // win-x64. Assets are chosen for it, nearest RID first (RuntimeAssetSelector).

@@ -56,7 +56,9 @@ walks it nearest-first, a hand-written image of NuGet's runtime graph for the fa
 
 For each package the first RID in the chain with a framework-compatible `runtimes/<rid>/lib/<tfm>/`
 folder wins (`FrameworkReducer.GetNearest` picks the folder); native assets are chosen the same way,
-independently. SqlClient on Unix is managed-only; the native path exists for packages that P/Invoke
+independently. A group holding only NuGet's `_._` placeholder is deliberately EMPTY and still wins —
+nothing is loaded from that package there, and no older TFM, farther RID or `lib/` is substituted.
+SqlClient on Unix is managed-only; the native path exists for packages that P/Invoke
 (SQLite, ONNX runtime, …).
 
 ## Host unification
@@ -71,8 +73,10 @@ other's — which is the clash the first SqlClient attempt also hit.
 `PackageAssemblyProbe.Resolve`, which the NodeType's `NodeAssemblyLoadContext.Load` calls after the
 platform (`MeshWeaver.*`) bind and before the module registry, decides for a name the packages supply:
 
-1. **The host ships it at an equal-or-newer version** (an assembly already loaded in the default
-   context, else the trusted-platform-assembly list) → bind the host's copy, and log
+1. **The host ships the same identity at an equal-or-newer version** (an assembly already loaded in
+   the default context, else the trusted-platform-assembly list — which the host builds from its
+   `.deps.json`, so it names every shipped dependency whether loaded yet or not; same culture and, for
+   a strong-named reference, same public key token) → bind the host's copy, and log
    `Unified NuGet dependency {Assembly} {Requested} with the host's {Host}`.
 2. **The host ships an older version** → load the package's copy in isolation and log a warning
    (`… is newer than the host's …: loading the package's copy in isolation`) — its types are distinct
@@ -81,7 +85,9 @@ platform (`MeshWeaver.*`) bind and before the module registry, decides for a nam
 
 The interactive kernel's probe hooks `AssemblyLoadContext.Default.Resolving`, which the runtime raises
 only for names the host cannot bind, so unification is implicit there; it skips native directories
-for managed loads and hooks `ResolvingUnmanagedDll` for native ones.
+for managed loads, tries the next candidate when one fails to load, and hooks
+`ResolvingUnmanagedDll` for native ones — answering only for an assembly that session loaded from its
+own package directories, so two sessions never bind each other's native binaries.
 
 ## What pins it
 

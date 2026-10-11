@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
@@ -156,7 +157,7 @@ public class NuGetAssemblyResolverTest
             """;
         var trusted = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!)
             .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries);
-        var compileNames = result.AssemblyPaths.Select(Path.GetFileName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var compileNames = result.AssemblyPaths.Select(Path.GetFileName).ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
         var references = trusted
             .Where(p => !compileNames.Contains(Path.GetFileName(p)))
             .Concat(result.AssemblyPaths)

@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Runtime.Loader;
@@ -35,24 +36,26 @@ public static class PackageAssemblyProbe
             "native", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
-    /// The version of <paramref name="simpleName"/> the host serves — an assembly already loaded in
+    /// The identity of <paramref name="simpleName"/> the host serves — an assembly already loaded in
     /// the default context, else the trusted-platform-assembly list — or <c>null</c> when the host
-    /// does not ship it.
+    /// does not ship it. For an application the TPA list is built from its <c>.deps.json</c>, so it
+    /// names every dependency the host ships (Azure.Core, Microsoft.Extensions.*) whether or not it
+    /// has been loaded yet.
     /// </summary>
-    public static Version? HostVersionOf(string simpleName)
+    public static AssemblyName? HostIdentityOf(string simpleName)
     {
         foreach (var loaded in AssemblyLoadContext.Default.Assemblies)
         {
             var n = loaded.GetName();
             if (string.Equals(n.Name, simpleName, StringComparison.OrdinalIgnoreCase))
-                return n.Version;
+                return n;
         }
         if (AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") is not string tpa) return null;
         foreach (var path in tpa.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
         {
             if (!string.Equals(Path.GetFileNameWithoutExtension(path), simpleName, StringComparison.OrdinalIgnoreCase))
                 continue;
-            try { return AssemblyName.GetAssemblyName(path).Version; }
+            try { return AssemblyName.GetAssemblyName(path); }
             catch (Exception e) when (e is IOException or BadImageFormatException or UnauthorizedAccessException)
             {
                 return null;
@@ -61,17 +64,43 @@ public static class PackageAssemblyProbe
         return null;
     }
 
+    /// <summary>The version of <paramref name="simpleName"/> the host serves, or <c>null</c>.</summary>
+    public static Version? HostVersionOf(string simpleName) => HostIdentityOf(simpleName)?.Version;
+
     /// <summary>
-    /// Binds <paramref name="requested"/> to the host's copy when the host ships it at an
-    /// equal-or-newer version; <c>null</c> when it does not (the caller probes the package next).
-    /// A host copy OLDER than requested is not unified — the package's own copy is the only one that
-    /// satisfies the reference — and that is logged as a warning, since its types then exist twice.
+    /// True when <paramref name="host"/> is the SAME assembly identity as <paramref name="requested"/>
+    /// apart from the version: same culture, and — when the reference is strong-named — the same
+    /// public key token. A same-named assembly of another publisher is a different assembly.
+    /// </summary>
+    public static bool SameIdentityModuloVersion(AssemblyName requested, AssemblyName host)
+    {
+        if (!string.Equals(requested.CultureName ?? string.Empty, host.CultureName ?? string.Empty,
+                StringComparison.OrdinalIgnoreCase))
+            return false;
+        var wanted = requested.GetPublicKeyToken() ?? [];
+        var have = host.GetPublicKeyToken() ?? [];
+        return wanted.Length == 0 || wanted.AsSpan().SequenceEqual(have);
+    }
+
+    /// <summary>
+    /// Binds <paramref name="requested"/> to the host's copy when the host ships the same identity
+    /// at an equal-or-newer version; <c>null</c> when it does not (the caller probes the package
+    /// next). A host copy OLDER than requested is not unified — the package's own copy is the only
+    /// one that satisfies the reference — and that is logged as a warning, since its types then exist
+    /// twice.
     /// </summary>
     public static Assembly? TryUnifyWithHost(AssemblyName requested, ILogger? logger = null)
     {
         if (string.IsNullOrEmpty(requested.Name)) return null;
-        var host = HostVersionOf(requested.Name);
-        if (host is null) return null;
+        var hostName = HostIdentityOf(requested.Name);
+        if (hostName?.Version is not { } host) return null;
+        if (!SameIdentityModuloVersion(requested, hostName))
+        {
+            logger?.LogDebug(
+                "NuGet dependency {Assembly} differs from the host's in culture or public key; not unified",
+                requested.FullName);
+            return null;
+        }
         if (requested.Version is { } wanted && host < wanted)
         {
             logger?.LogWarning(
@@ -86,7 +115,7 @@ public static class PackageAssemblyProbe
             // a by-name bind could not find again). Otherwise the default context's TPA bind.
             var bound = AssemblyLoadContext.Default.Assemblies.FirstOrDefault(a =>
                     string.Equals(a.GetName().Name, requested.Name, StringComparison.OrdinalIgnoreCase))
-                ?? AssemblyLoadContext.Default.LoadFromAssemblyName(new AssemblyName(requested.Name) { Version = host });
+                ?? AssemblyLoadContext.Default.LoadFromAssemblyName(hostName);
             logger?.LogInformation(
                 "Unified NuGet dependency {Assembly} {Requested} with the host's {Host}",
                 requested.Name, requested.Version?.ToString() ?? "(any)", bound.GetName().Version);
@@ -100,19 +129,18 @@ public static class PackageAssemblyProbe
     }
 
     /// <summary>
-    /// The first <c>{dir}/{name}.dll</c> among the MANAGED <paramref name="probingDirectories"/>
-    /// (native directories skipped), in order.
+    /// Every <c>{dir}/{name}.dll</c> among the MANAGED <paramref name="probingDirectories"/>
+    /// (native directories skipped), in probing order — a caller tries the next when one fails to load.
     /// </summary>
+    public static IEnumerable<string> FindManagedCandidates(string simpleName, IEnumerable<string> probingDirectories)
+        => probingDirectories
+            .Where(dir => !IsNativeDirectory(dir))
+            .Select(dir => Path.Combine(dir, simpleName + ".dll"))
+            .Where(File.Exists);
+
+    /// <summary>The first of <see cref="FindManagedCandidates"/>, or <c>null</c>.</summary>
     public static string? FindManaged(string simpleName, IEnumerable<string> probingDirectories)
-    {
-        foreach (var dir in probingDirectories)
-        {
-            if (IsNativeDirectory(dir)) continue;
-            var candidate = Path.Combine(dir, simpleName + ".dll");
-            if (File.Exists(candidate)) return candidate;
-        }
-        return null;
-    }
+        => FindManagedCandidates(simpleName, probingDirectories).FirstOrDefault();
 
     /// <summary>
     /// Host unification, then the package probe: the assembly <paramref name="context"/> should
@@ -124,20 +152,23 @@ public static class PackageAssemblyProbe
         ILogger? logger = null)
     {
         if (string.IsNullOrEmpty(requested.Name) || probingDirectories.Count == 0) return null;
-        var path = FindManaged(requested.Name, probingDirectories);
+        var candidates = FindManagedCandidates(requested.Name, probingDirectories).ToImmutableArray();
         // Only a name the PACKAGES supply is this probe's business; anything else keeps the
         // context's own resolution order untouched.
-        if (path is null) return null;
+        if (candidates.IsEmpty) return null;
         if (TryUnifyWithHost(requested, logger) is { } host) return host;
-        try
+        foreach (var path in candidates)
         {
-            return context.LoadFromAssemblyPath(path);
+            try
+            {
+                return context.LoadFromAssemblyPath(path);
+            }
+            catch (Exception ex)
+            {
+                logger?.LogDebug(ex, "Probing load failed for {Candidate}; trying the next", path);
+            }
         }
-        catch (Exception ex)
-        {
-            logger?.LogDebug(ex, "Probing load failed for {Candidate}", path);
-            return null;
-        }
+        return null;
     }
 
     /// <summary>

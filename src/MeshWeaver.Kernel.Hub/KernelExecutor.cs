@@ -710,7 +710,7 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
     internal sealed class AssemblyProbingResolver : IDisposable
     {
         // Ordered (managed runtime dirs first, native last — ResolvedPackageSet.ProbingDirectories).
-        private readonly List<string> probingDirs = [];
+        private ImmutableList<string> probingDirs = ImmutableList<string>.Empty;
         private readonly object gate = new();
         private readonly Func<AssemblyLoadContext, System.Reflection.AssemblyName, System.Reflection.Assembly?> handler;
         private readonly Func<System.Reflection.Assembly, string, IntPtr> nativeHandler;
@@ -722,19 +722,27 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                 // The default context only raises Resolving for a name the host does NOT ship, so
                 // host unification is implicit here; the probe skips the native directories.
                 if (string.IsNullOrEmpty(name.Name)) return null;
-                string? candidate;
+                ImmutableList<string> dirs;
                 lock (gate)
-                    candidate = MeshWeaver.NuGet.PackageAssemblyProbe.FindManaged(name.Name, probingDirs);
-                if (candidate is null) return null;
-                try { return ctx.LoadFromAssemblyPath(candidate); }
-                catch { return null; }
+                    dirs = probingDirs;
+                foreach (var candidate in MeshWeaver.NuGet.PackageAssemblyProbe.FindManagedCandidates(name.Name, dirs))
+                {
+                    try { return ctx.LoadFromAssemblyPath(candidate); }
+                    catch { /* try the next candidate */ }
+                }
+                return null;
             };
-            // A package's runtimes/<rid>/native/ library for a DllImport the default search missed.
-            nativeHandler = (_, libraryName) =>
+            // A package's runtimes/<rid>/native/ library for a DllImport the default search missed —
+            // answered ONLY for an assembly this session loaded from its own package directories, so
+            // two sessions with different versions of one native library never bind each other's.
+            nativeHandler = (requesting, libraryName) =>
             {
-                string[] dirs;
+                ImmutableList<string> dirs;
                 lock (gate)
-                    dirs = [.. probingDirs];
+                    dirs = probingDirs;
+                if (requesting.IsDynamic || string.IsNullOrEmpty(requesting.Location)) return IntPtr.Zero;
+                var origin = Path.GetDirectoryName(requesting.Location);
+                if (origin is null || !dirs.Contains(origin, StringComparer.OrdinalIgnoreCase)) return IntPtr.Zero;
                 return MeshWeaver.NuGet.PackageAssemblyProbe.ResolveUnmanaged(libraryName, dirs);
             };
             AssemblyLoadContext.Default.Resolving += handler;
@@ -746,7 +754,7 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
             lock (gate)
                 foreach (var dir in dirs)
                     if (!probingDirs.Contains(dir, StringComparer.OrdinalIgnoreCase))
-                        probingDirs.Add(dir);
+                        probingDirs = probingDirs.Add(dir);
         }
 
         public void Dispose()

@@ -139,6 +139,43 @@ public class NuGetRuntimeAssetTest : IDisposable
     }
 
     [Fact]
+    public void Select_AnEmptyNearestGroup_WinsOverOlderFrameworksAndLib()
+    {
+        // NuGet's `_._` marks a group DELIBERATELY empty: restore loads nothing from that package
+        // there, and must not fall back to an older TFM, a farther RID, or lib/.
+        var files = Layout(
+            "lib/net8.0/_._",
+            "lib/netstandard2.0/Shim.dll",
+            "runtimes/linux-x64/lib/net8.0/_._",
+            "runtimes/unix/lib/net8.0/Shim.dll",
+            "runtimes/linux-x64/native/_._",
+            "runtimes/unix/native/libshim.so");
+
+        var assets = RuntimeAssetSelector.Select(_root, files, Net10, RuntimeAssetSelector.RidFallbackChain("linux-x64"));
+
+        assets.Compile.Should().BeEmpty();
+        assets.Runtime.Should().BeEmpty();
+        assets.RuntimeRid.Should().Be("linux-x64");
+        assets.Native.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Unification_RequiresTheSamePublicKeyToken()
+    {
+        var host = typeof(JsonSerializer).Assembly.GetName();
+        var sameIdentityOlder = new AssemblyName(host.FullName) { Version = new Version(8, 0, 0, 0) };
+        PackageAssemblyProbe.SameIdentityModuloVersion(sameIdentityOlder, host).Should().BeTrue();
+
+        var otherPublisher = new AssemblyName(host.Name!) { Version = new Version(8, 0, 0, 0) };
+        otherPublisher.SetPublicKeyToken([1, 2, 3, 4, 5, 6, 7, 8]);
+        PackageAssemblyProbe.SameIdentityModuloVersion(otherPublisher, host).Should().BeFalse();
+        PackageAssemblyProbe.TryUnifyWithHost(otherPublisher).Should().BeNull();
+
+        var unsigned = new AssemblyName(host.Name!) { Version = new Version(8, 0, 0, 0) };
+        PackageAssemblyProbe.TryUnifyWithHost(unsigned).Should().BeSameAs(typeof(JsonSerializer).Assembly);
+    }
+
+    [Fact]
     public void Probe_AHostAssemblyInAPackageDirectory_BindsToTheHostsCopy()
     {
         // A package that ships the host's own System.Text.Json (an equal version — the boundary of

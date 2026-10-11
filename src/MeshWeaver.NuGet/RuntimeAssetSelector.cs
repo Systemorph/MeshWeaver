@@ -68,7 +68,8 @@ public static class RuntimeAssetSelector
         var os = arch is null ? rid : rid[..dash];
 
         // The OS family, nearest first.
-        var family = new List<string> { os };
+        var family = ImmutableArray.CreateBuilder<string>();
+        family.Add(os);
         bool isWindows = os.StartsWith("win", StringComparison.OrdinalIgnoreCase);
         if (os.Equals("linux-musl", StringComparison.OrdinalIgnoreCase)
             || os.StartsWith("alpine", StringComparison.OrdinalIgnoreCase))
@@ -118,17 +119,20 @@ public static class RuntimeAssetSelector
         NuGetFramework framework,
         IReadOnlyList<string> ridChain)
     {
-        var files = relativeFiles.Select(f => f.Replace('\\', '/').TrimStart('/')).ToList();
+        var files = relativeFiles.Select(f => f.Replace('\\', '/').TrimStart('/')).ToImmutableArray();
         string Full(string rel) => Path.Combine(packageFolder, rel.Replace('/', Path.DirectorySeparatorChar));
 
+        // null = the package has no compatible group there; EMPTY = it has one and it is
+        // deliberately empty (NuGet's `_._` placeholder) — which still WINS, exactly as restore
+        // treats it, so an older TFM, a farther RID or lib/ is never loaded in its place.
         var lib = NearestGroup(files, "lib/", framework);
 
-        ImmutableArray<string> runtime = [];
+        ImmutableArray<string>? runtime = null;
         string? runtimeRid = null;
         foreach (var rid in ridChain)
         {
             var group = NearestGroup(files, $"runtimes/{rid}/lib/", framework);
-            if (group.Length == 0) continue;
+            if (group is null) continue;
             runtime = group;
             runtimeRid = rid;
             break;
@@ -144,42 +148,44 @@ public static class RuntimeAssetSelector
                             && f.IndexOf('/', prefix.Length) < 0)
                 .ToImmutableArray();
             if (hits.Length == 0) continue;
-            native = hits;
+            native = hits.Where(f => !IsEmptyPlaceholder(f)).ToImmutableArray();
             break;
         }
 
-        var compile = lib.Length > 0 ? lib : runtime;
-        if (runtime.Length == 0) runtime = lib;
+        var compile = lib ?? runtime ?? [];
+        var load = runtime ?? lib ?? [];
 
         return new PackageAssets(
             [.. compile.Select(Full)],
-            [.. runtime.Select(Full)],
+            [.. load.Select(Full)],
             [.. native.Select(Full)],
             runtimeRid);
     }
 
+    private static bool IsEmptyPlaceholder(string relativePath)
+        => relativePath.EndsWith("/_._", StringComparison.Ordinal);
+
     /// <summary>
     /// The direct-child <c>.dll</c> files of the <c>{prefix}&lt;tfm&gt;/</c> folder nearest to
-    /// <paramref name="framework"/>; empty when no folder under <paramref name="prefix"/> is compatible.
+    /// <paramref name="framework"/>: <c>null</c> when no folder under <paramref name="prefix"/> is
+    /// compatible, EMPTY when the nearest one holds only NuGet's <c>_._</c> placeholder.
     /// </summary>
-    private static ImmutableArray<string> NearestGroup(List<string> files, string prefix, NuGetFramework framework)
+    private static ImmutableArray<string>? NearestGroup(ImmutableArray<string> files, string prefix, NuGetFramework framework)
     {
-        var groups = new Dictionary<NuGetFramework, List<string>>();
-        foreach (var f in files)
-        {
-            if (!f.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) continue;
-            var rest = f[prefix.Length..];
-            var slash = rest.IndexOf('/');
-            // Only lib/<tfm>/<file> — satellite resources live one level deeper and are not probed.
-            if (slash <= 0 || rest.IndexOf('/', slash + 1) >= 0) continue;
-            if (!rest.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)) continue;
-            var tfm = NuGetFramework.ParseFolder(rest[..slash]);
-            if (tfm.IsUnsupported) continue;
-            if (!groups.TryGetValue(tfm, out var list)) groups[tfm] = list = [];
-            list.Add(f);
-        }
-        if (groups.Count == 0) return [];
+        var groups = files
+            .Where(f => f.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            .Select(f => (File: f, Tail: f[prefix.Length..]))
+            // Only <prefix><tfm>/<file> — satellite resources live one level deeper and are not probed.
+            .Where(x => x.Tail.IndexOf('/') is > 0 and var slash && x.Tail.IndexOf('/', slash + 1) < 0)
+            .Where(x => x.Tail.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) || IsEmptyPlaceholder(x.File))
+            .Select(x => (x.File, Tfm: NuGetFramework.ParseFolder(x.Tail[..x.Tail.IndexOf('/')])))
+            .Where(x => !x.Tfm.IsUnsupported)
+            .GroupBy(x => x.Tfm)
+            .ToImmutableDictionary(
+                g => g.Key,
+                g => g.Select(x => x.File).Where(f => !IsEmptyPlaceholder(f)).ToImmutableArray());
+        if (groups.IsEmpty) return null;
         var nearest = new FrameworkReducer().GetNearest(framework, groups.Keys);
-        return nearest is not null && groups.TryGetValue(nearest, out var chosen) ? [.. chosen] : [];
+        return nearest is not null && groups.TryGetValue(nearest, out var chosen) ? chosen : null;
     }
 }
