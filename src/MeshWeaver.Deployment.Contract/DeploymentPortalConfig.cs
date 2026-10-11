@@ -410,7 +410,7 @@ public static class DeploymentPortalConfig
         var usable = ImmutableList.CreateBuilder<PluginRepoMount>();
         var problems = ImmutableList.CreateBuilder<string>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var tokenKeys = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var tokenKeys = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var mount in mounts ?? Enumerable.Empty<PluginRepoMount>())
         {
             if (mount is null)
