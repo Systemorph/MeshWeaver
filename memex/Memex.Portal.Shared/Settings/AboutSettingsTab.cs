@@ -142,11 +142,9 @@ public static class AboutSettingsTab
             // package advisories recorded for the build, the About tab SAYS so in one translated
             // sentence, rather than reading "update held" for a hold that no longer exists. The
             // advisories themselves are server-written diagnostics (package names and reasons, in
-            // English): like a hold's reason they are admin-scoped and stay on the Updates tab, so
-            // this surface never shows untranslated prose under a translated heading.
-            ? line + (string.IsNullOrEmpty(status.Advisories)
-                ? ""
-                : "\n\n" + localize("about.platformRolls"))
+            // English): like a hold's reason they are admin-scoped and stay on the Updates tab —
+            // the status projected to this surface carries only the fact that they exist.
+            ? line + (status.HasAdvisories ? "\n\n" + localize("about.platformRolls") : "")
             : null;
 
     private static string? StatusLine(PlatformUpdateStatus status, Func<string, string> localize) =>

@@ -361,7 +361,8 @@ public record SelfUpdateOptions
 
     /// <summary>
     /// 🚨 How long the release-availability gate and the roll selector may take to ANSWER before the
-    /// verdict becomes <c>Indeterminate</c> — which is a HOLD, never clearance.
+    /// verdict becomes <c>Indeterminate</c> — a package answer that could not be determined (an
+    /// advisory on a platform roll), never a statement that the packages are available.
     ///
     /// <para><b>This is a knob for a slow SHARE, and never a remedy for a slow READ</b> (#4742). The
     /// budget was blown on memex.meshweaver.cloud because the gate's denominator re-enumerated every

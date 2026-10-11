@@ -203,7 +203,9 @@ public static class ReleaseGateEndpoints
 
 
 
-    private static IObservable<IResult> Answer(HttpContext http, string? version)
+    /// <summary>The authenticated answer of <see cref="Route"/>. Internal so the JSON contract —
+    /// which CI scripts and operators consume — is pinned by a test without an instance key.</summary>
+    internal static IObservable<IResult> Answer(HttpContext http, string? version)
     {
         if (string.IsNullOrWhiteSpace(version))
             return Observable.Return(Results.Json(

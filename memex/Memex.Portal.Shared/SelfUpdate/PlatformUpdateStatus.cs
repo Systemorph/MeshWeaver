@@ -1,4 +1,3 @@
-using System.Collections.Immutable;
 using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
@@ -108,14 +107,14 @@ public record PlatformUpdateStatus(PlatformUpdateAvailability Availability, stri
             // a Red verification names modules that do not
             // survive the build — a statement about PACKAGES — and the poller rolls over it, so
             // rendering it as "held" would be the lie the paragraph above warns about, inverted.
-            // It reaches this surface as a package ADVISORY instead (Advisories below).
+            // It reaches this surface as a package ADVISORY instead (HasAdvisories below).
             return new(
                 policy.IsHoldOperative(latest)
                     ? PlatformUpdateAvailability.UpdateHeld
                     : PlatformUpdateAvailability.UpdateAvailable,
                 latest)
             {
-                Advisories = AdvisoriesFor(policy, latest),
+                HasAdvisories = HasAdvisoriesFor(policy, latest),
             };
         }
 
@@ -125,38 +124,30 @@ public record PlatformUpdateStatus(PlatformUpdateAvailability Availability, stri
             // packages that did not follow it are still worth saying until they catch up.
             : new(PlatformUpdateAvailability.UpToDate, null)
             {
-                Advisories = AdvisoriesFor(policy, runningVersion.Split('+')[0]),
+                HasAdvisories = HasAdvisoriesFor(policy, runningVersion.Split('+')[0]),
             };
     }
 
     /// <summary>
-    /// The package advisories recorded for <paramref name="tag"/> — what the release check said about
-    /// it without holding it (the boot-compile cost, the packages that do not follow the platform
-    /// roll, a combo Red), plus the failing modules of a Red verification — or null when there is
-    /// nothing to say. 🚨 Package NAMES and reasons only. The About tab announces that they exist (one
-    /// translated sentence, so "the platform rolled while a package stayed behind" is a visible
-    /// state for everyone); the lines themselves are untranslated diagnostics and render on the
-    /// admin-scoped Updates tab.
+    /// Whether package advisories are recorded for <paramref name="tag"/> — what the release check
+    /// said about it without holding it (the boot-compile cost, the packages that do not follow
+    /// the platform roll), or a Red combo verification of it. 🚨 A BOOLEAN on purpose: this record
+    /// is projected to every user (<see cref="Observe"/> reads the policy node as System), and
+    /// the advisories themselves are package names and diagnostic reasons — admin-scoped, like a
+    /// hold's reason. Only the fact that they exist escapes; the text renders on the Updates tab.
     /// </summary>
-    private static string? AdvisoriesFor(UpdatePolicyContent policy, string? tag)
-    {
-        ImmutableArray<string> recorded = policy.HasAdvisoriesFor(tag) ? [policy.Advisories!] : [];
-        ImmutableArray<string> combo = policy.VerificationFor(tag) is { Verdict: ComboVerdictKind.Red } red
-            ? red.FailedModules.Count == 0
-                ? [$"the combo gate recorded RED for {tag}"]
-                : [.. red.FailedModules.Select(m => $"{m.ModuleId}: does not compile or test against {tag}")]
-            : [];
-        ImmutableArray<string> lines = [.. recorded, .. combo];
-        return lines.IsEmpty ? null : string.Join("; ", lines);
-    }
+    private static bool HasAdvisoriesFor(UpdatePolicyContent policy, string? tag) =>
+        policy.HasAdvisoriesFor(tag)
+        || policy.VerificationFor(tag) is { Verdict: ComboVerdictKind.Red };
 
     /// <summary>
-    /// 🚨 What the release check said about the build this status is about WITHOUT holding it — the
-    /// packages that do not follow the platform roll and catch up on their own (policy
-    /// <c>platform-rolls-independently-of-packages</c>). Null when
-    /// there is nothing to say. Init-only, so the positional shape stays what it was.
+    /// 🚨 Whether the release check said something about the build this status is about WITHOUT
+    /// holding it — packages that do not follow the platform roll and catch up on their own (policy
+    /// <c>platform-rolls-independently-of-packages</c>). The About tab announces it in one
+    /// translated sentence; what was said stays on the admin-scoped Updates tab. Init-only, so the
+    /// positional shape stays what it was.
     /// </summary>
-    public string? Advisories { get; init; }
+    public bool HasAdvisories { get; init; }
 
     /// <summary>
     /// The status for the CURRENT build, read off <c>Admin/UpdatePolicy</c> as System and projected to

@@ -158,7 +158,7 @@ public class FrozenHoldIsHistoryTest
         var status = PlatformUpdateStatus.Derive(content, Running);
         status.Availability.Should().Be(PlatformUpdateAvailability.UpdateAvailable,
             "a Red names modules that do not follow the build — it does not hold the platform");
-        status.Advisories.Should().NotBeNull(
-            "the verdict is still the fact, and it is surfaced as the advisory it now is");
+        status.HasAdvisories.Should().BeTrue(
+            "the verdict is still the fact, and it is announced as the advisory it now is");
     }
 }

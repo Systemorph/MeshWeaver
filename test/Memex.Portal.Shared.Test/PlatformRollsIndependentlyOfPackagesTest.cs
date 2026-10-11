@@ -3,11 +3,14 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.IO;
 using System.Linq;
 using System.Reactive;
 using System.Reactive.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Memex.Portal.Shared.Api;
 using Memex.Portal.Shared.SelfUpdate;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
@@ -19,6 +22,7 @@ using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.PluginCatalog;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -194,6 +198,71 @@ public class PlatformRollsIndependentlyOfPackagesTest(ITestOutputHelper output) 
 
         waived.Target.Should().Be(CandidateTag, "a waived package hold does not keep the reboot on the running image");
         waived.Detail.Should().Contain("framework identity of release 9999.0.0-ci.1 is not resolvable");
+    }
+
+    /// <summary>
+    /// 🚨 THE EXTERNALLY CONSUMED CONTRACT of <c>/api/plugins/is-updatable</c>. The route answers
+    /// the ROLL question: with a package verdict that refuses, the body still says
+    /// <c>isUpdatable: true</c>, and the refusal is not lost — it is on <c>waivedHold</c>, leads
+    /// <c>advisories</c>, and every package keeps its own status. A caller that scripted on
+    /// <c>isUpdatable</c> reads the roll decision; one that needs the package answer reads
+    /// <c>waivedHold</c> and <c>packages</c>.
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task TheIsUpdatableEndpoint_AnswersTheRollQuestion_AndKeepsThePackageAnswer()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var packages = MissingBakeUnderRequirePrebuilt();
+        var http = new DefaultHttpContext
+        {
+            RequestServices = new ServiceCollection()
+                .AddLogging()
+                .AddSingleton<ReleaseAvailabilityService>(
+                    new FixedVerdict(Mesh, new ConfigurationBuilder().Build(), packages))
+                .BuildServiceProvider(),
+        };
+        using var body = new MemoryStream();
+        http.Response.Body = body;
+
+        var result = await ReleaseGateEndpoints.Answer(http, CandidateTag).FirstAsync().Timeout(Budget).Await(ct);
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        using var json = JsonDocument.Parse(body.ToArray());
+        var root = json.RootElement;
+        root.GetProperty("version").GetString().Should().Be(CandidateTag);
+        root.GetProperty("isUpdatable").GetBoolean().Should().BeTrue("a package answer never holds the platform roll");
+        root.GetProperty("waivedHold").GetString().Should().Be(packages.HoldReason);
+        root.GetProperty("holdReason").ValueKind.Should().Be(JsonValueKind.Null);
+        root.GetProperty("indeterminate").GetBoolean().Should().BeFalse("a missing bake is a determined answer");
+        root.GetProperty("enforced").GetBoolean().Should().BeTrue();
+        root.GetProperty("advisories").EnumerateArray().First().GetString()
+            .Should().Contain("independently of packages").And.Contain("Feedback");
+        var statuses = root.GetProperty("packages").EnumerateArray()
+            .ToDictionary(p => p.GetProperty("package").GetString()!, p => p.GetProperty("status").GetString());
+        statuses.Keys.Order(StringComparer.Ordinal).Should().Equal(["Crm", "Feedback"]);
+        statuses["Crm"].Should().Be(nameof(PackageAvailabilityKind.Available));
+        statuses["Feedback"].Should().NotBe(nameof(PackageAvailabilityKind.Available),
+            "the package that does not follow the roll keeps its own status");
+
+        // …and an availability that could not be determined is still told apart from a refusal.
+        var unknown = new DefaultHttpContext
+        {
+            RequestServices = new ServiceCollection()
+                .AddLogging()
+                .AddSingleton<ReleaseAvailabilityService>(
+                    new FixedVerdict(Mesh, new ConfigurationBuilder().Build(), UnresolvableIdentity()))
+                .BuildServiceProvider(),
+        };
+        using var unknownBody = new MemoryStream();
+        unknown.Response.Body = unknownBody;
+        await (await ReleaseGateEndpoints.Answer(unknown, CandidateTag).FirstAsync().Timeout(Budget).Await(ct))
+            .ExecuteAsync(unknown);
+        using var unknownJson = JsonDocument.Parse(unknownBody.ToArray());
+        unknownJson.RootElement.GetProperty("isUpdatable").GetBoolean().Should().BeTrue();
+        unknownJson.RootElement.GetProperty("indeterminate").GetBoolean().Should().BeTrue();
+        unknownJson.RootElement.GetProperty("waivedHold").GetString()
+            .Should().Contain("framework identity of release 9999.0.0-ci.1 is not resolvable");
     }
 
     /// <summary>

@@ -1,22 +1,16 @@
 ---
 Name: Combo Gate Wiring
 Category: Architecture
-Description: How the self-update decision consults the combo verification — the three verdicts, what an instance does on each, and why "could not find out" is neither a pass nor a refusal.
+Description: How the self-update decision consults the combo verification — the three verdicts, what an instance does on each (a Red is an advisory on the roll, never a hold), and why "could not find out" is neither a pass nor a refusal.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>
 ---
 
 # Combo Gate Wiring
 
 > 🚨 **The platform rolls independently of its packages** — policy
-> `platform-rolls-independently-of-packages` ([Policy Not Prose](../PolicyNotProse)). A recorded
-> **Red** is no longer a hold. It names modules this instance has landed that
-> do not survive the candidate — a statement about packages — so the roll proceeds, the failing
-> modules are named on `Admin/UpdatePolicy` (the advisories, which the Updates tab renders and the About tab announces)
-> and on the check verdict (`PACKAGE ADVISORY … the combo gate recorded RED`), and the modules keep
-> their previous generation and catch up through their own update policy. The candidate walk no longer
-> steps past a recorded Red, the manual button and the reboot no longer refuse on it, and the About
-> tab no longer renders it as "held". Green and NotVerifiable behave as below. Where this page says
-> Red "refuses" or "holds", read "is reported as an advisory".
+> `platform-rolls-independently-of-packages` ([Policy Not Prose](../PolicyNotProse)). A combo verdict
+> is a statement about **packages**, so no verdict holds the platform roll: a **Red** is an
+> **advisory** that names the failing modules, and the roll proceeds.
 
 An image being **newer** says nothing about whether it can **serve** what an instance already runs.
 A framework-identity change invalidates the whole assembly cache by design, and an optional
@@ -40,15 +34,14 @@ page is about the other half: **who asks, and what an instance does with the ans
 ```text
  registry tags ──► VersionSelect.PickTargets ──► candidates, newest first
                                                      │
-                          ┌──────────────────────────┴───────────────────────┐
-                          │ per candidate (the WALK — pure, no IO)           │
-                          │  availability gate accepts  AND  combo not RED   │
-                          └──────────────────────────┬───────────────────────┘
                                                      ▼
-                                              chosen candidate
+                                   the NEWEST admitted candidate — always
+                                   (no package answer walks past a release)
                                                      │
-                       ReleaseAvailabilityService.IsUpdatable  ─── hold ──► HELD
-                                                     │ clear
+                       ReleaseAvailabilityService.IsUpdatable
+                                                     │
+                          a package refusal ──► ADVISORIES on the roll, never HELD
+                                                     │
                                                      ▼
                         ComboVerificationGate.Clearance(policy, tag, imageRef)
                                                      │
@@ -57,12 +50,19 @@ page is about the other half: **who asks, and what an instance does with the ans
      Cleared                  Refused                              Unverifiable             NotVerified
      (Green)                   (Red)                             (NotVerifiable)         (no verdict at all)
         │                        │                                      │                        │
-      roll               HOLD, modules named                      neither — roll, recorded as UNVERIFIED
+      roll             roll — ADVISORY, modules named             roll, recorded as UNVERIFIED
 ```
+
+Every branch ends in a roll. What differs is what the instance **says** about it — on the log, on
+`Admin/UpdatePolicy`, and on the durable check verdict.
 
 The two gates answer **different questions** and are deliberately independent: the availability gate
 asks *"does a usable artifact exist for the target?"*, the combo gate asks *"can the target serve
-what this instance has already landed?"*. Passing one says nothing about the other.
+what this instance has already landed?"*. Both are questions about **packages**, and under
+policy `platform-rolls-independently-of-packages` neither answer decides which platform build an
+instance runs: the platform rolls, and a package that does not follow keeps its previous generation
+and catches up through its own update policy. The deadlock that rule removes is recorded in
+[Release & Self-Update Strategy](../ReleaseStrategy).
 
 ## Produce where possible, consult everywhere
 
@@ -127,8 +127,8 @@ rule is not reinvented in CI: upsert by `candidateTag` (case-insensitive), newes
 `MaxRecordedVerifications` = 8 — the rule `UpdatePolicyNodeType.RecordVerification` applies
 in-process.
 
-🚨 **Green is the only pass.** A `Red` fails the job (delivery promoted a candidate a live instance
-must refuse) and a `NotVerifiable` fails it too — that outcome means *nothing was checked*, which is
+🚨 **Green is the only pass.** A `Red` fails the job (delivery promoted a candidate that some of a
+live instance's modules do not survive) and a `NotVerifiable` fails it too — that outcome means *nothing was checked*, which is
 "the gate never ran" wearing the colour of "the gate passed".
 
 ### Why it is its own workflow, and why an instance's verify job is red until that instance is provisioned
@@ -169,9 +169,13 @@ fold lives in one pure function, `ComboClearance.For`, and its states map one-to
 | Recorded verdict | Clearance | What the instance does |
 |---|---|---|
 | `Green` | `Cleared` | Roll. The verdict's **caveats ride along** — a Green over a moving pin is not an unqualified pass. |
-| `Red` | `Refused` | **HOLD.** Every failing module is named on `Admin/UpdatePolicy`, logged at Error, and re-decided from scratch on the next check. |
-| `NotVerifiable` | `Unverifiable` | **Neither.** No clearance, no refusal. |
-| *(none)* | `NotVerified` | **Neither**, with a different sentence: nothing has asked. |
+| `Red` | `Refused` | **Roll, with an ADVISORY.** Every failing module is named among the advisories on `Admin/UpdatePolicy`, the roll is logged at Warning, and the check verdict reads `… PACKAGE ADVISORY … the combo gate recorded RED — <why>`. The modules keep their previous generation and catch up through their own update policy. |
+| `NotVerifiable` | `Unverifiable` | **Roll, UNVERIFIED.** No clearance, no advisory about a module. |
+| *(none)* | `NotVerified` | **Roll, UNVERIFIED**, with a different sentence: nothing has asked. |
+
+`Refused` is the clearance state's name — *the gate refused to clear the candidate* — and it is all
+the name means. Under policy `platform-rolls-independently-of-packages` it does not refuse the **roll**:
+`ComboThenApply` turns it into advisories (`WithComboAdvisory`) and applies.
 
 ### 🚨 Only a Green clears
 
@@ -182,9 +186,10 @@ unregistered runner, a producer that faulted, a producer that timed out, and an 
 `ComboClearance.For` names Green and Red *explicitly*, with everything else falling through, so a
 member appended tomorrow cannot silently become a pass.
 
-`SelfUpdateOptions.AllowUnverifiedRoll` waives the *availability* gate that could not run. It does
-**not** waive a combo Red: that gate ran, and a key that could wave away a produced refusal would be
-exactly the skip-trapdoor this area exists to keep out.
+No key turns a Red into a Green either. `SelfUpdateOptions.AllowUnverifiedRoll` no longer has any
+effect — an availability gate that could not run is an advisory with or without it — and it never
+touched a combo verdict: the Red stays a Red on the record and on every surface, whatever is
+configured. What changed is what a Red **does**, not what it **is**.
 
 ### 🚨 Why `NotVerifiable` is neither
 
@@ -200,8 +205,8 @@ Both of the obvious answers are wrong, and each is wrong in a way this codebase 
 So it does **neither**, and the answer is made *observable* instead of silent:
 
 - it never clears — a `NotVerifiable` candidate is never reported as verified;
-- it never refuses — the roll rests on the other gates, which is where it rested before this gate
-  existed;
+- it never names a module — nothing was found, so there is no advisory to record, and the roll
+  proceeds as it did before this gate existed;
 - the check verdict is **qualified** — `UpdatePolicyContent.LastCheckVerdict` reads
   `applied update X … UNVERIFIED — <why>`, durably, on the node the Updates tab renders;
 - and a patch actually issued without clearance logs at **Warning**, naming the reason.
@@ -214,26 +219,41 @@ nothing in the product able to say so (#2553). A node write does not.
 gate ran and could not answer" and "nothing has ever asked" are different incidents with different
 fixes, and an operator has to be able to tell them apart from the recorded sentence alone.
 
-## Where a refusal shows up
+## Where a Red shows up
 
-A refusal that is invisible is the silent freeze this gate must never become, so a `Red` lands in
-three places at once:
+The platform rolls over a `Red`, so the one thing a Red must never be is invisible: an operator has
+to be able to read which modules did not follow the roll without a pod log. It lands in four places
+at once:
 
-1. **`ComboVerifications`** — the full verdict, per candidate tag, which the **Updates** settings tab
-   already renders as *"cannot update to X — these modules do not compile or test against it"*,
-   listing every failing module and every caveat.
-2. **`HeldTag` / `HeldReason` / `HeldIndeterminate`** — the same hold fields the availability gate
-   writes, so the existing surfaces need no new state. `HeldIndeterminate` is **false**: the gate
-   looked and found an incompatibility, which is a candidate to re-verify, not an availability
-   incident to fix.
-3. **`PlatformUpdateStatus`** — `Derive` reads the recorded verdict as well as `IsHeld`, so the
-   About page and the header build chip render `UpdateHeld` rather than an eternal "update
-   available". Reading only `IsHeld` would have covered the empty state alone: the hold field is the
-   poller's *note* about the refusal, while the verdict is the *fact*, and a tick whose hold write
-   failed would otherwise have rendered a blocked build as available forever.
+1. **`ComboVerifications`** — the full verdict, per candidate tag. The **Updates** settings tab
+   keeps the release line and renders the verdict underneath as an advisory (`ui.updateBlocked`:
+   *"the platform still rolls to X, but these modules do not compile or test against it"*), listing
+   every failing module and every caveat.
+2. **`AdvisoriesTag` / `Advisories`** — the poller records the Red among the roll's advisories,
+   leading: *"the platform rolls independently of packages — the combo gate recorded RED for this
+   release: …"*. The hold fields (`HeldTag` / `HeldReason` / `HeldIndeterminate` / `HeldAt`) are
+   **cleared**, not written — nothing is held. A hold an older build recorded is cleared by the
+   same write, and on a check that finds nothing newer by the poller's no-candidate exit.
+3. **`LastCheckVerdict`** — the durable sentence: `applied update X … PACKAGE ADVISORY (the platform
+   rolls independently of packages; …): the combo gate recorded RED — <why>`.
+4. **The About tab and the header build chip** — `PlatformUpdateStatus.Derive` reads a Red as
+   *update available*, never as `UpdateHeld`. The About tab announces that package advisories exist
+   in one translated sentence and points to the Updates tab; the module names and reasons are
+   diagnostics and stay on that admin-scoped surface.
 
-Only `Red` reads as held. A `NotVerifiable` is not a hold — nothing refused that build — and
-rendering it as one would send an operator to fix an incompatibility that was never diagnosed.
+The same rule holds on the two paths a person starts. The **Apply update now** button does not
+refuse on a recorded Red: it applies, logs at Warning, and lists the advisories on its result line.
+The **reboot's image step** chooses the newest admitted tag and names the recorded Red in its detail
+— also on a host with no availability gate registered — except for a wedged instance, which does not
+wait for the combo verdict and says so.
+
+Before policy `platform-rolls-independently-of-packages` a Red was a **hold**: it wrote
+`HeldTag`, rendered as `UpdateHeld`, and the candidate walk stepped past the release.
+`SelfUpdateOutcome.ComboBlocked` is the outcome that hold produced; the type is kept and nothing
+produces it any more.
+
+A `NotVerifiable` names no module — nothing was diagnosed — so it is recorded as `UNVERIFIED` on the
+check verdict and never as an advisory about a package.
 
 ## 🚨 The verdict is read at DECISION time, never once at start-up
 
@@ -251,28 +271,32 @@ that same stream is what `StartAsync` reads at decision time (`policy.Take(1)` o
 it was dropped and every later check kept deciding on the content as it stood at start-up. Every
 other field went with it — `HeldTag`, `LastRolledTag`, an operator's edit on the Updates tab.
 
-The gate was therefore recorded, rendered on the tab, and **unable to refuse anything** — #2274's
+The gate was therefore recorded, rendered on the tab, and **unable to act on anything** — #2274's
 "built, documented, tested, and called by nothing" with one extra step. Nothing de-duplicates the
 content now. The trigger stream keeps its own `DistinctUntilChanged(content => content.Policy)`,
 so a content change that is not a policy change still triggers nothing — including the poller's
 own `LastCheckedAt`/`LastCheckVerdict` bookkeeping writes, which is why letting them through
 cannot loop.
 
-Pinned by `ComboGateRollTest.AVerdictRecordedAfterTheFirstCheck_RefusesTheNextRoll`, whose second
+Pinned by `ComboGateRollTest.AVerdictRecordedAfterTheFirstCheck_IsHonouredByTheNextCheck` — the
+verdict recorded after the first check is the advisory the next check records — whose second
 check is driven by the **safety net** on purpose: a policy change would refresh the content even
 with the defect present, because it moves the very field the filter keyed on.
 
 ## Cost, and why the walk is cheap
 
-`VersionSelect.PickTargets` returns every eligible tag newest-first and the poller takes the first
-one that is rollable, so a not-yet-baked head never freezes the releases behind it. Asking a
-*producer* per candidate would mean one full docker run per tag, so the walk uses only
-`ComboVerificationGate.Recorded` — a pure read of the policy content already in hand. A verdict is
-produced at most once per check, about the candidate actually chosen.
+`VersionSelect.PickTargets` returns every eligible tag newest-first and the poller takes the
+**newest admitted** one (`FirstRollable`): no package answer walks past a release, so there is no
+per-candidate combo question left to ask and the selection consults no combo verdict at all. A
+verdict is produced at most once per check — one docker run, on a host that can produce — about the
+candidate actually chosen, and everywhere else `ComboVerificationGate.Recorded` is a pure read of
+the policy content already in hand.
 
-If that production comes back `Red`, the tick holds; the now-recorded `Red` makes the very next walk
-step past that candidate. The two halves converge in one extra check instead of paying a gate run
-per tag.
+If that production comes back `Red`, the tick records it and rolls with the advisory.
+
+Before policy `platform-rolls-independently-of-packages` the walk skipped a candidate recorded
+`Red` and a freshly produced `Red` held the tick, so the two halves converged in one extra check;
+that walk and that hold are retired.
 
 ## What is not provisioned, what it costs, and what closes it (#3848)
 
@@ -469,12 +493,14 @@ Two independent reasons, and both were measured rather than assumed:
 
 1. **By design, an absent verdict neither clears nor refuses.** `ComboClearanceKind.NotVerified`
    "refuses nothing, because refusing on it would freeze every instance in the fleet on the day this
-   gate shipped" (`ComboClearance.cs:20-30`). Only a `Refused` — a recorded **Red** — removes a
-   candidate from the walk (`SelfUpdateHostedService.cs:891`) or holds a roll (`:1014`). An
+   gate shipped" (`ComboClearance.cs:20-30`). When this was measured a `Refused` — a recorded
+   **Red** — removed a candidate from the walk and held a roll; under
+   policy `platform-rolls-independently-of-packages` it does neither and is recorded as an advisory
+   (`SelfUpdateHostedService.ComboThenApply`). An
    unverified roll is **applied**, with `LogWarning("[SelfUpdate] rolled {Tag} WITHOUT combo
-   clearance")` and the verdict marked `Unverified` (`:1048-1056`). Of the other two readers, only
-   `PlatformUpdateStatus.cs:105` treats a verdict as blocking, and only a Red;
-   `UpdatePolicySettingsTab.cs:249-272` **renders all three kinds** — Green, Red and
+   clearance")` and the verdict marked `Unverified` (`Qualify`). Of the other two readers,
+   `PlatformUpdateStatus.Derive` reads a Red as an advisory beside *update available*, and
+   `UpdatePolicySettingsTab` **renders all three kinds** — Green, Red and
    NotVerifiable each get their own rendering, with the verdict's caveats surfaced on every one —
    so nothing is hidden from an operator, there is simply nothing recorded to show.
 2. **The one consumer is switched off on both live instances.** `Admin/UpdatePolicy` on
@@ -484,8 +510,8 @@ Two independent reasons, and both were measured rather than assumed:
    consults a verdict at decision time — is not deciding anything to begin with.
 
 That is **not** an argument for leaving it unprovisioned: the gate exists so that the day
-self-update is switched back on, a candidate a live instance cannot serve is refused rather than
-rolled. It is an argument about *priority* — this is a latent gate, not a live incident, and it
+self-update is switched back on, the modules a candidate cannot serve are **named before and on the
+roll** rather than discovered at boot. It is an argument about *priority* — this is a latent gate, not a live incident, and it
 should be read that way when it is scheduled against work that is bleeding.
 
 ### 🚨 The instance roster IS derived — `vars.COMBO_VERIFY_INSTANCES` no longer exists

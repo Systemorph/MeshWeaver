@@ -16,7 +16,15 @@ namespace MeshWeaver.PluginCatalog;
 /// this class decides. That is what lets an in-process service, an HTTP endpoint and a CI step
 /// reach the identical verdict without three copies of the reasoning.</para>
 ///
-/// <para>🚨 <b>What holds a roll, since #3651 (maintainer rule of 2026-09-07,
+/// <para>🚨 <b>This is the PACKAGE verdict, and what a refusal DOES is the caller's decision.</b>
+/// The CI build gate (#1755) fails on a refusal. A platform-roll path never holds on one: it
+/// passes the verdict through <see cref="UpdatabilityVerdict.ForPlatformRoll"/>, which turns the
+/// refusal into advisories and lets the roll proceed (policy
+/// <c>platform-rolls-independently-of-packages</c>). So "refuses" below means
+/// <see cref="UpdatabilityVerdict.IsUpdatable"/> is false on the verdict this class returns —
+/// never that a platform roll stops.</para>
+///
+/// <para>🚨 <b>What the package verdict refuses, since #3651 (maintainer rule of 2026-09-07,
 /// <c>Doc/Architecture/ModuleAdoptionPolicy</c>): a module that provably cannot LOAD on the target
 /// — and nothing declared.</b> Two lanes, judged differently on purpose:</para>
 /// <list type="number">
@@ -24,15 +32,15 @@ namespace MeshWeaver.PluginCatalog;
 /// framework identity (<c>prebuilt-bundles/&lt;identity&gt;/&lt;source&gt;/</c>, with its
 /// <c>_complete</c> sentinel written strictly last). Absent ⇒ the instance Roslyn-compiles that
 /// content at boot. 🚨 That is a COST, reported as <see cref="UpdatabilityVerdict.BootCompiles"/>
-/// ("would recompile at boot: education, crm") — never a hold: the compile is the same code path
+/// ("would recompile at boot: education, crm") — never a refusal: the compile is the same code path
 /// every pull request of that content already proves green, and on 2026-09-07 holding on it would
 /// have kept memex-cloud on 8009 a second day because the satellites had not baked for the new
 /// identity yet. <see cref="ReleaseGatePolicy.RequirePrebuilt"/> (the instance's
-/// <c>Modules:RequirePrebuilt</c>) is the opt-in STRICT mode in which a missing bake still holds —
-/// there a boot compile is refused by the seeder, so the roll would park. The identity match is
+/// <c>Modules:RequirePrebuilt</c>) is the opt-in STRICT mode in which a missing bake still refuses —
+/// there a boot compile is refused by the seeder, so the package would park. The identity match is
 /// EXACT — the strict-MVID rule of <c>PrebuiltAssemblySeeder.DeclineReason</c> — and it is
 /// expressed here as "the bundle is sealed under the target's identity", never re-derived. A
-/// sealed set that is INCONSISTENT (#3175) stays a hold: a torn publication is refused whole.</description></item>
+/// sealed set that is INCONSISTENT (#3175) stays a refusal: a torn publication is refused whole.</description></item>
 /// <item><description><b>Compiled module</b> — MEASURED. A module with a build published for the
 /// target identity (the identity's sealed module set carries it) will be adopted and needs no
 /// check. A module with no such build keeps its landed generation across the roll, so that
@@ -40,10 +48,10 @@ namespace MeshWeaver.PluginCatalog;
 /// (<see cref="ModulePlatformLink.Check(string, ModulePlatformSurface)"/> over the
 /// <see cref="ReleaseArtifacts.PlatformSurface"/> recorded for EXACTLY that release — policy
 /// <c>exact-release-surface</c>, never a publication's shared surface): <c>Unlinkable</c> is
-/// <see cref="PackageAvailabilityKind.ModuleUnloadable"/> — THE hold, naming the module and the
+/// <see cref="PackageAvailabilityKind.ModuleUnloadable"/> — THE refusal, naming the module and the
 /// missing type; <c>Linkable</c> clears; <c>Indeterminate</c> (no surface published, unreadable
 /// bytes) is REPORTED on <see cref="UpdatabilityVerdict.Advisories"/> and is neither clearance nor
-/// a hold — the boot-time probe, the keep-the-previous-generation fallback and the readiness stall
+/// a refusal — the boot-time probe, the keep-the-previous-generation fallback and the readiness stall
 /// are the safety net. 🚨 NOT the declared <c>MinMeshVersion</c> floor: that was a BLOCKER until
 /// #3648 and on 2026-09-07 it declined all 11 candidate releases on memex-cloud ("77 plugins
 /// required … every one declined") because the comparator ranks <c>ci &lt; rc &lt; clean</c> —
@@ -58,9 +66,9 @@ namespace MeshWeaver.PluginCatalog;
 /// is never dressed up as a compatibility verdict: <see cref="PackageAvailabilityKind.Indeterminate"/>
 /// and <see cref="PackageAvailabilityKind.ModuleUnloadable"/> are different answers to different
 /// questions, and a caller that cannot tell them apart cannot tell an outage from an incompatible
-/// release. The one Indeterminate that does NOT hold is the LINK check's — a release with no
-/// surface of its own predates exact-release surfaces (or #3651), and holding every roll on it
-/// would freeze the fleet exactly as the floors did; it is reported instead.</para>
+/// release. The one Indeterminate that does NOT refuse is the LINK check's — a release with no
+/// surface of its own predates exact-release surfaces (or #3651), and refusing every release on
+/// it would fail every package verdict exactly as the floors did; it is reported instead.</para>
 ///
 /// <para>Everything here is PURE: the caller supplies the target, the packages, and an
 /// <see cref="ReleaseArtifacts">observation</see> that already carries the link measurements
@@ -236,8 +244,8 @@ public static class ReleaseAvailability
         // ordinary path this answers null for every package — no seal, no rebuild, no plugin step
         // is on a platform roll's critical path. Only behind a declared break (an epoch/major bump,
         // or a ceiling the installed bytes declare) does a target the installed build does not
-        // cover need a replacement sealed for the target, and without one the roll is HELD here,
-        // naming the plugin and both versions.
+        // cover need a replacement sealed for the target, and without one the package is REFUSED
+        // here, naming the plugin and both versions (on a platform-roll path: an advisory).
         if (PlatformRangeHold(package, target, artifacts) is { } rangeHold)
             return new Evaluation(rangeHold, null);
 
@@ -298,10 +306,10 @@ public static class ReleaseAvailability
     /// </list>
     /// <para>Then the roll needs a REPLACEMENT: the package sealed under the target's key with a
     /// range that admits the target (<c>PlatformCompatibility.DeclineReason</c> answers null for
-    /// it). Without one the roll is HELD as <see cref="PackageAvailabilityKind.PlatformRangeExceeded"/>,
+    /// it). Without one the package is refused as <see cref="PackageAvailabilityKind.PlatformRangeExceeded"/>,
     /// and the reason names the plugin, the installed key and ceiling, and the target version and
     /// key. A legacy installed identity (<c>s…</c>/<c>g…</c>, no epoch) declares no range and is never
-    /// held here — the first roll onto the keyed platform is an ordinary roll.</para>
+    /// refused here — the first roll onto the keyed platform is an ordinary roll.</para>
     /// </summary>
     private static PackageAvailability? PlatformRangeHold(
         RequiredPackage package, ReleaseTarget target, ReleaseArtifacts artifacts)
@@ -351,8 +359,8 @@ public static class ReleaseAvailability
                 PackageAvailabilityKind.PlatformRangeExceeded,
                 $"the installed build {covered}, so it does not cover target {target.Version} "
                 + $"({targetKey}); a replacement is sealed under {targetKey} but does not admit the "
-                + $"target: {replacementDecline}. The roll is HELD until {package.Name} is rebuilt and "
-                + $"sealed for {targetKey} with a range that covers {target.Version}");
+                + $"target: {replacementDecline}. {package.Name} cannot serve this release until it is "
+                + $"rebuilt and sealed for {targetKey} with a range that covers {target.Version}");
         }
 
         return new PackageAvailability(
@@ -361,8 +369,8 @@ public static class ReleaseAvailability
             $"the installed build {covered}, so it does not cover target {target.Version} "
             + $"({targetKey ?? "key unknown"}), and no replacement is sealed under "
             + $"{targetKey ?? "the target's key"} — a declared compatibility break (policy "
-            + "platform-backwards-compatibility). The roll is HELD until "
-            + $"{package.Name} is rebuilt against the new platform and sealed for it");
+            + $"platform-backwards-compatibility). {package.Name} cannot serve this release until "
+            + "it is rebuilt against the new platform and sealed for it");
     }
 
     /// <summary>
@@ -375,7 +383,7 @@ public static class ReleaseAvailability
     /// loaded, nothing to hold on;</description></item>
     /// <item><description>no such build, and a landed generation — that generation keeps running
     /// across the roll, so its bytes were linked against the target's surface
-    /// (<see cref="ReleaseArtifacts.ModuleLinks"/>): <c>Unlinkable</c> HOLDS as
+    /// (<see cref="ReleaseArtifacts.ModuleLinks"/>): <c>Unlinkable</c> REFUSES as
     /// <see cref="PackageAvailabilityKind.ModuleUnloadable"/>, naming the module and the missing
     /// types, and so does <c>BindingConflict</c> (#4083), naming the assembly versions the target
     /// cannot bind; <c>Linkable</c> clears, its roll-forward version drift on the advisories;
@@ -662,7 +670,7 @@ public sealed record BundlePlatformRange(string? Floor, string? Ceiling)
 {
     /// <summary>
     /// Why the range could not be READ (an unreadable manifest), or null when it was. An unreadable
-    /// range is never an open one: behind a declared break it HOLDS the roll as indeterminate.
+    /// range is never an open one: behind a declared break it refuses the package as indeterminate.
     /// </summary>
     public string? Unreadable { get; init; }
 }
@@ -907,11 +915,24 @@ public sealed record PackageAvailability(string Package, PackageAvailabilityKind
 /// The gate's answer: whether the roll may proceed, every package's reason, and a one-line summary
 /// for the refusal a human reads. <see cref="IsUpdatable"/> false with a null
 /// <see cref="HoldReason"/> is impossible by construction — a refusal always says why.
+///
+/// <para>🚨 <b>One record, two questions — told apart by <see cref="WaivedHold"/>.</b> As the pure
+/// predicate returns it (<c>ReleaseAvailability.IsUpdatable</c>) this is the PACKAGE verdict:
+/// <see cref="IsUpdatable"/> is true only when every package is available. As
+/// <see cref="ForPlatformRoll"/> returns it, it is the PLATFORM-ROLL decision (policy
+/// <c>platform-rolls-independently-of-packages</c>): <see cref="IsUpdatable"/> is true although
+/// <see cref="Packages"/> may still carry unavailable entries — they are <see cref="Lagging"/>,
+/// the waived reason is on <see cref="WaivedHold"/> and leads <see cref="Advisories"/>. A consumer
+/// that needs "is every package available" reads <see cref="Lagging"/> (or asks the predicate),
+/// never <see cref="IsUpdatable"/> of a roll decision.</para>
 /// </summary>
-/// <param name="IsUpdatable">True only when every package is available.</param>
+/// <param name="IsUpdatable">Whether the roll may proceed. On the package verdict: true only when
+/// every package is available. On a roll decision (<see cref="ForPlatformRoll"/>): always true,
+/// whatever <paramref name="Packages"/> says.</param>
 /// <param name="Packages">Every package's verdict, including the available ones (a gate that
 /// reports only failures cannot show that it looked at anything).</param>
-/// <param name="HoldReason">The joined reasons, or null when updatable.</param>
+/// <param name="HoldReason">The joined reasons, or null when updatable (on a roll decision the
+/// waived reasons are on <see cref="WaivedHold"/>).</param>
 /// <param name="NotEnforcedReason">Set only when the gate does not APPLY to this deployment at all
 /// — see <see cref="NotEnforced"/>. Never a way to pass a gate that does apply.</param>
 public sealed record UpdatabilityVerdict(
@@ -929,7 +950,7 @@ public sealed record UpdatabilityVerdict(
     /// <para>This is deliberately NOT the same thing as passing. It is updatable with a stated
     /// reason the caller must LOG and SURFACE, so "nothing is gating this environment" is visible
     /// rather than inferred from a green tick. It is the one applicability answer; every other
-    /// unknown is <see cref="PackageAvailabilityKind.Indeterminate"/>, which HOLDS.</para>
+    /// unknown is <see cref="PackageAvailabilityKind.Indeterminate"/>, which REFUSES.</para>
     /// </summary>
     public static UpdatabilityVerdict NotEnforced(string reason) =>
         new(true, [], null, reason);
@@ -937,7 +958,7 @@ public sealed record UpdatabilityVerdict(
     /// <summary>
     /// 🚨 The gate could not RUN — it is not wired into this host at all.
     ///
-    /// <para>This is a HOLD, and it is deliberately not <see cref="NotEnforced"/>. That answer
+    /// <para>This is a REFUSAL (not updatable), and it is deliberately not <see cref="NotEnforced"/>. That answer
     /// exists for the one stated applicability exemption (a deployment consuming no CI bakes);
     /// reusing it for a wiring failure is the trap this repo has been bitten by repeatedly — an
     /// <c>if: vars.X != ''</c> that skips green, a health check reporting Healthy while the bake

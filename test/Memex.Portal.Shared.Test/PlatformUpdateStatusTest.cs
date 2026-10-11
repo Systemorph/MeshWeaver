@@ -162,7 +162,7 @@ public class PlatformUpdateStatusTest
 
         Assert.Equal(PlatformUpdateAvailability.UpdateAvailable, status.Availability);
         Assert.Equal("3.0.0-ci.2400", status.LatestVersion);
-        Assert.Contains("RED", status.Advisories);
+        Assert.True(status.HasAdvisories, "a Red verification is announced as a package advisory");
     }
 
     /// <summary>
@@ -193,7 +193,8 @@ public class PlatformUpdateStatusTest
             "3.1.10490");
 
         Assert.Equal(PlatformUpdateAvailability.UpdateAvailable, status.Availability);
-        Assert.Equal(Advisory, status.Advisories);
+        Assert.True(status.HasAdvisories);
+        Assert.DoesNotContain("framework identity", status.ToString());
 
         var markdown = Memex.Portal.Shared.Settings.AboutSettingsTab.UpdateStatusMarkdown(status, key => $"<{key}>");
         Assert.NotNull(markdown);
@@ -222,7 +223,8 @@ public class PlatformUpdateStatusTest
             "3.1.10502+abc123");
 
         Assert.Equal(PlatformUpdateAvailability.UpToDate, status.Availability);
-        Assert.Equal("Feedback: no sealed content bake", status.Advisories);
+        Assert.True(status.HasAdvisories);
+        Assert.DoesNotContain("Feedback", status.ToString());
         Assert.Contains("<about.platformRolls>",
             Memex.Portal.Shared.Settings.AboutSettingsTab.UpdateStatusMarkdown(status, key => $"<{key}>"));
     }
