@@ -7,8 +7,8 @@ what you see first is what you *use*, not everything the mesh can show you. The 
 |---|---|---|---|
 | **Pinned** | the caller has pins | the owner's content shortcuts (`User.PinnedPaths`) | last modified |
 | **Apps** | always | the APP DIRECTORY (the apps the viewer can see through access, `{owner}/_Apps`) — every app exactly once, as an ICON grid; the viewer's own `{owner}/_App` records only under the explicit `Home:AppSource = Records` compatibility path | last used |
-| **Spaces** | always | the catalog **without** store items | last accessed |
-| **All** | always | everything the viewer can read, at every depth | last accessed |
+| **Spaces** | always | the catalog **without** store items | location (path) — `HomeConfig.SortBy` |
+| **All** | always | everything the viewer can read, at every depth | location (path) — `HomeConfig.SortBy` |
 
 **Shared with me** is not a tab: cross-partition invitations (#385) are a distinct kind of content,
 not another lens on the catalog, so they render as their own titled band BELOW the search surface —

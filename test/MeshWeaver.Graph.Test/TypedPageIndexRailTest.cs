@@ -1,3 +1,5 @@
+using System.Reactive.Threading.Tasks;
+using System.Reactive.Linq;
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -71,13 +73,13 @@ public class TypedPageIndexRailTest(ITestOutputHelper output) : MonolithMeshTest
         // The rail paints progressively: the reader's own branch first, each level as it arrives.
         // Wait for the level that holds the sibling.
         var railArea = splitter.Areas[0].Area!.ToString()!;
-        var rail = await Collect(stream, railArea, ct);
-        for (var attempt = 0; attempt < 60
-             && !rail.OfType<NavLinkControl>().Any(l => l.Url?.ToString() == $"/{SiblingPath}"); attempt++)
-        {
-            await Task.Delay(250, ct);
-            rail = await Collect(stream, railArea, ct);
-        }
+        var rail = await Observable.Interval(TimeSpan.FromMilliseconds(250)).StartWith(0L)
+            .Select(_ => Observable.FromAsync(() => Collect(stream, railArea, ct)))
+            .Concat()
+            .Where(r => r.OfType<NavLinkControl>().Any(l => l.Url?.ToString() == $"/{SiblingPath}"))
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(30))
+            .ToTask(ct);
         var menu = Assert.Single(rail.OfType<NavMenuControl>());
         Assert.Equal(Space, menu.Skins.OfType<NavMenuSkin>().Single().SearchNamespace);
         Assert.Contains($"/{SiblingPath}", rail.OfType<NavLinkControl>().Select(l => l.Url?.ToString()));

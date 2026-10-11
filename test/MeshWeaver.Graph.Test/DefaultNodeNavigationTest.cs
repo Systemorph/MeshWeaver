@@ -292,7 +292,10 @@ public class DefaultNodeNavigationTest
         nav.Entries.Single(e => e.Path == "Infrastructure/Inference").Children
             .Should().NotContain(e => e.Label == "Mehr laden", "only the level that holds more gets the entry");
 
-        DefaultNodeNavigation.ParseMore("Infrastructure%2FInference:100").Should().Be(("Infrastructure/Inference", 100));
+        // The value arrives DECODED (LayoutAreaReference.ParseParameters): a separator is a '/', and
+        // a literal escape in a level name stays as it is.
+        DefaultNodeNavigation.ParseMore("Infrastructure/Inference:100").Should().Be(("Infrastructure/Inference", 100));
+        DefaultNodeNavigation.ParseMore("Odd%2FName:100").Should().Be(("Odd%2FName", 100));
         DefaultNodeNavigation.ParseMore("Infrastructure:50").Should().BeNull("never below the first batch");
         DefaultNodeNavigation.ParseMore("garbage").Should().BeNull();
         DefaultNodeNavigation.ParseMore(null).Should().BeNull();

@@ -924,7 +924,7 @@ public static class UserActivityLayoutAreas
         // viewer's side: the workspaces they can reach but do not own. Present only when there is
         // something in it, since the query is a path list and an empty list matches nothing at all.
         if (sharedTargets is { Count: > 0 })
-            scopes.Add(ContentScope("home.spaces", locale, HomeSortBy.LastModified,
+            scopes.Add(ContentScope("home.spaces", locale, cfg.EffectiveSort(),
                 (_, suffix) =>
                     $"path:{string.Join("|", sharedTargets)} is:main is:content -nodeType:User{SpacesDedupExclusions} {suffix}"));
 

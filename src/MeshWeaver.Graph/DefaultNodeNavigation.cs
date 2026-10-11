@@ -195,14 +195,16 @@ public static class DefaultNodeNavigation
         MarkdownOverviewLayoutArea.OrderSubNodes(level.Where(n => !LastSegment(n.Path).StartsWith('_')))
             .ToImmutableList();
 
-    /// <summary>Reads <c>?more={level}:{cap}</c>: the one level whose cap is raised, and to what —
+    /// <summary>Reads the DECODED value of <c>?more={level}:{cap}</c>: the one level whose cap is raised, and to what —
     /// null for a missing or malformed value, and a cap below <see cref="LevelCap"/> is never
     /// applied. Pure.</summary>
     public static (string Level, int Cap)? ParseMore(string? value)
     {
         if (string.IsNullOrWhiteSpace(value))
             return null;
-        var raw = Uri.UnescapeDataString(value);
+        // Already URI-decoded by the area reference's parameter parsing — decoding again would turn
+        // a literal %2F in a level name into a separator.
+        var raw = value;
         var colon = raw.LastIndexOf(':');
         if (colon <= 0 || !int.TryParse(raw[(colon + 1)..], out var cap) || cap <= LevelCap)
             return null;
