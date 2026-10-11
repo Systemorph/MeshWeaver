@@ -160,12 +160,23 @@ answer:
 |---|---|---|
 | sent by this hub itself | Debug | nobody outside waits; `NackThroughParent` declines it (#4178) |
 | a request marked `[ReaskedOnShutdown]` (`SubscribeRequest`) | Debug | every producer rides the transient NACK out and asks the next activation (#4888, #5424, #5589) |
+| a message the routing layer may not answer: `[CanBeIgnored]` (`StreamEndedEvent`, `HeartBeatEvent`) or a `DeliveryFailure` | Debug | no sender awaits a reply, and `NackThroughParent` posts none (`AnswerPolicy`). Dropping it for a hub that is going away is what the declaration asks for (#5718) |
 | anything else, from another sender | **Error** | the waiter may take the NACK as final. That is the report worth an issue |
 
 The first cleanup of this table, the self-heal's own recycle, no longer discards anything: it queues
 behind the gates (`HubSelfRecycleExtensions.RecycleSelfAfterAcceptedWork`, #5356). `[ReaskedOnShutdown]`
 makes a claim about EVERY producer of the type, so a new producer must ride the refusal out too.
 Pinned by `DeferredDeliveryNackedOnDisposeTest`, whose unmarked-request case is the control.
+
+The third row was measured, not reasoned. On the `memex` deployment every `[DISPOSE-DISCARD]` Error of a
+72 h window (2026-10-08 to 10-11, six lines) named a `sync/{id}` sub-hub disposing with its owner's
+`StreamEndedEvent` still deferred; the one read in full was parked behind `[SynchronizationGate]`
+and taken down by a direct dispose. `StreamEndedEvent` is `[CanBeIgnored]`
+for that exact case: the subscriber released its stream, and the owner's announcement arrived for a
+hub that was already leaving. The routing layer dropped such a message silently; this report did not
+know the contract, and its sentence "the sender is answered ShuttingDown" was false for it. An
+undeclared event through the same teardown still reports at Error, and that is the control in the
+same test class.
 
 ## Reading a refusal in the field
 
