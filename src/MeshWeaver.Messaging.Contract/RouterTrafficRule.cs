@@ -110,9 +110,10 @@ public static class RouterTrafficRule
     public static bool IsNackOfAnAnswerTheRouterPosted(object? message, Func<IMessageDelivery, bool> isResponse)
         => message is DeliveryFailure { Delivery: { } failed }
            && string.Equals(failed.Sender?.Type, AddressExtensions.MeshType, StringComparison.Ordinal)
-           // A NAMED other hub. A failed delivery with no target was not an answer sent anywhere,
-           // and "null is not the mesh" must not be what exempts its bounce.
-           && failed.Target is { } target
+           // A NAMED other hub. A failed delivery with no target — or an empty address, whose Type
+           // is "" — was not an answer sent anywhere, and "not the mesh" must not be what exempts
+           // its bounce.
+           && failed.Target is { Type.Length: > 0 } target
            && !string.Equals(target.Type, AddressExtensions.MeshType, StringComparison.Ordinal)
            && isResponse(failed);
 

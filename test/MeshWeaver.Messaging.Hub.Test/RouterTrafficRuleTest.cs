@@ -149,6 +149,9 @@ public class RouterTrafficRuleTest
         Assert.False(RouterTrafficRule.IsNackOfAnAnswerTheRouterPosted(
             new DeliveryFailure(new MessageDelivery<string>(new Address(Mesh, "s"), null!, "payload",
                 new System.Text.Json.JsonSerializerOptions())), _ => true)); // addressed at NO hub: not an answer to one
+        Assert.False(RouterTrafficRule.IsNackOfAnAnswerTheRouterPosted(
+            new DeliveryFailure(new MessageDelivery<string>(new Address(Mesh, "s"), new Address(), "payload",
+                new System.Text.Json.JsonSerializerOptions())), _ => true)); // an EMPTY address names no hub either
         Assert.False(RouterTrafficRule.IsNackOfAnAnswerTheRouterPosted(new object(), _ => true));
         Assert.False(RouterTrafficRule.IsNackOfAnAnswerTheRouterPosted(null, _ => true));
     }
