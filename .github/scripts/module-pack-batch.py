@@ -677,6 +677,43 @@ def workflow_entry_handover_problems(workflow: str) -> list[str]:
     return problems
 
 
+WITHHOLD_PLAN = 'withheld=true; need_publish=false'
+WITHHOLD_MATCH = ('grep -qxF "$(bk get --module "$MODULE" package)" "$RUNNER_TEMP/publish-withhold.txt"')
+WITHHOLD_PUBLISHED = '[ "$NEWER" != true ] && [ "$WITHHELD" != true ]; then PUBLISHED=true; fi'
+WITHHOLD_RECEIPT = 'elif [ "$WITHHELD" = true ]; then PUBLICATION=withheld'
+
+
+def workflow_publish_withhold_problems(workflow: str) -> list[str]:
+    """`publish-withhold` holds a package back from the hand-over, and ONLY from the hand-over.
+
+    A caller whose publication is decided per package (MeshWeaver.Plugins: an unsettled lock or an
+    unstamped platform floor holds back its own dependency network, never the whole tree) names the
+    packages this run must not hand over. The lane's part is three lines, and each one failing
+    silently is a different defect: the plan must turn the hand-over off for the module (or a
+    package the caller withheld is published), it must match the entry's `package` EXACTLY (a
+    substring match withholds `AI.Codex` for `AI`, or publishes `Store` for `Stor`), and the receipt
+    must neither claim a publication that did not happen nor leave the reason to be inferred.
+    """
+    problems: list[str] = []
+    if len(re.findall(r"^      publish-withhold:$", workflow, re.M)) != 1:
+        problems.append("the lane declares no `publish-withhold` input (exactly one is expected) — a caller "
+                        "passing it would be refused as an unexpected input, or worse, silently ignored")
+    if workflow.count("PUBLISH_WITHHOLD: ${{ inputs.publish-withhold }}") != 1:
+        problems.append("the plan step does not read `inputs.publish-withhold` exactly once")
+    if workflow.count(WITHHOLD_MATCH) != 1:
+        problems.append("the plan step must match a withheld name against the entry's `package` as a WHOLE "
+                        "LINE (`grep -qxF`), exactly once — a looser match withholds or publishes a neighbour")
+    if workflow.count(WITHHOLD_PLAN) != 1:
+        problems.append("the plan step must turn the hand-over off for a withheld module "
+                        f"(`{WITHHOLD_PLAN}`), exactly once — otherwise the caller's withheld package is published")
+    if workflow.count(WITHHOLD_PUBLISHED) != 1:
+        problems.append("the receipt must not say `published: true` for a withheld module")
+    if workflow.count(WITHHOLD_RECEIPT) != 1:
+        problems.append("the receipt must name the reason (`publication: withheld`) — a withheld module must "
+                        "never read as `direct`, `staged` or `superseded`")
+    return problems
+
+
 def self_test(workflow_path: Path | None = None) -> int:
     import subprocess
 
@@ -781,6 +818,26 @@ def self_test(workflow_path: Path | None = None) -> int:
         handover_problems = workflow_entry_handover_problems(workflow)
         check("publish-newest-only reads the WHOLE matrix entry through `entry`, never `get`",
               not handover_problems, "; ".join(handover_problems))
+        # `publish-withhold` (per-package publication): the caller withholds packages; the lane
+        # must leave exactly their hand-over out and say so on the receipt.
+        withhold_problems = workflow_publish_withhold_problems(workflow)
+        check("publish-withhold turns the hand-over off for a withheld package, by exact name, and the receipt says so",
+              not withhold_problems, "; ".join(withhold_problems))
+        check("NEGATIVE CONTROL: a plan that keeps the hand-over ON for a withheld package is caught",
+              any("hand-over off" in w for w in workflow_publish_withhold_problems(
+                  workflow.replace(WITHHOLD_PLAN, "withheld=true", 1))))
+        check("NEGATIVE CONTROL: a substring match on the package name is caught",
+              any("WHOLE" in w for w in workflow_publish_withhold_problems(
+                  workflow.replace("grep -qxF \"$(bk get --module", "grep -qF \"$(bk get --module", 1))))
+        check("NEGATIVE CONTROL: a receipt that reports a withheld module as published is caught",
+              any("published: true" in w for w in workflow_publish_withhold_problems(
+                  workflow.replace(' && [ "$WITHHELD" != true ]; then PUBLISHED=true', '; then PUBLISHED=true', 1))))
+        check("NEGATIVE CONTROL: a receipt that does not name `withheld` is caught",
+              any("publication: withheld" in w for w in workflow_publish_withhold_problems(
+                  workflow.replace(WITHHOLD_RECEIPT, 'elif false; then :', 1))))
+        check("NEGATIVE CONTROL: a lane without the input is caught",
+              any("declares no" in w for w in workflow_publish_withhold_problems(
+                  workflow.replace("      publish-withhold:\n", "      publish-withheld:\n", 1))))
         regressed_handover = workflow.replace(
             'bk entry --module "$MODULE" --phase publish',
             "bk get --module \"$MODULE\" entry --default '{}'",
