@@ -771,7 +771,10 @@ public sealed class InstanceAutoRegistrationService(
     ///     deployment rather than asserting a policy, so an admin who later uninstalls a package is
     ///     not fought by the next restart. 🚨 Deliberately UNCHANGED by the flag lane — the two
     ///     coexist, and an already-populated installation is exactly the case the seed cannot
-    ///     express and the flags can.</item>
+    ///     express and the flags can. A COMMERCIAL package an entry names EXACTLY
+    ///     (<c>Source/Package</c>) is installed on the deployment configuration's authority
+    ///     (<see cref="DeploymentConfigAuthority"/>, principal <c>deployment-config:{instance}</c>),
+    ///     with its requirements; one a wildcard merely covers is skipped.</item>
     ///   <item><b>The operator's patterns over a LOCAL CHECKOUT</b>
     ///     (<see cref="ConfiguredPackageSource.LocalCheckout"/>) — the same patterns, but the
     ///     source is a working tree mounted into this host, which is what a self-registry
@@ -946,6 +949,30 @@ public sealed class InstanceAutoRegistrationService(
         bool wildcardOnly, bool reconciled, bool recordedInLedger, bool freshInstance) =>
         wildcardOnly && !reconciled && !recordedInLedger && !freshInstance;
 
+    /// <summary>
+    /// The ledger's authorization trail after this pass: <paramref name="previous"/> with each of
+    /// <paramref name="fresh"/> added — replacing a previous entry for the same package only when
+    /// the principal or the reason differs, so an unchanged re-assert keeps the original entry
+    /// (and its time). Ordered by package. Pure.
+    /// </summary>
+    /// <param name="previous">The ledger's entries (null = none).</param>
+    /// <param name="fresh">This pass's entries (null = none).</param>
+    /// <returns>The merged trail.</returns>
+    internal static ImmutableList<DefaultInstallAuthorization> MergeAuthorizations(
+        ImmutableList<DefaultInstallAuthorization>? previous,
+        ImmutableList<DefaultInstallAuthorization>? fresh)
+    {
+        var byPackage = (previous ?? ImmutableList<DefaultInstallAuthorization>.Empty)
+            .GroupBy(a => a.Package, StringComparer.Ordinal)
+            .ToImmutableDictionary(g => g.Key, g => g.Last(), StringComparer.Ordinal);
+        foreach (var entry in fresh ?? ImmutableList<DefaultInstallAuthorization>.Empty)
+            if (!byPackage.TryGetValue(entry.Package, out var existing)
+                || !string.Equals(existing.InstalledBy, entry.InstalledBy, StringComparison.Ordinal)
+                || !string.Equals(existing.Reason, entry.Reason, StringComparison.Ordinal))
+                byPackage = byPackage.SetItem(entry.Package, entry);
+        return byPackage.Values.OrderBy(a => a.Package, StringComparer.Ordinal).ToImmutableList();
+    }
+
     /// <summary>Node holding the default-install ledger — what the SEED has delivered, ever.</summary>
     private const string SeedLedgerPath = PackageInstaller.InstalledPartition + "/_DefaultInstallLedger";
 
@@ -1086,7 +1113,14 @@ public sealed class InstanceAutoRegistrationService(
             }
         }
 
+        // CUMULATIVE, unlike the snapshots above: the audit trail of which commercial package the
+        // deployment configuration authorized, and why. An entry is replaced only when the same
+        // package is authorized again by a different principal or for a different reason, so a
+        // reconciled lane re-asserting it every boot does not rewrite the ledger every boot.
+        var authorized = MergeAuthorizations(ledger.Authorized, summary.Authorized);
+
         if (delivered.Count == 0
+            && authorized.SequenceEqual(ledger.Authorized ?? ImmutableList<DefaultInstallAuthorization>.Empty)
             && failures.SequenceEqual(ledger.Failed ?? ImmutableList<string>.Empty, StringComparer.Ordinal)
             && failureCauses.SequenceEqual(ledger.FailureCauses ?? ImmutableList<DefaultInstallFailure>.Empty)
             && skipped.SequenceEqual(ledger.Skipped)
@@ -1120,6 +1154,7 @@ public sealed class InstanceAutoRegistrationService(
                 Skipped = skipped,
                 Held = held,
                 TierRefused = tierRefused,
+                Authorized = authorized,
                 UpdatedAt = DateTimeOffset.UtcNow,
             },
         };
@@ -1333,6 +1368,10 @@ public sealed class InstanceAutoRegistrationService(
                     included.Any(i => i.Entry.Matches(c.Package.Source ?? "", c.Package.Id));
                 bool IsWanted(InstallCandidate c) =>
                     wanted.Any(w => w.Matches(c.Package.Source ?? "", c.Package.Id));
+                // Named EXACTLY by an operator entry (Source/Package), not merely covered by Source/*.
+                bool IsNamed(InstallCandidate c) =>
+                    wanted.Any(w => w.PackageId != PluginGrantEntry.AllPackages
+                                    && w.Matches(c.Package.Source ?? "", c.Package.Id));
                 var selected = catalog
                     .Where(c => (baseline && c.Package.PreInstalled) || IsIncluded(c) || IsWanted(c))
                     .ToList();
@@ -1358,6 +1397,29 @@ public sealed class InstanceAutoRegistrationService(
                         + "Source/* pattern cannot match — it fails closed rather than guessing.",
                         string.Join(", ", wanted), selected.Count);
 
+                // 🚨 THE DEPLOYMENT CONFIGURATION AUTHORIZES WHAT IT NAMES — policy
+                // `deployment-config-authorizes-named-commercial`. A package named EXACTLY in
+                // PluginCatalog:InstallByDefault (Source/Package — never a whole-source Source/*) is
+                // named in the instance's deployment record, which changes only through a reviewed,
+                // App-merged pull request; that record is the authorizing principal
+                // (deployment-config:{instance}, see DeploymentConfigAuthority) for it AND for what it
+                // requires, commercial requirements included. A wildcard names nothing and still never
+                // pulls a commercial package in. Installing grants nobody access — the plan and the
+                // subscriptions decide who reads it.
+                var catalogPackages = catalog.Select(c => c.Package).ToImmutableList();
+                var named = selected.Where(IsNamed).Select(c => c.Package).ToImmutableList();
+                var namedRequirements = ConfigAuthorizedRequirements(catalogPackages, named);
+                hub.ServiceProvider.GetService<DeploymentConfigAuthority>()?.Admit(namedRequirements);
+                var configAuthorized = named.Select(p => p.Id)
+                    .Concat(namedRequirements.Keys)
+                    .ToImmutableHashSet(StringComparer.Ordinal);
+                string? ConfigAuthority(InstallCandidate c) =>
+                    IsNamed(c)
+                        ? $"named in PluginCatalog:InstallByDefault as '{wanted.First(w => w.PackageId != PluginGrantEntry.AllPackages && w.Matches(c.Package.Source ?? "", c.Package.Id))}'"
+                        : namedRequirements.TryGetValue(c.Package.Id, out var root)
+                            ? $"required by '{root}', which PluginCatalog:InstallByDefault names"
+                            : null;
+
                 // 🚨 A selected package's REQUIREMENTS are selected too, even when nothing selects
                 // them directly. Ordering the selection was never enough: every pre-installed
                 // package declares `requires: ["Store@^1.0.0"]` while `Store` is itself
@@ -1368,9 +1430,10 @@ public sealed class InstanceAutoRegistrationService(
                 // was found in on 2026-08-10. The closure is taken over the FULL catalog, so a
                 // dependency outside the selection is pulled in rather than silently ignored.
                 var withDependencies = DependencyClosure(
-                    catalog.Select(c => c.Package).ToList(),
-                    selected.Select(c => c.Package).ToList(),
-                    logger);
+                    catalogPackages,
+                    selected.Select(c => c.Package).ToImmutableList(),
+                    logger,
+                    configAuthorized);
 
                 // The TOLERANT sort: a cycle warns and still yields every package exactly once
                 // (the requirement closing the loop is ignored; order within the cycle is
@@ -1419,10 +1482,13 @@ public sealed class InstanceAutoRegistrationService(
                         // entry names it, no flag declares it, it is not the platform baseline.
                         // Read by the governed-provision hold in InstallSelection.
                         WildcardOnly = IsWanted(c)
-                                       && !wanted.Any(w => w.PackageId != PluginGrantEntry.AllPackages
-                                                           && w.Matches(c.Package.Source ?? "", c.Package.Id))
+                                       && !IsNamed(c)
                                        && !IsIncluded(c)
                                        && !(baseline && c.Package.PreInstalled),
+                        // Why the deployment configuration authorizes it — named exactly, or
+                        // required by a package that is. Null when it does not (a wildcard, the
+                        // baseline, a flag): such a commercial package is still skipped.
+                        ConfigAuthority = ConfigAuthority(c),
                     })
                     .ToList(), listingIncomplete);
             }));
@@ -1661,21 +1727,27 @@ public sealed class InstanceAutoRegistrationService(
     /// that needs it will install and then fail at use, and that is a symptom nobody could otherwise
     /// trace back to a missing grant.</para>
     ///
-    /// <para><b>A COMMERCIAL requirement is never pulled in.</b> Selection is source-scoped on
-    /// purpose: an instance is routinely granted paid content it may buy but must not receive
-    /// automatically, and a requirement edge would otherwise be a back door around that scoping.
-    /// The boot has no authorizing principal, so such an install would be refused anyway.</para>
+    /// <para><b>A COMMERCIAL requirement is pulled in only on the deployment configuration's
+    /// authority</b> — when it is in <paramref name="configAuthorized"/>, i.e. required (directly or
+    /// transitively) by a package <see cref="PluginCatalogOptions.InstallByDefault"/> names EXACTLY
+    /// (<see cref="ConfigAuthorizedRequirements"/>). Otherwise never: selection is source-scoped on
+    /// purpose, an instance is routinely granted paid content it may buy but must not receive
+    /// automatically, and a requirement edge of a wildcard-selected or baseline package would be a
+    /// back door around that scoping.</para>
     ///
     /// <para>Cycles terminate: a package already in the result is never expanded twice.</para>
     /// </summary>
     /// <param name="catalog">Every package every configured source listed, deduped by id.</param>
     /// <param name="selected">The packages the baseline + operator patterns chose.</param>
     /// <param name="logger">Receives the unresolvable-requirement warning.</param>
+    /// <param name="configAuthorized">The package ids the deployment configuration authorizes
+    /// (named exactly, or required by one that is); null or empty = none.</param>
     /// <returns>The selection closed over its requirements, ordered by id (the sort orders it).</returns>
     internal static IReadOnlyList<PackageManifest> DependencyClosure(
         IReadOnlyList<PackageManifest> catalog,
         IReadOnlyList<PackageManifest> selected,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        IReadOnlySet<string>? configAuthorized = null)
     {
         var byId = catalog
             .GroupBy(p => p.Id, StringComparer.Ordinal)
@@ -1701,13 +1773,14 @@ public sealed class InstanceAutoRegistrationService(
                     missing.Add(id);
                     continue;
                 }
-                // 🚨 A COMMERCIAL requirement is never pulled in. Selection is deliberately
-                // source-scoped so that an instance granted paid content (course catalogues,
-                // customer modules) does not auto-install what it merely may buy — and a
-                // requirement edge must not become a back door around that. The boot has no
-                // authorizing principal either, so PackageEntitlement.Authorize would refuse it
-                // anyway: pulling it in would buy nothing but a failed install every boot.
-                if (dependency.IsCommercial())
+                // 🚨 A COMMERCIAL requirement is pulled in only when the deployment configuration
+                // authorizes it (required by a package InstallByDefault names exactly). Otherwise
+                // never: selection is deliberately source-scoped so that an instance granted paid
+                // content (course catalogues, customer modules) does not auto-install what it merely
+                // may buy — and a requirement edge must not become a back door around that. Without
+                // that authority PackageEntitlement.Authorize would refuse it anyway: pulling it in
+                // would buy nothing but a skip every boot.
+                if (dependency.IsCommercial() && configAuthorized?.Contains(id) != true)
                 {
                     priced.Add(id);
                     continue;
@@ -1720,8 +1793,9 @@ public sealed class InstanceAutoRegistrationService(
             logger?.LogWarning(
                 "[DefaultInstall] {Count} required package(s) are COMMERCIAL and were not installed: "
                 + "[{Priced}]. A paid or contact-sales dependency has to be acquired deliberately — "
-                + "install it from the catalog as a global admin, or provision it through a "
-                + "governed package.provision activity.",
+                + "install it from the catalog as a global admin, provision it through a governed "
+                + "package.provision activity, or name the package that needs it exactly "
+                + "(Source/Package) in PluginCatalog:InstallByDefault.",
                 priced.Count, string.Join(", ", priced));
 
         if (missing.Count > 0)
@@ -1749,6 +1823,51 @@ public sealed class InstanceAutoRegistrationService(
     }
 
     /// <summary>
+    /// Every package REQUIRED — directly or transitively, through free and commercial packages
+    /// alike — by a package the deployment configuration names exactly, mapped to the named
+    /// package it was first reached from (ordinal order of the named roots). The named packages
+    /// themselves are not in the map. A requirement the catalog does not carry is not followed
+    /// (<see cref="DependencyClosure"/> names it). Cycles terminate. Pure.
+    ///
+    /// <para>This is the closure the deployment configuration AUTHORIZES besides what it names:
+    /// "this instance comes up with X" means X working, and X does not work without what it
+    /// requires. It is handed to <see cref="DeploymentConfigAuthority.Admit"/>, so the entitlement
+    /// gate admits exactly this set and nothing a wildcard merely covers.</para>
+    /// </summary>
+    /// <param name="catalog">Every package every configured source listed.</param>
+    /// <param name="named">The packages <see cref="PluginCatalogOptions.InstallByDefault"/> names exactly.</param>
+    /// <returns>Requirement id → the named package that requires it.</returns>
+    internal static ImmutableDictionary<string, string> ConfigAuthorizedRequirements(
+        IReadOnlyList<PackageManifest> catalog, IReadOnlyList<PackageManifest> named)
+    {
+        var byId = catalog
+            .GroupBy(p => p.Id, StringComparer.Ordinal)
+            .ToImmutableDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
+        var namedIds = named.Select(p => p.Id).ToImmutableHashSet(StringComparer.Ordinal);
+        var result = ImmutableDictionary<string, string>.Empty.WithComparers(StringComparer.Ordinal);
+        foreach (var root in named.OrderBy(p => p.Id, StringComparer.Ordinal))
+        {
+            var seen = ImmutableHashSet.Create(StringComparer.Ordinal, root.Id);
+            var pending = ImmutableStack.Create(root);
+            while (!pending.IsEmpty)
+            {
+                pending = pending.Pop(out var package);
+                foreach (var requirement in package.Requires ?? [])
+                {
+                    var id = PackageDependencyGraph.DependencyId(requirement);
+                    if (id.Length == 0 || seen.Contains(id) || !byId.TryGetValue(id, out var dependency))
+                        continue;
+                    seen = seen.Add(id);
+                    if (!namedIds.Contains(id) && !result.ContainsKey(id))
+                        result = result.Add(id, root.Id);
+                    pending = pending.Push(dependency);
+                }
+            }
+        }
+        return result;
+    }
+
+    /// <summary>
     /// Why the UNATTENDED default install must not even ATTEMPT <paramref name="package"/> — or
     /// null when it may proceed. Pure.
     ///
@@ -1769,12 +1888,27 @@ public sealed class InstanceAutoRegistrationService(
     /// <param name="package">The selected candidate's manifest, as the catalog lists it now.</param>
     /// <returns>The speaking skip reason, or null when the pass may install it.</returns>
     internal static string? TerminalSkipReason(PackageManifest package) =>
+        TerminalSkipReason(package, configAuthorized: false);
+
+    /// <summary>
+    /// <see cref="TerminalSkipReason(PackageManifest)"/> for a candidate the deployment
+    /// configuration may authorize. 🚨 A commercial package the configuration names EXACTLY (or
+    /// that such a package requires) is NOT skipped: the deployment record is its authorizing
+    /// principal (<see cref="DeploymentConfigAuthority"/>, policy
+    /// <c>deployment-config-authorizes-named-commercial</c>). A plan-tier refusal still wins — the registry does not serve
+    /// what the instance's plan does not cover, and no configuration on the instance changes that.
+    /// Pure.
+    /// </summary>
+    /// <param name="package">The selected candidate's manifest.</param>
+    /// <param name="configAuthorized">Whether the deployment configuration authorizes it.</param>
+    /// <returns>The speaking skip reason, or null when the pass may install it.</returns>
+    internal static string? TerminalSkipReason(PackageManifest package, bool configAuthorized) =>
         package.Refusal is { } refused
             // #4097 — the registry refuses it to this instance's PLAN. Not an authorization this
             // lane lacks; a licence the instance does not hold. Re-derived from the listing each
             // pass, so a plan upgrade lifts it on the next boot.
             ? refused.Describe()
-            : package.IsCommercial() ? PackageEntitlement.Reason(package, null) : null;
+            : package.IsCommercial() && !configAuthorized ? PackageEntitlement.Reason(package, null) : null;
 
     /// <summary>Installs the selected packages sequentially and folds their outcomes into one summary.</summary>
     private IObservable<DefaultInstallSummary> InstallAll(IReadOnlyList<InstallCandidate> candidates) =>
@@ -1807,21 +1941,22 @@ public sealed class InstanceAutoRegistrationService(
         // reasons, and they are reported ONCE, at Warning: actionable ("needs a Global Admin"),
         // not a per-boot fail: with a stack trace (#2536).
         var skipped = candidates
-            .Select(c => (c.Package.Id, Reason: TerminalSkipReason(c.Package)))
+            .Select(c => (c.Package.Id, Reason: TerminalSkipReason(c.Package, c.ConfigAuthority is not null)))
             .Where(x => x.Reason is not null)
             .Select(x => new DefaultInstallSkip(x.Id, x.Reason!))
             .ToImmutableList();
         var installable = skipped.Count == 0
             ? candidates
-            : candidates.Where(c => TerminalSkipReason(c.Package) is null).ToList();
+            : candidates.Where(c => TerminalSkipReason(c.Package, c.ConfigAuthority is not null) is null).ToList();
         if (skipped.Count(x => candidates.Any(c => c.Package.Id == x.Package && !c.Package.IsRefused)) > 0)
             logger.LogWarning(
                 "[DefaultInstall] {Count} declared package(s) require an authorization this "
                 + "unattended install can never obtain and are SKIPPED, not failed: [{Skipped}]. "
                 + "They are recorded with their reasons on {Ledger} and no boot re-attempts them — "
                 + "a Global Admin installing them from the catalog, a governed package.provision "
-                + "activity signed for them, or the package ceasing to be commercial, is what "
-                + "changes this.",
+                + "activity signed for them, naming them exactly (Source/Package) in "
+                + "PluginCatalog:InstallByDefault — a whole-source pattern names nothing — or the "
+                + "package ceasing to be commercial, is what changes this.",
                 skipped.Count(x => candidates.Any(c => c.Package.Id == x.Package && !c.Package.IsRefused)),
                 string.Join(", ", skipped
                     .Where(x => candidates.Any(c => c.Package.Id == x.Package && !c.Package.IsRefused))
@@ -2030,6 +2165,22 @@ public sealed class InstanceAutoRegistrationService(
     {
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
         var package = candidate.Package;
+        // 🚨 The AUTHORIZING PRINCIPAL of a commercial package the deployment configuration names
+        // (or that such a package requires): deployment-config:{instance}, explicitly named — never
+        // an ambient identity (this runs as System, which authorizes nothing). PackageEntitlement
+        // verifies it against the current configuration; it is stamped on the install record
+        // (AuthorizedBy, re-verified by every unattended update) and on the ledger. A free package
+        // needs no principal and gets none — nothing changes for it.
+        var authority = hub.ServiceProvider.GetService<DeploymentConfigAuthority>();
+        var principal = candidate.ConfigAuthority is not null && package.IsCommercial()
+            ? authority?.Principal
+            : null;
+        if (principal is not null)
+            logger.LogInformation(
+                "[DefaultInstall] commercial package {Id} is installed on the authority of {Principal} "
+                + "({Reason}) — the deployment record is changed only by a reviewed, App-merged pull "
+                + "request. Installing grants nobody access: the plan and the subscriptions decide "
+                + "who reads it.", package.Id, principal, candidate.ConfigAuthority);
 
         // 🚨 RunAsSystem, not Observable.Using(ImpersonateAsSystem) (#1790). Rx disposes a Using's
         // resource on whichever thread TERMINATES the inner sequence — for a cross-hub install that
@@ -2040,7 +2191,8 @@ public sealed class InstanceAutoRegistrationService(
         // and the emission-time behaviour is unchanged.
         return accessService
             .RunAsSystem(() => CatalogLayoutAreas
-                    .InstallOrUpdate(hub, candidate.Source.Source, candidate.Source.GitRef, package, logger)
+                    .InstallOrUpdate(hub, candidate.Source.Source, candidate.Source.GitRef, package, logger,
+                        authorizingUserId: principal)
                     .Take(1)
                     .Do(result => logger.LogInformation(
                         "[DefaultInstall] {Id} → {Partition}: {Written} written, {Unchanged} unchanged",
@@ -2061,7 +2213,12 @@ public sealed class InstanceAutoRegistrationService(
                 Installed: result.Written > 0 ? 1 : 0,
                 UpToDate: result.Written > 0 ? 0 : 1,
                 Failed: 0,
-                Packages: [package.Id]))
+                Packages: [package.Id])
+            {
+                Authorized = principal is null
+                    ? ImmutableList<DefaultInstallAuthorization>.Empty
+                    : [new DefaultInstallAuthorization(package.Id, principal, candidate.ConfigAuthority!, DateTimeOffset.UtcNow)],
+            })
             // 🚨 The safety net behind TerminalSkipReason (#2536): a refusal that only becomes
             // visible AT install time — commerciality stamped registry-side after listing, or a
             // licence that requires an acceptance no boot-time principal can give — is STILL
@@ -2172,6 +2329,15 @@ public sealed class InstanceAutoRegistrationService(
         /// instance has been seeded.
         /// </summary>
         public bool WildcardOnly { get; init; }
+
+        /// <summary>
+        /// Why the DEPLOYMENT CONFIGURATION authorizes this candidate — it is named exactly in
+        /// <see cref="PluginCatalogOptions.InstallByDefault"/>, or required by a package that is —
+        /// or null when it does not. A commercial candidate with an authority is INSTALLED under
+        /// the principal <c>deployment-config:{instance}</c> (<see cref="DeploymentConfigAuthority"/>);
+        /// one without is skipped (<see cref="TerminalSkipReason(PackageManifest, bool)"/>).
+        /// </summary>
+        public string? ConfigAuthority { get; init; }
 
         /// <summary>
         /// Whether the ref this candidate would be installed at was PROVEN for this instance: the
@@ -2453,6 +2619,18 @@ public record DefaultInstallLedger
     /// </summary>
     public ImmutableList<PlanTierRefusal> TierRefused { get; init; } = ImmutableList<PlanTierRefusal>.Empty;
 
+    /// <summary>
+    /// The COMMERCIAL packages this lane installed on the deployment configuration's authority —
+    /// named exactly in <see cref="PluginCatalogOptions.InstallByDefault"/>, or required by one
+    /// that is — with the principal (<c>deployment-config:{instance}</c>), the reason and when.
+    /// The audit trail that answers "who decided this priced package lands here": the deployment
+    /// record, changed by a reviewed, App-merged pull request. CUMULATIVE, not a snapshot: it
+    /// records a decision that was acted on, which stays true after the package is removed (and
+    /// the seeded entry still keeps the seed from re-installing it).
+    /// </summary>
+    public ImmutableList<DefaultInstallAuthorization> Authorized { get; init; } =
+        ImmutableList<DefaultInstallAuthorization>.Empty;
+
     /// <summary>When the ledger last changed.</summary>
     public DateTimeOffset UpdatedAt { get; init; }
 }
@@ -2527,6 +2705,14 @@ public readonly record struct DefaultInstallSummary(
     public ImmutableList<PlanTierRefusal> TierRefused { get; init; } = ImmutableList<PlanTierRefusal>.Empty;
 
     /// <summary>
+    /// The commercial packages this pass DELIVERED on the deployment configuration's authority,
+    /// with the principal and the reason — what the ledger's
+    /// <see cref="DefaultInstallLedger.Authorized"/> trail records.
+    /// </summary>
+    public ImmutableList<DefaultInstallAuthorization> Authorized { get; init; } =
+        ImmutableList<DefaultInstallAuthorization>.Empty;
+
+    /// <summary>
     /// 🚨 True when at least one source's listing FAILED this pass (#4097), so what the pass did
     /// not see is unknown rather than absent. <see cref="TierRefused"/> is then a partial answer:
     /// the ledger keeps its previous refusals and the activation markers are left standing,
@@ -2588,6 +2774,8 @@ public readonly record struct DefaultInstallSummary(
             .AddRange(other.Held ?? ImmutableList<DefaultInstallHold>.Empty),
         TierRefused = (TierRefused ?? ImmutableList<PlanTierRefusal>.Empty)
             .AddRange(other.TierRefused ?? ImmutableList<PlanTierRefusal>.Empty),
+        Authorized = (Authorized ?? ImmutableList<DefaultInstallAuthorization>.Empty)
+            .AddRange(other.Authorized ?? ImmutableList<DefaultInstallAuthorization>.Empty),
         ListingIncomplete = ListingIncomplete || other.ListingIncomplete,
     };
 
@@ -2601,6 +2789,10 @@ public readonly record struct DefaultInstallSummary(
             : "")
         + (Skipped is { Count: > 0 } s
             ? $" — SKIPPED (authorization, not retried): [{string.Join(", ", s.Select(x => x.Package))}]"
+            : "")
+        + (Authorized is { Count: > 0 } a
+            ? " — AUTHORIZED by the deployment configuration: "
+              + $"[{string.Join(", ", a.Select(x => $"{x.Package} ({x.InstalledBy})"))}]"
             : "")
         + (Held is { Count: > 0 } h
             ? " — HELD (another writer owns the partition; re-derived next boot): "
@@ -2687,3 +2879,18 @@ public sealed record DefaultInstallHold(string Package, string Reason);
 /// <param name="Package">The package id.</param>
 /// <param name="Reason">The speaking refusal reason (see <see cref="PackageEntitlement.Reason"/>).</param>
 public sealed record DefaultInstallSkip(string Package, string Reason);
+
+/// <summary>
+/// One COMMERCIAL package the unattended default install INSTALLED on the deployment
+/// configuration's authority — recorded on the <see cref="DefaultInstallLedger"/> so the audit
+/// trail names who decided it lands on this instance.
+/// </summary>
+/// <param name="Package">The package id.</param>
+/// <param name="InstalledBy">The authorizing principal — <c>deployment-config:{instance}</c>
+/// (<see cref="DeploymentConfigAuthority.Principal"/>), the same value stamped on the install
+/// record's <see cref="PackageManifest.AuthorizedBy"/>.</param>
+/// <param name="Reason">Why the configuration authorizes it: named in
+/// <c>PluginCatalog:InstallByDefault</c> as <c>Source/Package</c>, or required by a package that is.</param>
+/// <param name="InstalledAt">When the pass that installed it ran.</param>
+public sealed record DefaultInstallAuthorization(
+    string Package, string InstalledBy, string Reason, DateTimeOffset InstalledAt);

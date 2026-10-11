@@ -177,6 +177,33 @@ manufactured by every deploy. Two residual silent-loss windows remain:
    > uses, so what remains here is the genuine race plus a genuinely permanent attach failure — both
    > of which still say so at `Critical`.
 
+   > 🚨 **The give-up is not the hub's lifetime (#3139), and a membership change that arrives
+   > DURING the attach is not lost (#6429).** A given-up attach is re-attached on the next cluster
+   > membership change: the subscription registers a `PubSubRendezvousGrain` in Orleans' grain
+   > directory, the directory is re-partitioned when membership moves, so the event that can
+   > invalidate the registration is the event that repairs it. No timer and no poll.
+   >
+   > The trigger used to ask its question once, at the instant the change arrived, and an attach
+   > still in flight answered "leave it alone". That threw the change away. The order is the
+   > ordinary one, not a corner: what makes an attach spend its whole budget is a silo that has
+   > stopped answering (six attempts at Orleans' 30 s response timeout), and the change that removes
+   > that silo lands while the budget is still running. The attach then gave up with nothing left to
+   > repair it, and the hub stayed disabled until an unrelated later change. Now each change waits
+   > for the current attach to settle and then decides. Several changes held behind one attach
+   > count once, so a roll's burst does not start one attach per notification.
+   >
+   > **How to read the log.** The give-up is `Critical`: *"… cross-process routing for this hub is
+   > DISABLED"*. Its closing line is a `Warning`: *"… is attached again after cluster membership
+   > change #N — cross-process routing for this hub is RESTORED"*. A `DISABLED` line for an address
+   > with no later `RESTORED` line and no later teardown is a hub that is still unattached. Before
+   > #6429 the recovery was logged at `Information`, which the fleet does not ship, so a `DISABLED`
+   > line could not be closed from the log at all.
+   >
+   > Tests: `StreamReattachRuleTest` (when a re-attach is safe), `StreamReattachHoldsAChangeMidAttachTest`
+   > (the ordering, with its negative control), and
+   > `AGivenUpStreamAttachIsRepairedByTheChangeItMissedTest` (two silos, a third joining, the real
+   > stream; a second hub that saw no change stays unattached).
+
 > 🚨 **Both of those residuals now live on a FALLBACK path, and that changes who should pay for
 > them.** Since the transport swap ([Pod-Hub Delivery](/Doc/Architecture/PodHubDeliveryRollPlan))
 > the primary route to a pod-process hub is a directed grain call; the stream carries only the roll
