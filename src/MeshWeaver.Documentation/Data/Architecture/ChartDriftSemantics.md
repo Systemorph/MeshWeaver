@@ -345,6 +345,20 @@ be tested" must never read as "matches". No owning record, or two, fails the run
 this compares is the Deployment's pod template — what the cluster is TOLD to run; per-replica images
 mid-roll are `Ops/Status/<id>`'s `replicas[]` (`Sample`), and both readings are worth having.
 
+**The verdict is printed in both directions.** Every run prints one line for the image, whatever
+else it found:
+
+```
+image vs record: ON RECORD — live tag '3.1.10524' matches updatePattern '3.*' of Deployments/<id>; repository equals imageRepository '…'
+image vs record: OFF-RECORD — 1 finding(s) below, against Deployments/<id>
+```
+
+An on-record image used to print nothing, so the first scheduled runs after this comparison landed
+(2026-10-11: both namespaces read their record, neither printed a finding) could be read as a pass
+only by the absence of an `OFF-RECORD` line — the same silence a comparison that never ran would
+leave. A record that states no `imageRepository` says so on that line: the repository was not
+compared.
+
 ## What this report does NOT prove
 
 🚨 **The left-hand side is not the chart a deploy renders.** `chart-drift.yml` renders
