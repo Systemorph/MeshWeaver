@@ -709,14 +709,23 @@ open), and the host resolves them at load time: `ModuleNativeAssets` subscribes
 `AssemblyLoadContext.Default.ResolvingUnmanagedDll`, derives the module folder from the REQUESTING
 assembly's own location — so a dependency such as `SkiaSharp.dll`, which declares the P/Invokes
 rather than the module assembly, resolves too — and probes
-`modules/<Name>/runtimes/<current-rid>/native/`, then the flat folder.
+`modules/<Name>/runtimes/<rid>/native/` for every RID of the running RID's fallback chain, most
+specific first, then the flat folder.
 
 Resolution rather than placement, because every module MSBuild invocation strips RID globals by
 design (#1675/#1676): a module publish is always portable, so the RID is unknown when the bits are
-laid out and only the host knows its own. The RID probe is the running RID plus its portable form
-(`osx.14-arm64` → `osx-arm64`); it deliberately does NOT walk a wider graph, because
-`linux-musl-x64` and `linux-x64` are different C libraries and loading one for the other crashes
-instead of failing cleanly.
+laid out and only the host knows its own. The RID probe is the .NET fallback chain of the running
+RID — on the fleet image `linux-x64 → linux → unix-x64 → unix → any`, and a versioned RID reaches
+its portable form (`osx.14-arm64` → `osx-arm64`). It is the ONE chain `RuntimeIdentifierGraph`
+(`MeshWeaver.Utils`) defines and the NuGet runtime-asset selector reads too ([NuGet Runtime
+Assets](../NuGetRuntimeAssets)), so a library a package ships under `runtimes/unix/native/` or
+`runtimes/linux/native/` — which the module layout check counts as carried for `linux-x64` — also
+LOADS; until the loader walked the chain it was counted carried and then failed with
+`DllNotFoundException`. The most specific folder holding the library wins, and another platform's
+folder (`win-x64` on Linux) is never probed. One deliberate departure from the graph, for native
+code only: a musl RID never falls back to the glibc rungs (`linux-<arch>`, `linux`), because
+`linux-musl-x64` and `linux-x64` binaries link different C libraries and loading one for the other
+crashes instead of failing cleanly.
 
 Two modules already needed this: Snowflake P/Invokes `libsf_mini_core.*` (and Mono.Unix), and
 Cosmos' query-plan `ServiceInterop` is native. Both were shipping with those files pruned away.
