@@ -28,7 +28,7 @@ namespace MeshWeaver.GitSync;
 /// a lost dispatch costs at most one delayed rebake wave — REPORTER-CLASS, never a hard failure.</para>
 ///
 /// <para>Reactive end to end: the App-token mint and each POST run inside <see cref="IIoPool"/>
-/// (<see cref="GitHubAppTokenService.GetInstallationToken"/> and <see cref="IoPoolExtensions.Run{T}"/>),
+/// (<see cref="GitHubAppTokenService.GetInstallationToken()"/> and <see cref="IoPoolExtensions.Run{T}"/>),
 /// so no <c>async</c>/<c>Task</c> escapes a public signature. Dispatches run one at a time and are
 /// isolated: a failure to one repo is captured as a <see cref="RepoDispatch"/> and never aborts the
 /// others or throws to the caller.</para>
