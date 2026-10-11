@@ -306,6 +306,19 @@ hold a token. It reports `DIFFERS inline env <name>`, and that class carries the
 the measurement above: **helm owns an entry it renders**, so an upgrade *does* reset that one. The
 finding says so, rather than repeating the generic "a deploy does not resolve this".
 
+### Two findings in that comparison that were the checker's own
+
+Read from the run log of 2026-10-11 (run 38118746006), on both environments:
+
+| finding | what it was | where it is fixed |
+|---|---|---|
+| `DIFFERS inline env MEMEX_POD_NAME` — "the entry's SHAPE differs" | The chart renders `fieldRef: {fieldPath: metadata.name}`. The API server defaults `fieldRef.apiVersion` to `v1` on write, so the pod reads back `{apiVersion: v1, fieldPath: metadata.name}`. The same ref, compared verbatim. | The comparator: an omitted `apiVersion` and an explicit `v1` are one shape. Any other version, and any other field path, still differ (`test-chart-drift-compare.sh`, section 7). |
+| `CLUSTER-ONLY inline env AZURE_CLIENT_ID` — "PENDING DELETION … the next `helm upgrade` WILL remove this" | No upgrade removed it. `hosting-deploy` passes `--set selfUpdate.azureClientId=…` on every apply, from the identity the record names, so every deploy renders the entry. The check renders from the committed values file, which did not state the value. | The estate's values file states it. The check then renders what a deploy renders, and compares the value. |
+
+The second is the general rule in one instance: **the check's render must hold every value a deploy
+supplies, including one the operator derives and passes with `--set`.** A value missing from the
+committed file makes the live entry read as abandoned, in the one class the report calls urgent.
+
 ## The portal image is compared against the RECORD, not the chart
 
 Policy [`chart-drift-compares-image-to-record`](../PolicyNotProse). The chart's `image:` is never what

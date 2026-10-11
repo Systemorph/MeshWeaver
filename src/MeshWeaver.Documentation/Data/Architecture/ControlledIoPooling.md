@@ -203,6 +203,7 @@ one, which is often *not* "how much parallelism can this resource take".
 | `FileSystem` | 256 | Runaway-fan-out stop. Async leaves release the thread during the await; sync directory walks are not pooled at all |
 | `Blob` | 128 | Same — async, thread released during await |
 | `Http` | 16 | A real throttle on outbound calls |
+| `LogStore` | **1** | Range reads against the log store (Loki `query_range`). A real throttle, separate from `Http` — see below |
 | `Ai` | 256 | Runaway-fan-out STOP, not a throttle. A round holds its slot for the whole round, and a *delegating* round holds one while awaiting a sub-round that needs its own |
 | `AgentStore` | 128 | Deliberately independent of `Ai`: a store call runs inside a tool call inside a round that already holds an `Ai` slot. Re-entering the same bounded pool is the nested-gate deadlock |
 | `Query` | 256 | Drain hook, not a throttle — the slot is held only for the bounded subscribe window |
@@ -217,6 +218,22 @@ one, which is often *not* "how much parallelism can this resource take".
 
 Note the prefix-shadowing order in `MaxConcurrencyFor`: `pg-read:` is tested **before** `pg:`
 (and `sf-read:` before `sf:`), because the read prefix also starts with the write prefix.
+
+**`LogStore` queues wide log reads in the caller, where waiting is free.** A range read is not one
+request to the log store. Its query frontend splits the window by time, runs the pieces in parallel,
+and admits them through a bounded per-tenant queue; a full queue answers
+`429 too many outstanding requests`, and a read that was admitted behind other reads' pieces can
+spend its whole budget waiting. Through `Http` one process could put sixteen such reads on the store
+at once. Measured on the control instance on 2026-10-11 (MeshWeaver#5717): three `Logs` actions, each
+a 72-hour window, were filed within five seconds while other sessions' wide reads were running, and
+all three answered 429 in the same second — the same refusal, and the 45-second budget timeouts beside
+it, that the incident record had been attributing to "Loki capacity" since 2026-09-24. So range reads
+go through their own pool with ONE slot per process: the reads of a process run one after another, the
+store's parallelism is spent on the read in hand, and a read's own budget starts when it gets the
+slot. What this does NOT bound: other processes — every replica of a control instance has its own
+pool, and the log watcher's short tail polls are not behind it — and the store's own queue length,
+which is its configuration (`deploy/aks/scripts/values.observability.yaml`) and was not read for this
+change.
 
 **`Routing` is an ISOLATION boundary, not a throttle.** `RoutingGrain` is `[StatelessWorker(1)]` and
 non-reentrant, so a silo has exactly ONE routing turn — and Orleans' request timeout applies to
