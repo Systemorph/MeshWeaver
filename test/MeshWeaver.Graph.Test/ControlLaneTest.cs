@@ -475,6 +475,54 @@ public class ControlLaneTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
     }
 
     /// <summary>
+    /// 🚨 EVERYTHING STAYS COMPATIBLE: a copy of the inventory record that predates the per-query split
+    /// round-trips <see cref="SpaceDeletionInventory.GitSync"/> alone (MeshWeaver.Plugins'
+    /// DeleteSpaceRunner does, through its own inventory record). That field keeps the meaning it had —
+    /// every row typed as a GitSync configuration or at or beneath a <c>_GitSync</c> segment — and such
+    /// an inventory is planned exactly as before: ONE <c>gitsync</c> target counting it. Read as
+    /// "no split", never as "no GitSync rows", which dropped the target from every such plan.
+    /// </summary>
+    [Fact]
+    public void AnInventoryWithoutTheSplit_KeepsTheLegacyGitSyncTarget()
+    {
+        static MeshNode Row(string path, string? nodeType = null) => MeshNode.FromPath(path) with { Name = path, NodeType = nodeType };
+        var rows = new[]
+        {
+            Row("S/_GitSync", SpaceDeletion.GitSyncNodeType), Row("S/_GitSync/state"),
+            Row("S/Sub/_GitSync", "Markdown"), Row("S/Elsewhere/Sync", SpaceDeletion.GitSyncNodeType),
+            Row("S/Gone/_GitSync/_Activity/a", "Activity"), Row("S/Page", "Markdown"),
+        };
+        var folded = SpaceDeletion.Fold("S", null, rows, recordExists: true, storeExists: true, [], []);
+
+        // The legacy field is the union the code before the split produced, row for row.
+        var legacyUnion = rows
+            .Where(r => r.NodeType == SpaceDeletion.GitSyncNodeType || r.Path.Split('/').Contains("_GitSync"))
+            .Select(r => r.Path).OrderBy(p => p, StringComparer.Ordinal);
+        folded.GitSync.Should().Equal(legacyUnion);
+        folded.HasGitSyncSplit.Should().BeTrue("Fold always reads the split");
+        folded.GitSync.Should().Equal(
+            folded.GitSyncTyped!.Union(folded.GitSyncNamed!).Union(folded.GitSyncContent!)
+                .Union(rows.Where(r => SatelliteTableMapping.IsSatellitePath(r.Path) && SpaceDeletion.IsGitSync(r)).Select(r => r.Path))
+                .OrderBy(p => p, StringComparer.Ordinal),
+            "the split partitions what the legacy field names; it never adds a row to it");
+
+        // What a mirror that predates the split hands back: every field it knows, none of the three new ones.
+        var mirrored = new SpaceDeletionInventory
+        {
+            Space = folded.Space, Schema = folded.Schema, StoreExists = folded.StoreExists, RecordExists = folded.RecordExists,
+            Tables = folded.Tables, Grants = folded.Grants, GitSync = folded.GitSync, GitSyncRows = folded.GitSyncRows,
+            NodeTypes = folded.NodeTypes, ContentRoots = folded.ContentRoots,
+        };
+        mirrored.HasGitSyncSplit.Should().BeFalse();
+        var step = SpaceDeletion.PlanSteps(mirrored).Steps.Single(s => s.Name == "Remove GitSync configuration");
+        var only = step.Targets.Should().ContainSingle().Subject;
+        only.Label.Should().Be(SpaceDeletion.TargetGitSync);
+        only.Query.Should().Be(SpaceDeletion.GitSyncQuery("S"));
+        only.Count.Should().Be(folded.GitSync.Count, "the target and count the plan bound before the split");
+        SpaceDeletion.UnselectedGitSyncSegments(mirrored).Should().BeEmpty();
+    }
+
+    /// <summary>
     /// The reader's own test, run against a real mesh: every GitSync target's query, executed as
     /// system, returns exactly the count the plan binds — for a space holding an untyped
     /// <c>_GitSync</c> with a row beneath it and a second one deeper down (#6040).

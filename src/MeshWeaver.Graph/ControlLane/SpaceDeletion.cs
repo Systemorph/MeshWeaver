@@ -49,21 +49,32 @@ public sealed record SpaceDeletionInventory
     /// </summary>
     public ImmutableList<string> GitSync { get; init; } = [];
 
-    /// <summary>The rows TYPED as a GitSync configuration — exactly what <see cref="SpaceDeletion.GitSyncQuery"/> selects.</summary>
-    public ImmutableList<string> GitSyncTyped { get; init; } = [];
+    /// <summary>The rows TYPED as a GitSync configuration — exactly what <see cref="SpaceDeletion.GitSyncQuery"/> selects.
+    /// <c>null</c> when the producer did not read the split (see <see cref="HasGitSyncSplit"/>).</summary>
+    public ImmutableList<string>? GitSyncTyped { get; init; }
 
     /// <summary>The rows whose own id is <c>_GitSync</c>, whatever their type, outside the satellite
     /// tables — exactly what <see cref="SpaceDeletion.GitSyncNamedQuery"/> selects (an untyped query
-    /// reads no satellite table).</summary>
-    public ImmutableList<string> GitSyncNamed { get; init; } = [];
+    /// reads no satellite table). <c>null</c> when the producer did not read the split.</summary>
+    public ImmutableList<string>? GitSyncNamed { get; init; }
 
     /// <summary>
     /// The rows of <see cref="GitSync"/> an UNTYPED query can select: those outside the satellite
     /// tables. A satellite row at or beneath a <c>_GitSync</c> path (an activity of a sync run, say)
     /// is still removed with it and is in <see cref="GitSyncRows"/>, but no untyped target query
-    /// reads its table, so no such target may count it.
+    /// reads its table, so no such target may count it. <c>null</c> when the producer did not read the split.
     /// </summary>
-    public ImmutableList<string> GitSyncContent { get; init; } = [];
+    public ImmutableList<string>? GitSyncContent { get; init; }
+
+    /// <summary>
+    /// Whether this inventory carries the per-query GitSync split (<see cref="GitSyncTyped"/>,
+    /// <see cref="GitSyncNamed"/>, <see cref="GitSyncContent"/>). <see cref="SpaceDeletion.Fold"/>
+    /// always sets all three. An inventory built WITHOUT them — a copy of this record made before
+    /// they existed, which round-trips <see cref="GitSync"/> alone — is planned exactly as before
+    /// they existed: one <c>gitsync</c> target counting <see cref="GitSync"/>
+    /// (<see cref="SpaceDeletion.GitSyncTargets"/>). An absent split is never read as "no GitSync rows".
+    /// </summary>
+    public bool HasGitSyncSplit => GitSyncTyped is not null && GitSyncNamed is not null && GitSyncContent is not null;
 
     /// <summary>
     /// How many rows the per-node GitSync removal covers — every row at or under a GitSync path. It is
@@ -484,25 +495,37 @@ public static class SpaceDeletion
     /// </summary>
     public static ImmutableList<ControlLanePlanTarget> GitSyncTargets(SpaceDeletionInventory inventory)
     {
+        // An inventory without the split (a copy of this record that predates it) is planned as it was
+        // before the split existed: ONE `gitsync` target over every row the removal is issued for.
+        if (!inventory.HasGitSyncSplit)
+            return inventory.GitSync.Count == 0
+                ? []
+                : [Target(TargetGitSync, GitSyncQuery(inventory.Space), inventory.GitSync.Count)];
+        var typed = inventory.GitSyncTyped!;
+        var named = inventory.GitSyncNamed!;
+        var content = inventory.GitSyncContent!;
         var targets = ImmutableList.CreateBuilder<ControlLanePlanTarget>();
-        if (inventory.GitSyncTyped.Count > 0)
-            targets.Add(Target(TargetGitSync, GitSyncQuery(inventory.Space), inventory.GitSyncTyped.Count));
-        if (inventory.GitSyncNamed.Except(inventory.GitSyncTyped, StringComparer.Ordinal).Any())
-            targets.Add(Target(TargetGitSyncNamed, GitSyncNamedQuery(inventory.Space), inventory.GitSyncNamed.Count));
+        if (typed.Count > 0)
+            targets.Add(Target(TargetGitSync, GitSyncQuery(inventory.Space), typed.Count));
+        if (named.Except(typed, StringComparer.Ordinal).Any())
+            targets.Add(Target(TargetGitSyncNamed, GitSyncNamedQuery(inventory.Space), named.Count));
         foreach (var segment in UnselectedGitSyncSegments(inventory))
             targets.Add(Target(TargetGitSyncBeneath, GitSyncBeneathQuery(segment),
-                inventory.GitSyncContent.Count(p => p.StartsWith(segment + "/", StringComparison.Ordinal))));
+                content.Count(p => p.StartsWith(segment + "/", StringComparison.Ordinal))));
         return targets.ToImmutable();
     }
 
     /// <summary>
     /// The outermost <c>…/_GitSync</c> paths that have rows beneath them and that neither
-    /// <see cref="GitSyncQuery"/> nor <see cref="GitSyncNamedQuery"/> selects, in ordinal order. Pure.
+    /// <see cref="GitSyncQuery"/> nor <see cref="GitSyncNamedQuery"/> selects, in ordinal order. Empty
+    /// for an inventory without the split (<see cref="SpaceDeletionInventory.HasGitSyncSplit"/>). Pure.
     /// </summary>
     public static ImmutableList<string> UnselectedGitSyncSegments(SpaceDeletionInventory inventory)
     {
-        var selected = inventory.GitSyncTyped.Concat(inventory.GitSyncNamed).ToImmutableHashSet(StringComparer.Ordinal);
-        return inventory.GitSyncContent
+        if (!inventory.HasGitSyncSplit)
+            return [];
+        var selected = inventory.GitSyncTyped!.Concat(inventory.GitSyncNamed!).ToImmutableHashSet(StringComparer.Ordinal);
+        return inventory.GitSyncContent!
             .Select(path =>
             {
                 var segments = path.Split('/');

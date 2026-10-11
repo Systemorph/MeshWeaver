@@ -163,6 +163,15 @@ and `EveryGitSyncTargetQuery_ReturnsTheCountThePlanBinds` and
 `RowsBeneathAGitSyncSegmentWithNoNode_AreATargetWhoseQuerySelectsThem` run the queries against a
 mesh. No plan offers a `content-roots` target any more: content goes with the store.
 
+The split is ADDITIVE, so a copy of the inventory record that predates it keeps working. The three
+lists (`GitSyncTyped`, `GitSyncNamed`, `GitSyncContent`) are nullable and `SpaceDeletion.Fold` always
+sets them; `GitSync` keeps its meaning (every row the removal is issued for). An inventory that carries
+`GitSync` alone (`HasGitSyncSplit` false, as a mirror record built before the split round-trips it) is
+planned exactly as before: ONE `gitsync` target, `nodeType:GitHubSyncConfig`, counting `GitSync`. An
+absent split is never read as "no GitSync rows". `ControlLaneTest.AnInventoryWithoutTheSplit_KeepsTheLegacyGitSyncTarget`
+pins both halves: the legacy field equals the union the code before the split produced, and the
+mirrored inventory keeps its one target.
+
 The control instance parks the action with the reported plan, the approval binds that snapshot's
 digest, and the real run carries it. The control side recomputes the digest over the reported steps
 and refuses a report whose stated digest differs (`ControlLaneClient.VerifyReport`). A drift between
