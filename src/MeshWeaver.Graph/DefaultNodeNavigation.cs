@@ -113,7 +113,7 @@ public static class DefaultNodeNavigation
                 .CombineLatest()
                 .CombineLatest(rootNode, (read, rootRow) =>
                 {
-                    var shown = read.Select(l => (l.Level, Cap: CapOf(l.Level), Visible: VisibleInOrder(l.Nodes.Values))).ToList();
+                    var shown = read.Select(l => (l.Level, Cap: CapOf(l.Level), Visible: VisibleInOrder(l.Nodes.Values))).ToImmutableList();
                     var moreLinks = shown
                         // Nothing more to offer once a level sits at the hard bound.
                         .Where(l => l.Visible.Count > l.Cap && l.Cap < MaxCap)
@@ -126,7 +126,7 @@ public static class DefaultNodeNavigation
                         .Concat(rootRow is null ? [] : new[] { rootRow })
                         .GroupBy(n => n.Path, StringComparer.Ordinal)
                         .Select(g => g.First())
-                        .ToList();
+                        .ToImmutableList();
                     return Build(root, nodes, currentPath, moreLinks, loadMore);
                 })),
             ex => logger?.LogWarning(ex,

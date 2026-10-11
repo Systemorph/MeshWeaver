@@ -870,7 +870,7 @@ public static class UserActivityLayoutAreas
     /// publishing hub, an event hub, a plugin cover, a course — is something you LAUNCH, and it
     /// appears exactly once, in the Apps band above.</para>
     /// <para>Store items are excluded — those are apps, and an app appears exactly once, up in the
-    /// Apps section. The sort dropdown offers last accessed / last modified / alphabetical, and the
+    /// Apps section. The sort dropdown offers location / last accessed / last modified / alphabetical, and the
     /// search box searches the active tab. <see cref="HomeConfig.Scope"/> can widen the list to the
     /// full subtree. Pure, for tests.</para>
     /// </summary>
