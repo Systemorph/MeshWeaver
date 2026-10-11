@@ -709,40 +709,59 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
     /// </summary>
     internal sealed class AssemblyProbingResolver : IDisposable
     {
-        private readonly HashSet<string> probingDirs = new(StringComparer.OrdinalIgnoreCase);
+        // Ordered (managed runtime dirs first, native last — ResolvedPackageSet.ProbingDirectories).
+        private ImmutableList<string> probingDirs = ImmutableList<string>.Empty;
         private readonly object gate = new();
         private readonly Func<AssemblyLoadContext, System.Reflection.AssemblyName, System.Reflection.Assembly?> handler;
+        private readonly Func<System.Reflection.Assembly, string, IntPtr> nativeHandler;
 
         public AssemblyProbingResolver()
         {
             handler = (ctx, name) =>
             {
-                var dllName = name.Name + ".dll";
+                // The default context only raises Resolving for a name the host does NOT ship, so
+                // host unification is implicit here; the probe skips the native directories.
+                if (string.IsNullOrEmpty(name.Name)) return null;
+                ImmutableList<string> dirs;
                 lock (gate)
+                    dirs = probingDirs;
+                foreach (var candidate in MeshWeaver.NuGet.PackageAssemblyProbe.FindManagedCandidates(name.Name, dirs))
                 {
-                    foreach (var d in probingDirs)
-                    {
-                        var candidate = Path.Combine(d, dllName);
-                        if (File.Exists(candidate))
-                        {
-                            try { return ctx.LoadFromAssemblyPath(candidate); }
-                            catch { /* try next */ }
-                        }
-                    }
+                    try { return ctx.LoadFromAssemblyPath(candidate); }
+                    catch { /* try the next candidate */ }
                 }
                 return null;
             };
+            // A package's runtimes/<rid>/native/ library for a DllImport the default search missed —
+            // answered ONLY for an assembly this session loaded from its own package directories, so
+            // two sessions with different versions of one native library never bind each other's.
+            nativeHandler = (requesting, libraryName) =>
+            {
+                ImmutableList<string> dirs;
+                lock (gate)
+                    dirs = probingDirs;
+                if (requesting.IsDynamic || string.IsNullOrEmpty(requesting.Location)) return IntPtr.Zero;
+                var origin = Path.GetDirectoryName(requesting.Location);
+                if (origin is null || !dirs.Contains(origin, StringComparer.OrdinalIgnoreCase)) return IntPtr.Zero;
+                return MeshWeaver.NuGet.PackageAssemblyProbe.ResolveUnmanaged(libraryName, dirs);
+            };
             AssemblyLoadContext.Default.Resolving += handler;
+            AssemblyLoadContext.Default.ResolvingUnmanagedDll += nativeHandler;
         }
 
         public void AddDirectories(IEnumerable<string> dirs)
         {
             lock (gate)
                 foreach (var dir in dirs)
-                    probingDirs.Add(dir);
+                    if (!probingDirs.Contains(dir, StringComparer.OrdinalIgnoreCase))
+                        probingDirs = probingDirs.Add(dir);
         }
 
-        public void Dispose() => AssemblyLoadContext.Default.Resolving -= handler;
+        public void Dispose()
+        {
+            AssemblyLoadContext.Default.Resolving -= handler;
+            AssemblyLoadContext.Default.ResolvingUnmanagedDll -= nativeHandler;
+        }
     }
 
     private void InstallRuntimeProbe(IEnumerable<string> dirs)

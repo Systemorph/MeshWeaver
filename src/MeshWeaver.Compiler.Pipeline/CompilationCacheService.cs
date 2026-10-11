@@ -876,26 +876,15 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
             }
         }
 
-        // Probe registered NuGet package directories for transitive dependencies.
+        // NuGet package dependencies: a name the packages supply binds to the HOST's copy when the
+        // host ships it at an equal-or-newer version (one System.Text.Json, one
+        // Microsoft.Extensions.DependencyInjection — never a second, older copy whose types differ
+        // from the host's), else to the package's runtime asset from the probing directories —
+        // runtimes/<rid>/lib/<tfm> ahead of lib/<tfm>, see RuntimeAssetSelector.
         var name = assemblyName.Name;
-        if (!string.IsNullOrEmpty(name) && !_probingDirs.IsDefaultOrEmpty)
-        {
-            foreach (var dir in _probingDirs)
-            {
-                var candidate = Path.Combine(dir, name + ".dll");
-                if (File.Exists(candidate))
-                {
-                    try
-                    {
-                        return LoadFromAssemblyPath(candidate);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger?.LogDebug(ex, "Probing load failed for {Candidate}", candidate);
-                    }
-                }
-            }
-        }
+        if (!string.IsNullOrEmpty(name) && !_probingDirs.IsDefaultOrEmpty
+            && MeshWeaver.NuGet.PackageAssemblyProbe.Resolve(this, assemblyName, _probingDirs, _logger) is { } packaged)
+            return packaged;
         // A MODULE (policy module-live-update-default): its current generation, from its own
         // context. Asked explicitly because no default-context binding may ever hand a module out —
         // the default context would cache the first generation it saw for the life of the process.
@@ -904,6 +893,17 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
 
         // For other dependencies, delegate to the default context
         return null;
+    }
+
+    /// <summary>
+    /// A <c>DllImport</c> from a NuGet package assembly in this context: the package's
+    /// <c>runtimes/&lt;rid&gt;/native/</c> library for the running RID, else the runtime's default search.
+    /// </summary>
+    protected override IntPtr LoadUnmanagedDll(string unmanagedDllName)
+    {
+        var dirs = _probingDirs;
+        if (dirs.IsDefaultOrEmpty) return IntPtr.Zero;
+        return MeshWeaver.NuGet.PackageAssemblyProbe.ResolveUnmanaged(unmanagedDllName, dirs, _logger);
     }
 
     public void Dispose()
