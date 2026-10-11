@@ -128,6 +128,11 @@ public static class GraphConfigurationExtensions
             // catalog the menu aggregation maps (one query subscription per silo).
             builder.AddUiContributionType();
             builder.ConfigureServices(s => s.AddSingleton<UiContributionCatalog>());
+            // The inbox's own item handlers — what Delete and Undo mean for the two item types
+            // core owns. Every other type's handler arrives with its package (IInboxItemHandler).
+            builder.ConfigureServices(s => s
+                .AddSingleton<IInboxItemHandler, NotificationInboxItemHandler>()
+                .AddSingleton<IInboxItemHandler, EmailInboxItemHandler>());
             // Type-scoped recycle (Admin/_Recycle): every process disposes the live activations it
             // HOSTS of the requested NodeTypes, read from its mesh hub's HostedHubsCollection.
             // Doc/Architecture/StaleStateUntilRecycle → "Recycling a type".

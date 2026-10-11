@@ -124,6 +124,20 @@ public record Notification
     public bool IsRead { get; init; }
 
     /// <summary>
+    /// Whether the addressee put the notification away in the inbox ("Delete"). SOFT: the node
+    /// stays until retention removes it, the inbox's leg stops selecting it
+    /// (<c>-content.dismissed:true</c>), and Undo clears the flag. Distinct from
+    /// <see cref="IsRead"/> — reading a notification does not remove it from the list, and putting
+    /// it away does not claim it was read.
+    ///
+    /// <para>🚨 Default <c>false</c> and therefore OMITTED from stored JSON, which is why the leg
+    /// negates the <c>true</c> value rather than matching <c>false</c>: a positive
+    /// <c>content.dismissed:false</c> would match no notification ever written.</para>
+    /// </summary>
+    [Browsable(false)]
+    public bool Dismissed { get; init; }
+
+    /// <summary>
     /// When the notification was created.
     /// </summary>
     [Browsable(false)]
