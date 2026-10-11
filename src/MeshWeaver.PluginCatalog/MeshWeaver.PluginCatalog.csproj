@@ -26,6 +26,10 @@
          coupon list's Open button (CouponAdminSettingsTab.CouponGrid) are pinned there, next to the
          platform half they exercise (RowScopedClickActionTest). -->
     <InternalsVisibleTo Include="MeshWeaver.Layout.Test" />
+    <!-- The installer's unchanged-gate over a NodeType's authored members
+         (AReinstallLandsEveryAuthoredNodeTypeMemberTest). The PluginCatalog suite lives in
+         MeshWeaver.Plugins against a pinned core, so the pin of a core change sits here. -->
+    <InternalsVisibleTo Include="MeshWeaver.Hosting.Test" />
   </ItemGroup>
 
   <ItemGroup>
