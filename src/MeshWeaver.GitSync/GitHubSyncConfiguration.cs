@@ -56,6 +56,14 @@ public static class GitHubSyncConfiguration
             sp.GetRequiredService<IoPoolRegistry>(),
             sp.GetRequiredService<IOptions<GitHubAppOptions>>(),
             sp.GetService<ILogger<GitHubAppTokenService>>()));
+        // Per-source credentials: a configured git source may name its own token (a configuration
+        // key the vault fills) or the App installation on another account. One reader, consulted
+        // by the package sources AND by the sync below, so both routes read a repository with the
+        // same identity.
+        services.AddSingleton(sp => new GitSourceCredentials(
+            sp.GetService<IConfiguration>(),
+            sp.GetService<GitHubAppTokenService>(),
+            sp.GetService<ILogger<GitSourceCredentials>>()));
         // Azure Repos (MeshWeaver#5248, policy azure-repos-push-only): the client tenant's app
         // registration is DECLARED in the instance's deployment record as AzureDevOps:TenantId /
         // AzureDevOps:ClientId (identifiers, not secrets); the instance's workload identity is
@@ -103,7 +111,10 @@ public static class GitHubSyncConfiguration
             sp.GetRequiredService<GitHubCredentialService>(),
             sp.GetService<GitHubAppTokenService>(),
             sp.GetService<TimeProvider>(),
-            sp.GetService<ILogger<GitHubRepoIdentityResolver>>()));
+            sp.GetService<ILogger<GitHubRepoIdentityResolver>>())
+        {
+            SourceCredentials = sp.GetService<GitSourceCredentials>(),
+        });
         services.AddSingleton<GitHubWebhookProcessor>();
         // Sources sync on PUSH (policy sources-sync-on-push); GitHub never redelivers a lost webhook
         // by itself, so a periodic pass resolves each configured branch's head and imports where a

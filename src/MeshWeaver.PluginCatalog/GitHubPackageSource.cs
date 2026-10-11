@@ -30,7 +30,7 @@ public sealed class GitHubPackageSource : IPackageSource
     /// <summary>
     /// Creates a package.json-repo source that resolves its access token FRESH before each fetch via
     /// <paramref name="tokenProvider"/> — so the registry hands in
-    /// <see cref="GitHubAppTokenService.GetInstallationToken"/> (re-minted transparently, never
+    /// <see cref="GitHubAppTokenService.GetInstallationToken()"/> (re-minted transparently, never
     /// captured stale). The provider may emit an empty string for anonymous (public-repo) access.
     /// </summary>
     public GitHubPackageSource(
