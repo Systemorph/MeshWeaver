@@ -831,8 +831,7 @@ ingress:
     # EVERY external provider is broken. Observed on a chart-deployed portal, 2026-08-31.
     nginx.ingress.kubernetes.io/proxy-buffer-size: "32k"
 # ---- Next.js React portal (experimental frontend — FEATURE-FLAGGED) --------
-# 🚂 ON THE PLATFORM RELEASE TRAIN (maintainer, 2026-10-11: "yes, please bring next onto same
-# release train. we can bundle in same package."). When enabled with NO image — the normal
+# 🚂 ON THE PLATFORM RELEASE TRAIN (policy `portal-next-in-platform-image`). When enabled with NO image — the normal
 # shape — the Next.js streaming-SSR build of the React GUI (clients/portal-next) ships INSIDE the
 # platform portal image and the portal process serves it on a `next` port; the portal ingress
 # gains a `/next` path routed there (nginx longest-prefix: /next/* → the Next server, everything

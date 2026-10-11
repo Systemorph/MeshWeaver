@@ -92,8 +92,7 @@ jobs:
       # Multi-arch publish (identical to the green `images` job), but: Version is BAKED to the edge
       # version, and tags are `<edge-version>` + the moving `edge` (NOT `main`, which is the green tag).
       # %3B is the MSBuild escape for a literal ';' inside a `;`-separated property value.
-      # 🚂 /next rides in the portal image (maintainer, 2026-10-11: "yes, please bring next onto same
-      # release train. we can bundle in same package.") — an edge build carries it exactly as the green
+      # 🚂 /next rides in the portal image (policy `portal-next-in-platform-image`) — an edge build carries it exactly as the green
       # one does (main-cd.yml, the portal-ai leg), or an edge install with /next on would serve none.
       - uses: actions/setup-node@v7
         with:
@@ -114,6 +113,22 @@ jobs:
           -p:ContainerImageTags="${{ steps.vars.outputs.version }}%3Bedge"
           -p:ContainerBaseImage=${{ env.ACR }}/memex-portal-ai-base:latest
           -p:PortalNextBundle="$RUNNER_TEMP/portal-next.zip"
+      # 🚂 The bundle must BE in the published bytes of every architecture (main-cd asserts the same
+      # before `promote`). MSBuild ignores a property nothing consumes, so a renamed or dropped
+      # PortalNextBundle consumer would otherwise publish an edge image with no /next and stay green.
+      # Edge applies its tags in the publish itself (an unverified channel by design), so this cannot
+      # come before them — it makes such a build RED, naming the architecture, instead of silent.
+      - name: The published edge image carries this run's /next bundle
+        run: |
+          set -euo pipefail
+          want=$(sha256sum "$RUNNER_TEMP/portal-next.zip" | cut -d' ' -f1)
+          mapfile -t dirs < <(find plugins-repo/src/Memex.Portal.Distributed/bin/Release -type d -path '*/linux-*/publish' | sort -u)
+          [ "${#dirs[@]}" -ge 2 ] || { echo "::error::expected a publish directory per architecture, found ${#dirs[@]}: ${dirs[*]:-none}"; exit 1; }
+          for d in "${dirs[@]}"; do
+            [ -f "$d/portal-next.zip" ] || { echo "::error::$d holds no portal-next.zip — this edge image serves no /next"; exit 1; }
+            [ "$(sha256sum "$d/portal-next.zip" | cut -d' ' -f1)" = "$want" ] || { echo "::error::$d/portal-next.zip is not the bundle this run built"; exit 1; }
+            echo "✓ $d/portal-next.zip = $want"
+          done
       - name: Build + push migration (edge)
         run: >
           dotnet publish plugins-repo/src/Memex.Database.Migration/Memex.Database.Migration.csproj

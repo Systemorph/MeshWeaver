@@ -1328,7 +1328,7 @@ jobs:
     # on the night of 2026-09-16→17 three consecutive reconciles (attempts 1/3, 2/3 and 3/3 for
     # `03919a6`) were killed at exactly 30:00 with the mirror still copying, `promote` never ran,
     # and the heal budget was spent on runs that were progressing normally (#4526). Two jobs, two
-    # budgets — not one bigger number. 🚂 +5 for the /next bundle (2026-10-11): `npm ci` + the gRPC-web
+    # budgets — not one bigger number. 🚂 +5 for the /next bundle (policy `portal-next-in-platform-image`): `npm ci` + the gRPC-web
     # codegen + `next build` + the zip, ~1.5 min measured locally — new WORK, not headroom for slowness.
     timeout-minutes: 35
     outputs:
@@ -1392,8 +1392,7 @@ jobs:
         uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 10.0.x
-      # 🚂 /next RIDES IN THIS IMAGE (maintainer, 2026-10-11: "yes, please bring next onto same release
-      # train. we can bundle in same package."). The Next.js front end used to be its own image,
+      # 🚂 /next RIDES IN THIS IMAGE (policy `portal-next-in-platform-image`). The Next.js front end used to be its own image,
       # `memex-portal-next:3.0.0-next.<run>`, outside this set and never moved by a roll, so every
       # deployment that enabled it pinned it. It is built HERE now, from the SAME Plugins commit as the
       # portal host, and published inside memex-portal-ai (`-p:PortalNextBundle` below →
@@ -2557,8 +2556,7 @@ jobs:
           "${{ env.REGISTRY }}/mw-plugin-test:${{ needs.gate.outputs.staging_tag }}"
 
   # 🚂 portal-next is no longer an image of its own: /next is built by `portal-image` above and
-  # published INSIDE memex-portal-ai (maintainer, 2026-10-11: "yes, please bring next onto same
-  # release train. we can bundle in same package."). It therefore shares the portal's staging tag,
+  # published INSIDE memex-portal-ai (policy `portal-next-in-platform-image`). It therefore shares the portal's staging tag,
   # its all-or-nothing promotion below and its `3-latest` pointer — nothing here promotes it
   # separately. (It was a separate image from MeshWeaver.Plugins' portal-next-image.yml, outside
   # this set and pinned by every deployment; that lane is retired.)

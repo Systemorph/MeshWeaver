@@ -354,8 +354,7 @@ public sealed record IngressSpec
 /// <summary>
 /// The Next.js React front end (<c>clients/portal-next</c>), served at <c>/next</c> beside the
 /// Blazor portal. 🚂 It ships INSIDE the platform portal image and the portal process serves it
-/// (maintainer, 2026-10-11: <i>"yes, please bring next onto same release train. we can bundle in same
-/// package."</i>) — so <see cref="Enabled"/> is the whole declaration, and /next is always the build
+/// (policy <c>portal-next-in-platform-image</c>) — so <see cref="Enabled"/> is the whole declaration, and /next is always the build
 /// the portal runs (the chart's <c>templates/memex-portal/_portal-next.tpl</c>). When it is on, the chart also routes the
 /// <c>/next</c> ingress path to it and renders <c>Portal__ReactAppUrl</c> into the portal's
 /// ConfigMap, which is what lights up the per-user "Try the new frontend" toggle. Null → the
@@ -392,7 +391,7 @@ public sealed record PortalNextSpec
     public string? Image { get; init; }
 
     /// <summary>Replicas. Null → the chart's 1. Stateless by design (every request mints its own token), so it scales with no sticky sessions.</summary>
-    [Description("Replicas — blank means the chart's 1")]
+    [Description("Developer override only: replicas of the separate image — blank means the chart's 1")]
     public int? Replicas { get; init; }
 
     /// <summary>
@@ -400,7 +399,7 @@ public sealed record PortalNextSpec
     /// Blank → the chart's in-cluster Service. The BROWSER always talks same-origin, so this
     /// affects SSR only.
     /// </summary>
-    [Description("Portal origin for server-side rendering — blank means the in-cluster Service")]
+    [Description("Developer override only: the separate image's portal origin for server-side rendering — blank means the in-cluster Service")]
     public string? PortalOrigin { get; init; }
 }
 

@@ -1116,9 +1116,8 @@ for _label, _c in (("portal", portal), ("crash-dump-prepare", _prep)):
             "by the next roll. " + _dump_fix,
         )
 
-# ---- 20. /next is served by ONE shape, end to end — bundled in the portal pod, or the override ----
-# 🚂 Maintainer, 2026-10-11: "yes, please bring next onto same release train. we can bundle in same
-# package." BUNDLED (portalNext.enabled, no image): the portal process serves /next from its own
+# ---- 21. /next is served by ONE shape, end to end — bundled in the portal pod, or the override ----
+# 🚂 Policy `portal-next-in-platform-image`. BUNDLED (portalNext.enabled, no image): the portal process serves /next from its own
 # image, so the config arms PortalNext__Bundled, the portal container and Service carry a `next`
 # port, the ingress routes /next THERE, and no portal-next Deployment exists — a second workload is
 # exactly what drifted. The OVERRIDE (portalNext.image) is the old shape, whole. Half of each is a
@@ -1162,6 +1161,11 @@ if _bundled:
         finding(f"PortalNext__PortalOrigin is {cfg_data.get('PortalNext__PortalOrigin')!r}",
                 "the bundled server's SSR reaches its OWN pod's portal over loopback. " + _next_fix)
 elif _next_dep is not None:
+    _next_svc = next(iter(by_kind("Service", "portal-next-service")), None)
+    _next_svc_ports = [p for p in (((_next_svc or {}).get("spec") or {}).get("ports") or [])]
+    if _next_svc is None or not any(p.get("port") == 3000 for p in _next_svc_ports):
+        finding("the /next OVERRIDE renders a Deployment but no portal-next-service on port 3000",
+                "the ingress would point at a backend that does not exist and /next would 503. " + _next_fix)
     if "next" in _svc_ports or "next" in _c_ports:
         finding("the /next OVERRIDE renders its own Deployment AND a `next` port on the portal",
                 "half of the bundled shape is left behind. " + _next_fix)

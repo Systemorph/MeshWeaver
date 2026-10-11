@@ -4,8 +4,7 @@
 #
 #   .github/scripts/build-portal-next-bundle.sh <plugins-checkout> <out.zip>
 #
-# 🚂 /next IS ON THE PLATFORM RELEASE TRAIN (maintainer, 2026-10-11: "yes, please bring next onto
-# same release train. we can bundle in same package."). It used to be a separate image,
+# 🚂 /next IS ON THE PLATFORM RELEASE TRAIN (policy `portal-next-in-platform-image`). It used to be a separate image,
 # `memex-portal-next:3.0.0-next.<run>`, built by a lane of its own in MeshWeaver.Plugins, excluded by
 # name from this repo's all-or-nothing image set, never promoted by release.yml and never moved by a
 # roll — so every deployment that enabled it PINNED it, and the pin drifted from the portal it talks

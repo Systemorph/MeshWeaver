@@ -152,8 +152,7 @@ for repo in $REPOS; do
 done
 
 # 🚂 memex-portal-next is NOT a repository of the set — and no longer an image at all. /next rides
-# the platform release train (maintainer, 2026-10-11: "yes, please bring next onto same release
-# train. we can bundle in same package."): main-cd's portal-ai leg builds it into memex-portal-ai
+# the platform release train (policy `portal-next-in-platform-image`): main-cd's portal-ai leg builds it into memex-portal-ai
 # (/app/portal-next.zip, .github/scripts/build-portal-next-bundle.sh) and asserts it is in the
 # published bytes of every architecture before `promote`. So /next is covered by `memex-portal-ai`
 # above, with the portal's sha, version and pointers — there is nothing of its own to assert here.

@@ -1,8 +1,7 @@
 {{- /*
   🚂 How /next is served: "off", "bundled" or "image".
 
-  BUNDLED is the normal shape (maintainer, 2026-10-11: "yes, please bring next onto same release
-  train. we can bundle in same package."). The Next.js front end ships INSIDE the platform portal
+  BUNDLED is the normal shape (policy `portal-next-in-platform-image`). The Next.js front end ships INSIDE the platform portal
   image — core's main-cd builds clients/portal-next into memex-portal-ai as /app/portal-next.zip —
   and the portal process unpacks and starts it on port 3000 with a clean environment
   (MeshWeaver.Plugins src/Memex.Portal.Distributed/PortalNextProcess.cs). So /next runs whatever

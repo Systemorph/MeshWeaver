@@ -314,8 +314,7 @@ exact version. The package version moves only when the adapter's surface does �
 
 ### `/next` rides the same train — inside `memex-portal-ai`
 
-**Maintainer, 2026-10-11:** *"yes, please bring next onto same release train. we can bundle in same
-package."*
+Policy [`portal-next-in-platform-image`](../PolicyNotProse).
 
 The Next.js front end (`clients/portal-next` in MeshWeaver.Plugins) is **not an image of its own any
 more**. It used to be `memex-portal-next:3.0.0-next.<run>` — a literal `3.0.0-` on its own run number,

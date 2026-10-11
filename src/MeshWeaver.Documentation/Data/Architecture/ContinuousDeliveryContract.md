@@ -28,8 +28,8 @@ two properties that make a partial or missing release impossible rather than mer
 | `memex-migration` | linux/amd64 + arm64 | rolled to the same version as the portal, applies schema |
 | `mw-plugin-test` | linux/amd64 + arm64 | the plugins repo's CI (ACR **and** a GHCR mirror) |
 
-**🚂 `/next` is not a repository of the set — it rides inside `memex-portal-ai`.** *"yes, please bring
-next onto same release train. we can bundle in same package."* (maintainer, 2026-10-11). The Next.js
+**🚂 `/next` is not a repository of the set — it rides inside `memex-portal-ai`** (policy
+[`portal-next-in-platform-image`](../PolicyNotProse)). The Next.js
 front end used to be `memex-portal-next:3.0.0-next.<run>`, published by a MeshWeaver.Plugins lane of
 its own, excluded from this set by name, never promoted by `release.yml` and never moved by a roll —
 so every deployment that enabled it pinned it, and the pin drifted from the portal it talks to. The
