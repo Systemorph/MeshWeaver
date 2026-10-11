@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Runtime.InteropServices;
+using MeshWeaver.Utils;
 using NuGet.Frameworks;
 
 namespace MeshWeaver.NuGet;
@@ -36,74 +37,15 @@ public sealed record PackageAssets(
 /// </summary>
 public static class RuntimeAssetSelector
 {
-    private static bool IsArchitecture(string segment) => segment.ToLowerInvariant() switch
-    {
-        "x64" or "x86" or "arm64" or "arm" or "armel" or "armv6" or "s390x" or "ppc64le"
-            or "loongarch64" or "riscv64" or "wasm" or "mips64" => true,
-        _ => false,
-    };
-
     /// <summary>
-    /// The RID fallback chain for <paramref name="rid"/>, nearest first, ending in <c>any</c> — a
-    /// hand-written image of NuGet's runtime graph for the families a portal runs on:
-    /// <c>linux-x64 → linux → unix-x64 → unix → any</c>,
-    /// <c>linux-musl-x64 → linux-musl → linux-x64 → linux → unix-x64 → unix → any</c>,
-    /// <c>osx-arm64 → osx → unix-arm64 → unix → any</c>, <c>win-x64 → win → any</c>.
-    /// A distro-versioned RID (<c>ubuntu.22.04-x64</c>) falls back to <c>linux</c>.
+    /// The RID fallback chain for <paramref name="rid"/>, nearest first, ending in <c>any</c>:
+    /// <c>linux-x64 → linux → unix-x64 → unix → any</c> on the portal image. The one definition is
+    /// <see cref="RuntimeIdentifierGraph.FallbackChain"/>, shared with the module native-asset
+    /// resolver so the two never disagree about which <c>runtimes/&lt;rid&gt;/</c> folder serves a RID.
     /// </summary>
     /// <param name="rid">A runtime identifier; <see cref="RuntimeInformation.RuntimeIdentifier"/> when null.</param>
     public static ImmutableArray<string> RidFallbackChain(string? rid = null)
-    {
-        rid = string.IsNullOrWhiteSpace(rid) ? RuntimeInformation.RuntimeIdentifier : rid.Trim();
-        var chain = ImmutableArray.CreateBuilder<string>();
-        void Add(string r)
-        {
-            if (!chain.Contains(r, StringComparer.OrdinalIgnoreCase)) chain.Add(r);
-        }
-
-        var dash = rid.LastIndexOf('-');
-        var arch = dash > 0 && IsArchitecture(rid[(dash + 1)..])
-            ? rid[(dash + 1)..]
-            : null;
-        var os = arch is null ? rid : rid[..dash];
-
-        // The OS family, nearest first.
-        var family = ImmutableArray.CreateBuilder<string>();
-        family.Add(os);
-        bool isWindows = os.StartsWith("win", StringComparison.OrdinalIgnoreCase);
-        if (os.Equals("linux-musl", StringComparison.OrdinalIgnoreCase)
-            || os.StartsWith("alpine", StringComparison.OrdinalIgnoreCase))
-        {
-            family.Add("linux-musl");
-            family.Add("linux");
-        }
-        else if (os.StartsWith("osx", StringComparison.OrdinalIgnoreCase))
-            family.Add("osx");
-        else if (isWindows)
-            family.Add("win");
-        else if (!os.Equals("unix", StringComparison.OrdinalIgnoreCase)
-                 && !os.Equals("any", StringComparison.OrdinalIgnoreCase)
-                 && !os.StartsWith("freebsd", StringComparison.OrdinalIgnoreCase)
-                 && !os.StartsWith("android", StringComparison.OrdinalIgnoreCase)
-                 && !os.StartsWith("ios", StringComparison.OrdinalIgnoreCase)
-                 && !os.StartsWith("maccatalyst", StringComparison.OrdinalIgnoreCase)
-                 && !os.StartsWith("browser", StringComparison.OrdinalIgnoreCase))
-            family.Add("linux"); // linux itself, or a distro RID (ubuntu.22.04, rhel.9, …)
-
-        foreach (var f in family)
-        {
-            if (f.Equals("any", StringComparison.OrdinalIgnoreCase)) continue;
-            if (arch is not null) Add($"{f}-{arch}");
-            Add(f);
-        }
-        if (!isWindows && !os.StartsWith("browser", StringComparison.OrdinalIgnoreCase))
-        {
-            if (arch is not null) Add($"unix-{arch}");
-            Add("unix");
-        }
-        Add("any");
-        return chain.ToImmutable();
-    }
+        => RuntimeIdentifierGraph.FallbackChain(rid);
 
     /// <summary>
     /// Selects <paramref name="packageFolder"/>'s assets for <paramref name="framework"/> on the
