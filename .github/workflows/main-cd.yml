@@ -1224,6 +1224,10 @@ jobs:
               --title "CD: main \`$SHORT\` has an incomplete image set" \
               --body "main's HEAD \`$SHORT\` is missing part of its deployment image set in ACR, so every self-updating install stays on the previous image. The CD reconciler will attempt to publish it; this issue collects those attempts. It CLOSES ITSELF as soon as a CD run reports a successful heal (#3176) — a later failure files a fresh issue rather than appending here.")
             issue="${url##*/}"
+            # 🏷️ TYPE + SEVERITY (Doc/Architecture/IssueTaxonomy): a bug; sev:H — every self-updating install
+            # stays on the previous image. Non-fatal, by the rule above: a label is never the ledger.
+            gh issue edit "$issue" --repo "$GITHUB_REPOSITORY" --add-label "bug,sev:H" >/dev/null \
+              || echo "::warning::could not stamp bug + sev:H on #$issue — the issue-taxonomy lane will name it"
           fi
 
           attempts=$(count_marker "$issue" "<!-- cd-heal:$SHORT -->")
@@ -2360,8 +2364,14 @@ jobs:
             gh label create control-image --repo "$GITHUB_REPOSITORY" \
               --description "The control-instance image lane (main-cd control-*) failed" \
               --color D93F0B --force || echo "::warning::could not ensure the control-image label (continuing)"
-            gh issue create --repo "$GITHUB_REPOSITORY" --title "control-first failed on main: run ${GITHUB_RUN_ID}" \
-              --label control-image --body "$body"
+            url=$(gh issue create --repo "$GITHUB_REPOSITORY" --title "control-first failed on main: run ${GITHUB_RUN_ID}" \
+              --label control-image --body "$body")
+            # 🏷️ TYPE + SEVERITY (Doc/Architecture/IssueTaxonomy): a bug; sev:M — control is not offered
+            # this build, the fleet's own delivery is unaffected. A separate, non-fatal call, by this
+            # file's label rule: the issue is the alarm; a label lost to a transient 5xx is named here,
+            # and the triage sweep plus the daily issue-taxonomy lane catch the issue it left untyped.
+            gh issue edit "${url##*/}" --repo "$GITHUB_REPOSITORY" --add-label "bug,sev:M" >/dev/null \
+              || echo "::warning::could not stamp bug + sev:M on ${url} — the issue-taxonomy lane will name it"
           fi
 
 
@@ -2414,9 +2424,13 @@ jobs:
           if [ -n "$existing" ]; then
             gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
           else
-            gh issue create --repo "$GITHUB_REPOSITORY" \
+            url=$(gh issue create --repo "$GITHUB_REPOSITORY" \
               --title "Control image lane failed on main: run ${GITHUB_RUN_ID}" \
-              --label control-image --body "$body"
+              --label control-image --body "$body")
+            # 🏷️ TYPE + SEVERITY (Doc/Architecture/IssueTaxonomy): a bug; sev:M — no new control image,
+            # the fleet's delivery unaffected. Non-fatal by this file's label rule (see control-first above).
+            gh issue edit "${url##*/}" --repo "$GITHUB_REPOSITORY" --add-label "bug,sev:M" >/dev/null \
+              || echo "::warning::could not stamp bug + sev:M on ${url} — the issue-taxonomy lane will name it"
           fi
 
   plugin-test-image:
@@ -5159,9 +5173,14 @@ jobs:
           if [ -n "$existing" ]; then
             gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
           else
-            gh issue create --repo "$GITHUB_REPOSITORY" \
+            url=$(gh issue create --repo "$GITHUB_REPOSITORY" \
               --title "CD failed on main: run ${GITHUB_RUN_ID}" \
-              --label ci-failure --body "$body"
+              --label ci-failure --body "$body")
+            # 🏷️ TYPE + SEVERITY (Doc/Architecture/IssueTaxonomy): a bug; sev:H — main's delivery is a
+            # primary path, and every self-updating install stays on the previous image while it is open.
+            # Non-fatal by this file's label rule: the issue is the alarm, never the label.
+            gh issue edit "${url##*/}" --repo "$GITHUB_REPOSITORY" --add-label "bug,sev:H" >/dev/null \
+              || echo "::warning::could not stamp bug + sev:H on ${url} — the issue-taxonomy lane will name it"
           fi
 
   # ─────────────────────────────── NO DEPLOY JOB ─────────────────────────────

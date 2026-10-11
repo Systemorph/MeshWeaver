@@ -107,8 +107,7 @@ public class NativeClosureTest : IDisposable
                  {
                      LinuxNative, OsxNative,
                      "runtimes/ios-arm64/native/e_sqlite3.a",
-                     "runtimes/browser-wasm/nativeassets/net9.0/e_sqlite3.so",
-                     "runtimes/win-x64/lib/net10.0/Rid.Specific.Managed.dll",
+                     UnprobedTargeted, RidManaged, ForeignManaged, ForeignNative,
                  })
         {
             var path = Path.Combine(app, relative.Replace('/', Path.DirectorySeparatorChar));
@@ -126,8 +125,10 @@ public class NativeClosureTest : IDisposable
                       "runtimes/linux-x64/native/libe_sqlite3.so": { "rid": "linux-x64", "assetType": "native" },
                       "runtimes/osx-arm64/native/libe_sqlite3.dylib": { "rid": "osx-arm64", "assetType": "native" },
                       "runtimes/ios-arm64/native/e_sqlite3.a": { "rid": "ios-arm64", "assetType": "native" },
-                      "runtimes/browser-wasm/nativeassets/net9.0/e_sqlite3.so": { "rid": "browser-wasm", "assetType": "native" },
-                      "runtimes/win-x64/lib/net10.0/Rid.Specific.Managed.dll": { "rid": "win-x64", "assetType": "runtime" }
+                      "runtimes/linux-x64/nativeassets/net9.0/e_sqlite3.so": { "rid": "linux-x64", "assetType": "native" },
+                      "runtimes/unix/lib/net10.0/Rid.Specific.Managed.dll": { "rid": "unix", "assetType": "runtime" },
+                      "runtimes/win/lib/netstandard2.0/System.Security.Cryptography.ProtectedData.dll": { "rid": "win", "assetType": "runtime" },
+                      "runtimes/browser-wasm/nativeassets/net9.0/e_sqlite3.so": { "rid": "browser-wasm", "assetType": "native" }
                     }
                   },
                   "MeshWeaver.Data/3.0.0": {
@@ -243,8 +244,14 @@ public class NativeClosureTest : IDisposable
 
     // ─────── #4367 / #4445: what this lane does NOT carry is NAMED, in the SDK lane's words ───────
 
-    private const string UnprobedWasm = "runtimes/browser-wasm/nativeassets/net9.0/e_sqlite3.so";
-    private const string RidManaged = "runtimes/win-x64/lib/net10.0/Rid.Specific.Managed.dll";
+    // 🚨 The two REFUSED shapes are for RIDs the bundle TARGETS (ModuleBundleTarget: linux-x64 and
+    // its fallback chain, `unix` included). The two FOREIGN ones are the measured #4445 case — a
+    // Windows-only managed implementation — and a browser-wasm native: information, never refused.
+    private const string UnprobedTargeted = "runtimes/linux-x64/nativeassets/net9.0/e_sqlite3.so";
+    private const string RidManaged = "runtimes/unix/lib/net10.0/Rid.Specific.Managed.dll";
+    private const string ForeignManaged =
+        "runtimes/win/lib/netstandard2.0/System.Security.Cryptography.ProtectedData.dll";
+    private const string ForeignNative = "runtimes/browser-wasm/nativeassets/net9.0/e_sqlite3.so";
 
     /// <summary>The two literals a wave's logs are grepped for — the measurement #4367 was armed
     /// on and #4445 arms on. Pinned here so a rewording cannot quietly blind that grep.</summary>
@@ -267,7 +274,7 @@ public class NativeClosureTest : IDisposable
             "the portable record declares one unprobed native and one RID-specific managed "
             + "assembly, and neither can ride this lane");
         closure.Uncarried.Should().Contain(f => f.StartsWith(
-            UncarriedAssetFindings.UnprobedNative("SQLitePCLRaw.lib.e_sqlite3", UnprobedWasm),
+            UncarriedAssetFindings.UnprobedNative("SQLitePCLRaw.lib.e_sqlite3", UnprobedTargeted),
             StringComparison.Ordinal));
         closure.Uncarried.Should().Contain(f => f.StartsWith(
             UncarriedAssetFindings.RidSpecificManaged("SQLitePCLRaw.lib.e_sqlite3", RidManaged),
@@ -322,21 +329,89 @@ public class NativeClosureTest : IDisposable
             UncarriedAssetFindings.UnprobedNative("Odd.Natives", key));
     }
 
-    /// <summary>Each finding is ONE warning line from the builder — the channel a wave's logs are
-    /// grepped on — and never a refusal: nothing is armed on this lane until #4445's measurement.</summary>
+    /// <summary>
+    /// 🚨 #4445 ARMED: an asset for the bundle's TARGET RID that this lane does not carry REFUSES
+    /// the module — one ERROR line per finding in the SDK lane's words, and a failure text for the
+    /// project. This is the self-test that a truly uncarried asset still refuses.
+    /// </summary>
     [Fact]
-    public void EveryNamedFindingIsOneWARNINGLine()
+    public void ATargetedUncarriedAsset_REFUSESTheModule_withOneErrorLineEach()
     {
         var closure = PrivateClosure.Derive(["SQLitePCLRaw.lib.e_sqlite3"], PortableImage(), shelf: null);
-        var warnings = new List<string>();
+        var errors = new List<string>();
 
-        var named = ProjectBuild.ReportUncarried("MeshWeaver.Test.Sqlite", closure, warnings.Add);
+        var refusal = ProjectBuild.RefuseUncarried("MeshWeaver.Test.Sqlite", closure, errors.Add);
 
-        named.Should().Be(2);
-        warnings.Should().HaveCount(2).And.OnlyContain(w => w.StartsWith(
+        refusal.Should().NotBeNull("both targeted shapes are uncarried, so the module must go RED")
+            .And.Contain(ModuleBundleTarget.Rid);
+        errors.Should().HaveCount(2).And.OnlyContain(w => w.StartsWith(
             "[MeshWeaver.Test.Sqlite] private closure: 'SQLitePCLRaw.lib.e_sqlite3'", StringComparison.Ordinal));
-        warnings.Should().Contain(w => w.Contains(UnprobedLiteral, StringComparison.Ordinal));
-        warnings.Should().Contain(w => w.Contains(RidManagedLiteral, StringComparison.Ordinal));
+        errors.Should().Contain(w => w.Contains(UnprobedLiteral, StringComparison.Ordinal));
+        errors.Should().Contain(w => w.Contains(RidManagedLiteral, StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// 🚨 #4445 — the measured population: a RID-specific asset for a RID the bundle does NOT
+    /// target (the Windows ProtectedData implementation, a browser-wasm native) is INFORMATION.
+    /// Named, never refused, and never in the words the refusal is grepped on.
+    /// </summary>
+    [Fact]
+    public void AForeignRidAsset_IsNamedAsInformation_andNeverRefused()
+    {
+        var closure = PrivateClosure.Derive(["SQLitePCLRaw.lib.e_sqlite3"], PortableImage(), shelf: null);
+
+        closure.NotTargeted.Should().HaveCount(2);
+        closure.NotTargeted.Should().Contain(UncarriedAssetFindings.NotTargetedRid(
+            "SQLitePCLRaw.lib.e_sqlite3", ForeignManaged, "win"));
+        closure.NotTargeted.Should().Contain(UncarriedAssetFindings.NotTargetedRid(
+            "SQLitePCLRaw.lib.e_sqlite3", ForeignNative, "browser-wasm"));
+        closure.NotTargeted.Should().NotContain(
+            f => f.Contains(UnprobedLiteral, StringComparison.Ordinal)
+                 || f.Contains(RidManagedLiteral, StringComparison.Ordinal),
+            "a wave grepped for the refusing literals must not count information");
+        closure.Uncarried.Should().NotContain(
+            f => f.Contains(ForeignManaged, StringComparison.Ordinal)
+                 || f.Contains(ForeignNative, StringComparison.Ordinal));
+    }
+
+    /// <summary>The negative control: a closure whose only RID-specific assets are foreign is
+    /// not refused at all.</summary>
+    [Fact]
+    public void OnlyForeignRidAssets_RefuseNothing()
+    {
+        var app = Path.Combine(_root, "foreign-only");
+        Directory.CreateDirectory(app);
+        Dll(app, "MeshWeaver.Data");
+        File.WriteAllText(Path.Combine(app, "Portal.deps.json"), $$"""
+            {
+              "runtimeTarget": { "name": ".NETCoreApp,Version=v10.0" },
+              "targets": {
+                ".NETCoreApp,Version=v10.0": {
+                  "Portal/1.0.0": { "dependencies": { "System.Security.Cryptography.ProtectedData": "6.0.0" } },
+                  "System.Security.Cryptography.ProtectedData/6.0.0": {
+                    "runtimeTargets": { "{{ForeignManaged}}": { "rid": "win", "assetType": "runtime" } }
+                  },
+                  "MeshWeaver.Data/3.0.0": {
+                    "runtime": { "MeshWeaver.Data.dll": { "assemblyVersion": "3.0.0.0" } }
+                  }
+                }
+              },
+              "libraries": {
+                "Portal/1.0.0": { "type": "project" },
+                "System.Security.Cryptography.ProtectedData/6.0.0": { "type": "package" },
+                "MeshWeaver.Data/3.0.0": { "type": "package" }
+              }
+            }
+            """);
+        var closure = PrivateClosure.Derive(
+            ["System.Security.Cryptography.ProtectedData"],
+            ContainerReferenceSet.Read(app, trustedPlatformAssemblies: string.Empty), shelf: null);
+        var errors = new List<string>();
+
+        closure.NotTargeted.Should().ContainSingle();
+
+        ProjectBuild.RefuseUncarried("MeshWeaver.Test.Sqlite", closure, errors.Add).Should().BeNull();
+        errors.Should().BeEmpty();
     }
 
     /// <summary>
@@ -359,8 +434,9 @@ public class NativeClosureTest : IDisposable
                   },
                   "SQLitePCLRaw.lib.e_sqlite3/3.50.3": {
                     "runtimeTargets": {
-                      "{{UnprobedWasm}}": { "rid": "browser-wasm", "assetType": "native" },
-                      "{{RidManaged}}": { "rid": "win-x64", "assetType": "runtime" }
+                      "{{UnprobedTargeted}}": { "rid": "linux-x64", "assetType": "native" },
+                      "{{RidManaged}}": { "rid": "unix", "assetType": "runtime" },
+                      "{{ForeignManaged}}": { "rid": "win", "assetType": "runtime" }
                     }
                   }
                 }
@@ -375,7 +451,7 @@ public class NativeClosureTest : IDisposable
 
         foreach (var finding in new[]
                  {
-                     UncarriedAssetFindings.UnprobedNative("SQLitePCLRaw.lib.e_sqlite3", UnprobedWasm),
+                     UncarriedAssetFindings.UnprobedNative("SQLitePCLRaw.lib.e_sqlite3", UnprobedTargeted),
                      UncarriedAssetFindings.RidSpecificManaged("SQLitePCLRaw.lib.e_sqlite3", RidManaged),
                  })
         {

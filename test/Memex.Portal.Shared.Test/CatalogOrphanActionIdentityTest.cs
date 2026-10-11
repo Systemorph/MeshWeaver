@@ -80,7 +80,7 @@ public class CatalogOrphanActionIdentityTest(ITestOutputHelper output) : Monolit
             await Install(first);
 
         var stream = OpenAll();
-        var before = await Rows(stream, CatalogLayoutAreas.OrphansDataId, insert ? 2 : 3);
+        var before = await Offered(stream, CatalogLayoutAreas.OrphansDataId, insert ? 2 : 3, RemoveStyle, RemoveArea);
         var clicked = RowOf(before, CatalogLayoutAreas.OrphansDataId, intended.Id);
 
         if (insert)
@@ -88,7 +88,7 @@ public class CatalogOrphanActionIdentityTest(ITestOutputHelper output) : Monolit
         else
             Assert.True(await PackageInstaller.RemoveInstalledRecord(Mesh, first.Id)
                 .Should().Within(TestTimeouts.Convergence).Emit());
-        var after = await Rows(stream, CatalogLayoutAreas.OrphansDataId, insert ? 3 : 2);
+        var after = await Offered(stream, CatalogLayoutAreas.OrphansDataId, insert ? 3 : 2, RemoveStyle, RemoveArea);
         Assert.NotEqual(clicked.Index, RowOf(after, CatalogLayoutAreas.OrphansDataId, intended.Id).Index);
 
         var records = Records();
@@ -110,7 +110,10 @@ public class CatalogOrphanActionIdentityTest(ITestOutputHelper output) : Monolit
         var orphan = Package("OrphanSolo", "Solo");
         await Install(orphan);
         var stream = OpenAll();
-        await Rows(stream, CatalogLayoutAreas.OrphansDataId, 1);
+        // The button must be ON OFFER before the row-less click: otherwise the click lands on a
+        // control the page has not rendered yet, nothing runs, and the "removes nothing" below
+        // passes having tested nothing.
+        await Offered(stream, CatalogLayoutAreas.OrphansDataId, 1, RemoveStyle, RemoveArea);
 
         var records = Records();
         Submit(stream, RemoveArea, row: null);
@@ -129,7 +132,7 @@ public class CatalogOrphanActionIdentityTest(ITestOutputHelper output) : Monolit
         foreach (var package in Listed)
             await Install(package);
         var stream = OpenAll();
-        var cards = await Rows(stream, CatalogLayoutAreas.CardsDataId, Listed.Count);
+        var cards = await Offered(stream, CatalogLayoutAreas.CardsDataId, Listed.Count, PolicyStyle, PinArea);
         var records = Records();
         await records.Where(items => Listed.All(p => items.Any(i => i.Id == p.Id
                 && i.EffectiveUpdatePolicy != PackageUpdatePolicy.None)))
@@ -178,13 +181,46 @@ public class CatalogOrphanActionIdentityTest(ITestOutputHelper output) : Monolit
         return records;
     }
 
+    private const string PolicyStyle = "policyStyle";
+    private const string RemoveStyle = "removeStyle";
+
+    /// <summary>
+    /// The rows of <paramref name="dataId"/> once a person could CLICK <paramref name="area"/> in
+    /// every one of them — the condition a click needs, never merely the rows existing. Two things
+    /// arrive separately and each, missing, swallows a click without a trace:
+    /// <list type="bullet">
+    /// <item>The rows render off the source's listing BEFORE the viewer's global-admin flag is
+    /// confirmed (it starts false), and in that render the administrator's controls are hidden
+    /// (<paramref name="styleProperty"/> is <see cref="CatalogLayoutAreas.Hidden"/>): the server's
+    /// page offers no policy / Remove on any row, so the action correctly does nothing.</item>
+    /// <item>The row values can reach the client before the template's controls do (measured on a
+    /// cold first render: the bound rows ~100 ms ahead of the controls). A click on an area the
+    /// stream holds no control for runs nothing — a person cannot make that click, since there is
+    /// no button on their screen yet.</item>
+    /// </list>
+    /// </summary>
+    private static async Task<ImmutableArray<JsonElement>> Offered(
+        ISynchronizationStream<JsonElement> stream, string dataId, int count, string styleProperty, string area)
+    {
+        var rows = await Rows(stream, dataId, count,
+            row => row.GetProperty(styleProperty).GetString() != CatalogLayoutAreas.Hidden,
+            $"every row shows {styleProperty}");
+        await stream.GetControlStream(area).Should().Within(TestTimeouts.Convergence).Match(
+            control => control is ButtonControl,
+            $"the client holds the control at {area}", TestContext.Current.CancellationToken);
+        return rows;
+    }
+
     private static async Task<ImmutableArray<JsonElement>> Rows(
-        ISynchronizationStream<JsonElement> stream, string dataId, int count)
+        ISynchronizationStream<JsonElement> stream, string dataId, int count,
+        Func<JsonElement, bool>? eachRow = null, string? rowCondition = null)
     {
         var rows = await stream.GetDataStream<JsonElement>(new JsonPointerReference(LayoutAreaReference.GetDataPointer(dataId)))
             .Should().Within(TestTimeouts.Convergence).Match(
-                r => r.ValueKind == JsonValueKind.Array && r.GetArrayLength() == count,
-                $"the client mirror holds the {count} rows of {dataId}",
+                r => r.ValueKind == JsonValueKind.Array && r.GetArrayLength() == count
+                     && (eachRow is null || r.EnumerateArray().All(eachRow)),
+                $"the client mirror holds the {count} rows of {dataId}"
+                + (rowCondition is null ? "" : $", and {rowCondition}"),
                 TestContext.Current.CancellationToken);
         return [.. rows.EnumerateArray().Select(r => r.Clone())];
     }

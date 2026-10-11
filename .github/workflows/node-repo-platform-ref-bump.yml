@@ -440,6 +440,15 @@ jobs:
             gh issue edit "$existing" --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
             echo "::error::the platform-pin bump failed again — #$existing updated with $RUN_URL"
           else
-            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --label "$label" --body "$body"
+            # 🏷️ The lane states its own TYPE and SEVERITY (core Doc/Architecture/IssueTaxonomy): a bug
+            # without a sev: is invisible to the release gate. sev:M — every pin move is a hand move until it
+            # is fixed, a secondary path. Each taxonomy label is made to EXIST first (the single-label
+            # endpoint 404s when absent), so the create never meets an unknown label; a failure here is RED.
+            for spec in "bug|d73a4a|Something isn't working" "sev:M|FBCA04|Medium - secondary path broken, or easy workaround"; do
+              IFS='|' read -r name color desc <<<"$spec"
+              gh api "repos/$GITHUB_REPOSITORY/labels/$name" --silent 2>/dev/null \
+                || gh label create "$name" --repo "$GITHUB_REPOSITORY" --color "$color" --description "$desc"
+            done
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --label "$label" --label bug --label sev:M --body "$body"
             echo "::error::the platform-pin bump failed — tracking issue filed"
           fi

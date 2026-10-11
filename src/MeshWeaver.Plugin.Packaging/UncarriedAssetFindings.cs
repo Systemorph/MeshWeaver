@@ -4,8 +4,9 @@ namespace MeshWeaver.Plugin.Packaging;
 /// The ONE spelling of the two findings a module bundle's closure derivation reports for what it
 /// cannot carry (#4126, #4367) — shared by BOTH derivations, the SDK lane's
 /// (<c>MeshWeaver.Plugin.Build.DepsClosure</c>, which REFUSES the pack unless something named
-/// carries it) and the container lane's (<c>MeshWeaver.PluginTester</c>, which NAMES it as a
-/// warning until a measured container wave arms a refusal there, #4445).
+/// carries it) and the container lane's (<c>MeshWeaver.PluginTester</c>, which REFUSES the
+/// project, #4445). Both apply them only to assets for a RID the bundle targets
+/// (<see cref="ModuleBundleTarget"/>); an asset for another RID is <see cref="NotTargetedRid"/>.
 ///
 /// <para>🚨 One spelling because the arming decision is a MEASUREMENT: "a full wave printed zero
 /// of either finding" is a grep for these sentences across every pack log, and two lanes wording
@@ -32,4 +33,18 @@ public static class UncarriedAssetFindings
         $"'{package}' declares a native asset at '{relativePath}', which is NOT the layout the "
         + "module loader probes (exactly runtimes/<rid>/native/<file>) — it is not carried, "
         + "because bytes at a path nothing looks at read as shipped and behave as absent.";
+
+    /// <summary>
+    /// INFORMATION, never a refusal (#4445): an asset declared for a RID the bundle does not target
+    /// (<see cref="ModuleBundleTarget"/>). Omitting it is correct, because nothing that loads the
+    /// bundle runs on that RID. It is still printed, so a wave's log names what was left out and
+    /// why. The grep literals of the two refusing findings above are deliberately absent from it.
+    /// </summary>
+    /// <param name="package">The package that declares it.</param>
+    /// <param name="relativePath">Its deps.json key, <c>/</c>-separated.</param>
+    /// <param name="rid">The RID the declaration is for.</param>
+    public static string NotTargetedRid(string package, string relativePath, string rid) =>
+        $"info: '{package}' declares {relativePath} for RID '{rid}', which a module bundle does not "
+        + $"target (bundles target {ModuleBundleTarget.Rid}: {string.Join(", ", ModuleBundleTarget.CompatibleRids)}) "
+        + "— left out, correctly, and not a refusal.";
 }

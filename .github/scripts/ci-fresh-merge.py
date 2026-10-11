@@ -16,7 +16,8 @@ against a main that has since moved — "a gate fix in main does not reach open 
 
 So every suite job, after its checkout, replaces that tree with a merge it computes itself:
 
-    tree   = git merge-tree --write-tree --merge-base=<merge-base(main, head)> <main tip> <head>
+    tree   = git merge-tree --write-tree [--merge-base=<THE merge-base, when there is one>] <main tip> <head>
+             (several merge-bases — a criss-cross — are merged into a virtual base, as `git merge` does)
     commit = git commit-tree <tree> -p <main tip> -p <head>      (fixed identity and dates)
 
 The merge commit is a pure function of (main tip, head): every job of one run that is handed the
@@ -98,26 +99,57 @@ def parents(path: str, sha: str) -> list[str]:
     return [l.split()[1] for l in body.split("\n\n", 1)[0].splitlines() if l.startswith("parent ")]
 
 
-def merge_base(path: str, main: str, head: str, compare) -> str:
-    r = git(path, "merge-base", main, head, check=False)
-    if r.returncode == 0 and r.stdout.strip():
-        return r.stdout.strip()
-    # A shallow checkout cannot walk to the merge-base: deepen the two tips step by step until git can.
-    # Git transport, not REST — the run's GITHUB_TOKEN shares ONE per-repository REST budget with every
-    # other PR's run (measured 2026-10-05: every PR-body read of every core PR run failed in the same
-    # minutes), so the compare read is only the last resort.
-    errors = []
+def local_merge_bases(path: str, a: str, b: str) -> list[str]:
+    r = git(path, "merge-base", "--all", a, b, check=False)
+    return r.stdout.split() if r.returncode == 0 else []
+
+
+def walkable_merge_bases(path: str, a: str, b: str, deepen_refs: tuple[str, ...], errors: list[str]) -> list[str]:
+    """EVERY merge-base of a and b, deepening a shallow checkout over git until git can walk to them.
+
+    Git transport, not REST — the run's GITHUB_TOKEN shares ONE per-repository REST budget with every
+    other PR's run (measured 2026-10-05: every PR-body read of every core PR run failed in the same
+    minutes), so the compare read is only the caller's last resort."""
+    bases = local_merge_bases(path, a, b)
     for depth in (64, 512, 4096):
-        d = git(path, "fetch", "--no-tags", "--quiet", f"--deepen={depth}", "origin", main, head, check=False)
+        if bases:
+            break
+        d = git(path, "fetch", "--no-tags", "--quiet", f"--deepen={depth}", "origin", *deepen_refs, check=False)
         if d.returncode != 0:
             errors.append(f"deepen {depth}: {(d.stderr or d.stdout).strip()[:200]}")
             continue
-        r = git(path, "merge-base", main, head, check=False)
-        if r.returncode == 0 and r.stdout.strip():
-            return r.stdout.strip()
+        bases = local_merge_bases(path, a, b)
+    return bases
+
+
+def merge_bases(path: str, main: str, head: str, compare) -> list[str]:
+    """Every merge-base of main and head.
+
+    A branch that merged main more than once can have SEVERAL merge-bases with it (a criss-cross).
+    `git merge` then merges them into a virtual base; handing `merge-tree` just ONE of them diffs each
+    side against a commit that is not their real common ancestor and reports conflicts a real merge does
+    not have (Plugins #3394). So all of them are read, and when there is more than one the history the
+    virtual base needs — the merge-bases OF the bases, recursively — is made walkable as well."""
+    errors: list[str] = []
+    bases = walkable_merge_bases(path, main, head, (main, head), errors)
+    if bases:
+        pending, seen = [bases], set()
+        while pending:
+            level = pending.pop()
+            for other in level[1:]:
+                pair = (level[0], other)
+                if pair in seen:
+                    continue
+                seen.add(pair)
+                inner = walkable_merge_bases(path, level[0], other, (main, head), errors)
+                if not inner:
+                    raise Refused(f"main {main[:12]} and head {head[:12]} have {len(bases)} merge-bases, and the history git needs to merge them into one virtual base could not be read ({'; '.join(errors) or 'no common ancestor'}) — the fresh merge cannot be computed")
+                if len(inner) > 1:
+                    pending.append(inner)
+        return bases
     mb = compare(main, head)
     if mb:
-        return mb
+        return [mb]
     errors.append(getattr(compare, "last_error", "") or "the compare read returned nothing")
     raise Refused(f"the merge-base of main {main[:12]} and head {head[:12]} could not be read ({'; '.join(errors)}) — the fresh merge cannot be computed")
 
@@ -130,9 +162,13 @@ def fresh_merge(path: str, main: str, head: str, compare) -> tuple[str, str]:
     if current and parents(path, current) == [main, head]:
         return "already-fresh", current
     fetch(path, main, head)
-    mb = merge_base(path, main, head, compare)
-    fetch(path, mb)
-    r = git(path, "merge-tree", "--write-tree", "--name-only", f"--merge-base={mb}", main, head, check=False)
+    bases = merge_bases(path, main, head, compare)
+    fetch(path, *bases)
+    # ONE merge-base: name it (a shallow checkout or the compare read may be all that knows it). SEVERAL:
+    # let git find them and merge them into a virtual base exactly as `git merge` does — `--merge-base`
+    # takes only one, and any single one of them reports conflicts the real merge does not have.
+    pick = [f"--merge-base={bases[0]}"] if len(bases) == 1 else []
+    r = git(path, "merge-tree", "--write-tree", "--name-only", *pick, main, head, check=False)
     if r.returncode == 1:
         lines = r.stdout.strip().split("\n")
         conflicted = [l for l in lines[1:] if l and not l.startswith("Auto-merging") and not l.startswith("CONFLICT")][:20]
@@ -260,12 +296,35 @@ def self_test() -> int:
         conflict_head = commit(origin, {"b.txt": "b changed by another PR\n"}, "conflicting pr")
         git(origin, "checkout", "-q", "main")
 
-        def clone(name: str, shallow: bool) -> str:
+        # A CRISS-CROSS (Plugins #3394): main and the PR branch each merged the other's commit, so the two
+        # tips have TWO merge-bases, M1 and F1. The real merge (virtual base = M1+F1: x1, y1) is clean and
+        # takes main's x2/y2; diffing against M1 alone conflicts on y, against F1 alone on x.
+        def merge(repo: str, other: str, msg: str) -> str:
+            git(repo, "merge", "-q", "--no-ff", "--no-edit", "-m", msg, other,
+                env=dict(IDENTITY, GIT_AUTHOR_DATE="2026-01-02T00:00:00Z", GIT_COMMITTER_DATE="2026-01-02T00:00:00Z"))
+            return git(repo, "rev-parse", "HEAD").stdout.strip()
+
+        git(origin, "checkout", "-q", "-b", "cc-main", base)
+        cc_root = commit(origin, {"x.txt": "x0\n", "y.txt": "y0\n"}, "cc root")
+        m1 = commit(origin, {"x.txt": "x1\n"}, "main: x1")
+        git(origin, "checkout", "-q", "-b", "cc-feature", cc_root)
+        f1 = commit(origin, {"y.txt": "y1\n"}, "pr: y1")
+        merge(origin, m1, "pr merges main")                          # F2 = F1 + M1
+        cc_head = commit(origin, {"z.txt": "z by the PR\n"}, "pr: z")
+        git(origin, "checkout", "-q", "-b", "cc-conflict")
+        cc_conflict_head = commit(origin, {"x.txt": "x by the PR\n"}, "pr: x (a REAL conflict with main's x2)")
+        git(origin, "checkout", "-q", "cc-main")
+        merge(origin, f1, "main merges the pr's y1")                 # M2 = M1 + F1
+        cc_main = commit(origin, {"x.txt": "x2\n", "y.txt": "y2\n"}, "main: x2 y2")
+        git(origin, "checkout", "-q", "main")
+
+        def clone(name: str, shallow: bool, tip: str = "") -> str:
+            tip = tip or head
             d = os.path.join(tmp, name)
             url = "file://" + origin
             subprocess.run(["git", "clone", "-q"] + (["--depth=1"] if shallow else []) + ["--no-checkout", url, d], check=True, capture_output=True)
-            git(d, "fetch", "-q", *(["--depth=1"] if shallow else []), "origin", head)
-            git(d, "checkout", "-q", "--detach", head)
+            git(d, "fetch", "-q", *(["--depth=1"] if shallow else []), "origin", tip)
+            git(d, "checkout", "-q", "--detach", tip)
             return d
 
         compare_calls: list[tuple[str, str]] = []
@@ -325,6 +384,44 @@ def self_test() -> int:
             check(False, "a head that conflicts with the current main is refused")
         except Refused as e:
             check("CONFLICTS" in str(e) and "b.txt" in str(e), "a head that conflicts with the current main is refused, naming b.txt")
+
+        # 5a. CRISS-CROSS, clean: two merge-bases, and the fresh merge is the one `git merge` makes.
+        cc = clone("criss-cross", shallow=False, tip=cc_head)
+        git(cc, "fetch", "-q", "origin", cc_main)
+        cc_bases = sorted(local_merge_bases(cc, cc_main, cc_head))
+        check(cc_bases == sorted([m1, f1]), "the criss-cross fixture has TWO merge-bases (M1, F1)")
+        single = [git(cc, "merge-tree", "--write-tree", "--name-only", f"--merge-base={b}", cc_main, cc_head, check=False).returncode for b in cc_bases]
+        check(single == [1, 1], "control: merging over EITHER single merge-base conflicts (the false report this fixes)")
+        try:
+            mode_cc, cc_merged = fresh_merge(cc, cc_main, cc_head, compare)
+            got = {n: open(os.path.join(cc, n)).read() for n in ("x.txt", "y.txt", "z.txt")}
+            check(mode_cc == "merged" and parents(cc, cc_merged) == [cc_main, cc_head]
+                  and got == {"x.txt": "x2\n", "y.txt": "y2\n", "z.txt": "z by the PR\n"},
+                  "a criss-cross head that merges cleanly is merged over the virtual base (x2, y2, the PR's z)")
+        except Refused as e:
+            cc_merged = ""
+            check(False, f"a criss-cross head that merges cleanly is merged, not refused ({e})")
+        real = clone("criss-cross-real", shallow=False, tip=cc_main)
+        git(real, "merge", "-q", "--no-edit", cc_head, env=dict(IDENTITY))
+        check(bool(cc_merged) and git(real, "rev-parse", "HEAD^{tree}").stdout.strip() == git(cc, "rev-parse", f"{cc_merged}^{{tree}}").stdout.strip(),
+              "the fresh merge's tree is byte-identical to what `git merge` produces")
+
+        # 5b. The same criss-cross from a SHALLOW checkout deepens to every base and to the bases' own base.
+        ccs = clone("criss-cross-shallow", shallow=True, tip=cc_head)
+        try:
+            _, ccs_merged = fresh_merge(ccs, cc_main, cc_head, compare)
+            check(ccs_merged == cc_merged, "a shallow checkout computes the IDENTICAL criss-cross merge commit")
+        except Refused as e:
+            check(False, f"a shallow criss-cross checkout is merged, not refused ({e})")
+
+        # 5c. A REAL conflict in a criss-cross history is still RED, naming the path.
+        ccc = clone("criss-cross-conflict", shallow=False, tip=cc_conflict_head)
+        git(ccc, "fetch", "-q", "origin", cc_main)
+        try:
+            fresh_merge(ccc, cc_main, cc_conflict_head, compare)
+            check(False, "a criss-cross head with a real conflict is refused")
+        except Refused as e:
+            check("CONFLICTS" in str(e) and "x.txt" in str(e), "a criss-cross head with a real conflict is refused, naming x.txt")
 
         # 6. apply(): a non-PR event and a named content ref change nothing, and say so.
         os.environ["GITHUB_EVENT_NAME"] = "push"

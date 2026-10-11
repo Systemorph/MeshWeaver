@@ -105,6 +105,14 @@ affected plugins sit on the path. Never gate on an exact build identity, never s
 around a break: fix compatibility (an `[Obsolete]` forwarder, an API restore, the binder) or declare
 the break.
 
+**What a portal that has not rolled gets across a break.** The publish-bake lane's `epoch-leg:
+previous` call bakes NodeType content against `previousEpochCeiling` and **carries the previous
+epoch's sealed module set forward** for it. It does not rebuild modules, and it never seals this run's
+current-epoch module builds under the old key. Before sealing, every carried bundle is verified for its
+seal, its identity (`mw-plugin-test module-identity --expect <ceiling identity>`, which refuses a
+foreign identity) and its digest. So a module fix reaches an old-epoch portal only when that portal
+rolls. Full account: [Framework Identity Churn](../FrameworkIdentityChurn) (#3583).
+
 ## The three numbers, and who owns each
 
 | number | lives in | owned by |

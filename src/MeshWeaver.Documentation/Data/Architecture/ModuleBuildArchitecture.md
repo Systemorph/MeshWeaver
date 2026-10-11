@@ -926,6 +926,17 @@ B) — the bytes a portal actually installs. The availability gate saw it from #
 rolling onto it; **the serve side now resolves it** (#3244, below), so the two producers can no
 longer disagree in the archive a consumer installs.
 
+### Across a declared break: the previous epoch's set is carried forward, not produced again (#3583)
+
+The previous-epoch leg (`node-repo-publish-bake.yml` with `epoch-leg: previous`) keeps this
+invariant by not producing at all. The previous epoch's identity already has exactly one producer, the
+publication its epoch sealed. The leg reads that repository's own sealed module set for the ceiling's
+identity, verifies its seal, its identity (`mw-plugin-test module-identity`, which refuses a bundle
+built for any other identity) and its digest, and seals those exact bytes again. This run's module
+bundles are current-epoch builds and are never downloaded on that leg. A second build would be a
+second producer for the old identity, which is the shape this section forbids. See
+[Framework Identity Churn](../FrameworkIdentityChurn).
+
 ### The third shape: `live is absent` — ZERO producers, not two (2026-09-06)
 
 A bake-consumption decline reads almost identically whether a module has **two** producers or
