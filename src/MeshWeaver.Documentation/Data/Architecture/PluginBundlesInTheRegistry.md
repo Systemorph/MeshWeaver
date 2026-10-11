@@ -78,6 +78,7 @@ assume "same commit ⇒ same digest".
 | an installation's pre-warm (`ShippedPrebuiltBundles`) | the index for its own identity and each source in `bundles.sources`, materialised under `PreWarm:PrebuiltBundleRoot` in the layout it already reads | the pod's `imagePullSecrets` credential (`portal.imagePullSecret`), projected into the init container as a docker config | the `bundle-fetch` init container (`deploy/helm/files/bundle-fetch.sh`, rendered when `bundles.registry` is set) runs ORAS before the portal starts; the pre-warm keeps reading a filesystem, and needs no mesh and no network |
 | the Store, `RegistryUpdateReconciler`, `InstanceAutoRegistrationService` (a bundle adopted at runtime) | one bundle manifest by digest, named by the index's `artifact` (`cr.meshweaver.cloud/plugins/<source>/<package>@sha256:…`), then its `.zip` layer by digest | the instance credential `RegistryTokenResolver` already holds, presented at the registry's token realm as `Basic instance:<token>` | `PluginBundleClient` through `OciRegistryClient` (`MeshWeaver.PluginCatalog`, the same client `OciTagLister` lists image tags with) — the same landing path, entering `ModuleLandingService.LandCore`, gated by the `ModulePlatformLink` probe and the load; a bundle whose `artifact` is `null` takes the HTTP route |
 | `memex-local` and every self-hosted install | as above | the instance key in its manifest, projected as `ContainerRegistry:DockerConfigJson` (`{"auths":{"cr.meshweaver.cloud":{"auth":base64("instance:<key>")}}}`, emitted only when the key decrypts — core #3722) | no second credential |
+| the release-availability gate (`ReleaseAvailabilityService`), for a candidate release its published root has no marker for | the release record `plugins/releases:<version>` — its manifest by tag, then its config blob by digest | the instance credential `RegistryTokenResolver` holds for a registry mount (`ResolveDurableKey`), presented only to the artifact host that mount's bundle index declares | `RegistryReleaseIdentities` through `OciRegistryClient`; nothing is written — see "A release's identity on a registry-fed root" |
 | satellite CI on `main` (`node-repo-gate`, `compose-sealed-modules`, `memex build plugin`) | the index and bundles for the pinned identity | the repository's instance key (`REGISTRY_KEY`) | ORAS |
 | satellite CI on a `pull_request` | **unchanged: the HTTP prebuilt surface** (`/api/plugins/bundles/prebuilt/…`) with the GitHub OIDC build principal | OIDC token | see "What stays on the HTTP surface" |
 
@@ -137,6 +138,57 @@ naming the previous image's identity.
   MeshWeaver.Plugins) still patches only the `memex-portal` container**; until it moves
   `bundle-identity` as well, a self-patched pod reads the previous image's identity (which is the
   behaviour this replaced, never worse).
+
+### A release's identity on a registry-fed root
+
+Policy `release-identity-from-registry` ([Policy Not Prose](../PolicyNotProse)).
+
+The self-update gate judges a candidate release by its framework identity, which it reads from the
+marker `<root>/_releases/<version>`. The publisher writes that marker to the storage it mounts. A
+root filled by `bundle-fetch` is a different volume: an emptyDir holding
+`<identity>/<source>/…` for the identity the running image reports, mounted read-only into the
+portal, with no `_releases` directory. On such an estate no candidate ever had a marker, so every
+one answered *"the framework identity of release … is not resolvable"* and the installation held
+on the release it booted with — a hold with no failing component.
+
+The gate therefore asks the registry when, and only when, the marker file is absent:
+
+1. each registry mount (`PluginCatalog:Registries`), in order, is asked for its bundle index;
+2. the artifact host that index declares (`artifactRegistry`) is asked for
+   `plugins/releases:<version>`, with the mount's durable key;
+3. the record's config (`{"identity","version"}`) is taken when its media type is the release
+   record's, its bytes hash to the digest the manifest names, it names the version asked for, and
+   its identity is a single path segment;
+4. the bundles are then read from the root exactly as with a marker.
+
+| situation | answer |
+|---|---|
+| the marker file exists | the file; the registry is not asked |
+| no marker, the registry names the identity, and its bundles are on the root | judged like any marked release |
+| no marker, the registry names an identity nothing on the root is published under | identity known, no bundle sealed — the completeness hold, by package |
+| no marker and no mount declares an artifact host, the record is absent or malformed, or the read fails | *identity not resolvable* — the hold, as before |
+
+"The marker file exists" means its presence was established. A marker whose presence cannot be
+determined (access denied, an I/O fault) is neither read as absent nor overridden: the registry is
+not asked and the read reports what it found.
+
+🚨 **The second row is weaker than a marked release, and is not equivalent to one.** The registry
+record binds `version → identity` and nothing more. The bundles the gate then counts are the
+snapshot `bundle-fetch` pulled when THIS pod started, while `plugins/<source>:<identity>` is a tag
+that moves whenever that source publishes again under the same identity. The pod that starts on the
+new image pulls the tag as it stands then. A package that left a source's publication after this
+pod started is therefore still counted here, and the new pod compiles it at boot instead of
+adopting it. The gate on such a root answers "the identity is known and this pod's snapshot is
+complete for it", not "the publication the next pod will pull is complete". Closing that needs the
+release bound to an immutable publication digest per source, which the release record does not
+carry.
+
+The third row is the other limit of a registry-fed root: `bundle-fetch` materialises
+one identity, the running image's. A release that moves the compatibility key
+(`c<major>e<epoch>`) is not shown adoptable from that root, because its bundles are not there
+until the pod restarts on the new image. The enumeration of candidates
+(`PublishedBundleCatalogue.PublishedReleases`) still reads marker files only; the poller supplies
+its own candidate list, so it does not depend on it.
 
 ## Authorization: memex decides, the edge enforces
 

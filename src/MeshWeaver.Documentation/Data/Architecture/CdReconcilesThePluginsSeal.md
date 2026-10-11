@@ -187,6 +187,53 @@ is red THERE, and recorded on the `cd-plugins-seal` issue, and never on the plat
 (policy `platform-backwards-compatibility`; see
 [Continuous Delivery Contract → The ladder](../ContinuousDeliveryContract)).
 
+## The resolver waits for a seal that is still running — and has no opt-out
+
+The other side of the same seam is in `resolve-platform.py`. A set whose platform trio is sealed but
+whose own `Plugins: bake + seal …` job is **still running** is passed over (or waited for, on a
+release trigger with `--wait-for-seal`). A seal that failed, was skipped or was cancelled is
+terminal and holds nothing back; only the in-flight one does. The exception exists because taking
+the set in that window made every consumer red on `upstream 'plugins' has no SEALED publication …
+for identity <id>` (measured on MeshWeaver.Manufacturing, 2026-09-10).
+
+The wait has a price. Measured on the core CD runs of 2026-09-27, the platform bake finished about
+5 minutes after promote and the Plugins seal a further 13 to 23 minutes later (run 36299288833:
+promote 06:59–07:02, platform bake 07:02–07:06, Plugins seal 07:17–07:34). So a new core set becomes
+resolvable about 20 minutes later than its platform seal.
+
+MeshWeaver#6041 asked whether a consumer that does not read the `plugins` publication could opt out
+of that wait. The answer is **no second resolver mode**, and the reason is who the consumers are.
+Read from each repository's default branch through the REST contents API on 2026-10-09, and
+re-read on 2026-10-11:
+
+| Consumer | Calls the resolver | Reads `plugins` under the resolved identity | Could skip the wait |
+|---|---|---|---|
+| MeshWeaver.Education, .Reinsurance, .SocialMedia, .Manufacturing, .Crm, .FundReporting | yes | **yes** — `upstream-seed` / `upstream-sources` name `plugins` | no: skipping it is the 2026-09-10 red |
+| core `node-repo-gate.yml`, `node-repo-publish-bake.yml` | yes, when the caller pins no digest | the caller's own `upstream-seed` — these lanes serve the rows above | no |
+| Memex | no | — | not applicable |
+| MeshWeaver.Plugins | yes | **no** — it declares no upstream; it *is* the `plugins` publication | the only candidate |
+
+MeshWeaver.Plugins is the only consumer the opt-out could serve, and for it the opt-out is not
+clearly safe:
+
+1. **The same resolution feeds its publish-bake.** One run resolves one set, and that set's image
+   digest is what Plugins' own publish-bake uses to write `prebuilt-bundles/<identity>/plugins/` —
+   the same prefix core's `Plugins: bake + seal` job is writing in that window. Resolving before
+   core's seal lands makes Plugins the **second writer** on an identity whose first writer is
+   mid-publish. That two-publisher interleave is handled (`publish-bake-bundles.sh`, the two-writer
+   postcondition, proven by `test-publish-bake-overlap.py`), but as a rare case. An opt-out would
+   make it the ordinary one. Scoping the opt-out to the gate and not the bake would give one run two
+   platform sets, which breaks the "one resolved set per run" rule the lanes assert.
+2. **The gain is small.** Plugins no longer rebuilds per platform build. It runs on its own pushes,
+   on a manual dispatch and once a day, so the 20 minutes only matter to a push that lands between
+   a core promote and that set's seal — and such a run is not wrong, it tests the previous sealed
+   set and the next run takes the new one.
+
+So one resolver mode stays, and it is the one every reader of the publication needs. If the wait is
+ever to shrink, shrink it at its source — the duration of core's `Plugins: bake + seal` job — which
+helps every consumer and adds no mode. What would change this evaluation: a consumer appearing
+that calls the resolver, reads no upstream, and publishes nothing under the resolved identity.
+
 ## What this does not cover
 
 * **The fleet-registry copy.** `check-release-availability.sh` probes the Azure Files share, which

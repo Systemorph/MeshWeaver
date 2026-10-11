@@ -3354,6 +3354,32 @@ public class MessageService : IMessageService
                     + "read once and disposed by design); not a discard of anybody else's work.",
                     Address, delivery.Message.GetType().Name, delivery.Id,
                     gatesAtDeferral, hub.RunLevel, disposal);
+            // 🚨 …AND FOR A MESSAGE THE ROUTING LAYER MAY NOT ANSWER, there is no waiter by the
+            // message's own declaration (#5718). AnswerPolicy names the two: a [CanBeIgnored]
+            // message is fire-and-forget, with no Observe callback behind it, and a
+            // DeliveryFailure is itself an answer. NackThroughParent declines both
+            // (NACK_DECLINED reason=not-awaited), so for them the Error's own sentence, "the
+            // sender is answered ShuttingDown", was false, and the instruction that follows it had
+            // nobody to find.
+            //
+            // MEASURED on memex, 2026-10-08: every [DISPOSE-DISCARD] Error of a 72 h window was a
+            // `sync/{id}` sub-hub disposed directly while a StreamEndedEvent from its owner sat
+            // behind [SynchronizationGate]. That is the case StreamEndedEvent is [CanBeIgnored]
+            // FOR, in its own words: "the announcement then arrives for a sync hub that is already
+            // gone. Routing must DROP it silently there rather than NACK". Routing does. This
+            // site did not know the contract, and reported the drop the type asks for as lost work.
+            //
+            // Still REPORTED, at Debug and with the same facts. A message that IS awaited is
+            // untouched by this branch, whatever its type.
+            else if (!delivery.MayAnswer())
+                logger.LogDebug(DisposalDiscardedDeferredDelivery,
+                    "[DISPOSE-DISCARD] Hub {Address} is disposing with {MessageType} (id={MessageId}, from {Sender}) "
+                    + "still deferred; initialization gates closed at deferral: [{Gates}]. RunLevel={RunLevel}; "
+                    + "teardown {Disposal}. The message is declared not answerable (fire-and-forget, or itself "
+                    + "a delivery failure): nobody awaits a reply to it, so none is posted and dropping it is "
+                    + "what its contract asks for. Teardown-normal; nobody is stranded.",
+                    Address, delivery.Message.GetType().Name, delivery.Id, delivery.Sender,
+                    gatesAtDeferral, hub.RunLevel, disposal);
             // 🚨 …AND FOR A REQUEST WHOSE PROTOCOL RE-ASKS, nobody outside is stranded either
             // (#4888, #5424, #5589). A delivery can only be parked here behind an INITIALIZATION
             // gate, and those gates close for one thing only, a bring-up the teardown has just
