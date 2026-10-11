@@ -1321,7 +1321,7 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
                 // <c>platform-rolls-independently-of-packages</c>) is recorded with the clear
                 // rather
                 // than lost with it.
-                return RecordHold(target, advised).Catch(HoldWriteFailed(target))
+                return RecordHold(target, advised).Catch(PolicyStateWriteFailed(target, "the package advisories (and the clearing of any stale hold)"))
                     .IgnoreElements()
                     .Select(_ => SelfUpdateVerdict.NoOutcome())
                     .Concat(Apply(trigger, policy, target)
@@ -1568,12 +1568,19 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
                 .Select(_ => Unit.Default));
     }
 
-    private Func<Exception, IObservable<Unit>> HoldWriteFailed(string target) =>
+    /// <summary>A failed bookkeeping write on the policy node, logged with WHAT it was writing —
+    /// never phrased as a hold, because under policy
+    /// <c>platform-rolls-independently-of-packages</c> this service records no hold, and a log
+    /// line naming one would send an operator after a state that does not exist. The roll's
+    /// decision is unaffected (#1020).</summary>
+    /// <param name="target">The tag the write was about.</param>
+    /// <param name="what">What was being written, in words.</param>
+    private Func<Exception, IObservable<Unit>> PolicyStateWriteFailed(string target, string what) =>
         ex =>
         {
             _logger?.LogWarning(ex,
-                "[SelfUpdate] could not record the availability hold for {Tag} on {Node}; the "
-                + "verdict itself still stands.", target, UpdatePolicyNodeType.NodePath);
+                "[SelfUpdate] could not write {What} for {Tag} on {Node}; nothing is held, and the "
+                + "check's decision stands.", what, target, UpdatePolicyNodeType.NodePath);
             return Observable.Return(Unit.Default);
         };
 
@@ -1606,7 +1613,7 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
                             },
                         })
                     .Select(_ => Unit.Default))
-            .Catch(HoldWriteFailed(held));
+            .Catch(PolicyStateWriteFailed(held, "the clearing of the hold an earlier build recorded"));
     }
 
     /// <summary>
