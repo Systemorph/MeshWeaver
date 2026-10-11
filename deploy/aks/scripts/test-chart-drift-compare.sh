@@ -383,15 +383,22 @@ d["spec"]["template"]["spec"]["containers"][0]["image"] = sys.argv[3]
 json.dump(d, open(sys.argv[2], "w"))
 PYEOF
 }
-image_verdict() {  # image_verdict <description> <expect: clean|off> <policy-file> <live-file>
+image_verdict() {  # image_verdict <description> <expect: clean|off> <policy-file> <live-file> [<exact ON RECORD line>]
   local o rc
   o="$(run_case_with_manifest clean "$DATA/clean/release-manifest.yaml" "$TMPI/$3" "$TMPI/$4")"; rc=$?
+  # The verdict is STATED in both directions: an on-record image prints its own line (the tag, and
+  # the rule it satisfied), so a pass is never read off the mere absence of a finding. A clean case
+  # names the EXACT line it expects — tag, rule, record and repository — so a well-shaped line
+  # carrying the wrong facts fails as surely as a missing one.
   if [ "$2" = clean ]; then
-    if [ "$rc" -eq 0 ] && ! echo "$o" | grep -q 'OFF-RECORD'; then echo "  ok   $1 → on record"
-    else echo "::error::$1 — expected ON record, got rc=$rc:"; echo "$o" | grep '::error::' | sed 's/^/      /'; fail=1; fi
+    if [ "$rc" -eq 0 ] && ! echo "$o" | grep -q 'OFF-RECORD' \
+       && echo "$o" | grep -qxF -- "$5"; then
+      echo "  ok   $1 → on record, and says so"
+    else echo "::error::$1 — expected exactly: $5"; echo "      got rc=$rc:"; echo "$o" | grep -E '::error::|^image vs record' | sed 's/^/      /'; fail=1; fi
   else
-    if [ "$rc" -ne 0 ] && echo "$o" | grep -q 'OFF-RECORD'; then echo "  ok   $1 → OFF-RECORD"
-    else echo "::error::$1 — expected OFF-RECORD, got rc=$rc:"; echo "$o" | sed 's/^/      /'; fail=1; fi
+    if [ "$rc" -ne 0 ] && echo "$o" | grep -qE '^image vs record: OFF-RECORD ' && ! echo "$o" | grep -q 'ON RECORD'; then
+      echo "  ok   $1 → OFF-RECORD, and says so"
+    else echo "::error::$1 — expected a stated OFF-RECORD verdict and no ON RECORD line, got rc=$rc:"; echo "$o" | sed 's/^/      /'; fail=1; fi
   fi
 }
 R=cr.example.test/portal-fixture
@@ -399,16 +406,22 @@ policy p-any.json   "{\"record\":\"Deployments/t\",\"imageRepository\":\"$R\",\"
 policy p-ci.json    "{\"record\":\"Deployments/t\",\"imageRepository\":\"$R\",\"updatePattern\":\"3.0.0-ci*\"}"
 policy p-pin.json   "{\"record\":\"Deployments/t\",\"imageRepository\":\"$R\",\"updatePattern\":\"3.*\",\"pinnedImageTag\":\"3.1.10400\"}"
 policy p-none.json  "{\"record\":\"Deployments/t\",\"imageRepository\":\"$R\"}"
+policy p-norepo.json "{\"record\":\"Deployments/t\",\"updatePattern\":\"3.*\"}"
 live_with_image l-semver.json "$R:3.1.10400"
 live_with_image l-ci.json     "$R:3.0.0-ci.10148"
 live_with_image l-other.json  "$R:3.1.10399"
 live_with_image l-digest.json "$R@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 live_with_image l-repo.json   "example.azurecr.io/other-portal:3.1.10400"
 live_with_image l-port.json   "localhost:5000/portal-fixture:3.1.10400"
-image_verdict "SemVer tag under pattern 3.*"                 clean p-any.json  l-semver.json
-image_verdict "old -ci tag under pattern 3.*"                clean p-any.json  l-ci.json
+image_verdict "SemVer tag under pattern 3.*"                 clean p-any.json  l-semver.json \
+  "image vs record: ON RECORD — live tag '3.1.10400' matches updatePattern '3.*' of Deployments/t; repository equals imageRepository '$R'"
+image_verdict "old -ci tag under pattern 3.*"                clean p-any.json  l-ci.json \
+  "image vs record: ON RECORD — live tag '3.0.0-ci.10148' matches updatePattern '3.*' of Deployments/t; repository equals imageRepository '$R'"
 image_verdict "SemVer tag under a 3.0.0-ci* pattern"         off   p-ci.json   l-semver.json
-image_verdict "the pinned tag itself"                        clean p-pin.json  l-semver.json
+image_verdict "the pinned tag itself"                        clean p-pin.json  l-semver.json \
+  "image vs record: ON RECORD — live tag '3.1.10400' equals pinnedImageTag '3.1.10400' of Deployments/t; repository equals imageRepository '$R'"
+image_verdict "a record with no imageRepository"             clean p-norepo.json l-repo.json \
+  "image vs record: ON RECORD — live tag '3.1.10400' matches updatePattern '3.*' of Deployments/t; the record states no imageRepository, so the repository was NOT compared"
 image_verdict "a tag other than the pin (pattern would allow)" off p-pin.json  l-other.json
 image_verdict "a digest-only reference"                      off   p-any.json  l-digest.json
 image_verdict "another repository"                           off   p-any.json  l-repo.json
@@ -419,10 +432,13 @@ policy p-upper.json "{\"record\":\"Deployments/t\",\"imageRepository\":\"$R\",\"
 policy p-qmark.json "{\"record\":\"Deployments/t\",\"imageRepository\":\"$R\",\"updatePattern\":\"3.1.1040?\"}"
 policy p-class.json "{\"record\":\"Deployments/t\",\"imageRepository\":\"$R\",\"updatePattern\":\"3.[01]*\"}"
 policy p-pinup.json "{\"record\":\"Deployments/t\",\"imageRepository\":\"$R\",\"pinnedImageTag\":\"3.0.0-CI.10148\"}"
-image_verdict "a pattern differing only in letter case"      clean p-upper.json l-ci.json
-image_verdict "'?' as exactly one character"                 clean p-qmark.json l-semver.json
+image_verdict "a pattern differing only in letter case"      clean p-upper.json l-ci.json \
+  "image vs record: ON RECORD — live tag '3.0.0-ci.10148' matches updatePattern '3.*-CI*' of Deployments/t; repository equals imageRepository '$R'"
+image_verdict "'?' as exactly one character"                 clean p-qmark.json l-semver.json \
+  "image vs record: ON RECORD — live tag '3.1.10400' matches updatePattern '3.1.1040?' of Deployments/t; repository equals imageRepository '$R'"
 image_verdict "a bracket is literal, not a character class"  off   p-class.json l-semver.json
-image_verdict "a pin differing only in letter case"          clean p-pinup.json l-ci.json
+image_verdict "a pin differing only in letter case"          clean p-pinup.json l-ci.json \
+  "image vs record: ON RECORD — live tag '3.0.0-ci.10148' equals pinnedImageTag '3.0.0-CI.10148' of Deployments/t; repository equals imageRepository '$R'"
 # A registry PORT is not a tag: `localhost:5000/…:3.1.10400` must be read as tag 3.1.10400, repo
 # localhost:5000/portal-fixture — so it is OFF-RECORD only for the repository, never the tag.
 o="$(run_case_with_manifest clean "$DATA/clean/release-manifest.yaml" "$TMPI/p-any.json" "$TMPI/l-port.json")"

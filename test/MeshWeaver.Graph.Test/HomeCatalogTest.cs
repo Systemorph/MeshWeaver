@@ -59,34 +59,32 @@ public class HomeCatalogTest
     }
 
     [Fact]
-    public void Catalog_DefaultsToLastAccessedOrder()
+    public void Catalog_DefaultsToLocationOrder()
     {
         var search = UserActivityLayoutAreas.BuildCatalog(NodePath).Should().BeOfType<MeshSearchControl>().Subject;
 
-        // Default order = last accessed (source:accessed projects the UserActivity access time into
-        // the sort slot), most-recently-opened first. The JOIN targets the CALLER's own access log
-        // (their partition's user_activities) across every branch schema, so it works
-        // cross-partition — and every scope clause still applies (the roots leg pushes
-        // `namespace = ''`), so it stays a first-level list.
-        search.HiddenQuery!.ToString().Should().Contain("source:accessed");
-        search.HiddenQuery!.ToString().Should().Contain("sort:LastModified-desc");
+        // Default order = LOCATION (path), so each space's content stays together, the way a folder
+        // explorer lists it (policy explorer-navigation).
+        search.HiddenQuery!.ToString().Should().Contain("sort:path-asc");
+        search.HiddenQuery!.ToString().Should().NotContain("source:accessed");
     }
 
     [Fact]
-    public void Catalog_OffersLastAccessedLastModifiedAndAlphabeticalSorts()
+    public void Catalog_OffersLocationLastAccessedLastModifiedAndAlphabeticalSorts()
     {
         var search = UserActivityLayoutAreas.BuildCatalog(NodePath).Should().BeOfType<MeshSearchControl>().Subject;
 
         var options = search.SortOptions!;
-        options.Select(o => o.Label).Should().Equal("Last accessed", "Last modified", "Alphabetical");
+        options.Select(o => o.Label).Should().Equal("Location", "Last accessed", "Last modified", "Alphabetical");
         // The first option is the default and MUST equal the control's HiddenQuery.
         options[0].Query.Should().Be(search.HiddenQuery!.ToString());
+        options[0].Query.Should().Contain("sort:path-asc");
         // Last accessed = access-ordered working set; the other two are pure order-bys.
-        options[0].Query.Should().Contain("source:accessed");
-        options[1].Query.Should().Contain("sort:LastModified-desc");
-        options[1].Query.Should().NotContain("source:accessed");
-        options[2].Query.Should().Contain("sort:Name-asc");
+        options[1].Query.Should().Contain("source:accessed");
+        options[2].Query.Should().Contain("sort:LastModified-desc");
         options[2].Query.Should().NotContain("source:accessed");
+        options[3].Query.Should().Contain("sort:Name-asc");
+        options[3].Query.Should().NotContain("source:accessed");
         // Every option stays first-level (union of roots + home children, no subtree).
         foreach (var o in options)
         {
@@ -169,12 +167,14 @@ public class HomeCatalogTest
     // ── Data-driven home config (Admin/HomeConfig) ──────────────────────────────────────────────────
 
     [Fact]
-    public void HomeConfig_ShippedDefaults_AreFirstLevelFlatLastAccessed()
+    public void HomeConfig_ShippedDefaults_AreFirstLevelFlatLocation()
     {
         HomeConfigNodeType.Defaults.Style.Should().Be(HomeStyle.Tabs);
         HomeConfigNodeType.Defaults.Scope.Should().Be(HomeCatalogScope.FirstLevel);
         HomeConfigNodeType.Defaults.Render.Should().Be(HomeCatalogRender.Flat);
-        HomeConfigNodeType.Defaults.DefaultSort.Should().Be(HomeCatalogSort.LastAccessed);
+        HomeConfigNodeType.Defaults.SortBy.Should().BeNull("unset = by location, the shipped default");
+        HomeConfigNodeType.Defaults.EffectiveSort().Should().Be(HomeSortBy.Location);
+        HomeConfigNodeType.Defaults.DefaultSort.Should().Be(HomeCatalogSort.LastAccessed, "the legacy member keeps its signature and default");
     }
 
     [Fact]
@@ -220,12 +220,31 @@ public class HomeCatalogTest
         var cfg = new HomeConfig { DefaultSort = HomeCatalogSort.Alphabetical };
         var search = UserActivityLayoutAreas.BuildCatalog(NodePath, cfg).Should().BeOfType<MeshSearchControl>().Subject;
 
-        // The chosen default is FIRST and equals HiddenQuery; all three sorts are still offered.
+        // The chosen default is FIRST and equals HiddenQuery; all four sorts are still offered.
         search.SortOptions![0].Label.Should().Be("Alphabetical");
         search.SortOptions![0].Query.Should().Be(search.HiddenQuery!.ToString());
         search.HiddenQuery!.ToString().Should().Contain("sort:Name-asc");
         search.SortOptions!.Select(o => o.Label).OrderBy(l => l, StringComparer.Ordinal).Should()
-            .Equal("Alphabetical", "Last accessed", "Last modified");
+            .Equal("Alphabetical", "Last accessed", "Last modified", "Location");
+    }
+
+    [Fact]
+    public void HomeConfig_EffectiveSort_IsTheOpenValue_ThenTheLegacyOne_ThenLocation()
+    {
+        new HomeConfig().EffectiveSort().Should().Be(HomeSortBy.Location);
+        new HomeConfig { SortBy = " LastModified " }.EffectiveSort().Should().Be(HomeSortBy.LastModified);
+        new HomeConfig { DefaultSort = HomeCatalogSort.Alphabetical }.EffectiveSort().Should().Be(HomeSortBy.Alphabetical,
+            "a legacy value an admin moved off its default still decides");
+        new HomeConfig { SortBy = HomeSortBy.LastAccessed, DefaultSort = HomeCatalogSort.Alphabetical }.EffectiveSort()
+            .Should().Be(HomeSortBy.LastAccessed, "the open value wins");
+        // Open vocabulary: a value this build does not know is passed through, never coerced, and
+        // the home then opens on its own first sort (Location) with every known sort still offered.
+        var unknown = new HomeConfig { SortBy = "ByOwner" };
+        unknown.EffectiveSort().Should().Be("ByOwner");
+        UserActivityLayoutAreas.UnknownSort(unknown).Should().Be("ByOwner", "an unknown value stays named, so it is reported");
+        UserActivityLayoutAreas.UnknownSort(new HomeConfig()).Should().BeNull();
+        var search = UserActivityLayoutAreas.BuildCatalog(NodePath, unknown).Should().BeOfType<MeshSearchControl>().Subject;
+        search.SortOptions!.Select(o => o.Label).Should().Equal("Location", "Last accessed", "Last modified", "Alphabetical");
     }
 
     [Fact]
