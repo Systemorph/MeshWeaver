@@ -151,6 +151,54 @@ Each issue becomes ONE item, `Hosting/Triage/issue/{repo}-{number}`, whichever r
 `Hosting/Triage` (`get Hosting/Triage`). A finding an agent makes goes in by the third route,
 `Feedback/Feedback` (AGENTS.md, "file it and move on"), never as a hand-opened issue.
 
+### How "always classified" is held — by construction, not by memory
+
+Every route an issue can take into an open repository either classifies it or NAMES why it could not.
+None leaves the classification to a model, a person or an agent remembering.
+
+| route | what makes the type and severity certain |
+|---|---|
+| a **sentinel workflow** opens its own issue | it stamps type + severity itself (table below); a missing label is created first, and a sentinel it reopens is stamped too unless a person already classified it (`scripts/check-issue-taxonomy.py stamp`) |
+| the **red-main ledger** (`ci-main-red`, every satellite) | `.github/scripts/ci-failure-ledger.py` stamps `bug` + `sev:H` on the issue it files, reopens or appends to |
+| an **agent** files through MCP `git_hub_issue` | the tool refuses a `bug` without exactly one `sev:B/H/M/L`, a severity on a non-bug, and any other `sev:` |
+| triage **files** a defect (`FileIssue`) | refused without exactly one severity |
+| the **log-incident filer** | stamps the default `sev:M` when its policy proposes none |
+| a person or an agent opens one **directly** | the webhook and the hourly sweep classify it: the model is asked ONE question and the answer is validated in code — a bug without a valid severity is never applied; it is re-asked ONCE naming the defect, and a second invalid answer is marked **UNCLASSIFIED — needs a person** on the item and listed on `Hosting/Triage/blocking/issues-need-a-person` |
+
+What triage cannot complete is always a person's, and always listed on that one finding: labels that
+CONTRADICT the taxonomy (triage only adds, it never removes a type or a severity), an author with no
+write access to the repository (a stranger's text reaches no model), an answer that stayed invalid,
+a model call that kept failing, a label the repository lacks.
+
+🚨 **Trust is write access, not `author_association`.** GitHub reports a private organisation member to
+a webhook and to an App as `CONTRIBUTOR`. Triage once trusted `OWNER`/`MEMBER`/`COLLABORATOR` alone, so
+every issue a maintainer (or an agent under a maintainer's credential) opened was HELD as a stranger's
+and never classified. Triage now reads the author's permission on the repository through its App and
+trusts `write`, `maintain` and `admin`; anything else, and any lookup that fails, stays held.
+
+A model call that failed — the EU-only pool down, a provider error — is never a person's on the first
+miss and never retried in a loop: it is made again when the model has ANSWERED a classification since
+the failure (or, while nothing answers, one probe per hour), and handed to a person after a bounded
+number of failed calls.
+
+**The sentinels' declared severities** (each stated, with its reason, in the workflow that opens it):
+
+| sentinel | label | type + severity |
+|---|---|---|
+| CD on main failed / incomplete image set (`main-cd.yml`) | `ci-failure` | `bug` `sev:H` |
+| a satellite's red main (`node-repo-ci-failure.yml`) | `ci-main-red` | `bug` `sev:H` |
+| the cluster does not match its chart (`chart-drift.yml`) | `chart-drift-sentinel` | `bug` `sev:H` |
+| control image lane failed (`main-cd.yml`) | `control-image` | `bug` `sev:M` |
+| control behind the newest build (`control-always-latest.yml`) | `control-lag` | `bug` `sev:M` |
+| the issue-text name scan could not check (`issue-text-names.yml`) | `issue-text-names-sentinel` | `bug` `sev:M` |
+| core main breaks a satellite's pin (`node-repo-platform-canary.yml`) | the caller's | `bug` `sev:M` |
+| the platform-pin bump lane is dead (`node-repo-platform-ref-bump.yml`) | `platform-pin-bump-failure` | `bug` `sev:M` |
+
+**And it is measured independently.** `.github/workflows/issue-taxonomy.yml` runs daily and goes RED
+naming every open issue of the triage scope that has violated the taxonomy for more than 24 hours, and
+every repository missing a severity label (`scripts/check-issue-taxonomy.py check`; a run that could
+not read is red, never green).
+
 > ⚠️ `Hosting/Issue` is **not** part of this. It is fleet health — "no replicas ready", "not
 > observed" — machine-written, self-resolving, one node per deployment × condition. It carries its
 > own `Severity` (`Warning`/`Critical`, set by the detector), which is unrelated to the `sev:` scale

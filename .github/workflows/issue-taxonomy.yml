@@ -1,0 +1,84 @@
+name: Issue taxonomy
+
+# Every OPEN issue of the triage scope carries exactly one type, and every bug exactly one sev:B/H/M/L
+# (Doc/Architecture/IssueTaxonomy, policy `release-blocker-gate`). The release gate counts open sev:B and
+# sev:H bugs, so an issue that breaks the invariant is invisible to it — an untyped issue and a bug
+# without a severity both read as "nothing blocking".
+#
+# Triage keeps the invariant (the hourly issue sweep classifies, and names what needs a person on
+# Hosting/Triage/blocking/issues-need-a-person); this lane is the INDEPENDENT measurement of whether it
+# did. It goes RED naming every violation older than 24 hours — younger ones are triage's to finish —
+# and every repository missing a severity label. `scripts/check-issue-taxonomy.py` reads the issues
+# endpoint page by page (never search) and exits 2 when anything could not be read: a run that could
+# not check is red, never green.
+#
+# 🛡️ THIS WORKFLOW MAY NOT SKIP (AGENTS.md → "A gate NEVER tests its own inputs"). `preflight` asserts
+# the App credential and fails RED naming it; `check` needs it and carries no input-shaped `if:`.
+
+on:
+  schedule:
+    - cron: "53 6 * * *"   # daily, after the night's sweeps
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: issue-taxonomy
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Preflight (fleet-reader credential)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Assert every input
+        env:
+          APP_ID: ${{ secrets.FLEET_READER_APP_ID }}
+          APP_KEY: ${{ secrets.FLEET_READER_APP_PRIVATE_KEY }}
+        run: |
+          missing=()
+          [ -n "$APP_ID" ]  || missing+=("secrets.FLEET_READER_APP_ID           the fleet-reader App's id")
+          [ -n "$APP_KEY" ] || missing+=("secrets.FLEET_READER_APP_PRIVATE_KEY  the fleet-reader App's private key")
+          if [ ${#missing[@]} -gt 0 ]; then
+            printf '::error::the issue-taxonomy check cannot run — provision:\n'
+            printf '  %s\n' "${missing[@]}"
+            exit 1
+          fi
+          echo "every input present"
+
+  check:
+    name: Every open issue typed, every bug with one severity
+    needs: [preflight]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: scripts
+      - name: Self-test the check
+        run: python3 scripts/check-issue-taxonomy.py --self-test
+      # The App must hold Issues: read on every repository below; a missing grant fails THIS step,
+      # naming the permission — never a quiet zero.
+      - name: Mint a read token for the triage scope
+        id: token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.FLEET_READER_APP_ID }}
+          private-key: ${{ secrets.FLEET_READER_APP_PRIVATE_KEY }}
+          owner: Systemorph
+          repositories: >-
+            MeshWeaver,MeshWeaver.Plugins,Memex,MeshWeaver.Crm,MeshWeaver.Education,MeshWeaver.Reinsurance,
+            MeshWeaver.SocialMedia,MeshWeaver.Manufacturing,MeshWeaver.FundReporting
+          permission-issues: read
+          permission-metadata: read
+      - name: Check
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        run: |
+          python3 scripts/check-issue-taxonomy.py check \
+            --repo Systemorph/MeshWeaver --repo Systemorph/MeshWeaver.Plugins --repo Systemorph/Memex \
+            --repo Systemorph/MeshWeaver.Crm --repo Systemorph/MeshWeaver.Education --repo Systemorph/MeshWeaver.Reinsurance \
+            --repo Systemorph/MeshWeaver.SocialMedia --repo Systemorph/MeshWeaver.Manufacturing --repo Systemorph/MeshWeaver.FundReporting \
+            --older-than-hours 24
