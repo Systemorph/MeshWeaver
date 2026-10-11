@@ -61,7 +61,8 @@ processor mandatory on portals that sell nothing.
 | `SecretSettingName` / `WebhookSecretSettingName` / `DeliverySignatureHeader` | the names an operator finding has to quote |
 
 `PaymentMetadata` holds the keys a checkout stamps and the delivery reader looks for
-(`orderPath`, `pluginPath`, `buyer`, `couponCode`, `planTier`, `cadence`). They are **on the wire**
+(`orderPath`, `pluginPath`, `buyer`, `couponCode`, `planTier`, `cadence`, and for setups and
+deferred renewals `claimReference`, `setupReference`, `termsHash`, `intendedUse`, `siteId`). They are **on the wire**
 at the processor: a session created before a rename hands the old key back weeks later, so they are
 durable contract exactly like a configuration key — and they live in the platform because the
 mesh-compiled content that stamps them must bind something present in every image.
@@ -139,6 +140,133 @@ members, called only from a governed task a global admin triggers (policy
   `ToString`. The caller shows it once to the person who ran the task and writes it nowhere: not to
   a node, an activity, a log line or an exception message. Whoever holds it can forge a completed
   checkout.
+
+## Saving a method without a payment, and a consented renewal
+
+`IPaymentMethodSetupProvider` is a **second, optional** capability beside `IPaymentProvider`. It
+saves a payment method without taking a payment, and schedules a renewal that charges nothing today
+only when the buyer separately consents to it. The contract contains no provider call, no processor
+name and no configuration. The first consumer is the coupon journey in MeshWeaver.Plugins (#2063),
+and the first implementation will be the Stripe module (#2064).
+
+**Why a second interface and not a zero-amount checkout.** `CreateCheckout` models an amount and an
+optional recurrence, and its completed delivery fulfils an order. Expressing "save only" as an amount
+of zero would make a finished setup indistinguishable from a paid purchase. A separate interface also
+keeps the capability optional twice over: a portal can mount a provider that sells and cannot save
+methods, and every existing provider keeps compiling untouched. `hub.PaymentMethodSetupProvider()`
+returns null in that case, and the caller says *this site cannot save a payment method*. It never
+falls back to charging and never waives a setup that an offer requires.
+
+| Member | What it answers |
+|---|---|
+| `SetupUnavailable` | why a method cannot be saved here now, in the viewer's language (null when it can) |
+| `DescribeSetup(intendedUse, currency)` | per method kind, whether a saved method is reusable **for that use** on this account |
+| `CreateSetup(PaymentMethodSetupRequest)` | open a setup session: never a charge, an invoice or a subscription |
+| `RetrieveSetup(setupId)` / `CancelSetup(setupId)` | reconcile a setup from the processor; cancel an unfinished one |
+| `RemovesPaymentMethods` / `RemovePaymentMethod(customer, method)` | detach a saved method. Defaults to *not supported* |
+| `SupportsDeferredSubscription` / `CreateDeferredSubscription(DeferredSubscriptionRequest)` | schedule one renewal with zero due today. Defaults to *not supported* |
+| `RetrieveDeferredSubscription(id, claim)` / `CancelDeferredSubscription(id)` | reconcile it; turn off its future billing |
+
+### Two consents, never one
+
+`PaymentMethodSetupRequest` carries a required **storage** consent and an optional, separate
+**renewal** consent (`PaymentConsentReference`: kind, text version, text hash, accepted-at, terms
+hash). Its `IntendedUse` is `CustomerPresentPurchaseOnly` or `AuthorizedRenewal` (an open
+vocabulary). `AuthorizesOffSession` is the one predicate a provider uses to decide whether to ask its
+processor for permission to charge in the buyer's absence. It is true only when the use is
+`AuthorizedRenewal` **and** a consent of kind `RecurringRenewal` travels with the request.
+
+`Problems()` checks the pairing in both directions:
+
+- a renewal use without a renewal consent is refused;
+- a renewal consent on a customer-present setup is refused, so a changed checkbox cannot quietly
+  upgrade an existing setup;
+- a renewal consent given against different terms is refused.
+
+A storage consent offered as the renewal consent authorizes nothing.
+
+A setup request has **no amount field**. It cannot express a charge.
+
+### Wallet reuse is purpose-specific
+
+`DescribeSetup` answers per kind (`Card`, `ApplePay`, `GooglePay`, or a provider's own word) with
+`Reusable`, `FreshAuthorizationEachPurchase`, `Unsupported` or `Unverified`. A wallet that can pay is
+not thereby a stored method for a customer-present purchase. A kind the provider did not list reads
+as `Unverified`, and unverified is never treated as reusable. This is the server's half of the
+answer. Whether a wallet shows on the buyer's device is for the provider's own in-page controls to
+establish, never a guess from the operating system.
+
+### The client secret crosses one boundary
+
+`PaymentMethodSetupSession.ClientSecret` is for the intended buyer's page only. Like
+`PaymentEndpointChange.DisclosedSecret`, it is `[JsonIgnore]` and masked in `ToString`. It is never
+written to a node, an activity, a log line, a URL, a cache or browser storage.
+`ClientPublicKey` is public by nature and is serialized.
+
+### A verified fact must be this request's own
+
+`PaymentMethodSetupFact` comes from an authenticated delivery (`PaymentDelivery.Setup`) or from
+`RetrieveSetup`, never from a browser return. It is **not a payment and not an entitlement**.
+`Satisfies(request, session)` holds only when the status is `Succeeded`, the fact names the saved
+method (`PaymentMethodId`), and nothing in `Mismatches(…)` differs. The fields compared are the
+setup id, buyer, the caller's reference, claim, site, terms hash, intended use, customer, account
+mode, and off-session permission, which must equal exactly what the request authorized. Permission the request never asked for is a mismatch, not a
+bonus.
+
+A finished setup is reported on `PaymentDelivery.Setup` and **never** on `Checkout`, so it cannot
+reach paid-order fulfilment. A setup or deferred-subscription delivery that names its claim
+`NamesWork`. If it does not authenticate, it is retained as evidence, the same rule as for a paid
+order.
+
+### Zero due today, proven
+
+`DeferredSubscriptionRequest` carries exact, immutable terms: claim, buyer, verified setup,
+customer, method, plan, cadence, currency, the **tax-inclusive** recurring total, the exact
+`FirstChargeAt` instant, the renewal consent, the terms hash and one idempotency key. There is no
+field through which a caller could ask for a charge now. `DueToday` is the constant zero. A provider
+refuses a request with `Problems(now)`, a setup that did not authorize off-session use, and any
+account state that would make today's amount positive or change the accepted total. Every field a
+fact is later matched on must be non-blank in the request: a blank one is stamped and then read
+back as absent, so the created object could never satisfy its own request. A consent counts only
+with its kind, text version, text hash and an acceptance instant. It never omits
+the first-charge instant as a fallback and never charges and refunds.
+
+`DeferredSubscriptionFact.Satisfies(request)` holds only when the status is `Scheduled`, a
+subscription id is named, every term matches exactly (the stamped setup reference included, so a
+subscription created from another setup never stands for this one), and zero-due is **proven** from the
+processor's own numbers: `InitialInvoiceAmountDue == 0` and `AmountCharged == 0`. An amount the
+processor did not report is not a zero.
+
+The answer is an outcome, never a fault (open vocabulary `DeferredSubscriptionStatus`). `Refused`
+means nothing was created. `Indeterminate` means a write was sent and got no answer, so the caller
+reconciles by **reading** (`RetrieveDeferredSubscription`) and never by creating again. Only
+`Cancelled` means future billing is off. Compensation for a claim that failed after the renewal was
+scheduled stays open, and visible to an operator, until that word is read.
+
+### A zero invoice is not a paid period
+
+A trial-style subscription normally produces an initial invoice of zero. That invoice is reported on
+`PaymentDelivery.DeferredSubscription` and never as `PaymentSubscriptionChange.Renewed`. As a second
+guard, `PaymentSubscriptionEvent.AmountPaid` carries what the invoice collected. `IsPaidRenewal` is
+false for a renewal that states it collected zero, and true for a positive amount or an amount the
+provider did not report (a provider written before the field existed keeps its meaning). Paid-period
+accounting starts with the first verified paid renewal and never with the existence of a
+subscription.
+
+### Who owns what
+
+| Concern | Owner |
+|---|---|
+| Signature verification of a setup or renewal delivery | the provider, in `ReadDelivery` (`Authentic` beside `Setup` / `DeferredSubscription`) |
+| Matching a fact to the caller's own request | the caller, through `Satisfies` / `Mismatches` |
+| Replay | the caller: one outcome per provider `EventId`; a duplicate or late event converges, and an old setup event arriving after a cancellation cannot re-enable a renewal |
+| Reconciliation after a missed delivery, a return that arrived first, or a restart | the caller, through `RetrieveSetup` / `RetrieveDeferredSubscription` |
+| Cancellation and compensation | the caller decides; the provider's `CancelDeferredSubscription` answer is the evidence |
+| Provider failure | an outcome (`Refused`, `Indeterminate`) or a viewer-language error, never a silent success |
+
+The new metadata keys (`claimReference`, `setupReference`, `termsHash`, `intendedUse`, `siteId`) are
+on the wire at the processor, like the existing ones. `StampedMetadata()` on both requests is the
+one composition, so the side that stamps and the side that reads months later cannot drift.
 
 ## Absence is a modelled state
 

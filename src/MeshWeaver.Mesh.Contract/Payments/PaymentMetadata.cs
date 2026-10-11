@@ -35,6 +35,27 @@ public static class PaymentMetadata
 
     /// <summary>The billing cadence the plan was bought on.</summary>
     public const string Cadence = "cadence";
+
+    /// <summary>
+    /// The claim a payment-method setup or a deferred subscription belongs to — the caller's own
+    /// durable record, and the only owner a provider object stamped with it may have.
+    /// </summary>
+    public const string ClaimReference = "claimReference";
+
+    /// <summary>
+    /// The setup a provider object belongs to: on a setup, the caller's handle for the attempt; on a
+    /// deferred subscription, the verified setup that authorized it.
+    /// </summary>
+    public const string SetupReference = "setupReference";
+
+    /// <summary>The hash of the quoted terms the buyer accepted.</summary>
+    public const string TermsHash = "termsHash";
+
+    /// <summary>What a saved method was saved for (<see cref="PaymentMethodIntendedUse"/>).</summary>
+    public const string IntendedUse = "intendedUse";
+
+    /// <summary>The registered site the buyer was on.</summary>
+    public const string SiteId = "siteId";
 }
 
 /// <summary>
