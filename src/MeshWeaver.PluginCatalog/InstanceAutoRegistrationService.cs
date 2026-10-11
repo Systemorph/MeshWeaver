@@ -309,6 +309,24 @@ public sealed class InstanceAutoRegistrationService(
     /// </summary>
     public IObservable<DefaultInstallSummary> Completed => completed;
 
+    /// <summary>What the LAST default-install pass of this process left undone, in words — what
+    /// <see cref="RetryFailedDefaults"/> repairs. Null when it left nothing undone, and before the
+    /// boot pass has ended.</summary>
+    private volatile string? repairOwed;
+
+    /// <summary>What a pass left undone (pure): the packages it could not install, and a source it
+    /// could not list — packages a listing never named are neither failed nor installed. Null when
+    /// the pass delivered everything it selected.</summary>
+    /// <param name="summary">The pass's outcome.</param>
+    internal static string? LeftUndone(DefaultInstallSummary summary) =>
+        summary.Failed > 0 && summary.ListingIncomplete
+            ? $"{summary.Failed} package(s) failed ([{string.Join(", ", summary.Failures)}]) and a source could not be listed"
+            : summary.Failed > 0
+                ? $"{summary.Failed} package(s) failed ([{string.Join(", ", summary.Failures)}])"
+                : summary.ListingIncomplete
+                    ? "a source could not be listed"
+                    : null;
+
     /// <inheritdoc />
     public Task StartAsync(CancellationToken cancellationToken)
     {
@@ -448,11 +466,12 @@ public sealed class InstanceAutoRegistrationService(
             // package the deployment DECLARES read as a healthy boot (#2254).
             .Do(summary =>
             {
+                repairOwed = LeftUndone(summary);
                 if (summary.Failed > 0)
                     logger.LogError(
                         "[DefaultInstall] reconciled with FAILURES: {Summary}. This installation is "
                         + "missing {Count} declared package(s) — they are recorded on {Ledger} and "
-                        + "re-attempted on the next boot.",
+                        + "re-attempted when a registry next answers a feed read, and on the next boot.",
                         summary, summary.Failed, SeedLedgerPath);
                 else
                     logger.LogInformation("[DefaultInstall] reconciled: {Summary}", summary);
@@ -461,8 +480,10 @@ public sealed class InstanceAutoRegistrationService(
             // pass that installed nothing, having already logged the cause at Error.
             .Catch((Exception ex) =>
             {
+                repairOwed = "the pass did not complete";
                 logger.LogError(ex,
-                    "First-startup plugin provisioning failed; no retry is attempted.");
+                    "First-startup plugin provisioning failed; it is re-attempted when a registry next "
+                    + "answers a feed read, and on the next boot.");
                 return Observable.Return(DefaultInstallSummary.Empty);
             })
             .Subscribe(completed));
@@ -2372,6 +2393,61 @@ public sealed class InstanceAutoRegistrationService(
     /// </summary>
     internal IObservable<DefaultInstallSummary> RunDefaultInstall() =>
         InstallDefaults(hub.ServiceProvider.GetService<PluginCatalogOptions>() ?? new PluginCatalogOptions());
+
+    /// <summary>
+    /// 🚨 <b>The repair of a default package the boot could not install, without waiting for the next
+    /// boot</b> (MeshWeaver#5825). When the last pass of this process left something undone
+    /// (<see cref="LeftUndone"/>: a failed package, a source it could not list, or the pass itself
+    /// faulting), runs the default-install pass again — the identical selection and install
+    /// (<see cref="InstallDefaults"/>), which re-attempts what the ledger records as FAILED and skips
+    /// what is installed. When the last pass left nothing undone, does nothing at all: no source is
+    /// listed.
+    ///
+    /// <para><b>Who calls it, and why not a timer.</b> <see cref="RegistryUpdateReconciler"/>, at the
+    /// end of a reconcile that a successful feed read made possible, on its serialized lane. A boot
+    /// install fails because a registry did not answer; the registry answering is the event that
+    /// changes the outcome, and the reconciler already observes it. Before this, the only repair was
+    /// the next boot — measured on the control instance, 2026-09-27: <c>Anthropic</c> stayed
+    /// uninstalled after one stalled HTTPS read, on an instance whose next boot is whenever the next
+    /// image rolls.</para>
+    ///
+    /// <para>A package that fails again stays recorded and is re-attempted on the next such
+    /// reconcile; each attempt logs its cause at Error exactly as the boot pass does, so a package
+    /// that cannot be installed stays loud. Never faults.</para>
+    /// </summary>
+    /// <param name="because">The event that prompted the repair, for the log.</param>
+    /// <returns>Cold; emits once when the repair pass has ended, or immediately when there was
+    /// nothing to repair.</returns>
+    internal IObservable<Unit> RetryFailedDefaults(string because) =>
+        Observable.Defer(() =>
+        {
+            if (repairOwed is not { } undone)
+                return Observable.Return(Unit.Default);
+            logger.LogInformation(
+                "[DefaultInstall] running the default install again: in the last pass {Undone} — {Because}.",
+                undone, because);
+            return RunDefaultInstall()
+                .Do(summary =>
+                {
+                    repairOwed = LeftUndone(summary);
+                    if (summary.Failed > 0)
+                        logger.LogError(
+                            "[DefaultInstall] the repair pass still has FAILURES: {Summary}. They stay "
+                            + "recorded on {Ledger} and are re-attempted when a registry next answers a "
+                            + "feed read, and on the next boot.", summary, SeedLedgerPath);
+                    else
+                        logger.LogInformation("[DefaultInstall] the repair pass reconciled: {Summary}", summary);
+                })
+                .Select(_ => Unit.Default)
+                .DefaultIfEmpty(Unit.Default)
+                .Catch((Exception ex) =>
+                {
+                    logger.LogError(ex,
+                        "[DefaultInstall] the repair pass did not complete — it is re-attempted when a "
+                        + "registry next answers a feed read, and on the next boot.");
+                    return Observable.Return(Unit.Default);
+                });
+        });
 }
 
 /// <summary>
