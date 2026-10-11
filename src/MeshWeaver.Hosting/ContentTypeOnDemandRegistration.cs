@@ -1,6 +1,7 @@
 using System.Reactive.Linq;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -91,6 +92,42 @@ public sealed class ContentTypeOnDemandRegistration(ILogger<ContentTypeOnDemandR
         });
     }
 
+    /// <summary>
+    /// What the record at a NodeType path means for a registration, and the one place the path's
+    /// OCCUPANT is told apart from a NodeType DECLARATION (Systemorph/MeshWeaver#6525,
+    /// <c>Doc/Architecture/DanglingNodeTypes</c> hole C, #5264).
+    ///
+    /// <para>A read of content typed with a bare path such as <c>Feedback</c> asks this service to
+    /// register that path. The store answers with whatever sits THERE: the Store plugin's ROOT
+    /// (<c>PluginContent</c>), while the declaration lives at <c>Feedback/Feedback</c>. Handing that
+    /// occupant to <c>DynamicTypePreWarmer.DynamicTypesOf</c> WITH the logger reported its normal
+    /// input at Error as a bare, subject-free
+    /// <c>As&lt;NodeTypeDefinition&gt; for Feedback: value is PluginContent ... not convertible</c> -
+    /// the fingerprint #5008 and #5264 each removed from another caller of the same family.</para>
+    ///
+    /// <para>The test is the SAME one-sided predicate every other boundary applies
+    /// (<c>NodeTypeDeclarationProbe.IsProvablyNotADeclaration</c>), never a second copy: only a node
+    /// PROVABLY not a declaration is answered here, as
+    /// <see cref="ContentTypeRegistrationStatus.NotBaked"/> with a detail that names the occupant.
+    /// Every uncertain shape, and every genuine declaration, takes the existing route with the
+    /// logger attached - so a NodeType that is declared and does not convert stays loud.</para>
+    /// </summary>
+    private IObservable<ContentTypeRegistrationOutcome> OutcomeFor(
+        IMessageHub mesh, MeshNode? record, string path)
+    {
+        if (record is not null
+            && NodeTypeDeclarationProbe.IsProvablyNotADeclaration(record, mesh.JsonSerializerOptions))
+            return Observable.Return(new ContentTypeRegistrationOutcome(
+                path, ContentTypeRegistrationStatus.NotBaked,
+                $"{NodeTypeDeclarationProbe.Describe(record)}, not a NodeType declaration — "
+                + "nothing to register from"));
+        return DynamicContentTypeRegistrar.RegisterType(
+            mesh,
+            DynamicTypePreWarmer.DynamicTypesOf(
+                record is null ? [] : [record], mesh.JsonSerializerOptions, logger),
+            path, logger);
+    }
+
     private IObservable<ContentTypeRegistrationOutcome> Attempt(IMessageHub mesh, string path)
     {
         // 🚨 The record is read from the STORE — the authority — never from a query (eventually
@@ -109,9 +146,10 @@ public sealed class ContentTypeOnDemandRegistration(ILogger<ContentTypeOnDemandR
                     .Read(path, mesh.JsonSerializerOptions)
                     .Take(1)
                     .Timeout(RecordReadBudget))
-            .Select(record => DynamicTypePreWarmer.DynamicTypesOf(
-                record is null ? [] : [record], mesh.JsonSerializerOptions, logger))
-            .SelectMany(types => DynamicContentTypeRegistrar.RegisterType(mesh, types, path, logger))
+            .SelectMany(record => OutcomeFor(mesh, record, path))
+                // The record is judged by OutcomeFor: an occupant PROVABLY not a NodeType declaration is answered
+                // NotBaked and named, everything else converts exactly as before (see its remarks).
+            // One outcome per attempt: the occupant verdict above, or the registrar's own.
             .Take(1)
             .DefaultIfEmpty(new ContentTypeRegistrationOutcome(
                 path, ContentTypeRegistrationStatus.Faulted, "the NodeType record read completed without an answer"))
