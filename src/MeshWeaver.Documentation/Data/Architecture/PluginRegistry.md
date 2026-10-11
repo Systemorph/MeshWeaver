@@ -681,7 +681,7 @@ Policy [`deployment-config-authorizes-named-commercial`](../PolicyNotProse).
 
 `PluginCatalog:InstallByDefault` lives in the instance's **deployment record**, and that record
 changes only through a reviewed pull request in the deployment repository, merged by the auto-merge
-App — a merge there *is* the release. Naming `PartnerRe/Claims` there is therefore a decision people
+App — a merge there *is* the release. Naming `Acme/Claims` there is therefore a decision people
 took, reviewed and put on record: the same kind of decision a governed `package.provision` activity
 records. So the unattended default install carries an explicitly named principal for it,
 **`deployment-config:{PluginCatalog:InstanceId}`** (`DeploymentConfigAuthority`), and
@@ -692,6 +692,7 @@ records. So the unattended default install carries an explicitly named principal
 |---|---|
 | the instance | the principal names another instance than this one's `PluginCatalog:InstanceId` |
 | the naming | the package is not named **exactly** (`Source/Package`) in the CURRENT `InstallByDefault` — a whole-source `Source/*` names nothing — and is not a requirement (direct or transitive) of a package that is, as this boot's selection computed it |
+| the source | the candidate manifest names **no source** — a package id alone never authorizes, because another source may list the same id. A registry stamps the source on what it serves; an update listed straight off a watched repository does not, and is applied by a person's Update click |
 
 The principal is verified, never trusted by its string: the gate re-reads the current configuration,
 so the install record's `authorizedBy: deployment-config:…` is re-verified by every unattended update,

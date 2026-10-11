@@ -2494,7 +2494,16 @@ public sealed class InstanceAutoRegistrationService(
                                 id, recorded, candidate.Package.ModuleVersion ?? "(none)");
                             continue;
                         }
-                        atRecordedHash.Add(candidate with { Reconciled = true });
+                        // A commercial package the deployment configuration authorized is REPAIRED
+                        // under that same authority — re-derived here, after the default pass has
+                        // published its requirement closure — instead of being classified as
+                        // unauthorized and skipped on every boot. The gate re-verifies it.
+                        atRecordedHash.Add(candidate with
+                        {
+                            Reconciled = true,
+                            ConfigAuthority = hub.ServiceProvider.GetService<DeploymentConfigAuthority>()
+                                ?.Because(candidate.Package),
+                        });
                     }
                     if (atRecordedHash.Count == 0)
                         return Observable.Return(DefaultInstallSummary.Empty with

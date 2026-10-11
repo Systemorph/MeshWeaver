@@ -346,6 +346,11 @@ public static class PackageEntitlement
             if (hub.ServiceProvider.GetService(typeof(DeploymentConfigAuthority)) is not DeploymentConfigAuthority authority)
                 return Refuse(manifest, principal, logger,
                     detail: "no deployment configuration authority is registered on this host");
+            // 🚨 The check binds on the manifest's OWN source. A manifest that names none (one
+            // listed straight off a repository by the update watcher) is refused — fail closed.
+            // Borrowing the source from the install record would bind by package id alone, and a
+            // second watched source listing the same id would then inherit the configured source's
+            // authorization. Such an update is applied by a person's Update click instead.
             if (authority.WhyNot(principal, manifest) is { } why)
                 return Refuse(manifest, principal, logger, detail: why);
             logger?.LogInformation(

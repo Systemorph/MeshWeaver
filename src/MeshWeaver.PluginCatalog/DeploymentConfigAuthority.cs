@@ -137,6 +137,10 @@ public sealed class DeploymentConfigAuthority
         var expected = Principal;
         if (!string.Equals(principal.Trim(), expected, StringComparison.Ordinal))
             return $"'{principal}' names another instance's configuration — this instance's is '{expected}'";
+        if (string.IsNullOrWhiteSpace(package.Source) && Because(package) is null)
+            return $"'{package.Id}' was listed without a source, so it cannot be matched to a "
+                   + "Source/Package entry of PluginCatalog:InstallByDefault — a package id alone "
+                   + "never authorizes, because another source may list the same id";
         return Because(package) is null
             ? $"'{package.Id}' (source '{package.Source}') is neither named exactly in "
               + "PluginCatalog:InstallByDefault — a whole-source pattern such as 'Plugins/*' names "
