@@ -386,12 +386,17 @@ PYEOF
 image_verdict() {  # image_verdict <description> <expect: clean|off> <policy-file> <live-file>
   local o rc
   o="$(run_case_with_manifest clean "$DATA/clean/release-manifest.yaml" "$TMPI/$3" "$TMPI/$4")"; rc=$?
+  # The verdict is STATED in both directions: an on-record image prints its own line (the tag, and
+  # the rule it satisfied), so a pass is never read off the mere absence of a finding.
   if [ "$2" = clean ]; then
-    if [ "$rc" -eq 0 ] && ! echo "$o" | grep -q 'OFF-RECORD'; then echo "  ok   $1 → on record"
-    else echo "::error::$1 — expected ON record, got rc=$rc:"; echo "$o" | grep '::error::' | sed 's/^/      /'; fail=1; fi
+    if [ "$rc" -eq 0 ] && ! echo "$o" | grep -q 'OFF-RECORD' \
+       && echo "$o" | grep -qE "^image vs record: ON RECORD — live tag '[^']+' (equals pinnedImageTag|matches updatePattern) "; then
+      echo "  ok   $1 → on record, and says so"
+    else echo "::error::$1 — expected a stated ON RECORD verdict, got rc=$rc:"; echo "$o" | grep -E '::error::|^image vs record' | sed 's/^/      /'; fail=1; fi
   else
-    if [ "$rc" -ne 0 ] && echo "$o" | grep -q 'OFF-RECORD'; then echo "  ok   $1 → OFF-RECORD"
-    else echo "::error::$1 — expected OFF-RECORD, got rc=$rc:"; echo "$o" | sed 's/^/      /'; fail=1; fi
+    if [ "$rc" -ne 0 ] && echo "$o" | grep -qE '^image vs record: OFF-RECORD ' && ! echo "$o" | grep -q 'ON RECORD'; then
+      echo "  ok   $1 → OFF-RECORD, and says so"
+    else echo "::error::$1 — expected a stated OFF-RECORD verdict and no ON RECORD line, got rc=$rc:"; echo "$o" | sed 's/^/      /'; fail=1; fi
   fi
 }
 R=cr.example.test/portal-fixture
