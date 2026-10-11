@@ -229,8 +229,10 @@ public class PackageDependencyFloorHoldTest(ITestOutputHelper output) : Monolith
     }
 
     /// <summary>
-    /// A FRESH install is not held: there is no installed version to keep, and the installer orders
-    /// a package's dependencies before it. Holding it would leave a default package uninstalled.
+    /// A FRESH install is not held — the CURRENT behaviour, stated, not a claim that it is safe: a
+    /// dependency installed earlier in the same closure is landed, not loaded. Refusing it on the
+    /// loaded reading would fail a new instance's first boot for every default package whose floor is
+    /// above the image's own module copy; the module-set proposal still names such a floor.
     /// </summary>
     [Fact(Timeout = 300_000)]
     public async Task AFreshInstall_IsNotHeld()

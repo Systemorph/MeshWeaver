@@ -47,10 +47,15 @@ namespace MeshWeaver.PluginCatalog;
 /// <see cref="PackageUpdateReconciler"/> before a reminder is raised, so an update this instance
 /// cannot run is not offered either.</para>
 ///
-/// <para><b>What it does not cover.</b> A FRESH install (the installer orders dependencies first and
-/// there is no installed version to keep), a re-install of the content already recorded, and a
+/// <para><b>What it does not cover.</b> A re-install of the content already recorded, and a
 /// sync-owned partition (its sync source applies the same rule before it writes, and the record must
-/// adopt what that owner has landed).</para>
+/// adopt what that owner has landed). A FRESH install is not held either, and not because it is
+/// safe: a dependency installed earlier in the same closure is landed, not loaded. It is left out
+/// because the image ships its own copy of the platform modules and the registry is routinely ahead
+/// of it, so refusing on the loaded reading would fail a new instance's first boot for every default
+/// package above that copy; the module-set proposal still names such a floor. The reading is per
+/// process: while replicas run different generations of a dependency, one that runs a satisfying
+/// generation applies the update for all of them — the same limit the GitSync import's rule has.</para>
 /// </summary>
 public static class PackageDependencyFloorGate
 {

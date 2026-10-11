@@ -372,9 +372,14 @@ import uses) before an update over an existing record: an unmet one is held — 
 installed version and its record unchanged, `heldUpdate` naming the requirement, the module that
 runs and its version — and the first pass after a satisfying dependency is loaded applies it.
 `PackageUpdateReconciler` asks the same question before it raises a reminder, so a held update is
-not offered either. Not gated: a fresh install (nothing to keep, and the installer orders
-dependencies first), a re-install of the recorded content, and a sync-owned partition (its import
-applies rule 1b, and the record must adopt what the owner landed). Which installer lane moved the
+not offered either. Not gated: a re-install of the recorded content, a sync-owned partition (its
+import applies rule 1b, and the record must adopt what the owner landed), and a FRESH install. The
+fresh install is not safe by this rule — a dependency installed earlier in the same closure is
+landed, not loaded — it is left out because the image ships its own copy of the platform modules
+and the registry is routinely ahead of it, so refusing on the loaded reading would fail a new
+instance's first boot for every default package above that copy. It is still caught here, at the
+proposal. The reading is also per process: while replicas run different generations, one that runs
+a satisfying dependency applies the update for all of them, the same limit as the import's rule. Which installer lane moved the
 two records was not read from the logs; all of them go through the orchestrator. Pinned by
 `PackageDependencyFloorHoldTest`; with the gate unwired the held arms never record a hold.
 
