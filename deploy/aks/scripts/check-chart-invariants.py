@@ -1161,11 +1161,33 @@ if _bundled:
         finding(f"PortalNext__PortalOrigin is {cfg_data.get('PortalNext__PortalOrigin')!r}",
                 "the bundled server's SSR reaches its OWN pod's portal over loopback. " + _next_fix)
 elif _next_dep is not None:
+    # End to end: ingress port → Service port → targetPort → a port the override container LISTENS on.
     _next_svc = next(iter(by_kind("Service", "portal-next-service")), None)
     _next_svc_ports = [p for p in (((_next_svc or {}).get("spec") or {}).get("ports") or [])]
-    if _next_svc is None or not any(p.get("port") == 3000 for p in _next_svc_ports):
-        finding("the /next OVERRIDE renders a Deployment but no portal-next-service on port 3000",
-                "the ingress would point at a backend that does not exist and /next would 503. " + _next_fix)
+    _next_pod = (((_next_dep.get("spec") or {}).get("template") or {}).get("spec")) or {}
+    _listens = {}
+    for _c in (_next_pod.get("containers") or []):
+        for _p in (_c.get("ports") or []):
+            _listens[_p.get("containerPort")] = _p
+            if _p.get("name"):
+                _listens[_p.get("name")] = _p
+
+    def _reaches(svc_port):
+        target = svc_port.get("targetPort", svc_port.get("port"))  # k8s: an omitted targetPort is the port
+        return target in _listens
+
+    _served = [p for p in _next_svc_ports if _reaches(p)]
+    if _next_svc is None or not _served:
+        finding("the /next OVERRIDE renders a Deployment but no portal-next-service port reaches a port it listens on",
+                f"Service ports {_next_svc_ports!r}, container ports {sorted(k for k in _listens if isinstance(k, int))!r}: "
+                "the ingress would forward /next to nothing and it would 503. " + _next_fix)
+    for b in _next_backends:
+        _bp = b.get("port") or {}
+        if b.get("name") == "portal-next-service" and not any(
+                (_bp.get("number") is not None and p.get("port") == _bp.get("number"))
+                or (_bp.get("name") is not None and p.get("name") == _bp.get("name")) for p in _served):
+            finding(f"the /next OVERRIDE's ingress targets portal-next-service port {_bp!r}, which reaches no listening port",
+                    "the path would 503. " + _next_fix)
     if "next" in _svc_ports or "next" in _c_ports:
         finding("the /next OVERRIDE renders its own Deployment AND a `next` port on the portal",
                 "half of the bundled shape is left behind. " + _next_fix)
