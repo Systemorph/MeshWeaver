@@ -261,6 +261,19 @@ public record MeshQueryRequest
     public string? TableHint { get; init; }
 
     /// <summary>
+    /// Asks the providers to assess which of the partitions they read the caller can read only
+    /// IN PART, and to report them on
+    /// <see cref="QueryResultChange{T}.PartiallyReadPartitions"/> (#6564).
+    ///
+    /// <para>Opt-in because it costs a read of the caller's grant rows per partition. The
+    /// operator- and agent-facing <c>search</c> sets it, because its envelope is read as a
+    /// denominator (the pre-deploy NodeType sweep). Interactive listings do not need it. A
+    /// provider that does not honour it leaves the field <see langword="null"/>, which means
+    /// "not assessed".</para>
+    /// </summary>
+    public bool ReportPartialReads { get; init; }
+
+    /// <summary>
     /// Creates a new request with the specified query string.
     /// </summary>
     public static MeshQueryRequest FromQuery(string query) => new() { Query = query };

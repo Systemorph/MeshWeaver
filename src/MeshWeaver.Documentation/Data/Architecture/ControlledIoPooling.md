@@ -189,6 +189,26 @@ The concurrency cap is enforced two ways, chosen per leaf kind:
 
 > The two shapes use threads differently, on purpose. **Async leaves reuse the ThreadPool the framework already uses**, with a governor in front of it — they hold a worker only between awaits, which is what the pool is built for. **Blocking leaves do not touch the ThreadPool at all**: they run on dedicated threads the pool's scheduler starts (one per concurrent drain loop, kept parked between bursts and exiting only when the pool is disposed), because a blocked thread is exactly what Orleans cannot coordinate with when it is one of its own workers. The thread COUNT is the same either way — a burst of N blocking leaves needs N threads — but a borrowed worker is taken from the grain turns and replaced only by the pool's slow injection, while a started thread is taken from no one.
 
+### 🚨 A parked lane holds nothing it ran
+
+A KEPT thread is a long-lived GC root, so whatever its parked stack still references stays alive for
+as long as the lane is idle. The lane loop therefore runs each take-and-execute in a method of its own
+(`LimitedConcurrencyLevelTaskScheduler.RunOne`, never inlined) that RETURNS before the next park; the
+loop's own frame holds no task.
+
+**Measured.** With the take and the execute inlined in the loop, a heap dump of
+`ModuleLiveSwapTest` on a Debug build found the retired module generation's ONLY root in the parked
+lane's frame: two temporaries of the previous iteration — the dequeued `LinkedListNode<Task>` and the
+`Task<SwapPlan>` itself — whose RESULT named the generations the swap retires. A `Task` drops its
+delegate once it has run but keeps its result while it is reachable, so the collectible context
+stayed loaded until the lane happened to run something else. Every "the old generation is collected"
+assertion in `MeshWeaver.Compiler.Pipeline.Test` (`ModuleLiveSwapTest`, `ModuleBuilderHookSwapTest`,
+`ModuleRootServicesSwapTest`) failed on a Debug build of unchanged `main` for this reason, alone and in
+the suite, and passed in Release, where the JIT reports those slots dead — so the measurement depended
+on the build configuration, not on the reference graph. `AParkedLaneHoldsNothingItRanTest` pins it:
+a leaf's result is collectible once the lane has parked (red on a Debug build with `RunOne` inlined
+back).
+
 ---
 
 ## Named pools and caps
