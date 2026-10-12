@@ -82,6 +82,7 @@ public record ActivityLog(string Category)
 
 - `Status` is **read-only from the user's perspective**. Only the owning hub writes it, as the activity transitions through `Running → Succeeded / Failed / Cancelled`.
 - `RequestedStatus` is the **control input**. Users, other hubs, and MCP agents patch this to drive the activity into a new state.
+- `Actions` holds the **durable actions** the activity offers once it has run ("Open QR card") as plain data, written with `hub.RecordActivityAction(activityPath, reference)`. They are neither status nor control: a stored caption and a local target that a reader can still open after the execution hub has unloaded. See [Action-Link Contracts](../ActionLinkContracts).
 
 ---
 

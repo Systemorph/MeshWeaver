@@ -17,13 +17,20 @@ namespace Memex.Portal.Shared.SelfUpdate;
 /// <summary>
 /// 🚨 <b>The deployment gate (#1754): may this environment be rolled to that release?</b>
 ///
-/// <para>An image is not rollable just because its version is newer — but since #3651 (maintainer
-/// rule of 2026-09-07, <c>Doc/Architecture/ModuleAdoptionPolicy</c>) the ONLY thing that holds it
-/// is MEASURED: a module this environment has landed, for which the target publishes no build,
-/// whose bytes reference a type the target's platform surface does not carry. A missing content
-/// bake is reported ("would recompile at boot: …") and the roll proceeds — the compile is what
-/// every PR of that content already proved green; <c>Modules:RequirePrebuilt</c> keeps it a hold
-/// for the instances that opt in. A declared <c>MinMeshVersion</c> floor is worded onto the
+/// <para>🚨 <b>Its answer is a PACKAGE answer and never holds the platform</b> (policy
+/// <c>platform-rolls-independently-of-packages</c>). <see cref="IsUpdatable"/> answers
+/// truthfully — "cannot determine" is still not "available" — and every roll path (the poller,
+/// the reboot, the manual button, <c>/api/plugins/is-updatable</c>, <see cref="SelectRollTarget"/>)
+/// passes a refusal through <see cref="UpdatabilityVerdict.ForPlatformRoll"/>, which turns it
+/// into advisories, and rolls to the newest admitted tag. Wherever this type says the package
+/// verdict REFUSES, that is the truthful package answer; no roll stops on it.</para>
+///
+/// <para>What the package verdict refuses, since #3651 (maintainer rule of 2026-09-07,
+/// <c>Doc/Architecture/ModuleAdoptionPolicy</c>), is MEASURED: a module this environment has
+/// landed, for which the target publishes no build, whose bytes reference a type the target's
+/// platform surface does not carry. A missing content bake is reported ("would recompile at
+/// boot: …") and is no refusal — the compile is what every PR of that content already proved
+/// green; <c>Modules:RequirePrebuilt</c> keeps it a refusal for the instances that opt in. A declared <c>MinMeshVersion</c> floor is worded onto the
 /// advisories and decides nothing. This service is what adds the environment's LANDED generations
 /// (the activation sidecar) to the gate's inputs and runs the link measurement against the surface
 /// the publication carries.</para>
@@ -194,42 +201,46 @@ public class ReleaseAvailabilityService(
     /// for each environment which is the latest platform version shipping all plugins, if different
     /// from current version ⇒ update."</i></blockquote>
     ///
-    /// <para><see cref="IsUpdatable"/> answers a question you must already know the answer to —
-    /// <i>may I roll to THIS version?</i> — so every caller still has to choose the version itself,
-    /// and the only choice available was "the newest". This inverts it: completeness becomes the
-    /// SELECTION criterion, so an environment never targets a release that does not ship all of its
-    /// plugins and there is nothing left for a readiness gate to refuse.</para>
+    /// <para>🚨 <b>It selects the NEWEST ADMITTED candidate, always</b> (policy
+    /// <c>platform-rolls-independently-of-packages</c>). The blockquote above is the question the
+    /// selector was built to answer; a package answer no longer decides it. The head of the
+    /// candidate list is judged by exactly the code <see cref="IsUpdatable"/> runs —
+    /// <see cref="ReleaseAvailability.IsUpdatable(ReleaseTarget, IEnumerable{RequiredPackage}, ReleaseArtifacts)"/> over
+    /// <see cref="PublishedBundleCatalogue"/>'s observation — and that verdict is passed through
+    /// <see cref="UpdatabilityVerdict.ForPlatformRoll"/> by the walk in <see cref="RollSelection"/>:
+    /// a package that is not available for the release, and an availability that could not be
+    /// determined, become <see cref="RollSelectionOutcome.Advisories"/> on the SELECTED release.
+    /// No candidate is declined, so a caller must not implement a fallback to an older release.</para>
     ///
-    /// <para><b>The predicate is the same one.</b> Each candidate is judged by exactly the code
-    /// <see cref="IsUpdatable"/> runs — <see cref="ReleaseAvailability.IsUpdatable(ReleaseTarget, IEnumerable{RequiredPackage}, ReleaseArtifacts)"/> over
-    /// <see cref="PublishedBundleCatalogue"/>'s observation — and the walk itself lives in
-    /// <see cref="RollSelection"/>. There is deliberately no second copy of "does this release ship
-    /// all plugins" to drift from the first.</para>
+    /// <para><b>What each unreadable input becomes.</b> The plugin list unread or empty, or the
+    /// published root unreadable while the caller supplied the candidates: the head is still
+    /// selected and the advisory says that no package was checked
+    /// (<see cref="RollSelection.Unjudged"/>). The published root unreadable with NO candidates
+    /// supplied (they would have come from that root), or a candidate universe that could not be
+    /// listed: <see cref="RollSelectionKind.Indeterminate"/> — nothing can be selected, and that
+    /// is said. A deployment that consumes no CI bakes: <see cref="RollSelectionKind.NotEnforced"/>.
+    /// A selection that does not answer within the budget, or faults: Indeterminate.</para>
     ///
-    /// <para><b>It costs ONE inventory read per selection, not one per candidate.</b> The mesh query
-    /// and the monotone denominator are read once, before the walk; only the per-candidate
-    /// observation is repeated, and only until one candidate clears.</para>
+    /// <para><b>It costs ONE inventory read and ONE candidate observation per selection.</b> The
+    /// mesh query and the monotone denominator are read once, and only the head is observed.</para>
     ///
     /// <para>Cold and total, like <see cref="IsUpdatable"/>: every failure resolves to an outcome
-    /// carrying its reason, so a caller can subscribe without a <c>Catch</c> that would turn an
-    /// incident into a selection.</para>
+    /// carrying its reason, so a caller can subscribe without a <c>Catch</c>.</para>
     /// </summary>
     /// <param name="currentVersion">What this environment runs — <c>different from current ⇒
-    /// update</c> is the algorithm's own comparison, so it has to be given.</param>
+    /// update</c> is the selection's own comparison, so it has to be given.</param>
     /// <param name="candidatesNewestFirst">The releases to choose from, newest first. Null ⇒ every
     /// release the published root carries a marker for, ordered by <see cref="VersionSelect"/> under
     /// <paramref name="policy"/> — which lets an environment answer for itself without listing a
     /// container registry.</param>
     /// <param name="policy">Which releases are eligible when the candidates are derived. Default
-    /// <see cref="UpdatePolicyKind.Continuous"/>: the question "which release ships all plugins" is
-    /// about the PUBLICATIONS, and whether this install would apply the answer is a separate
-    /// decision that stays with the poller.</param>
-    /// <param name="condemned">Optional second opinion applied to each candidate BEFORE it can be
-    /// selected — in production the combo gate's recorded refusal, which answers the question an
-    /// artifact cannot: whether the candidate's assemblies can still serve the modules this
-    /// instance has landed. Returns the refusal, or null when it has nothing against the candidate.
-    /// 🚨 Only a REFUSAL removes a candidate; "not verified" is neither preferred nor condemned, so
-    /// an unwired verifier can never empty the candidate list.</param>
+    /// <see cref="UpdatePolicyKind.Continuous"/>: which releases exist is a question about the
+    /// PUBLICATIONS, and whether this install would apply the answer is a separate decision that
+    /// stays with the poller.</param>
+    /// <param name="condemned">Optional second opinion about each candidate — e.g. the combo gate's
+    /// recorded Red. Returns what it says, or null when it has nothing against the candidate.
+    /// 🚨 It is an ADVISORY on the selected release (policy
+    /// <c>platform-rolls-independently-of-packages</c>), never a reason to walk past it.</param>
     /// <param name="requireCiGreen">Exclude unverified <c>edge</c> builds when deriving candidates.</param>
     public virtual IObservable<RollSelectionOutcome> SelectRollTarget(
         string? currentVersion,
@@ -258,7 +269,22 @@ public class ReleaseAvailabilityService(
                     // as a root that genuinely serves none — and they mean opposite things. See
                     // Verdict() for the full reasoning; this is the same order, one level up.
                     f.Refusal is { } refusal
-                        ? Observable.Return(Indeterminate(environment, currentVersion, refusal))
+                        // 🚨 An unreadable root is a PACKAGE question that could not be asked, so
+                        // it holds nothing (policy
+                        // <c>platform-rolls-independently-of-packages</c>). With the candidates in
+                        // hand the
+                        // newest admitted one is selected and the advisory says nothing was
+                        // checked; without them (they would have come from that very root) there
+                        // is nothing to select, and that is still said as Indeterminate.
+                        ? Observable.Return(candidatesNewestFirst is { Count: > 0 }
+                            ? RollSelection.Unjudged(
+                                new RollSelectionInputs(environment, currentVersion,
+                                    [.. candidatesNewestFirst],
+                                    PluginInventory.Unreadable(InventorySource, refusal)),
+                                $"the published bundle root could not be read ({refusal}), so no "
+                                + "package was checked against this release; the packages catch up "
+                                + "through their own update policy")
+                            : Indeterminate(environment, currentVersion, refusal))
                         : !f.ServesBakes
                             ? Observable.Return(NotEnforced(
                                 environment, currentVersion, NoPublicationsReason(publishedRoot)))
@@ -316,15 +342,19 @@ public class ReleaseAvailabilityService(
         Func<string, string?>? condemned) =>
         Judge(publishedRoot, required, version)
             .Do(LogAdvisories)
-            .Select(verdict => verdict.IsUpdatable && condemned?.Invoke(version) is { } refusal
-                // Folded into the SAME verdict shape rather than kept beside it, so the walk has
-                // one notion of "this candidate is out" and the refusal travels with its reason.
+            .Select(verdict => condemned?.Invoke(version) is { } refusal
+                // 🚨 The second opinion (the combo gate's recorded Red) is a statement about the
+                // modules this instance has landed — a PACKAGE question — so under policy
+                // <c>platform-rolls-independently-of-packages</c> it
+                // is an ADVISORY on the candidate, never a reason to walk past it.
                 ? verdict with
                 {
-                    IsUpdatable = false,
-                    Packages = verdict.Packages.Add(new PackageAvailability(
-                        "(combo)", PackageAvailabilityKind.ComboVerificationFailed, refusal)),
-                    HoldReason = refusal,
+                    Advisories =
+                    [
+                        .. verdict.Advisories.IsDefault ? [] : verdict.Advisories,
+                        $"the platform rolls independently of packages — {refusal}; those modules "
+                        + "keep their previous generation and catch up through their own update policy",
+                    ],
                 }
                 : verdict);
 
@@ -394,14 +424,14 @@ public class ReleaseAvailabilityService(
     private static RollSelectionOutcome Indeterminate(
         string environment, string? currentVersion, string reason) =>
         new(RollSelectionKind.Indeterminate, null, currentVersion, 0, 0, [],
-            $"{environment}: the roll selection could not be made ({reason}) — cannot determine "
-            + "which release ships all plugins, which is not clearance to roll to the newest one.");
+            $"{environment}: the roll selection could not be made ({reason}) — the releases to "
+            + "choose from could not be determined, so nothing is selected.");
 
     /// <summary>
     /// The verdict, given what the denominator observation turned out to be. Three outcomes, and
     /// the ORDER is the whole point.
     ///
-    /// <para>🚨 <b>An unreadable root is a HOLD, and it is tested FIRST.</b> A configured root that
+    /// <para>🚨 <b>An unreadable root is a REFUSAL (indeterminate), and it is tested FIRST.</b> A configured root that
     /// does not exist, or that faults on read, produces a floor with no bundles — the same shape as
     /// a root that genuinely serves no bakes. They mean opposite things: the first is a mis-mounted
     /// volume or a mistyped path on a deployment that DECLARES it consumes CI bakes (an availability
@@ -431,14 +461,14 @@ public class ReleaseAvailabilityService(
                 // 🚨 THE VACUITY REFUSAL (#3479). With no packages required, every release is
                 // vacuously available and this gate answers a confident green having compared two
                 // empty sets — the SAME shape #3441 removed from HasContent, reappearing at the
-                // package LIST itself. It is a HOLD, and Unavailable rather than a
+                // package LIST itself. It is a REFUSAL, and Unavailable rather than a
                 // compatibility verdict because the remedy is to fix the read (or to stop
                 // declaring that this deployment consumes CI bakes), never to re-bake a release.
                 //
                 // The case is not hypothetical: this environment's install records measured ZERO
-                // on 2026-08-10 while it carried 42 modules. It is also self-clearing — the
-                // verdict is re-evaluated from scratch on every tick, so a portal that has not yet
-                // written its records holds for one interval and then proceeds.
+                // on 2026-08-10 while it carried 42 modules. On a roll path it is an advisory
+                // saying no package was checked; the verdict is re-evaluated from scratch on every
+                // tick, so it disappears once the portal has written its records.
                 ? Observable.Return(UpdatabilityVerdict.Unavailable(VacuousDenominatorReason))
                 : Judge(publishedRoot, required, targetVersion).Do(LogAdvisories));
     }
@@ -489,7 +519,7 @@ public class ReleaseAvailabilityService(
             verdict.Advisories.Length, string.Join("; ", verdict.Advisories));
     }
 
-    /// <summary>Why an empty denominator is a hold rather than a pass — see the call site.</summary>
+    /// <summary>Why an empty denominator is a refusal rather than a pass — see the call site.</summary>
     private const string VacuousDenominatorReason =
         "this deployment consumes CI bakes and its published root serves them, yet it reports ZERO "
         + "installed packages — so every release would 'ship all' of nothing and this gate would "
