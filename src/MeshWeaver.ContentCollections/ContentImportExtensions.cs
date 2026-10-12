@@ -134,7 +134,7 @@ public static class ContentImportExtensions
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger(typeof(ContentImportExtensions).FullName!);
         // The hub action block only subscribes + returns; the write runs on the collection's pool.
-        SaveOne(hub.ServiceProvider.GetService<IContentService>(), delivery.Message, logger)
+        SaveOne(hub, hub.ServiceProvider.GetService<IContentService>(), delivery.Message, logger)
             .Subscribe(
                 count => hub.Post(ImportContentResponse.Ok(count), o => o.ResponseFor(delivery)),
                 ex => hub.Post(FailureFor(delivery, ex), o => o.ResponseFor(delivery)));
@@ -146,7 +146,7 @@ public static class ContentImportExtensions
     /// own collection configuration and streams the bytes (inline or staged) into the file.
     /// </summary>
     private static IObservable<int> SaveOne(
-        IContentService? contentService, SaveContentFileRequest request, ILogger? logger)
+        IMessageHub hub, IContentService? contentService, SaveContentFileRequest request, ILogger? logger)
     {
         if (contentService is null)
             return Observable.Throw<int>(new InvalidOperationException(
@@ -155,6 +155,18 @@ public static class ContentImportExtensions
         if (config is null)
             return Observable.Throw<int>(new InvalidOperationException(
                 $"collection '{request.CollectionName}' not found on this node"));
+        // 🚨 Only a collection THIS node owns is written here. GetCollectionConfig falls back to the
+        // hosting hub's content service, so a name this node does not declare can resolve to a
+        // collection registered on its host — a store rooted above this node, shared with every
+        // other node it hosts. The gate that admitted this delivery decided Update on THIS node,
+        // which is no authority over that store: writing into it would let an editor of one node
+        // plant or overwrite files of its host and of its siblings. So an inherited collection is
+        // refused here, by name, and nothing is written.
+        if (!OwnsCollection(hub, contentService, config))
+            return Observable.Throw<int>(new InvalidOperationException(
+                $"collection '{request.CollectionName}' is not declared by this node (it is inherited from "
+                + $"'{config.Address?.ToString() ?? "its host"}'); a write into it is not this node's to admit. "
+                + "Nothing was written."));
         if (!config.IsEditable)
             return Observable.Throw<int>(new InvalidOperationException(
                 $"collection '{request.CollectionName}' is read-only"));
@@ -185,6 +197,22 @@ public static class ContentImportExtensions
                 ? target.SaveFile(dir, name, () => new MemoryStream(bytes, writable: false)).Select(_ => 1)
                 : WriteStaged(target, request.Staged! with { Path = path }, dir, name, logger));
     }
+
+    /// <summary>
+    /// Whether <paramref name="config"/> is a collection <paramref name="hub"/> declares itself, as
+    /// opposed to one it inherits from its hosting hub — either through the host's content service
+    /// (<see cref="IContentService.GetCollectionConfig"/> falls back to it) or through the host's
+    /// service registrations, which a node hub's container sees as well.
+    ///
+    /// <para>A config that names its owner (<see cref="ContentCollectionConfig.Address"/>, stamped by
+    /// every per-hub registration) is this node's exactly when that owner is this node. One that names
+    /// none is this node's only when the host does not declare the same name — a name the host also
+    /// answers is the host's, and the safe reading of the ambiguity is "not this node's".</para>
+    /// </summary>
+    private static bool OwnsCollection(IMessageHub hub, IContentService contentService, ContentCollectionConfig config)
+        => config.Address is { } owner
+            ? string.Equals(owner.Path, hub.Address.Path, StringComparison.OrdinalIgnoreCase)
+            : contentService is ContentService own && !own.HostDeclares(config.Name);
 
     private static IMessageDelivery HandleSyncContentFiles(
         IMessageHub hub, IMessageDelivery<SyncContentFilesRequest> delivery)
@@ -1222,7 +1250,13 @@ public sealed class SaveContentFileBuilder
             })
             .SelectMany(destination => destination is null
                 ? inline
-                : OutOfBandContentTransfer.Stage(destination, pool, file)
+                // Reclaim a dead producer's residue before adding to the folder, never after — the
+                // same order as SyncContentFilesBuilder.Stage, so the sweep cannot see this upload's
+                // own blob. Without it a staged upload abandoned before its post terminates (an HTTP
+                // cancellation, a crashed caller) would leave its blob for good on a collection that
+                // is only ever uploaded to.
+                : OutOfBandContentTransfer.SweepStale(destination, DateTime.UtcNow, logger)
+                    .SelectMany(_ => OutOfBandContentTransfer.Stage(destination, pool, file))
                     .SelectMany(staged =>
                     {
                         // Reclaimed IN the chain, ahead of the caller's answer — the same contract

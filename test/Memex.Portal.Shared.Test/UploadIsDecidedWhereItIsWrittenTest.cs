@@ -48,6 +48,13 @@ public class UploadIsDecidedWhereItIsWrittenTest(ITestOutputHelper output) : Mon
     private readonly string _contentRoot = Path.Combine(
         AppContext.BaseDirectory, "Files", "UploadOwnerGate", Guid.NewGuid().ToString("N"));
 
+    /// <summary>A collection registered on the MESH hub and exposed to children — the store a node
+    /// hub's content service falls back to for a name the node does not declare itself.</summary>
+    private const string HostCollection = "hostshared";
+
+    private readonly string _hostRoot = Path.Combine(
+        AppContext.BaseDirectory, "Files", "UploadOwnerGateHost", Guid.NewGuid().ToString("N"));
+
     private static TimeSpan Budget => TestTimeouts.Convergence;
 
     // 🚨 ConfigureMeshBase, not base.ConfigureMesh: the latter grants Public the Admin role in every
@@ -55,7 +62,16 @@ public class UploadIsDecidedWhereItIsWrittenTest(ITestOutputHelper output) : Mon
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
         Directory.CreateDirectory(_contentRoot);
+        Directory.CreateDirectory(_hostRoot);
         return ConfigureMeshBase(builder)
+            .ConfigureHub(hub => hub.AddContentCollection(_ => new ContentCollectionConfig
+            {
+                Name = HostCollection,
+                SourceType = "FileSystem",
+                BasePath = _hostRoot,
+                IsEditable = true,
+                ExposeInChildren = true,
+            }))
             .AddMeshNodes(
                 new MeshNode(UploadType)
                 {
@@ -186,5 +202,42 @@ public class UploadIsDecidedWhereItIsWrittenTest(ITestOutputHelper output) : Mon
         var staging = Path.Combine(_contentRoot, ContentStaging.Folder);
         (Directory.Exists(staging) ? Directory.GetFiles(staging) : [])
             .Should().BeEmpty("the staged blob is reclaimed when the write answers");
+    }
+
+    [Fact]
+    public async Task AnEditorOfOneNode_CannotWriteIntoACollectionItInheritsFromItsHost()
+    {
+        // The node does not declare HostCollection; its content service resolves the name off the
+        // mesh hub, whose store is shared by every node it hosts. Update on the node is no authority
+        // over that store, so the owner-side write refuses it and nothing lands in the host's root.
+        var answer = await UploadAs(EditorUser, $"{Target}/{HostCollection}/planted.txt",
+            System.Text.Encoding.UTF8.GetBytes("into the host's store"));
+        Output.WriteLine($"inherited: {answer}");
+
+        answer.Should().StartWith("Error:").And.Contain("not declared by this node");
+        File.Exists(Path.Combine(_hostRoot, "planted.txt")).Should().BeFalse(
+            "a collection the node only inherits is not the node's to write into");
+        File.Exists(Path.Combine(_hostRoot, Target, "planted.txt")).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task AStagedUpload_SweepsAStaleBlobADeadProducerLeft()
+    {
+        // A blob abandoned by an upload that never terminated (an HTTP cancellation after staging):
+        // older than StaleAfter, so the next staged upload into the collection reclaims it first.
+        var staging = Path.Combine(_contentRoot, ContentStaging.Folder);
+        Directory.CreateDirectory(staging);
+        var abandoned = Path.Combine(staging, new string('a', 64));
+        await File.WriteAllBytesAsync(abandoned, [1, 2, 3], TestContext.Current.CancellationToken);
+        File.SetLastWriteTimeUtc(abandoned, DateTime.UtcNow - ContentStaging.StaleAfter - TimeSpan.FromHours(1));
+
+        var bytes = new byte[ContentDeliveryBudget.BudgetBytes + 64 * 1024];
+        new Random(6593).NextBytes(bytes);
+        var answer = await UploadAs(EditorUser, $"{Target}/content/after-abandoned.bin", bytes);
+        Output.WriteLine($"sweep: {answer}");
+
+        answer.Should().Contain("\"Uploaded\"");
+        File.Exists(abandoned).Should().BeFalse("a staged upload reclaims a dead producer's residue before staging");
+        Directory.GetFiles(staging).Should().BeEmpty("and its own blob is reclaimed when the write answers");
     }
 }
