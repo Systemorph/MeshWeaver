@@ -5,6 +5,7 @@ using MeshWeaver.AI;   // MeshOperations — its namespace is a frozen binary co
 using MeshWeaver.Fixture;
 using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Monolith.TestBase;
+using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
@@ -27,8 +28,9 @@ namespace Memex.Portal.Shared.Test;
 /// platform admin.</para>
 ///
 /// <para>The seed is reproduced here with the same shape (an Admin grant at scope <c>Admin</c>).
-/// A caller with no grant must not find it through <c>query-nodes</c> or <c>search</c>; the seeded
-/// admin, who may read <c>Admin/_Access</c>, still does — the positive control.</para>
+/// A caller with no grant must not find it through <c>query-nodes</c>, <c>search</c> or an
+/// autocomplete drill-down under <c>Admin/_Access</c>; the seeded admin, who may read
+/// <c>Admin/_Access</c>, still does — the positive control.</para>
 /// </summary>
 public class DeclaredAccessAssignmentIsRowFilteredTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -41,7 +43,9 @@ public class DeclaredAccessAssignmentIsRowFilteredTest(ITestOutputHelper output)
     // default partition, under which every caller could read Admin/_Access and the filter would be vacuous.
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder)
-            .AddMeshNodes(AssignmentNodeFactory.UserRole(SeededAdmin, "Admin", "Admin"));
+            .AddMeshNodes(
+                AssignmentNodeFactory.UserRole(SeededAdmin, "Admin", "Admin"),
+                new MeshNode(SatelliteNote, "Admin/_Access") { NodeType = "Markdown", Name = SatelliteNote });
 
     private IMessageHub SessionHub() => SessionHubFactory.Resolve(
         Mesh, "mcp", "declaredgrant",
@@ -84,5 +88,49 @@ public class DeclaredAccessAssignmentIsRowFilteredTest(ITestOutputHelper output)
 
         answer.Should().Contain(SeededAdmin,
             "the seeded admin may read Admin/_Access — if this fails, the filter above proves nothing");
+    }
+    /// <summary>
+    /// A declared node on the same satellite path whose type is NOT excluded from autocomplete.
+    /// <c>AccessAssignment</c> itself is (<c>AutocompleteExcludedNodeTypes</c>), so a drill-down
+    /// never suggested the seed above — a probe of it would pass with or without the row filter.
+    /// This row is what makes the filter observable on the autocomplete surface.
+    /// </summary>
+    private const string SatelliteNote = "declaredgrant-note";
+
+    /// <summary>
+    /// The paths the declared-node provider suggests to <paramref name="userId"/> for an autocomplete
+    /// drill-down under <c>Admin/_Access</c> — the provider itself, the leaf every
+    /// <c>MeshQuery.Autocomplete</c> fan-out (and so the chat drill-down) reaches. One snapshot, then
+    /// complete: the catalog is in memory.
+    /// </summary>
+    private Task<string> AutocompleteAs(string userId)
+    {
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        access.SetContext(new AccessContext { ObjectId = userId, Name = userId });
+        return Mesh.ServiceProvider.GetRequiredService<StaticNodeQueryProvider>()
+            .Autocomplete("Admin/_Access", "", Mesh.JsonSerializerOptions, limit: 50)
+            .Select(rows => string.Join("\n", rows.Select(r => r.Path)))
+            .Timeout(Budget)
+            .Await(TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Autocomplete_AStranger_IsNotSuggestedADeclaredSatelliteRow()
+    {
+        var answer = await AutocompleteAs(Stranger);
+        Output.WriteLine($"stranger: {answer}");
+
+        answer.Should().NotContain(SatelliteNote,
+            "an autocomplete drill-down under Admin/_Access is the same read as search — a declared row there is filtered for the stranger exactly as a query of it is");
+    }
+
+    [Fact]
+    public async Task Autocomplete_TheSeededAdmin_IsStillSuggestedIt()
+    {
+        var answer = await AutocompleteAs(SeededAdmin);
+        Output.WriteLine($"admin: {answer}");
+
+        answer.Should().Contain(SatelliteNote,
+            "the seeded admin may read Admin/_Access — if this fails, the stranger's missing suggestion proves nothing");
     }
 }

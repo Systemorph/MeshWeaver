@@ -207,10 +207,14 @@ public class ACopyThatCannotCompleteSaysSoTest(ITestOutputHelper output) : Monol
         outcome.Status.Should().Be(NodeCopyStatus.SourceNotFullyReadable,
             "an enumeration that came back short because of permission is NOT an empty subtree, "
             + "and a copy that cannot see all of its source must refuse rather than carry a part");
-        (outcome.SourceNodeCount - outcome.EnumeratedCount).Should().Be(2,
-            $"'{RestrictedFolder}' and '{RestrictedLeaf}' are held by the subtree and hidden from "
-            + "this caller — the System-scoped reading is what turns that into a number instead of "
-            + "a silence");
+        // Three, not two: the deny that restricts the branch is itself a node of the subtree —
+        // the declared grant 'TestData/Pkg/Restricted/_Access/copier_Access' — and a declared access row
+        // is row-filtered like a stored one (StaticNodeQueryProvider, #6578), so a caller who may
+        // not read the branch does not read its access row either.
+        (outcome.SourceNodeCount - outcome.EnumeratedCount).Should().Be(3,
+            $"'{RestrictedFolder}', '{RestrictedLeaf}' and the deny grant declared under "
+            + $"'{RestrictedFolder}/_Access' are held by the subtree and hidden from this caller — "
+            + "the System-scoped reading is what turns that into a number instead of a silence");
         outcome.IsComplete.Should().BeFalse("a refusal is never a finished copy");
         outcome.Entries.Should().BeEmpty("the refusal is established BEFORE anything is attempted");
 

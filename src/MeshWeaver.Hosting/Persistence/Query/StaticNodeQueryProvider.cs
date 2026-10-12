@@ -236,30 +236,39 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
         string? contextPath = null, string? context = null)
     {
         var providerName = ((IMeshQueryProvider)this).Name;
-        var rows = (IReadOnlyCollection<QueryResult>)ComputeSuggestions(basePath, prefix, mode, limit, contextPath, context)
-            .Select(s => new QueryResult
-            {
-                Path = s.Path,
-                Name = s.Name,
-                NodeType = s.NodeType,
-                Icon = s.Icon,
-                Score = s.Score,
-                ProviderName = providerName,
-            })
-            .ToList();
-        return Observable.Return(rows);
+        // 🚨 The viewer is resolved NOW, on the caller's thread — the same instant and the same
+        // AccessService StorageAdapterMeshQueryProvider.Autocomplete resolves it at — and every
+        // declared satellite row (a declared access grant) is row-filtered BEFORE the limit, so a
+        // suggestion and a `search` of the same path agree: a caller who cannot read
+        // Admin/_Access cannot autocomplete the platform admins out of it either (#6578).
+        var viewer = QueryIdentityResolver.Resolve(
+            new MeshQueryRequest { Query = string.IsNullOrEmpty(basePath) ? "" : $"path:{basePath}" },
+            _accessService?.Context?.ObjectId ?? _accessService?.CircuitContext?.ObjectId).UserId;
+        var candidates = ComputeSuggestions(basePath, prefix, contextPath, context);
+        return FilterReadable(candidates, c => c.Node, viewer)
+            .Select(visible => (IReadOnlyCollection<QueryResult>)Order(visible.Select(c => c.Suggestion), mode)
+                .Take(limit)
+                .Select(s => new QueryResult
+                {
+                    Path = s.Path,
+                    Name = s.Name,
+                    NodeType = s.NodeType,
+                    Icon = s.Icon,
+                    Score = s.Score,
+                    ProviderName = providerName,
+                })
+                .ToList());
     }
 
     /// <summary>
     /// Synchronous suggestion computation backing the reactive <see cref="Autocomplete"/> override.
     /// Pure in-memory scan + score + order — no I/O, so no async.
     /// </summary>
-    private IReadOnlyList<QuerySuggestion> ComputeSuggestions(
-        string basePath, string prefix, AutocompleteMode mode, int limit,
-        string? contextPath, string? context)
+    private List<(MeshNode Node, QuerySuggestion Suggestion)> ComputeSuggestions(
+        string basePath, string prefix, string? contextPath, string? context)
     {
         var normalizedPrefix = (prefix ?? "").ToLowerInvariant();
-        var suggestions = new List<QuerySuggestion>();
+        var suggestions = new List<(MeshNode Node, QuerySuggestion Suggestion)>();
 
         foreach (var node in _allNodes)
         {
@@ -302,10 +311,14 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
             }
 
             score += PathProximity.ComputeBoost(contextPath, node.Path);
-            suggestions.Add(new QuerySuggestion(node.Path ?? "", name, node.NodeType, score, node.Icon));
+            suggestions.Add((node, new QuerySuggestion(node.Path ?? "", name, node.NodeType, score, node.Icon)));
         }
 
-        IEnumerable<QuerySuggestion> ordered = mode switch
+        return suggestions;
+    }
+
+    private static IEnumerable<QuerySuggestion> Order(IEnumerable<QuerySuggestion> suggestions, AutocompleteMode mode) =>
+        mode switch
         {
             AutocompleteMode.RelevanceFirst => suggestions
                 .OrderByDescending(s => s.Score)
@@ -316,9 +329,6 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
                 .ThenByDescending(s => s.Score)
                 .ThenBy(s => s.Name)
         };
-
-        return ordered.Take(limit).ToList();
-    }
 
     /// <inheritdoc />
     /// <remarks>
@@ -407,11 +417,23 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
             return Observable.Return(items);
         var viewer = QueryIdentityResolver.ResolveAndReport(
             request, _accessService?.Context?.ObjectId ?? _accessService?.CircuitContext?.ObjectId, _logger).UserId;
-        if (string.Equals(viewer, WellKnownUsers.System, StringComparison.Ordinal))
+        return FilterReadable(items, item => item as MeshNode, viewer);
+    }
+
+    /// <summary>
+    /// <paramref name="items"/> without the declared SATELLITE rows <paramref name="viewer"/> may not
+    /// read — the one filter <see cref="Query{T}"/> and <see cref="Autocomplete"/> share. Synchronous
+    /// when there is nothing to decide (no satellite row, no validators, or a System read).
+    /// </summary>
+    private IObservable<List<TItem>> FilterReadable<TItem>(List<TItem> items, Func<TItem, MeshNode?> nodeOf, string viewer)
+    {
+        if (_nodeValidators is null
+            || string.Equals(viewer, WellKnownUsers.System, StringComparison.Ordinal)
+            || !items.Any(i => nodeOf(i) is { } n && SatelliteTableMapping.IsSatellitePath(n.Path)))
             return Observable.Return(items);
 
         return items
-            .Select(item => item is MeshNode node && SatelliteTableMapping.IsSatellitePath(node.Path)
+            .Select(item => nodeOf(item) is { } node && SatelliteTableMapping.IsSatellitePath(node.Path)
                 ? ValidateRead(node, viewer).Select(visible => (item, visible))
                 : Observable.Return((item, visible: true)))
             .ToInlineObservable()
