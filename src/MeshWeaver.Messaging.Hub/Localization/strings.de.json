@@ -1783,6 +1783,8 @@
   "notification.packageUpdate.authorizationRequired.title": "Update benötigt einen globalen Administrator: {name}",
   "notification.packageUpdate.authorizationRequired.bodyFiles": "Ein neuer Build von {name} ist verfügbar ({changed} Datei(en) geändert, {removed} entfernt), es ist jedoch ein kommerzielles Paket und wurde nicht automatisch angewendet. {reason}",
   "notification.packageUpdate.authorizationRequired.bodyContent": "Ein neuer Build von {name} ist verfügbar (Inhalt geändert), es ist jedoch ein kommerzielles Paket und wurde nicht automatisch angewendet. {reason}",
+  "notification.packageUpdate.originAmbiguous.title": "Update abgelehnt: {name}",
+  "notification.packageUpdate.originAmbiguous.body": "Ein neuer Build von {name} ist verfügbar, aber diese Installation hält nicht fest, aus welchem Repository sie stammt, und {count} beobachtete Repositories führen das Paket: {origins}. Es wurde NICHT angewendet. Installieren Sie es erneut aus dem Repository, zu dem es gehört; spätere Updates kommen dann nur noch von dort.",
   "notification.import.startupFailed.title": "Import beim Start fehlgeschlagen: {partition}",
   "notification.import.startupFailed.body": "Der Import ist beim Start fehlgeschlagen.",
   "notification.accessGranted.title": "Sie haben Zugriff auf {name} erhalten",
