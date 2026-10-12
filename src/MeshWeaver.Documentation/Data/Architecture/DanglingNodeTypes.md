@@ -433,6 +433,19 @@ logger, so a genuine conversion fault on a NodeType stays loud. Pinned by
 (3 Error lines against the unfixed watcher, 0 with the fix; the positive half proves the watcher
 still recycles once a declaration arrives).
 
+🚨 **A second caller outside the route met the same input** (#6525). On-demand content-type
+registration (`ContentTypeOnDemandRegistration`, [Dynamic Content Type Registration](../DynamicContentTypeRegistration))
+runs when a read cannot type an instance yet, and it asks for the type the instance NAMES — so for an
+instance naming the bare `Feedback` it reads the Store plugin root at that path. It handed that
+record to the NodeType enumeration's typing, whose logger reports an unconvertible record at `Error`
+(right for its own `nodeType:NodeType` enumeration, where every row should be a declaration), and the
+fingerprint came back from a `MeshWeaver.Hosting` category. The attempt now applies the same one-sided
+`IsProvablyNotADeclaration` first: a proven occupant answers `NotBaked` with the shared occupant
+sentence (*'Feedback' is a 'Store/Plugin' node, not a NodeType declaration …*), logged at
+`Information` with the attempt, and nothing is converted with a logger. Pinned by
+`AnOccupiedNodeTypePathIsNotAConversionFaultTest` (1 Error line naming the occupied path without the
+check, 0 with it).
+
 **What this does NOT do: repair the instance.** An instance that names the bare `Feedback` still gets
 the overlay — correctly — until its `nodeType` is rewritten to `Feedback/Feedback` through the repair
 path below. The write-side refusal (above) stops new ones only on an image that carries it.

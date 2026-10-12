@@ -257,7 +257,15 @@ public static class InboxLayoutArea
     /// key, else its id (right for a name that is the same in every language).
     /// </summary>
     internal static string SourceLabel(LayoutAreaHost host, InboxSection section)
-        => string.IsNullOrWhiteSpace(section.SourceLabelKey) ? section.Source : host.Localize(section.SourceLabelKey);
+        => Label(key => host.Localize(key), section.SourceLabelKey, section.Source);
+
+    /// <summary>
+    /// The catalog text for <paramref name="key"/>, or <paramref name="fallback"/> when no key was
+    /// given or the catalog does not define it. A package can name a key a NEWER platform adds; on a
+    /// platform that lacks it the viewer reads the provider's own name, never the raw key.
+    /// </summary>
+    internal static string Label(Func<string, string> localize, string? key, string fallback)
+        => !string.IsNullOrWhiteSpace(key) && LocalizationCatalog.ContainsKey(key) ? localize(key) : fallback;
 
     /// <summary>
     /// The culture a row's date is written in. A language tag the runtime does not know falls back
@@ -550,9 +558,7 @@ public static class InboxLayoutArea
     /// </summary>
     internal static string BandTitle(LayoutAreaHost host, string band, IEnumerable<InboxSection> sections)
         => BandOrder.Contains(band) ? host.Localize(BandTitleKey(band))
-            : sections.FirstOrDefault(s => s.Band == band && !string.IsNullOrWhiteSpace(s.BandLabelKey))?.BandLabelKey is { } key
-                ? host.Localize(key)
-                : band;
+            : Label(key => host.Localize(key), sections.FirstOrDefault(s => s.Band == band && !string.IsNullOrWhiteSpace(s.BandLabelKey))?.BandLabelKey, band);
 
     /// <summary>The localization key of a band's title.</summary>
     internal static string BandTitleKey(string band) => "inbox.band." + band;
