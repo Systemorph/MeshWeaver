@@ -257,6 +257,13 @@ The same registry closes the two neighbouring gaps of that class, again on both 
   which every host kind calls; every read of the installed or incompatible set resolves the registry
   first. The Autofac root still claims the publication earlier, from `IRootContainerBuilt`, so there it
   runs outside the root's shared-instance lock (the lock-order reasoning below is unchanged).
+  **Residual, plain MS DI only:** MS DI offers no post-build hook, so there the publication runs inside
+  whichever resolve first reaches the registry. If that resolve is the constructor of a root singleton
+  `A`, and a held module's singleton needs `A`, then MS DI builds `A` a second time on the same thread:
+  its singleton lock is re-entrant and its value is not set yet. The module's singleton then holds the
+  copy rather than the root's `A`. Nothing deadlocks: MS DI has no container-wide lock, so this is not
+  the #6542 inversion. Every MeshWeaver host builds its root with `MessageHubServiceProviderFactory`
+  (Autofac) and claims the publication from `IRootContainerBuilt`, so this shape does not arise there.
 - **No forwarder of a withdrawn module is enumerated.** A held module that registers further
   `InstalledModuleAssembly` instances itself (MeshWeaver.Testing registers its xunit closure that way)
   used to get a root `Current` forwarder per instance, and a forwarder can only throw once its module is

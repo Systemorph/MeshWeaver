@@ -154,6 +154,54 @@ whose file and stored definition already agree is untouched. For a type that dec
 `keepsHistory: false` the version writer's cached verdict is invalidated by that write, and history
 written before it is purged by the next write or the delete of each instance.
 
+## A wider gate is reached only if the install compares at all
+
+Widening the gate was not enough on its own. Measured on a deployed portal: the Governance package
+was reinstalled on a platform carrying the wider gate, and `Governance/NameCheck` still read
+`keepsHistory: true`. The gate was never consulted.
+
+The install funnel (`CatalogLayoutAreas.InstallOrUpdate`) decides from the install record before
+any node is read, and both of its shortcuts read hashes of the **source**:
+
+- the up-to-date exit returns when the record's module hash equals the served one;
+- the incremental update fetches only the files whose hash moved since the record.
+
+Each treats the record as a statement about the **mesh** — every file at this hash is stored as the
+package ships it. That statement is only as good as the comparison that decided each write. The
+install that met `keepsHistory: false` under the narrow gate skipped the write and stamped the
+file's hash anyway, so every later install found an equal hash and never compared the node again.
+
+The record therefore carries the rule it was stamped under, `PackageManifest.ComparisonEpoch`, and
+the installer names the rule it applies, `PackageInstaller.InstallComparisonEpoch`. A record under any
+other rule is no baseline (`PackageInstaller.RecordIsNotABaselineUnderThisRule`): the funnel installs
+in full, which compares every stored node with the package, writes only the ones that differ, and
+stamps the installer's own rule.
+
+The match is exact, never "at least". During a surge-first roll an older pod and a newer one share
+the install records. Were a newer rule's record a baseline for the older pod, its incremental update
+would compare under the older rule, skip a difference only the newer rule sees, and carry the newer
+value forward — a record falsely claiming the newer comparison, which the newer pod's equal-hash exit
+would then never repair. Under an exact match the older pod installs in full and stamps its own rule,
+and the newer pod, finding a mismatch, compares in full again under its own. Only a full install may
+stamp it; an incremental update compared only what it fetched and carries the previous value
+forward.
+
+**Raise `InstallComparisonEpoch` whenever the gate starts to see a difference it used to miss.**
+Every record stamped before that change claims content the old gate never compared. Narrowing the
+gate needs no bump.
+
+`ARecordUnderAnOlderComparisonRuleIsNoBaselineTest` re-enacts the measured state through the real
+funnel: a stored node differs from the package while its file hash is unchanged, the record carries
+no rule, and the reinstall must rewrite the node. Its control is the same sequence under a record
+stamped by the current rule, where the up-to-date exit is trusted and nothing is written.
+
+**What this does to a running fleet.** Each package does one full install the next time a lane
+reaches the funnel for it: the boot pass for the platform baseline and the environment's packages, a
+person's Install or Update, or the next update of the package. The full install writes only the
+nodes that differ; a package whose stored nodes all match its files writes nothing and recompiles
+nothing. A package installed by hand whose source does not move is reached by no lane until someone
+reinstalls it.
+
 ## Related
 
 - [Node Type Compilation](../NodeTypeCompilation) — the compile control plane that writes this state

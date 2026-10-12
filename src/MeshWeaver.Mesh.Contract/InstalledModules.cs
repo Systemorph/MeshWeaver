@@ -1,4 +1,6 @@
+using System.Collections.Concurrent;
 using System.Collections.Immutable;
+using System.Runtime.CompilerServices;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Mesh;
@@ -48,6 +50,12 @@ public sealed class InstalledModules
     private ImmutableList<string> held = [];
     private IServiceCollection? declarations;
     private ServiceDescriptor[]? declared;
+    private IServiceProvider? root;
+    // Instance state of the mesh-scoped registry (NoStaticState): a declared singleton's one instance,
+    // and each scope's scoped instances — weakly keyed by the scope's provider, so a scope that ends
+    // takes its instances with it.
+    private readonly ConditionalWeakTable<ServiceDescriptor, Lazy<object>> singletons = new();
+    private readonly ConditionalWeakTable<IServiceProvider, ConcurrentDictionary<ServiceDescriptor, Lazy<object>>> scoped = new();
 
     internal InstalledModules(ModuleContexts contexts) =>
         this.contexts = contexts ?? throw new ArgumentNullException(nameof(contexts));
@@ -85,18 +93,12 @@ public sealed class InstalledModules
     {
         ArgumentNullException.ThrowIfNull(services);
         Published(services);
-        var result = new List<InstalledModuleAssembly>();
-        foreach (var descriptor in Declared<InstalledModuleAssembly>())
-        {
-            if (descriptor.ImplementationFactory?.Target is InstalledModuleSlot slot)
-            {
-                if (slot.Current(services) is { } present)
-                    result.Add(present);
-                continue;
-            }
-            result.Add(Activate<InstalledModuleAssembly>(descriptor, services));
-        }
-        return result;
+        return Declared<InstalledModuleAssembly>()
+            .Select(descriptor => descriptor.ImplementationFactory?.Target is InstalledModuleSlot slot
+                ? slot.Current(services)
+                : (InstalledModuleAssembly)Activate(descriptor, services))
+            .OfType<InstalledModuleAssembly>()
+            .ToImmutableList();
     }
 
     /// <summary>
@@ -109,23 +111,51 @@ public sealed class InstalledModules
     {
         ArgumentNullException.ThrowIfNull(services);
         Published(services);
-        var result = new List<IncompatibleModule>();
-        foreach (var descriptor in Declared<IncompatibleModule>())
-            result.Add(Activate<IncompatibleModule>(descriptor, services));
-        result.AddRange(contexts.NotBuilt);
-        return result;
+        return Declared<IncompatibleModule>()
+            .Select(descriptor => (IncompatibleModule)Activate(descriptor, services))
+            .Concat(contexts.NotBuilt)
+            .ToImmutableList();
     }
 
     // The registry decides which held modules it publishes on its first resolve, on a host that has
-    // not run the publication yet (ModuleContexts.PublishOnce) — so resolve it before reading.
+    // not run the publication yet (ModuleContexts.PublishOnce) — so resolve it before reading. Its
+    // singleton registration is built in the mesh's ROOT provider, so resolving it also hands over that
+    // root (Attach) — what a declared SINGLETON is activated against, as DI would.
     private static void Published(IServiceProvider services) =>
         services.GetService(typeof(ModuleContexts));
 
-    private static T Activate<T>(ServiceDescriptor descriptor, IServiceProvider services) where T : class =>
-        descriptor.ImplementationInstance as T
-        ?? (descriptor.ImplementationFactory is { } factory
-            ? (T)factory(services)
-            : (T)ActivatorUtilities.CreateInstance(services, descriptor.ImplementationType!));
+    /// <summary>The mesh's root provider — set by the registry's own singleton registration.</summary>
+    internal void Attach(IServiceProvider rootProvider) =>
+        Interlocked.CompareExchange(ref root, rootProvider, null);
+    /// <summary>
+    /// A fixed declaration's member, with the LIFETIME its declaration asked for — the
+    /// <c>IEnumerable&lt;T&gt;</c> registration that serves this set replaces the per-descriptor
+    /// collection DI would have built, so this keeps what DI kept: a provided instance is itself, a
+    /// singleton is built once for the mesh (against the root provider), a scoped one once per scope, a
+    /// transient one at every read. Both member types are sealed, non-disposable records, so there is no
+    /// disposal for DI to have tracked.
+    /// </summary>
+    private object Activate(ServiceDescriptor descriptor, IServiceProvider services)
+    {
+        if (descriptor.ImplementationInstance is { } instance)
+            return instance;
+        return descriptor.Lifetime switch
+        {
+            ServiceLifetime.Singleton => singletons
+                .GetValue(descriptor, d => new Lazy<object>(() => Create(d, Volatile.Read(ref root) ?? services)))
+                .Value,
+            ServiceLifetime.Scoped => scoped
+                .GetValue(services, _ => new ConcurrentDictionary<ServiceDescriptor, Lazy<object>>(ReferenceEqualityComparer.Instance))
+                .GetOrAdd(descriptor, d => new Lazy<object>(() => Create(d, services)))
+                .Value,
+            _ => Create(descriptor, services),
+        };
+    }
+
+    private static object Create(ServiceDescriptor descriptor, IServiceProvider services) =>
+        descriptor.ImplementationFactory is { } factory
+            ? factory(services)
+            : ActivatorUtilities.CreateInstance(services, descriptor.ImplementationType!);
 
     private ServiceDescriptor[] Declared<T>() =>
         Declared().Where(d => d.ServiceType == typeof(T)).ToArray();

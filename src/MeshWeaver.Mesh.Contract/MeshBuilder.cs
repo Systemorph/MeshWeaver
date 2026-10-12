@@ -50,10 +50,14 @@ public partial record MeshBuilder
             // (MeshWeaver#6557): the hook every host kind calls, so a host built with plain MS DI
             // withdraws a module whose shared instances cannot be built just as the Autofac root does
             // (which claims it earlier, outside any lock — ModulesBuiltBeforePublished).
-            services.TryAddSingleton(sp => modules.Attach(
-                sp.GetService<CollectibleContextUnloads>(),
-                sp.GetService<ILoggerFactory>()?.CreateLogger<ModuleContexts>(),
-                sp).PublishOnce());
+            services.TryAddSingleton(sp =>
+            {
+                installedModules.Attach(sp);
+                return modules.Attach(
+                    sp.GetService<CollectibleContextUnloads>(),
+                    sp.GetService<ILoggerFactory>()?.CreateLogger<ModuleContexts>(),
+                    sp).PublishOnce();
+            });
             // The layout client re-reads held modules' views from their current generations.
             services.TryAddSingleton<MeshWeaver.Layout.Client.IViewContributionSource>(sp => sp.GetRequiredService<ModuleContexts>());
             // 🚨 The installed-module set is ONE registry the mesh owns (MeshWeaver#6557), and the

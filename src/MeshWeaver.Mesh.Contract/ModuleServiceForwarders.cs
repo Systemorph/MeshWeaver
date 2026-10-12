@@ -209,13 +209,11 @@ internal static class ModuleServiceForwarding
                     // A member of the installed-module set the module contributes: ABSENT once the
                     // module is withdrawn or retired, never a fault in whoever enumerates the set
                     // (MeshWeaver#6557, InstalledModules).
+                    // ONE snapshot of the module's generation: a check of Current and a second lookup
+                    // to resolve could see a generation that was disposed in between.
                     root.Add(InstalledModuleSlot.Declare(sp =>
-                        {
-                            var contexts = sp.GetRequiredService<ModuleContexts>();
-                            return contexts.Current(module) is not { Services: not null }
-                                ? null
-                                : (InstalledModuleAssembly)contexts.ResolveModuleService(module, index);
-                        },
+                            (InstalledModuleAssembly?)sp.GetRequiredService<ModuleContexts>()
+                                .TryResolveCurrentModuleService(module, index),
                         $"Module {module} is no longer held by this mesh's module registry — the installed module it contributed is gone with it."));
                     break;
                 case ModuleServiceRoute.Current:

@@ -309,6 +309,9 @@ internal sealed class ModuleFallbackSource(
                 .Select(rootRegistration => RegistrationBuilder
                     .ForDelegate(type, (context, _) => context.Resolve<RootResolutionScope>().Scope
                         .ResolveComponent(new ResolveRequest(service, rootRegistration, [])))
+                    // Names the root registration it resolves, so the scoped-dependency walk follows
+                    // exactly what this module's fallback reaches (ScopedDependencyWalk).
+                    .WithMetadata(ScopedDependencyWalk.StandsInFor, rootRegistration.Registration)
                     .ExternallyOwned()
                     .InstancePerDependency()
                     .CreateRegistration())
@@ -382,12 +385,33 @@ internal sealed class ScopedDependencyWalk(IComponentRegistry module, IComponent
         return verdict;
     }
 
+    /// <summary>The metadata key under which a module container's stand-in for a ROOT registration
+    /// (<see cref="ModuleFallbackSource"/>) names the root registration it resolves.</summary>
+    internal const string StandsInFor = "MeshWeaver.ModuleFallback.StandsInFor";
+
+    // 🚨 What the MODULE container answers for `type`, exactly as it resolves it: the module's own
+    // registrations, and a root registration only where the module's fallback stands in for it. The
+    // fallback consults the root only when the module registers no `T` of its own, so a module that
+    // overrides a root-SCOPED `T` with its own singleton never reaches the root's `T` — and that
+    // unreachable registration must not mark a root-reachable singleton as scoped (it would then be left
+    // to its first resolve, and the #6542 lock inversion with it).
     private IEnumerable<(IComponentRegistration Registration, Side Side)> RegistrationsOf(Type type, Side side)
     {
         var service = new TypedService(type);
         if (side == Side.Module)
+        {
+            var any = false;
             foreach (var own in module.ServiceRegistrationsFor(service))
-                yield return (own.Registration, Side.Module);
+            {
+                any = true;
+                yield return own.Registration.Metadata.TryGetValue(StandsInFor, out var stood)
+                             && stood is IComponentRegistration inRoot
+                    ? (inRoot, Side.Root)
+                    : (own.Registration, Side.Module);
+            }
+            if (any)
+                yield break;
+        }
         // Never ASK the root about a type that names a collectible assembly: asking caches the type in
         // the root's registry, which pins its context (ModuleFallbackSource refuses the same).
         if (root is not null && !NamesACollectibleAssembly(type))

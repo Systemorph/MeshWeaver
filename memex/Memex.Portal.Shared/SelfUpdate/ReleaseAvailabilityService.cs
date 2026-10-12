@@ -523,8 +523,8 @@ public class ReleaseAvailabilityService(
     private const string VacuousDenominatorReason =
         "this deployment consumes CI bakes and its published root serves them, yet it reports ZERO "
         + "installed packages — so every release would 'ship all' of nothing and this gate would "
-        + "pass having compared two empty sets. Cannot determine availability, which is not "
-        + "clearance to proceed. Either the install records (Plugins/*, nodeType:Package) are not "
+        + "pass having compared two empty sets. Cannot determine package availability, which is "
+        + "never read as available. Either the install records (Plugins/*, nodeType:Package) are not "
         + "being read, or this deployment genuinely deploys no packages — in which case "
         + $"{ShippedPrebuiltBundles.PublishedRootConfigKey} should not be configured for it.";
 
