@@ -163,7 +163,8 @@ never receives a tag a consumer can select, so the red lands on the run that pro
 on six satellites that did not.
 
 **Invariant 1** compares the host's `/app` and surface manifest against the composed-module set —
-**read out of `main-cd.yml` itself** (`jobs.plugins-modules.with.modules`), never restated. The
+**read out of `main-cd.yml` itself** (`jobs.published-modules.env.PUBLISHED_MODULES`; it was
+`jobs.plugins-modules.with.modules` until #6143 removed that job), never restated. The
 compose set and the set the image is forbidden to carry must be one list, or they drift, and a
 drifted second list is how a gate stays green while asserting the wrong names.
 

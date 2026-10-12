@@ -41,7 +41,7 @@ and the version mechanics in
 | **Version** | `3.1.<run#>` — a plain SemVer release per build, the patch is main-cd's `$GITHUB_RUN_NUMBER` (policy `platform-semver-versioning`; retired notation `3.0.0-ci.<run#>` is still READ) | clean `3.1.0` — **the same bytes**, retagged |
 | **Workflow** | `main-cd.yml` (after `MeshWeaver Build and Test` passes) | `release.yml` |
 | **Docker** | **multi-arch** (`linux-x64;linux-arm64` → OCI image-index) → ACR | ACR retag + GHCR mirror, by digest |
-| **Bake / seal** | ✅ platform content, sealed under the compatibility key `c<major>e<epoch>`; the Plugins re-seal is an independent follow-up that never gates the platform | ✅ inherited — `_releases/<clean>` copies the key marker |
+| **Bake / seal** | ✅ platform content, sealed under the compatibility key `c<major>e<epoch>`; core CD seals NO module — the `plugins` publication is sealed by MeshWeaver.Plugins' own lane and never gates the platform | ✅ inherited — `_releases/<clean>` copies the key marker |
 | **NuGet** | ❌ never | ❌ **retired** (last publish `3.0.0-rc13`) |
 | **Rollout** | an install self-updates onto it ONLY when its `Admin/UpdatePolicy` is `Continuous` **with a pattern** that admits the tag (`3.*`) | every install on the default (`Stable`, clean releases only) self-updates on its next check |
 
@@ -74,8 +74,8 @@ left on the retired `3.0.0-ci*` admits no new build and freezes silently. The `-
 compatible within a compatibility epoch, so platform and plugins roll as SEPARATE steps: the platform
 first, keeping the plugin bytes an install runs (no rebuild, no re-seal), then a plugin built against
 the RUNNING platform (floor ≤ running, no platform roll). A normal platform build requires NO plugin
-seal anywhere — not in CD (`delivery-verdict` judges the platform legs only; the Plugins re-seal is
-`report-plugins-seal`, never on the critical path), not in the roll selection, not in the sealed-sync
+seal anywhere — not in CD (`delivery-verdict` judges the platform legs only; core CD has baked no
+`plugins` publication since #6143 — MeshWeaver.Plugins' own lane is its only writer), not in the roll selection, not in the sealed-sync
 gate. A plugin seal is a precondition ONLY behind a DECLARED break (epoch/major bump in
 `src/MeshWeaver.Compiler/platform-compatibility.json`, with a ceiling on the old builds), and then it
 is the precondition for that PLUGIN to follow: the platform still rolls (policy
@@ -149,12 +149,14 @@ cheapest defeat of this bar and `release.cut`'s acceptance criterion names it; s
 recently re-labelled two.
 
 1. **The commit is on `main` and its CD run SEALED**: `Promote`, `Verify every image shipped` and
-   `Plugins: bake + seal` all `success` — read the seal JOB, never the run's conclusion:
+   `Bake platform content in the shipped image + publish` all `success` — read the JOBS, never the
+   run's conclusion. (Core CD has had no `Plugins: bake + seal` job since #6143; the `plugins`
+   publication `release.yml` also asserts is sealed by MeshWeaver.Plugins' own lane.)
    ```bash
    gh api "repos/Systemorph/MeshWeaver/actions/runs?head_sha=<sha>" \
      --jq '.workflow_runs[] | select(.name=="Continuous Delivery (main)") | .id' | head -1 \
      | xargs -I{} gh api "repos/Systemorph/MeshWeaver/actions/runs/{}/jobs?per_page=100" \
-       --jq '.jobs[] | select(.name | test("Promote|Verify every|bake \\+ seal")) | "\(.name): \(.conclusion)"'
+       --jq '.jobs[] | select(.name | test("Promote|Verify every|Bake platform content")) | "\(.name): \(.conclusion)"'
    ```
    🚨 **Name the target set only AFTER this reads success, and state the requirement as a COMMIT until
    then** ("the first sealed set cut from `<sha>` or later"). A set's name carries its RUN number, and
@@ -243,9 +245,10 @@ Since #1773 an install checks per publication *event*, and `UpdatePolicyKind` pi
 cadence. #1780 added **`SelfUpdate__MinRollInterval`**, a restart budget set to `1h` in
 `values.aks.yaml`, deliberately matched to the tick. **If you change one, change the other.**
 
-🚨 **Promoted is not SEALED.** `Promote` and `Verify every image shipped` can be green while
-`Plugins: bake + seal` failed — the images exist, no install can adopt them, and a tag on that
-commit is refused by `release.yml`. The self-updater does NOT hold the platform roll for it (policy
+🚨 **Promoted is not SEALED.** `Promote` and `Verify every image shipped` can be green while the
+platform bake failed, or while MeshWeaver.Plugins' own lane has not yet sealed the `plugins`
+publication for that identity (core CD no longer seals it — #6143) — the images exist, and a tag on
+that commit is refused by `release.yml`'s `check-release-availability.sh`. The self-updater does NOT hold the platform roll for it (policy
 `platform-rolls-independently-of-packages`): it rolls, and names each package without a sealed bake as
 an advisory on `Admin/UpdatePolicy` (`… no sealed content bake …`); those packages boot-compile or keep
 their previous generation. A `heldReason` of that shape on an old record is history, not a hold.
