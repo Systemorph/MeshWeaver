@@ -316,7 +316,13 @@ public partial class QueryParser
             }
         }
 
-        // Check for wildcard pattern
+        // Check for wildcard pattern.
+        // 🚨 A NEGATED wildcard (`-field:val*`) stays NotEqual and KEEPS its `*` (#6581): every
+        // executor reads a `*` in a NotEqual value as the COMPLEMENT of the glob
+        // (QueryWildcard.IsNotLikeMatch; `NOT ILIKE … OR IS NULL` on SQL). There is no NotLike
+        // member — QueryOperator is public and widening it breaks every switch that consumes it
+        // (policy open-vocabulary-string-constants). Before #6581 the executors compared the
+        // pattern LITERALLY, so the negation matched every node, positives included.
         if (!isNegated && (op == QueryOperator.Equal || op == QueryOperator.NotEqual))
         {
             if (value.Contains('*'))
@@ -555,6 +561,18 @@ public partial class QueryParser
                         namespaceAlternation = token.Condition.Values;
                         namespaceAlternationNegated = token.Condition.Operator == QueryOperator.NotIn;
                         namespaceUsed = true;
+                        continue;
+                    }
+                    // 🚨 A NEGATED single namespace is a FILTER, never an anchor (#6581) — the same
+                    // defect #4296 fixed for `-path:`. `-namespace:X` fell through to `path = X`
+                    // and `-namespace:*/X` to a POSITIVE `namespace LIKE` filter: the operator was
+                    // dropped and the exclusion returned exactly what it was written to exclude.
+                    // Left as `namespace NotEqual value` it is evaluated by every backend, a `*` in
+                    // the value reading as the complement of the glob (see QueryWildcard).
+                    if (token.Condition!.Operator is QueryOperator.NotEqual)
+                    {
+                        filterTokens.Add(new Token(TokenType.Comparison, string.Empty,
+                            new QueryCondition("namespace", QueryOperator.NotEqual, [value.Trim('/')])));
                         continue;
                     }
                     if (QueryWildcard.ContainsWildcard(value))

@@ -162,6 +162,30 @@ assertions shipped that way and were caught only by running the suite against th
 evaluator — with the fallback removed they stayed **green**. Removing the fallback now fails 7 of
 36; before the assertions were repaired it failed 5.
 
+## Negation is the complement — on both executors
+
+A negated **wildcard** (`-content.apiKey:enc*`) was a no-op on both executors (MeshWeaver#6581).
+The parser keeps a negated wildcard as `NotEqual` with its `*` (there is deliberately no `NotLike`
+member: `QueryOperator` is public, and widening it breaks every switch that consumes it), and both
+executors compared that value **literally** — `!= 'enc*'` — so the negation matched every node,
+including the ones it was written to exclude. Measured on a live portal: 11 ModelProviders, 6 match
+`content.apiKey:enc*`, and `-content.apiKey:enc*` returned all 11.
+
+The rule both executors now implement: **a `*` in a `NotEqual` value is the complement of the
+glob.** In memory that is `QueryWildcard.IsNotLikeMatch`; in SQL `(sel NOT ILIKE p OR sel IS NULL)`.
+A node that **lacks** the field does not match `field:val*`, so `-field:val*` **includes** it — the
+same null-inclusive rule `NotEqual` and `NotIn` already followed.
+
+The same parser pass dropped the operator of a negated single namespace: `-namespace:X` became a
+positive path anchor and `-namespace:*/X` a positive `namespace LIKE` filter. Both are now a
+`namespace NotEqual` **filter**, never an anchor — the shape #4296 gave `-path:`.
+
+`test/MeshWeaver.Fixture/NegationCorpus.cs` holds the node set and the exact expected result of
+every case, positives beside their negations; core runs it through `QueryEvaluator`
+(`NegatedFilterIsTheComplementTest`) and MeshWeaver.Plugins seeds the same nodes into Postgres. Each
+suite also asserts on its executor's **actual** answers that every positive/negated pair partitions
+the node set, so an executor that answers a negation with "everything" or "nothing" cannot pass.
+
 ## What is still divergent
 
 The fallback closes the case where a selector is unknown to **both** providers. It does not close
