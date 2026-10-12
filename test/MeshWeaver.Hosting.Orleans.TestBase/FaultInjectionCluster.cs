@@ -140,7 +140,13 @@ public class FaultInjectionCluster : IAsyncLifetime
 
     /// <summary>Kills silo <paramref name="index"/>: no graceful stop, no grain deactivation.</summary>
     /// <param name="index">The silo's index at deploy time.</param>
-    public Task Kill(int index) => Cluster.KillSiloAsync(_silos[index]);
+    public Task Kill(int index)
+    {
+        // The process is gone: whatever its own process carried dies with it (see
+        // CrossProcessChangeRelay.HoldInWriter); the store's feed does not.
+        Relay.Depart(Storage(index));
+        return Cluster.KillSiloAsync(_silos[index]);
+    }
 
     /// <summary>
     /// Drains silo <paramref name="index"/> the way a rolling restart does: the host is told to stop

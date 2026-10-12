@@ -16,9 +16,12 @@ namespace MeshWeaver.Mesh.Services;
 /// pre-commit caches for the life of the process — no error, nothing to grep.</para>
 ///
 /// <para>So the property is DECLARED by the backend that has it, never inferred from which adapter
-/// happens to be registered: <see cref="CrossProcessChangeDeliveryExtensions.DeclareCrossProcessChangeDelivery"/>
-/// is called by the PostgreSQL persistence registration (and by test rigs that model
-/// LISTEN/NOTIFY), and a host that declares more than one silo checks for it at boot. Multi-silo
+/// happens to be registered. 🚨 <b>This type is the declaration SURFACE only, and nothing enforces it
+/// yet</b> (#4802 rolls out in slices): today only the test rigs that model LISTEN/NOTIFY call
+/// <see cref="CrossProcessChangeDeliveryExtensions.DeclareCrossProcessChangeDelivery"/>. A later
+/// slice makes the PostgreSQL persistence registration declare it, and only after that does a
+/// multi-silo host check for it at boot — enforcing first would refuse every portal that has not
+/// yet picked up the declaration. Until then its ABSENCE proves nothing about a host. Multi-silo
 /// is PostgreSQL-only; single-process hosts (the Monolith, a localhost silo, the bake silo) need
 /// nothing.</para>
 /// </summary>

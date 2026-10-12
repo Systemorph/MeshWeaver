@@ -261,7 +261,7 @@ same retry / NACK / failure signal the forward leg already has. Sketch of what t
 
 > 🚨 **The cleanup dividend is smaller than this page used to claim.** It said the memory stream
 > provider "is only kept alive by this one use". It was not: `PathCacheInvalidatorGrain`
-> (`[ImplicitStreamSubscription("mesh-created"/"mesh-deleted")]`) and
+> (`[ImplicitStreamSubscription("mesh-created"/"mesh-updated"/"mesh-deleted")]`) and
 > `OrleansMeshChangeFeed.BroadcastAsync` both used `StreamProviders.Memory`. Both are now deleted
 > (#4802 — cross-silo change delivery is the storage layer's own feed), so the routing leg and its
 > NACK fallback are what keep `AddMemoryStreams` and its `PubSubStore` alive. The

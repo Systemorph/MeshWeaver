@@ -30,8 +30,10 @@ namespace MeshWeaver.FaultInjection.Test;
 ///   <item><b>Fixed:</b> the notification belongs to the store, not to the dead writer, so silo 2's
 ///     invalidation feed hears the commit after the writer is gone.</item>
 ///   <item><b>Negative control:</b> the identical sequence with a carrier that lives in the writer's
-///     process — the memory stream's shape: what it held dies with the silo (modelled as the relay
-///     LOSING the in-flight notification, announcing nothing) — and silo 2 never hears it. This is
+///     process — the memory stream's shape: the notification is QUEUED in the writer
+///     (<see cref="Testing.FaultInjection.CrossProcessChangeRelay.HoldInWriter"/>), and the kill
+///     itself is what discards it (<c>FaultInjectionCluster.Kill</c> departs the writer from the
+///     relay) — and silo 2 never hears it. This is
 ///     what proves the fixed arm's arrival comes from the store's feed and from nothing else: no
 ///     Orleans stream, no second publish, no timer.</item>
 /// </list>
@@ -59,9 +61,11 @@ public abstract class ACommitInFlightWhenItsWriterDies(FaultInjectionCluster mes
             });
 
         // ── The fault: the notification is in flight when its writer dies ─────────────────────
+        // Both arms QUEUE the notification; they differ only in WHERE it is queued — in the store
+        // (survives the writer) or in the writer's own process (dies in Kill below).
         using var inFlight = CarrierOutlivesTheWriter
             ? mesh.Relay.Hold()
-            : mesh.Relay.Drop(announceGap: false);
+            : mesh.Relay.HoldInWriter();
         await writerStore.Write(
                 new MeshNode("node", path[..path.IndexOf('/')])
                 {
