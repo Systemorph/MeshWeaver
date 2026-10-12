@@ -4,8 +4,9 @@ Category: Architecture
 Description: >-
   The deploy procedure under the ladder (policy platform-backwards-compatibility), for both paths —
   a compatible platform build, which needs no plugin seal and rolls platform and plugins as separate
-  steps, and a declared compatibility break, where the platform roll is held per installed plugin
-  until a replacement covering the target is sealed. What "build complete" means on each path, and
+  steps, and a declared compatibility break, where each installed plugin with no replacement
+  covering the target is named as a package advisory while the platform rolls, and keeps its
+  previous generation until a replacement is sealed. What "build complete" means on each path, and
   what CD, the self-updater and the control lane check at each step, each tied to the code that runs.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4v-4h4v-4h4V8h4"/><path d="M4 20V4"/></svg>
 ---
@@ -35,7 +36,7 @@ newer than the one running. Only a DECLARED break (an epoch or major bump) inter
 | A new plugin publication, producer ≤ running platform | not involved | ✅ adopted; its sources advance to it | the plugin's own seal only |
 | A new plugin publication, producer **>** running platform | not involved | ❌ declined at adoption; its sources are HELD, naming both versions | — (the platform roll releases it) |
 | A declared break (target key ≠ installed key, or target above an installed build's ceiling), replacement sealed with floor ≤ target | ✅ | the replacement is adopted with the roll | **Yes — the replacement** |
-| A declared break, no replacement for some installed plugin | ❌ **HELD**, the hold names the plugin, the installed key/ceiling and the target | — | the missing replacement is the work |
+| A declared break, no replacement for some installed plugin | ✅ rolls to the newest admitted tag; the plugin is named as a package ADVISORY (`PlatformRangeExceeded`: the plugin, the installed key/ceiling and the target), policy `platform-rolls-independently-of-packages` | ❌ that plugin keeps its previous generation until a replacement covering the target is sealed | the missing replacement is the work |
 
 ## The compatible path
 
@@ -55,14 +56,16 @@ re-publishes the platform. (Line numbers are `main-cd.yml` as of the ladder chan
 (`memex/Memex.Portal.Shared/SelfUpdate/SelfUpdateHostedService.cs:959`) asks
 `ReleaseAvailabilityService.SelectRollTarget` (`ReleaseAvailabilityService.cs:229`) over the
 candidates `VersionSelect.SelectCandidates` (`VersionSelect.cs:313`) admits under the instance's
-`Admin/UpdatePolicy`. `RollSelection.Select` (`src/MeshWeaver.PluginCatalog/RollSelection.cs:72`) walks
-them newest-first and takes the first on which `ReleaseAvailability.IsUpdatable` holds nothing for
-this environment's installed plugins. On the compatible path the ladder rule
+`Admin/UpdatePolicy`. `RollSelection.Select` (`src/MeshWeaver.PluginCatalog/RollSelection.cs`) takes
+the newest of them and asks `ReleaseAvailability.IsUpdatable` about this environment's installed
+plugins once; under policy `platform-rolls-independently-of-packages` whatever that package verdict refuses is reported as an advisory
+on the selected release, never a reason to take an older one. On the compatible path the ladder rule
 (`ReleaseAvailability.PlatformRangeHold`, `ReleaseAvailability.cs:276`) answers null for every package
 — the target carries the installed build's key and no ceiling is declared — so the newest promoted
 image is selected **with nothing sealed for it**; a missing bake is reported as "would recompile at
-boot", a cost, never a hold. The only other hold is a MEASURED one: a landed module that cannot link
-against the target's surface.
+boot", a cost, never a hold. A landed module that cannot link against the target's surface is a
+MEASURED package refusal — on the roll an advisory too, with the boot-time link probe and the
+keep-the-previous-generation fallback as the safety net.
 
 **3. The roll itself.** A fleet instance hands the selected tag to the control lane
 (`SelfUpdateHandover`, `ui.updateHandedOver`). The control instance routes it
@@ -95,22 +98,24 @@ source of the epoch and of every break.
 2. **Plugins are rebuilt against the new platform**, producing bytes under the new key with a new
    floor (their `producerPlatformVersion`).
 3. **The affected plugins are sealed** under the new key.
-4. **A platform roll is allowed only where every installed plugin has a sealed build whose range
-   covers the target.** `ReleaseAvailability.PlatformRangeHold` compares each installed package's key
+4. **Every installed plugin needs a sealed build whose range covers the target to FOLLOW the
+   roll.** `ReleaseAvailability.PlatformRangeHold` compares each installed package's key
    (the running key, `ReleaseAvailabilityService.cs:556`) and any ceiling its bundle declares
    (`PublishedBundleCatalogue.RangesForIdentity`) against the target; behind the break it demands a
    replacement sealed under the target's key whose `DeclineReason` is null for the target. Without one
-   the candidate is declined with `PlatformRangeExceeded`, naming the plugin, the installed key and
-   ceiling and the target — and because the walk is newest-first, the portal lands on the newest
-   release its plugins still cover (the last build of the old epoch) instead of staying put.
+   the PACKAGE verdict refuses it with `PlatformRangeExceeded`, naming the plugin, the installed key
+   and ceiling and the target. Under policy `platform-rolls-independently-of-packages` that refusal is an advisory on the roll: the
+   portal rolls to the newest admitted tag (it no longer walks back to the last build of the old
+   epoch — `DeclaredBreakRollHoldTest.TheWalk_SelectsTheNewest_AndNamesThePluginThatDoesNotCoverIt`),
+   and the plugin keeps its previous generation until its replacement is sealed.
 5. **The plugins roll** with the platform (the replacements) or after it, exactly as on the
    compatible path.
 
 **Build complete, on this path** = the platform set is promoted, pullable and verified (as above)
 **and** every plugin the break affects has a publication sealed under the new key whose range covers
 the target. CD does not enforce the second half — it is per ENVIRONMENT (which plugins are installed
-where), so the self-updater enforces it per candidate, and a portal whose installed plugin has no
-replacement yet is HELD with that plugin named.
+where), so the self-updater reports it per candidate: a portal whose installed plugin has no
+replacement yet rolls, with that plugin named among the advisories on `Admin/UpdatePolicy`.
 
 ## Operational facts
 

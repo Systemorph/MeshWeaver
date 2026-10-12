@@ -19,8 +19,9 @@ The framework cannot do that, and should not try. It ships as a container image,
 enumerable set of dependents, and holding its release until every downstream repo was rebuilt would
 slow the train while still answering the wrong question. **The set that matters is per-instance —
 the plugins a given portal actually installed** — so for the framework the gate sits at the *deploy*
-boundary: a portal verifies a candidate image against its own installed plugins, and refuses to
-adopt one they cannot compile.
+boundary: a portal verifies a candidate image against its own installed plugins and names the ones
+that cannot compile against it — as package advisories on the roll (policy
+`platform-rolls-independently-of-packages`), while those plugins keep their previous generation.
 
 This page specifies both: the states, the failure semantics, and where each gate lives.
 
@@ -151,12 +152,14 @@ and the portal then declined SocialMedia at adoption because its NodeTypes had b
 
 **Available now means CONSISTENT**: every dependency record inside every installed package's sealed
 bundle names module builds that ARE the module builds sealed for that identity, and no module is
-sealed twice at different builds. Anything else is `SealedSetInconsistent` — a hold naming the
+sealed twice at different builds. Anything else is `SealedSetInconsistent` — a package refusal naming the
 bundle, the NodeType, the module and both MVIDs — and "nothing goes" (maintainer, 2026-09-03: *"we
 must have a clear confirmation that all plugins deployed to an instance are available for the
 correct platform version; if not ⇒ nothing goes"*). An unreadable module set is `Indeterminate`,
-which also holds; a false "available" rolls a fleet, a false "hold" freezes it, and the two are
-told apart in the verdict on purpose. The mechanism and its limit — a module an instance installed
+which also refuses; a false "available" hides a package that will not follow, a false refusal
+names one that would, and the two are told apart in the verdict on purpose. On a platform-roll path
+both are advisories (policy `platform-rolls-independently-of-packages`): the platform rolls and the
+packages are named. The mechanism and its limit — a module an instance installed
 from the registry outside any publication is not visible to this check — are in
 [ModuleBuildArchitecture](../ModuleBuildArchitecture) → "One producer per (module, framework
 identity)".
@@ -303,17 +306,20 @@ to evaluate instead. A check there would be a guess; the combo run is an answer.
    tests green), **Red** with the complete per-module failure list, or **NotVerifiable** with the
    caveats naming why the question could not be answered (the three are never conflated: "we could
    not find out" reads as neither "broken" nor "all clear"). The admin **Updates** settings tab
-   joins this against the poller's `LatestAvailableTag`, so a red candidate renders "cannot update
-   to X — these modules do not compile or test against it" instead of an eternal "update
-   available". Writes go through `UpdatePolicyNodeType.RecordVerification` (stream.Update, upsert
+   joins this against the poller's `LatestAvailableTag`, so a red candidate renders the release
+   line with the modules that do not compile or test against it listed underneath, as an advisory
+   (`ui.updateBlocked`), instead of an unqualified "update available". Writes go through `UpdatePolicyNodeType.RecordVerification` (stream.Update, upsert
    by tag, bounded).
 
-5. **HONOUR the verdict in the roll decision — WIRED.** Recording a verdict that nothing consults
-   would leave the settings tab showing real answers while the instance rolled regardless, which
-   looks even more like a working gate than an empty one. `ComboVerificationGate` folds the verdict
-   into the self-update decision: **Red REFUSES the roll** (a hold naming every failing module),
-   **Green clears it**, and **NotVerifiable is neither** — it grants no clearance and takes no
-   refusal, and the check verdict says the roll was taken UNVERIFIED. See
+5. **REPORT the verdict in the roll decision — WIRED.** `ComboVerificationGate` folds the verdict
+   into the self-update decision, and under policy `platform-rolls-independently-of-packages` a
+   verdict is a statement about this instance's MODULES, never a hold on the platform roll:
+   **Red is a package ADVISORY** — the instance still rolls to the newest admitted tag, every
+   failing module is named on `Admin/UpdatePolicy` (the Updates tab) and on the check verdict
+   (`PACKAGE ADVISORY … the combo gate recorded RED`), and those modules keep their previous
+   generation and catch up through their own update policy; **Green clears it**; and
+   **NotVerifiable is neither** — it grants no clearance, and the check verdict says the roll was
+   taken UNVERIFIED. (Before the policy, a Red refused the roll.) See
    [Combo Gate Wiring](/Doc/Architecture/ComboGateWiring) for the full decision table, the
    producer/consumer split, and why "could not find out" must not fail closed here.
 
@@ -334,8 +340,10 @@ GITHUB_TOKEN=… mw-combo-verify combo.json meshweaver.azurecr.io/memex-portal-a
 # 3. Land the verdict where the instance's admins look: combo-verdict.json is a
 #    ComboVerification — merge it into Admin/UpdatePolicy → content.comboVerifications
 #    (upsert by candidateTag), e.g. via the meshweaver MCP: get → merge → patch.
-#    🚨 This is no longer only a report: the instance's next update check CONSULTS it, so a Red
-#    landed here REFUSES the roll (Doc/Architecture/ComboGateWiring).
+#    The instance's next update check CONSULTS it: a Red landed here NAMES the failing modules as
+#    package advisories on the roll — it does not stop the roll (policy
+#    platform-rolls-independently-of-packages, Doc/Architecture/ComboGateWiring). Land it so the
+#    admins see which modules will not follow, before or as the instance rolls.
 ```
 
 The verify job itself holds no portal credential — reading the combo (step 1) and landing the

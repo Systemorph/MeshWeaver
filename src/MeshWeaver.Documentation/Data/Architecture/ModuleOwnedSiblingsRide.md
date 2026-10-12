@@ -511,8 +511,9 @@ moment it landed. `verify` is a required context in five satellites; turning an 
 into a refusal there is how a new guard takes CD down fleet-wide.
 
 The population is not unguarded in the meantime. It is guarded **late**, at the consumer, where
-`PublishedBundleCatalogue` answers `SealedSetInconsistent` and holds the roll for the whole fleet —
-days later, on a portal. Moving that refusal earlier is the whole point; doing it before one wave has
+`PublishedBundleCatalogue` answers `SealedSetInconsistent` — a package refusal for the whole fleet,
+reported on every roll as an advisory naming the affected packages (the platform rolls, policy
+`platform-rolls-independently-of-packages`) — days later, on a portal. Moving that refusal earlier is the whole point; doing it before one wave has
 been read is guessing, and the promotion condition is therefore explicit:
 
 > Read the `publication module set: …` line on the first waves. If the divergence is zero, add

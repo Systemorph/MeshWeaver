@@ -100,5 +100,17 @@
         /// <param name="appearance">The appearance to set.</param>
         /// <returns>A new <see cref="ButtonControl"/> instance with the specified appearance.</returns>
         public ButtonControl WithAppearance(object appearance) => this with { Appearance = appearance };
+
+        /// <summary>
+        /// The keys that click this button while focus is inside the page and not in a text field —
+        /// key names as the browser reports them (<c>KeyboardEvent.key</c>), separated by <c>|</c>
+        /// (<c>"Backspace|Delete"</c>). A shortcut is a second way to press the button: it goes
+        /// through the same click, busy state and outcome line.
+        /// </summary>
+        public object? Shortcut { get; init; }
+
+        /// <summary>Sets the keys that click this button (<see cref="Shortcut"/>).</summary>
+        /// <param name="keys">Key names separated by <c>|</c>, e.g. <c>"Backspace|Delete"</c>.</param>
+        public ButtonControl WithShortcut(string keys) => this with { Shortcut = keys };
     }
 }
