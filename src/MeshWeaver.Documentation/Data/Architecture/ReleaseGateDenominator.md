@@ -9,6 +9,8 @@ icon: "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><rect width='
 # The Release Gate's Denominator
 
 > ✅ **Rule change, 2026-09-07 (maintainer) — [Module Adoption Policy](../ModuleAdoptionPolicy), implemented by [#3648](https://github.com/Systemorph/MeshWeaver/issues/3648), [#3649](https://github.com/Systemorph/MeshWeaver/issues/3649), [#3650](https://github.com/Systemorph/MeshWeaver/issues/3650) and [#3651](https://github.com/Systemorph/MeshWeaver/issues/3651).** This page describes the mechanism as it runs after those changes: a declared floor is advisory, a refused generation falls back to the previous one, a new build is adopted eagerly, and a platform roll is held only by a module that provably cannot load on the target.
+>
+> 🚨 **Superseded for the platform roll** by policy `platform-rolls-independently-of-packages` ([Policy Not Prose](../PolicyNotProse)): no package answer holds the roll any more — it is an advisory; [Release Gates](../ReleaseGates) → "What a refusal does".
 
 > Maintainer, 2026-09-06: *"let's see that the deploy rolls only when **all** packages of all
 > plugins are baked"* — *"we kept rolling without edu being properly baked."*
