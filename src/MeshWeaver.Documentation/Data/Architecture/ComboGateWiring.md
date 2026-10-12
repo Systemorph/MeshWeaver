@@ -660,14 +660,65 @@ holds **both** of these:
    With no audience configured the portal refuses every build token by design
    (`InstanceRegistryAuthenticator.AuthenticateBuild`), because accepting any audience would trust
    every GitHub Actions run that pointed a token at anything.
-2. **The grant, as a node.** A global admin of that instance creates
-   `Admin/_BuildPrincipal/systemorph--meshweaver`: `repository: Systemorph/MeshWeaver`, its immutable
-   `repositoryId` and `repositoryOwnerId`, `events` `workflow_run` and `workflow_dispatch` → `verify`,
-   both `eventRefs` restricted to `refs/heads/main`, and `scopes: ["verify:combo"]` and nothing else.
-   It grants reading the release inputs and recording a verdict through
-   `POST /api/plugins/combo-verification`; it cannot install, apply an update, read user content,
-   edit access or change the update policy ([Access control](../AccessControl) → Build principals).
-   Revoking it is a node write and takes effect on the next request.
+2. **The grant — declared in the same record, or written as a node.** The rule is
+   `repository: Systemorph/MeshWeaver`, its immutable `repositoryId` and `repositoryOwnerId`, `events`
+   `workflow_run` and `workflow_dispatch` → `verify`, both `eventRefs` restricted to
+   `refs/heads/main`, and `scopes: ["verify:combo"]` and nothing else. It grants reading the release
+   inputs and recording a verdict through `POST /api/plugins/combo-verification`; it cannot install,
+   apply an update, read user content, edit access or change the update policy
+   ([Access control](../AccessControl) → Build principals). It has two homes:
+
+   - **Declared** (policy `declared-not-derived`), beside the audience in `extraPortalConfig`, which
+     is how an estate provisions every one of its instances with one merge:
+
+     ```text
+     Plugins__Registry__BuildPrincipals__0__Repository             Systemorph/MeshWeaver
+     Plugins__Registry__BuildPrincipals__0__RepositoryId           <repository_id>
+     Plugins__Registry__BuildPrincipals__0__RepositoryOwnerId      <repository_owner_id>
+     Plugins__Registry__BuildPrincipals__0__Events__workflow_run__0        verify
+     Plugins__Registry__BuildPrincipals__0__Events__workflow_dispatch__0   verify
+     Plugins__Registry__BuildPrincipals__0__EventRefs__workflow_run__0       refs/heads/main
+     Plugins__Registry__BuildPrincipals__0__EventRefs__workflow_dispatch__0  refs/heads/main
+     Plugins__Registry__BuildPrincipals__0__Scopes__0              verify:combo
+     ```
+
+   - **A node**, `Admin/_BuildPrincipal/systemorph--meshweaver`, created by a global admin of that
+     instance. A node that already exists keeps working unchanged.
+
+#### The declared form: stricter than a node, visible, and overridden by one
+
+The grant used to exist only as a node, created by hand on each instance by whoever held a global
+admin's session there. An instance nobody could reach that way never got it, and its verify job
+stayed red on a 401 with nothing in any repository to change. The audience was already declared in
+the record; the grant now travels the same route.
+
+- **Stricter than a node.** `DeclaredBuildPrincipals` refuses a declaration that leaves out either
+  immutable id, lists an event without a ref allow-list, lists a verb no declared scope carries, or
+  carries a scope other than `verify:combo`. Publishing or fetching a source stays an act of a
+  global admin on a node. A declaration that breaks a rule is refused **whole** — it is never
+  narrowed into something that passes — and so is every declaration of a repository declared twice.
+  An unknown key refuses it too, so a typo cannot silently drop a restriction.
+- **Visible.** A declared principal is in no node, so `search nodeType:BuildPrincipal` no longer
+  lists everything an instance trusts. The public `/health` body carries a `build_principals` line
+  that prints whatever its status: the repository, both ids, each event with its refs and the
+  scopes of every declaration in force; each refused declaration with the rule it broke (Degraded);
+  and, when principals are declared but no audience is, that the whole leg is off (Degraded). It
+  names declarations only — nodes are not listed there.
+- **Overridden by a node.** The authenticator reads the node first and consults the declaration
+  only when no node exists for the repository. A node narrower than the declaration narrows it, and
+  a node carrying `requestedAction: Revoke` stops a declared principal on the next request, with no
+  roll. An unreadable node is answered retryable and never falls through to the declaration,
+  because a revoking node may be exactly what could not be read.
+- **Nothing is materialised.** The declaration is read from configuration when a token is decided.
+  No node is written at boot, so there is no importer and nothing that could prune one; removing
+  the declaration from the record removes the trust at the next roll, and only that does.
+
+A declaration reaches a portal the way any record change does: the record change opens a
+record-change Reconcile on the control instance, and the portal reads the new configuration when
+its pods are replaced. The portal must run an image that knows the section; an older image ignores
+the keys and keeps answering 401 until it rolls.
+
+Revoking a node is a node write and takes effect on the next request.
 
 The lander mints a fresh token before **every** instance call (the verification between the reads
 and the landing can outlive a token minted once) and lands through the recording route, which merges

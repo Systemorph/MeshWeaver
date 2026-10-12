@@ -79,6 +79,45 @@ public static class RouterTrafficRule
     }
 
     /// <summary>
+    /// Whether <paramref name="message"/> is the NACK of an ANSWER the router itself posted — a
+    /// <see cref="DeliveryFailure"/> about a delivery that came FROM the mesh hub, was addressed to
+    /// some other hub, and answered a request.
+    ///
+    /// <para>🚨 <b>A NACK inherits the verdict of the delivery it is about</b>
+    /// (<see href="https://github.com/Systemorph/MeshWeaver/issues/5713">#5713</see>). The routing
+    /// layer NACKs an undeliverable delivery to that delivery's SENDER, so when the router's own
+    /// answer cannot be delivered — the target's host is shutting down, say — the notice is posted
+    /// by the router AND addressed at it: <c>sender AND target</c>.
+    /// <see cref="RoleOf(string?, string?, object?, bool)"/> reads a response addressed at the
+    /// router as proof that the router ISSUED a request, and for this one shape that inference is
+    /// false: the delivery that failed was an answer, which the same rule already calls routing's
+    /// own duty and does not report. Production reported exactly that — the success
+    /// <c>DeleteNodeResponse</c> the delete handler deliberately answers from the mesh hub (the
+    /// handling per-node hub may be gone by then), bounced by a host that was stopping — as a
+    /// router-origin violation naming the routing service's NACK site, where no call site can be
+    /// moved and no seam applies.</para>
+    ///
+    /// <para><b>Deliberately narrow.</b> The NACK of a REQUEST the router posted is still reported:
+    /// that delivery is itself a violation, and its bounce is often the only sighting of it. So is
+    /// the NACK of anything addressed AT the router. Only the bounce of an unreported answer is
+    /// silent.</para>
+    /// </summary>
+    /// <param name="message">The message being delivered.</param>
+    /// <param name="isResponse">Whether a delivery ANSWERS a request — the same request-id
+    /// correlation <see cref="RoleOf(string?, string?, object?, bool)"/> is told about, asked here
+    /// of the FAILED delivery. Passed in because the correlation key belongs to the hub layer.</param>
+    /// <returns><c>true</c> when the message is such a NACK and must not be reported.</returns>
+    public static bool IsNackOfAnAnswerTheRouterPosted(object? message, Func<IMessageDelivery, bool> isResponse)
+        => message is DeliveryFailure { Delivery: { } failed }
+           && string.Equals(failed.Sender?.Type, AddressExtensions.MeshType, StringComparison.Ordinal)
+           // A NAMED other hub. A failed delivery with no target — or an empty address, whose Type
+           // is "" — was not an answer sent anywhere, and "not the mesh" must not be what exempts
+           // its bounce.
+           && failed.Target is { Type.Length: > 0 } target
+           && !string.Equals(target.Type, AddressExtensions.MeshType, StringComparison.Ordinal)
+           && isResponse(failed);
+
+    /// <summary>
     /// Binary-compatible 3-argument form — the pre-<c>isResponse</c> public signature, kept so
     /// assemblies compiled against it keep resolving (this is a shipped Contract package).
     /// Treats the delivery as a non-response, i.e. applies no NACK exclusion.
