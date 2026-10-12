@@ -126,4 +126,21 @@ public static class QueryWildcard
             ? IsMatch(value, pattern)
             : value.Contains(pattern, StringComparison.OrdinalIgnoreCase);
     }
+
+    /// <summary>
+    /// The in-memory reading of a NEGATED wildcard — a <see cref="QueryOperator.NotEqual"/> whose
+    /// value carries a <see cref="Wildcard"/> (<c>-field:val*</c>). It is the exact COMPLEMENT of
+    /// the <see cref="QueryOperator.Like"/> the un-negated term parses to: a value that does not
+    /// glob-match is kept, and so is a MISSING value (<see langword="null"/>), because a node that
+    /// lacks the field does not match <c>field:val*</c>. That is what the SQL generators emit
+    /// (<c>(sel NOT ILIKE p OR sel IS NULL)</c>), the same null-inclusive rule
+    /// <see cref="QueryOperator.NotEqual"/> and <see cref="QueryOperator.NotIn"/> already follow.
+    /// Issue #6581: the executors used to compare the pattern literally, so the negation matched
+    /// every node — the ones it was written to exclude included.
+    /// </summary>
+    /// <remarks>Defined as the negation of <see cref="IsLikeMatch"/> for every input, so the public
+    /// pair is complementary for a wildcard-free pattern too (contains semantics), not only for the
+    /// glob form the evaluator routes here.</remarks>
+    public static bool IsNotLikeMatch(string? value, string pattern) =>
+        value is null || !IsLikeMatch(value, pattern);
 }

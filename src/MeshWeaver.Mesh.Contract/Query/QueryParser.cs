@@ -316,7 +316,13 @@ public partial class QueryParser
             }
         }
 
-        // Check for wildcard pattern
+        // Check for wildcard pattern.
+        // 🚨 A NEGATED wildcard (`-field:val*`) stays NotEqual and KEEPS its `*` (#6581): every
+        // executor reads a `*` in a NotEqual value as the COMPLEMENT of the glob
+        // (QueryWildcard.IsNotLikeMatch; `NOT ILIKE … OR IS NULL` on SQL). There is no NotLike
+        // member — QueryOperator is public and widening it breaks every switch that consumes it
+        // (policy open-vocabulary-string-constants). Before #6581 the executors compared the
+        // pattern LITERALLY, so the negation matched every node, positives included.
         if (!isNegated && (op == QueryOperator.Equal || op == QueryOperator.NotEqual))
         {
             if (value.Contains('*'))
@@ -557,6 +563,23 @@ public partial class QueryParser
                         namespaceUsed = true;
                         continue;
                     }
+                    // 🚨 A NEGATED single namespace is a FILTER, never an anchor (#6581) — the same
+                    // defect #4296 fixed for `-path:`. `-namespace:X` fell through to `path = X`
+                    // and `-namespace:*/X` to a POSITIVE `namespace LIKE` filter: the operator was
+                    // dropped and the exclusion returned exactly what it was written to exclude.
+                    // Left as `namespace NotEqual value` it is evaluated by every backend, a `*` in
+                    // the value reading as the complement of the glob (see QueryWildcard).
+                    if (token.Condition!.Operator is QueryOperator.NotEqual)
+                    {
+                        // A negated WILDCARD is widened with its positive twin once `scope:` is
+                        // known — to the AND of the two negated patterns, the complement of the
+                        // positive's self-or-below OR pair (WidenWildcardNamespacesToSubtree).
+                        if (QueryWildcard.ContainsWildcard(value))
+                            (namespaceWildcardIndices ??= []).Add(filterTokens.Count);
+                        filterTokens.Add(new Token(TokenType.Comparison, string.Empty,
+                            new QueryCondition("namespace", QueryOperator.NotEqual, [value.Trim('/')])));
+                        continue;
+                    }
                     if (QueryWildcard.ContainsWildcard(value))
                     {
                         // Wildcard namespace: add as LIKE filter (e.g., namespace:*/_Thread).
@@ -784,13 +807,25 @@ public partial class QueryParser
             if (filterTokens[index].Condition is not { } self || self.Value.Length == 0)
                 continue;
             var pattern = self.Value;
+            var negated = self.Operator == QueryOperator.NotEqual;
             // Same vocabulary as the pattern being widened: `*`, not SQL's `%` (issue #1235). The
             // widened form carries TWO wildcards (`*/Source/*`), which is exactly the shape both
             // in-memory matchers used to mishandle by splitting on the first one only.
             var below = new QueryCondition(
-                self.Selector, QueryOperator.Like,
+                self.Selector, self.Operator,
                 [$"{pattern.TrimEnd('/')}/{QueryWildcard.Wildcard}"]);
             filterTokens.RemoveAt(index);
+            // A NEGATED wildcard (`-namespace:*/X`, #6581) is the complement of the positive's
+            // `(self OR below)` — De Morgan: `NOT self AND NOT below`, two adjacent comparisons.
+            if (negated)
+            {
+                filterTokens.InsertRange(index,
+                [
+                    new Token(TokenType.Comparison, string.Empty, self),
+                    new Token(TokenType.Comparison, string.Empty, below),
+                ]);
+                continue;
+            }
             filterTokens.InsertRange(index,
             [
                 new Token(TokenType.LeftParen, "("),

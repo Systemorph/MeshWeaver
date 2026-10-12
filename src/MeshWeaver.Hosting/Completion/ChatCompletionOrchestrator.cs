@@ -76,12 +76,19 @@ internal sealed class ChatCompletionOrchestrator(
         logger?.LogDebug("[ChatComplete] query={Query}, mode={Mode}, currentNamespace={NS}",
             query, mode.Mode, currentNamespace);
 
+        // 🚨 The caller, captured HERE on the caller's turn and handed to every read below — most of
+        // them are subscribed inside a continuation (the presentation screen's emission, the
+        // Merge-then-Concat of the blended sources), where the ambient identity is the delivering
+        // thread's and the read gates pass a hub principal through. Re-reading it there listed
+        // nodes the caller holds no Read on (MeshWeaver#6570, the sweep beyond `get`).
+        var caller = CaptureCaller();
+
         var produced = mode.Mode switch
         {
-            CompletionMode.PartitionList => ProducePartitionList(mode.Filter),
-            CompletionMode.PartitionDrillDown => ProducePartitionDrillDown(mode.Partition!, mode.Filter),
-            CompletionMode.TagQuery => ProduceTagCompletions(reference, currentNamespace),
-            CompletionMode.CurrentNodeAndGlobal => ProduceCurrentAndGlobal(reference, currentNamespace),
+            CompletionMode.PartitionList => ProducePartitionList(mode.Filter, caller),
+            CompletionMode.PartitionDrillDown => ProducePartitionDrillDown(mode.Partition!, mode.Filter, caller),
+            CompletionMode.TagQuery => ProduceTagCompletions(reference, currentNamespace, caller),
+            CompletionMode.CurrentNodeAndGlobal => ProduceCurrentAndGlobal(reference, currentNamespace, caller),
             _ => Observable.Empty<CompletionBatch>()
         };
 
@@ -113,6 +120,32 @@ internal sealed class ChatCompletionOrchestrator(
         var screen = hub.ServiceProvider.GetService<AccessService>().ViewerScreen(hub).Take(1);
         return screen.SelectMany(viewerScreen => Screened(batches, viewerScreen));
     }
+
+    /// <summary>
+    /// The identity every read of one completion is decided for: the ambient caller at
+    /// <see cref="GetCompletions"/>'s entry. An absent identity is
+    /// <see cref="WellKnownUsers.Anonymous"/>, never "whoever is ambient later".
+    /// </summary>
+    private AccessContext CaptureCaller()
+    {
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        return accessService?.Context ?? accessService?.CircuitContext
+            ?? new AccessContext { ObjectId = WellKnownUsers.Anonymous, Name = "Anonymous", IsVirtual = true };
+    }
+
+    /// <summary>
+    /// Builds AND subscribes <paramref name="read"/> with <paramref name="caller"/> ambient, so a
+    /// read that takes its identity when it is built or subscribed (the query viewer stamp, the
+    /// request's delivery identity, the stream cache's gate) decides for the caller even when this
+    /// runs inside another read's continuation.
+    /// </summary>
+    private IObservable<T> ReadAs<T>(AccessContext caller, Func<IObservable<T>> read)
+        => Observable.Create<T>(observer =>
+        {
+            var accessService = hub.ServiceProvider.GetService<AccessService>();
+            using (accessService?.SwitchAccessContext(caller))
+                return read().Subscribe(observer);
+        });
 
     /// <summary>
     /// The projection itself, as a pure observable-in / observable-out function of the screen —
@@ -165,14 +198,14 @@ internal sealed class ChatCompletionOrchestrator(
     /// in-process partition lists. No global enumeration, no centralized
     /// "load all partitions" cache.
     /// </summary>
-    private IObservable<CompletionBatch> ProducePartitionList(string filter)
+    private IObservable<CompletionBatch> ProducePartitionList(string filter, AccessContext caller)
     {
         var request = new MeshQueryRequest
         {
             Query = "namespace:Admin/Partition nodeType:Partition",
             Limit = 100
         };
-        return meshService.Query<MeshNode>(request)
+        return ReadAs(caller, () => meshService.Query<MeshNode>(request))
             .Take(1)
             .Select(change =>
             {
@@ -209,9 +242,9 @@ internal sealed class ChatCompletionOrchestrator(
             || partitionKey.Contains(filter, StringComparison.OrdinalIgnoreCase);
     }
 
-    private IObservable<CompletionBatch> ProducePartitionDrillDown(string partition, string filter)
+    private IObservable<CompletionBatch> ProducePartitionDrillDown(string partition, string filter, AccessContext caller)
     {
-        return meshService.Autocomplete(partition, filter, AutocompleteMode.PathFirst, 20)
+        return ReadAs(caller, () => meshService.Autocomplete(partition, filter, AutocompleteMode.PathFirst, 20))
             .Select(snapshot =>
             {
                 var combined = snapshot
@@ -242,16 +275,16 @@ internal sealed class ChatCompletionOrchestrator(
     /// subscribes to the deferred C only after the merged A+B stream completes, and the deferred
     /// closure reads the accumulated count to decide whether to actually run broadening.</para>
     /// </summary>
-    private IObservable<CompletionBatch> ProduceCurrentAndGlobal(string reference, string? currentNamespace)
+    private IObservable<CompletionBatch> ProduceCurrentAndGlobal(string reference, string? currentNamespace, AccessContext caller)
     {
         return Observable.Defer(() =>
         {
             var seenPaths = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
             var totalCount = 0;
 
-            var a = ProduceViaAutocompleteRequest(reference, currentNamespace, seenPaths)
+            var a = ProduceViaAutocompleteRequest(reference, currentNamespace, seenPaths, caller)
                 .Do(batch => Interlocked.Add(ref totalCount, batch.Items.Count));
-            var b = ProduceViaSubtreeQuery(reference, currentNamespace, seenPaths)
+            var b = ProduceViaSubtreeQuery(reference, currentNamespace, seenPaths, caller)
                 .Do(batch => Interlocked.Add(ref totalCount, batch.Items.Count));
 
             return Observable.Merge(a, b)
@@ -260,7 +293,7 @@ internal sealed class ChatCompletionOrchestrator(
                     var forcesBroadening = reference.StartsWith("../") || reference.StartsWith("/");
                     if (!forcesBroadening && totalCount >= BroadeningThreshold)
                         return Observable.Empty<CompletionBatch>();
-                    return ProduceViaBroadening(reference, currentNamespace, seenPaths);
+                    return ProduceViaBroadening(reference, currentNamespace, seenPaths, caller);
                 }));
         });
     }
@@ -272,7 +305,8 @@ internal sealed class ChatCompletionOrchestrator(
     private IObservable<CompletionBatch> ProduceViaAutocompleteRequest(
         string reference,
         string? currentNamespace,
-        ConcurrentDictionary<string, byte> seenPaths)
+        ConcurrentDictionary<string, byte> seenPaths,
+        AccessContext caller)
     {
         if (string.IsNullOrEmpty(currentNamespace))
             return Observable.Empty<CompletionBatch>();
@@ -281,7 +315,7 @@ internal sealed class ChatCompletionOrchestrator(
         // Content collections, layout areas, data live on the parent node — not on satellites.
         var targetNamespace = ResolveParentNodeNamespace(currentNamespace);
 
-        return SendAutocompleteRequest($"@{reference}", currentNamespace, new Address(targetNamespace))
+        return SendAutocompleteRequest($"@{reference}", currentNamespace, new Address(targetNamespace), caller)
             .Select(response =>
             {
                 var items = new List<AutocompleteItem>();
@@ -321,7 +355,8 @@ internal sealed class ChatCompletionOrchestrator(
     private IObservable<CompletionBatch> ProduceViaSubtreeQuery(
         string reference,
         string? currentNamespace,
-        ConcurrentDictionary<string, byte> seenPaths)
+        ConcurrentDictionary<string, byte> seenPaths,
+        AccessContext caller)
     {
         if (string.IsNullOrEmpty(currentNamespace) || string.IsNullOrEmpty(reference))
             return Observable.Empty<CompletionBatch>();
@@ -334,7 +369,7 @@ internal sealed class ChatCompletionOrchestrator(
             Limit = 20
         };
 
-        return meshService.Query<MeshNode>(request)
+        return ReadAs(caller, () => meshService.Query<MeshNode>(request))
             .Take(1)
             .SelectMany(c => c.Items.ToObservable())
             .Where(node => !string.IsNullOrEmpty(node.Path) && seenPaths.TryAdd(node.Path!, 0))
@@ -371,7 +406,8 @@ internal sealed class ChatCompletionOrchestrator(
     private IObservable<CompletionBatch> ProduceViaBroadening(
         string reference,
         string? currentNamespace,
-        ConcurrentDictionary<string, byte> seenPaths)
+        ConcurrentDictionary<string, byte> seenPaths,
+        AccessContext caller)
     {
         var partition = ExtractPartition(currentNamespace);
         if (string.IsNullOrEmpty(partition) || partition == currentNamespace)
@@ -379,8 +415,8 @@ internal sealed class ChatCompletionOrchestrator(
 
         var searchText = reference.TrimStart('.', '/');
 
-        return meshService.Autocomplete(
-                partition, searchText, AutocompleteMode.RelevanceFirst, 20, currentNamespace)
+        return ReadAs(caller, () => meshService.Autocomplete(
+                partition, searchText, AutocompleteMode.RelevanceFirst, 20, currentNamespace))
             .Select(snapshot => snapshot
                 .Where(s => seenPaths.TryAdd(s.Path, 0))
                 .Select(s =>
@@ -413,7 +449,7 @@ internal sealed class ChatCompletionOrchestrator(
     /// Supports both colon format (<c>@path/content:readme</c>) and slash format
     /// (<c>@path/content/readme</c>, <c>@content/file</c>).
     /// </summary>
-    private IObservable<CompletionBatch> ProduceTagCompletions(string reference, string? currentNamespace)
+    private IObservable<CompletionBatch> ProduceTagCompletions(string reference, string? currentNamespace, AccessContext caller)
     {
         return Observable.Defer(() =>
         {
@@ -451,7 +487,7 @@ internal sealed class ChatCompletionOrchestrator(
             if (string.IsNullOrEmpty(nodeAddress))
                 return Observable.Empty<CompletionBatch>();
 
-            return SendAutocompleteRequest($"@{reference}", currentNamespace, new Address(nodeAddress))
+            return SendAutocompleteRequest($"@{reference}", currentNamespace, new Address(nodeAddress), caller)
                 .Select(response =>
                 {
                     var items = new List<AutocompleteItem>();
@@ -495,7 +531,7 @@ internal sealed class ChatCompletionOrchestrator(
     /// the moment it is allowed to wait for every provider to settle (#3094).</para>
     /// </summary>
     private IObservable<AutocompleteResponse?> SendAutocompleteRequest(
-        string query, string? context, Address target)
+        string query, string? context, Address target, AccessContext caller)
     {
         // 🚨 ISSUED OFF THE ROUTER (#5900). The orchestrator is resolved from the root container in
         // production, where the injected IMessageHub IS the mesh router: posting the request there
@@ -515,7 +551,10 @@ internal sealed class ChatCompletionOrchestrator(
                 hub.ReadIssuingHub()
                     .Observe(
                         new AutocompleteRequest(query, context),
-                        o => o.WithTarget(target),
+                        // The request is decided for the CALLER (it is [RequiresPermission(Read)] on
+                        // the target), and this post runs inside a continuation — so the identity
+                        // is stated, never left to whatever is ambient here (MeshWeaver#6570).
+                        o => o.WithTarget(target).WithAccessContext(caller),
                         Guid.NewGuid().ToString("N"))
                     ?.Take(1)
                     .Select(d => d.Message as AutocompleteResponse)
