@@ -129,6 +129,49 @@ the same reasoning that leaves `count` out of a `search_chunks` answer under `"s
 (#2741). The aggregator unions the lists of the providers that reported and stays null when none
 did (`MeshQuery.MergeProviderObservables`).
 
+### A listed partition can still be read only in part
+
+`coverage.partitions` names the partitions a read was **run against**. It does not say every row
+in them was visible. Row-level security narrows twice. A partition the caller holds no grant in at
+all is dropped before the SQL is written, so it never appears in the list. Inside a listed
+partition, the row filter (the same per-subject longest-prefix fold as the permission evaluator)
+hides every row under a sub-path the caller's grants do not reach. The partition-level membership
+test admits a schema as soon as the caller holds *any* grant inside it.
+
+Measured on memex.meshweaver.cloud, 2026-10-12 (#6564), with one global-admin credential:
+
+| read | answer |
+|---|---|
+| `get MeshWeaver/samples/Graph/Data/Type/article` | the NodeType, `compilationStatus: Error` |
+| `nodeType:NodeType content.compilationStatus:Error partitions:all` | `count: 0`, and `meshweaver` **is** in `coverage.partitions` |
+| `namespace:MeshWeaver scope:descendants nodeType:NodeType` | 13 sample types, none under `Type/` |
+| `whoami` at `…/Type/article` / at `…/ACME/Article` / at `MeshWeaver` | `[]` / `Read, Execute, Api` / `[]` |
+
+The row was indexed. The caller's grants (a `Public` grant on `ACME/`, `FutuRe/`, … and none on
+`Type/`) covered only some sub-trees of the partition, so the sweep's zero was read against a
+partition it had seen only in part.
+
+The envelope therefore carries a third field:
+
+```json
+"coverage": { "scope": "declared", "partitions": ["acme", "meshweaver"], "partial": ["meshweaver"] }
+```
+
+| `coverage.partial` | meaning |
+|---|---|
+| a list | the listed partitions whose **root** the caller's grants do not cover (or where a deeper Read deny cuts into the covering grant): rows under ungranted sub-paths were not counted there |
+| `[]` | assessed, and every partition read is covered |
+| `null` | the provider did not assess it (a system read, an in-memory store, an older image). This is unknown and never means "none partial" |
+
+The provider computes it (`QueryResultChange.PartiallyReadPartitions`) from the caller's **own**
+grant rows, with the same subjects and the same fold the row filter uses. It discloses nothing: it
+says "your grants do not reach the whole of X" and never what lies outside them. It is opt-in per
+request (`MeshQueryRequest.ReportPartialReads`), because it costs one read of the caller's grant
+rows per partition. `search` sets it, and interactive listings do not. When it is
+non-empty the envelope also carries a `partialHint` sentence. The aggregator unions the
+reporting providers' lists, because a partition one provider read in part is not made whole by
+another.
+
 ### `basePath` reaches the whole subtree
 
 `basePath` now becomes `namespace:{base} scope:descendants` unless the query states its own
@@ -150,7 +193,13 @@ search 'nodeType:NodeType partitions:all' limit:200
 
 When `coverage.partitions` is `null`, the image serving the query does not report what it read;
 say "M unknown — coverage not reported by this image" and do **not** pass the sweep on that zero
-alone. The system-side census on `/health` (`bake-report`) is the instrument that enumerates as the
+alone.
+
+🚨 **And M counts only the partitions read in FULL.** Subtract every partition in
+`coverage.partial`, and state them: "0 of N over M fully readable partitions; P read in part:
+…". A partition in `coverage.partial` may hold a broken type the sweep could not see (#6564). A
+`coverage.partial` of `null` means the image does not assess partial reads, so the same rule as a
+`null` denominator applies and the zero does not pass the sweep on its own. The system-side census on `/health` (`bake-report`) is the instrument that enumerates as the
 process and sees past row-level security — [A Census That Counts Must
 Name](/Doc/Architecture/ACensusThatCountsMustName) says what it can and cannot name.
 
@@ -180,6 +229,8 @@ Two things the declared sweep still cannot see, and no query form can:
   for this credential, which is itself a zero with the RLS caveat.
 - **A NodeType in a partition you hold no grant on.** That is the denominator M; the census is the
   only instrument that counts past it.
+- **A NodeType under a sub-path of a listed partition that your grants do not reach.** The sweep
+  cannot see it either, but it can now SAY so: that partition is in `coverage.partial`.
 
 ### The cap is the other half of the same rule
 
@@ -236,6 +287,11 @@ until N stops being a floor.
   down, and a caller-stated scope is kept.
 - `MeshQueryMergeContractTest.ReportedPartitions_*` — the aggregator unions reported partitions and
   stays null when no provider reported.
+- `MeshQueryMergeContractTest.PartiallyReadPartitions_AreUnionedOntoTheMergedInitial` /
+  `AssessedAndFullyCovered_StaysEmptyNotNull` — the partial-read verdict survives the merge, and
+  "assessed, none partial" stays distinct from "not assessed".
+- The Postgres provider's half, which computes the verdict from `user_effective_permissions`, is
+  tested in MeshWeaver.Plugins (`MeshWeaver.Hosting.PostgreSql.Test`).
 
 Related: [Cross-Schema Fan-Out Elimination](/Doc/Architecture/CrossSchemaFanOutElimination) (the
 lock-bomb this refusal keeps operator searches out of), [Query Provider

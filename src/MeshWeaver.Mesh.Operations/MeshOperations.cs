@@ -1439,6 +1439,15 @@ public partial class MeshOperations
     /// <c>null</c> for a declared fan-out on an image whose provider does not report — explicitly
     /// unknown, never "all" (the same reasoning as <c>search_chunks</c>' missing <c>count</c> under
     /// <c>"searched": false</c>, #2741).</para>
+    ///
+    /// <para>🚨 <b>A listed partition is a partition the read RAN against. That does not mean every
+    /// row in it was visible</b> (#6564). Row-level security narrows twice: whole partitions the
+    /// caller holds no grant in are dropped (they never appear in <c>coverage.partitions</c>), and
+    /// INSIDE a listed partition every row under a sub-path the caller's grants do not reach is
+    /// filtered out. So <c>coverage.partial</c> names the listed partitions whose root the caller's
+    /// grants do not cover (<see cref="QueryResultChange{T}.PartiallyReadPartitions"/>): a zero read
+    /// against one of them is a floor, not a clean answer. <c>null</c> means the provider did not
+    /// assess it, which is unknown and never "none partial".</para>
     /// </summary>
     /// <param name="query">The GitHub-style query string (e.g. <c>nodeType:Agent name:*sales*</c>).</param>
     /// <param name="basePath">Optional path to search UNDER; <c>null</c> means the query must anchor or declare itself.</param>
@@ -1488,7 +1497,7 @@ public partial class MeshOperations
         // containing every match for this query in one batch — no async enumeration,
         // no FromAsync bridge. ONE row past the limit is asked for, so `truncated` is a
         // measurement ("a further match exists") rather than "the page happened to be full".
-        return mesh.Query<MeshNode>(new MeshQueryRequest { Query = fullQuery, Limit = limit + 1 })
+        return mesh.Query<MeshNode>(new MeshQueryRequest { Query = fullQuery, Limit = limit + 1, ReportPartialReads = true })
             .Take(1)
             .Select(change =>
             {
@@ -1508,6 +1517,10 @@ public partial class MeshOperations
                 // what the query NAMED is the fallback; a declared fan-out with no report is
                 // explicitly null — unknown, never "all".
                 var partitions = change.Partitions ?? coverage.Value.Named;
+                // The partitions read only IN PART (#6564): the caller's grants do not cover their
+                // root, so rows under ungranted sub-paths were filtered out and not counted. Null =
+                // the provider did not assess it (unknown), never "none".
+                var partial = change.PartiallyReadPartitions;
                 var payload = new JsonObject
                 {
                     ["count"] = list.Count,
@@ -1516,15 +1529,18 @@ public partial class MeshOperations
                     ["coverage"] = new JsonObject
                     {
                         ["scope"] = coverage.Value.Scope,
-                        ["partitions"] = partitions is null
-                            ? null
-                            : new JsonArray(partitions.Select(p => (JsonNode?)JsonValue.Create(p)).ToArray()),
+                        ["partitions"] = ToJsonArray(partitions),
+                        ["partial"] = ToJsonArray(partial),
                     },
                     ["results"] = JsonSerializer.SerializeToNode(list, hub.JsonSerializerOptions) ?? new JsonArray(),
                 };
                 if (truncated)
                     payload["hint"] =
                         "Result set hit the limit — there may be more matches. Narrow the query (namespace:/nodeType:/name:) or raise 'limit' (max 200).";
+                if (partial is { Count: > 0 })
+                    payload["partialHint"] =
+                        $"{partial.Count} of the partitions read are readable to you only in part (coverage.partial): "
+                        + "rows under sub-paths your grants do not reach were not counted, so this count is a floor there.";
                 return ToolAnswerJson.Write(payload);
             })
             .Catch((Exception ex) =>
@@ -1533,6 +1549,12 @@ public partial class MeshOperations
                 return Observable.Return($"Error: {ex.Message}");
             });
     }
+
+    /// <summary>A partition list as a JSON array, or JSON null when the list is unknown.</summary>
+    private static JsonArray? ToJsonArray(IReadOnlyList<string>? partitions)
+        => partitions is null
+            ? null
+            : new JsonArray(partitions.Select(p => (JsonNode?)JsonValue.Create(p)).ToArray());
 
     /// <summary>
     /// Whether the query text states its own <c>scope:</c> qualifier, so a <c>basePath</c> must not

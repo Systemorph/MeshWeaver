@@ -685,6 +685,10 @@ public class MeshQuery : IMeshQueryCore
             // unioned onto the merged Initial. Null throughout when no provider reported — the
             // merged change then says "unknown", which is the honest answer, never "all".
             IReadOnlyList<string>?[] providerPartitions = new IReadOnlyList<string>?[observables.Count];
+            // …and the subset each said it read only IN PART (QueryResultChange.PartiallyReadPartitions,
+            // #6564). Unioned the same way: a partition one provider read in part is not made whole by
+            // another, and null throughout stays "not assessed".
+            IReadOnlyList<string>?[] providerPartial = new IReadOnlyList<string>?[observables.Count];
 
             var subscriptions = new List<IDisposable>();
 
@@ -709,6 +713,7 @@ public class MeshQuery : IMeshQueryCore
                 observer.OnNext(clipped with
                 {
                     Partitions = UnionReportedPartitions(providerPartitions),
+                    PartiallyReadPartitions = UnionReportedPartitions(providerPartial),
                     // Stamped on the merged frame, never on a delta: this says what the SNAPSHOT is
                     // worth. Empty stays null so the common case allocates nothing and reads as
                     // "every provider answered".
@@ -753,6 +758,7 @@ public class MeshQuery : IMeshQueryCore
                                 }
                                 lastQuery ??= change.Query;
                                 providerPartitions[idx] ??= change.Partitions;
+                                providerPartial[idx] ??= change.PartiallyReadPartitions;
                                 // 🚨 A provider that ANSWERED over reads it could not complete is
                                 // named here, exactly like one that answered not at all
                                 // (MeshWeaver#1186). SnapshotIncomplete is the provider's own verdict
