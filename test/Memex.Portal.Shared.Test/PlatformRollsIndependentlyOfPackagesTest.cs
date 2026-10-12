@@ -170,6 +170,37 @@ public class PlatformRollsIndependentlyOfPackagesTest(ITestOutputHelper output) 
     }
 
     /// <summary>
+    /// 🌍 MeshWeaver#6540 — the advisory the poller RECORDS renders in the viewer's language. The
+    /// record goes through the real mesh (so the reason code's arguments come back as JSON), and the
+    /// Updates tab's status renders it for a German and an English viewer off the SAME record: the
+    /// German line is the catalog's German, the English line is exactly the stored English.
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task TheRecordedAdvisory_RendersInTheViewersLanguage()
+    {
+        await Seed(TestContext.Current.CancellationToken);
+
+        var content = (await RunOneCheck(new RecordingUpdater(), MissingBakeUnderRequirePrebuilt()))
+            with { LatestAvailableTag = CandidateTag };
+
+        var item = content.AdvisoryItems.Should().ContainSingle(
+            "the record carries the advisory with its reason code beside the joined English").Subject;
+        item.Key.Should().Be(ReleaseAdvisoryCode.PackagesDoNotFollow);
+        item.Text.Should().Be(content.Advisories, "the item's English IS the sentence the record joins");
+
+        var german = Memex.Portal.Shared.Settings.UpdatePolicySettingsTab.StatusMarkdown(
+            content, (key, args) => LocalizationCatalog.Get(key, "de", args), locale: "de");
+        var english = Memex.Portal.Shared.Settings.UpdatePolicySettingsTab.StatusMarkdown(
+            content, (key, args) => LocalizationCatalog.Get(key, "en", args), locale: "en");
+
+        german.Should().Contain("die Plattform wird unabhängig von den Paketen aktualisiert — 1 Paket(e) sind für dieses Release nicht verfügbar",
+                "the count argument came back from the stored record and bound into the German template")
+            .And.NotContain("1 package(s) are not available", "a German viewer no longer reads the English sentence");
+        english.Should().Contain("1 package(s) are not available for this release")
+            .And.NotContain("Paket(e)");
+    }
+
+    /// <summary>
     /// The reboot's image step names EVERY advisory the verdict carries — not only a waived hold.
     /// An already-updatable verdict has <c>WaivedHold</c> null and still carries its boot-compile /
     /// link / declared-floor advisories; a detail built from the waived hold alone drops them

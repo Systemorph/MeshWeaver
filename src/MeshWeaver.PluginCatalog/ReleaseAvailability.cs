@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using MeshWeaver.Compiler;
+using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 
@@ -143,19 +144,18 @@ public static class ReleaseAvailability
                 ? null
                 : string.Join("; ", blockers.Select(b => $"{b.Package}: {b.Reason}")))
         {
-            Advisories =
-            [
-                .. bootCompiles.IsEmpty
-                    ? []
-                    : new[] { BootCompileAdvisory(bootCompiles, target) },
-                .. evaluated.Select(e => e.LinkAdvisory).OfType<string>(),
-                .. required.Select(p => FloorAdvisory(p, target)).OfType<string>(),
-                .. OlderCompatibleSetAdvisory(required, verdicts, target, artifacts) is { } older
-                    ? new[] { older }
-                    : [],
-            ],
             BootCompiles = bootCompiles,
-        };
+        }.WithAdvisories(
+        [
+            .. bootCompiles.IsEmpty
+                ? []
+                : new[] { BootCompileAdvisory(bootCompiles, target) },
+            .. evaluated.Select(e => e.LinkAdvisory).OfType<LocalizableText>(),
+            .. required.Select(p => FloorAdvisory(p, target)).OfType<LocalizableText>(),
+            .. OlderCompatibleSetAdvisory(required, verdicts, target, artifacts) is { } older
+                ? new[] { older }
+                : [],
+        ]);
     }
 
     /// <summary>
@@ -164,9 +164,13 @@ public static class ReleaseAvailability
     /// reason in <see cref="UpdatabilityVerdict.IsUpdatable"/> (outside
     /// <see cref="ReleaseGatePolicy.RequirePrebuilt"/>).
     /// </summary>
-    private static string BootCompileAdvisory(ImmutableArray<string> packages, ReleaseTarget target) =>
-        $"would recompile at boot on {Describe(target)} (no sealed content bake for framework "
-        + $"identity {target.FrameworkIdentity}): {string.Join(", ", packages)}";
+    private static LocalizableText BootCompileAdvisory(ImmutableArray<string> packages, ReleaseTarget target) =>
+        LocalizableText.Keyed(
+            $"would recompile at boot on {Describe(target)} (no sealed content bake for framework "
+            + $"identity {target.FrameworkIdentity}): {string.Join(", ", packages)}",
+            ReleaseAdvisoryCode.BootCompile,
+            ("target", Describe(target)), ("identity", target.FrameworkIdentity),
+            ("packages", string.Join(", ", packages)));
 
     /// <summary>
     /// The ladder, said out loud (policy <c>platform-backwards-compatibility</c>): the packages the
@@ -175,7 +179,7 @@ public static class ReleaseAvailability
     /// re-seal for the target build. Null when there is none. A statement, never a hold: it names
     /// the rung (platform 2 + plugin 1) so a reader never mistakes it for a boot compile.
     /// </summary>
-    private static string? OlderCompatibleSetAdvisory(
+    private static LocalizableText? OlderCompatibleSetAdvisory(
         ImmutableArray<RequiredPackage> required, ImmutableArray<PackageAvailability> verdicts,
         ReleaseTarget target, ReleaseArtifacts artifacts)
     {
@@ -185,13 +189,19 @@ public static class ReleaseAvailability
             .Select(p => (p.Name, Floor: artifacts.BundleRanges.TryGetValue(p.BundleName, out var r) && r.Unreadable is null ? r.Floor : null))
             .Where(x => x.Floor is not null && PlatformCompatibility.ProducerIsNewer(target.Version, x.Floor))
             .ToList();
-        return older.Count == 0
-            ? null
-            : $"adopts the older compatible set on {Describe(target)}: {older.Count} package(s) sealed under "
-              + $"compatibility key {target.FrameworkIdentity} by an earlier build ("
-              + string.Join(", ", older.Take(5).Select(x => $"{x.Name} @ {x.Floor}"))
-              + (older.Count > 5 ? $", +{older.Count - 5} more" : "")
-              + ") — no rebuild and no re-seal for this build (policy platform-backwards-compatibility)";
+        if (older.Count == 0)
+            return null;
+        // The list is language-neutral (names, versions and a "+n" overflow count), so it travels
+        // as ONE argument and the sentence around it is the catalog's.
+        var list = string.Join(", ", older.Take(5).Select(x => $"{x.Name} @ {x.Floor}"))
+                   + (older.Count > 5 ? $", +{older.Count - 5}" : "");
+        return LocalizableText.Keyed(
+            $"adopts the older compatible set on {Describe(target)}: {older.Count} package(s) sealed under "
+            + $"compatibility key {target.FrameworkIdentity} by an earlier build ({list}) — no rebuild "
+            + "and no re-seal for this build (policy platform-backwards-compatibility)",
+            ReleaseAdvisoryCode.OlderCompatibleSet,
+            ("target", Describe(target)), ("count", older.Count),
+            ("key", target.FrameworkIdentity), ("packages", list));
     }
 
     /// <summary>
@@ -201,10 +211,16 @@ public static class ReleaseAvailability
     /// <see cref="UpdatabilityVerdict.Advisories"/>, logged by the callers, and by design absent
     /// from <see cref="UpdatabilityVerdict.IsUpdatable"/> and <see cref="UpdatabilityVerdict.Blockers"/>.
     /// </summary>
-    private static string? FloorAdvisory(RequiredPackage package, ReleaseTarget target) =>
-        ModulePlatformFloor.DeclineReason(package.MinMeshVersion, target.Version) is { } reason
-            ? $"{package.Name}: {reason}"
-            : null;
+    private static LocalizableText? FloorAdvisory(RequiredPackage package, ReleaseTarget target) =>
+        ModulePlatformFloor.DeclineReason(package.MinMeshVersion, target.Version) is not { } reason
+            ? null
+            // The English stays EXACTLY the floor's own sentence (the pack-time lint's parity oracle
+            // words it); the key reproduces that sentence, by its two branches.
+            : string.IsNullOrWhiteSpace(target.Version)
+                ? LocalizableText.Keyed($"{package.Name}: {reason}", ReleaseAdvisoryCode.PlatformFloorUnknown,
+                    ("package", package.Name), ("floor", package.MinMeshVersion))
+                : LocalizableText.Keyed($"{package.Name}: {reason}", ReleaseAdvisoryCode.PlatformFloor,
+                    ("package", package.Name), ("floor", package.MinMeshVersion), ("running", target.Version));
 
     /// <summary>
     /// Why the whole observation is unusable, or null when it can be reasoned about. Kept separate
@@ -228,7 +244,7 @@ public static class ReleaseAvailability
 
     /// <summary>One package's answer plus the link ADVISORY it may carry — the sentence for a link
     /// check that could not be made, which rides beside the verdict rather than inside it.</summary>
-    private readonly record struct Evaluation(PackageAvailability Availability, string? LinkAdvisory);
+    private readonly record struct Evaluation(PackageAvailability Availability, LocalizableText? LinkAdvisory);
 
     private static Evaluation Evaluate(
         RequiredPackage package, ReleaseTarget target, ReleaseArtifacts artifacts, ReleaseGatePolicy policy)
@@ -393,7 +409,7 @@ public static class ReleaseAvailability
     /// </list>
     /// Returns the hold, or the advisory, or neither.
     /// </summary>
-    private static (PackageAvailability? Unloadable, string? Advisory) ModuleLane(
+    private static (PackageAvailability? Unloadable, LocalizableText? Advisory) ModuleLane(
         RequiredPackage package, ReleaseTarget target, ReleaseArtifacts artifacts)
     {
         if (string.IsNullOrWhiteSpace(package.ModuleName))
@@ -421,22 +437,30 @@ public static class ReleaseAvailability
             return artifacts.Modules is { Refusal: null } observed
                     && !observed.MvidByModule.ContainsKey(package.ModuleName)
                 ? (null,
-                    $"{package.Name}: the install record names module {package.ModuleName}, which "
-                    + $"the module set sealed for framework identity {target.FrameworkIdentity} "
-                    + "does not carry, and no generation of it is landed on this instance — so no "
-                    + "publisher produces it and no roll can obtain it. Reported, never a hold: "
-                    + "holding would wait for ever. If the package is genuinely retired, remove "
-                    + "its install record; if it moved, the record must name its new home")
+                    LocalizableText.Keyed(
+                        $"{package.Name}: the install record names module {package.ModuleName}, which "
+                        + $"the module set sealed for framework identity {target.FrameworkIdentity} "
+                        + "does not carry, and no generation of it is landed on this instance — so no "
+                        + "publisher produces it and no roll can obtain it. Reported, never a hold: "
+                        + "holding would wait for ever. If the package is genuinely retired, remove "
+                        + "its install record; if it moved, the record must name its new home",
+                        ReleaseAdvisoryCode.ModuleNotProduced,
+                        ("package", package.Name), ("module", package.ModuleName),
+                        ("identity", target.FrameworkIdentity)))
                 : (null, null);
 
         if (!artifacts.ModuleLinks.TryGetValue(package.Name, out var link))
-            return (null,
-                $"{package.Name}: whether its landed module {package.ModuleName} loads on "
-                + $"{Describe(target)} could not be determined — "
-                + (artifacts.PlatformSurfaceDetail
-                   ?? "the landed generation was not measured against the target's surface")
-                + ". Reported, not a hold: the boot-time link probe decides, and a generation that "
-                + "does not load is kept out while the previous one keeps serving");
+            return (null, artifacts.PlatformSurfaceDetail is { } surfaceDetail
+                ? LinkUndetermined(package, target, surfaceDetail)
+                : LocalizableText.Keyed(
+                    $"{package.Name}: whether its landed module {package.ModuleName} loads on "
+                    + $"{Describe(target)} could not be determined — the landed generation was not "
+                    + "measured against the target's surface. Reported, not a hold: the boot-time link "
+                    + "probe decides, and a generation that does not load is kept out while the "
+                    + "previous one keeps serving",
+                    ReleaseAdvisoryCode.ModuleLinkNotMeasured,
+                    ("package", package.Name), ("module", package.ModuleName),
+                    ("target", Describe(target))));
 
         return link.State switch
         {
@@ -445,9 +469,13 @@ public static class ReleaseAvailability
             ModuleLinkState.Linkable => (null,
                 link.Advisories.IsDefaultOrEmpty
                     ? null
-                    : $"{package.Name}: its landed module {package.ModuleName} links on "
-                      + $"{Describe(target)} with assembly version skew the loader rolls forward "
-                      + "— reported, never a hold: " + string.Join("; ", link.Advisories)),
+                    : LocalizableText.Keyed(
+                        $"{package.Name}: its landed module {package.ModuleName} links on "
+                        + $"{Describe(target)} with assembly version skew the loader rolls forward "
+                        + "— reported, never a hold: " + string.Join("; ", link.Advisories),
+                        ReleaseAdvisoryCode.ModuleLinkSkew,
+                        ("package", package.Name), ("module", package.ModuleName),
+                        ("target", Describe(target)), ("skew", string.Join("; ", link.Advisories)))),
             // 🚨 The FileLoadException shape (#4083): the landed generation references an assembly
             // the target carries at a LOWER version (or under another public key token) than the
             // module's bytes were bound to. The target's copy is what loads there, and .NET never
@@ -480,13 +508,21 @@ public static class ReleaseAvailability
                     + "a build of the module for this platform is published, or the module is "
                     + "uninstalled"),
                 null),
-            _ => (null,
-                $"{package.Name}: whether its landed module {package.ModuleName} loads on "
-                + $"{Describe(target)} could not be determined ({link.Detail}). Reported, not a "
-                + "hold: the boot-time link probe decides, and a generation that does not load is "
-                + "kept out while the previous one keeps serving"),
+            _ => (null, LinkUndetermined(package, target, link.Detail)),
         };
     }
+
+    /// <summary>The advisory for a link check that could not be made, quoting the measurement's
+    /// own diagnostic (<paramref name="detail"/>) verbatim inside the catalog sentence.</summary>
+    private static LocalizableText LinkUndetermined(RequiredPackage package, ReleaseTarget target, string? detail) =>
+        LocalizableText.Keyed(
+            $"{package.Name}: whether its landed module {package.ModuleName} loads on "
+            + $"{Describe(target)} could not be determined ({detail}). Reported, not a "
+            + "hold: the boot-time link probe decides, and a generation that does not load is "
+            + "kept out while the previous one keeps serving",
+            ReleaseAdvisoryCode.ModuleLinkUndetermined,
+            ("package", package.Name), ("module", package.ModuleName),
+            ("target", Describe(target)), ("detail", detail));
 
     /// <summary>
     /// 🚨 <b>The set, not the file (#3175).</b> memex-cloud rolled to ci.7621 on a verdict that
@@ -1025,20 +1061,63 @@ public sealed record UpdatabilityVerdict(
             return this;
         var lagging = Lagging.ToImmutableArray();
         var reason = HoldReason ?? "package availability was not stated";
-        var advisory = (IsIndeterminate
-                ? "the platform rolls independently of packages — package availability for this release "
-                  + "could NOT be determined, and that decides nothing about the platform roll: "
-                : $"the platform rolls independently of packages — {lagging.Length} package(s) are not "
-                  + "available for this release, so they do not follow this roll and catch up through "
-                  + "their own update policy: ")
-            + reason;
-        return this with
+        var advisory = IsIndeterminate
+            ? LocalizableText.Keyed(
+                "the platform rolls independently of packages — package availability for this release "
+                + "could NOT be determined, and that decides nothing about the platform roll: " + reason,
+                ReleaseAdvisoryCode.AvailabilityUndetermined, ("reason", reason))
+            : LocalizableText.Keyed(
+                $"the platform rolls independently of packages — {lagging.Length} package(s) are not "
+                + "available for this release, so they do not follow this roll and catch up through "
+                + "their own update policy: " + reason,
+                ReleaseAdvisoryCode.PackagesDoNotFollow,
+                ("count", lagging.Length), ("reason", reason));
+        return (this with
         {
             IsUpdatable = true,
             HoldReason = null,
             WaivedHold = reason,
-            Advisories = [advisory, .. Advisories.IsDefault ? [] : Advisories],
-        };
+        }).WithAdvisories([advisory, .. AdvisoryTexts]);
+    }
+
+    /// <summary>
+    /// A copy whose <see cref="Advisories"/> are exactly <paramref name="advisories"/>' English and
+    /// whose <see cref="AdvisoryTexts"/> carry their catalog keys — the ONE way a producer sets both,
+    /// so the two cannot disagree (MeshWeaver#6540).
+    /// </summary>
+    /// <param name="advisories">Every advisory, in order.</param>
+    /// <returns>The verdict carrying them.</returns>
+    public UpdatabilityVerdict WithAdvisories(IEnumerable<LocalizableText> advisories)
+    {
+        ImmutableArray<LocalizableText> texts = [.. advisories];
+        return this with { Advisories = [.. texts.Select(t => t.English)], AdvisoryTexts = texts };
+    }
+
+    private readonly ImmutableArray<LocalizableText> keyedAdvisories = [];
+
+    /// <summary>
+    /// 🌍 <see cref="Advisories"/> as the sentences the Updates tab renders in the VIEWER's language
+    /// (MeshWeaver#6540): each advisory's English plus the catalog key (an
+    /// <see cref="ReleaseAdvisoryCode"/>) and named arguments that reproduce it. Derived from
+    /// <see cref="Advisories"/> — one entry per line, in its order — so a producer that sets only
+    /// the English (or a verdict deserialized from an older writer) yields
+    /// <see cref="LocalizableText.Verbatim"/> lines, which render the stored English unchanged, and
+    /// never a key bound to a sentence it does not describe. Set through
+    /// <see cref="WithAdvisories"/>.
+    /// </summary>
+    public ImmutableArray<LocalizableText> AdvisoryTexts
+    {
+        get
+        {
+            var keyed = keyedAdvisories;
+            return
+            [
+                .. (Advisories.IsDefault ? [] : Advisories).Select(english =>
+                    keyed.FirstOrDefault(k => string.Equals(k.English, english, StringComparison.Ordinal))
+                    ?? LocalizableText.Verbatim(english)),
+            ];
+        }
+        init => keyedAdvisories = value.IsDefault ? [] : value;
     }
 
     /// <summary>
