@@ -1,4 +1,5 @@
-﻿using System.Reactive.Linq;
+﻿using MeshWeaver.ActionLinks;
+using System.Reactive.Linq;
 using MeshWeaver.Graph.Apps;
 using MeshWeaver.Graph.Storage;
 using MeshWeaver.Mesh.Storage;
@@ -127,6 +128,9 @@ public static class GraphConfigurationExtensions
             // Data-contributed menu entries (UiContribution nodes, #1645) + the mesh-scoped live
             // catalog the menu aggregation maps (one query subscription per silo).
             builder.AddUiContributionType();
+            // The action-handler chain (ActionHandlerRule nodes, read live) —
+            // Doc/Architecture/ActionLinkContracts.
+            builder.AddActionHandlerRuleType();
             builder.ConfigureServices(s => s.AddSingleton<UiContributionCatalog>());
             // The inbox's own item handlers — what Delete and Undo mean for the two item types
             // core owns. Every other type's handler arrives with its package (IInboxItemHandler).
