@@ -783,12 +783,13 @@ public static class JsonSynchronizationStream
             // captured by this stream's closures — never static, so they cannot bleed between
             // streams or tests. Reset by the success arm exactly like recycleReArms.
             string? lastRejectingActivation = null;
-            var sameActivationReAsks = 0;
             // Every activation that has refused this stream since the owner last ANSWERED a re-ask
-            // (#6602). The budget counts members of this set, not changes of "the previous one":
-            // a NACK and an announcement from one teardown can arrive interleaved with another
-            // carrier's, and an A, B, A sequence is still two activations, not three.
-            var refusingActivations = ImmutableHashSet<string>.Empty;
+            // (#6602), with the re-asks spent riding THAT activation out. The activation budget
+            // counts keys, not changes of "the previous one": a NACK and an announcement from one
+            // teardown can arrive interleaved with another carrier's, and an A, B, A sequence is
+            // still two activations, not three. The time budget is charged PER KEY, so an
+            // A, B, A, B interleaving never pools two teardowns' re-asks onto whichever came last.
+            var refusingActivations = ImmutableDictionary<string, int>.Empty;
             // One-shot: the give-up is announced once, not once per later rejection. The change-feed
             // latch can keep calling Resubscribe after the budgets are spent, and a Warning per
             // rejection would turn one diagnosis into log noise.
@@ -856,10 +857,9 @@ public static class JsonSynchronizationStream
                                 Interlocked.Exchange(ref recycleReArms, 0);
                                 // …and the SAME reasoning for the ride-out counter: an answer ends
                                 // the teardown we were riding out, so the next one starts fresh.
-                                Interlocked.Exchange(ref sameActivationReAsks, 0);
                                 Volatile.Write(ref lastRejectingActivation, null);
                                 Volatile.Write(ref refusingActivations,
-                                    ImmutableHashSet<string>.Empty);
+                                    ImmutableDictionary<string, int>.Empty);
                                 // …and re-arm the announcement with the latch. A stream that
                                 // recovered and later gives up again has given up TWICE, and the
                                 // second time is as much a diagnosis as the first.
@@ -1010,7 +1010,7 @@ public static class JsonSynchronizationStream
 
             // Charges ONE of the two budgets and hands the decision downstream, or null when this
             // rejection no longer buys a re-ask. The verdict is CARRIED rather than re-derived
-            // later: `sameActivationReAsks` and `lastRejectingActivation` keep moving as further
+            // later: `refusingActivations` and `lastRejectingActivation` keep moving as further
             // rejections arrive, and an attempt waiting its turn in the Concat below must act on
             // the state that charged IT, not on whatever the newest rejection left behind.
             //
@@ -1020,7 +1020,6 @@ public static class JsonSynchronizationStream
             ReArmDecision? ChargeReArmBudget(RecycleRejection rejection)
             {
                 var activation = rejection.Activation;
-                var previous = Volatile.Read(ref lastRejectingActivation);
                 // A rejection with NO activation identity (an owner on an older image, or a NACK
                 // site that embeds none) is never assumed to be the same corpse: it charges the
                 // activation budget, exactly as every rejection did before #2986. A tagged one is
@@ -1028,11 +1027,8 @@ public static class JsonSynchronizationStream
                 // answer (#6602) — not only when it was the immediately previous refuser, because
                 // one teardown's NACK and its announcement can interleave with another carrier's.
                 var sameActivation = activation is not null
-                                     && (activation == previous
-                                         || Volatile.Read(ref refusingActivations).Contains(activation));
+                                     && Volatile.Read(ref refusingActivations).ContainsKey(activation);
                 Volatile.Write(ref lastRejectingActivation, activation);
-                if (activation is not null)
-                    ImmutableInterlocked.Update(ref refusingActivations, set => set.Add(activation));
 
                 // 🚨 The give-up lines report the OBSERVED counts, never the budget constants.
                 // A triage line whose number is a compile-time constant tells the reader nothing
@@ -1042,7 +1038,8 @@ public static class JsonSynchronizationStream
                 // observation — both, and labelled.
                 if (!sameActivation)
                 {
-                    Interlocked.Exchange(ref sameActivationReAsks, 0);
+                    if (activation is not null)
+                        ImmutableInterlocked.TryAdd(ref refusingActivations, activation, 0);
                     var distinctActivations = Interlocked.Increment(ref recycleReArms);
                     if (distinctActivations <= MaxRecycleReArms)
                         return new ReArmDecision(rejection, RidingOutSameActivation: false);
@@ -1055,7 +1052,10 @@ public static class JsonSynchronizationStream
                     return null;
                 }
 
-                var attemptsAtThisActivation = Interlocked.Increment(ref sameActivationReAsks);
+                // Charged to THIS activation's own count (#6602 review): the line below names one
+                // activation, so the number it reports must be that activation's alone.
+                var attemptsAtThisActivation = ImmutableInterlocked.AddOrUpdate(
+                    ref refusingActivations, activation!, 1, (_, spent) => spent + 1);
                 if (attemptsAtThisActivation <= MaxSameActivationReAsks)
                     return new ReArmDecision(rejection, RidingOutSameActivation: true);
                 GiveUp(

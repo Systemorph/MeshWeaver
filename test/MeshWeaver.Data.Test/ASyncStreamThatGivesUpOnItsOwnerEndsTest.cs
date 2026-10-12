@@ -159,4 +159,32 @@ public class ASyncStreamThatGivesUpOnItsOwnerEndsTest(ITestOutputHelper output) 
         Volatile.Read(ref terminal).Should().BeNull(
             "one activation's NACK and announcement must not be charged as distinct activations");
     }
+
+    /// <summary>
+    /// Two activations refuse in turn — A, B, A, B, … — 20 re-asks in all, 10 each. Each is inside the
+    /// per-activation ride-out budget, so the stream must not give up: the time budget is charged per
+    /// activation, never pooled onto whichever refused last (which would report that ONE activation had
+    /// refused more re-asks than it ever saw).
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task TwoInterleavedActivations_EachChargeTheirOwnRideOut_AndTheStreamRecovers()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        activationForRefusal = n => n % 2 == 1 ? "0B0B0B0B" : "0A0A0A0A";
+        refusalsLeft = 20;
+        var (held, ended, values) = Open();
+        using var _ = held;
+        await values.Should().Within(TestTimeouts.Convergence).Emit("the stream is established", ct);
+
+        refusing = true;
+        var (streamId, subscriber) = stream!.Value;
+        owner!.Post(new StreamEndedEvent(streamId) { Activation = "0A0A0A0A" }, o => o.WithTarget(subscriber));
+
+        await acceptedAfterRefusals.Should().Within(TestTimeouts.Convergence).Emit(
+            "two activations refusing in turn are two ride-outs of 10 each, both inside the budget — "
+            + "pooled into one counter they would exceed it and end a stream that was settling", ct);
+        Volatile.Read(ref refusals).Should().Be(20);
+        Volatile.Read(ref terminal).Should().BeNull(
+            "no single activation refused more re-asks than its own budget");
+    }
 }
