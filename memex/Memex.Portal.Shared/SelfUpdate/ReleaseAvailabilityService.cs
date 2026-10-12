@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
+using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.SelfUpdate;
@@ -347,15 +348,14 @@ public class ReleaseAvailabilityService(
                 // modules this instance has landed — a PACKAGE question — so under policy
                 // <c>platform-rolls-independently-of-packages</c> it
                 // is an ADVISORY on the candidate, never a reason to walk past it.
-                ? verdict with
-                {
-                    Advisories =
-                    [
-                        .. verdict.Advisories.IsDefault ? [] : verdict.Advisories,
+                ? verdict.WithAdvisories(
+                [
+                    .. verdict.AdvisoryTexts,
+                    LocalizableText.Keyed(
                         $"the platform rolls independently of packages — {refusal}; those modules "
                         + "keep their previous generation and catch up through their own update policy",
-                    ],
-                }
+                        ReleaseAdvisoryCode.ModulesDoNotFollow, ("refusal", refusal)),
+                ])
                 : verdict);
 
     /// <summary>
