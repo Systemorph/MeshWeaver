@@ -21,7 +21,7 @@ namespace MeshWeaver.PluginCatalog;
 /// comes from <see cref="IHttpClientFactory"/> when the host registered one, else a single shared
 /// long-lived client — never a per-instance <c>new HttpClient()</c> (socket exhaustion).</para>
 /// </summary>
-public sealed class RegistryPackageSource : IPackageSource
+public sealed class RegistryPackageSource : IPackageSource, IOriginatedPackageSource
 {
     /// <summary>The registry route prefix the endpoints are mapped under.</summary>
     public const string RoutePrefix = "/api/plugins";
@@ -53,6 +53,11 @@ public sealed class RegistryPackageSource : IPackageSource
         _http = hub.ServiceProvider.GetService<IHttpClientFactory>()
             ?.CreateClient(InstanceRegistrationClient.HttpClientName) ?? SharedHttp;
     }
+
+    /// <summary>The registry this source reads, as an install ORIGIN (MeshWeaver#6526): a package
+    /// installed through it records this, so an update watcher on the same instance never binds it
+    /// to a repository that happens to list the same id.</summary>
+    string IOriginatedPackageSource.Origin => InstallOrigin.ForRegistry(_registryUrl);
 
     /// <summary>
     /// The prebuilt-bundle client for the SAME registry, same key (#1664) — set where this source

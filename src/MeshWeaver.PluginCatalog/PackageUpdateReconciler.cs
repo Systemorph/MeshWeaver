@@ -60,6 +60,11 @@ internal static class PackageUpdateReconciler
     /// e.g. <c>"Built from a1b2c3d"</c> or <c>"Served by registry 'memex'"</c>. It ends up in the
     /// reminder a user reads, so it must say something a user can act on.</param>
     /// <param name="logger">Diagnostics.</param>
+    /// <param name="binding">🚨 What binds this pass to the install records' origins
+    /// (MeshWeaver#6526): a candidate is taken only for a record installed from
+    /// <see cref="InstallOriginBinding.Origin"/>, or for a record with no origin that this origin
+    /// ADOPTS because no other watched origin lists the package. Null leaves the pass unbound — the
+    /// registry lane, whose single configured registry is the consumer's trust root.</param>
     /// <returns>Cold observable completing when every candidate has been considered.</returns>
     public static IObservable<Unit> ReconcileInstalled(
         IMessageHub hub,
@@ -67,7 +72,8 @@ internal static class PackageUpdateReconciler
         string sourceRef,
         IReadOnlyList<PackageManifest> candidates,
         string provenance,
-        ILogger? logger)
+        ILogger? logger,
+        InstallOriginBinding? binding = null)
     {
         var storage = hub.ServiceProvider.GetService<IStorageAdapter>();
         if (storage is null || candidates.Count == 0)
@@ -82,7 +88,7 @@ internal static class PackageUpdateReconciler
         // already makes for the identical reason.
         return candidates
             .Select(pkg => ReconcileOne(
-                hub, storage, meshService, accessService, source, sourceRef, pkg, provenance, logger))
+                hub, storage, meshService, accessService, source, sourceRef, pkg, provenance, logger, binding))
             .ToObservable()
             .Concat()
             .DefaultIfEmpty(Unit.Default)
@@ -98,7 +104,8 @@ internal static class PackageUpdateReconciler
         string sourceRef,
         PackageManifest pkg,
         string provenance,
-        ILogger? logger)
+        ILogger? logger,
+        InstallOriginBinding? binding)
     {
         var recordPath = $"{PackageInstaller.InstalledPartition}/{pkg.Id}";
         return storage.Read(recordPath, hub.JsonSerializerOptions)
@@ -115,7 +122,7 @@ internal static class PackageUpdateReconciler
                 // Not installed here → nothing to remind anyone about.
                 ? Observable.Return(Unit.Default)
                 : Decide(hub, meshService, accessService, source, sourceRef, pkg, record, recordPath,
-                    provenance, logger));
+                    provenance, logger, binding));
     }
 
     private static IObservable<Unit> Decide(
@@ -128,7 +135,8 @@ internal static class PackageUpdateReconciler
         PackageManifest record,
         string recordPath,
         string provenance,
-        ILogger? logger)
+        ILogger? logger,
+        InstallOriginBinding? binding)
     {
         // 🚨 A MISSING hash on either side is not evidence of a change — it is the ABSENCE of
         // evidence, and the two must not be confused. Without a `manifest.lock` there is no content
@@ -164,6 +172,143 @@ internal static class PackageUpdateReconciler
         if (string.Equals(record.ModuleVersion, pkg.ModuleVersion, StringComparison.Ordinal))
             return Observable.Return(Unit.Default);
 
+        // 🚨 THE ORIGIN gate (MeshWeaver#6526), before anything is written or told: a candidate from
+        // a repository the package was not installed from is not an update of THIS install. After
+        // the equality gate, so an unchanged module never costs a census of the watched origins;
+        // before the floor gate, so a foreign candidate cannot even stamp a hold on the record.
+        // A pinned package is skipped — nothing moves for it, so nothing is bound or refused.
+        if (binding is null || record.EffectiveUpdatePolicy == PackageUpdatePolicy.None)
+            return DecideBound(hub, meshService, accessService, source, sourceRef, pkg, record, recordPath,
+                provenance, logger);
+        return BindOrigin(hub, meshService, accessService, pkg, record, recordPath, binding, logger)
+            .SelectMany(bound => bound is null
+                ? Observable.Return(Unit.Default)
+                : DecideBound(hub, meshService, accessService, source, sourceRef, pkg, bound, recordPath,
+                    provenance, logger));
+    }
+
+    /// <summary>
+    /// 🚨 Binds one candidate to the install record's origin (MeshWeaver#6526,
+    /// <see cref="InstallOrigin.Decide"/>). Emits the record to decide on — with its origin ADOPTED
+    /// when this is the only watched origin listing the package — or null when the candidate must
+    /// not be taken: a foreign origin (ignored), two or more listing origins (refused, by name, on
+    /// the platform bell), or an incomplete census (neither, this pass).
+    /// </summary>
+    private static IObservable<PackageManifest?> BindOrigin(
+        IMessageHub hub,
+        IMeshService meshService,
+        AccessService accessService,
+        PackageManifest pkg,
+        PackageManifest record,
+        string recordPath,
+        InstallOriginBinding binding,
+        ILogger? logger)
+    {
+        var census = string.IsNullOrEmpty(record.Origin)
+            ? binding.Census(pkg.Id)
+                .Take(1)
+                .Select(c => (OriginCensus?)c)
+                .Catch((Exception ex) =>
+                {
+                    logger?.LogWarning(ex,
+                        "Package update: which watched repositories list {Id} could not be read.", pkg.Id);
+                    return Observable.Return<OriginCensus?>(null);
+                })
+                .DefaultIfEmpty(null)
+            : Observable.Return<OriginCensus?>(null);
+
+        return census.SelectMany(c =>
+        {
+            switch (InstallOrigin.Decide(record.Origin, binding.Origin, c))
+            {
+                case OriginVerdict.Bound:
+                    return Observable.Return<PackageManifest?>(record);
+
+                case OriginVerdict.Foreign:
+                    logger?.LogInformation(
+                        "Package update: {Id} was installed from {Recorded}; the candidate {Candidate} listed by "
+                        + "{Origin} is ignored (MeshWeaver#6526).",
+                        pkg.Id, record.Origin, pkg.ModuleVersion, binding.Origin);
+                    return Observable.Return<PackageManifest?>(null);
+
+                case OriginVerdict.Adopt:
+                    logger?.LogInformation(
+                        "Package update: {Id} records no origin; {Origin} is the only watched repository "
+                        + "listing it, so the record adopts it (MeshWeaver#6526).", pkg.Id, binding.Origin);
+                    return AdoptOrigin(hub, accessService, recordPath, record, binding.Origin, logger);
+
+                case OriginVerdict.Ambiguous:
+                    var candidates = c!.Listing.Add(binding.Origin);
+                    var listed = string.Join(", ", candidates);
+                    var name = pkg.Name ?? pkg.Id;
+                    logger?.LogWarning(
+                        "Package update: {Id} records no origin and {Count} watched repositories list it "
+                        + "({Origins}); the update is REFUSED until an administrator installs it from one "
+                        + "of them (MeshWeaver#6526).", pkg.Id, candidates.Count, listed);
+                    return Notify(
+                            hub, meshService, accessService, recordPath, pkg, record, OriginAmbiguousKind,
+                            LocalizableText.Keyed(
+                                $"Update refused: {name}",
+                                "notification.packageUpdate.originAmbiguous.title", ("name", name)),
+                            LocalizableText.Keyed(
+                                $"A new build of {name} is available, but this install does not record "
+                                + $"which repository it came from, and {candidates.Count} watched "
+                                + $"repositories list it: {listed}. It was NOT applied. Install it again "
+                                + "from the repository it belongs to; later updates then come from there only.",
+                                "notification.packageUpdate.originAmbiguous.body",
+                                ("name", name), ("count", candidates.Count), ("origins", listed)),
+                            logger)
+                        .Select(_ => (PackageManifest?)null);
+
+                default:
+                    logger?.LogWarning(
+                        "Package update: {Id} records no origin, and not every watched repository could be "
+                        + "read ({Unread}); it is neither adopted nor updated from {Origin} this pass "
+                        + "(MeshWeaver#6526).",
+                        pkg.Id, c is null ? "the census failed" : string.Join(", ", c.Unread), binding.Origin);
+                    return Observable.Return<PackageManifest?>(null);
+            }
+        });
+    }
+
+    /// <summary>Records <paramref name="origin"/> on an install record that named none, and hands
+    /// the decision the record carrying it. Only an EMPTY origin is filled: a concurrent install that
+    /// stamped one first wins.</summary>
+    private static IObservable<PackageManifest?> AdoptOrigin(
+        IMessageHub hub, AccessService accessService, string recordPath, PackageManifest record,
+        string origin, ILogger? logger)
+    {
+        var adopted = record with { Origin = origin };
+        // RunAsSystem, never Observable.Using (#1790): the install-records partition is System-owned.
+        return accessService.RunAsSystem(() => hub.GetMeshNodeStream(recordPath)
+                .Update<PackageManifest>(current => string.IsNullOrEmpty(current.Origin)
+                    ? current with { Origin = origin }
+                    : current))
+            .Take(1)
+            .Select(_ => (PackageManifest?)adopted)
+            .DefaultIfEmpty(adopted)
+            .Catch((Exception ex) =>
+            {
+                // Not adopted ⇒ not bound ⇒ not updated this pass; the next pass adopts again.
+                logger?.LogWarning(ex, "Package update: recording the origin of {Path} failed.", recordPath);
+                return Observable.Return<PackageManifest?>(null);
+            });
+    }
+
+    /// <summary>The floor and policy half of <see cref="Decide"/> — reached once the candidate is
+    /// bound to the record's origin, or the pass is unbound.</summary>
+    private static IObservable<Unit> DecideBound(
+        IMessageHub hub,
+        IMeshService meshService,
+        AccessService accessService,
+        IPackageSource source,
+        string sourceRef,
+        PackageManifest pkg,
+        PackageManifest record,
+        string recordPath,
+        string provenance,
+        ILogger? logger)
+    {
         // 🚨 policy package-min-mesh-version — the candidate is USABLE here only if the running
         // platform satisfies its declared floor. A held candidate is neither applied nor offered:
         // the installed version keeps running (R1), the record says why, and the next reconcile
@@ -547,6 +692,13 @@ internal static class PackageUpdateReconciler
     /// one is "press Update", the other is "this package will not auto-update here, and why".
     /// </summary>
     private const string SyncOwnedPartitionKind = "sync-owned-partition";
+
+    /// <summary>
+    /// The refusal that an install record naming no origin cannot be bound, because two or more
+    /// watched repositories list the package (MeshWeaver#6526). Its own kind: it says "install it
+    /// again from the right repository", never "press Update".
+    /// </summary>
+    private const string OriginAmbiguousKind = "origin-ambiguous";
 
     /// <summary>
     /// Raises a system notification on the install record — the user-visible surface of an update
