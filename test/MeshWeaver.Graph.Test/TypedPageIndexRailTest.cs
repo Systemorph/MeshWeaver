@@ -31,6 +31,7 @@ public class TypedPageIndexRailTest(ITestOutputHelper output) : MonolithMeshTest
     private const string SiblingPath = "RailTyped/Beta";
     private const string RootPath = "RailRoot";
     private const string RootName = "The Rail Root";
+    private const string ReshapeRootPath = "RailReshape";
 
     /// <summary>The content type the widget NodeType is configured with.</summary>
     public record RailWidget
@@ -54,7 +55,10 @@ public class TypedPageIndexRailTest(ITestOutputHelper output) : MonolithMeshTest
             new MeshNode("Beta", Space) { Name = "Beta", NodeType = WidgetType, Content = new RailWidget { Label = "b" } },
             // A typed node AT a partition root, with a child: its own page heads the rail.
             new MeshNode(RootPath) { Name = RootName, NodeType = WidgetType, Content = new RailWidget { Label = "r" } },
-            new MeshNode("Leaf", RootPath) { Name = "Leaf", NodeType = WidgetType, Content = new RailWidget { Label = "l" } });
+            new MeshNode("Leaf", RootPath) { Name = "Leaf", NodeType = WidgetType, Content = new RailWidget { Label = "l" } },
+            // A typed partition root with NOTHING under it yet: its page has no index until a test
+            // creates a child — the forced re-shape.
+            new MeshNode(ReshapeRootPath) { Name = "Reshape Root", NodeType = WidgetType, Content = new RailWidget { Label = "x" } });
 
     private ISynchronizationStream<JsonElement> Open(string query = "")
     {
@@ -76,24 +80,85 @@ public class TypedPageIndexRailTest(ITestOutputHelper output) : MonolithMeshTest
         var splitter = Assert.IsType<SplitterControl>(root);
 
         // The rail paints progressively: the reader's own branch first, each level as it arrives.
-        // Wait for the level that holds the sibling.
+        // Wait for the level that holds the sibling — on the rail's tree as it is NOW, re-read on
+        // every frame (NodePageAreas), never on child keys read from an earlier one.
         var railArea = splitter.Areas[0].Area!.ToString()!;
-        var rail = await Observable.Interval(TestTimeouts.Quick / 20).StartWith(0L)
-            .Select(_ => Observable.FromAsync(() => Collect(stream, railArea, ct)))
-            .Concat()
+        var rail = await stream.TreeSnapshots(railArea)
             .Should().Within(TestTimeouts.Convergence)
             .Match(r => r.OfType<NavLinkControl>().Any(l => l.Url?.ToString() == $"/{SiblingPath}"),
                 cancellationToken: ct);
-        var menu = Assert.Single(rail.OfType<NavMenuControl>());
+        var menu = Assert.Single(rail!.OfType<NavMenuControl>());
         Assert.Equal(Space, menu.Skins.OfType<NavMenuSkin>().Single().SearchNamespace);
-        Assert.Contains($"/{SiblingPath}", rail.OfType<NavLinkControl>().Select(l => l.Url?.ToString()));
+        Assert.Contains($"/{SiblingPath}", rail!.OfType<NavLinkControl>().Select(l => l.Url?.ToString()));
 
         // The second pane is the page itself: the typed node's header is in there, not in the rail.
-        var page = await Collect(stream, splitter.Areas[1].Area!.ToString()!, ct);
-        Assert.Contains(page.OfType<StackControl>(),
-            s => s.DataContext?.Contains(MeshNodeLayoutAreas.HeaderDataId) == true);
-        Assert.Empty(page.OfType<NavMenuControl>());
+        var page = await stream.TreeSnapshots(splitter.Areas[1].Area!.ToString()!)
+            .Should().Within(TestTimeouts.Convergence)
+            .Match(p => p.OfType<StackControl>().Any(IsHeader), "the page pane renders the typed node's header",
+                cancellationToken: ct);
+        Assert.Empty(page!.OfType<NavMenuControl>());
     }
+
+    /// <summary>
+    /// The trap behind MeshWeaver#6548, forced deterministically: a page whose index root has nothing
+    /// to list renders WITHOUT a rail; a child created under it makes the index answer, and the page
+    /// re-renders as a splitter. A sub-area key read from the first frame names an area of the OLD
+    /// tree, so a wait on it after the re-shape never sees the page again — the shape that hung
+    /// FutuRe's Overview test on CI. The live walk (<see cref="NodePageAreas.TreeSnapshots"/>) follows
+    /// the page into its new pane.
+    /// </summary>
+    [Fact]
+    public async Task AKeyReadFromTheFirstFrame_IsLostWhenTheRailReshapesThePage_TheLiveWalkFollowsThePage()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var stream = GetClient().GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new Address(ReshapeRootPath), new LayoutAreaReference(MeshNodeLayoutAreas.OverviewArea));
+
+        // Before: nothing to index, so the page is the area's root — no splitter. Read a child key
+        // off this frame exactly as the old helpers did, and prove it resolves to the header NOW
+        // (the positive control: the old pattern works as long as the page keeps its shape).
+        var first = await stream.GetControlStream(MeshNodeLayoutAreas.OverviewArea)
+            .Should().Within(TestTimeouts.Convergence)
+            .Match(c => c is IContainerControl and not SplitterControl, "the page paints without a rail", cancellationToken: ct);
+        var staleKeys = ((IContainerControl)first!).Areas.Select(a => a.Area?.ToString()).OfType<string>().ToImmutableList();
+        var headerKey = await staleKeys
+            .Select(key => stream.TreeSnapshots(key)
+                .Where(tree => tree.OfType<StackControl>().Any(IsHeader))
+                .Select(_ => key))
+            .Merge()
+            .Should().Within(TestTimeouts.Convergence)
+            .Match(_ => true, "one of the first frame's child areas carries the header", cancellationToken: ct);
+
+        // The forced re-shape: a child makes the index root non-empty, and the page re-renders.
+        await NodeFactory.CreateNode(new MeshNode("Child", ReshapeRootPath)
+            {
+                Name = "Child",
+                NodeType = WidgetType,
+                Content = new RailWidget { Label = "c" },
+            })
+            .Should().Within(TestTimeouts.WriteConvergence).Emit(cancellationToken: ct);
+        await stream.GetControlStream(MeshNodeLayoutAreas.OverviewArea)
+            .Should().Within(TestTimeouts.Convergence)
+            .Match(c => c is SplitterControl { Areas.Count: 2 }, "the index answers and the page re-shapes", cancellationToken: ct);
+
+        // Negative control: the old pattern — wait on the key read from the first frame — no longer
+        // reaches the header. The area belongs to a tree the page has left.
+        await stream.GetControlStream(headerKey!)
+            .Where(c => c is StackControl s && IsHeader(s))
+            .Should().NotEmit(TestTimeouts.Quick,
+                "the first frame's child area is not where the page lives after the re-shape", ct);
+
+        // The helper: the same question asked of the page's CURRENT tree finds the header in the
+        // splitter's page pane.
+        var tree = await stream.TreeSnapshots(MeshNodeLayoutAreas.OverviewArea)
+            .Should().Within(TestTimeouts.Convergence)
+            .Match(t => t.OfType<SplitterControl>().Any() && t.OfType<StackControl>().Any(IsHeader),
+                "the live walk follows the page into the splitter's page pane", cancellationToken: ct);
+        Assert.Single(tree!.OfType<StackControl>(), IsHeader);
+    }
+
+    private static bool IsHeader(StackControl stack)
+        => stack.DataContext?.Contains(MeshNodeLayoutAreas.HeaderDataId) == true;
 
     [Fact]
     public async Task OnTheRootsOwnPage_TheRailHeadingCarriesTheRootsName()
@@ -105,13 +170,11 @@ public class TypedPageIndexRailTest(ITestOutputHelper output) : MonolithMeshTest
             .Should().Within(TestTimeouts.Convergence)
             .Match(c => c is SplitterControl { Areas.Count: 2 }, cancellationToken: ct);
         var railArea = ((SplitterControl)root!).Areas[0].Area!.ToString()!;
-        var rail = await Observable.Interval(TestTimeouts.Quick / 20).StartWith(0L)
-            .Select(_ => Observable.FromAsync(() => Collect(stream, railArea, ct)))
-            .Concat()
+        var rail = await stream.TreeSnapshots(railArea)
             .Should().Within(TestTimeouts.Convergence)
             .Match(r => r.OfType<NavLinkControl>().Any(l => l.Title?.ToString() == RootName),
                 cancellationToken: ct);
-        Assert.Contains(rail.OfType<NavLinkControl>(), l => l.Title?.ToString() == RootName);
+        Assert.Contains(rail!.OfType<NavLinkControl>(), l => l.Title?.ToString() == RootName);
     }
 
     [Fact]
@@ -123,24 +186,9 @@ public class TypedPageIndexRailTest(ITestOutputHelper output) : MonolithMeshTest
         var root = await stream.GetControlStream(MeshNodeLayoutAreas.OverviewArea)
             .Should().Within(TestTimeouts.Convergence).Match(c => c is not null, cancellationToken: ct);
         Assert.IsNotType<SplitterControl>(root);
-        var all = await Collect(stream, MeshNodeLayoutAreas.OverviewArea, ct);
-        Assert.Empty(all.OfType<NavMenuControl>());
-    }
-
-    private static async Task<ImmutableList<UiControl>> Collect(
-        ISynchronizationStream<JsonElement> stream, string areaName, System.Threading.CancellationToken ct, int depth = 0)
-    {
-        if (depth > 8)
-            return ImmutableList<UiControl>.Empty;
-        var control = await stream.GetControlStream(areaName)
-            .Should().Within(TestTimeouts.Convergence).Match(c => c != null, cancellationToken: ct);
-        if (control is null)
-            return ImmutableList<UiControl>.Empty;
-        var found = ImmutableList.Create(control);
-        if (control is IContainerControl container)
-            foreach (var area in container.Areas)
-                if (area.Area?.ToString() is { Length: > 0 } name)
-                    found = found.AddRange(await Collect(stream, name, ct, depth + 1));
-        return found;
+        var all = await stream.TreeSnapshots(MeshNodeLayoutAreas.OverviewArea)
+            .Should().Within(TestTimeouts.Convergence)
+            .Match(t => t.Count > 1, "the embedded page renders its content below the root", cancellationToken: ct);
+        Assert.Empty(all!.OfType<NavMenuControl>());
     }
 }

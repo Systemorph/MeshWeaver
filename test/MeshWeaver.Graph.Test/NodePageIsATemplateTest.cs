@@ -175,21 +175,8 @@ public class NodePageIsATemplateTest(ITestOutputHelper output) : MonolithMeshTes
     private static async Task<T> Find<T>(
         ISynchronizationStream<JsonElement> stream, string area, Func<T, bool> predicate, string because)
         where T : UiControl
-        => await Walk(stream, area).OfType<T>().Should().Within(TestTimeouts.Convergence)
+        => await stream.WalkTree(area).OfType<T>().Should().Within(TestTimeouts.Convergence)
             .Match(predicate, because);
-
-    /// <summary>Every control rendered at <paramref name="area"/> and, recursively, in its sub-areas.</summary>
-    private static IObservable<UiControl?> Walk(ISynchronizationStream<JsonElement> stream, string area)
-        => stream.GetControlStream(area)
-            .Select(control => control is IContainerControl container
-                ? container.Areas
-                    .Select(a => a.Area?.ToString())
-                    .OfType<string>()
-                    .Select(subArea => Walk(stream, subArea))
-                    .Merge()
-                    .StartWith(control)
-                : Observable.Return(control))
-            .Switch();
 
     /// <summary>The data context a bound template carries — the test fails, naming the control, when
     /// it carries none.</summary>
