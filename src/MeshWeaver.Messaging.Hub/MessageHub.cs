@@ -2064,6 +2064,12 @@ public sealed class MessageHub : IMessageHub
         var options = new PostOptions(Address);
         if (configure != null)
             options = configure(options);
+        // 🚨 The sender is THIS hub — never the address the caller wrote (#6553). A guard that
+        // decides by sender (the stamped-field guard admits only the owning hub) can rely on it only
+        // if posting code cannot name another hub's address. The one exception is a parent carrying
+        // its hosted hub's own post, which only this assembly can mark.
+        if (!options.CarriedForHostedHub && !Equals(options.Sender, Address))
+            options = StampOwnSender(options, typeof(TMessage), configure);
         // A platform principal stamped by the CALLER (WithAccessContext / ImpersonateAsHub) is an
         // impersonation like any other: check who asked (Doc/Architecture/InMeshImpersonation).
         if (options.ImpersonationRequestedBy is { } requestedBy && options.ImpersonateContext is { } stamped)
@@ -2090,6 +2096,29 @@ public sealed class MessageHub : IMessageHub
             logger.LogTrace("MESSAGE_FLOW: HUB_POST_RESULT | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}",
                 typeof(TMessage).Name, Address, result?.Id, options.Target);
         return result;
+    }
+
+    // One warning per (message type, claimed sender, call site) for this hub's lifetime: a caller
+    // that names a foreign sender does so on every post, and the line must stay readable.
+    private readonly ConcurrentDictionary<string, byte> foreignSenderReported = new();
+
+    /// <summary>
+    /// Overwrites a caller-written <see cref="PostOptions.Sender"/> with this hub's address and logs
+    /// who wrote it (#6553, Doc/Architecture/SenderIsThePostingHub). The post still goes out — as
+    /// this hub, which is what it is — so a reply comes back here and a sender-keyed guard judges
+    /// the real poster.
+    /// </summary>
+    private PostOptions StampOwnSender(PostOptions options, Type messageType, Delegate? configure)
+    {
+        var claimed = options.Sender;
+        var callSite = configure?.Method is { } m ? $"{m.DeclaringType?.FullName}.{m.Name}" : "(none)";
+        if (foreignSenderReported.TryAdd($"{messageType.FullName}|{claimed}|{callSite}", 0))
+            logger.LogWarning(
+                "[ForeignSender] Hub {Address} posted {MessageType} naming sender {ClaimedSender} (call site {CallSite}). "
+                + "The sender of a post is the hub that posts it: the claimed address was replaced by {Address} "
+                + "(Doc/Architecture/SenderIsThePostingHub).",
+                Address, messageType.Name, claimed?.ToString() ?? "(null)", callSite, Address);
+        return options with { Sender = Address };
     }
 
     // One report per (role, message type) for this hub's lifetime, keyed independently of the

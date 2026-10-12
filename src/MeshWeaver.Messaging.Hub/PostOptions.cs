@@ -188,6 +188,22 @@ public record PostOptions(Address Sender)
         ImpersonationSurface = nameof(ImpersonateAsHub),
     };
 
+    /// <summary>
+    /// 🚨 The ONE sanctioned way a post leaves a hub under another hub's address (#6553): a parent
+    /// CARRYING a delivery its hosted hub posted but can no longer send itself (a correlated reply or
+    /// a release posted during that hub's teardown). Only this assembly can set it.
+    ///
+    /// <para>Every other post is stamped with the address of the hub that actually posts it
+    /// (<see cref="MessageHub.Post{TMessage}"/>): a <see cref="Sender"/> the caller wrote is
+    /// overwritten, so a hub guard that decides by sender — the stamped-field guard admitting only
+    /// the owning hub — cannot be passed by code that merely names another hub's address.</para>
+    /// </summary>
+    internal bool CarriedForHostedHub { get; init; }
+
+    /// <summary>Marks these options as carried by a parent for one of its hosted hubs (see
+    /// <see cref="CarriedForHostedHub"/>).</summary>
+    internal PostOptions CarriedByParent() => this with { CarriedForHostedHub = true };
+
     internal string MessageId { get; init; } = Guid.NewGuid().AsString();
     /// <summary>
     /// Returns a copy of these options with an explicit message id, overriding the

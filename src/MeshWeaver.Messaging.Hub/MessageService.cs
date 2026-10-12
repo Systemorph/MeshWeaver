@@ -3071,7 +3071,7 @@ public class MessageService : IMessageService
             {
                 try
                 {
-                    replyParent.Post(message, _ => opt);
+                    replyParent.Post(message, _ => opt.CarriedByParent());
                     postFate?.Add($"REPLY_FORWARDED_THROUGH_PARENT runLevel={hub.RunLevel}", Address);
                     replyFate?.Add($"REPLY_FORWARDED_THROUGH_PARENT runLevel={hub.RunLevel} parent={replyParent.Address}", Address);
                     return delivery;
@@ -3122,7 +3122,7 @@ public class MessageService : IMessageService
                     var releaseOptions = releaseParent.Address.Type != AddressExtensions.MeshType
                         ? opt with { Sender = opt.Sender.WithHost(releaseParent.Address) }
                         : opt;
-                    var forwarded = releaseParent.Post(message, _ => releaseOptions);
+                    var forwarded = releaseParent.Post(message, _ => releaseOptions.CarriedByParent());
                     postFate?.Add($"RELEASE_FORWARDED_THROUGH_PARENT runLevel={hub.RunLevel} parent={releaseParent.Address}", Address);
                     if (forwarded is not null)
                         return forwarded;
