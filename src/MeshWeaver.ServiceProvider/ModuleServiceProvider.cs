@@ -73,6 +73,61 @@ public static class ModuleServiceProvider
     }
 
     /// <summary>
+    /// 🚨 <b>Built before published</b> (MeshWeaver#6542): builds every SHARED instance
+    /// <paramref name="moduleContainer"/> holds at its own root — each singleton, and each scoped
+    /// registration (which is shared at a container's root) — except the services
+    /// <paramref name="skip"/> names. The caller does this BEFORE the container can be reached from the
+    /// mesh's root container, so the root only ever READS a module's instances: Autofac answers an
+    /// instance that exists without any lock, so a thread holding the root container's shared-instance
+    /// lock never waits for a module container's.
+    ///
+    /// <para><b>Why.</b> Autofac holds a scope's shared-instance lock for the whole build of a shared
+    /// instance, and that one lock covers every shared instance of the scope. A root singleton whose
+    /// construction reached a module's service not built yet took the root's lock, then the module's; a
+    /// module singleton whose construction needed a root singleton not built yet took them the other
+    /// way round. Two first-time builds in those orders deadlocked. Taking the root's lock first on the
+    /// module side was measured and rejected: a module constructor then ran under the root's lock, so
+    /// one slow module constructor stalled every first-time root resolve in the process (#6432).</para>
+    ///
+    /// <para><b>What it reaches.</b> Every registration the container holds explicitly, in registration
+    /// order, and — transitively — everything their constructors take: a closed generic over a module
+    /// type (<c>IOptions&lt;ItsOptions&gt;</c>, <c>ILogger&lt;ItsType&gt;</c>) that a built instance
+    /// takes is built with it, and so is the root child scope the module's fallback resolves in. It does
+    /// NOT reach a shared instance that only a registration SOURCE makes on demand and that no
+    /// constructor takes — a closed generic resolved later from inside a factory or a method. That is
+    /// the residual (<c>Doc/Architecture/LiveModuleUpdate</c> → "Built before published").</para>
+    ///
+    /// <para>Throws what a constructor throws; the caller fails the module's load or swap with it, and
+    /// disposes the container.</para>
+    /// </summary>
+    /// <param name="moduleContainer">A provider <see cref="Create(IServiceCollection, IServiceProvider, Func{Type, bool}, IEnumerable{ServiceDescriptor})"/>
+    /// built, not yet reachable from the root.</param>
+    /// <param name="skip">Services NOT to build — a registration exposing any of them is left to its
+    /// first resolve (a module's hosted services, started by their own host).</param>
+    public static void BuildSharedInstances(IServiceProvider moduleContainer, Func<Service, bool> skip)
+    {
+        ArgumentNullException.ThrowIfNull(moduleContainer);
+        ArgumentNullException.ThrowIfNull(skip);
+        if (moduleContainer.GetService<ILifetimeScope>() is not { } scope)
+            return;
+        var registrations = scope.ComponentRegistry.Registrations
+            .Where(r => r.Sharing == InstanceSharing.Shared
+                        && r.Lifetime is Autofac.Core.Lifetime.RootScopeLifetime or Autofac.Core.Lifetime.CurrentScopeLifetime
+                        && !r.Services.Any(skip))
+            .ToArray();
+        foreach (var registration in registrations)
+        {
+            if (registration.Services.FirstOrDefault() is not { } service)
+                continue;
+            var serviceRegistration = scope.ComponentRegistry.ServiceRegistrationsFor(service)
+                .FirstOrDefault(r => ReferenceEquals(r.Registration, registration));
+            if (serviceRegistration.Registration is null)
+                continue;
+            scope.ResolveComponent(new ResolveRequest(service, serviceRegistration, []));
+        }
+    }
+
+    /// <summary>
     /// One stand-in registration per resolver in <paramref name="resolvers"/>, each answering its own
     /// instance, created in order. When <paramref name="explicitRegistrationsExist"/> they are yielded in
     /// order — Autofac keeps an explicit registration the default, so the list reads explicit-then-these;

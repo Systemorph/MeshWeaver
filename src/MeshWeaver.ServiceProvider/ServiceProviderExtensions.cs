@@ -67,6 +67,16 @@ public static class ServiceProviderExtensions
                 containerBuilder.RegisterSource(source);
 
             ret = new AutofacServiceProvider(containerBuilder.Build());
+            // Then every build callback registered as an instance, on THIS thread, before the provider
+            // is handed to anyone — how a mesh's module registry builds its modules' shared instances
+            // before they can be reached (MeshWeaver#6542). Not an Autofac build callback on purpose:
+            // those run inside Build(), before the provider exists.
+            foreach (var callback in services
+                         .Where(d => d.ServiceType == typeof(IRootContainerBuilt) && !d.IsKeyedService)
+                         .Select(d => d.ImplementationInstance)
+                         .OfType<IRootContainerBuilt>()
+                         .ToArray())
+                callback.Built(ret);
         }
         return ret;
     }
