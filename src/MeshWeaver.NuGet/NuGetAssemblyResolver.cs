@@ -137,8 +137,14 @@ public sealed class NuGetAssemblyResolver(
         var resolved = resolver.Resolve(resolverContext, ct).ToList();
 
         var assemblyPaths = ImmutableArray.CreateBuilder<string>();
-        var probing = ImmutableArray.CreateBuilder<string>();
+        var runtimePaths = ImmutableArray.CreateBuilder<string>();
+        var nativePaths = ImmutableArray.CreateBuilder<string>();
+        var managedDirs = ImmutableArray.CreateBuilder<string>();
+        var nativeDirs = ImmutableArray.CreateBuilder<string>();
         var versions = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.OrdinalIgnoreCase);
+        // The runtime this process IS — the portal image is linux-x64, a developer box osx-arm64 or
+        // win-x64. Assets are chosen for it, nearest RID first (RuntimeAssetSelector).
+        var ridChain = RuntimeAssetSelector.RidFallbackChain();
 
         foreach (var pkg in resolved)
         {
@@ -147,31 +153,42 @@ public sealed class NuGetAssemblyResolver(
             var installedPath = await EnsureInstalledAsync(info, packagesRoot, ct);
             versions[pkg.Id] = pkg.Version.ToNormalizedString();
 
-            var reader = new PackageFolderReader(installedPath);
-            var libItems = (await reader.GetLibItemsAsync(ct)).ToList();
-            if (libItems.Count == 0) continue;
+            // 🚨 lib/<tfm>/ alone is NOT the runtime asset. A package may replace it per RID under
+            // runtimes/<rid>/lib/<tfm>/ — and for every .NET SQL Server client the lib/ copy is the
+            // "not supported on this platform" stub: a NodeType referencing Microsoft.Data.SqlClient
+            // compiled, then failed at render on linux-x64 (client-a.meshweaver.cloud, 2026-10-11).
+            // Compile against lib/, LOAD the RID group, and surface runtimes/<rid>/native/ too.
+            using var reader = new PackageFolderReader(installedPath);
+            var assets = RuntimeAssetSelector.Select(installedPath, reader.GetFiles(), framework, ridChain);
+            if (assets.RuntimeRid is not null)
+                MsLogging.LoggerExtensions.LogDebug(logger,
+                    "NuGet package {Id} {Version}: runtime assets from runtimes/{Rid}/lib (compile against lib/)",
+                    pkg.Id, versions[pkg.Id], assets.RuntimeRid);
 
-            var bestMatch = new FrameworkReducer().GetNearest(framework, libItems.Select(li => li.TargetFramework));
-            var chosen = libItems.FirstOrDefault(li => li.TargetFramework == bestMatch);
-            if (chosen is null) continue;
-
-            var dirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var relPath in chosen.Items)
+            foreach (var path in assets.Compile.Where(File.Exists)) assemblyPaths.Add(path);
+            foreach (var path in assets.Runtime.Where(File.Exists))
             {
-                if (!relPath.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)) continue;
-                var full = Path.Combine(installedPath, relPath);
-                if (!File.Exists(full)) continue;
-                assemblyPaths.Add(full);
-                var dir = Path.GetDirectoryName(full);
-                if (!string.IsNullOrEmpty(dir)) dirs.Add(dir);
+                runtimePaths.Add(path);
+                if (Path.GetDirectoryName(path) is { Length: > 0 } dir) managedDirs.Add(dir);
             }
-            foreach (var d in dirs) probing.Add(d);
+            foreach (var path in assets.Native.Where(File.Exists))
+            {
+                nativePaths.Add(path);
+                if (Path.GetDirectoryName(path) is { Length: > 0 } dir) nativeDirs.Add(dir);
+            }
         }
 
-        return new ResolvedPackageSet(
-            assemblyPaths.ToImmutable(),
-            probing.Distinct(StringComparer.OrdinalIgnoreCase).ToImmutableArray(),
-            versions.ToImmutable());
+        // Managed runtime directories first, then the native ones (`…/runtimes/<rid>/native`, which
+        // the managed probe skips and LoadUnmanagedDll searches — PackageAssemblyProbe).
+        var probing = managedDirs.Concat(nativeDirs)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToImmutableArray();
+
+        return new ResolvedPackageSet(assemblyPaths.ToImmutable(), probing, versions.ToImmutable())
+        {
+            RuntimeAssemblyPaths = runtimePaths.ToImmutable(),
+            NativeLibraryPaths = nativePaths.ToImmutable(),
+        };
     }
 
     private async Task<PackageIdentity> ResolveIdentityAsync(

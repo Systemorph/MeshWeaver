@@ -126,10 +126,10 @@ public class UserActivityHomeOverrideTest
     {
         var catalog = UserActivityLayoutAreas.BuildCatalog(NodePath);
 
-        // ONE tab-less, FLAT, FIRST-LEVEL list — no tab row, no grouping, defaults to last-accessed.
+        // ONE tab-less, FLAT, FIRST-LEVEL list — no tab row, no grouping, defaults to location order.
         var search = catalog.Should().BeOfType<MeshSearchControl>().Subject;
         catalog.Should().NotBeOfType<TabsControl>();
-        search.HiddenQuery!.ToString().Should().Contain("source:accessed");
+        search.HiddenQuery!.ToString().Should().Contain("sort:path-asc");
         search.HiddenQuery!.ToString().Should().NotContain("scope:subtree");
         search.RenderMode.Should().Be(MeshSearchRenderMode.Flat);
     }

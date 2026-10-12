@@ -138,6 +138,13 @@ release wave is untouched — that stays memex's, and
 `PlatformReleaseNotifyGuard.DispatchLedger` admits exactly this one sender, this one event type and
 this one target. `PlatformNeverDependsOnPluginsGuard.ApiReadLedger` carries the read.
 
+The FOURTH edge of this class is `issue-taxonomy.yml`, and it is the mildest: a DAILY scheduled lane
+that reads the open issues and the severity labels of every repository of the triage scope with a
+read-only fleet-reader App token, to measure that every open issue is typed and every bug carries
+one severity ([Issue Taxonomy](../IssueTaxonomy)). It runs on no pull request and gates no merge, so
+a sibling's state can turn only that lane — and its one standing issue — red, never a core build.
+It is ledgered all the same, in `ApiReadLedger`, so the inventory stays complete.
+
 ## What is NOT an inverted edge
 
 Checked and cleared — do not "fix" these:

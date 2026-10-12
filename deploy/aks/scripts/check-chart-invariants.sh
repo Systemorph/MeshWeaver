@@ -50,6 +50,10 @@
 #  20. a crash dump lands in <root>/$(MEMEX_POD_NAME)/ on a    or every roll deletes the dump (the
 #      dedicated claim or /data, root normalised, and the     09-26 and 10-07 dumps were lost so)
 #      retention script runs as init container AND postStart
+#  21. /next renders ONE whole shape: bundled (portal config, or /next 503s, or a second
+#      container + Service `next` ports, ingress to them, no     server is left behind by a roll
+#      portal-next Deployment) or the override (its own         (policy portal-next-in-platform-image)
+#      Deployment + Service on port 3000, ingress to it)
 #
 # NO SKIP-TRAPDOOR (AGENTS.md → "A gate NEVER tests its own inputs"). Every input is IN THIS REPO:
 # the chart and the tracked values files. There is no secret to be absent, so there is no condition
@@ -180,9 +184,20 @@ COMBOS=(
   # catalog section, OpenRouter's endpoint and the OpenRouterEU section — set, blank and
   # whitespace-only values. The evidence check below asserts which of them render, trimmed.
   "EU-only AI processing keys (fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.eu-ai-residency.yaml"
+  # A git plugin source's OWN credential (Doc/Architecture/PluginSourceCredentials). Nothing else
+  # here sets pluginCatalog.sources, so without this the TokenKey / InstallationOwner lines are
+  # rendered by no combination — and the absent / null / blank / stated distinction, which decides
+  # WHICH IDENTITY reads a private repository, could regress with every invariant green. The
+  # evidence check below asserts each of the five shapes.
+  "a plugin source's own credential, five shapes (fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.plugin-source-credentials.yaml"
   # Crash dumps on a DEDICATED claim (persistence.dumps), on the AKS overlay: the only combination in
   # which invariant 20 sees the dedicated-claim branch, and invariant 12 a chart-created dump PVC.
   "AKS overlay + crash dumps on a dedicated claim (fixture)|deploy/helm/values.yaml:deploy/aks/values.aks.yaml:deploy/aks/scripts/testdata/values.crash-dumps-dedicated-claim.yaml"
+  # 🚂 /next on the platform release train (policy `portal-next-in-platform-image`): BUNDLED in the portal image —
+  # the normal shape — and the developer override (a separately built image). Nothing else here
+  # turns portalNext on, so without these invariant 21 would only ever see /next OFF.
+  "AKS overlay + /next bundled in the portal image (fixture)|deploy/helm/values.yaml:deploy/aks/values.aks.yaml:deploy/aks/scripts/testdata/values.portal-next-bundled.yaml"
+  "AKS overlay + /next from a separately built image, the developer override (fixture)|deploy/helm/values.yaml:deploy/aks/values.aks.yaml:deploy/aks/scripts/testdata/values.portal-next-override.yaml"
 )
 
 WORK="$(mktemp -d)"
@@ -299,6 +314,26 @@ if [ -f "$eu_render" ] && [ -f "$defaults_render" ] \
   ok "the EU-only AI keys reach the ConfigMap trimmed, and only when set — blank renders no key, OpenRouterEU carries no ApiKey, the defaults render none"
 else
   report "EU-only AI keys: the fixture must render its set values trimmed (AI__RequiredDataResidency=\"Eu\", the {Section}__DataResidency/__DataRetention it declares, OpenRouter__Endpoint, OpenRouterEU__Endpoint/__Models__0/__Models__15, Features__Ai__Providers__OpenRouterEU), NO key for its blank or whitespace-only values, no OpenRouterEU__ApiKey, and the chart defaults must render none of these keys — a blank endpoint reaching the pod replaces the section's default endpoint with nothing"
+fi
+
+# The plugin-source credential evidence (Doc/Architecture/PluginSourceCredentials). Read by NAME:
+# a stated tokenKey / installationOwner renders TRIMMED; a tokenKey stated and left BLANK renders
+# BLANK (the portal refuses it by name — dropping it would fall back to the instance's App or an
+# anonymous read); an absent or null one renders NO key; and the chart defaults render no such key
+# at all. A regression to a truthiness guard, or to an unconditional line, passes every invariant.
+source_render="$(render_of "a plugin source's own credential, five shapes (fixture)")"
+if [ -f "$source_render" ] && [ -f "$defaults_render" ] \
+   && grep -q '^  PluginCatalog__Sources__1__TokenKey: "PluginCatalog:SourceTokens:Extensions"$' "$source_render" \
+   && grep -q '^  PluginCatalog__Sources__2__InstallationOwner: "fabrikam"$' "$source_render" \
+   && grep -q '^  PluginCatalog__Sources__3__TokenKey: ""$' "$source_render" \
+   && ! grep -Eq '^  PluginCatalog__Sources__[04]__(TokenKey|InstallationOwner):' "$source_render" \
+   && ! grep -Eq '^  PluginCatalog__Sources__[13]__InstallationOwner:' "$source_render" \
+   && ! grep -q '^  PluginCatalog__Sources__2__TokenKey:' "$source_render" \
+   && [ "$(grep -Ec '^  PluginCatalog__Sources__[0-9]+__(TokenKey|InstallationOwner):' "$source_render")" -eq 3 ] \
+   && ! grep -Eq '^  PluginCatalog__Sources__[0-9]+__(TokenKey|InstallationOwner):' "$defaults_render"; then
+  ok "a plugin source's own credential reaches the ConfigMap by reference — stated renders trimmed, a blank tokenKey renders blank, absent and null render no key, the defaults render none"
+else
+  report "plugin source credentials: the fixture must render exactly Sources__1__TokenKey=\"PluginCatalog:SourceTokens:Extensions\" and Sources__2__InstallationOwner=\"fabrikam\" (trimmed), Sources__3__TokenKey=\"\" (a blank tokenKey is a DECLARATION the portal refuses — dropping it reads the repository with the instance's App or anonymously), NO credential key for the undeclared source 0 and the null tokenKey of source 4, and the chart defaults must render none"
 fi
 
 # The bake-gate evidence (MeshWeaver#4588, #5544). Invariant 10b — an armed PreWarm__GateReadiness

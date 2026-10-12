@@ -309,6 +309,40 @@ public sealed class InstanceAutoRegistrationService(
     /// </summary>
     public IObservable<DefaultInstallSummary> Completed => completed;
 
+    /// <summary>What the LAST default-install pass of this process left undone, in words — what
+    /// <see cref="RetryFailedDefaults"/> repairs. Null when it left nothing undone, and before the
+    /// boot pass has ended.</summary>
+    private volatile string? repairOwed;
+
+    /// <summary>What a pass left undone that a LATER pass of this process can change (pure): the
+    /// packages it could not install, and a source that did not answer its listing — packages a
+    /// listing never named are neither failed nor installed. Null when the pass delivered
+    /// everything it selected.
+    ///
+    /// <para>🚨 A source that is HELD is not on this list. A hold releases at the next process start
+    /// and nowhere else (<see cref="ListAtProvenRef(ConfiguredPackageSource)"/>), so running the
+    /// pass again cannot list it; counting it as owed would re-run the default install on every
+    /// reconcile for the life of the process, each time against a source this lane must not revisit.
+    /// It still makes the listing incomplete (<see cref="DefaultInstallSummary.ListingIncomplete"/>,
+    /// #4097) — that is a statement about what the pass SAW, not about what a retry can
+    /// repair.</para></summary>
+    /// <param name="summary">The pass's outcome.</param>
+    internal static string? LeftUndone(DefaultInstallSummary summary) =>
+        summary.Failed > 0 && summary.SourceUnreachable
+            ? $"{summary.Failed} package(s) failed ([{string.Join(", ", summary.Failures)}]) and a source could not be listed"
+            : summary.Failed > 0
+                ? $"{summary.Failed} package(s) failed ([{string.Join(", ", summary.Failures)}])"
+                : summary.SourceUnreachable
+                    ? "a source could not be listed"
+                    : null;
+
+    /// <summary>The sources HELD in this process, by name. A hold releases at the next process
+    /// start (<see cref="ListAtProvenRef(ConfiguredPackageSource)"/>), so every later pass of this
+    /// process — the repair pass above all — answers for such a source from here: its seal is not
+    /// read again and it is not listed. Instance state of this mesh-scoped singleton; swapped
+    /// atomically, never mutated.</summary>
+    private ImmutableHashSet<string> heldSources = ImmutableHashSet.Create<string>(StringComparer.OrdinalIgnoreCase);
+
     /// <inheritdoc />
     public Task StartAsync(CancellationToken cancellationToken)
     {
@@ -448,11 +482,12 @@ public sealed class InstanceAutoRegistrationService(
             // package the deployment DECLARES read as a healthy boot (#2254).
             .Do(summary =>
             {
+                repairOwed = LeftUndone(summary);
                 if (summary.Failed > 0)
                     logger.LogError(
                         "[DefaultInstall] reconciled with FAILURES: {Summary}. This installation is "
                         + "missing {Count} declared package(s) — they are recorded on {Ledger} and "
-                        + "re-attempted on the next boot.",
+                        + "re-attempted when a registry next answers a feed read, and on the next boot.",
                         summary, summary.Failed, SeedLedgerPath);
                 else
                     logger.LogInformation("[DefaultInstall] reconciled: {Summary}", summary);
@@ -461,8 +496,10 @@ public sealed class InstanceAutoRegistrationService(
             // pass that installed nothing, having already logged the cause at Error.
             .Catch((Exception ex) =>
             {
+                repairOwed = "the pass did not complete";
                 logger.LogError(ex,
-                    "First-startup plugin provisioning failed; no retry is attempted.");
+                    "First-startup plugin provisioning failed; it is re-attempted when a registry next "
+                    + "answers a feed read, and on the next boot.");
                 return Observable.Return(DefaultInstallSummary.Empty);
             })
             .Subscribe(completed));
@@ -771,7 +808,10 @@ public sealed class InstanceAutoRegistrationService(
     ///     deployment rather than asserting a policy, so an admin who later uninstalls a package is
     ///     not fought by the next restart. 🚨 Deliberately UNCHANGED by the flag lane — the two
     ///     coexist, and an already-populated installation is exactly the case the seed cannot
-    ///     express and the flags can.</item>
+    ///     express and the flags can. A COMMERCIAL package an entry names EXACTLY
+    ///     (<c>Source/Package</c>) is installed on the deployment configuration's authority
+    ///     (<see cref="DeploymentConfigAuthority"/>, principal <c>deployment-config:{instance}</c>),
+    ///     with its requirements; one a wildcard merely covers is skipped.</item>
     ///   <item><b>The operator's patterns over a LOCAL CHECKOUT</b>
     ///     (<see cref="ConfiguredPackageSource.LocalCheckout"/>) — the same patterns, but the
     ///     source is a working tree mounted into this host, which is what a self-registry
@@ -892,7 +932,11 @@ public sealed class InstanceAutoRegistrationService(
                             .Where(c => c.Reconciled || !seeded.Contains(c.Package.Id))
                             .Where(c => !HeldForGovernedProvision(c, known, freshInstance: seeded.Count == 0))
                             .ToList())
-                        .Select(summary => summary with { ListingIncomplete = selection.ListingIncomplete }))
+                        .Select(summary => summary with
+                        {
+                            ListingIncomplete = selection.ListingIncomplete,
+                            SourceUnreachable = selection.SourceUnreachable,
+                        }))
                     .SelectMany(summary => RecordSeeded(ledger, summary).Select(_ => summary));
             }));
     }
@@ -945,6 +989,30 @@ public sealed class InstanceAutoRegistrationService(
     internal static bool HoldsForGovernedProvision(
         bool wildcardOnly, bool reconciled, bool recordedInLedger, bool freshInstance) =>
         wildcardOnly && !reconciled && !recordedInLedger && !freshInstance;
+
+    /// <summary>
+    /// The ledger's authorization trail after this pass: <paramref name="previous"/> with each of
+    /// <paramref name="fresh"/> added — replacing a previous entry for the same package only when
+    /// the principal or the reason differs, so an unchanged re-assert keeps the original entry
+    /// (and its time). Ordered by package. Pure.
+    /// </summary>
+    /// <param name="previous">The ledger's entries (null = none).</param>
+    /// <param name="fresh">This pass's entries (null = none).</param>
+    /// <returns>The merged trail.</returns>
+    internal static ImmutableList<DefaultInstallAuthorization> MergeAuthorizations(
+        ImmutableList<DefaultInstallAuthorization>? previous,
+        ImmutableList<DefaultInstallAuthorization>? fresh)
+    {
+        var byPackage = (previous ?? ImmutableList<DefaultInstallAuthorization>.Empty)
+            .GroupBy(a => a.Package, StringComparer.Ordinal)
+            .ToImmutableDictionary(g => g.Key, g => g.Last(), StringComparer.Ordinal);
+        foreach (var entry in fresh ?? ImmutableList<DefaultInstallAuthorization>.Empty)
+            if (!byPackage.TryGetValue(entry.Package, out var existing)
+                || !string.Equals(existing.InstalledBy, entry.InstalledBy, StringComparison.Ordinal)
+                || !string.Equals(existing.Reason, entry.Reason, StringComparison.Ordinal))
+                byPackage = byPackage.SetItem(entry.Package, entry);
+        return byPackage.Values.OrderBy(a => a.Package, StringComparer.Ordinal).ToImmutableList();
+    }
 
     /// <summary>Node holding the default-install ledger — what the SEED has delivered, ever.</summary>
     private const string SeedLedgerPath = PackageInstaller.InstalledPartition + "/_DefaultInstallLedger";
@@ -1086,7 +1154,14 @@ public sealed class InstanceAutoRegistrationService(
             }
         }
 
+        // CUMULATIVE, unlike the snapshots above: the audit trail of which commercial package the
+        // deployment configuration authorized, and why. An entry is replaced only when the same
+        // package is authorized again by a different principal or for a different reason, so a
+        // reconciled lane re-asserting it every boot does not rewrite the ledger every boot.
+        var authorized = MergeAuthorizations(ledger.Authorized, summary.Authorized);
+
         if (delivered.Count == 0
+            && authorized.SequenceEqual(ledger.Authorized ?? ImmutableList<DefaultInstallAuthorization>.Empty)
             && failures.SequenceEqual(ledger.Failed ?? ImmutableList<string>.Empty, StringComparer.Ordinal)
             && failureCauses.SequenceEqual(ledger.FailureCauses ?? ImmutableList<DefaultInstallFailure>.Empty)
             && skipped.SequenceEqual(ledger.Skipped)
@@ -1120,6 +1195,7 @@ public sealed class InstanceAutoRegistrationService(
                 Skipped = skipped,
                 Held = held,
                 TierRefused = tierRefused,
+                Authorized = authorized,
                 UpdatedAt = DateTimeOffset.UtcNow,
             },
         };
@@ -1277,7 +1353,32 @@ public sealed class InstanceAutoRegistrationService(
     /// <summary>One pass's selection, and whether every source ANSWERED (#4097): a source whose
     /// listing failed contributes nothing, and a pass with such a source must not read its own
     /// silence as "that source refuses nothing".</summary>
-    private sealed record CandidateSelection(IReadOnlyList<InstallCandidate> Candidates, bool ListingIncomplete);
+    /// <param name="Candidates">What the pass selected.</param>
+    /// <param name="ListingIncomplete">A source contributed nothing — held, or it did not answer.</param>
+    /// <param name="SourceUnreachable">A source did not ANSWER — the half of
+    /// <paramref name="ListingIncomplete"/> a later pass of this process can change. A held source
+    /// is not counted (<see cref="LeftUndone"/>).</param>
+    private sealed record CandidateSelection(
+        IReadOnlyList<InstallCandidate> Candidates, bool ListingIncomplete, bool SourceUnreachable);
+
+    /// <summary>One source's listing: what it listed, whether it contributed nothing
+    /// (<paramref name="Failed"/>), and — when it contributed nothing — whether that is a HOLD
+    /// (<paramref name="Held"/>: released at the next process start only) rather than a source that
+    /// did not answer (retryable).</summary>
+    /// <param name="Candidates">The packages listed; empty for a failed listing.</param>
+    /// <param name="Failed">True when the source contributed nothing this pass.</param>
+    /// <param name="Held">True when <paramref name="Failed"/> is a hold, not an unanswered listing.</param>
+    private readonly record struct SourceListing(List<InstallCandidate> Candidates, bool Failed, bool Held)
+    {
+        /// <summary>A source that listed.</summary>
+        public static SourceListing Of(List<InstallCandidate> candidates) => new(candidates, false, false);
+
+        /// <summary>A source that did not answer its listing — retryable.</summary>
+        public static SourceListing Unreachable { get; } = new([], true, false);
+
+        /// <summary>A source held until the next process start.</summary>
+        public static SourceListing OnHold { get; } = new([], true, true);
+    }
 
     private IObservable<CandidateSelection> Candidates(
         IReadOnlyList<ConfiguredPackageSource> sources,
@@ -1322,6 +1423,7 @@ public sealed class InstanceAutoRegistrationService(
             .Select(answers =>
             {
                 var listingIncomplete = answers.Any(a => a.Failed);
+                var sourceUnreachable = answers.Any(a => a.Failed && !a.Held);
                 var perSource = answers.Select(a => a.Candidates).ToList();
                 var catalog = perSource
                     .SelectMany(list => list)
@@ -1333,6 +1435,10 @@ public sealed class InstanceAutoRegistrationService(
                     included.Any(i => i.Entry.Matches(c.Package.Source ?? "", c.Package.Id));
                 bool IsWanted(InstallCandidate c) =>
                     wanted.Any(w => w.Matches(c.Package.Source ?? "", c.Package.Id));
+                // Named EXACTLY by an operator entry (Source/Package), not merely covered by Source/*.
+                bool IsNamed(InstallCandidate c) =>
+                    wanted.Any(w => w.PackageId != PluginGrantEntry.AllPackages
+                                    && w.Matches(c.Package.Source ?? "", c.Package.Id));
                 var selected = catalog
                     .Where(c => (baseline && c.Package.PreInstalled) || IsIncluded(c) || IsWanted(c))
                     .ToList();
@@ -1358,6 +1464,42 @@ public sealed class InstanceAutoRegistrationService(
                         + "Source/* pattern cannot match — it fails closed rather than guessing.",
                         string.Join(", ", wanted), selected.Count);
 
+                // 🚨 THE DEPLOYMENT CONFIGURATION AUTHORIZES WHAT IT NAMES — policy
+                // `deployment-config-authorizes-named-commercial`. A package named EXACTLY in
+                // PluginCatalog:InstallByDefault (Source/Package — never a whole-source Source/*) is
+                // named in the instance's deployment record, which changes only through a reviewed,
+                // App-merged pull request; that record is the authorizing principal
+                // (deployment-config:{instance}, see DeploymentConfigAuthority) for it AND for what it
+                // requires, commercial requirements included. A wildcard names nothing and still never
+                // pulls a commercial package in. Installing grants nobody access — the plan and the
+                // subscriptions decide who reads it.
+                var catalogPackages = catalog.Select(c => c.Package).ToImmutableList();
+                var trustedPackages = catalog.Where(ProvenanceIsTrusted).Select(c => c.Package).ToImmutableList();
+                // Only a candidate whose source is PROVEN may carry the configuration's authority
+                // (ProvenanceIsTrusted): a manifest a direct repository lists can AUTHOR any
+                // `source`, and must not borrow another configured source's Source/Package naming.
+                var named = selected.Where(c => IsNamed(c) && ProvenanceIsTrusted(c)).Select(c => c.Package).ToImmutableList();
+                var namedRequirements = ConfigAuthorizedRequirements(trustedPackages, named);
+                // Admitted keyed by SOURCE and id (the catalog stamps every listed manifest's
+                // source), so the gate never authorizes the same id listed by another source.
+                var bySourceId = trustedPackages.ToImmutableDictionary(p => p.Id, p => p.Source ?? "", StringComparer.Ordinal);
+                hub.ServiceProvider.GetService<DeploymentConfigAuthority>()?.Admit(namedRequirements
+                    .Where(kv => bySourceId.TryGetValue(kv.Key, out var src) && src.Length > 0)
+                    .ToImmutableDictionary(
+                        kv => DeploymentConfigAuthority.RequirementKey(bySourceId[kv.Key], kv.Key),
+                        kv => kv.Value,
+                        StringComparer.Ordinal));
+                var configAuthorized = named.Select(p => p.Id)
+                    .Concat(namedRequirements.Keys)
+                    .ToImmutableHashSet(StringComparer.Ordinal);
+                string? ConfigAuthority(InstallCandidate c) =>
+                    !ProvenanceIsTrusted(c) ? null
+                    : IsNamed(c)
+                        ? $"named in PluginCatalog:InstallByDefault as '{wanted.First(w => w.PackageId != PluginGrantEntry.AllPackages && w.Matches(c.Package.Source ?? "", c.Package.Id))}'"
+                        : namedRequirements.TryGetValue(c.Package.Id, out var root)
+                            ? $"required by '{root}', which PluginCatalog:InstallByDefault names"
+                            : null;
+
                 // 🚨 A selected package's REQUIREMENTS are selected too, even when nothing selects
                 // them directly. Ordering the selection was never enough: every pre-installed
                 // package declares `requires: ["Store@^1.0.0"]` while `Store` is itself
@@ -1368,9 +1510,10 @@ public sealed class InstanceAutoRegistrationService(
                 // was found in on 2026-08-10. The closure is taken over the FULL catalog, so a
                 // dependency outside the selection is pulled in rather than silently ignored.
                 var withDependencies = DependencyClosure(
-                    catalog.Select(c => c.Package).ToList(),
-                    selected.Select(c => c.Package).ToList(),
-                    logger);
+                    catalogPackages,
+                    selected.Select(c => c.Package).ToImmutableList(),
+                    logger,
+                    configAuthorized);
 
                 // The TOLERANT sort: a cycle warns and still yields every package exactly once
                 // (the requirement closing the loop is ignored; order within the cycle is
@@ -1419,12 +1562,15 @@ public sealed class InstanceAutoRegistrationService(
                         // entry names it, no flag declares it, it is not the platform baseline.
                         // Read by the governed-provision hold in InstallSelection.
                         WildcardOnly = IsWanted(c)
-                                       && !wanted.Any(w => w.PackageId != PluginGrantEntry.AllPackages
-                                                           && w.Matches(c.Package.Source ?? "", c.Package.Id))
+                                       && !IsNamed(c)
                                        && !IsIncluded(c)
                                        && !(baseline && c.Package.PreInstalled),
+                        // Why the deployment configuration authorizes it — named exactly, or
+                        // required by a package that is. Null when it does not (a wildcard, the
+                        // baseline, a flag): such a commercial package is still skipped.
+                        ConfigAuthority = ConfigAuthority(c),
                     })
-                    .ToList(), listingIncomplete);
+                    .ToList(), listingIncomplete, sourceUnreachable);
             }));
 
     /// <summary>
@@ -1479,8 +1625,25 @@ public sealed class InstanceAutoRegistrationService(
     /// <param name="configured">The source as configured.</param>
     /// <returns>The candidates listed at the proven ref, or an empty, FAILED listing for a held
     /// source; the tuple shape every other listing outcome uses.</returns>
-    private IObservable<(List<InstallCandidate> Candidates, bool Failed)> ListAtProvenRef(
+    private IObservable<SourceListing> ListAtProvenRef(
         ConfiguredPackageSource configured)
+        => Observable.Defer(() => heldSources.Contains(configured.Name)
+            ? StillHeld(configured)
+            : ListAtFreshlyProvenRef(configured));
+
+    /// <summary>A source already held in this process: answered from the hold, with no read of its
+    /// seal and no listing. The first hold said why at Warning; this is the same fact, repeated by a
+    /// later pass.</summary>
+    private IObservable<SourceListing> StillHeld(ConfiguredPackageSource configured)
+    {
+        logger.LogInformation(
+            "[DefaultInstall] {Name} was held earlier in this process and stays held until the next "
+            + "process start — its seal is not read again and it is not listed "
+            + "(Doc/Architecture/SyncRefContract).", configured.Name);
+        return Observable.Return(SourceListing.OnHold);
+    }
+
+    private IObservable<SourceListing> ListAtFreshlyProvenRef(ConfiguredPackageSource configured)
         => ProvenRef(configured)
             .Catch((Exception exception) =>
             {
@@ -1495,18 +1658,35 @@ public sealed class InstanceAutoRegistrationService(
             })
             .SelectMany(proven => ListAtProvenRef(configured, proven));
 
-    private IObservable<(List<InstallCandidate> Candidates, bool Failed)> ListAtProvenRef(
+    /// <summary>One seal answer's listing as the pass reads it — whether the source contributed
+    /// nothing, whether that is a hold, and how many packages it listed. The pin for
+    /// <c>AFailedDefaultInstallIsRepairedWhenTheFeedAnswersTest</c> (InternalsVisibleTo): it goes
+    /// through the same hold path a seal answer takes in production.</summary>
+    /// <param name="configured">The source as configured.</param>
+    /// <param name="proven">The seal's answer for it.</param>
+    /// <returns>Cold; emits once.</returns>
+    internal IObservable<(bool Failed, bool Held, int Listed)> ListingFor(
+        ConfiguredPackageSource configured, ProvenSource proven)
+        => ListAtProvenRef(configured, proven).Select(l => (l.Failed, l.Held, l.Candidates.Count));
+
+    /// <summary>The listing for one seal answer — the ONE place a hold is declared: it is recorded
+    /// for the rest of this process (<see cref="heldSources"/>) and answered as
+    /// <see cref="SourceListing.OnHold"/>, typed apart from a source that did not answer.</summary>
+    /// <param name="configured">The source as configured.</param>
+    /// <param name="proven">The seal's answer for it.</param>
+    private IObservable<SourceListing> ListAtProvenRef(
         ConfiguredPackageSource configured, ProvenSource proven)
     {
         if (proven.HoldReason is { } hold)
         {
+            ImmutableInterlocked.Update(ref heldSources, static (held, name) => held.Add(name), configured.Name);
             logger.LogWarning(
                 "[DefaultInstall] {Name} is HELD this boot — {Reason}. Its packages are not "
                 + "asserted this boot; this lane runs once per boot, so they are re-attempted at "
                 + "the next process start after the seal lands — an unattended install never "
                 + "resolves the branch instead (Doc/Architecture/SyncRefContract).",
                 configured.Name, hold);
-            return Observable.Return((Candidates: new List<InstallCandidate>(), Failed: true));
+            return Observable.Return(SourceListing.OnHold);
         }
         var source = proven.Source;
         if (!ReferenceEquals(source, configured))
@@ -1526,7 +1706,7 @@ public sealed class InstanceAutoRegistrationService(
             // The WHOLE listing is carried forward, not just the selected packages: a selected
             // package's requirements are resolved against the full catalog below, and a
             // dependency that is neither pre-installed nor pattern-matched exists only here.
-            .Select(packages => (Candidates: packages
+            .Select(packages => SourceListing.Of(packages
                 .Select(p => string.IsNullOrEmpty(p.Source) ? p with { Source = source.Name } : p)
                 .Select(p => new InstallCandidate(source, p)
                 {
@@ -1537,13 +1717,13 @@ public sealed class InstanceAutoRegistrationService(
                     // UnprovenRefHold decides what that may be written into.
                     RefIsProven = !ReferenceEquals(source, configured) || configured.LocalCheckout,
                 })
-                .ToList(), Failed: false))
+                .ToList()))
             .Catch((Exception exception) =>
             {
                 logger.LogWarning(exception,
                     "[DefaultInstall] listing {Name} @ {Ref} failed — its packages are skipped "
                     + "this boot", source.Name, source.GitRef);
-                return Observable.Return((Candidates: new List<InstallCandidate>(), Failed: true));
+                return Observable.Return(SourceListing.Unreachable);
             });
     }
 
@@ -1661,21 +1841,27 @@ public sealed class InstanceAutoRegistrationService(
     /// that needs it will install and then fail at use, and that is a symptom nobody could otherwise
     /// trace back to a missing grant.</para>
     ///
-    /// <para><b>A COMMERCIAL requirement is never pulled in.</b> Selection is source-scoped on
-    /// purpose: an instance is routinely granted paid content it may buy but must not receive
-    /// automatically, and a requirement edge would otherwise be a back door around that scoping.
-    /// The boot has no authorizing principal, so such an install would be refused anyway.</para>
+    /// <para><b>A COMMERCIAL requirement is pulled in only on the deployment configuration's
+    /// authority</b> — when it is in <paramref name="configAuthorized"/>, i.e. required (directly or
+    /// transitively) by a package <see cref="PluginCatalogOptions.InstallByDefault"/> names EXACTLY
+    /// (<see cref="ConfigAuthorizedRequirements"/>). Otherwise never: selection is source-scoped on
+    /// purpose, an instance is routinely granted paid content it may buy but must not receive
+    /// automatically, and a requirement edge of a wildcard-selected or baseline package would be a
+    /// back door around that scoping.</para>
     ///
     /// <para>Cycles terminate: a package already in the result is never expanded twice.</para>
     /// </summary>
     /// <param name="catalog">Every package every configured source listed, deduped by id.</param>
     /// <param name="selected">The packages the baseline + operator patterns chose.</param>
     /// <param name="logger">Receives the unresolvable-requirement warning.</param>
+    /// <param name="configAuthorized">The package ids the deployment configuration authorizes
+    /// (named exactly, or required by one that is); null or empty = none.</param>
     /// <returns>The selection closed over its requirements, ordered by id (the sort orders it).</returns>
     internal static IReadOnlyList<PackageManifest> DependencyClosure(
         IReadOnlyList<PackageManifest> catalog,
         IReadOnlyList<PackageManifest> selected,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        IReadOnlySet<string>? configAuthorized = null)
     {
         var byId = catalog
             .GroupBy(p => p.Id, StringComparer.Ordinal)
@@ -1701,13 +1887,14 @@ public sealed class InstanceAutoRegistrationService(
                     missing.Add(id);
                     continue;
                 }
-                // 🚨 A COMMERCIAL requirement is never pulled in. Selection is deliberately
-                // source-scoped so that an instance granted paid content (course catalogues,
-                // customer modules) does not auto-install what it merely may buy — and a
-                // requirement edge must not become a back door around that. The boot has no
-                // authorizing principal either, so PackageEntitlement.Authorize would refuse it
-                // anyway: pulling it in would buy nothing but a failed install every boot.
-                if (dependency.IsCommercial())
+                // 🚨 A COMMERCIAL requirement is pulled in only when the deployment configuration
+                // authorizes it (required by a package InstallByDefault names exactly). Otherwise
+                // never: selection is deliberately source-scoped so that an instance granted paid
+                // content (course catalogues, customer modules) does not auto-install what it merely
+                // may buy — and a requirement edge must not become a back door around that. Without
+                // that authority PackageEntitlement.Authorize would refuse it anyway: pulling it in
+                // would buy nothing but a skip every boot.
+                if (dependency.IsCommercial() && configAuthorized?.Contains(id) != true)
                 {
                     priced.Add(id);
                     continue;
@@ -1720,8 +1907,9 @@ public sealed class InstanceAutoRegistrationService(
             logger?.LogWarning(
                 "[DefaultInstall] {Count} required package(s) are COMMERCIAL and were not installed: "
                 + "[{Priced}]. A paid or contact-sales dependency has to be acquired deliberately — "
-                + "install it from the catalog as a global admin, or provision it through a "
-                + "governed package.provision activity.",
+                + "install it from the catalog as a global admin, provision it through a governed "
+                + "package.provision activity, or name the package that needs it exactly "
+                + "(Source/Package) in PluginCatalog:InstallByDefault.",
                 priced.Count, string.Join(", ", priced));
 
         if (missing.Count > 0)
@@ -1749,6 +1937,70 @@ public sealed class InstanceAutoRegistrationService(
     }
 
     /// <summary>
+    /// Whether <paramref name="candidate"/>'s <see cref="PackageManifest.Source"/> is PROVENANCE
+    /// rather than an authored claim: a registry stamps the source at its own boundary from its
+    /// configured sources, and any other source's manifest is trusted only where its source IS the
+    /// name that source was configured under (the lister stamps that name on every manifest that
+    /// authors none). A directly read repository whose manifest authors ANOTHER source's name gets
+    /// no deployment-configuration authority — it could otherwise claim that source's
+    /// <c>Source/Package</c> entry (policy <c>deployment-config-authorizes-named-commercial</c>).
+    /// Selection itself is unchanged; only the authority is withheld. Pure.
+    /// </summary>
+    private static bool ProvenanceIsTrusted(InstallCandidate candidate) =>
+        candidate.Source.Source is RegistryPackageSource
+        || string.Equals(candidate.Package.Source, candidate.Source.Name, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Whether two source names are the same non-empty source (case-insensitive, like
+    /// <see cref="PluginGrantEntry.Matches"/>). Pure.</summary>
+    private static bool SameSource(string? a, string? b) =>
+        !string.IsNullOrWhiteSpace(a) && string.Equals(a.Trim(), b?.Trim(), StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Every package REQUIRED — directly or transitively, through free and commercial packages
+    /// alike — by a package the deployment configuration names exactly, mapped to the named
+    /// package it was first reached from (ordinal order of the named roots). The named packages
+    /// themselves are not in the map. A requirement the catalog does not carry is not followed
+    /// (<see cref="DependencyClosure"/> names it). Cycles terminate. Pure.
+    ///
+    /// <para>This is the closure the deployment configuration AUTHORIZES besides what it names:
+    /// "this instance comes up with X" means X working, and X does not work without what it
+    /// requires. It is handed to <see cref="DeploymentConfigAuthority.Admit"/>, so the entitlement
+    /// gate admits exactly this set and nothing a wildcard merely covers.</para>
+    /// </summary>
+    /// <param name="catalog">Every package every configured source listed.</param>
+    /// <param name="named">The packages <see cref="PluginCatalogOptions.InstallByDefault"/> names exactly.</param>
+    /// <returns>Requirement id → the named package that requires it.</returns>
+    internal static ImmutableDictionary<string, string> ConfigAuthorizedRequirements(
+        IReadOnlyList<PackageManifest> catalog, IReadOnlyList<PackageManifest> named)
+    {
+        var byId = catalog
+            .GroupBy(p => p.Id, StringComparer.Ordinal)
+            .ToImmutableDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
+        var namedIds = named.Select(p => p.Id).ToImmutableHashSet(StringComparer.Ordinal);
+        var result = ImmutableDictionary<string, string>.Empty.WithComparers(StringComparer.Ordinal);
+        foreach (var root in named.OrderBy(p => p.Id, StringComparer.Ordinal))
+        {
+            var seen = ImmutableHashSet.Create(StringComparer.Ordinal, root.Id);
+            var pending = ImmutableStack.Create(root);
+            while (!pending.IsEmpty)
+            {
+                pending = pending.Pop(out var package);
+                foreach (var requirement in package.Requires ?? [])
+                {
+                    var id = PackageDependencyGraph.DependencyId(requirement);
+                    if (id.Length == 0 || seen.Contains(id) || !byId.TryGetValue(id, out var dependency))
+                        continue;
+                    seen = seen.Add(id);
+                    if (!namedIds.Contains(id) && !result.ContainsKey(id))
+                        result = result.Add(id, root.Id);
+                    pending = pending.Push(dependency);
+                }
+            }
+        }
+        return result;
+    }
+
+    /// <summary>
     /// Why the UNATTENDED default install must not even ATTEMPT <paramref name="package"/> — or
     /// null when it may proceed. Pure.
     ///
@@ -1769,12 +2021,27 @@ public sealed class InstanceAutoRegistrationService(
     /// <param name="package">The selected candidate's manifest, as the catalog lists it now.</param>
     /// <returns>The speaking skip reason, or null when the pass may install it.</returns>
     internal static string? TerminalSkipReason(PackageManifest package) =>
+        TerminalSkipReason(package, configAuthorized: false);
+
+    /// <summary>
+    /// <see cref="TerminalSkipReason(PackageManifest)"/> for a candidate the deployment
+    /// configuration may authorize. 🚨 A commercial package the configuration names EXACTLY (or
+    /// that such a package requires) is NOT skipped: the deployment record is its authorizing
+    /// principal (<see cref="DeploymentConfigAuthority"/>, policy
+    /// <c>deployment-config-authorizes-named-commercial</c>). A plan-tier refusal still wins — the registry does not serve
+    /// what the instance's plan does not cover, and no configuration on the instance changes that.
+    /// Pure.
+    /// </summary>
+    /// <param name="package">The selected candidate's manifest.</param>
+    /// <param name="configAuthorized">Whether the deployment configuration authorizes it.</param>
+    /// <returns>The speaking skip reason, or null when the pass may install it.</returns>
+    internal static string? TerminalSkipReason(PackageManifest package, bool configAuthorized) =>
         package.Refusal is { } refused
             // #4097 — the registry refuses it to this instance's PLAN. Not an authorization this
             // lane lacks; a licence the instance does not hold. Re-derived from the listing each
             // pass, so a plan upgrade lifts it on the next boot.
             ? refused.Describe()
-            : package.IsCommercial() ? PackageEntitlement.Reason(package, null) : null;
+            : package.IsCommercial() && !configAuthorized ? PackageEntitlement.Reason(package, null) : null;
 
     /// <summary>Installs the selected packages sequentially and folds their outcomes into one summary.</summary>
     private IObservable<DefaultInstallSummary> InstallAll(IReadOnlyList<InstallCandidate> candidates) =>
@@ -1807,21 +2074,22 @@ public sealed class InstanceAutoRegistrationService(
         // reasons, and they are reported ONCE, at Warning: actionable ("needs a Global Admin"),
         // not a per-boot fail: with a stack trace (#2536).
         var skipped = candidates
-            .Select(c => (c.Package.Id, Reason: TerminalSkipReason(c.Package)))
+            .Select(c => (c.Package.Id, Reason: TerminalSkipReason(c.Package, c.ConfigAuthority is not null)))
             .Where(x => x.Reason is not null)
             .Select(x => new DefaultInstallSkip(x.Id, x.Reason!))
             .ToImmutableList();
         var installable = skipped.Count == 0
             ? candidates
-            : candidates.Where(c => TerminalSkipReason(c.Package) is null).ToList();
+            : candidates.Where(c => TerminalSkipReason(c.Package, c.ConfigAuthority is not null) is null).ToList();
         if (skipped.Count(x => candidates.Any(c => c.Package.Id == x.Package && !c.Package.IsRefused)) > 0)
             logger.LogWarning(
                 "[DefaultInstall] {Count} declared package(s) require an authorization this "
                 + "unattended install can never obtain and are SKIPPED, not failed: [{Skipped}]. "
                 + "They are recorded with their reasons on {Ledger} and no boot re-attempts them — "
                 + "a Global Admin installing them from the catalog, a governed package.provision "
-                + "activity signed for them, or the package ceasing to be commercial, is what "
-                + "changes this.",
+                + "activity signed for them, naming them exactly (Source/Package) in "
+                + "PluginCatalog:InstallByDefault — a whole-source pattern names nothing — or the "
+                + "package ceasing to be commercial, is what changes this.",
                 skipped.Count(x => candidates.Any(c => c.Package.Id == x.Package && !c.Package.IsRefused)),
                 string.Join(", ", skipped
                     .Where(x => candidates.Any(c => c.Package.Id == x.Package && !c.Package.IsRefused))
@@ -2030,6 +2298,22 @@ public sealed class InstanceAutoRegistrationService(
     {
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
         var package = candidate.Package;
+        // 🚨 The AUTHORIZING PRINCIPAL of a commercial package the deployment configuration names
+        // (or that such a package requires): deployment-config:{instance}, explicitly named — never
+        // an ambient identity (this runs as System, which authorizes nothing). PackageEntitlement
+        // verifies it against the current configuration; it is stamped on the install record
+        // (AuthorizedBy, re-verified by every unattended update) and on the ledger. A free package
+        // needs no principal and gets none — nothing changes for it.
+        var authority = hub.ServiceProvider.GetService<DeploymentConfigAuthority>();
+        var principal = candidate.ConfigAuthority is not null && package.IsCommercial()
+            ? authority?.Principal
+            : null;
+        if (principal is not null)
+            logger.LogInformation(
+                "[DefaultInstall] commercial package {Id} is installed on the authority of {Principal} "
+                + "({Reason}) — the deployment record is changed only by a reviewed, App-merged pull "
+                + "request. Installing grants nobody access: the plan and the subscriptions decide "
+                + "who reads it.", package.Id, principal, candidate.ConfigAuthority);
 
         // 🚨 RunAsSystem, not Observable.Using(ImpersonateAsSystem) (#1790). Rx disposes a Using's
         // resource on whichever thread TERMINATES the inner sequence — for a cross-hub install that
@@ -2040,7 +2324,8 @@ public sealed class InstanceAutoRegistrationService(
         // and the emission-time behaviour is unchanged.
         return accessService
             .RunAsSystem(() => CatalogLayoutAreas
-                    .InstallOrUpdate(hub, candidate.Source.Source, candidate.Source.GitRef, package, logger)
+                    .InstallOrUpdate(hub, candidate.Source.Source, candidate.Source.GitRef, package, logger,
+                        authorizingUserId: principal)
                     .Take(1)
                     .Do(result => logger.LogInformation(
                         "[DefaultInstall] {Id} → {Partition}: {Written} written, {Unchanged} unchanged",
@@ -2061,7 +2346,12 @@ public sealed class InstanceAutoRegistrationService(
                 Installed: result.Written > 0 ? 1 : 0,
                 UpToDate: result.Written > 0 ? 0 : 1,
                 Failed: 0,
-                Packages: [package.Id]))
+                Packages: [package.Id])
+            {
+                Authorized = principal is null
+                    ? ImmutableList<DefaultInstallAuthorization>.Empty
+                    : [new DefaultInstallAuthorization(package.Id, principal, candidate.ConfigAuthority!, DateTimeOffset.UtcNow)],
+            })
             // 🚨 The safety net behind TerminalSkipReason (#2536): a refusal that only becomes
             // visible AT install time — commerciality stamped registry-side after listing, or a
             // licence that requires an acceptance no boot-time principal can give — is STILL
@@ -2174,6 +2464,15 @@ public sealed class InstanceAutoRegistrationService(
         public bool WildcardOnly { get; init; }
 
         /// <summary>
+        /// Why the DEPLOYMENT CONFIGURATION authorizes this candidate — it is named exactly in
+        /// <see cref="PluginCatalogOptions.InstallByDefault"/>, or required by a package that is —
+        /// or null when it does not. A commercial candidate with an authority is INSTALLED under
+        /// the principal <c>deployment-config:{instance}</c> (<see cref="DeploymentConfigAuthority"/>);
+        /// one without is skipped (<see cref="TerminalSkipReason(PackageManifest, bool)"/>).
+        /// </summary>
+        public string? ConfigAuthority { get; init; }
+
+        /// <summary>
         /// Whether the ref this candidate would be installed at was PROVEN for this instance: the
         /// seal named a commit (<see cref="ApplyPlan"/> re-reffed the source, so it is a different
         /// instance), or the source is a working tree the operator mirrors — MeshWeaver#3359, where
@@ -2209,7 +2508,11 @@ public sealed class InstanceAutoRegistrationService(
                 Parse((composition ?? FeatureComposition.Empty).Included),
                 Parse((composition ?? FeatureComposition.Empty).Excluded))
             .SelectMany(selection => InstallAll(selection.Candidates)
-                .Select(summary => summary with { ListingIncomplete = selection.ListingIncomplete }));
+                .Select(summary => summary with
+                {
+                    ListingIncomplete = selection.ListingIncomplete,
+                    SourceUnreachable = selection.SourceUnreachable,
+                }));
 
     /// <summary>
     /// 🚨 <b>RE-ASSERT already-installed packages through the ONE install funnel</b> —
@@ -2255,6 +2558,8 @@ public sealed class InstanceAutoRegistrationService(
             t => t.PackageId, t => t.ModuleVersion, StringComparer.Ordinal);
         var recordedPartitions = targets.ToImmutableDictionary(
             t => t.PackageId, t => t.Partition, StringComparer.Ordinal);
+        var recordedSources = targets.ToImmutableDictionary(
+            t => t.PackageId, t => t.Source, StringComparer.Ordinal);
         var options = hub.ServiceProvider.GetService<PluginCatalogOptions>() ?? new PluginCatalogOptions();
         return Sources(options).SelectMany(sources =>
         {
@@ -2275,10 +2580,18 @@ public sealed class InstanceAutoRegistrationService(
                 .SelectMany(answers =>
                 {
                     var listingIncomplete = answers.Any(a => a.Failed);
+                    var sourceUnreachable = answers.Any(a => a.Failed && !a.Held);
+                    // Bound by (source, id), not id alone: where several sources list the same id,
+                    // the one the install record was stamped with is preferred, so a repair never
+                    // re-asserts another source's files over the package that is installed.
                     var catalog = answers
                         .SelectMany(a => a.Candidates)
                         .GroupBy(c => c.Package.Id, StringComparer.Ordinal)
-                        .ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
+                        .ToImmutableDictionary(
+                            g => g.Key,
+                            g => g.FirstOrDefault(c => SameSource(c.Package.Source, recordedSources.GetValueOrDefault(g.Key)))
+                                 ?? g.First(),
+                            StringComparer.Ordinal);
 
                     var atRecordedHash = ImmutableList.CreateBuilder<InstallCandidate>();
                     foreach (var (id, recorded) in recordedModuleVersions.OrderBy(kv => kv.Key, StringComparer.Ordinal))
@@ -2328,12 +2641,26 @@ public sealed class InstanceAutoRegistrationService(
                                 id, recorded, candidate.Package.ModuleVersion ?? "(none)");
                             continue;
                         }
-                        atRecordedHash.Add(candidate with { Reconciled = true });
+                        // A commercial package the deployment configuration authorized is REPAIRED
+                        // under that same authority — re-derived here, after the default pass has
+                        // published its requirement closure — instead of being classified as
+                        // unauthorized and skipped on every boot. The gate re-verifies it.
+                        atRecordedHash.Add(candidate with
+                        {
+                            Reconciled = true,
+                            // …and the configuration's authority only from the RECORDED source:
+                            // another source listing the same id derives none.
+                            ConfigAuthority = ProvenanceIsTrusted(candidate)
+                                              && SameSource(candidate.Package.Source, recordedSources.GetValueOrDefault(id))
+                                ? hub.ServiceProvider.GetService<DeploymentConfigAuthority>()?.Because(candidate.Package)
+                                : null,
+                        });
                     }
                     if (atRecordedHash.Count == 0)
                         return Observable.Return(DefaultInstallSummary.Empty with
                         {
                             ListingIncomplete = listingIncomplete,
+                            SourceUnreachable = sourceUnreachable,
                         });
 
                     logger.LogInformation(
@@ -2349,7 +2676,11 @@ public sealed class InstanceAutoRegistrationService(
                         .Select(p => byId[p.Id])
                         .ToList();
                     return InstallAll(ordered)
-                        .Select(summary => summary with { ListingIncomplete = listingIncomplete });
+                        .Select(summary => summary with
+                        {
+                            ListingIncomplete = listingIncomplete,
+                            SourceUnreachable = sourceUnreachable,
+                        });
                 });
         });
     }
@@ -2362,7 +2693,10 @@ public sealed class InstanceAutoRegistrationService(
     /// <param name="PackageId">The package id — the record's node id.</param>
     /// <param name="Partition">The partition the record was installed into.</param>
     /// <param name="ModuleVersion">The module version the record carries.</param>
-    internal sealed record ReassertTarget(string PackageId, string Partition, string ModuleVersion);
+    /// <param name="Source">The source the install record was stamped with — the repair re-asserts
+    /// from a listing of THAT source when one lists the package, and derives the deployment
+    /// configuration's authority only from it. Null when the record names none.</param>
+    internal sealed record ReassertTarget(string PackageId, string Partition, string ModuleVersion, string? Source = null);
 
     /// <summary>
     /// Runs the PRODUCTION default-install pass on demand — the identical selection, ordering and
@@ -2372,6 +2706,62 @@ public sealed class InstanceAutoRegistrationService(
     /// </summary>
     internal IObservable<DefaultInstallSummary> RunDefaultInstall() =>
         InstallDefaults(hub.ServiceProvider.GetService<PluginCatalogOptions>() ?? new PluginCatalogOptions());
+
+    /// <summary>
+    /// 🚨 <b>The repair of a default package the boot could not install, without waiting for the next
+    /// boot</b> (MeshWeaver#5825). When the last pass of this process left something undone
+    /// (<see cref="LeftUndone"/>: a failed package, a source that did not answer its listing, or the
+    /// pass itself faulting — never a source that is HELD, which releases at the next process start
+    /// and is not listed again before it), runs the default-install pass again — the identical selection and install
+    /// (<see cref="InstallDefaults"/>), which re-attempts what the ledger records as FAILED and skips
+    /// what is installed. When the last pass left nothing undone, does nothing at all: no source is
+    /// listed.
+    ///
+    /// <para><b>Who calls it, and why not a timer.</b> <see cref="RegistryUpdateReconciler"/>, at the
+    /// end of a reconcile that a successful feed read made possible, on its serialized lane. A boot
+    /// install fails because a registry did not answer; the registry answering is the event that
+    /// changes the outcome, and the reconciler already observes it. Before this, the only repair was
+    /// the next boot — measured on the control instance, 2026-09-27: <c>Anthropic</c> stayed
+    /// uninstalled after one stalled HTTPS read, on an instance whose next boot is whenever the next
+    /// image rolls.</para>
+    ///
+    /// <para>A package that fails again stays recorded and is re-attempted on the next such
+    /// reconcile; each attempt logs its cause at Error exactly as the boot pass does, so a package
+    /// that cannot be installed stays loud. Never faults.</para>
+    /// </summary>
+    /// <param name="because">The event that prompted the repair, for the log.</param>
+    /// <returns>Cold; emits once when the repair pass has ended, or immediately when there was
+    /// nothing to repair.</returns>
+    internal IObservable<Unit> RetryFailedDefaults(string because) =>
+        Observable.Defer(() =>
+        {
+            if (repairOwed is not { } undone)
+                return Observable.Return(Unit.Default);
+            logger.LogInformation(
+                "[DefaultInstall] running the default install again: in the last pass {Undone} — {Because}.",
+                undone, because);
+            return RunDefaultInstall()
+                .Do(summary =>
+                {
+                    repairOwed = LeftUndone(summary);
+                    if (summary.Failed > 0)
+                        logger.LogError(
+                            "[DefaultInstall] the repair pass still has FAILURES: {Summary}. They stay "
+                            + "recorded on {Ledger} and are re-attempted when a registry next answers a "
+                            + "feed read, and on the next boot.", summary, SeedLedgerPath);
+                    else
+                        logger.LogInformation("[DefaultInstall] the repair pass reconciled: {Summary}", summary);
+                })
+                .Select(_ => Unit.Default)
+                .DefaultIfEmpty(Unit.Default)
+                .Catch((Exception ex) =>
+                {
+                    logger.LogError(ex,
+                        "[DefaultInstall] the repair pass did not complete — it is re-attempted when a "
+                        + "registry next answers a feed read, and on the next boot.");
+                    return Observable.Return(Unit.Default);
+                });
+        });
 }
 
 /// <summary>
@@ -2453,15 +2843,30 @@ public record DefaultInstallLedger
     /// </summary>
     public ImmutableList<PlanTierRefusal> TierRefused { get; init; } = ImmutableList<PlanTierRefusal>.Empty;
 
+    /// <summary>
+    /// The COMMERCIAL packages this lane installed on the deployment configuration's authority —
+    /// named exactly in <see cref="PluginCatalogOptions.InstallByDefault"/>, or required by one
+    /// that is — with the principal (<c>deployment-config:{instance}</c>), the reason and when.
+    /// The audit trail that answers "who decided this priced package lands here": the deployment
+    /// record, changed by a reviewed, App-merged pull request. CUMULATIVE, not a snapshot: it
+    /// records a decision that was acted on, which stays true after the package is removed (and
+    /// the seeded entry still keeps the seed from re-installing it).
+    /// </summary>
+    public ImmutableList<DefaultInstallAuthorization> Authorized { get; init; } =
+        ImmutableList<DefaultInstallAuthorization>.Empty;
+
     /// <summary>When the ledger last changed.</summary>
     public DateTimeOffset UpdatedAt { get; init; }
 }
 
 /// <summary>
 /// What one default-install pass did: how many packages were written, how many were already
-/// current, how many failed, and which packages the pass covered. Emitted once per pass on
-/// <see cref="InstanceAutoRegistrationService.Completed"/>, so both the boot log line and a test
-/// read the same outcome.
+/// current, how many failed, and which packages the pass covered. The BOOT pass's summary is
+/// emitted once on <see cref="InstanceAutoRegistrationService.Completed"/>, so both the boot log
+/// line and a test read the same outcome. A later repair pass
+/// (<c>InstanceAutoRegistrationService.RetryFailedDefaults</c>) produces one too and does NOT emit
+/// it there — <c>Completed</c> stays the boot's answer; the repair's outcome is its log line and
+/// the ledger.
 /// </summary>
 /// <param name="Installed">Packages that actually wrote content this pass.</param>
 /// <param name="UpToDate">Packages already at the catalog's content version.</param>
@@ -2527,12 +2932,29 @@ public readonly record struct DefaultInstallSummary(
     public ImmutableList<PlanTierRefusal> TierRefused { get; init; } = ImmutableList<PlanTierRefusal>.Empty;
 
     /// <summary>
+    /// The commercial packages this pass DELIVERED on the deployment configuration's authority,
+    /// with the principal and the reason — what the ledger's
+    /// <see cref="DefaultInstallLedger.Authorized"/> trail records.
+    /// </summary>
+    public ImmutableList<DefaultInstallAuthorization> Authorized { get; init; } =
+        ImmutableList<DefaultInstallAuthorization>.Empty;
+
+    /// <summary>
     /// 🚨 True when at least one source's listing FAILED this pass (#4097), so what the pass did
     /// not see is unknown rather than absent. <see cref="TierRefused"/> is then a partial answer:
     /// the ledger keeps its previous refusals and the activation markers are left standing,
     /// because a registry that was down at boot has not lifted anybody's plan.
     /// </summary>
     public bool ListingIncomplete { get; init; }
+
+    /// <summary>
+    /// True when at least one source did not ANSWER its listing this pass — the part of
+    /// <see cref="ListingIncomplete"/> that a later pass of the same process can change, and so the
+    /// part <c>InstanceAutoRegistrationService.RetryFailedDefaults</c> repairs. A source that is
+    /// HELD makes the listing incomplete without setting this: a hold releases at the next process
+    /// start, so a repair pass neither waits on it nor lists it.
+    /// </summary>
+    public bool SourceUnreachable { get; init; }
 
     /// <summary>
     /// The ids this pass actually DELIVERED — installed or already current. The ledger's input:
@@ -2588,7 +3010,10 @@ public readonly record struct DefaultInstallSummary(
             .AddRange(other.Held ?? ImmutableList<DefaultInstallHold>.Empty),
         TierRefused = (TierRefused ?? ImmutableList<PlanTierRefusal>.Empty)
             .AddRange(other.TierRefused ?? ImmutableList<PlanTierRefusal>.Empty),
+        Authorized = (Authorized ?? ImmutableList<DefaultInstallAuthorization>.Empty)
+            .AddRange(other.Authorized ?? ImmutableList<DefaultInstallAuthorization>.Empty),
         ListingIncomplete = ListingIncomplete || other.ListingIncomplete,
+        SourceUnreachable = SourceUnreachable || other.SourceUnreachable,
     };
 
     /// <inheritdoc />
@@ -2601,6 +3026,10 @@ public readonly record struct DefaultInstallSummary(
             : "")
         + (Skipped is { Count: > 0 } s
             ? $" — SKIPPED (authorization, not retried): [{string.Join(", ", s.Select(x => x.Package))}]"
+            : "")
+        + (Authorized is { Count: > 0 } a
+            ? " — AUTHORIZED by the deployment configuration: "
+              + $"[{string.Join(", ", a.Select(x => $"{x.Package} ({x.InstalledBy})"))}]"
             : "")
         + (Held is { Count: > 0 } h
             ? " — HELD (another writer owns the partition; re-derived next boot): "
@@ -2687,3 +3116,18 @@ public sealed record DefaultInstallHold(string Package, string Reason);
 /// <param name="Package">The package id.</param>
 /// <param name="Reason">The speaking refusal reason (see <see cref="PackageEntitlement.Reason"/>).</param>
 public sealed record DefaultInstallSkip(string Package, string Reason);
+
+/// <summary>
+/// One COMMERCIAL package the unattended default install INSTALLED on the deployment
+/// configuration's authority — recorded on the <see cref="DefaultInstallLedger"/> so the audit
+/// trail names who decided it lands on this instance.
+/// </summary>
+/// <param name="Package">The package id.</param>
+/// <param name="InstalledBy">The authorizing principal — <c>deployment-config:{instance}</c>
+/// (<see cref="DeploymentConfigAuthority.Principal"/>), the same value stamped on the install
+/// record's <see cref="PackageManifest.AuthorizedBy"/>.</param>
+/// <param name="Reason">Why the configuration authorizes it: named in
+/// <c>PluginCatalog:InstallByDefault</c> as <c>Source/Package</c>, or required by a package that is.</param>
+/// <param name="InstalledAt">When the pass that installed it ran.</param>
+public sealed record DefaultInstallAuthorization(
+    string Package, string InstalledBy, string Reason, DateTimeOffset InstalledAt);

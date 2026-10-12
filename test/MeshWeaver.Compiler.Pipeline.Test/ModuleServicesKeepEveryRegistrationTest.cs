@@ -41,7 +41,7 @@ public sealed class HostListedTool : IListedTool
 /// Reported 2026-10-06 on memex.meshweaver.cloud ("the chat is not coming on the home page … IHarness")
 /// Measured the same day on the three portals running core 7585f2a6 (memex.meshweaver.cloud,
 /// memex.systemorph.com, control.systemorph.com): MCP listed ONE tool of 37 (<c>restore_from_point_in_time</c>,
-/// the last declared), while pearl on an older image listed all 37. By the same mechanism a per-node hub
+/// the last declared), while client-b on an older image listed all 37. By the same mechanism a per-node hub
 /// resolves only the LAST <c>IHarness</c> the AI module registers. Two places collapsed a list to its last
 /// element:
 /// <list type="number">

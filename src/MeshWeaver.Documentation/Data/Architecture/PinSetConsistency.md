@@ -87,13 +87,13 @@ of these was written narrower on measured evidence:
   - a ref "satisfied" by a lane in another file was never readable by that lane;
   - a ref in a file that calls no lane is not a lane's source ref at all.
 
-  `Systemorph/PartnerRe.Memex` is the second case, and it was the **only** repository in the fleet
+  `Systemorph/ClientA.Memex` is the second case, and it was the **only** repository in the fleet
   declaring a literal source ref (31 scanned, 2026-10-08). Its `helm-release.yml` and
   `infra-deploy.yml` each pin the core commit they check the chart / Bicep out of. Those pins are
   moved deliberately and alone, and that repository's one lane, `auto-arm.yml`, is unrelated CI
   tooling. Pooled, the gate demanded both deploy pins equal the auto-arm sha. It was red on
   `Pinned image digests` every day for weeks, and the only way to green it was to choose which chart
-  PartnerRe deploys to suit a CI lane.
+  ClientA deploys to suit a CI lane.
 
   Such a ref is now printed in the census (`…in a file calling NO lane (I8 n/a)`) and named in
   the log, never folded into a silent green. The self-test drives both directions:

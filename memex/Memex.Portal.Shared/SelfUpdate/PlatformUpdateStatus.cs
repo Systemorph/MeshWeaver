@@ -25,11 +25,14 @@ public enum PlatformUpdateAvailability
     UpdateAvailable,
 
     /// <summary>
-    /// A newer build exists but a gate is HOLDING it: the release-availability gate (#1754) found a
-    /// package this deployment runs with no usable artifact for that release, or the COMBO gate
-    /// (#2274) recorded a <see cref="ComboVerdictKind.Red"/> verdict — that image cannot serve the
-    /// modules this instance has landed. <see cref="PlatformUpdateStatus.LatestVersion"/> still
-    /// names the build.
+    /// A newer build exists and an OPERATIVE hold record names it
+    /// (<see cref="UpdatePolicyContent.IsHoldOperative"/>). Under policy
+    /// <c>platform-rolls-independently-of-packages</c> no package answer produces this state — a
+    /// package that has no usable artifact for the build and a <see cref="ComboVerdictKind.Red"/>
+    /// combo verdict are package advisories (<see cref="UpdateAvailable"/> with
+    /// <see cref="PlatformUpdateStatus.HasAdvisories"/>) — so it is reached only through a hold an
+    /// older build recorded, until the next check clears it.
+    /// <see cref="PlatformUpdateStatus.LatestVersion"/> still names the build.
     ///
     /// <para>🚨 This state exists so a hold cannot be silent. Rendering a held update as
     /// "update available" would leave an install looking normal while it never moves; rendering it
@@ -102,18 +105,52 @@ public record PlatformUpdateStatus(PlatformUpdateAvailability Availability, stri
             // frozen at whatever the last evaluation said and would render "update held" forever,
             // naming an incompatibility that may have been fixed days ago. A Red verification is
             // unaffected: that is a recorded FACT about the build, not a note about the poller.
-            var blocked = policy.VerificationFor(latest)?.Verdict == ComboVerdictKind.Red;
+            //
+            // 🚨 SUPERSEDED for the combo half by policy <c>platform-rolls-independently-of-packages</c>:
+            // a Red verification names modules that do not
+            // survive the build — a statement about PACKAGES — and the poller rolls over it, so
+            // rendering it as "held" would be the lie the paragraph above warns about, inverted.
+            // It reaches this surface as a package ADVISORY instead (HasAdvisories below).
             return new(
-                policy.IsHoldOperative(latest) || blocked
+                policy.IsHoldOperative(latest)
                     ? PlatformUpdateAvailability.UpdateHeld
                     : PlatformUpdateAvailability.UpdateAvailable,
-                latest);
+                latest)
+            {
+                HasAdvisories = HasAdvisoriesFor(policy, latest),
+            };
         }
 
         return policy.Policy == UpdatePolicyKind.None
             ? Unknown
-            : new(PlatformUpdateAvailability.UpToDate, null);
+            // 🚨 The platform ROLLED (the running build is the one the advisories describe): the
+            // packages that did not follow it are still worth saying until they catch up.
+            : new(PlatformUpdateAvailability.UpToDate, null)
+            {
+                HasAdvisories = HasAdvisoriesFor(policy, runningVersion.Split('+')[0]),
+            };
     }
+
+    /// <summary>
+    /// Whether package advisories are recorded for <paramref name="tag"/> — what the release check
+    /// said about it without holding it (the boot-compile cost, the packages that do not follow
+    /// the platform roll), or a Red combo verification of it. 🚨 A BOOLEAN on purpose: this record
+    /// is projected to every user (<see cref="Observe"/> reads the policy node as System), and
+    /// the advisories themselves are package names and diagnostic reasons — admin-scoped, like a
+    /// hold's reason. Only the fact that they exist escapes; the text renders on the Updates tab.
+    /// </summary>
+    private static bool HasAdvisoriesFor(UpdatePolicyContent policy, string? tag) =>
+        policy.HasAdvisoriesFor(tag)
+        || policy.VerificationFor(tag) is { Verdict: ComboVerdictKind.Red };
+
+    /// <summary>
+    /// 🚨 Whether the release check said something about the build this status is about WITHOUT
+    /// holding it — packages that do not follow the platform roll and catch up on their own (policy
+    /// <c>platform-rolls-independently-of-packages</c>). The About tab announces it in one
+    /// translated sentence; what was said stays on the admin-scoped Updates tab. Init-only, so the
+    /// positional shape stays what it was.
+    /// </summary>
+    public bool HasAdvisories { get; init; }
 
     /// <summary>
     /// The status for the CURRENT build, read off <c>Admin/UpdatePolicy</c> as System and projected to

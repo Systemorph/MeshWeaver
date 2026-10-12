@@ -23,12 +23,12 @@ The repos under `meshweaver.azurecr.io`:
 |---|---|---|
 | `memex-portal-ai` | The portal image — one tag per deploy | Where the bloat is; prune aggressively |
 | `memex-migration` | The DB-migration image | A few tags; keep the live one + `latest` |
-| `memex-portal-next` | The `portal-next` client image | Keep the tags matching live/kept portal versions |
+| `memex-portal-next` | **Retired** (policy `portal-next-in-platform-image`) — `/next` ships inside `memex-portal-ai` now | Keep only tags a deployment still pins (`lock-pinned-digests` holds them) until no overlay names one; then the repository can go |
 | `mw-plugin-test` | Plugin-CI test image (also published to GHCR) | Keep the newest; not deployment-critical |
 | `memex-portal-ai-base` | The custom runtime **base** image every portal build layers on | **Never delete `latest`** — it breaks every future build |
 
-> 🚨 `memex-portal-ai`, `memex-migration`, `mw-plugin-test` and `memex-portal-next` form the
-> **four-image set** that `.github/scripts/check-image-set.sh` asserts is complete for a given commit, and
+> 🚨 `memex-portal-ai`, `memex-migration` and `mw-plugin-test` form the
+> **three-image set** that `.github/scripts/check-image-set.sh` asserts is complete for a given commit, and
 > CD's reconciler republishes when it is not. Deleting one leg's tag for a commit makes that commit look
 > unpublished to the reconciler. Prune whole versions, never one repo's tag in isolation.
 

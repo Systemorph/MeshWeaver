@@ -709,40 +709,66 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
     /// </summary>
     internal sealed class AssemblyProbingResolver : IDisposable
     {
-        private readonly HashSet<string> probingDirs = new(StringComparer.OrdinalIgnoreCase);
+        // One entry per resolution (a submission's ResolvedPackageSet.ProbingDirectories — managed
+        // runtime dirs first, native last). Kept apart so a native import is answered only from the
+        // closure its requesting assembly belongs to.
+        private ImmutableList<ImmutableArray<string>> closures = ImmutableList<ImmutableArray<string>>.Empty;
         private readonly object gate = new();
         private readonly Func<AssemblyLoadContext, System.Reflection.AssemblyName, System.Reflection.Assembly?> handler;
+        private readonly Func<System.Reflection.Assembly, string, IntPtr> nativeHandler;
 
         public AssemblyProbingResolver()
         {
             handler = (ctx, name) =>
             {
-                var dllName = name.Name + ".dll";
+                // The default context only raises Resolving for a name the host does NOT ship, so
+                // host unification is implicit here; the probe skips the native directories.
+                if (string.IsNullOrEmpty(name.Name)) return null;
+                ImmutableList<ImmutableArray<string>> current;
                 lock (gate)
+                    current = closures;
+                var dirs = current.SelectMany(c => c).Distinct(StringComparer.OrdinalIgnoreCase);
+                foreach (var candidate in MeshWeaver.NuGet.PackageAssemblyProbe.FindManagedCandidates(name.Name, dirs, name.CultureName))
                 {
-                    foreach (var d in probingDirs)
-                    {
-                        var candidate = Path.Combine(d, dllName);
-                        if (File.Exists(candidate))
-                        {
-                            try { return ctx.LoadFromAssemblyPath(candidate); }
-                            catch { /* try next */ }
-                        }
-                    }
+                    try { return ctx.LoadFromAssemblyPath(candidate); }
+                    catch { /* try the next candidate */ }
                 }
                 return null;
             };
+            // A package's runtimes/<rid>/native/ library for a DllImport the default search missed —
+            // answered ONLY from the FIRST resolution whose managed directories hold the requesting
+            // assembly, so a later submission's (or another session's) different version of the same
+            // native library is never offered to it. The default context is process-wide: one
+            // managed path is one loaded assembly with one native binding, whoever asked first.
+            nativeHandler = (requesting, libraryName) =>
+            {
+                if (requesting.IsDynamic) return IntPtr.Zero;
+                ImmutableList<ImmutableArray<string>> current;
+                lock (gate)
+                    current = closures;
+                var dirs = MeshWeaver.NuGet.PackageAssemblyProbe.NativeSearchDirectoriesFor(requesting.Location, current);
+                return dirs.IsEmpty
+                    ? IntPtr.Zero
+                    : MeshWeaver.NuGet.PackageAssemblyProbe.ResolveUnmanaged(libraryName, dirs);
+            };
             AssemblyLoadContext.Default.Resolving += handler;
+            AssemblyLoadContext.Default.ResolvingUnmanagedDll += nativeHandler;
         }
 
         public void AddDirectories(IEnumerable<string> dirs)
         {
+            var closure = dirs.ToImmutableArray();
+            if (closure.IsEmpty) return;
             lock (gate)
-                foreach (var dir in dirs)
-                    probingDirs.Add(dir);
+                if (!closures.Any(c => c.SequenceEqual(closure, StringComparer.OrdinalIgnoreCase)))
+                    closures = closures.Add(closure);
         }
 
-        public void Dispose() => AssemblyLoadContext.Default.Resolving -= handler;
+        public void Dispose()
+        {
+            AssemblyLoadContext.Default.Resolving -= handler;
+            AssemblyLoadContext.Default.ResolvingUnmanagedDll -= nativeHandler;
+        }
     }
 
     private void InstallRuntimeProbe(IEnumerable<string> dirs)

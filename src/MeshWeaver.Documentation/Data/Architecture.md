@@ -237,6 +237,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Agent Task Collaboration](AgentTaskCollaboration) — launch shared work only through `start_collaboration`; participant effort, harness, and model are creation-time settings, not follow-up-message overrides
 - [Thread Execution Streaming](ThreadExecutionStreaming)
 - [Activity Control Plane](ActivityControlPlane)
+- [Action-Link Contracts](ActionLinkContracts) — the neutral invocation, handler and recipient contract modules share, and the durable action reference an activity keeps after its execution hub has unloaded
 - [Activity Mirror Release Lifetime](/Doc/Architecture/ActivityMirrorReleaseLifetime)
 - [Activity Operations](ActivityOperations)
 - [The Communication Hub](CommunicationHub) — one participant registry, one message-type family (approvals, notifications, information requests) and the master-plus-copies fan-out that keeps every inbox query anchored to one schema
@@ -293,6 +294,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Retiring a NodeType](RetiringANodeType) — the prune keeps the definition and deletes its sources
 - [Dangling NodeTypes](DanglingNodeTypes) — a node whose type resolves to nothing, and the two write paths that allowed it
 - [Node Type Compilation](NodeTypeCompilation)
+- [NuGet Runtime Assets](NuGetRuntimeAssets) — a NodeType's `#r "nuget:"` package compiles against `lib/` but loads `runtimes/<rid>/lib` for the running RID (Microsoft.Data.SqlClient's `lib/` is a platform stub), resolves `runtimes/<rid>/native`, and binds any dependency the host already ships to the host's copy
 - [Closed Type Set](ClosedTypeSet) — `Mesh:ClosedTypeSet=true`: a process activates only the NodeTypes its image registers in code; a database-defined type is refused at activation, never enumerated by the sweep, never adopted and never compiled — the property the dedicated control instance's readiness rests on
 - [Mount-Relative Source Queries](MountRelativeSourceQueries) — a cross-type `shared=@…` source reference is authored mount-relative, so the resolver asks for the mount-anchored spelling too; resolved verbatim under an import prefix it matched nothing while the type's own rebased query did, so the merged set stayed non-empty, no emptiness check could fire, and Roslyn reported a genuine-looking `CS0246` about present content. Also: the four `CS0246` shapes a reader has to tell apart from the source-discovery block
 - [Who Owns a NodeType Member](NodeTypeMemberOwnership) — the repo owns the definition, the mesh owns the compile state, and the mask that encodes it was pinned in ONE direction: four runtime-state members were missing from it, one spelled outside the naming convention meant to catch them. The three guards, and why a member the mesh writes may still have to stay unmasked
@@ -335,6 +337,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - **Start here:** [Plugins](Plugins) — node repos from git, no NuGet
 - [Plugin Manual](PluginAuthoring) — author · publish · install · own registry
 - [Plugin Registry](PluginRegistry) — memex re-serves plugins over REST
+- [Plugin Source Credentials](PluginSourceCredentials) — a git source names its own token (vault, by reference) or another App installation; a declared credential that is missing refuses by name
 - [The Plugin Registry Index's Per-Request Cost](PluginRegistryIndexCost) — the authenticated bundle index evaluates entitlement per package and queries the mesh per request (12–19 s to first byte for 8.7 KB), and that one cost reads as two unrelated incidents because it meets a 10 s auth budget and an unbounded assembly stage; why widening a client budget moved the symptom instead of fixing it
 - [Webhook Inbox](WebhookInbox) — external services deliver into {target}/_Inbox
 - [Plugin Packaging](PluginPackaging) — bundles, the framework identity, and the `Release` node that links a release to its assemblies per architecture

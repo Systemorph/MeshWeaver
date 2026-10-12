@@ -237,6 +237,75 @@ and the next recurrence is the one that can be read. In the result, look for rec
 `MessageCenter.ReceiveMessage`) or activation threads parked on one lock or one `Wait`. Until it has
 been read, any tolerance change or watchdog is a band-aid over a blocking call nobody has seen.
 
+### What the first dump said: one container lock, and Orleans queued behind it
+
+The first read (`Ops/Actions/analyzedump-memex-cloud-20261011-ltlwc-2` on the control instance: the
+pod evicted on 2026-10-10 at 18:16Z, 91 managed threads) names the lock, and with it why the probes
+failed. It does not yet name the call that holds it.
+
+- **`syncblk` shows two held monitors and no other.** Monitor #2, a `System.Object` created in the
+  process's first moments, is owned by OS thread `0x1e`, one of the first pool workers, with
+  `MonitorHeld` 43: **21 threads waiting**. Monitor #169 is owned by thread `0xf1` with 4 waiting.
+- **Every waiter shown is in the same frame**: `Monitor.Enter` under
+  `Autofac.Core.Lifetime.LifetimeScope.CreateSharedInstance`. That is the lock a container scope
+  holds while it constructs one of its single-instance services, and it is one lock per scope, not
+  one per service. The owner of #169 is itself such a waiter: it holds one scope's lock while it
+  constructs a service and waits for another scope's lock for that service's constructor argument.
+- **The waiters are the whole process, not one feature.** The mesh's own: the post-creation
+  handlers of three creates, two `MessageHubGrain` activations resolving their hub configuration, a
+  node-stream update, the provider credential seed, ASP.NET's route matcher. And **Orleans' own
+  message path**: threads in `MessageSerializer.Write` and `ReadBodyObject` constructing the codec
+  for `IndirectProbeResponse`, for the grain-call cancellation system target and for the grain
+  directory, each through `ActivatorUtilities` into the same lock. A silo that cannot construct the
+  codec for a probe response cannot answer the probe. The thread pool agrees with the liveness
+  lines above: 35 workers, 30 running, CPU 0 %.
+
+So the eviction was correct for a concrete reason: the root container's single-instance lock was
+held for the life of the process, and everything that had not been resolved before it was taken,
+Orleans' codecs included, waited on it. `IAmAlive` kept being written because that path had been
+constructed already.
+
+**Not established:** what thread `0x1e` was doing. Its stack was among the groups that read cut
+"to fit" (the oldest thread, dropped first), so whether it waits on monitor #169 (two scopes locked
+in opposite orders by two threads) or on something else while it holds #2 is not known from that
+read. The read was repaired for exactly this: a thread `syncblk` names as a monitor's owner is now
+always shown, first, with its whole stack. The next `AnalyzeDump` of the same dump is the reading
+that names the call. The lock order is worth knowing before it arrives: since each module's
+services live in a container of their own
+([Live Module Update](../LiveModuleUpdate)), a module service constructed there may take a root
+service as a constructor argument (module lock, then root lock), and a root service under
+construction may ask for a module's service (root lock, then module lock). Both directions exist
+by design; whether they are this incident's two threads is what the owner's stack decides.
+
+### What the second read said: a scoped service built in the root
+
+The repaired read of the same dump (`Ops/Actions/analyzedump-memex-cloud-20261011-ltlwc-3`) shows
+both owners whole, and the pair is NOT the root and a module container. It is the root and the
+**mesh hub's own scope**:
+
+| thread | holds | waits for | how |
+|---|---|---|---|
+| `0x1e` | #2, the root container's lock | #169 | `ApplicationStarted` → the WhatsApp module's `WhatsAppReplySender.Begin()` → from a scope of its OWN container, `GetRequiredService<PortalApplication>()` → the module container's fallback → **the root** builds `PortalApplication` → its constructor reads `hub.ServiceProvider.GetRequiredService<ILayoutClient>()` |
+| `0xf1` | #169, the mesh hub scope's lock | #2 | a grain activation → `MessageHubGrain.ResolveHubConfigurationObservable` → `meshHub.ServiceProvider.GetService<IMeshNodeHubFactory>()` → a constructor argument that is a root singleton not built yet |
+
+`PortalApplication` is a SCOPED registration. The module container's fallback resolved every root
+registration in the root scope itself, so a scoped service asked for from a module scope was built —
+and then shared, for the life of the process — in the root, under the root's lock, and its
+constructor reached into a child scope. Before modules had containers of their own (core #6127) the
+same call resolved it from a root child scope, under that scope's lock, which is why the first wedge
+of this shape is two days younger than #6127.
+
+**The fix**: the fallback resolves a root registration in a root child scope owned by the asking
+module scope and disposed with it (`RootResolutionScope`). A singleton is still the root's one
+instance; a scoped service is that scope's; a transient's disposal ends with the module scope.
+`AScopedRootServiceIsNeverBuiltInTheRootTest` pins it with this dump's two threads forced to
+overlap, and a negative control that builds the scoped service in the root and deadlocks.
+
+**What is still open, and not this incident:** a root SINGLETON whose construction calls a module's
+service (root lock, then module lock) while a module singleton's construction takes a root singleton
+(module lock, then root lock) deadlocks the same way. It was reproduced with real containers while
+reading this dump; no dump has shown it.
+
 ## Procedure
 
 1. **Read the victim's own log first**, not the membership table. `LocalSiloHealthMonitor`

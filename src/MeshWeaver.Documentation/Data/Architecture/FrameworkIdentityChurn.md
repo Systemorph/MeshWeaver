@@ -151,6 +151,29 @@ missing in 13 of them; the 23 spanned **18 distinct identities**; all 23 were `r
 > has been declared yet (`platform-compatibility.json` reads `epoch: 1`, `breaks: []`), so the leg's
 > bake path has not run in production. Its decision is proven by the script's self-test.
 >
+> **Where that leg's module bundles come from: CARRIED FORWARD, verified — never built a second time**
+> (policy [`bake-per-live-identity`](../PolicyNotProse), #3583). The leg does not download the module bundles the run built: those
+> are current-epoch builds, and sealed under the old key they would hand every portal that has not
+> rolled bytes built for a platform it does not run. Instead its *carry-forward* step reads the
+> repository's OWN sealed module set for the ceiling's identity off the share
+> (`compose-sealed-modules.sh --packages '*'`, one generation), verifies it, and seals exactly those
+> bytes again:
+>
+> - **seal**: only from a sealed publication for that identity (`_complete` and `modules/_index` present);
+> - **identity**: every bundle must state the ceiling's identity by `ModuleFrameworkIdentity`'s rule.
+>   `mw-plugin-test module-identity --expect`, run by the ceiling's own tester, refuses anything else,
+>   including a current-epoch build;
+> - **digest**: the external-modules step seals an own bundle only when its sha256 is one of the
+>   carried ones.
+>
+> A repository that builds modules but whose previous-epoch publication seals none is RED, not
+> silently module-less. The accepted consequence: a module fix does not reach a portal that has not
+> rolled. NodeType content is still re-baked against the ceiling, so a NodeType source that uses a
+> module API added since the break fails that bake, by name. The portal side of the decision is
+> proven in `test/MeshWeaver.Updates.Test/PreviousEpochCarryForwardTest.cs`: a previous-epoch portal
+> adopts the carried set, declines a current-epoch build in favour of the image's copy, and adopts a
+> store-only build whatever it states, which is why the lane refuses it.
+>
 > Measured on 2026-10-09: memex.systemorph.com, memex.meshweaver.cloud and control.systemorph.com all
 > report `framework=c003e001` on `/health`. `bake-report` reads `baked=198` of 201 and 414 of 416, and
 > the three that are not baked are marked `previouslybroken`, not missing a bundle. memex.systemorph.com's

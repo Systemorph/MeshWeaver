@@ -727,6 +727,38 @@ for one in flight when the activation went. What it ends is the **stranding**: t
 within one round trip and the NEXT click lands on a live handler, instead of every click for the rest
 of that page's life being thrown away.
 
+## A click on an area with no control
+
+The stream can be perfectly alive and a click still have nothing to run: its area holds no control
+on the owner. `LayoutAreaHost.OnClick` used to answer that with `UserActionAccepted`, so the sender's
+pending state cleared exactly as if the action had run — a click dropped while reporting success.
+Found on a cold first render of a catalog, where the rows' data reached the client about 116 ms
+before the template's buttons.
+
+It is now **refused**: one `Warning` on the owner (`REFUSING click on area … no control is rendered at
+that area`) naming the area, the stream and the sender, and a `DeliveryFailure` with
+`ErrorType.Rejected` carrying the clicking person's `click.noControl` sentence, which names the area.
+That reaches `SubmitUserAction`'s `onRefused` arm — the Blazor view's `SurfaceRefusal` — with no client
+change: the client already treats any refusal as "this did not happen".
+
+**Refused, not queued until the control arrives.** A queue would be right if the owner could be
+*behind* the client, and in this data-binding model it never is: the owner's stream is the source the
+client renders FROM, so any control a person can see and click was in the owner's `Current` before
+the client received it. A click naming an area the owner does not hold is therefore not early — the
+area was re-rendered away, or never existed — and nothing will ever arrive to release a queued click.
+Holding it would need a deadline to answer at all, which is a timer standing in for a fact the owner
+already has.
+
+**`Warning`, not `Error`.** Unlike a lost stream, this is not a platform failure: a re-render that
+removes a button while a click on it is in flight is ordinary, and the person is told. The line exists
+so a cluster of them (a client clicking areas the owner never renders) is visible.
+
+A rendered control that declares **no** click action is unchanged — accepted as the no-op it is, since
+there was nothing to run.
+
+Pinned by `ClickOnAnAreaWithNoControlIsRefusedTest` (the refusal and its one log line; the rendered
+button on the same stream still accepted and run — the negative control; a label still accepted).
+
 ## What this deliberately does not do
 
 - **Any retry, resubscribe or widened grace.** The issue rules all three out and so does this: an

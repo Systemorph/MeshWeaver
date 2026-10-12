@@ -7,8 +7,8 @@ what you see first is what you *use*, not everything the mesh can show you. The 
 |---|---|---|---|
 | **Pinned** | the caller has pins | the owner's content shortcuts (`User.PinnedPaths`) | last modified |
 | **Apps** | always | the APP DIRECTORY (the apps the viewer can see through access, `{owner}/_Apps`) — every app exactly once, as an ICON grid; the viewer's own `{owner}/_App` records only under the explicit `Home:AppSource = Records` compatibility path | last used |
-| **Spaces** | always | the catalog **without** store items | last accessed |
-| **All** | always | everything the viewer can read, at every depth | last accessed |
+| **Spaces** | always | the catalog **without** store items | location (path) — `HomeConfig.SortBy` |
+| **All** | always | everything the viewer can read, at every depth | location (path) — `HomeConfig.SortBy` |
 
 **Shared with me** is not a tab: cross-partition invitations (#385) are a distinct kind of content,
 not another lens on the catalog, so they render as their own titled band BELOW the search surface —
@@ -190,12 +190,30 @@ The admin-editable platform node (`HomeConfigNodeType`, public-read, live-reload
   not what existing viewers have. Until a list-capable edit-form field ships it is
   `[Browsable(false)]` on the generic content editor — admins edit the node content directly.
 - `Scope`, `Render`, `DefaultSort` — apply to the Spaces/All scopes (and the legacy list).
+- **The content list is ONE flat list in LOCATION order by default** (policy
+  [`explorer-navigation`](../PolicyNotProse)). The default order is `SortBy`, an open string value
+  (`HomeSortBy`: `Location`, `LastAccessed`, `LastModified`, `Alphabetical`). It ships UNSET, which
+  means `Location` (`sort:path-asc`), so each space's content stays together. The older
+  `DefaultSort` enum keeps its signature and applies only when `SortBy` is empty and an admin moved
+  it off `LastAccessed` (`HomeConfig.EffectiveSort`). `Render` ships `Flat`: the Tabs home no longer
+  fans its entries out into per-type sections, which put every top-level entry into one "Space (N)"
+  group; `Render: Grouped` stays the admin's explicit choice. Location order stays in the Sort
+  control either way.
 
 **The dedup rule:** an app is represented exactly once. The Spaces scope and the Shared-with-me band
 exclude `-nodeType:Store/Plugin -nodeType:Store/Catalog`; Shared-with-me also excludes
 `-nodeType:User` — a grant that resolves to another user's home partition must not list that
 person's space as shared content. **The Store itself is an app** (a config default); only the
 anonymous header keeps a Store link.
+
+**The platform's own partitions are not spaces.** A space is a place people work together. The
+partitions the platform itself runs on carry a `Space` root for plumbing reasons, so they would
+otherwise sit beside the real workspaces: `WellKnownPartitions.Platform` (Admin, Auth, …) and
+`WellKnownPartitions.Fleet` (Doc, Ops, Plugins, Agent, Skill, Provider, Governance, Store, …). The
+home lists neither as a space, and a grant on one of them (every global admin holds some) is not
+listed as shared with the viewer. Each is reached through its app: Documentation, Threads, Settings,
+Administration. The filter is `RefreshSpacePathsLogonAction.IsPlatformOwnedPartition`, applied when
+the viewer's space and shared manifests are written at logon.
 
 ## Sort semantics — why last-accessed is a two-leg union
 

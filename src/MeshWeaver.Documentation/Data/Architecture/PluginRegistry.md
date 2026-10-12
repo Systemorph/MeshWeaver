@@ -97,9 +97,14 @@ and they are independent:
   on the next boot. A package **newly listed** in a source this instance already seeded from, and
   covered only by a whole-source pattern such as `Plugins/*`, is **held**: it lands through a
   governed `package.provision` activity, or by being named exactly — and a held package gets **no**
-  ledger entry. A **commercial** package (a price or a sales contact) that passes the hold is never
-  installed by this unattended pass — it has no authorizing principal — and is recorded under
-  `skipped` on the ledger with its reason. Our deployments set
+  ledger entry. A **commercial** package (a price or a sales contact) **named exactly**
+  (`Source/Package`) is **installed**, together with what it requires (commercial requirements
+  included), on the authority of the deployment configuration — the principal
+  `deployment-config:{InstanceId}`, see
+  [the deployment configuration authorizes what it names](#the-deployment-configuration-authorizes-what-it-names).
+  A commercial package covered only by a whole-source pattern names nothing: it is never installed
+  (nor pulled in as a requirement) by this pass and is recorded under `skipped` on the ledger with
+  its reason. Our deployments set
   `["Plugins/*"]`, so a new portal comes up with the platform plugins — the Store included — already
   present and (per `AutoUpdateByDefault`) tracking their repo. 🚨 Over a **local checkout** — a
   `PluginCatalog:Sources:N:RepoPath` that is a directory on the host, which is what a self-registry
@@ -160,7 +165,9 @@ merges all sources' packages (on an id collision the first configured source win
 resolves an id in the same order. With several sources one failing repo degrades to an empty
 contribution (logged), never a broken catalog. The legacy single-source keys
 (`PluginCatalog:SourceRepoPath`/`SourceSubdir`/`SourceRef`/`SourceFormat`) keep working when no
-`Sources` list is set. The registry is authoritative on each source's git ref; a consumer's `ref`
+`Sources` list is set. A source in another organisation, or one the instance's App does not
+reach, states its own credential by reference (`TokenKey` / `InstallationOwner`) —
+[Plugin Source Credentials](/Doc/Architecture/PluginSourceCredentials). The registry is authoritative on each source's git ref; a consumer's `ref`
 is advisory. The wire shapes are produced by `PluginRegistryPayloads` and parsed by
 `RegistryPackageSource`, one place each, so producer and consumer cannot drift.
 
@@ -564,6 +571,28 @@ the skip is never silent:
   per-package catch); this keeps a second one from re-introducing a failed id with nothing beside it.
 - **Kept off the seeded list, and retried by the next pass** (#2254) — the ledger knows the package,
   so the governed-provision hold does not take it for a newly listed one (#5934).
+- **The next pass does not wait for the next boot** (#5825). A boot install fails because a registry
+  did not answer, and the registry answering is the event that changes the outcome. The reconciler
+  already observes it: every reconcile that a feed read after boot made possible (the safety-net
+  pass on `PluginCatalog:ReconcileSafetyNetInterval`, and a boot reconcile that was deferred and is
+  drained by the first feed read) ends by asking
+  the installer to run the default install again when its last pass left something undone — a
+  failed package, a source that did not answer its listing, or the pass itself faulting
+  (`RegistryUpdateReconciler.RetryFailedDefaultInstalls` → `InstanceAutoRegistrationService.RetryFailedDefaults`).
+  A source HELD at boot (a torn or unreadable seal) is not owed a repair and is not listed again by
+  one: a hold releases at the next process start and nowhere else, so the repair skips it and keeps
+  that contract (the maintainer's decision on #6493). It still makes the pass's listing incomplete,
+  which is a statement about what the pass saw (`ListingIncomplete`), kept apart from the retryable
+  half (`SourceUnreachable`).
+  It runs on the reconciler's serialized lane, so there is no second writer and no timer of its own;
+  it is the same shape as the faulted-reload retry that ends the same pass. A pass that left nothing
+  undone is not repeated (no source is listed), and the boot reconcile does not ask, because it runs
+  straight after the pass that failed. A package that fails again stays recorded and logs its cause
+  at Error on each attempt, so one that can never install stays loud at the reconcile's cadence.
+  Before this the only repair was the next boot: measured on the control instance on 2026-09-27,
+  `Anthropic` stayed uninstalled after one stalled HTTPS read until the next image roll. With the
+  safety net disabled (`ReconcileSafetyNetInterval` ≤ 0), the next boot is again the
+  retry. Pinned by `AFailedDefaultInstallIsRepairedWhenTheFeedAnswersTest`.
 - **A snapshot.** `failed` and `failureCauses` describe the last pass that attempted anything: an entry
   leaves the moment its package is delivered or stops being declared.
 - **A bound that expires says which wait it was.** The install chain's internal bounds fault with
@@ -611,7 +640,7 @@ lists image tags with, so an installation speaks to the fleet's registry through
 one credential, for images and bundles alike. The design is
 [Plugin Bundles in the Registry](../PluginBundlesInTheRegistry).
 
-## Free syncs freely, commercial needs a Global Admin or a governed activity
+## Free syncs freely, commercial needs a Global Admin, a governed activity or the deployment configuration
 
 Who may bring a package onto an installation is decided by its **price**, and the decision is made on
 the **action**, not on the screen that triggered it:
@@ -619,7 +648,7 @@ the **action**, not on the screen that triggered it:
 | Package | Access / sync |
 |---|---|
 | **Free** — `price` null or `0` | Installs and auto-updates with **no special permission**. This is what lets a fresh installation pick up the platform baseline unattended. |
-| **Commercial** — a non-zero `price` (positive = purchasable, negative = coupon-only), or a sales contact (`contactEmail`) | Requires **Global Admin** on the installing instance, or a **verified governed `package.provision` activity** signed for the package, to install or update. |
+| **Commercial** — a non-zero `price` (positive = purchasable, negative = coupon-only), or a sales contact (`contactEmail`) | Requires **Global Admin** on the installing instance, a **verified governed `package.provision` activity** signed for the package (or a `package.provision-set` activity whose signed list names it), or the **deployment configuration** naming it exactly in `PluginCatalog:InstallByDefault` (for the unattended default install), to install or update. |
 
 `PackageEntitlement.Authorize` is the single rule, and it runs inside `PackageInstaller.Install` /
 `InstallNodeRepoDelta` — so the machine paths are gated exactly like a click:
@@ -631,8 +660,9 @@ the **action**, not on the screen that triggered it:
   applying a commercial delta: a PERSON must *still* be a global admin, so revoking the admin stops the
   syncing; a governed ACTIVITY must still verify for this package (below).
 - **A governed activity is an authorizing principal.** Installing a package on an instance goes
-  through a governed `package.provision` activity signed by people, not through a person's standing
-  rights, so the Store's provision control plane hands the activity (`Governance/Activities/{id}`)
+  through a governed `package.provision` activity signed by people (or, for several packages at
+  once, one `package.provision-set` activity whose signed list names them), not through a person's
+  standing rights, so the Store's provision control plane hands the activity (`Governance/Activities/{id}`)
   over as the principal once it has verified the request. The gate does not take the path on trust:
   it reads the activity **authoritatively from storage** (`ReadGovernedActivity` — the same
   identity-independent read the broad-grant guard uses, so core needs no reference to the Governance
@@ -642,10 +672,15 @@ the **action**, not on the screen that triggered it:
   |---|---|
   | the path | it is not exactly `Governance/Activities/{id}`, or nothing readable is stored there |
   | the node type | it is not a `Governance/Activity` |
-  | the standard | it is not `package.provision` |
+  | the standard | it is neither `package.provision` nor `package.provision-set` |
   | the state | it has not started — `Executing`, `Done` or `Failed` are started (gates green, signatures consumed; monotone, so a later update re-check gives the same answer) |
   | the signatures | none is consumed |
   | the package | the signed `package` input is not this package's id (ordinal) |
+  | the package (a set) | for `package.provision-set`: the signed `packages` list does not name this package's id (ordinal). The list is parsed by `PackageEntitlement.PackageSetIds`, the Store's rule: ids separated by commas, semicolons or whitespace, each a plain id. A list holding an id that is not plain, or the same id twice, names nothing |
+
+  `package.provision-set` is ONE activity, signed once, that installs a list of packages (policy
+  `package-set-one-signature-round`). It has the same authority and gates as the single standard,
+  and the Store installs the list in dependency order.
 
   A refusal names which check failed. An admission is logged as
   `[PackageEntitlement] commercial package X AUTHORIZED by governed activity Governance/Activities/…`,
@@ -653,11 +688,54 @@ the **action**, not on the screen that triggered it:
   activity authorized it, and the unattended update re-verifies that same activity. Only WHO may
   authorize widens: the registry still serves only what the instance's plan tier covers, and the
   licence and parameter gates still run.
-- **Unattended paths carry no principal**, so a commercial package cannot ride in on the boot-time
-  default install — it fails closed: held if newly listed under a whole-source pattern (no ledger
-  entry), otherwise recorded on the ledger under `skipped`.
+- **The deployment configuration is an authorizing principal** — see the next section. It is the
+  ONLY principal the boot-time default install carries, and only for a commercial package named
+  exactly in `PluginCatalog:InstallByDefault` (or required by one that is). Every other unattended
+  path carries no principal, so a commercial package cannot ride in on a wildcard — it fails closed:
+  held if newly listed under a whole-source pattern (no ledger entry), otherwise recorded on the
+  ledger under `skipped`.
 - **A refusal is never silent**: it logs a speaking reason and, on the auto-update path, raises a
   notification on the install record. The manual Update button stays.
+
+### The deployment configuration authorizes what it names
+
+Policy [`deployment-config-authorizes-named-commercial`](../PolicyNotProse).
+
+`PluginCatalog:InstallByDefault` lives in the instance's **deployment record**, and that record
+changes only through a reviewed pull request in the deployment repository, merged by the auto-merge
+App — a merge there *is* the release. Naming `ClientA/Claims` there is therefore a decision people
+took, reviewed and put on record: the same kind of decision a governed `package.provision` activity
+records. So the unattended default install carries an explicitly named principal for it,
+**`deployment-config:{PluginCatalog:InstanceId}`** (`DeploymentConfigAuthority`), and
+`PackageEntitlement.Authorize` admits a commercial package under it when
+(`DeploymentConfigAuthority.WhyNot`):
+
+| check | refused when |
+|---|---|
+| the instance | the principal names another instance than this one's `PluginCatalog:InstanceId` |
+| the naming | the package is not named **exactly** (`Source/Package`) in the CURRENT `InstallByDefault` — a whole-source `Source/*` names nothing — and is not a requirement (direct or transitive) of a package that is, as this boot's selection computed it |
+| the source | the candidate manifest names **no source** — a package id alone never authorizes, because another source may list the same id. A registry stamps the source on what it serves; an update listed straight off a watched repository does not, and is applied by a person's Update click |
+
+The principal is verified, never trusted by its string: the gate re-reads the current configuration,
+so the install record's `authorizedBy: deployment-config:…` is re-verified by every unattended update,
+and a package the configuration stops naming stops being authorized by it. An admission is logged as
+`[PackageEntitlement] commercial package X AUTHORIZED by deployment-config:… : named in
+PluginCatalog:InstallByDefault as 'Source/X'`, the boot logs the same, and the default-install ledger
+records it under **`authorized`** — `{package, installedBy, reason, installedAt}` — beside `seeded`.
+
+What does NOT change:
+
+- **Installing grants nobody anything.** Access to the installed package still follows the plan
+  (`Store:InstancePlan`) and the subscriptions — the Store's `PluginGate` keeps its content dark
+  until a user's plan admits them. No sweep, no bulk grant, no notification.
+- **Wildcards still never pull in a commercial package**, newly listed packages under `Plugins/*`
+  are still held, and a commercial requirement of a wildcard-selected or baseline package is still
+  not pulled in.
+- **Seed once.** The ledger still records the package as seeded, so an operator who removes it is
+  not fought by the next restart.
+- **The registry's plan tier still wins** (a package the plan does not cover is not served), and a
+  licence that requires **acceptance** is still skipped: a configuration cannot accept terms on a
+  person's behalf (`LicenseAcceptanceGate`).
 
 The registry side needs nothing extra: `/api/plugins` already requires a registered instance key and
 scopes every listing and file fetch to that instance's `PluginGrant`, so an unauthenticated caller

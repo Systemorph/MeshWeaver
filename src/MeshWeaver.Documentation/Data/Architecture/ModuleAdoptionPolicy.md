@@ -393,9 +393,16 @@ The rule is the consumer's "never roll back unattended", applied to the publish 
 
 ## What the platform roll gates on
 
-The self-updater and the CD post-promote gate select **the newest release on which no installed module is unloadable**. Concretely, per installed package: a build published for the target identity exists (it will be adopted), *or* the landed generation links against the target's surface, *or* neither can be shown — which is reported as *indeterminate*, never as clearance and never as a hold. Declared floors do not enter the ROLL: they decide which package version an installation takes (R2), never whether the platform rolls. A missing content bake does not enter (it is reported as "would compile at boot: …"). The sealed-set consistency check (#3175/#3221) stays: two builds of one platform assembly in one identity is a torn publication, and torn publications are refused whole.
+> 🚨 **No package answer gates the platform roll** — policy `platform-rolls-independently-of-packages`
+> ([Policy Not Prose](../PolicyNotProse)). The self-updater selects **the newest admitted release**;
+> the per-package answer below is still computed, exactly as stated, and is what the CI build gate
+> (#1755) and the package surfaces read, but on a roll path a package that is unloadable on the
+> target is reported as an advisory, keeps its previous generation and catches up through its own
+> update policy. [Release Gates](../ReleaseGates) → "What a refusal does" has the two consumers.
 
-The safety net after a roll is boot-time, in this order: the link probe refuses what cannot load; the fallback keeps the previous generation; a module with no loadable generation makes the pod unhealthy and the rollout stalls, with the previous pods serving. That is what "robust during deployments" buys: the worst outcome of a wrong roll is a **stalled rollout with a named module**, never a portal that serves nothing and never an installation stuck on a month-old build because a string said so.
+Before that policy, the self-updater and the CD post-promote gate selected **the newest release on which no installed module is unloadable**. The package answer is unchanged: per installed package, a build published for the target identity exists (it will be adopted), *or* the landed generation links against the target's surface, *or* neither can be shown — which is reported as *indeterminate*, never as clearance. Declared floors do not enter the ROLL: they decide which package version an installation takes (R2), never whether the platform rolls. A missing content bake does not enter (it is reported as "would compile at boot: …"). The sealed-set consistency check (#3175/#3221) stays: two builds of one platform assembly in one identity is a torn publication, and torn publications are refused whole.
+
+The safety net after a roll — now the ONLY thing between a module that cannot load and the roll — is boot-time, in this order: the link probe refuses what cannot load; the fallback keeps the previous generation; a module with no loadable generation makes the pod unhealthy and the rollout stalls, with the previous pods serving. That is what "robust during deployments" buys: the worst outcome of a wrong roll is a **stalled rollout with a named module**, never a portal that serves nothing and never an installation stuck on a month-old build because a string said so.
 
 ## The implementation plan
 

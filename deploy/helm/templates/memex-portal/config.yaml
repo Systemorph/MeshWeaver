@@ -442,6 +442,14 @@ data:
   # deployment DEFAULT stays Blazor — we deliberately leave Portal:Frontend unset —
   # so enabling the flag is opt-in per user, fully reversible.
   Portal__ReactAppUrl: "/next"
+{{- if eq (include "memex.portalNext.mode" .) "bundled" }}
+  # 🚂 BUNDLED: the portal process starts the Next server from the bundle its OWN image carries
+  # (PortalNextProcess) — so /next is always the build the portal runs. SSR reaches this same
+  # process over loopback; the browser still talks same-origin through the ingress.
+  PortalNext__Bundled: "true"
+  PortalNext__Port: "{{ include "memex.portalNext.port" . }}"
+  PortalNext__PortalOrigin: "http://127.0.0.1:{{ .Values.config.memex_portal.ASPNETCORE_HTTP_PORTS | default 8080 }}"
+{{- end }}
 {{- end }}
   # ---- Embeddings (vector search + content indexing) — optional -------------
   # With an Endpoint set, the portal registers the embedding provider: search-bar queries hit
@@ -1391,6 +1399,21 @@ data:
   PluginCatalog__Sources__{{ $i }}__RepoPath: "{{ $s.repoPath }}"
   PluginCatalog__Sources__{{ $i }}__Ref: "{{ $s.ref | default "main" }}"
   PluginCatalog__Sources__{{ $i }}__Format: "{{ $s.format | default "node-repo" }}"
+  {{- /* The source's OWN credential, by reference — never a value. `tokenKey` is the
+         CONFIGURATION KEY the repository's token is read from (PluginCatalog:SourceTokens:<name>);
+         the value reaches the pod under that key from the vault (keyVaultSecrets: vaultSecret →
+         PluginCatalog__SourceTokens__<name>). `installationOwner` is the account whose installation
+         of the instance's GitHub App reads the repository. Emitted only when STATED: a declared
+         key that is empty makes the portal REFUSE the repository by name, so an unconditional ""
+         would turn every source into a refusal. A tokenKey stated and left blank (`tokenKey: ""`)
+         IS emitted, blank, for the same reason — it is a declaration, and dropping it would read
+         the repository with the instance's App or anonymously; an absent or null one is not. */}}
+  {{- if and (hasKey $s "tokenKey") (not (kindIs "invalid" $s.tokenKey)) }}
+  PluginCatalog__Sources__{{ $i }}__TokenKey: "{{ $s.tokenKey | toString | trim }}"
+  {{- end }}
+  {{- if ($s.installationOwner | default "" | trim) }}
+  PluginCatalog__Sources__{{ $i }}__InstallationOwner: "{{ $s.installationOwner | trim }}"
+  {{- end }}
   {{- end }}
   {{- range $i, $g := .Values.pluginCatalog.defaultGrants }}
   PluginCatalog__DefaultGrants__{{ $i }}: "{{ $g }}"

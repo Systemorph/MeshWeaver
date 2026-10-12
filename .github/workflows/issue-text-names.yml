@@ -2,7 +2,10 @@ name: Issue-text name scan
 
 # Client names in issue and pull-request TEXT (MeshWeaver.Plugins#2845, policy `issue-text-name-scan`).
 #
-# The committed-text check covers the tree. This scheduled lane covers what the repository also
+# 🚨 NOTHING checks the committed TREE yet: the committed-text check (`client-names.yml` +
+# `check-client-names.py`, #5852) was closed unmerged while its caller grant was outstanding, so a
+# name in a committed file is stopped by no lane until that change lands. Do not read this lane as
+# covering it. This scheduled lane covers what the repository also
 # publishes: issue titles and bodies, issue comments, pull-request descriptions, review comments and
 # review bodies, by every author, bots included. `.github/scripts/scan-issue-text-names.py` is
 # deterministic and holds no names. It submits the text to the instance that owns the CRM as
@@ -92,7 +95,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          sparse-checkout: .github/scripts
+          sparse-checkout: |
+            .github/scripts
+            scripts
       - name: Open, update or close the tracking issue
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -131,4 +136,10 @@ jobs:
             NEW=$(gh api "repos/$REPO/issues" -f title="$TITLE" -f body="$BODY" -f "labels[]=$LABEL" --jq '.number')
             echo "opened #$NEW"
             python3 .github/scripts/sentinel-issue.py await-visible --repo "$REPO" --label "$LABEL" --number "$NEW"
+            NUM="$NEW"
           fi
+          # 🏷️ The sentinel states its own TYPE and SEVERITY (Doc/Architecture/IssueTaxonomy) — on the issue
+          # it opened AND on the one it reopened. A scan that could not check is a gate that cannot fail: a
+          # bug; sev:M, because the committed-text check still runs. `stamp` creates a missing taxonomy label
+          # and leaves a classification a person already gave untouched.
+          python3 scripts/check-issue-taxonomy.py stamp --repo "$REPO" --number "$NUM" --label bug --label sev:M

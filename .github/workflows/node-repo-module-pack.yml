@@ -1970,6 +1970,9 @@ jobs:
             echo "::error::the pinned tester could not run inside the pinned image (exit $probe_rc, output above) — 'build-project --help' is the cheapest thing it does, so this is the tester app (tester-image-digest $TESTER_DIGEST, restored at $tester_app) or the platform image ($DIGEST), not the flag. A cache entry restored broken reads exactly like this: delete the tester-app-<digest> cache entry and rerun before moving any pin."
             exit 1
           fi
+          # Kept for the uncarried-refusal assertion after the build (#4445): what this tester
+          # ADVERTISES decides whether the ENFORCED line is required in the log.
+          printf '%s\n' "$usage" > "$RUNNER_TEMP/tester-build-project-usage.txt"
           if ! printf '%s\n' "$usage" | grep -q -- '--bind-to-image'; then
             printf '%s\n' "$usage" | head -n 5
             echo "::error::the pinned tester (tester-image-digest $TESTER_DIGEST) has no 'build-project --bind-to-image' (its usage is above), so it cannot stamp modules with the image's own AssemblyVersion — every module would fail the binding-identity check, or bind to a literal that is wrong for this platform. Move tester-image-digest and platform-image-digest TOGETHER to a set built from MeshWeaver main after the flag landed."
@@ -2023,6 +2026,8 @@ jobs:
       - name: The global build emitted every selected module (postcondition)
         env:
           MODULES: ${{ needs.select.outputs.build-modules }}
+          BUILT: ${{ steps.build.outputs.built }}
+          TESTER_DIGEST: ${{ inputs.tester-image-digest }}
         run: |
           set -euo pipefail
           python3 build-logic/.github/scripts/workspace-build-verify.py --self-test
@@ -2030,6 +2035,24 @@ jobs:
           python3 build-logic/.github/scripts/workspace-build-verify.py \
             --modules "@$RUNNER_TEMP/selection.json" \
             --output "$RUNNER_TEMP/module-build"
+          # 🚨 THE UNCARRIED-ASSET REFUSAL IS ASSERTED, NOT ASSUMED (#4445). The builder refuses a
+          # module whose private closure declares an asset for the bundle target RID that this
+          # lane does not carry, and prints one ENFORCED line before it builds anything. A green
+          # build without that line would be a build that no longer checks, reading as one that
+          # checked and passed — so it is RED. The single exception is a pinned tester that does
+          # not ADVERTISE the refusal at all (it predates #4445): that run says so by name, every
+          # run, until the satellite's tester pin carries it. It never applies to a tester that
+          # advertises the refusal and then does not print it.
+          if [ "$BUILT" != "true" ]; then
+            echo "uncarried-asset refusal: no container entry was compiled in this run, so there is no workspace-build log to hold to it (sdk entries are refused by module-pack itself)"
+          elif grep -qF 'uncarried-asset refusal — ENFORCED for bundle target RID' "$RUNNER_TEMP/module-build/workspace-build.log"; then
+            grep -F 'uncarried-asset refusal — ENFORCED for bundle target RID' "$RUNNER_TEMP/module-build/workspace-build.log" | head -n 1
+          elif grep -qF 'Uncarried-asset refusal: ARMED' "$RUNNER_TEMP/tester-build-project-usage.txt"; then
+            echo "::error::the pinned tester (tester-image-digest $TESTER_DIGEST) advertises the uncarried-asset refusal, but its workspace build printed no 'uncarried-asset refusal — ENFORCED' line — the refusal did not arm, and every container bundle in this run went unchecked for assets it does not carry (#4445)."
+            exit 1
+          else
+            echo "::warning::uncarried-asset refusal NOT ENFORCED in this run — OBSERVE-ONLY: the pinned tester (tester-image-digest $TESTER_DIGEST) predates MeshWeaver#4445 and does not refuse a container bundle that lacks an asset for the target RID. It arms when the tester pin moves to a platform build carrying #4445."
+          fi
       # ───────── THE LEDGER HEARS ABOUT THIS JOB — a heartbeat on success, the verdict on failure ─────────
       # A claim taken in `select` must stay fresh across this job (queue + up to 30 min of compile);
       # a heartbeat here keeps a follower from taking the key over mid-build. On failure the verdict

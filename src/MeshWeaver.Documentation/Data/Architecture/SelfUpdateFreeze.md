@@ -573,13 +573,13 @@ returns early for a node that exists. Build was provisioned on 2026-09-12, befor
 was rendered into the portal configuration at all (d38e790ba5, 2026-09-19). Its node was therefore
 created with the image's own default, `Stable` and no pattern, and the record's `Continuous` never
 reached it. `Stable` and "`Continuous` without a pattern" both admit clean releases only, hence
-"none newer". The contrast is pearl, created 2026-09-21 against the same registry: its
+"none newer". The contrast is client-b, created 2026-09-21 against the same registry: its
 `Admin/UpdatePolicy` reads `policy: Continuous, pattern: 3.0.0-ci*, latestAvailableTag:
 3.0.0-ci.9564`.
 
 🚨 **What was not read:** build's own `Admin/UpdatePolicy` node. No MCP server reaches the build
 instance, so the node's `Stable`/no-pattern content is INFERRED from the log line, the two creation
-dates and pearl's contrast, not observed.
+dates and client-b's contrast, not observed.
 
 **Fix (policy `self-update-record-authoritative`).** When `SelfUpdate:DefaultPolicy` is SET in the
 configuration, the self-updater's seeding stage now also converges the EXISTING node's `policy` and

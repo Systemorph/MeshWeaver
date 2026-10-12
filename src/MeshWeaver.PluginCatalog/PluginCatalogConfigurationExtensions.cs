@@ -49,6 +49,11 @@ public static class PluginCatalogConfigurationExtensions
             // "Reboot this instance" — sync, land, roll, verify in one step; plus the instance's own
             // wedge watchdog (Doc/Architecture/InstanceReboot).
             .AddInstanceReboot()
+            // Each installed package's own partition counts for action-handler rules, read live
+            // from its install record (Doc/Architecture/ActionLinkContracts).
+            .ConfigureServices(services => services
+                .AddSingleton<MeshWeaver.ActionLinks.IActionHandlerRuleNamespaceSource,
+                    InstalledPackageActionHandlerRuleNamespaces>())
             // Infrastructure credential, never pickable content.
             .AddAutocompleteExcludedTypes(PluginRegistryCredentials.NodeType)
             // The registry's token signing key — infrastructure, never pickable content.
@@ -138,6 +143,13 @@ public static class PluginCatalogConfigurationExtensions
                 // the /api/instances/register endpoint. Mesh-scoped like everything above.
                 .AddSingleton<RegistrationKeyService>()
                 .AddSingleton<InstanceRegistrationClient>()
+                // The deployment configuration as an authorizing principal
+                // (deployment-config:{instance}): what PackageEntitlement verifies a commercial
+                // package named EXACTLY in InstallByDefault against. It captures the named entries
+                // and the instance id ONCE, here, from the options the host bound from its deployment
+                // configuration — never re-reading that mutable object. Mesh-scoped — the requirement
+                // closure the boot selection admits dies with the mesh.
+                .AddSingleton(sp => new DeploymentConfigAuthority(sp.GetService<PluginCatalogOptions>()))
                 // 🚨 THE ONE DEFAULT-INSTALL PATH. Two phases in one service, deliberately: phase 1
                 // auto-registers this installation at the configured registry when
                 // PluginCatalog:BootstrapKey is set and no instance key is stored yet, and phase 2

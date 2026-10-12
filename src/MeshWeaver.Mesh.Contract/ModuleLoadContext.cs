@@ -135,9 +135,9 @@ public sealed class ModuleLoadContext : AssemblyLoadContext, IPlatformLoadContex
         // The same candidates, in the same order, the default context's module hook probes
         // (ModuleNativeAssets, #1728) — so a module's runtimes/<rid>/native payload resolves the same
         // way whichever context it runs in.
-        foreach (var candidate in ModuleNativeAssets.CandidatePaths(
+        foreach (var candidate in ModuleNativeAssets.ExistingCandidatePaths(
                      Directory, unmanagedDllName, RuntimeInformation.RuntimeIdentifier))
-            if (File.Exists(candidate) && NativeLibrary.TryLoad(candidate, out var handle))
+            if (NativeLibrary.TryLoad(candidate, out var handle))
                 return handle;
         return IntPtr.Zero;
     }

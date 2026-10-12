@@ -168,15 +168,16 @@ def make_handler(state: Registry):
     return Handler
 
 
-def compose(state: Registry, out: Path) -> subprocess.CompletedProcess[str]:
+def compose(state: Registry, out: Path, packages: str = "AI Essentials",
+            upstreams: str = SOURCE) -> subprocess.CompletedProcess[str]:
     server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
         return subprocess.run(
             [str(SCRIPT),
-             "--identity", IDENTITY, "--packages", "AI Essentials",
-             "--upstreams", SOURCE, "--out", str(out),
+             "--identity", IDENTITY, "--packages", packages,
+             "--upstreams", upstreams, "--out", str(out),
              "--registry-url", f"http://127.0.0.1:{server.server_port}",
              "--registry-key", "mwi_stub"],
             capture_output=True, text=True, timeout=180, check=False)
@@ -334,8 +335,25 @@ def main() -> int:
         if "MeshWeaver#3401" not in proc.stdout + proc.stderr:
             fail("gate-storm", "the refusal must name itself so a pin-move PR is not blamed", proc)
 
-    print("sealed-publication reads: 6/6 cases pass — compose-sealed-modules.sh "
-          "(settled, resealed-once, reseal-storm, registry-without-generation) and "
+        # ── 6. CARRY FORWARD (MeshWeaver#3583): `--packages '*'` composes EVERY package the one
+        #       source sealed, read off its seal — the previous-epoch leg's whole own module set ──
+        out = Path(tmp, "carry-all"); out.mkdir()
+        state = Registry(reseals=0)
+        proc = compose(state, out, packages="*")
+        if proc.returncode != 0:
+            fail("carry-all", "'*' over one sealed source must compose its whole module set", proc)
+        if sorted(p.name for p in out.iterdir()) != sorted(MODULES):
+            fail("carry-all", f"'*' composed {[p.name for p in out.iterdir()]}, the seal lists {MODULES}", proc)
+        if state.if_match_seen != ["g1", "g1"]:
+            fail("carry-all", f"'*' must pin the generation exactly as a named list does: {state.if_match_seen}", proc)
+        # …and '*' across two sources is a union nobody sealed together: refused, nothing composed.
+        out = Path(tmp, "carry-two"); out.mkdir()
+        proc = compose(Registry(reseals=0), out, packages="*", upstreams=f"{SOURCE} other")
+        if proc.returncode != 2 or list(out.iterdir()):
+            fail("carry-two", "'*' over two sources must be refused as bad usage, composing nothing", proc)
+
+    print("sealed-publication reads: 8/8 cases pass — compose-sealed-modules.sh "
+          "(settled, resealed-once, reseal-storm, registry-without-generation, carry-all, carry-two) and "
           "node-repo-gate.yml's seed step (resealed-once, reseal-storm)")
     return 0
 

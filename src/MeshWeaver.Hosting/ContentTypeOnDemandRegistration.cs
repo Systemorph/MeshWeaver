@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Threading;
@@ -109,9 +110,12 @@ public sealed class ContentTypeOnDemandRegistration(ILogger<ContentTypeOnDemandR
                     .Read(path, mesh.JsonSerializerOptions)
                     .Take(1)
                     .Timeout(RecordReadBudget))
-            .Select(record => DynamicTypePreWarmer.DynamicTypesOf(
-                record is null ? [] : [record], mesh.JsonSerializerOptions, logger))
-            .SelectMany(types => DynamicContentTypeRegistrar.RegisterType(mesh, types, path, logger))
+            .SelectMany(record => NotADeclaration(record, mesh.JsonSerializerOptions) is { } occupant
+                ? Observable.Return(new ContentTypeRegistrationOutcome(path, ContentTypeRegistrationStatus.NotBaked, occupant))
+                : DynamicContentTypeRegistrar.RegisterType(
+                    mesh,
+                    DynamicTypePreWarmer.DynamicTypesOf(record is null ? [] : [record], mesh.JsonSerializerOptions, logger),
+                    path, logger))
             .Take(1)
             .DefaultIfEmpty(new ContentTypeRegistrationOutcome(
                 path, ContentTypeRegistrationStatus.Faulted, "the NodeType record read completed without an answer"))
@@ -133,4 +137,24 @@ public sealed class ContentTypeOnDemandRegistration(ILogger<ContentTypeOnDemandR
                         path, outcome.Status, elapsed, outcome.Detail ?? "-");
             });
     }
+
+    /// <summary>
+    /// 🚨 The occupant of a NodeType path that is PROVABLY not a declaration — the dangling-NodeType
+    /// collision (<c>Doc/Architecture/DanglingNodeTypes</c>, hole C; #6525) — as the sentence this
+    /// attempt's outcome carries, or null for anything that may be one.
+    ///
+    /// <para>A read asks for the type an instance NAMES, so the path can hold any node: a Store
+    /// plugin root sits at the bare <c>Feedback</c> while its NodeType lives at
+    /// <c>Feedback/Feedback</c>. That occupant is a normal input here, not a conversion fault, so it
+    /// is judged by the same one-sided predicate the write and activation boundaries use — which
+    /// converts WITHOUT a logger — and is never handed to <see cref="DynamicTypePreWarmer.DynamicTypesOf"/>,
+    /// whose logger reports an unconvertible NodeType record at Error (the right call for its own
+    /// <c>nodeType:NodeType</c> enumeration, and a subject-free false alarm for this one).</para>
+    /// </summary>
+    internal static string? NotADeclaration(MeshNode? record, System.Text.Json.JsonSerializerOptions options) =>
+        record is not null && NodeTypeDeclarationProbe.IsProvablyNotADeclaration(record, options)
+            ? NodeTypeDeclarationProbe.Describe(record)
+              + ", not a NodeType declaration — an instance naming this path as its type meets the "
+              + "dangling-NodeType collision (Doc/Architecture/DanglingNodeTypes); nothing to register from"
+            : null;
 }
