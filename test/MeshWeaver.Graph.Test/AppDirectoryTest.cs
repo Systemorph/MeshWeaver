@@ -133,14 +133,23 @@ public class AppDirectoryPureTest
     {
         var options = new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web);
         AppDirectory.ReadPerson(null, options).Should().BeNull();
-        AppDirectory.ReadPerson(new MeshNode("alice") { Name = "alice" }, options)
+        AppDirectory.ReadPerson(new MeshNode("acme") { NodeType = "Space", Name = "Acme Space" }, options)
+            .Should().BeNull("only a USER node names the person tile");
+        AppDirectory.PersonQuery("alice").Should().Be($"path:alice nodeType:{UserNodeType.NodeType}");
+        AppDirectory.ReadPerson(new MeshNode("carol") { NodeType = "User", Name = "Carol Roe", Icon = "content:me.png" }, options)!
+            .Icon.Should().Be(MeshNodeImageHelper.ResolveContentPath("content:me.png", "carol"))
+            .And.NotStartWith("content:", "the synthetic _Apps row would resolve a relative picture against itself");
+        AppDirectory.ReadPerson(new MeshNode("dave") { NodeType = "User", Name = "Dave Roe", Icon = "Person" }, options)!
+            .Icon.Should().BeNull("a Fluent icon name is no picture — the tile keeps the settings icon");
+        AppDirectory.ReadPerson(new MeshNode("alice") { NodeType = "User", Name = "alice" }, options)
             .Should().BeNull("a name that is just the id says nothing the plain tile does not");
         AppDirectory.ReadPerson(new MeshNode("alice")
         {
+            NodeType = "User",
             Name = "alice",
             Content = System.Text.Json.JsonSerializer.SerializeToElement(new { fullName = "Alice Muster", locale = "de" }),
         }, options).Should().Be(new PersonTile("Alice Muster", null, "de"));
-        AppDirectory.ReadPerson(new MeshNode("bob") { Name = "Bob Roe", Icon = "/pic.png" }, options)
+        AppDirectory.ReadPerson(new MeshNode("bob") { NodeType = "User", Name = "Bob Roe", Icon = "/pic.png" }, options)
             .Should().Be(new PersonTile("Bob Roe", "/pic.png", null));
         AppDirectory.Compose("alice", [], isGlobalAdmin: false, person: null)[0].LabelKey.Should().Be("common.settings");
     }
@@ -569,21 +578,13 @@ public class AppDirectoryTest(ITestOutputHelper output) : MonolithMeshTestBase(o
     }
 
     [Fact(Timeout = 60000)]
-    public async Task AnAbsentOwner_KeepsThePlainSettingsTile_AndNeverPointReadsTheMissingRoot()
+    public async Task AnAbsentOwner_KeepsThePlainSettingsTile()
     {
         var ct = TestContext.Current.CancellationToken;
         const string ghost = "dir-no-such-owner";
         var list = await Directory.Compute(ghost).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
         list[0].Id.Should().Be(AppDirectory.SettingsId);
         list[0].LabelKey.Should().Be("common.settings");
-
-        // The person read went through the empty-on-absent query and settled EMPTY — no point read
-        // of the absent root, so nothing tripped the stream cache's breaker for that path.
-        var cache = Mesh.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
-        var query = cache.GetQuery(AppDirectory.PersonQueryId(ghost));
-        Assert.True(query is not null, "the person tile reads the owner through its query, not a point read");
-        var rows = await query.FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
-        rows.Should().BeEmpty();
     }
 
     [Fact(Timeout = 60000)]

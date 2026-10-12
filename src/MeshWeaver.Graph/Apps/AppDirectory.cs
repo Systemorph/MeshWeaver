@@ -165,21 +165,29 @@ public sealed class AppDirectory
     /// <summary>The viewer's own user node, read as <see cref="PersonTile"/> — live, never blocking:
     /// it starts with <c>null</c> (the plain Settings tile) and re-emits when the name, the picture
     /// or the language changes.
-    /// <para>🚨 Read through an EMPTY-ON-ABSENT query (<see cref="PersonQuery"/>), never a point read:
-    /// the directory also serves System-backed <c>{owner}/_Apps</c> reads for arbitrary owners, and a
-    /// point read of an owner with no node answers NotFound and opens the stream cache's storm
-    /// breaker for that path — which a <c>Catch</c> would only hide. An absent owner is an empty
-    /// result here, i.e. the plain tile.</para></summary>
+    /// <para>🚨 EXISTENCE first, through an OWNED, empty-on-absent query (<see cref="PersonQuery"/>,
+    /// <see cref="IMeshQueryCore"/> — torn down with the viewer's directory slot, never a
+    /// process-resident cached query), and the authoritative node stream only once the node is
+    /// seen: the directory also serves System-backed <c>{owner}/_Apps</c> reads for arbitrary
+    /// owners, and a point read of an owner with no node answers NotFound and opens the stream
+    /// cache's storm breaker for that path. The same shape as
+    /// <see cref="LauncherArrangementSource.Observe"/>.</para></summary>
     private IObservable<PersonTile?> PersonOf(string viewer)
     {
-        // Resolved ONCE, on the caller's thread — never inside a long-lived selector (#2679).
-        var cache = hub.ServiceProvider.GetService<IMeshNodeStreamCache>();
-        if (cache is null || string.IsNullOrWhiteSpace(viewer))
+        if (string.IsNullOrWhiteSpace(viewer))
             return Observable.Return<PersonTile?>(null);
+        // Resolved ONCE, on the caller's thread — never inside a long-lived selector (#2679).
+        var core = hub.ServiceProvider.GetRequiredService<IMeshQueryCore>();
+        var cache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
         var options = hub.JsonSerializerOptions;
-        return cache.GetQuery(PersonQueryId(viewer), options, PersonQuery(viewer))
-            .Select(nodes => ReadPerson(
-                nodes.FirstOrDefault(n => string.Equals(n.Path, viewer, StringComparison.OrdinalIgnoreCase)), options))
+        var request = MeshQueryRequest.FromQuery(PersonQuery(viewer)) with { UserId = WellKnownUsers.System };
+        return LauncherArrangementSource.Fold(core.Query<MeshNode>(request, options))
+            .Select(nodes => nodes.ContainsKey(viewer))
+            .DistinctUntilChanged()
+            .Select(exists => exists
+                ? cache.GetStream(viewer, options).Select(node => ReadPerson(node, options))
+                : Observable.Return<PersonTile?>(null))
+            .Switch()
             .Catch<PersonTile?, Exception>(exception =>
             {
                 logger?.LogDebug(exception,
@@ -190,19 +198,18 @@ public sealed class AppDirectory
             .DistinctUntilChanged();
     }
 
-    /// <summary>The stable id of the person-tile query for <paramref name="viewer"/>.</summary>
-    public static string PersonQueryId(string viewer) => $"$person-tile:{viewer}";
-
-    /// <summary>The person-tile query: the viewer's own root by exact path — empty when no such node
-    /// exists, so an absent owner never becomes a NotFound point read. Pure.</summary>
-    public static string PersonQuery(string viewer) => $"path:{viewer}";
+    /// <summary>The person-tile existence query: the viewer's own root, narrowed to the User type —
+    /// empty when there is no such node, and never a Space or another root that happens to sit at
+    /// an owner path the directory is asked about. Pure.</summary>
+    public static string PersonQuery(string viewer) => $"path:{viewer} nodeType:{UserNodeType.NodeType}";
 
     /// <summary>The person tile's facts from a user node: the display name (the node's name, else
     /// <c>fullName</c>), the picture (the node's icon) and the language (<c>locale</c>). Null when
     /// the node carries no name at all. Pure.</summary>
     public static PersonTile? ReadPerson(MeshNode? node, JsonSerializerOptions options)
     {
-        if (node is null)
+        // Only a USER node names the person tile — a Space (or any other root) at the same path never does.
+        if (node is null || !string.Equals(node.NodeType, UserNodeType.NodeType, StringComparison.Ordinal))
             return null;
         var content = ElementOf(node, options);
         string? Text(string name) => content is { } c && Property(c, name) is { ValueKind: JsonValueKind.String } v
@@ -213,7 +220,12 @@ public sealed class AppDirectory
             : Text("fullName");
         if (string.IsNullOrWhiteSpace(name))
             return null;
-        return new PersonTile(name.Trim(), string.IsNullOrWhiteSpace(node.Icon) ? null : node.Icon, Text("locale"));
+        // The picture is resolved HERE, against the user node: an uploaded one is stored relative
+        // (`content:<file>`), and the tile is painted from a synthetic {viewer}/_Apps row, where a
+        // relative value would resolve against the wrong node. A Fluent icon NAME is no picture
+        // (null → the settings icon).
+        var picture = MeshNodeImageHelper.ResolveContentPath(node.Icon, node.Path);
+        return new PersonTile(name.Trim(), string.IsNullOrWhiteSpace(picture) ? null : picture, Text("locale"));
     }
 
     private IObservable<ImmutableList<AppRoot>> VisibleRoots(ImmutableList<AppRoot> roots, string viewer)
