@@ -10,7 +10,10 @@ namespace MeshWeaver.Messaging;
 /// metadata applied to a message as it is dispatched into the mesh. Immutable record — each
 /// <c>With…</c> method returns a new instance with the change applied.
 /// </summary>
-/// <param name="Sender">The address the message is sent from; also used as the identity when impersonating as a hub.</param>
+/// <param name="Sender">The address the message is sent from. It is always the hub that posts: the hub's
+/// message service stamps its own address over any other value set here, so a hub-side guard that decides by
+/// the sender of a delivery can rely on it (Systemorph/MeshWeaver#6553). Also the identity
+/// <c>ImpersonateAsHub()</c> installs.</param>
 public record PostOptions(Address Sender)
 {
     /// <summary>
@@ -46,6 +49,18 @@ public record PostOptions(Address Sender)
     public PostOptions AcceptingProgress() => WithProperty(AcceptsProgress, "true");
 
     internal Address Target { get; init; } = null!;
+
+    /// <summary>
+    /// Set ONLY by the hub infrastructure, never by a caller (the setter is <c>internal</c>): this post
+    /// FORWARDS a message on behalf of another hub, so its <c>Sender</c> is that hub's address and must reach
+    /// the receiver as written. Every other post is stamped with the address of the hub that posts it
+    /// (<c>MessageService.StampSender</c>), because a guard that decides by the sender of a delivery - the
+    /// stamped-field guard admits a write only from the owning hub - can only rely on a value the posting code
+    /// cannot choose (Systemorph/MeshWeaver#6553). The two forwards that set it are the teardown carriers in
+    /// <c>MessageService.PostImplGeneric</c>: a correlated reply, and an <c>IReleasesRemoteState</c> release, both
+    /// handed to the parent of a hub that is shutting down.
+    /// </summary>
+    internal bool ForwardsSender { get; init; }
 
     /// <summary>
     /// Arbitrary key/value metadata to attach to the outgoing message. Backed by an immutable
