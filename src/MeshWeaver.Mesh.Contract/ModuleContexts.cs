@@ -183,6 +183,17 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
             $"Module {module} holds no service scope in this mesh."))
         .Resolve(Root, index);
 
+    /// <summary>
+    /// The instance behind registration <paramref name="index"/> of <paramref name="module"/>'s CURRENT
+    /// generation, or null when there is none — read off ONE snapshot of that generation
+    /// (MeshWeaver#6557). A live uninstall or a boot withdrawal can remove and dispose the generation
+    /// at any moment; a check of <see cref="Current"/> followed by <see cref="ResolveModuleService"/>
+    /// reads it twice and faults when it went in between. Here the generation read once is the one
+    /// resolved, and its disposal — before or during the resolve — answers null: the member is absent.
+    /// </summary>
+    internal object? TryResolveCurrentModuleService(string module, int index) =>
+        Current(module)?.Services is { } services ? services.TryResolve(Root, index) : null;
+
     /// <summary>The scope of <paramref name="module"/>'s CURRENT generation.</summary>
     public IServiceProvider? ModuleScope(string module) =>
         Current(module)?.Services?.Scope(Root);
@@ -232,10 +243,31 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
     }
 
     private ImmutableList<IncompatibleModule> notBuilt = [];
+    private int publicationClaimed;
 
     /// <summary>The modules whose shared instances could not be built at boot, so were never published
-    /// — served as <see cref="IncompatibleModule"/> records by <see cref="ModuleOwnedRootSource"/>.</summary>
+    /// — served as <see cref="IncompatibleModule"/> records by the mesh's <see cref="InstalledModules"/>
+    /// registry, on every container kind (MeshWeaver#6557).</summary>
     internal ImmutableList<IncompatibleModule> NotBuilt => notBuilt;
+
+    /// <summary>Claims the ONE boot publication (<see cref="BuildAllBeforePublish"/>) for the caller;
+    /// false when somebody already claimed it. Whoever claims it runs it.</summary>
+    internal bool TryClaimPublication() => Interlocked.Exchange(ref publicationClaimed, 1) == 0;
+
+    /// <summary>
+    /// Runs the boot publication unless it was already claimed — what the registry's own singleton
+    /// registration calls on its first resolve (MeshWeaver#6557), so every host kind withdraws a module
+    /// whose shared instances cannot be built. The Autofac root claims it earlier, outside any lock
+    /// (<see cref="MeshWeaver.ServiceProvider.IRootContainerBuilt"/>); a host built with plain MS DI
+    /// <c>BuildServiceProvider()</c> reaches it here, at the first read of the registry. Claimed BEFORE it
+    /// runs, so a resolve of the registry from inside a constructor it builds does not run it again.
+    /// </summary>
+    internal ModuleContexts PublishOnce()
+    {
+        if (TryClaimPublication())
+            BuildAllBeforePublish();
+        return this;
+    }
 
     /// <summary>
     /// 🚨 <b>Built before published, at boot</b> (MeshWeaver#6542): called once the root container is
