@@ -1,4 +1,5 @@
 ﻿using System.Reactive;
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -25,6 +26,40 @@ public sealed class StaleStreamStateException : InvalidOperationException
     /// </summary>
     /// <param name="message">A message describing the drift that was detected.</param>
     public StaleStreamStateException(string message) : base(message) { }
+}
+
+/// <summary>
+/// The terminal a subscriber's sync stream ends with when it has stopped re-asking its owner:
+/// the owner refused the stream more often than the recycle re-arm budget allows, or one dying
+/// activation kept refusing it past the ride-out budget.
+///
+/// <para>🚨 Why the give-up is a TERMINAL and not a log line (#5011, #6602). The give-up used to
+/// disarm the re-ask and leave the stream ALIVE on its last value. A reader then held a frozen
+/// snapshot that rendered exactly like a live one — no error, no completion, nothing for its own
+/// recovery to react to — which is how the fleet watch read <c>Ops/Status/*</c> as current while
+/// nothing reached it any more. Ending the stream hands the decision to the reader, which owns the
+/// signal for when to read again (the node's next write, a new listing frame); the cache evicts the
+/// faulted entry so that next read opens a fresh subscription.</para>
+/// </summary>
+public sealed class SyncStreamOwnerRefusedException : InvalidOperationException
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="SyncStreamOwnerRefusedException"/> class.
+    /// </summary>
+    /// <param name="streamId">The subscriber-side stream id.</param>
+    /// <param name="owner">The owner address that refused the stream.</param>
+    /// <param name="message">What was observed: how many activations refused, and how often.</param>
+    public SyncStreamOwnerRefusedException(string streamId, string owner, string message) : base(message)
+    {
+        StreamId = streamId;
+        Owner = owner;
+    }
+
+    /// <summary>The subscriber-side stream id.</summary>
+    public string StreamId { get; }
+
+    /// <summary>The owner address that refused the stream.</summary>
+    public string Owner { get; }
 }
 
 /// <summary>
@@ -682,12 +717,15 @@ public static class JsonSynchronizationStream
                         logger.LogDebug(
                             "Stream {StreamId}: owner {Owner} ended the server-side subscription — re-asking once its teardown settles.",
                             reduced.StreamId, owner);
-                        // No activation identity on this carrier — the owner ANNOUNCED the end
-                        // rather than NACKing, so there is no NACK text to read one from. A null
-                        // tag is treated as "a distinct activation" by the budget below, i.e.
-                        // exactly the pre-#2986 accounting: never guessed, never free.
+                        // The announcing activation rides on the event (#6602). Before it did, an
+                        // owner's ONE teardown was charged twice — once for its announcement (no
+                        // identity, so "distinct"), once for the NACK of the re-ask it raced —
+                        // and two settling recycles in a roll spent the whole budget. An owner on
+                        // an older image still sends none: null is treated as "a distinct
+                        // activation", i.e. exactly the pre-#2986 accounting, never guessed.
                         rejectedByRecycle.OnNext(new RecycleRejection(
-                            "ended our server-side subscription", null));
+                            "ended our server-side subscription",
+                            string.IsNullOrEmpty(delivery.Message.Activation) ? null : delivery.Message.Activation));
                         return delivery.Processed();
                     },
                     d => reduced.StreamId.Equals(d.Message.StreamId)
@@ -746,6 +784,11 @@ public static class JsonSynchronizationStream
             // streams or tests. Reset by the success arm exactly like recycleReArms.
             string? lastRejectingActivation = null;
             var sameActivationReAsks = 0;
+            // Every activation that has refused this stream since the owner last ANSWERED a re-ask
+            // (#6602). The budget counts members of this set, not changes of "the previous one":
+            // a NACK and an announcement from one teardown can arrive interleaved with another
+            // carrier's, and an A, B, A sequence is still two activations, not three.
+            var refusingActivations = ImmutableHashSet<string>.Empty;
             // One-shot: the give-up is announced once, not once per later rejection. The change-feed
             // latch can keep calling Resubscribe after the budgets are spent, and a Warning per
             // rejection would turn one diagnosis into log noise.
@@ -815,6 +858,8 @@ public static class JsonSynchronizationStream
                                 // the teardown we were riding out, so the next one starts fresh.
                                 Interlocked.Exchange(ref sameActivationReAsks, 0);
                                 Volatile.Write(ref lastRejectingActivation, null);
+                                Volatile.Write(ref refusingActivations,
+                                    ImmutableHashSet<string>.Empty);
                                 // …and re-arm the announcement with the latch. A stream that
                                 // recovered and later gives up again has given up TWICE, and the
                                 // second time is as much a diagnosis as the first.
@@ -976,11 +1021,18 @@ public static class JsonSynchronizationStream
             {
                 var activation = rejection.Activation;
                 var previous = Volatile.Read(ref lastRejectingActivation);
-                // A rejection with NO activation identity (the StreamEndedEvent carrier, or a NACK
+                // A rejection with NO activation identity (an owner on an older image, or a NACK
                 // site that embeds none) is never assumed to be the same corpse: it charges the
-                // activation budget, exactly as every rejection did before #2986.
-                var sameActivation = activation is not null && activation == previous;
+                // activation budget, exactly as every rejection did before #2986. A tagged one is
+                // the same corpse when THIS stream has already been refused by it since the last
+                // answer (#6602) — not only when it was the immediately previous refuser, because
+                // one teardown's NACK and its announcement can interleave with another carrier's.
+                var sameActivation = activation is not null
+                                     && (activation == previous
+                                         || Volatile.Read(ref refusingActivations).Contains(activation));
                 Volatile.Write(ref lastRejectingActivation, activation);
+                if (activation is not null)
+                    ImmutableInterlocked.Update(ref refusingActivations, set => set.Add(activation));
 
                 // 🚨 The give-up lines report the OBSERVED counts, never the budget constants.
                 // A triage line whose number is a compile-time constant tells the reader nothing
@@ -994,29 +1046,45 @@ public static class JsonSynchronizationStream
                     var distinctActivations = Interlocked.Increment(ref recycleReArms);
                     if (distinctActivations <= MaxRecycleReArms)
                         return new ReArmDecision(rejection, RidingOutSameActivation: false);
-                    if (Interlocked.Exchange(ref gaveUp, 1) == 0)
-                        logger.LogWarning(
-                            "Stream {StreamId}: giving up on owner {Owner} — {DistinctActivations} DISTINCT "
-                            + "owner activations have refused this stream (budget {Budget}). The address is "
-                            + "recycling in a LOOP, not settling: each successor dies before it can answer. "
-                            + "Readers of this stream will now time out; the fix is at whatever is "
-                            + "requesting the recycles, not here.",
-                            reduced.StreamId, owner, distinctActivations, MaxRecycleReArms);
+                    GiveUp(
+                        "Stream {0}: giving up on owner {1} — {2} DISTINCT owner activations have refused "
+                        + "this stream (budget {3}). The address is recycling in a LOOP, not settling: each "
+                        + "successor dies before it can answer. The stream now ENDS with this error so its "
+                        + "readers can re-read; the fix is at whatever is requesting the recycles, not here.",
+                        distinctActivations, MaxRecycleReArms, activation);
                     return null;
                 }
 
                 var attemptsAtThisActivation = Interlocked.Increment(ref sameActivationReAsks);
                 if (attemptsAtThisActivation <= MaxSameActivationReAsks)
                     return new ReArmDecision(rejection, RidingOutSameActivation: true);
-                if (Interlocked.Exchange(ref gaveUp, 1) == 0)
-                    logger.LogWarning(
-                        "Stream {StreamId}: giving up on owner {Owner} — the SAME activation #{Activation} "
-                        + "has refused {Attempts} re-subscribes as ShuttingDown (budget {Budget}) without "
-                        + "ever releasing the address. That is ONE WEDGED TEARDOWN at the owner, not a "
-                        + "recycle loop and not a slow reader: readers of this stream will now time out "
-                        + "with nothing to show for it. Look at that hub's disposal.",
-                        reduced.StreamId, owner, activation, attemptsAtThisActivation, MaxSameActivationReAsks);
+                GiveUp(
+                    "Stream {0}: giving up on owner {1} — the SAME activation #{4} has refused {2} "
+                    + "re-subscribes as ShuttingDown (budget {3}) without ever releasing the address. That "
+                    + "is ONE WEDGED TEARDOWN at the owner, not a recycle loop and not a slow reader. The "
+                    + "stream now ENDS with this error so its readers can re-read. Look at that hub's disposal.",
+                    attemptsAtThisActivation, MaxSameActivationReAsks, activation);
                 return null;
+            }
+
+            // 🚨 THE GIVE-UP IS A TERMINAL (#6602, #5011). It used to disarm the re-ask and leave the
+            // stream alive on its last value — "the pre-existing orphaned-stream behaviour" — so a
+            // reader held a frozen snapshot that rendered exactly like a live one and its own recovery
+            // never ran: no error, no completion, nothing to react to. Measured on memex-cloud during
+            // rolls, on Hosting/PlatformBuilds, Hosting/Modules and Ops/Status/*. Now it ends the
+            // stream the same way an owner VERDICT does above (OnError + stop the keep-alive): the
+            // reader decides when to read again, on its own signal, and the cache evicts the faulted
+            // entry so that read opens a fresh subscription. Still not a retry here — the stream stops
+            // asking; it just says so to the people holding it. Logged and raised ONCE.
+            void GiveUp(string template, int observed, int budget, string? activation)
+            {
+                if (Interlocked.Exchange(ref gaveUp, 1) != 0)
+                    return;
+                var text = string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                    template, reduced.StreamId, owner, observed, budget, activation ?? "(unknown)");
+                logger.LogWarning("{GiveUp}", text);
+                reduced.OnError(new SyncStreamOwnerRefusedException(reduced.StreamId, owner.ToString(), text));
+                keepAlive.Dispose();
             }
 
             // The wait a rejection buys. Deferred, so the probe is taken when this attempt is
@@ -1775,7 +1843,7 @@ public static class JsonSynchronizationStream
             }
             try
             {
-                hub.Post(new StreamEndedEvent(request.StreamId),
+                hub.Post(new StreamEndedEvent(request.StreamId) { Activation = ShutdownNack.ActivationToken(hub) },
                     o => o.WithTarget(request.Subscriber));
             }
             catch (Exception ex)
