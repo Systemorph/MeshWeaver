@@ -17,6 +17,15 @@ public sealed record InboxSection(string Band, string Source, int Order, string 
 
     /// <summary>The catalog key of a provider band's display name, when the provider gave one.</summary>
     public string? BandLabelKey { get; init; }
+
+    /// <summary>Whether every row this leg brings is unread (<see cref="InboxQueryLeg.Unread"/>).</summary>
+    public bool Unread { get; init; }
+
+    /// <summary>Whether the source is shown before the viewer touches its switch.</summary>
+    public bool ShownByDefault { get; init; } = true;
+
+    /// <summary>The source's symbol (<see cref="InboxQueryLeg.SourceIcon"/>), or empty.</summary>
+    public string SourceIcon { get; init; } = string.Empty;
 }
 
 /// <summary>
@@ -55,6 +64,18 @@ public sealed record InboxRow
     /// <summary>The same instant as a sortable UTC stamp — the row order, never shown.</summary>
     public string Stamp { get; init; } = string.Empty;
 
+    /// <summary>The source's symbol, shown before the title.</summary>
+    public string SourceIcon { get; init; } = string.Empty;
+
+    /// <summary>Whether the item is unread — the row is shown bold.</summary>
+    public bool Unread { get; init; }
+
+    /// <summary>
+    /// The row's CSS class — <see cref="InboxRows.UnreadClass"/> for an unread item, else empty. The
+    /// grid applies it per row (<c>DataGridControl.WithRowClassProperty</c>).
+    /// </summary>
+    public string RowClass { get; init; } = string.Empty;
+
     /// <summary>
     /// Why the row cannot be selected, or empty when it can — the grid renders a disabled checkbox
     /// with this as its tooltip.
@@ -70,16 +91,16 @@ public sealed record InboxUndoItem(string Path, string NodeType);
 /// <summary>
 /// The orderings the inbox offers — a CLOSED set, owned by the page: the select lists exactly
 /// <see cref="All"/>, and no package adds one. String constants only because the chosen one is
-/// STORED in the page's data section and bound to the select. A stored value outside the set (one a
-/// later version retired) is read as <see cref="Importance"/>, so a stale preference can never hide
-/// what needs the viewer behind what merely happened last.
+/// STORED in the page's data section and bound to the select. The default is <see cref="Newest"/> —
+/// everything by date, as a mail client lists it; a stored value outside the set (one a later
+/// version retired) reads as that default.
 /// </summary>
 public static class InboxOrder
 {
-    /// <summary>What needs the viewer first, then what is running, then what finished — newest first within each. The default.</summary>
+    /// <summary>What needs the viewer first, then what is running, then what finished — newest first within each.</summary>
     public const string Importance = "Importance";
 
-    /// <summary>Newest change first, whatever the band.</summary>
+    /// <summary>Newest change first, whatever the band. The default.</summary>
     public const string Newest = "Newest";
 
     /// <summary>Oldest change first.</summary>
@@ -106,7 +127,7 @@ public sealed record InboxFilter
     public string Search { get; init; } = string.Empty;
 
     /// <summary>An <see cref="InboxOrder"/> constant.</summary>
-    public string Order { get; init; } = InboxOrder.Importance;
+    public string Order { get; init; } = InboxOrder.Newest;
 
     /// <summary>
     /// Which sources are shown, by <see cref="InboxRows.SourceKey"/>. A source with no entry is
@@ -120,6 +141,15 @@ public static class InboxRows
 {
     /// <summary>The row property that keys a row (camelCase, as serialized).</summary>
     public const string KeyProperty = "path";
+
+    /// <summary>The row property that carries the source's symbol.</summary>
+    public const string SourceIconProperty = "sourceIcon";
+
+    /// <summary>The row property that carries the row's CSS class.</summary>
+    public const string RowClassProperty = "rowClass";
+
+    /// <summary>The CSS class of an unread row — bold, as a mail client shows new mail.</summary>
+    public const string UnreadClass = "inbox-unread";
 
     /// <summary>The row property that carries why a row is not selectable.</summary>
     public const string BlockedReasonProperty = "blockedReason";
@@ -184,6 +214,9 @@ public static class InboxRows
                 .ToString("g", culture ?? CultureInfo.InvariantCulture),
             Stamp = node.LastModified.UtcDateTime.ToString("O", CultureInfo.InvariantCulture),
             BlockedReason = blockedReason ?? string.Empty,
+            SourceIcon = section.SourceIcon,
+            Unread = section.Unread,
+            RowClass = section.Unread ? UnreadClass : string.Empty,
         };
 
     /// <summary>
@@ -213,7 +246,7 @@ public static class InboxRows
         var shown = rows.Where(row => !filter.Sources.TryGetValue(SourceKey(row.SourceId), out var on) || on);
         var ordered = filter.Order switch
         {
-            InboxOrder.Newest => shown.OrderByDescending(r => r.Stamp, StringComparer.Ordinal),
+            InboxOrder.Importance => shown.OrderBy(r => r.Rank).ThenByDescending(r => r.Stamp, StringComparer.Ordinal),
             InboxOrder.Oldest => shown.OrderBy(r => r.Stamp, StringComparer.Ordinal),
             InboxOrder.Title => shown.OrderBy(r => r.Title, text)
                 .ThenByDescending(r => r.Stamp, StringComparer.Ordinal),
@@ -222,9 +255,8 @@ public static class InboxRows
             InboxOrder.Source => shown.OrderBy(r => r.Source, text)
                 .ThenBy(r => r.SourceId, StringComparer.Ordinal)
                 .ThenByDescending(r => r.Stamp, StringComparer.Ordinal),
-            // Importance — and anything unrecognised: an unknown stored order must never hide what
-            // needs the viewer behind what merely happened last.
-            _ => shown.OrderBy(r => r.Rank).ThenByDescending(r => r.Stamp, StringComparer.Ordinal),
+            // Newest — the default, and what anything unrecognised reads as: everything by date.
+            _ => shown.OrderByDescending(r => r.Stamp, StringComparer.Ordinal),
         };
         return ordered.ThenBy(r => r.Path, StringComparer.Ordinal).ToImmutableList();
     }
