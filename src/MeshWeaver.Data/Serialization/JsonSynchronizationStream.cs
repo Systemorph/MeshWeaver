@@ -128,6 +128,9 @@ public static class JsonSynchronizationStream
             // so the claim can never be wrong: whatever version of this code posts the subscribe is
             // the version that folds the frames.
             AcceptsStringSplice = true,
+            // Same argument, same assembly: RouteStreamMessage (MeshWeaver.Data) is what splits a
+            // coalesced recycle announcement back into one end per stream (#5532).
+            AcceptsCoalescedStreamEnd = true,
         };
 
     /// <summary>
@@ -1813,7 +1816,8 @@ public static class JsonSynchronizationStream
         // AFTER the outbound forwarding subscription exists, so a re-assert can never find a
         // stream that has no way to reach the subscriber. Unregisters itself on disposal.
         (workspace as Workspace)?.RegisterClientSubscription(
-            request.Subscriber, request.StreamId, request.Reference, reduced);
+            request.Subscriber, request.StreamId, request.Reference, reduced,
+            request.AcceptsCoalescedStreamEnd);
 
         // 🚨 A FRESH stream acks IMMEDIATELY, and the asymmetry with the re-assert path above is
         // deliberate (#3058). This subscribe has no answer to overtake — the stream was just built
