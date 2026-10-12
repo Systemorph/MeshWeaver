@@ -127,6 +127,8 @@ public static class MeshExtensions
         // same short name on every hub that carries one; unregistered, a receiving hub resolves it
         // as an untyped JsonElement and the staged write silently reads nothing.
         config.TypeRegistry.WithType(typeof(StagedContentFile), nameof(StagedContentFile));
+        // The upload write — decided and committed on the owning node's hub (#6585).
+        config.TypeRegistry.WithType(typeof(SaveContentFileRequest), nameof(SaveContentFileRequest));
         config.TypeRegistry.WithType(typeof(DeleteContentRequest), nameof(DeleteContentRequest));
         config.TypeRegistry.WithType(typeof(DeleteContentResponse), nameof(DeleteContentResponse));
 

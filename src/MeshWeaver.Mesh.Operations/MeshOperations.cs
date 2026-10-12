@@ -2890,15 +2890,15 @@ public partial class MeshOperations
             var qualifiedCollectionName = $"{resolution.Prefix}/{collectionName}";
 
             // 🚨 AN UPLOAD IS A WRITE, so it is authorized as one — Update on the node that owns the
-            // collection, the permission every content edit of that node requires. The collection
-            // lookup below is gated on Read only, and the save itself runs on THIS hub's content
-            // service straight into the collection's storage — no owner gate sees it. Without this
-            // pre-flight a caller holding Read alone wrote files into the node's content. Asked for
-            // the caller captured at entry, fail-closed on every non-granted verdict.
+            // collection, the permission every content edit of that node requires. This pre-flight
+            // is the EARLY answer (it names the missing permission, and spares staging bytes for a
+            // caller who will be refused); the decision that admits the write is the owning hub's
+            // gate on the delivery that carries the bytes (SaveUpload, #6585). Asked for the caller
+            // captured at entry, fail-closed on every non-granted verdict.
             return AuthorizeUpload(resolution.Prefix, resolvedPath, caller)
                 .SelectMany(refusal => refusal is not null
                     ? Observable.Return(refusal)
-                    : SaveUpload(resolution, collectionName, filePath, targetAddress, qualifiedCollectionName, bytes, caller));
+                    : SaveUpload(resolution, resolvedPath, collectionName, filePath, targetAddress, qualifiedCollectionName, bytes, caller));
         })
         .Catch((Exception ex) =>
         {
@@ -2947,12 +2947,13 @@ public partial class MeshOperations
         => $"Error: no matching node for path '{resolvedPath}'";
 
     /// <summary>
-    /// The authorized half of <see cref="Upload"/>: looks the collection up on the owning node hub
-    /// and saves the bytes into it. Reached only after <see cref="AuthorizeUpload"/> granted.
+    /// The write half of <see cref="Upload"/>: looks the collection up on the owning node hub and
+    /// posts the bytes to THAT hub, which decides Update for the caller and writes them. Reached only
+    /// after <see cref="AuthorizeUpload"/> granted, but not admitted by it (#6585).
     /// </summary>
     private IObservable<string> SaveUpload(
-        AddressResolution resolution, string collectionName, string filePath, Address targetAddress,
-        string qualifiedCollectionName, byte[] bytes, AccessContext caller)
+        AddressResolution resolution, string resolvedPath, string collectionName, string filePath,
+        Address targetAddress, string qualifiedCollectionName, byte[] bytes, AccessContext caller)
     {
             // Ask the owning node hub for its collection config — exact same mechanism
             // the static GET endpoint uses (see BlazorHostingExtensions.ResolveStatic).
@@ -2999,38 +3000,57 @@ public partial class MeshOperations
                     if (contentService == null)
                         return Observable.Return("Error: content service not configured on the hub.");
 
+                    // Registered here only so the post-upload observers can read the file under the
+                    // qualified name — this hub never WRITES through it.
                     contentService.AddConfiguration(collectionConfig);
-                    // Pure composition — the save leaf runs on the collection's own IIoPool.
-                    return contentService.GetCollection(qualifiedCollectionName)
-                        .SelectMany(collection =>
+                    // 🚨 THE WRITE IS DECIDED WHERE IT IS COMMITTED (#6585). The bytes go to the
+                    // OWNING node's hub as the caller, and that hub's inbound gate evaluates Update
+                    // for the caller on the delivery that carries them — the gate every node write
+                    // passes. AuthorizeUpload above is an early answer only: a grant revoked after
+                    // it is refused here, and no path can store bytes without passing the owner.
+                    return hub.SaveContentFile(resolution.Prefix)
+                        .To(collectionName, filePath)
+                        .WithAccessContext(caller)
+                        .Post(bytes)
+                        .Catch((DeliveryFailureException refused) =>
+                            refused.Failure?.ErrorType == ErrorType.Unauthorized
+                                ? OwnerRefusal(resolution.Prefix, resolvedPath, caller)
+                                    .Select(message => ImportContentResponse.Fail(message))
+                                : Observable.Throw<ImportContentResponse>(refused))
+                        .Select(answer =>
                         {
-                            if (collection == null)
-                                return Observable.Return($"Error: failed to initialize collection '{qualifiedCollectionName}'.");
+                            if (!answer.Success)
+                                return answer.Error!.StartsWith("Error:", StringComparison.Ordinal)
+                                    ? answer.Error
+                                    : $"Error: {answer.Error}";
 
-                            var dir = Path.GetDirectoryName(filePath)?.Replace('\\', '/') ?? "";
-                            var fileName = Path.GetFileName(filePath);
-                            var ms = new MemoryStream(bytes);
-                            return collection.SaveFile(dir, fileName, ms)
-                                .Finally(ms.Dispose)
-                                .Select(_ =>
-                                {
-                                    // Post-upload seam: notify registered observers (e.g. the content-indexing
-                                    // pipeline) AFTER the save succeeds. Fire-and-forget — each observer starts its
-                                    // own off-band work (an Activity), so the upload response returns immediately
-                                    // and indexing never runs inline on this continuation. No-op when no
-                                    // observer is registered; ContentCollections itself takes no indexing/AI/pg dep.
-                                    hub.RaiseContentUploaded(qualifiedCollectionName, filePath);
+                            // Post-upload seam: notify registered observers (e.g. the content-indexing
+                            // pipeline) AFTER the save succeeds. Fire-and-forget — each observer starts its
+                            // own off-band work (an Activity), so the upload response returns immediately
+                            // and indexing never runs inline on this continuation. No-op when no
+                            // observer is registered; ContentCollections itself takes no indexing/AI/pg dep.
+                            hub.RaiseContentUploaded(qualifiedCollectionName, filePath);
 
-                                    return ToolAnswerJson.Serialize(new
-                                    {
-                                        status = "Uploaded",
-                                        path = $"{resolution.Prefix}/{collectionName}/{filePath}",
-                                        bytes = bytes.Length,
-                                    }, hub.JsonSerializerOptions);
-                                });
+                            return ToolAnswerJson.Serialize(new
+                            {
+                                status = "Uploaded",
+                                path = $"{resolution.Prefix}/{collectionName}/{filePath}",
+                                bytes = bytes.Length,
+                            }, hub.JsonSerializerOptions);
                         });
                 });
     }
+
+    /// <summary>
+    /// The answer for a write the OWNING hub's gate refused (#6585) — the caller's grant was revoked
+    /// after <see cref="AuthorizeUpload"/> admitted it, or it never held one. Re-asked for the caller
+    /// now, so it reads exactly as the pre-flight's refusal would (a non-reader gets the absent-path
+    /// answer); should the re-ask grant (the grant came back), the refusal still stands, named plainly.
+    /// </summary>
+    private IObservable<string> OwnerRefusal(string nodePath, string resolvedPath, AccessContext caller)
+        => AuthorizeUpload(nodePath, resolvedPath, caller)
+            .Select(refusal => refusal
+                ?? $"Error: Access denied: the write to '{nodePath}' was refused by the node. Nothing was written.");
 
     /// <summary>
     /// Lists a content collection directory — the read half of the file browser. Path shape is

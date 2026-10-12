@@ -233,6 +233,34 @@ public sealed class SyncContentFilesPermissionAttribute() : RequiresPermissionAt
 }
 
 /// <summary>
+/// Writes ONE file into a node's editable content collection — the upload write (MCP <c>upload</c>,
+/// <c>POST /api/mesh/upload</c>). Posted to the OWNING node's hub, AS THE CALLER, and written there.
+///
+/// <para>🚨 <b>The authorization is evaluated where the bytes are committed.</b> The owning hub's
+/// inbound gate decides <see cref="Permission.Update"/> for the delivery's identity on the node's
+/// path — the same gate (<c>AccessControlPipeline</c>, consulting the node type's access rule
+/// through <c>NodeTypeAccessRuleGate</c>) every other node write passes — and the handler that
+/// writes the bytes runs only on a delivery that passed it. A caller-side pre-flight cannot do
+/// that: the caller's grant can be revoked between its check and the save, and the save itself
+/// carried no authorization at all, so every path to the save had to remember to ask first.</para>
+///
+/// <para>Exactly one of <see cref="Content"/> (the bytes inline) and <see cref="Staged"/> (a handle
+/// to bytes already in the collection's reserved staging folder — a file too large for one
+/// delivery, see <c>Doc/Architecture/OutOfBandContentTransfer</c>) is set.</para>
+/// </summary>
+/// <param name="CollectionName">Name of the node's content collection (e.g. <c>content</c>).</param>
+/// <param name="FilePath">The file's collection-relative path (e.g. <c>images/logo.png</c>).</param>
+[RequiresPermission(Permission.Update)]
+public record SaveContentFileRequest(string CollectionName, string FilePath) : IRequest<ImportContentResponse>
+{
+    /// <summary>The file's bytes, when they travel inline.</summary>
+    public byte[]? Content { get; init; }
+
+    /// <summary>The staged blob carrying the file's bytes, when they travelled out of band.</summary>
+    public StagedContentFile? Staged { get; init; }
+}
+
+/// <summary>
 /// Request to delete content from a content collection folder.
 /// </summary>
 /// <param name="CollectionName">Name of the content collection</param>
