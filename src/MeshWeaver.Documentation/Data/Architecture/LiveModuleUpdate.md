@@ -253,6 +253,21 @@ end afterwards finds nothing to do (`ACallersModuleScopeEndsWithTheGenerationTes
 the platform-class road; its negative control resolves the same registration with no caller and gets
 the uninitialised-state throw.
 
+**A forwarder owns nothing it returns (MeshWeaver#6588).** Every root forwarder of a module's
+platform-typed service — `Current`, and `Proxy` at every lifetime — is a `NotOwnedServiceDescriptor`,
+which every container MeshWeaver builds registers **externally owned** (`PopulateMeshWeaver`). An
+ordinary factory registration is owned by the scope that resolves it, so the forwarder used to hand
+ownership of a module's instance to whoever asked: the first circuit to end disposed a module
+SINGLETON under every other user, and disposed a module SCOPED instance a second time after the module
+scope that circuit owned had already disposed it; a `Proxy` over an `IDisposable` interface forwarded
+the same disposal. Ownership stays where the instance was built — the generation's container for a
+singleton, the caller-owned module scope for a scoped one. The forwarder is registered at its own
+position in the collection while `Populate` walks it, so the default registration of a service and the
+order of an `IEnumerable` of it are unchanged (`ANotOwnedForwarderKeepsItsPositionTest`).
+`AModuleForwarderOwnsNothingItReturnsTest` measures one circuit ending on the test mesh, on an
+`IHostApplicationBuilder` host and on a legacy `IHostBuilder` host: the singleton serves the other
+circuit undisposed, each scoped instance (class and proxy route) is disposed exactly once.
+
 **Residual.** A caller-owned module scope has its own Autofac shared-instance lock. A first build of a
 caller-scoped ROOT service whose constructor resolves a module's scoped service (caller lock, then the
 module scope's), overlapping a first build of that module service whose constructor takes a

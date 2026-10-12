@@ -89,7 +89,7 @@ public static class ModuleServiceProvider
         Func<Type, IReadOnlyList<Func<ILifetimeScope?, object>>> registrationsElsewhere)
     {
         var builder = new ContainerBuilder();
-        builder.Populate(services);
+        builder.PopulateMeshWeaver(services);
         var callers = new ModuleCallerScopes();
         builder.RegisterInstance(callers).AsSelf().ExternallyOwned();
         if (root.GetService<ILifetimeScope>() is { } rootScope)

@@ -45,17 +45,17 @@ public static class ServiceProviderExtensions
                 throw new NotSupportedException("Mesh Weaver has not been properly configured.");
             else if (tag != null)
                 ret = new AutofacServiceProvider(
-                    lifetimeScope.BeginLifetimeScope(tag, c => c.Populate(services))
+                    lifetimeScope.BeginLifetimeScope(tag, c => c.PopulateMeshWeaver(services))
                 );
             else
                 ret = new AutofacServiceProvider(
-                    lifetimeScope.BeginLifetimeScope(c => c.Populate(services))
+                    lifetimeScope.BeginLifetimeScope(c => c.PopulateMeshWeaver(services))
                 );
         }
         else
         {
             var containerBuilder = new ContainerBuilder();
-            containerBuilder.Populate(services);
+            containerBuilder.PopulateMeshWeaver(services);
             // A ROOT container also takes every registration SOURCE registered as an instance — how a
             // mesh's module registry answers the types its modules declare (MeshWeaver.Mesh's
             // ModuleOwnedRootSource). Only the root: every hub's scope asks its way up to it.
