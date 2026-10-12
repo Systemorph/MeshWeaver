@@ -334,6 +334,11 @@ public partial class MeshOperations
         if (string.IsNullOrWhiteSpace(resolvedPath))
             return Observable.Return("Error: path is required.");
 
+        // 🚨 Captured HERE, on the caller's thread, and handed down to every read below — several of
+        // them run inside the continuation of an earlier response, where the ambient identity is
+        // the delivering thread's, not the caller's (MeshWeaver#6570).
+        var caller = CaptureCaller();
+
         // Handle children query (path/*) — Query emits a QueryResultChange whose
         // Initial change contains every matching child in a single batch. Take(1) completes
         // the stream as soon as the first snapshot arrives; no await, no FromAsync bridge.
@@ -363,7 +368,7 @@ public partial class MeshOperations
         // carries. Before this route existed, the path fell through to FetchNode on the
         // full "{path}/area/Name" string and always returned "Not found: …".
         if (TryParseAreaRoute(resolvedPath, out var areaNodePath, out var routeArea, out var routeAreaId))
-            return GetAreaRoute(resolvedPath, areaNodePath, routeArea, routeAreaId);
+            return GetAreaRoute(resolvedPath, areaNodePath, routeArea, routeAreaId, caller);
 
         // Image content files: return the AI description (the file's Document node) instead of the raw
         // bytes. When the file has been indexed its Document carries {Name, Summary}; otherwise fall
@@ -378,13 +383,13 @@ public partial class MeshOperations
             // fallback read below produces the real verdict (and will itself report unavailability
             // honestly if the mesh is degraded). Reporting "unavailable" here would replace a
             // perfectly good answer with an error.
-            return FetchNode(documentPath, timeoutSeconds: 3)
+            return FetchNode(documentPath, caller, timeoutSeconds: 3)
                 .SelectMany(doc => doc.Node is not null
                     ? Observable.Return(ToolAnswerJson.Serialize(doc.Node, hub.JsonSerializerOptions))
-                    : ReadNodeOrUnified(resolvedPath));
+                    : ReadNodeOrUnified(resolvedPath, caller));
         }
 
-        return ReadNodeOrUnified(resolvedPath);
+        return ReadNodeOrUnified(resolvedPath, caller);
     }
 
     /// <summary>
@@ -392,17 +397,18 @@ public partial class MeshOperations
     /// or falls back to an authoritative node read. Factored out of <see cref="Get"/> so the image
     /// branch can reuse it as its "no Document yet" fallback.
     /// </summary>
-    private IObservable<string> ReadNodeOrUnified(string resolvedPath)
+    private IObservable<string> ReadNodeOrUnified(string resolvedPath, AccessContext caller)
     {
-        // Capture the caller identity synchronously: the AccessContext AsyncLocal is cleared
-        // across .Subscribe hops, so read it now (Get runs under the caller's context) and thread
-        // it into the reactive chain for the User-PII read projection below.
-        var accessService = hub.ServiceProvider.GetService<AccessService>();
-        var caller = accessService?.Context ?? accessService?.CircuitContext;
+        // `caller` was captured by Get on the caller's thread: this method can itself run inside a
+        // continuation (the image branch's fallback), where the ambient identity is not the
+        // caller's. It decides both the node read's gate and the User-PII projection below.
 
         // Single-node content read via GetDataRequest + MeshNodeReference + hub.Observe(...).
         // See Doc/Architecture/CqrsAndContentAccess.md — queries are for sets only.
-        return TryResolveUnifiedPath(resolvedPath)
+        // 🚨 As the CALLER (ReadAs): the unified read posts its GetDataRequest when it is
+        // SUBSCRIBED, and the post carries the identity ambient at that moment — which, for an
+        // observable built by one principal and subscribed under another, is not the caller's.
+        return ReadAs(caller, () => TryResolveUnifiedPath(resolvedPath))
             .SelectMany(unified =>
             {
                 // A unified (UCR) interpretation that ERRORS may be shadowing a real node whose
@@ -417,7 +423,7 @@ public partial class MeshOperations
                 if (unified is not null && unifiedError is null)
                     return Observable.Return(unified);
 
-                return FetchNode(resolvedPath).SelectMany(outcome =>
+                return FetchNode(resolvedPath, caller).SelectMany(outcome =>
                 {
                     // 🚨 UNAVAILABLE ≠ absent (#974). The broken-NodeType fallback below ends in
                     // "Not found: {path}", so routing a stalled read into it would state, falsely
@@ -429,7 +435,7 @@ public partial class MeshOperations
                     if (node is null)
                         return unifiedError is not null
                             ? Observable.Return(unifiedError)
-                            : GetWithBrokenNodeTypeFallback(resolvedPath);
+                            : GetWithBrokenNodeTypeFallback(resolvedPath, caller);
                     // Redact PII (email) on a User node for a reader who is neither the subject
                     // nor a global admin — the User node is world-readable, so its content reaches
                     // every authenticated caller (issue #471). Non-User nodes pass through unchanged.
@@ -516,11 +522,15 @@ public partial class MeshOperations
     /// (code-authoring agents, MCP, UI overlays) can fix the source instead of seeing a
     /// generic "Not found".</para>
     /// </summary>
-    private IObservable<string> GetWithBrokenNodeTypeFallback(string resolvedPath)
+    private IObservable<string> GetWithBrokenNodeTypeFallback(string resolvedPath, AccessContext caller)
     {
         // Read the NodeType MeshNode directly — the snapshot carries the
         // CompilationError if compilation has failed at least once.
-        return hub.GetWorkspace().GetMeshNodeStream(resolvedPath)
+        // 🚨 As the CALLER (ReadAs): this runs inside FetchNode's continuation, where the ambient
+        // identity is not the caller's, and the stream cache's read gate takes its identity at
+        // subscribe time (MeshWeaver#6570). A denied read faults, the Catch below maps it to null,
+        // and the answer is the same "Not found" an absent node gets.
+        return ReadAs(caller, () => hub.GetWorkspace().GetMeshNodeStream(resolvedPath))
             .Where(n => n is not null)
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(5))
@@ -539,7 +549,7 @@ public partial class MeshOperations
                 // Live Query — first emission carries the snapshot; the catalog
                 // is the source of truth here (the per-node hub is broken by
                 // definition, so live content is unreachable).
-                return mesh.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{resolvedPath}"))
+                return ReadAs(caller, () => mesh.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{resolvedPath}")))
                     .Select(c => c.Items.FirstOrDefault())
                     .Select(qn => qn is null
                         ? $"Not found: {resolvedPath}"
@@ -851,8 +861,10 @@ public partial class MeshOperations
     /// error surfaces only when no such node exists.
     /// </summary>
     private IObservable<string> GetAreaRoute(
-        string fullPath, string nodePath, string? area, string? id) =>
-        RenderArea(nodePath, area, id)
+        string fullPath, string nodePath, string? area, string? id, AccessContext caller) =>
+        // 🚨 As the CALLER (ReadAs): RenderArea takes its identity when it is SUBSCRIBED, so a get
+        // built by one principal and subscribed under another would render as the subscriber.
+        ReadAs(caller, () => RenderArea(nodePath, area, id))
             .Catch((Exception ex) => Observable.Return($"Error: {ex.Message}"))
             .SelectMany(result =>
             {
@@ -862,7 +874,7 @@ public partial class MeshOperations
                 // Absent → keep the area's own error (it is the more specific answer). Unavailable
                 // → say so, rather than letting the area's "Not found: …" stand as if the node
                 // had been checked and found missing.
-                return FetchNode(fullPath).Select(outcome => outcome.IsUnavailable
+                return FetchNode(fullPath, caller).Select(outcome => outcome.IsUnavailable
                     ? UnavailableMessage(fullPath, outcome.UnavailableReason!)
                     : outcome.Node is null
                         ? result
@@ -948,6 +960,34 @@ public partial class MeshOperations
     }
 
     /// <summary>
+    /// The identity a caller-facing read is decided for, captured SYNCHRONOUSLY at the public
+    /// entry while the caller's <see cref="AccessService.Context"/> is still ambient — and then
+    /// handed down explicitly, never re-read later (MeshWeaver#6570: a re-read inside a response
+    /// continuation picked up the delivering thread's identity instead). An absent identity is
+    /// <see cref="WellKnownUsers.Anonymous"/>, never System — see the note in
+    /// <see cref="FetchNode"/>.
+    /// </summary>
+    private AccessContext CaptureCaller()
+    {
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        return accessService?.Context ?? accessService?.CircuitContext
+            ?? new AccessContext { ObjectId = WellKnownUsers.Anonymous, Name = "Anonymous", IsVirtual = true };
+    }
+
+    /// <summary>
+    /// Builds AND subscribes <paramref name="read"/> with <paramref name="caller"/> ambient, so a
+    /// read gate that takes its identity at subscribe time (the mesh-node stream cache, the query
+    /// row filter) decides for the caller even when this runs inside another read's continuation.
+    /// </summary>
+    private IObservable<T> ReadAs<T>(AccessContext caller, Func<IObservable<T>> read)
+        => Observable.Create<T>(observer =>
+        {
+            var accessService = hub.ServiceProvider.GetService<AccessService>();
+            using (accessService?.SwitchAccessContext(caller))
+                return read().Subscribe(observer);
+        });
+
+    /// <summary>
     /// One-shot read of the MeshNode at <paramref name="resolvedPath"/> via the
     /// owning per-node hub's <c>MeshNodeReference</c> reducer — the authoritative
     /// source of truth, no catalog lag. <c>GetDataRequest</c> activates the cold
@@ -962,7 +1002,7 @@ public partial class MeshOperations
     /// prevent; the budget below is the ONLY place that knows the read gave up, so it is the place
     /// that classifies.</para>
     /// </summary>
-    private IObservable<NodeReadOutcome> FetchNode(string resolvedPath, int timeoutSeconds = 10)
+    private IObservable<NodeReadOutcome> FetchNode(string resolvedPath, AccessContext caller, int timeoutSeconds = 10)
     {
         // 🚨 SECURITY: capture the caller's identity HERE, synchronously, while we are still on the
         // caller's execution context — and re-establish it around the subscribe below.
@@ -1000,8 +1040,15 @@ public partial class MeshOperations
         // user here means UNAUTHENTICATED, not infrastructure: fall back to Anonymous. That sees
         // public content and is denied gated content, exactly like a logged-out visitor — and it
         // leaves the global background-task fallback untouched.
-        var callerIdentity = accessService?.Context ?? accessService?.CircuitContext
-            ?? new AccessContext { ObjectId = WellKnownUsers.Anonymous, Name = "Anonymous", IsVirtual = true };
+        //
+        // 🚨 And the identity is the one the CALLER captured at its public entry, never "whatever is
+        // ambient now" (MeshWeaver#6570). A FetchNode reached inside a continuation — Get's fallback
+        // after a unified-path read, the area route's fallback after a render — runs on the thread
+        // that delivered the PREVIOUS response, and that thread's AccessContext is not the
+        // caller's: on a deployed portal it was a hub principal, which the read gate passes
+        // through, so a caller with no grant read AccessAssignment / Code / NodeType nodes under
+        // any path carrying a unified keyword (`…/Data/…`). See CaptureCaller.
+        var callerIdentity = caller;
 
         return Observable.Create<NodeReadOutcome>(observer =>
         {
@@ -1875,6 +1922,9 @@ public partial class MeshOperations
     {
         logger.LogInformation("Update called");
 
+        // The read-for-claim below runs when the Defer is subscribed; the identity is the caller's,
+        // captured now (MeshWeaver#6570).
+        var caller = CaptureCaller();
         return Observable.Defer(() =>
         {
             List<MeshNode>? nodeList;
@@ -1954,7 +2004,7 @@ public partial class MeshOperations
                 var claimRead = NamesSyncBehavior(
                         rawArray is not null && index < rawArray.Count ? rawArray[index] as JsonObject : null)
                     ? null
-                    : FetchNode(currentPath);
+                    : FetchNode(currentPath, caller);
                 // The caller's OWN intended field values (#2469 — see WaitForPatchApplied):
                 // restrict to the mutable surface (PatchableFields) so identity/audit fields
                 // (version, lastModified*, …) — which the OWNER re-stamps on apply and will
@@ -2052,8 +2102,7 @@ public partial class MeshOperations
         // when those callbacks eventually issue UpdateNode. Without this, an agent's System write
         // can arrive with no writer (or inherit another circuit user) even though the patch lands.
         var access = hub.ServiceProvider.GetService<AccessService>();
-        var caller = access?.Context ?? access?.CircuitContext
-            ?? new AccessContext { ObjectId = WellKnownUsers.Anonymous, Name = "Anonymous", IsVirtual = true };
+        var caller = CaptureCaller();
         return Observable.Defer(() =>
         {
             using var callerScope = access?.SwitchAccessContext(caller);
@@ -2086,7 +2135,7 @@ public partial class MeshOperations
             // Read-merge-write via DataChangeRequest. FetchNode returns null when the
             // path doesn't resolve (now with path-match verification so we don't
             // accidentally patch an ancestor hub).
-            return FetchNode(resolvedPath)
+            return FetchNode(resolvedPath, caller)
                 .CarryAccessContext(hub.ServiceProvider, caller)
                 .SelectMany(outcome =>
             {
@@ -2312,10 +2361,11 @@ public partial class MeshOperations
         if (oldText == newText)
             return Observable.Return("Error: oldText and newText are identical — nothing to change.");
 
+        var caller = CaptureCaller();
         return Observable.Defer(() =>
         {
             var resolvedPath = ResolvePath(path);
-            return FetchNode(resolvedPath).SelectMany(outcome =>
+            return FetchNode(resolvedPath, caller).SelectMany(outcome =>
             {
                 // Same read-before-write rule as Patch: a stall must never be reported as a
                 // missing node, because that steers the caller into creating a duplicate (#974).
@@ -4972,7 +5022,7 @@ public partial class MeshOperations
         // Diagnostics are read directly off the NodeType MeshNode — the
         // owner-driven status/error/timestamps live on NodeTypeDefinition,
         // populated by the per-NodeType hub's CompileWatcher.
-        return FetchNode(resolvedPath).SelectMany(outcome =>
+        return FetchNode(resolvedPath, CaptureCaller()).SelectMany(outcome =>
             {
                 // Diagnostics answer "what is wrong with this NodeType?". A read that reached no
                 // verdict must say so — the "Unknown / Not found" reply below would otherwise
@@ -6009,7 +6059,9 @@ public partial class MeshOperations
                 hub.JsonSerializerOptions));
 
         // Defer so the post happens on Subscribe — MeshOperations' documented cold-observable
-        // contract (hub.Observe posts eagerly when called).
+        // contract (hub.Observe posts eagerly when called). The pre-flight read is decided for the
+        // caller captured NOW, not for whoever is ambient at subscribe (MeshWeaver#6570).
+        var caller = CaptureCaller();
         return Observable.Defer(() =>
             // 🚨 PRE-FLIGHT (#2918). Whether this target can run a script at all is decidable HERE,
             // from one bounded read — so it is decided here, instead of being asked of a hub that
@@ -6031,7 +6083,7 @@ public partial class MeshOperations
             // CodeNodeType.HandleExecuteScript reaches on the owning hub — with the caller's own
             // budget as the ceiling, so the pre-flight can never cost more than the dispatch it
             // replaces.
-            FetchNode(resolvedPath, Math.Clamp(timeoutSeconds, 1, PreflightReadSeconds))
+            FetchNode(resolvedPath, caller, Math.Clamp(timeoutSeconds, 1, PreflightReadSeconds))
                 .SelectMany(outcome =>
                     DescribeUnrunnableTarget(outcome, resolvedPath) is { } refusal
                         ? Observable.Return(refusal)
