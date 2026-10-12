@@ -16,6 +16,7 @@ using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.SelfUpdate;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Persistence;
+using MeshWeaver.Mesh.Security;
 using Microsoft.Extensions.Logging;
 using OpenTelemetry;
 using OpenTelemetry.Metrics;
@@ -502,7 +503,15 @@ public static class ServiceDefaults
             // Admin/UpdatePolicy, behind authentication. Census-tagged (prints whatever its status),
             // no probe tag (a failing self-update costs delivery, never a reason to pull the pod).
             .AddCheck<SelfUpdateHealthCheck>(
-                SelfUpdateCheckCensus.HealthCheckName, tags: [ProbeEndpoints.CensusTag]);
+                SelfUpdateCheckCensus.HealthCheckName, tags: [ProbeEndpoints.CensusTag])
+            // Policy declared-not-derived: the build principals this deployment DECLARES in
+            // configuration. A declared principal is in no node, so nothing a reader can search
+            // names it; this entry does, in full. Census-tagged (prints whatever its status), no
+            // probe tag — a refused declaration costs a build a 401, never a reason to pull the pod.
+            .AddCheck(
+                DeclaredBuildPrincipals.HealthCheckName,
+                new BuildPrincipalHealthCheck(builder.Configuration),
+                tags: [ProbeEndpoints.CensusTag]);
 
         // 🚨 A roll gate holds READINESS only (policy bake-gate-readiness-only, #5544). The host
         // registers the NodeType bake gate by NAME, in another repository, and until this change it

@@ -331,13 +331,30 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
                     return unavailable;
 
                 var principal = Content<BuildPrincipal>(read.Node);
+                var principalPath = path;
+                if (read.Status == NodeReadStatus.Absent
+                    && BuildPrincipalConfiguration
+                        .Declared(hub.ServiceProvider.GetService<IConfiguration>())
+                        .Find(claims.Repository) is { } declared)
+                {
+                    // 🚨 DECLARED trust (policy declared-not-derived): no node exists for this
+                    // repository, and the deployment's configuration declares it. Consulted ONLY on
+                    // a definitive Absent — a node that is there decides, a revoke included, and an
+                    // unreadable node was already answered retryable above, because a revoking node
+                    // may be exactly what could not be read. Everything below (the repository
+                    // re-compare, IsActive, and every Allows at the endpoints) runs on the declared
+                    // principal unchanged.
+                    principal = declared.Principal;
+                    principalPath = declared.ConfigPath;
+                }
                 if (principal is null)
                 {
                     // The NORMAL negative: this mesh does not trust that repository. Definitive,
                     // so the endpoint answers 401.
                     logger.LogWarning(
                         "A verified GitHub Actions token for {Repository} has no build principal at "
-                        + "{Path} — refusing.", claims.Repository, path);
+                        + "{Path} and none declared in configuration — refusing.",
+                        claims.Repository, path);
                     return InstanceAuthResult.Resolved(null);
                 }
 
@@ -345,7 +362,7 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
                 {
                     logger.LogWarning(
                         "Build principal {Path} declares repository {Declared} but the token claims "
-                        + "{Claimed} — refusing.", path, principal.Repository, claims.Repository);
+                        + "{Claimed} — refusing.", principalPath, principal.Repository, claims.Repository);
                     return InstanceAuthResult.Resolved(null);
                 }
 
@@ -353,11 +370,12 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
                 {
                     logger.LogWarning(
                         "Build principal {Path} for {Repository} is revoked or out of term — refusing.",
-                        path, claims.Repository);
+                        principalPath, claims.Repository);
                     return InstanceAuthResult.Resolved(null);
                 }
 
-                return InstanceAuthResult.ResolvedBuild(new AuthenticatedBuild(principal, claims, path));
+                return InstanceAuthResult.ResolvedBuild(
+                    new AuthenticatedBuild(principal, claims, principalPath));
             }));
     }
 
@@ -677,7 +695,8 @@ public sealed record InstanceAuthResult
 /// </summary>
 /// <param name="Principal">The admin-owned rule the repository resolved to.</param>
 /// <param name="Claims">The verified token claims.</param>
-/// <param name="PrincipalPath">Where the rule was read from — for the log and the ledger.</param>
+/// <param name="PrincipalPath">Where the rule was read from — the node path, or the configuration
+/// path of a principal the deployment declares — for the log and the ledger.</param>
 public sealed record AuthenticatedBuild(
     BuildPrincipal Principal, GitHubBuildClaims Claims, string PrincipalPath)
 {
