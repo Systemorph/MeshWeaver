@@ -178,10 +178,18 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
 
     /// <summary>The instance behind forwarded registration <paramref name="index"/> of
     /// <paramref name="module"/>'s CURRENT generation — what every root forwarder resolves.</summary>
-    public object ResolveModuleService(string module, int index) =>
+    public object ResolveModuleService(string module, int index) => ResolveModuleService(module, index, null);
+
+    /// <summary>As <see cref="ResolveModuleService(string, int)"/>, for <paramref name="caller"/> — the
+    /// root-side scope resolving (a Blazor circuit's, a request's, a hub's), or null (MeshWeaver#6584,
+    /// <see cref="ModuleServices.Resolve(IServiceProvider, int, Autofac.ILifetimeScope?)"/>).</summary>
+    /// <param name="module">The module's entry-assembly name.</param>
+    /// <param name="index">The registration's index.</param>
+    /// <param name="caller">The root-side scope resolving, or null.</param>
+    public object ResolveModuleService(string module, int index, Autofac.ILifetimeScope? caller) =>
         (Current(module)?.Services ?? throw new InvalidOperationException(
             $"Module {module} holds no service scope in this mesh."))
-        .Resolve(Root, index);
+        .Resolve(Root, index, caller);
 
     /// <summary>The scope of <paramref name="module"/>'s CURRENT generation.</summary>
     public IServiceProvider? ModuleScope(string module) =>
@@ -198,11 +206,11 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
     internal IServiceProvider? ModuleScopeSeenFrom(string module, ModuleSwapStage? stage) =>
         (stage?.Get(module) ?? Current(module))?.Services?.Scope(Root);
 
-    /// <summary>As <see cref="ResolveModuleService"/>, seen from a container of <paramref name="stage"/>.</summary>
-    internal object ResolveModuleServiceSeenFrom(string module, int index, ModuleSwapStage? stage) =>
+    /// <summary>As <see cref="ResolveModuleService(string, int, Autofac.ILifetimeScope?)"/>, seen from a container of <paramref name="stage"/>.</summary>
+    internal object ResolveModuleServiceSeenFrom(string module, int index, ModuleSwapStage? stage, Autofac.ILifetimeScope? caller) =>
         ((stage?.Get(module) ?? Current(module))?.Services ?? throw new InvalidOperationException(
             $"Module {module} holds no service scope in this mesh."))
-        .Resolve(Root, index);
+        .Resolve(Root, index, caller);
 
     /// <summary>
     /// 🚨 <b>Built before published</b> (MeshWeaver#6542): builds every shared instance of
