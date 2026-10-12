@@ -237,6 +237,38 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
     /// — served as <see cref="IncompatibleModule"/> records by <see cref="ModuleOwnedRootSource"/>.</summary>
     internal ImmutableList<IncompatibleModule> NotBuilt => notBuilt;
 
+    // The modules this mesh installed from their own context, each with a WEAK reference to the generation that
+    // installed it - never the Assembly itself: a strong one would root generation N for as long as the registry
+    // lives (ModuleLiveSwapTest's collection assertion).
+    private ImmutableList<KeyValuePair<string, WeakReference<Assembly>>> installedHeld = [];
+
+    /// <summary>Records <paramref name="boot"/>, the generation of module <paramref name="name"/> this mesh
+    /// installed at boot, as an installed module - what <see cref="InstalledModuleAnswers"/> lists.</summary>
+    internal void RecordInstalled(string name, Assembly boot)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        ArgumentNullException.ThrowIfNull(boot);
+        var entry = new KeyValuePair<string, WeakReference<Assembly>>(name, new WeakReference<Assembly>(boot));
+        ImmutableInterlocked.Update(ref installedHeld, list => list.Add(entry));
+    }
+
+    /// <summary>
+    /// One answer per module this mesh installed from its own context and this registry STILL holds - derived from
+    /// the registry when the list is asked for, never laid out at install (MeshWeaver#6557). A module withdrawn at
+    /// boot (<see cref="BuildAllBeforePublish"/>) is not current, so it has no answer and is not an installed
+    /// module; it stays reported as an <see cref="IncompatibleModule"/>. Each answer is the module's CURRENT
+    /// generation, so a live swap is followed.
+    /// </summary>
+    internal IReadOnlyList<Func<object>> InstalledModuleAnswers() =>
+        installedHeld
+            .Where(entry => Current(entry.Key) is not null)
+            .Select(entry => (Func<object>)(() => new InstalledModuleAssembly(
+                Resolve(entry.Key)
+                ?? (entry.Value.TryGetTarget(out var original)
+                    ? original
+                    : throw new InvalidOperationException($"Module {entry.Key} is no longer held by this mesh's module registry.")))))
+            .ToArray();
+
     /// <summary>
     /// 🚨 <b>Built before published, at boot</b> (MeshWeaver#6542): called once the root container is
     /// built and before the provider is handed out (<see cref="MeshWeaver.ServiceProvider.IRootContainerBuilt"/>).
@@ -276,8 +308,11 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
         {
             withdrawn.Add(generation.Name);
             Uncommit(generation);
-            // Its singletons go with it; its context stays loaded — a dependent may already hold
+            // Its singletons go with it; its context is not unloaded here — a dependent may already hold
             // types from it, and unloading under it is the use-after-unload the leases exist for.
+            // Nothing keeps it loaded either: the registry no longer lists it, so it is collectable, and what
+            // answered for it from a reference kept at install time must be derived from the registry when
+            // asked (InstalledModuleAnswers, MeshWeaver#6557).
             generation.Services?.Dispose();
             var record = new IncompatibleModule(generation.Location, generation.Name,
                 $"its shared instances could not be built before it was published, so it was withdrawn: {why}", null);

@@ -233,8 +233,18 @@ and N's hosted services are never stopped (`ModuleRootServicesSwapTest`). At boo
 WITHDRAWN — no longer current, its container disposed — together with every module that depends on
 it, and each is reported as an `IncompatibleModule` (stderr, the log, and the records `/health` and the
 module-status surfaces read); the mesh boots without it
-(`AModuleWhoseSingletonCannotBeBuiltAtBootTest`, with its negative control). Its load context stays
-loaded until the restart: a dependent may already hold its types.
+(`AModuleWhoseSingletonCannotBeBuiltAtBootTest`, with its negative control). Its load context is not unloaded (a dependent may
+already hold its types), and nothing keeps it loaded either: the registry no longer lists it, so it is
+collectable. Whatever answers for it must be derived from the registry when asked, never kept from install
+time. `InstalledModuleAssembly` is: the root lists the modules that installed and are still current
+(`ModuleOwnedRootSource`, `ModuleContexts.InstalledModuleAnswers`), so a withdrawn module is absent from the
+compile reference set and the installed-module fingerprint and stays reported as an `IncompatibleModule`
+(`AWithdrawnModuleIsNotAnInstalledModuleTest`, control `AModuleThatBuildsIsStillAnInstalledModuleTest`). It was
+one transient registration per held module laid out at install, which a built container cannot drop: it
+answered the withdrawn generation until the garbage collector reclaimed it, then threw `Module X is no longer
+held by this mesh's module registry` — the boot pre-warm sweep on a memex pod refused readiness on it
+(MeshWeaver#6557). A registration source is asked once per service, so the list is fixed at its first ask —
+after `BuildAllBeforePublish`, unless a module constructor in that very build asks for it.
 
 **The cost:** module singletons are constructed at boot or at the swap instead of on first use, so
 their constructors' side effects — and their failures — move there.

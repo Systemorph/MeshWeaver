@@ -778,6 +778,11 @@ public partial record MeshBuilder
     /// references must follow a live swap (policy <c>module-live-update-default</c>), and a singleton
     /// would pin the boot generation for the life of the process. An image-bound module never changes
     /// and stays a singleton.
+    ///
+    /// <para>🚨 A held module is RECORDED here (<see cref="ModuleContexts.RecordInstalled"/>), not registered: the
+    /// root lists the ones the registry still holds when the list is asked for (<see cref="ModuleOwnedRootSource"/>).
+    /// A registration laid out here cannot be dropped from a built container, so one per module answered a module
+    /// withdrawn at boot until it was collected and then threw (MeshWeaver#6557).</para>
     /// </summary>
     private void RegisterInstalledModuleAssemblies(Assembly[] assemblies)
     {
@@ -785,20 +790,11 @@ public partial record MeshBuilder
         {
             var name = assembly.GetName().Name ?? "";
             if (ModuleContexts.Current(name) is { } held && ReferenceEquals(held.Assembly, assembly))
-                RegisterCurrentGeneration(ModuleContexts, name, new WeakReference<Assembly>(assembly));
+                ModuleContexts.RecordInstalled(name, assembly);
             else
                 RegisterImageBound(new InstalledModuleAssembly(assembly));
         }
     }
-
-    // Captures the registry, the name and a WEAK reference to the boot generation — never the
-    // Assembly itself, which would root generation N for as long as the container lives.
-    private void RegisterCurrentGeneration(ModuleContexts contexts, string name, WeakReference<Assembly> boot) =>
-        ConfigureServices(services => services.AddTransient(_ => new InstalledModuleAssembly(
-            contexts.Resolve(name)
-            ?? (boot.TryGetTarget(out var original)
-                ? original
-                : throw new InvalidOperationException($"Module {name} is no longer held by this mesh's module registry.")))));
 
     private void RegisterImageBound(InstalledModuleAssembly module) =>
         ConfigureServices(services => services.AddSingleton(module));

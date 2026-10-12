@@ -42,6 +42,16 @@ public sealed class ModuleOwnedRootSource(ModuleContexts contexts) : IRegistrati
                     .SingleInstance()
                     .CreateRegistration())
                 .ToArray();
+        // A module held in its own context that INSTALLED is an InstalledModuleAssembly, answered from the registry
+        // when the list is first asked for - so a module withdrawn at boot (above) is not in it (MeshWeaver#6557).
+        // Beside the image-bound modules' explicit singletons.
+        if (typed.ServiceType == typeof(InstalledModuleAssembly))
+        {
+            var installed = contexts.InstalledModuleAnswers();
+            return installed.Count == 0
+                ? []
+                : ModuleServiceProvider.StandIns(typeof(InstalledModuleAssembly), installed, registrationAccessor(service).Any());
+        }
         var resolvers = ModuleServices.RegistrationsElsewhere(contexts, null, typed.ServiceType);
         return resolvers.Count == 0
             ? []
