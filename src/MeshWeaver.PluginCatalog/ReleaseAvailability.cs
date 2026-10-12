@@ -215,14 +215,14 @@ public static class ReleaseAvailability
     {
         if (artifacts.ReadFailure is { Length: > 0 } failure)
             return $"the artifact catalogue for release {Describe(target)} could not be read "
-                   + $"({failure}) — cannot determine availability, which is not clearance to proceed";
+                   + $"({failure}) — cannot determine availability, which is never read as available";
         if (string.IsNullOrWhiteSpace(target.Version))
             return "no target release version was given — cannot determine availability, which is "
-                   + "not clearance to proceed";
+                   + "never read as available";
         if (string.IsNullOrWhiteSpace(target.FrameworkIdentity))
             return $"the framework identity of release {target.Version} is not resolvable — no "
                    + "content bake has been published for it, so nothing can be shown adoptable; "
-                   + "cannot determine availability, which is not clearance to proceed";
+                   + "cannot determine availability, which is never read as available";
         return null;
     }
 
@@ -270,7 +270,8 @@ public static class ReleaseAvailability
                     + "this instance would recompile it at boot"
                     + (policy.RequirePrebuilt
                         ? $" — and {PrebuiltAssemblySeeder.RequirePrebuiltConfigKey} refuses a boot "
-                          + "compile on this instance, so the roll is held"
+                          + "compile on this instance, so this package cannot be served by that release"
+                          + " until its bake is published"
                         : " (a cost, not a hold — #3651)"))
                 {
                     IsAdvisory = !policy.RequirePrebuilt,
@@ -323,8 +324,8 @@ public static class ReleaseAvailability
         if (package.InstalledRangeUnreadable is { } rangeFault && PlatformCompatibility.IsKey(installedKey))
             return new PackageAvailability(package.Name, PackageAvailabilityKind.Indeterminate,
                 $"the platform range the installed build declares could not be read ({rangeFault}) — "
-                + $"whether it covers target {target.Version} cannot be established, which is not "
-                + "clearance to roll");
+                + $"whether it covers target {target.Version} cannot be established, which is never "
+                + "read as covered");
         var keyBreak = PlatformCompatibility.TryParseKey(installedKey, out _, out var installedEpoch)
                        && PlatformCompatibility.IsKey(targetKey)
                        && !string.Equals(installedKey, targetKey, StringComparison.Ordinal);
@@ -464,8 +465,8 @@ public static class ReleaseAvailability
                     + string.Join(", ", link.BindingConflicts)
                     + " — the target's copy is what the loader binds, and a reference to a higher "
                     + "version than the platform carries throws FileLoadException the first time "
-                    + "any code path touches the assembly. The roll is held until a build of the "
-                    + "module for this platform is published, or the module is uninstalled"),
+                    + "any code path touches the assembly. It cannot serve this release until a build "
+                    + "of the module for this platform is published, or the module is uninstalled"),
                 null),
             ModuleLinkState.Unlinkable => (
                 new PackageAvailability(
@@ -476,9 +477,9 @@ public static class ReleaseAvailability
                     + "for that identity, and the landed generation references "
                     + string.Join(", ", link.MissingTypes)
                     + ", which the target does not carry — loading it there throws "
-                    + "TypeLoadException at the first render that touches it. The roll is held until "
-                    + "a build of the module for this platform is published, or the module is "
-                    + "uninstalled"),
+                    + "TypeLoadException at the first render that touches it. It cannot serve this "
+                    + "release until a build of the module for this platform is published, or the "
+                    + "module is uninstalled"),
                 null),
             _ => (null,
                 $"{package.Name}: whether its landed module {package.ModuleName} loads on "
@@ -549,7 +550,7 @@ public static class ReleaseAvailability
                         $"'{package.BundleName}' ({record.NodePath}) was built against module {name} {id}, "
                         + $"but the module set sealed for framework identity {target.FrameworkIdentity} "
                         + $"could not be read ({set?.Refusal ?? "it was not observed"}) — cannot determine "
-                        + "whether the bundle and the module are one build, which is not clearance to proceed");
+                        + "whether the bundle and the module are one build, which is never read as consistent");
 
                 if (set.Conflicts.FirstOrDefault(c => c.StartsWith($"module {name}:", StringComparison.Ordinal))
                     is { } conflict)
@@ -559,8 +560,8 @@ public static class ReleaseAvailability
                         $"'{package.BundleName}' ({record.NodePath}) binds module {name}, which the set "
                         + $"sealed for framework identity {target.FrameworkIdentity} carries as TWO "
                         + $"DIFFERENT builds ({conflict}) — the loader keeps whichever it sees first, so "
-                        + "the other's NodeTypes are declined at adoption; the set is inconsistent and "
-                        + "nothing rolls");
+                        + "the other's NodeTypes are declined at adoption; the set is inconsistent, so this "
+                        + "package cannot be served by that release until the module set is re-sealed");
 
                 // 🚨 THE ONE CHECK THE FLOOR RETIRES, and only for a floor-shaped id (#3934):
                 // "the bundle and the module are two BUILDS" stopped being a refusal the moment a
