@@ -162,26 +162,19 @@ internal static class ModuleServiceForwarding
     ///
     /// <para>🚨 One exception (MeshWeaver#6557): an <see cref="InstalledModuleAssembly"/> the module
     /// registers (the further reference assemblies a module ships — MeshWeaver.Testing's xunit closure)
-    /// gets NO root forwarder. A forwarder can only throw once its module is withdrawn, and every
+    /// gets no plain forwarder. A plain forwarder can only throw once its module is withdrawn, and every
     /// enumeration of the installed-module set — the boot pre-warm sweep's included — would fault on it.
-    /// It is recorded in the mesh's <see cref="InstalledModules"/> registry instead, which answers it from
-    /// the module's current generation while the registry holds the module and leaves it out once the
-    /// module is withdrawn or retired.</para>
+    /// It is declared as an <see cref="InstalledModuleSlot"/> in its place in the set instead, which
+    /// <see cref="InstalledModules"/> answers from the module's current generation while the registry
+    /// holds the module and leaves out once the module is withdrawn or retired.</para>
     /// </summary>
-    public static IServiceCollection AddForwarders(IServiceCollection root, ModuleServices services, InstalledModules installed)
+    public static IServiceCollection AddForwarders(IServiceCollection root, ModuleServices services)
     {
         var module = services.ModuleName;
         foreach (var registration in services.Registrations)
         {
             var index = registration.Index;
             var type = registration.Descriptor.ServiceType;
-            if (type == typeof(InstalledModuleAssembly)
-                && !registration.Descriptor.IsKeyedService
-                && registration.Route == ModuleServiceRoute.Current)
-            {
-                installed.AddModuleRegistered(module, index);
-                continue;
-            }
             if (registration.Descriptor.IsKeyedService)
             {
                 // Forwarded under the module's OWN key, so a consumer asking by key gets the module's.
@@ -211,6 +204,19 @@ internal static class ModuleServiceForwarding
                     // Resolving the registry through the container is what attaches it to the root.
                     root.Add(ServiceDescriptor.Singleton(type, sp => ModuleServiceProxy.Create(
                         type, sp.GetRequiredService<ModuleContexts>(), module, index)));
+                    break;
+                case ModuleServiceRoute.Current when type == typeof(InstalledModuleAssembly):
+                    // A member of the installed-module set the module contributes: ABSENT once the
+                    // module is withdrawn or retired, never a fault in whoever enumerates the set
+                    // (MeshWeaver#6557, InstalledModules).
+                    root.Add(InstalledModuleSlot.Declare(sp =>
+                        {
+                            var contexts = sp.GetRequiredService<ModuleContexts>();
+                            return contexts.Current(module) is not { Services: not null }
+                                ? null
+                                : (InstalledModuleAssembly)contexts.ResolveModuleService(module, index);
+                        },
+                        $"Module {module} is no longer held by this mesh's module registry — the installed module it contributed is gone with it."));
                     break;
                 case ModuleServiceRoute.Current:
                     root.Add(ServiceDescriptor.Transient(type, sp => sp.GetRequiredService<ModuleContexts>().ResolveModuleService(module, index)));
