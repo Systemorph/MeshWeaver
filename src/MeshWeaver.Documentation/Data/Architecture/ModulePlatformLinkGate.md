@@ -1,13 +1,15 @@
 ---
 Name: The Module Platform Link Gate
 Category: Architecture
-Description: A module's platform requirement is not a version string an author writes — it is the set of types its bytes are linked against. This is the gate that measures that requirement against the platform actually running, refuses a module the process cannot load, parks the generation instead of the portal — and, through the surface every bake publishes, holds a platform roll only when a landed module provably cannot load on the target.
+Description: A module's platform requirement is not a version string an author writes — it is the set of types its bytes are linked against. This is the gate that measures that requirement against the platform actually running, refuses a module the process cannot load, parks the generation instead of the portal — and, through the surface every bake publishes, names a landed module that provably cannot load on the target as a package refusal, which the platform roll reports as an advisory.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12h6"/><path d="M12 9v6"/></svg>
 ---
 
 # The Module Platform Link Gate
 
 > ✅ **Rule change, 2026-09-07 (maintainer) — [Module Adoption Policy](../ModuleAdoptionPolicy), implemented by [#3648](https://github.com/Systemorph/MeshWeaver/issues/3648), [#3649](https://github.com/Systemorph/MeshWeaver/issues/3649), [#3650](https://github.com/Systemorph/MeshWeaver/issues/3650) and [#3651](https://github.com/Systemorph/MeshWeaver/issues/3651).** This page describes the mechanism as it runs after those changes: a declared floor is advisory, a refused generation falls back to the previous one, a new build is adopted eagerly, and a platform roll is held only by a module that provably cannot load on the target.
+>
+> 🚨 **Superseded for the platform roll** by policy `platform-rolls-independently-of-packages` ([Policy Not Prose](../PolicyNotProse)): no package answer holds the roll any more — it is an advisory; [Release Gates](../ReleaseGates) → "What a refusal does".
 
 **A module is adopted on what this process can LOAD, never on a version string.**
 
@@ -359,8 +361,10 @@ surface is what has to be measured.
 
 ### At the roll — the surface travels as a document
 
-**A platform roll is held only by a module that provably cannot load on the target, and by
-nothing declared** (MeshWeaver#3651; the maintainer's rule of 2026-09-07,
+**The package verdict refuses only a module that provably cannot load on the target, and nothing
+declared — and on the platform roll even that refusal is an advisory** (policy
+`platform-rolls-independently-of-packages`: the platform rolls, the module keeps its previous
+generation; MeshWeaver#3651; the maintainer's rule of 2026-09-07,
 [Module Adoption Policy](../ModuleAdoptionPolicy)). On that day every production portal sat on its
 morning build: the declared floors declined every candidate (lifted by MeshWeaver#3648), and the
 satellites' missing bakes for the new identity would have held it again the moment the floors were
@@ -566,14 +570,15 @@ surface document with one type removed as "the older target":
 | `AModuleWithABuildPublishedForTheTarget_IsNotHeldOnItsLandedGeneration` | the published build is what will be adopted; the landed one does not decide |
 | `AReleaseWithNoPublishedSurface_IsIndeterminate_ReportedNeitherClearanceNorHold` | the roll-time direction of the third state |
 | `AMissingContentBake_IsACostTheVerdictNames_AndAHoldOnlyUnderRequirePrebuilt` | both arms of the bake rule on one fixture |
-| `TheWalkStopsAtTheFirstReleaseWithNoUnloadableModule` | newest-first, past the unloadable one, naming it; the cost said on the outcome |
-| `WhenEveryCandidateCannotLoadTheModule_NothingIsSelected_AndTheModuleIsNamed` | "no complete release" stays put and names the module |
+| `AnUnloadableModuleIsAnAdvisory_TheNewestIsSelected` | the newest admitted release is selected after one verdict; the unloadable module is named on the advisories |
+| `WhenEveryCandidateCannotLoadTheModule_TheNewestIsSelected_AndTheModuleIsNamed` | "no complete release" no longer stays put: the newest is selected and the module is named as the package that does not follow |
+| `AReleaseWithNoSurface_IsSelectedWithTheUnmeasuredModuleReported` | an unmeasured module is reported, never a reason to skip the release |
 
 ## Related
 
 - [Module Adoption Policy](../ModuleAdoptionPolicy) — the rule this gate is the only instrument of: run the newest thing that loads, keep what you have until then, never let a string decide.
 - [Release Availability Gates](../ReleaseGates) — the roll gate that consumes the published surface.
-- [Roll Selection](../RollSelection) — the walk that stops at the first release with no unloadable module.
+- [Roll Selection](../RollSelection) — selects the newest admitted release; an unloadable module is a package advisory there, never a reason to walk past it.
 - [Module Versioning](../ModuleVersioning) — what the pack lane records, what the build derives.
 - [Module Build Architecture](../ModuleBuildArchitecture) — the one build shape, every repo.
 - [NodeType Compilation](../NodeTypeCompilation) — the *other* identity lane, where MVID equality
