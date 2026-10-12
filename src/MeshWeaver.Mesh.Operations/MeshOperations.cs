@@ -579,9 +579,10 @@ public partial class MeshOperations
     /// <c>Finally</c> — the subscription never outlives the call on any path: completion,
     /// fault, timeout, or caller unsubscribe (HTTP client abort).</para>
     ///
-    /// <para>Error contract: <c>"Not found: …"</c> when the path resolves to nothing,
-    /// <c>"Error: …"</c> for failures surfaced by the subscribe (an RLS denial faults the
-    /// remote stream with "Access denied" — see <c>HubSubscriptionSecurityTest</c>). A timeout
+    /// <para>Error contract: <c>"Not found: …"</c> when the path resolves to nothing AND when the
+    /// owner refuses the caller's read (an RLS denial faults the remote stream; answering it as
+    /// "Access denied" would disclose that a node exists at the path), <c>"Error: …"</c> for every
+    /// other failure surfaced by the subscribe. A timeout
     /// faults the observable with <see cref="TimeoutException"/> so transports can map it
     /// distinctly (REST maps it to a 504-style JSON error instead of the sentinel).</para>
     /// </summary>
@@ -651,6 +652,14 @@ public partial class MeshOperations
                 // else surfaces through the standard "Error: …" sentinel contract.
                 if (ex is TimeoutException)
                     return Observable.Throw<string>(ex);
+                // 🚨 A REFUSED render answers exactly what an absent path answers. The owner's
+                // refusal names the path ("Access denied: … on '{path}'"), and handing that on told
+                // a caller who may not read the node that one exists there.
+                if (IsAccessDenial(ex))
+                {
+                    logger.LogInformation("RenderArea DENIED for {Path} — answered as absent", resolvedPath);
+                    return Observable.Return($"Not found: {resolvedPath}");
+                }
                 logger.LogWarning(ex, "RenderArea failed for {Path}", resolvedPath);
                 return Observable.Return($"Error: {ex.Message}");
             });
@@ -2864,7 +2873,7 @@ public partial class MeshOperations
         return pathResolver.ResolvePath(resolvedPath).SelectMany(resolution =>
         {
             if (resolution == null)
-                return Observable.Return($"Error: no matching node for path '{resolvedPath}'");
+                return Observable.Return(NoMatchingNodeAnswer(resolvedPath));
             if (string.IsNullOrEmpty(resolution.Remainder))
                 return Observable.Return("Error: path must include '{collection}/{filePath}' after the node path (e.g. 'Systemorph/content/logo.png').");
 
@@ -2880,6 +2889,71 @@ public partial class MeshOperations
             var targetAddress = (Address)resolution.Prefix;
             var qualifiedCollectionName = $"{resolution.Prefix}/{collectionName}";
 
+            // 🚨 AN UPLOAD IS A WRITE, so it is authorized as one — Update on the node that owns the
+            // collection, the permission every content edit of that node requires. The collection
+            // lookup below is gated on Read only, and the save itself runs on THIS hub's content
+            // service straight into the collection's storage — no owner gate sees it. Without this
+            // pre-flight a caller holding Read alone wrote files into the node's content. Asked for
+            // the caller captured at entry, fail-closed on every non-granted verdict.
+            return AuthorizeUpload(resolution.Prefix, resolvedPath, caller)
+                .SelectMany(refusal => refusal is not null
+                    ? Observable.Return(refusal)
+                    : SaveUpload(resolution, collectionName, filePath, targetAddress, qualifiedCollectionName, bytes, caller));
+        })
+        .Catch((Exception ex) =>
+        {
+            logger.LogWarning(ex, "Upload failed for {Path}", path);
+            var message = ex is TimeoutException
+                ? $"the node for '{path}' did not respond to the content-collection lookup in time — " +
+                  "confirm the path resolves to a content-enabled node (one configured with AddContentCollections)."
+                : ex.Message;
+            return Observable.Return($"Error: {message}");
+        });
+    }
+
+    /// <summary>
+    /// The write pre-flight of <see cref="Upload"/>: <c>null</c> when <paramref name="caller"/> holds
+    /// Update on <paramref name="nodePath"/>, otherwise the refusal to answer. Asks the same question
+    /// as every other write pre-flight (<see cref="CheckUpdateOutcome"/> — the raw fold, re-decided
+    /// through the node's access rule on a definitive denial).
+    ///
+    /// <para>🚨 A caller who may not even READ the node gets the answer an absent path gets — naming
+    /// "access denied" there would tell them a node exists at that path. A reader who lacks Update
+    /// already knows the node exists, so they are told which permission is missing.</para>
+    /// </summary>
+    private IObservable<string?> AuthorizeUpload(string nodePath, string resolvedPath, AccessContext caller) =>
+        CheckUpdateOutcome(nodePath, "Upload", caller)
+            .SelectMany(outcome =>
+            {
+                if (outcome.IsGranted)
+                    return Observable.Return<string?>(null);
+                if (outcome.IsUndetermined)
+                    return Observable.Return<string?>(
+                        $"Error: uploading to {nodePath}: the permission check did not complete "
+                        + $"({outcome.UndeterminedReason}). Nothing was written; retry.");
+                return hub.CheckPermissionOutcome(nodePath, UserIdOf(caller), MeshWeaver.Mesh.Security.Permission.Read)
+                    .Take(1)
+                    .Timeout(TimeSpan.FromSeconds(10))
+                    .Catch((Exception _) => Observable.Return(MeshWeaver.Mesh.Security.PermissionCheckOutcome.Denied))
+                    .Select(read => read.IsGranted
+                        ? (string?)$"Error: Access denied: user '{UserIdOf(caller)}' lacks Update permission on "
+                            + $"'{nodePath}'. Nothing was written."
+                        : NoMatchingNodeAnswer(resolvedPath));
+            });
+
+    /// <summary>The answer <see cref="Upload"/> and <see cref="ContentList"/> give for a path that
+    /// resolves to no node — and, identically, for one the caller may not read.</summary>
+    private static string NoMatchingNodeAnswer(string resolvedPath)
+        => $"Error: no matching node for path '{resolvedPath}'";
+
+    /// <summary>
+    /// The authorized half of <see cref="Upload"/>: looks the collection up on the owning node hub
+    /// and saves the bytes into it. Reached only after <see cref="AuthorizeUpload"/> granted.
+    /// </summary>
+    private IObservable<string> SaveUpload(
+        AddressResolution resolution, string collectionName, string filePath, Address targetAddress,
+        string qualifiedCollectionName, byte[] bytes, AccessContext caller)
+    {
             // Ask the owning node hub for its collection config — exact same mechanism
             // the static GET endpoint uses (see BlazorHostingExtensions.ResolveStatic).
             // 🚨 .Timeout is mandatory: HandleCollectionConfigRequest is registered ONLY by
@@ -2956,16 +3030,6 @@ public partial class MeshOperations
                                 });
                         });
                 });
-        })
-        .Catch((Exception ex) =>
-        {
-            logger.LogWarning(ex, "Upload failed for {Path}", path);
-            var message = ex is TimeoutException
-                ? $"the node for '{path}' did not respond to the content-collection lookup in time — " +
-                  "confirm the path resolves to a content-enabled node (one configured with AddContentCollections)."
-                : ex.Message;
-            return Observable.Return($"Error: {message}");
-        });
     }
 
     /// <summary>
@@ -2994,7 +3058,7 @@ public partial class MeshOperations
         return pathResolver.ResolvePath(resolvedPath).SelectMany(resolution =>
         {
             if (resolution == null)
-                return Observable.Return($"Error: no matching node for path '{resolvedPath}'");
+                return Observable.Return(NoMatchingNodeAnswer(resolvedPath));
             if (string.IsNullOrEmpty(resolution.Remainder))
                 return Observable.Return("Error: path must include '{collection}[/{dir}]' after the node path (e.g. 'Systemorph/content').");
 
@@ -3068,6 +3132,13 @@ public partial class MeshOperations
         })
         .Catch((Exception ex) =>
         {
+            // 🚨 A REFUSED lookup answers exactly what an absent path answers: "access denied"
+            // naming the path would tell a caller who may not read it that a node exists there.
+            if (IsAccessDenial(ex))
+            {
+                logger.LogInformation("ContentList DENIED for {Path} — answered as absent", resolvedPath);
+                return Observable.Return(NoMatchingNodeAnswer(resolvedPath));
+            }
             logger.LogWarning(ex, "ContentList failed for {Path}", path);
             var message = ex is TimeoutException
                 ? "the node did not respond to the content-collection lookup in time — confirm the path resolves to a content-enabled node."
@@ -4800,6 +4871,15 @@ public partial class MeshOperations
 
         return false;
     }
+
+    /// <summary>
+    /// True when <paramref name="error"/> is the mesh's decided "no" for the caller — the same typed
+    /// test as <see cref="IsWriteDenial"/>, read on the READ side: a caller-facing read that was
+    /// refused answers what an absent path answers, so naming the refusal would disclose that
+    /// something exists at the path.
+    /// </summary>
+    /// <param name="error">The fault the read terminated with.</param>
+    internal static bool IsAccessDenial(Exception error) => IsWriteDenial(error);
 
     /// <summary>
     /// The <c>DisposeRequest.Reason</c> an operator recycle carries — the framework's own sentence

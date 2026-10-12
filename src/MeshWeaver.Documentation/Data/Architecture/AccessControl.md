@@ -360,6 +360,21 @@ Each AccessAssignment node maps **one subject** (User or Group) to **multiple ro
 | `Roles[].Role` | Role to grant or deny (`Admin`, `Editor`, `Viewer`, `Commenter`, or custom) |
 | `Roles[].Denied` | When `true`, denies the role instead of granting it |
 
+## 🚨 Configuration-declared nodes are public to every authenticated caller
+
+A node DECLARED in configuration — `builder.AddMeshNodes(...)`, or yielded by an `IStaticNodeProvider` — is served to queries from memory by `StaticNodeQueryProvider`, and **without the per-user row filter** the storage providers apply to a stored row. That is deliberate: what is declared there is the platform's public vocabulary — NodeType definitions, built-in roles, partition definitions, documentation, templates, read-only `_Policy` nodes — and filtering it per caller would cost a permission fold per row on every type lookup.
+
+The rule that follows: **never declare a sensitive node in configuration.** No credentials, tokens, keys or endpoints in a declared node's content; no user data; nothing a caller who may not read its path must not see. Put such a node in storage (a write as System at boot, or a sync), where the row filter decides it, or keep the secret out of node content altogether.
+
+**The one exception is enforced, not trusted: a declared node on a SATELLITE path** (`_Access`, `_Thread`, `_Comment`, … — `SatelliteTableMapping.IsSatellitePath`) is row-filtered with the same validators, for the same viewer, as a stored one. The case that needed it is the platform-admin seed — `Auth:GlobalAdmins` → `GlobalAdminSeed` declares an `AccessAssignment` per listed user under `Admin/_Access`, and before the filter any authenticated caller could list who holds platform admin. Pinned by `DeclaredAccessAssignmentIsRowFilteredTest` (a stranger finds no declared grant through `search` or `query-nodes`; the seeded admin still does). A System read is unfiltered, so the permission evaluator's own reads of the static grants are unchanged.
+
+## 🚨 Caller-facing verbs: a refusal looks like absence, and a write is authorized as one
+
+Two rules every transport verb (`MeshOperations`, behind the MCP tools and `/api/mesh/*`) holds:
+
+- **A refused read answers exactly what an absent path answers.** The owner's refusal names the path (`Access denied: user '…' lacks Read permission on '…'`); handing it on tells a caller who may not read a node that one exists there. `get` answers a refusal with its not-found answer (#6571); `render_area` (and the `get {path}/area/…` route) answers `Not found: {path}`, and `content/list` answers `Error: no matching node for path '…'` — the same strings a path that resolves to nothing gets. A refusal is still logged at Information on the server. Pinned by `RefusedReadLooksAbsentTest`, which compares a refused node with an absent sibling and an absent root, path masked, and keeps the grant holder as the positive control.
+- **An upload is a write.** `upload` (MCP and `POST /api/mesh/upload`) saves into a node's content collection through the calling hub's content service, where no owner-side write gate sees it, so it takes the Update pre-flight on the owning node itself (the same one `recycle` and `patch` use) for the caller captured at entry, before anything is saved. A reader without Update is told which permission is missing; a caller who may not read the node gets the absent answer. Pinned by `UploadRequiresUpdateTest` (a reader is refused and nothing is stored; an editor uploads — the negative control).
+
 ## Built-in roles
 
 Defined as static properties on `Role` (`src/MeshWeaver.Mesh.Contract/Security/Role.cs`):

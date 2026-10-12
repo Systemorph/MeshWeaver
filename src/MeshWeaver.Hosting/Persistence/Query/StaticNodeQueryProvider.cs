@@ -2,7 +2,9 @@ using System.Reactive.Linq;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.Persistence.Query;
@@ -77,6 +79,8 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
     private MeshNode[] _allNodes => Current.AllNodes;
     private HashSet<string> _nodeTypes => Current.NodeTypes;
     private readonly MeshConfiguration? _meshConfiguration;
+    private readonly IEnumerable<Lazy<INodeValidator>>? _nodeValidators;
+    private readonly AccessService? _accessService;
     private readonly QueryParser _parser = new();
     private readonly QueryEvaluator _evaluator = new();
     private readonly Microsoft.Extensions.Logging.ILogger? _logger;
@@ -120,7 +124,36 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
         MeshConfiguration? meshConfiguration,
         Microsoft.Extensions.Logging.ILoggerFactory? loggerFactory,
         MeshWeaver.Mesh.ModuleContexts? modules)
+        : this(providers, matches, meshConfiguration, loggerFactory, modules, null, null)
     {
+    }
+
+    /// <summary>
+    /// As the five-argument constructor, row-filtering every declared node on a SATELLITE path
+    /// (<c>_Access</c>, <c>_Thread</c>, … — see <see cref="SatelliteTableMapping.IsSatellitePath"/>)
+    /// through <paramref name="nodeValidators"/> for the viewer of each query, exactly as the
+    /// storage providers filter a stored row. See <see cref="Query{T}"/>.
+    /// </summary>
+    /// <param name="providers">The static node providers.</param>
+    /// <param name="matches">Predicate deciding whether a scoped query's namespaces are owned by this provider.</param>
+    /// <param name="meshConfiguration">Optional mesh configuration.</param>
+    /// <param name="loggerFactory">Optional logger factory.</param>
+    /// <param name="modules">Module generations; the catalog is re-taken when one is swapped.</param>
+    /// <param name="nodeValidators">The mesh's node validators (row-level security among them),
+    /// resolved LAZILY for the same reason the storage provider does — the RLS validator depends on
+    /// the security service, whose warm-up queries through this provider.</param>
+    /// <param name="accessService">The ambient identity, consulted only when a query names no viewer.</param>
+    public StaticNodeQueryProvider(
+        IEnumerable<IStaticNodeProvider> providers,
+        Func<IReadOnlyList<string>, bool> matches,
+        MeshConfiguration? meshConfiguration,
+        Microsoft.Extensions.Logging.ILoggerFactory? loggerFactory,
+        MeshWeaver.Mesh.ModuleContexts? modules,
+        IEnumerable<Lazy<INodeValidator>>? nodeValidators,
+        AccessService? accessService)
+    {
+        _nodeValidators = nodeValidators;
+        _accessService = accessService;
         _meshConfiguration = meshConfiguration;
         _logger = loggerFactory?.CreateLogger<StaticNodeQueryProvider>();
         _matches = matches;
@@ -335,21 +368,81 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
             (parsedQuery.Filter as MeshWeaver.Mesh.QueryComparison)?.Condition.Values is { } vs
                 ? string.Join("|", vs) : "(complex)",
             items.Count);
-        // Score the matched items when the query carries a text-search term.
-        // For pure filter / namespace / nodeType queries we leave Scores=null so
-        // the aggregator falls back to insertion order — there's no relevance
-        // signal to surface ("give me all Threads in this namespace" is
-        // unordered with respect to score).
-        var scores = ComputeScores(items, parsedQuery);
-        return Observable.Return(new QueryResultChange<T>
+        return RowFilter(items, request)
+            .Select(visible => new QueryResultChange<T>
+            {
+                ChangeType = QueryChangeType.Initial,
+                Items = visible,
+                // Score the matched items when the query carries a text-search term.
+                // For pure filter / namespace / nodeType queries we leave Scores=null so
+                // the aggregator falls back to insertion order — there's no relevance
+                // signal to surface ("give me all Threads in this namespace" is
+                // unordered with respect to score).
+                Scores = ComputeScores(visible, parsedQuery),
+                Query = parsedQuery,
+                Version = 0,
+                Timestamp = DateTimeOffset.UtcNow
+            });
+    }
+
+    /// <summary>
+    /// 🚨 <b>A declared node on a SATELLITE path is row-filtered like a stored one.</b> Declared
+    /// nodes are public to every caller by design — type definitions, roles, partitions, docs — and
+    /// they are served from memory without the per-user filter. The exception that made this
+    /// necessary is access data: the platform-admin seed (<c>Auth:GlobalAdmins</c>) declares an
+    /// <c>AccessAssignment</c> per platform admin under <c>Admin/_Access</c>, and without this filter
+    /// any authenticated caller could list who holds platform admin. Satellite paths
+    /// (<c>_Access</c>, <c>_Thread</c>, <c>_Comment</c>, …) are exactly the per-user rows the storage
+    /// providers filter, so the same validators decide them here, for the same viewer
+    /// (<see cref="QueryIdentityResolver"/>). Every other declared node stays public — and so a
+    /// declaration must never carry anything that is not (<c>Doc/Architecture/AccessControl</c>).
+    ///
+    /// <para>Pure in-memory and synchronous when there is nothing to decide (no satellite row, no
+    /// validators, or a System read), which is every query but the rare one that reaches a declared
+    /// grant.</para>
+    /// </summary>
+    private IObservable<List<T>> RowFilter<T>(List<T> items, MeshQueryRequest request)
+    {
+        if (_nodeValidators is null || !items.Any(i => i is MeshNode n && SatelliteTableMapping.IsSatellitePath(n.Path)))
+            return Observable.Return(items);
+        var viewer = QueryIdentityResolver.ResolveAndReport(
+            request, _accessService?.Context?.ObjectId ?? _accessService?.CircuitContext?.ObjectId, _logger).UserId;
+        if (string.Equals(viewer, WellKnownUsers.System, StringComparison.Ordinal))
+            return Observable.Return(items);
+
+        return items
+            .Select(item => item is MeshNode node && SatelliteTableMapping.IsSatellitePath(node.Path)
+                ? ValidateRead(node, viewer).Select(visible => (item, visible))
+                : Observable.Return((item, visible: true)))
+            .ToInlineObservable()
+            .Concat()
+            .Where(r => r.visible)
+            .Select(r => r.item)
+            .ToList()
+            .Select(list => list.ToList());
+    }
+
+    /// <summary>The Read verdict of every Read-capable validator for <paramref name="viewer"/> —
+    /// the same composition <see cref="StorageAdapterMeshQueryProvider"/> applies to a stored row.</summary>
+    private IObservable<bool> ValidateRead(MeshNode node, string viewer)
+    {
+        var relevant = _nodeValidators!
+            .Select(lv => lv.Value)
+            .Where(v => v.SupportedOperations.Count == 0 || v.SupportedOperations.Contains(NodeOperation.Read))
+            .ToList();
+        if (relevant.Count == 0)
+            return Observable.Return(true);
+        var context = new NodeValidationContext
         {
-            ChangeType = QueryChangeType.Initial,
-            Items = items,
-            Scores = scores,
-            Query = parsedQuery,
-            Version = 0,
-            Timestamp = DateTimeOffset.UtcNow
-        });
+            Operation = NodeOperation.Read,
+            Node = node,
+            AccessContext = new AccessContext { ObjectId = viewer },
+        };
+        return relevant
+            .Select(v => v.Validate(context).Take(1))
+            .ToInlineObservable()
+            .Concat()
+            .All(r => r.IsValid);
     }
 
     /// <summary>
