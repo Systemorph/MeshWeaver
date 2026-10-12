@@ -302,6 +302,32 @@ surfaces an operator and a user already look at:
   modules of a recorded combo Red. A roll that left a package behind is a state an operator can see
   on the tab, not a fact that lives only in a pod log.
 
+#### Advisories render in the viewer's language
+
+An advisory is platform-authored text, so it follows the VIEWER's language, not the language of the
+process that wrote it (#6540). The writer has no viewer in scope — the poller runs as System, and
+admins with different languages read the one record — so the record stores the advisory's **reason
+code** and its **arguments**, and the tab resolves the sentence at render time:
+
+- Each advisory the shared predicate composes is a `LocalizableText`: its English, a code from the
+  open vocabulary `ReleaseAdvisoryCode` (`releaseAdvisory.bootCompile`, `…olderCompatibleSet`,
+  `…platformFloor`, `…moduleNotProduced`, `…moduleLinkNotMeasured`, `…moduleLinkUndetermined`,
+  `…moduleLinkSkew`, `…packagesDoNotFollow`, `…availabilityUndetermined`, `…comboRed`,
+  `…modulesDoNotFollow`) and named arguments (package, module, identity, target, count, …). The code
+  IS the catalog key in `strings.{en,de}.json`. `UpdatabilityVerdict.AdvisoryTexts` carries them,
+  one per line of `Advisories`; `WithAdvisories` is the one way a producer sets both.
+- `Admin/UpdatePolicy` keeps `Advisories` — the joined English, which is also what the log line
+  says — and writes `AdvisoryItems` beside it: one `{ text, key, args }` per advisory, the same shape
+  a notification persists its title in.
+- The Updates tab renders each item through its key in the viewer's language. A record written
+  before `AdvisoryItems` existed, an item with no key, and an item whose key no catalog carries all
+  render their stored English — an unknown code is never given a meaning of its own.
+
+What stays English: an argument that is another component's own diagnostic — the per-package
+reasons a waived package hold quotes (`{reason}`), a link measurement's detail, the combo gate's
+reason. Those are produced by the package verdict and the combo gate, not by the advisory, and are
+quoted inside the localized sentence.
+
 ### No hold is written — and one an older build wrote is cleared
 
 The poller writes no hold: a check either rolls or says why nothing is newer. The hold fields on

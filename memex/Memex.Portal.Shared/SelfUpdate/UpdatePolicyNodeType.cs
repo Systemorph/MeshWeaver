@@ -234,6 +234,17 @@ public record UpdatePolicyContent
     [Browsable(false)]
     public string? Advisories { get; init; }
 
+    /// <summary>
+    /// 🌍 <see cref="Advisories"/> as localizable items (MeshWeaver#6540): one per advisory, each
+    /// its English, its reason code (a <see cref="ReleaseAdvisoryCode"/> — the catalog key) and its
+    /// named arguments, so the Updates tab renders them in the VIEWER's language. Written beside
+    /// <see cref="Advisories"/> on every gate evaluation and cleared with it; a record written
+    /// before it existed carries only <see cref="Advisories"/>, and the tab renders that stored
+    /// English as before. Not user-editable.
+    /// </summary>
+    [Browsable(false)]
+    public ImmutableList<UpdateAdvisory>? AdvisoryItems { get; init; }
+
     /// <summary>Whether <paramref name="tag"/> is the tag <see cref="Advisories"/> describe.</summary>
     public bool HasAdvisoriesFor(string? tag) =>
         !string.IsNullOrEmpty(tag)
