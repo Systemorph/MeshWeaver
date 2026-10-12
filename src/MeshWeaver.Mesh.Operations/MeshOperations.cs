@@ -616,7 +616,12 @@ public partial class MeshOperations
                 + "elapsed — nothing was rendered."));
 
         var pathResolver = hub.ServiceProvider.GetRequiredService<IPathResolver>();
-        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        // 🚨 The CALLER, captured HERE at the public entry — not at subscribe time. A render is
+        // subscribed wherever its consumer subscribes it, including inside another response's
+        // continuation (the `{path}/area/…` route of Get), where the ambient identity is the
+        // delivering thread's; captured there, the layout-area subscribe went out under a hub
+        // principal and the owner rendered the area for a caller holding no Read (MeshWeaver#6570).
+        var caller = CaptureCaller();
         return Observable.Defer(() =>
         {
             // 🚨 The budget is a DEADLINE, not merely the outer `.Timeout(...)` below. Timeout
@@ -630,13 +635,10 @@ public partial class MeshOperations
             // callback, and in a portal an orphaned sync hub + heartbeat per abandoned render).
             // So the remaining budget is re-checked at the last instant before committing to it.
             var startedAt = Stopwatch.GetTimestamp();
-            // Capture the CALLER's ambient identity at subscribe time (the transport request
-            // thread / test context — same precedence the sync-stream uses). The remote-stream
-            // creation below happens inside a reactive continuation on a hub scheduler where the
-            // AsyncLocal context is wiped or hub-shaped; without re-applying the captured user
-            // there, the SubscribeRequest would fall back to the System identity and BYPASS the
-            // owner's RLS read gate — a denied caller would receive the rendered content.
-            var caller = accessService?.Context ?? accessService?.CircuitContext;
+            // The remote-stream creation below happens inside a reactive continuation on a hub
+            // scheduler where the AsyncLocal context is wiped or hub-shaped; the caller captured at
+            // the entry is re-applied there, or the SubscribeRequest would carry that identity and
+            // bypass the owner's RLS read gate — a denied caller would receive the rendered content.
             return pathResolver.ResolvePath(resolvedPath)
                 .Take(1)
                 .SelectMany(resolution => RenderResolvedArea(
@@ -665,7 +667,7 @@ public partial class MeshOperations
         string resolvedPath,
         string? area,
         string? id,
-        AccessContext? caller,
+        AccessContext caller,
         long startedAt,
         TimeSpan budget)
     {
@@ -715,9 +717,7 @@ public partial class MeshOperations
             // caller captured at the RenderArea boundary for the creation scope — otherwise the
             // subscribe would fall back to System and bypass the owner's RLS read gate.
             var accessService = hub.ServiceProvider.GetService<AccessService>();
-            using var callerScope = caller is not null
-                ? accessService?.SwitchAccessContext(caller)
-                : null;
+            using var callerScope = accessService?.SwitchAccessContext(caller);
             // 🚨 SUBSCRIBED OFF THE ROUTER (#4614/#4615/#4617). `hub` is whatever hub built this
             // facade, and for the AI/agent surface that is the DI-injected IMessageHub — the
             // ROUTER (see ReadHub). A workspace is SCOPED PER HUB, so `hub.GetWorkspace()` would
@@ -2243,7 +2243,7 @@ public partial class MeshOperations
                 if (JsonNode.DeepEquals(
                         JsonSerializer.SerializeToNode(existing, hub.JsonSerializerOptions),
                         JsonSerializer.SerializeToNode(merged, hub.JsonSerializerOptions)))
-                    return CheckUpdateOutcome(resolvedPath, "Patch")
+                    return CheckUpdateOutcome(resolvedPath, "Patch", caller)
                         .Select(outcome => outcome.IsGranted
                             ? $"No change: {existing.Path} (v{existing.Version}) — every field in the patch "
                                 + "already holds that value, so nothing was written."
@@ -2856,6 +2856,11 @@ public partial class MeshOperations
             return Observable.Return("Error: path is required.");
 
         var pathResolver = hub.ServiceProvider.GetRequiredService<IPathResolver>();
+        // 🚨 Captured HERE: the collection lookup below is posted inside the path resolution's
+        // continuation, where the ambient identity is the delivering thread's — the owner then
+        // decided the [RequiresPermission(Read)] lookup for that identity instead of the caller's
+        // (MeshWeaver#6570). The post states the caller explicitly.
+        var caller = CaptureCaller();
         return pathResolver.ResolvePath(resolvedPath).SelectMany(resolution =>
         {
             if (resolution == null)
@@ -2887,7 +2892,7 @@ public partial class MeshOperations
             // this hub is only the reply mailbox, so it is the read seam, not the write one.
             return ReadHub.Observe(
                 new GetDataRequest(new ContentCollectionReference([collectionName])),
-                o => o.WithTarget(targetAddress))
+                o => o.WithTarget(targetAddress).WithAccessContext(caller))
                 .Take(1)
                 .Timeout(TimeSpan.FromSeconds(30))
                 .Select(collectionResponse =>
@@ -2981,6 +2986,11 @@ public partial class MeshOperations
             return Observable.Return("Error: path is required.");
 
         var pathResolver = hub.ServiceProvider.GetRequiredService<IPathResolver>();
+        // 🚨 Captured HERE: the collection lookup below is posted inside the path resolution's
+        // continuation, where the ambient identity is the delivering thread's — the owner then
+        // decided the [RequiresPermission(Read)] lookup for that identity instead of the caller's
+        // (MeshWeaver#6570). The post states the caller explicitly.
+        var caller = CaptureCaller();
         return pathResolver.ResolvePath(resolvedPath).SelectMany(resolution =>
         {
             if (resolution == null)
@@ -3005,7 +3015,7 @@ public partial class MeshOperations
             // 🚨 ISSUED OFF THE ROUTER (#1140) — see ReadHub.
             return ReadHub.Observe(
                 new GetDataRequest(new ContentCollectionReference([collectionName])),
-                o => o.WithTarget(targetAddress))
+                o => o.WithTarget(targetAddress).WithAccessContext(caller))
                 .Take(1)
                 .Timeout(TimeSpan.FromSeconds(30))
                 .Select(collectionResponse =>
@@ -3935,7 +3945,10 @@ public partial class MeshOperations
             || resolvedPath.Contains("/_", StringComparison.Ordinal))
             return Observable.Return(Answer(false));
 
-        return hub.GetWorkspace().GetMeshNodeStream(resolvedPath)
+        // As the CALLER (ReadAs): the node's name is copied into the caller's own activity log, so
+        // the read must be decided for them whatever thread subscribes it (MeshWeaver#6570).
+        var caller = CaptureCaller();
+        return ReadAs(caller, () => hub.GetWorkspace().GetMeshNodeStream(resolvedPath))
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(3))
             .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
@@ -3969,15 +3982,17 @@ public partial class MeshOperations
     /// precedence <c>HubPermissionExtensions</c> uses), defaulting to
     /// <see cref="WellKnownUsers.Anonymous"/> when no real identity is present.
     /// </summary>
-    private string ResolveCallerUserId()
-    {
-        var accessService = hub.ServiceProvider.GetService<AccessService>();
-        var ctx = accessService?.Context ?? accessService?.CircuitContext;
-        var userId = ctx?.ObjectId;
-        if (string.IsNullOrEmpty(userId) || ctx?.IsVirtual == true)
-            userId = WellKnownUsers.Anonymous;
-        return userId;
-    }
+    private string ResolveCallerUserId() => UserIdOf(CaptureCaller());
+
+    /// <summary>
+    /// The user id a permission check is asked about for <paramref name="caller"/>:
+    /// <see cref="WellKnownUsers.Anonymous"/> for a virtual or nameless context, its id otherwise.
+    /// </summary>
+    /// <param name="caller">The caller captured at a verb's public entry.</param>
+    private static string UserIdOf(AccessContext caller)
+        => string.IsNullOrEmpty(caller.ObjectId) || caller.IsVirtual
+            ? WellKnownUsers.Anonymous
+            : caller.ObjectId;
 
     /// <summary>
     /// Imports a ZIP produced by <see cref="Export"/> under <paramref name="targetNamespace"/>:
@@ -4359,7 +4374,7 @@ public partial class MeshOperations
         // COMPLETES without emitting (#2742) sails past it. CheckPermissionOutcome classifies both
         // terminals, so "we could not find out" gets its own answer instead of borrowing the
         // denial's. Still fail-closed: nothing is recycled without a positive verdict.
-        return CheckUpdateOutcome(resolvedPath, "Recycle")
+        return CheckUpdateOutcome(resolvedPath, "Recycle", CaptureCaller())
             // 🚨 THE PRE-FLIGHT MUST ASK THE QUESTION THE OWNER WILL ASK — issue #3121. The check
             // above is a RAW (path, Update) fold, and the owner's delivery gate stopped being that
             // in #3061/#3100: on a definitive denial it re-decides through the node's registered
@@ -4612,9 +4627,12 @@ public partial class MeshOperations
     /// </summary>
     /// <param name="resolvedPath">The target, already resolved.</param>
     /// <param name="verb">The verb asking, for the log and the undetermined reason.</param>
+    /// <param name="caller">The caller captured at the verb's public entry — the identity the
+    /// decision is about. Never re-read here: this is subscribed inside continuations, where the
+    /// ambient identity is the delivering thread's (MeshWeaver#6570).</param>
     private IObservable<MeshWeaver.Mesh.Security.PermissionCheckOutcome> CheckUpdateOutcome(
-        string resolvedPath, string verb) =>
-        hub.CheckPermissionOutcome(resolvedPath, MeshWeaver.Mesh.Security.Permission.Update)
+        string resolvedPath, string verb, AccessContext caller) =>
+        hub.CheckPermissionOutcome(resolvedPath, UserIdOf(caller), MeshWeaver.Mesh.Security.Permission.Update)
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(10))
             .Catch((Exception ex) => Observable.Return(
@@ -4623,7 +4641,7 @@ public partial class MeshOperations
                     + $"{ex.GetType().Name}")))
             .SelectMany(outcome => outcome.IsGranted || outcome.IsUndetermined
                 ? Observable.Return(outcome)
-                : ReconsiderUpdateThroughNodeTypeRule(resolvedPath, verb));
+                : ReconsiderUpdateThroughNodeTypeRule(resolvedPath, verb, caller));
 
     /// <summary>
     /// Re-decides a DENIED Update pre-flight (<see cref="Recycle(string)"/>, Patch's no-change answer) through the target node's own
@@ -4639,8 +4657,9 @@ public partial class MeshOperations
     /// </summary>
     /// <param name="resolvedPath">The target, already resolved.</param>
     /// <param name="verb">The verb asking, for the log.</param>
+    /// <param name="caller">The caller captured at the verb's public entry.</param>
     private IObservable<MeshWeaver.Mesh.Security.PermissionCheckOutcome> ReconsiderUpdateThroughNodeTypeRule(
-        string resolvedPath, string verb)
+        string resolvedPath, string verb, AccessContext caller)
     {
         // Update is in the CRUD set SubjectOperationFor maps, so this is never null in practice —
         // it is asked rather than assumed so that a change to that mapping cannot silently make
@@ -4656,18 +4675,17 @@ public partial class MeshOperations
                     || NodeTypeAccessRuleGate.Find(hub, node.NodeType, operation) is not { } rule)
                     return Observable.Return(MeshWeaver.Mesh.Security.PermissionCheckOutcome.Denied);
 
-                var accessService = hub.ServiceProvider.GetService<AccessService>();
                 var context = new NodeValidationContext
                 {
                     Operation = operation,
                     Node = node,
-                    AccessContext = accessService?.Context ?? accessService?.CircuitContext,
+                    AccessContext = caller,
                 };
                 logger.LogDebug(
                     "{Verb}: Update on {Path} was denied by the standard check — re-deciding "
                     + "through the {NodeType} access rule, which governs this node type",
                     verb, resolvedPath, node.NodeType);
-                return NodeTypeAccessRuleGate.Evaluate(rule, context, ResolveCallerUserId(), logger);
+                return NodeTypeAccessRuleGate.Evaluate(rule, context, UserIdOf(caller), logger);
             })
             .Catch((Exception ex) =>
             {
