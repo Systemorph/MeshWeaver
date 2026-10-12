@@ -160,6 +160,40 @@ one, and the gate reads each file with `utf-8-sig` for the same reason. Plain `u
 the file's first *character* — harmless while each file was its own unit, and not harmless once
 every file after the first lands in the middle of one.
 
+## A run that could not answer never exits like one that did
+
+Compiling the same program is half of the contract. The other half is that the exit status tells
+"the content is broken" apart from "this run could not judge it" (Systemorph/MeshWeaver#6567).
+Before that fix, every refusal — a framework checkout behind its remote, a reference set without the
+image's shared frameworks or without Rx, a set missing a registry-served module — exited `1`, the
+code of a real break. A run that compiled **nothing** (a full run over a tree with no NodeType, the
+shape of a mis-set `MW_REPO_ROOT` or working directory, or a run whose every set was UNVERIFIABLE)
+printed `✓ compile gate GREEN … 0 clean` and exited `0`.
+
+| exit | meaning |
+|---|---|
+| 0 | GREEN: at least one NodeType compiled and was judged, and nothing gates — or a `--modules` unit whose packages declare no NodeType, printed as `NOTHING TO COMPILE` and never as GREEN |
+| 1 | RED: a new break, a fingerprint drift, or a stale allow entry |
+| 2 | usage: an unknown or empty `--modules`, `--image` with `--refs`, `--gen-allow` with `--modules` |
+| 3 | REFUSED: the framework checkout is behind `origin/main` (local runs only — CI checks out fresh) |
+| 4 | REFUSED: the reference set is absent or short |
+| 5 | REFUSED: nothing was judged |
+
+Every refusal ends with one line, `✗ REFUSED (exit N): <reason>`. The `✓ compile gate GREEN` line
+is printed only when the judged count is above zero. A refused run writes no `--report`, so a caller
+relaying the verdict (`compat-verdict.py`) reads it as a gate that died before judging, which is
+what happened.
+
+The one zero-count case that still exits `0` is a scoped unit of NodeType-less packages: in
+MeshWeaver.Plugins, 35 of 78 packages declare no NodeType (AI, Mail, Stripe, …), and the CI's unit
+selector runs a leg for each package a pull request changes. Exiting red there would block every
+such pull request because of what the package is, when nothing in it is broken. The verdict says
+what happened in words instead.
+
+The self-test (`--self-test`) runs the script as a subprocess against fixture trees for every arm.
+That includes a real git checkout one commit behind its `origin/main`. Each arm was red against the
+pre-fix script.
+
 ## Related
 
 - [NodeType Compilation & Releases](/Doc/Architecture/NodeTypeCompilation) — the runtime side of the
