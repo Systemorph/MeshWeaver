@@ -37,7 +37,19 @@ public static class ShutdownNack
     /// <param name="activation">The hub instance the NACK is being minted for.</param>
     /// <returns>The tag, e.g. <c>activation #017DA86C</c>.</returns>
     public static string FormatActivationTag(object activation) =>
-        $"{ActivationMarker}{System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(activation):X8}";
+        $"{ActivationMarker}{ActivationToken(activation)}";
+
+    /// <summary>
+    /// The bare hex token for <paramref name="activation"/> — exactly what
+    /// <see cref="ExtractActivationTag"/> pulls out of a <see cref="FormatActivationTag"/> NACK, for
+    /// carriers that hold the identity as a FIELD rather than in message text (a stream's end
+    /// announcement, #6602). One formatter, so a NACK and an announcement from the same
+    /// activation compare equal.
+    /// </summary>
+    /// <param name="activation">The hub instance whose identity IS the activation.</param>
+    /// <returns>The hex token, e.g. <c>017DA86C</c>.</returns>
+    public static string ActivationToken(object activation) =>
+        System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(activation).ToString("X8", System.Globalization.CultureInfo.InvariantCulture);
 
     /// <summary>
     /// Pulls the stable activation token out of a NACK message, or <c>null</c> when the message
