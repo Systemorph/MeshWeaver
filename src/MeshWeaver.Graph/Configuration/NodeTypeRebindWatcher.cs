@@ -187,6 +187,11 @@ internal static class NodeTypeRebindWatcher
             .Take(1)
             .SelectMany(change => WaitWhileAnInstallHoldsIt(leases, path, logger)
                 .Select(_ => change))
+            // The activation that committed the retype settles what the NEW type needs before it
+            // goes (INodeRetypeSettlement — the stamped-field clear); a settlement that faults keeps
+            // this activation, which then refuses what it cannot judge rather than handing the next
+            // activation a node it never settled.
+            .SelectMany(change => SettleRetype(instanceHub, change.NodeType).Select(_ => change))
             .Subscribe(
                 change =>
                 {
@@ -232,6 +237,21 @@ internal static class NodeTypeRebindWatcher
                 ex => logger?.LogWarning(ex,
                     "NodeType rebind watcher for '{Path}' faulted — the hub keeps its activation-time "
                     + "configuration until it is recycled", path));
+
+    /// <summary>
+    /// Runs every <see cref="INodeRetypeSettlement"/> the hub registers, in order, and emits once
+    /// all of them have settled — at once when it registers none or is already tearing down.
+    /// </summary>
+    private static IObservable<Unit> SettleRetype(IMessageHub instanceHub, string? newNodeType)
+        => Observable.Defer(() =>
+        {
+            if (instanceHub.IsDisposing)
+                return Observable.Return(Unit.Default);
+            var settlements = instanceHub.ServiceProvider.GetServices<INodeRetypeSettlement>().ToArray();
+            return settlements.Length == 0
+                ? Observable.Return(Unit.Default)
+                : settlements.Select(s => s.Settle(newNodeType)).Concat().ToList().Select(_ => Unit.Default);
+        });
 
     /// <summary>
     /// Emits once no install is writing under <paramref name="path"/> — at once in the ordinary
@@ -301,4 +321,20 @@ internal static class NodeTypeRebindWatcher
                 change.NodeType ?? string.Empty,
                 boundNodeType ?? string.Empty,
                 StringComparison.OrdinalIgnoreCase);
+}
+
+/// <summary>
+/// Work the activation that committed a node's RETYPE finishes before the rebind recycle hands the
+/// node to an activation bound to the new type — the stamped-field clear
+/// (<c>Doc/Architecture/StampedFields</c>). Registered in the per-node hub's own container; the
+/// rebind watcher runs every registration, in order, between seeing the retype post-commit and
+/// posting the recycle. An error keeps the activation (and is logged): the next activation never
+/// receives a node its settlement did not finish.
+/// </summary>
+internal interface INodeRetypeSettlement
+{
+    /// <summary>Settles the retype; emits once when done.</summary>
+    /// <param name="newNodeType">The NodeType the post-commit change reported.</param>
+    /// <returns>One value once settled; an error when it could not be.</returns>
+    IObservable<Unit> Settle(string? newNodeType);
 }
