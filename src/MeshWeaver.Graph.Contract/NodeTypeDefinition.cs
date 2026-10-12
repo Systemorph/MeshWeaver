@@ -291,6 +291,21 @@ public record NodeTypeDefinition
     public IReadOnlyList<string>? Sources { get; init; }
 
     /// <summary>
+    /// Content fields of this type's instances that ONLY the instance's own hub may write — the
+    /// node's JSON property names inside <c>content</c> (e.g. <c>["confirmedBy"]</c>). A value the
+    /// platform's code stamps (who confirmed, who approved) and that something downstream trusts as
+    /// an identity must not be writable by whoever holds Update on the node.
+    ///
+    /// <para>The platform enforces it on every client write: a cross-hub patch
+    /// (<c>GetMeshNodeStream(path).Update</c> from another hub, MCP <c>update</c>/<c>patch</c>/
+    /// <c>edit_content</c>, an upsert) or a <c>DataChangeRequest</c> that CHANGES a stamped field is
+    /// refused, naming the field; a create that carries a non-empty stamped field is refused the same
+    /// way. The owning hub's own writes (<c>GetMeshNodeStream().Update</c> on its own node) are the
+    /// only path that sets them. Reading is unchanged. See <c>Doc/Architecture/StampedFields</c>.</para>
+    /// </summary>
+    public IReadOnlyList<string>? StampedFields { get; init; }
+
+    /// <summary>
     /// Locations of the Code nodes classified as tests for this NodeType. Same
     /// query syntax, <c>name=</c> grouping, and expansion rules as
     /// <see cref="Sources"/> — see <c>CodeQueryResolver</c>. Shown under

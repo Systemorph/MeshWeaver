@@ -12,6 +12,7 @@ using MeshWeaver.Domain;
 using MeshWeaver.Kernel;
 using MeshWeaver.Mesh;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Graph.Security;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Services.LanguageServer;
@@ -238,6 +239,10 @@ public static class MeshDataSourceExtensions
                 // …and a MeshNode ENTERING it is a create (a raw storage write), so it answers to the
                 // create-validator chain — not to RLS alone.
                 .AddScoped<MeshWeaver.Data.Validation.IDataValidator, MeshWeaver.Graph.Security.MeshNodeCreationDataValidator>())
+            // A field the node's TYPE declares stamped (NodeTypeDefinition.StampedFields) is written by
+            // this hub alone: a client write that would change one is refused here, naming it, before
+            // the merge runs. Doc/Architecture/StampedFields.
+            .AddStampedFieldGuard()
             // InitializeHubRequest, HeartBeatEvent, ShutdownRequest, DisposeRequest,
             // and DeliveryFailure are bypassed by the framework — see MessageService.cs.
             .WithInitializationGate(MeshNodeExtensions.MeshNodeInitGateName, d => d.Message is CreateNodeRequest)
