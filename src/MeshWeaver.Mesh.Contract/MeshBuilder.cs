@@ -46,10 +46,14 @@ public partial record MeshBuilder
         var installedModules = InstalledModuleSet;
         ConfigureServices(services =>
         {
-            services.TryAddSingleton(sp => modules.Attach(
-                sp.GetService<CollectibleContextUnloads>(),
-                sp.GetService<ILoggerFactory>()?.CreateLogger<ModuleContexts>(),
-                sp));
+            services.TryAddSingleton(sp =>
+            {
+                installedModules.Attach(sp);
+                return modules.Attach(
+                    sp.GetService<CollectibleContextUnloads>(),
+                    sp.GetService<ILoggerFactory>()?.CreateLogger<ModuleContexts>(),
+                    sp);
+            });
             // The layout client re-reads held modules' views from their current generations.
             services.TryAddSingleton<MeshWeaver.Layout.Client.IViewContributionSource>(sp => sp.GetRequiredService<ModuleContexts>());
             // 🚨 The installed-module set is ONE registry the mesh owns (MeshWeaver#6557), and the
