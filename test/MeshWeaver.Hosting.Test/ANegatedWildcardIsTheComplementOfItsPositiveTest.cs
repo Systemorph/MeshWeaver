@@ -184,4 +184,24 @@ public class ANegatedWildcardIsTheComplementOfItsPositiveTest
         Matching(NamespaceNodes(), query, n => n.Namespace!)
             .Should().Equal(expectedNamespaces.Split('|'), $"'{query}'");
     }
+
+    /// <summary>
+    /// A negated PATH wildcard is a filter too. The carve-out of a negated path (#4296) names the
+    /// operators that stay filters; the NotLike a negated wildcard now parses to must be one of
+    /// them, or `-path:Acme/*` would fall through to the positive path anchor.
+    /// </summary>
+    [Fact]
+    public void ANegatedPathWildcardIsAFilterNeverAnAnchor()
+    {
+        var parsed = Parse("-path:Acme/* nodeType:User");
+
+        parsed.Path.Should().BeNull();
+        parsed.Paths.Should().BeNull();
+        parsed.IsSufficientlySpecified().Should().BeFalse();
+        var condition = Conditions(parsed.Filter)
+            .Where(c => c.Selector.Equals("path", StringComparison.OrdinalIgnoreCase))
+            .Should().ContainSingle().Subject;
+        condition.Operator.ToString().Should().Be("NotLike");
+        condition.Values.Should().Equal("Acme/*");
+    }
 }

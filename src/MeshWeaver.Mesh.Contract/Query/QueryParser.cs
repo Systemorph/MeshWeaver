@@ -316,17 +316,19 @@ public partial class QueryParser
             }
         }
 
-        // Check for wildcard pattern
-        if (!isNegated && (op == QueryOperator.Equal || op == QueryOperator.NotEqual))
+        // Check for wildcard pattern. A NEGATED one is NotLike - the complement of Like - and never a
+        // NotEqual against the literal text `val*`, which no value equals and which therefore matched
+        // every node (Systemorph/MeshWeaver#6581).
+        if (op == QueryOperator.Equal || op == QueryOperator.NotEqual)
         {
             if (value.Contains('*'))
             {
-                op = QueryOperator.Like;
+                op = isNegated ? QueryOperator.NotLike : QueryOperator.Like;
             }
         }
 
         // Apply negation for comparison operators
-        if (isNegated && op != QueryOperator.NotEqual && op != QueryOperator.NotIn && op != QueryOperator.Like)
+        if (isNegated && op != QueryOperator.NotEqual && op != QueryOperator.NotIn && op != QueryOperator.NotLike && op != QueryOperator.Like)
         {
             // For negated comparisons like -price:>100, invert the operator
             op = op switch
@@ -522,7 +524,8 @@ public partial class QueryParser
                         or QueryOperator.LessThan
                         or QueryOperator.LessOrEqual
                         or QueryOperator.NotEqual
-                        or QueryOperator.NotIn)
+                        or QueryOperator.NotIn
+                        or QueryOperator.NotLike)
                     {
                         filterTokens.Add(token);
                         continue;
@@ -555,6 +558,24 @@ public partial class QueryParser
                         namespaceAlternation = token.Condition.Values;
                         namespaceAlternationNegated = token.Condition.Operator == QueryOperator.NotIn;
                         namespaceUsed = true;
+                        continue;
+                    }
+                    // A NEGATED namespace is a FILTER, never an anchor (Systemorph/MeshWeaver#6581), the same
+                    // rule as a negated path (#4296): `-namespace:X` says where NOT to look, which never says
+                    // where TO look. The operator used to be dropped here, so `-namespace:*/X` became the
+                    // positive wildcard filter and `-namespace:X` the positive path anchor. A wildcard is
+                    // NotLike (the complement of the Like it would be), a concrete value NotEqual - and both
+                    // register for the subtree widening, which ANDs the negations (De Morgan).
+                    if (token.Condition.Operator is QueryOperator.NotEqual
+                        or QueryOperator.NotLike
+                        or QueryOperator.NotIn)
+                    {
+                        var excluded = QueryWildcard.ContainsWildcard(value) ? value : value.Trim('/');
+                        (namespaceWildcardIndices ??= []).Add(filterTokens.Count);
+                        filterTokens.Add(new Token(TokenType.Comparison, string.Empty,
+                            new QueryCondition("namespace",
+                                QueryWildcard.ContainsWildcard(excluded) ? QueryOperator.NotLike : QueryOperator.NotEqual,
+                                [excluded])));
                         continue;
                     }
                     if (QueryWildcard.ContainsWildcard(value))
@@ -784,18 +805,25 @@ public partial class QueryParser
             if (filterTokens[index].Condition is not { } self || self.Value.Length == 0)
                 continue;
             var pattern = self.Value;
+            // A NEGATED pattern widens to `(NOT self AND NOT below)`: the complement of
+            // `(self OR below)` is the AND of the two complements (De Morgan) - an OR of them would let a
+            // node through whenever it is outside either one.
+            var negated = self.Operator is QueryOperator.NotLike or QueryOperator.NotEqual;
+            Token[] joiner = negated
+                ? System.Array.Empty<Token>()
+                : new[] { new Token(TokenType.Or, "OR") };
             // Same vocabulary as the pattern being widened: `*`, not SQL's `%` (issue #1235). The
             // widened form carries TWO wildcards (`*/Source/*`), which is exactly the shape both
             // in-memory matchers used to mishandle by splitting on the first one only.
             var below = new QueryCondition(
-                self.Selector, QueryOperator.Like,
+                self.Selector, negated ? QueryOperator.NotLike : QueryOperator.Like,
                 [$"{pattern.TrimEnd('/')}/{QueryWildcard.Wildcard}"]);
             filterTokens.RemoveAt(index);
             filterTokens.InsertRange(index,
             [
                 new Token(TokenType.LeftParen, "("),
                 new Token(TokenType.Comparison, string.Empty, self),
-                new Token(TokenType.Or, "OR"),
+                ..joiner,
                 new Token(TokenType.Comparison, string.Empty, below),
                 new Token(TokenType.RightParen, ")"),
             ]);

@@ -111,6 +111,10 @@ public class QueryEvaluator
             QueryOperator.In => condition.Values.Any(v => CompareEqual(actualValue, v)),
             QueryOperator.NotIn => !condition.Values.Any(v => CompareEqual(actualValue, v)),
             QueryOperator.Like => CompareWildcard(actualValue, condition.Value),
+            // The exact complement of Like (Systemorph/MeshWeaver#6581): a node that lacks the field
+            // - null - does not match `field:val*`, so it IS matched by `-field:val*`, as the
+            // null-inclusive NotEqual / NotIn and the SQL `NOT ILIKE ... OR field IS NULL` are.
+            QueryOperator.NotLike => !CompareWildcard(actualValue, condition.Value),
             _ => false
         };
     }

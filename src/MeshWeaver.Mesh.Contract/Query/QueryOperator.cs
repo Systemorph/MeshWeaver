@@ -30,5 +30,8 @@ public enum QueryOperator
     NotIn,
 
     /// <summary>Wildcard pattern (field:*value*)</summary>
-    Like
+    Like,
+
+    /// <summary>Negated wildcard pattern (-field:value*): the complement of Like, so a node that lacks the field is included</summary>
+    NotLike
 }

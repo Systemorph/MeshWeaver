@@ -95,6 +95,18 @@ name:Acme*        # Starts with 'Acme'
 name:*Corp        # Ends with 'Corp'
 ```
 
+#### Negating a wildcard
+
+A negated term is the **complement** of its positive inside the same scope, and a node that *lacks* the field is **included** - `-status:Archived` keeps the nodes that have no `status`, as the null-inclusive `NotEqual` and `NotIn` do:
+
+- `-field:value` is `NotEqual`.
+- `-field:(A OR B)` and `-field:A|B` are `NotIn`.
+- `-field:val*` is `NotLike`, the complement of the wildcard (`Like`). In memory it is `!match`, and every backend must read it the same way: `NOT ILIKE ... OR field IS NULL`. So `-field:*` leaves exactly the nodes that have no such field.
+
+A negated wildcard is **not** a `NotEqual` against the literal text `val*`. It used to be read that way - the parser turned `*` into `Like` only for a term that was not negated - and no value equals `enc*`, so `-content.apiKey:enc*` returned every node, the ones `content.apiKey:enc*` matches included ([#6581](https://github.com/Systemorph/MeshWeaver/issues/6581)).
+
+A negated `namespace:` is a **filter, never an anchor** - the same rule as a negated `path:`. `-namespace:*/X` is `namespace NotLike '*/X'` and `-namespace:X` is `namespace NotEqual 'X'`; neither names a place to read, so a query that has only these still needs an anchor or `partitions:all`. With `scope:descendants` or `scope:subtree` the exclusion covers the subtree: `NOT self AND NOT below` (De Morgan), never an OR.
+
 ### Comparison Operators
 
 ```
