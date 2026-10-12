@@ -114,16 +114,65 @@ public class NodeRepoLaneSelfResolveGuard
     {
         var text = File.ReadAllText(Path.Combine(FindRepoRoot(), Resolver));
         Assert.StartsWith("#!/usr/bin/env python3", text, StringComparison.Ordinal);
-        // The seal is the TRIO — neither the run's conclusion nor its own Plugins seal decides.
+        // The seal is the TRIO — the run's conclusion does not decide, and nothing else does either.
         foreach (var job in new[] { "Promote: tag the full set", "Verify every image shipped",
                      "Bake platform content in the shipped image + publish" })
             Assert.Contains($"\"{job}\"", text, StringComparison.Ordinal);
-        Assert.Contains("PLUGINS_SEAL_JOB = (\"plugins seal\", \"Plugins: bake + seal the publication for this identity\")", text, StringComparison.Ordinal);
         Assert.Contains("--self-test", text, StringComparison.Ordinal);
         Assert.Contains("PLATFORM_BASELINE", text, StringComparison.Ordinal);
         // Its output keys are the contract the lanes re-key from; keep them stable across the fleet.
-        foreach (var key in new[] { "\"image-digest\"", "\"portal-image-digest\"", "\"set\"", "\"run-number\"", "\"plugins-set\"", "\"override\"" })
+        foreach (var key in new[] { "\"image-digest\"", "\"portal-image-digest\"", "\"set\"", "\"run-number\"", "\"override\"" })
             Assert.Contains(key, text, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// MeshWeaver#6615: core CD has had no <c>Plugins: bake + seal the publication for this
+    /// identity</c> job since #6143 — MeshWeaver.Plugins' own lane is the only writer of the
+    /// <c>plugins</c> publication, sealed per framework identity. A resolver that still read that job
+    /// saw <c>absent</c> on every run, passed over every sealed set whose run was still in flight,
+    /// and could only report a pre-#6143 run as "the plugins publication". The retired name may live
+    /// on as a self-test FIXTURE (to prove it decides nothing) — never as a seal the choice reads,
+    /// and never as a <c>plugins-*</c> output.
+    /// </summary>
+    [Fact]
+    public void TheResolver_ReadsNoRetiredPluginsSeal_AndWritesNoPluginsOutput()
+    {
+        var text = File.ReadAllText(Path.Combine(FindRepoRoot(), Resolver));
+
+        Assert.DoesNotContain("PLUGINS_SEAL_JOB = (", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("PLUGINS_LOOKBACK", text, StringComparison.Ordinal);
+        foreach (var key in new[] { "\"plugins-sealed\"", "\"plugins-run\"", "\"plugins-run-url\"", "\"plugins-set\"", "\"plugins-sealed-at\"" })
+            Assert.DoesNotContain($"{key}:", text, StringComparison.Ordinal);
+
+        // The selection functions never name the retired job. Control: the slice MUST contain the
+        // trio loop, or an emptied slice would pass this on nothing.
+        foreach (var function in new[] { "def verdict(", "def choose(" })
+        {
+            var body = PythonFunction(text, function);
+            Assert.Contains("REQUIRED_JOBS", body, StringComparison.Ordinal);
+            Assert.DoesNotContain("RETIRED_PLUGINS_SEAL_JOB", body, StringComparison.Ordinal);
+            Assert.DoesNotContain("Plugins: bake + seal", body, StringComparison.Ordinal);
+        }
+    }
+
+    [Theory]
+    [InlineData(PublishBake)]
+    [InlineData(Gate)]
+    public void TheLane_ReportsNoPluginsPublicationFromTheResolver(string workflow)
+    {
+        // The resolver writes no `plugins-set` (MeshWeaver#6615); a lane that still greps for it
+        // prints an empty "plugins publication:" that reads like an answer.
+        var lines = ExecutableLinesOf(File.ReadAllText(Path.Combine(FindRepoRoot(), workflow)));
+        Assert.DoesNotContain("plugins-set", lines, StringComparison.Ordinal);
+    }
+
+    /// <summary>A top-level Python function: from its <c>def</c> to the next top-level statement.</summary>
+    private static string PythonFunction(string python, string def)
+    {
+        var at = python.IndexOf("\n" + def, StringComparison.Ordinal);
+        Assert.True(at >= 0, $"'{def}' is gone from the resolver");
+        var end = Regex.Match(python[(at + 1 + def.Length)..], @"\n(?=[^\s#\n])");
+        return end.Success ? python.Substring(at, 1 + def.Length + end.Index) : python[at..];
     }
 
     /// <summary>The step block that carries <paramref name="marker"/>: from the previous
