@@ -23,7 +23,7 @@ The repos under `meshweaver.azurecr.io`:
 |---|---|---|
 | `memex-portal-ai` | The portal image — one tag per deploy | Where the bloat is; prune aggressively |
 | `memex-migration` | The DB-migration image | A few tags; keep the live one + `latest` |
-| `memex-portal-next` | **Retired** (policy `portal-next-in-platform-image`) — `/next` ships inside `memex-portal-ai` now | Keep only tags a deployment still pins (`lock-pinned-digests` holds them) until no overlay names one; then the repository can go |
+| `memex-portal-next` | **Retired** (policy `portal-next-in-platform-image`) — `/next` ships inside `memex-portal-ai` now | No overlay or record names it any more (Systemorph/Memex#726, `check-no-pins.py` rule 7 keeps it so). Ready to delete — [Retiring `memex-portal-next`](#retiring-memex-portal-next) |
 | `mw-plugin-test` | Plugin-CI test image (also published to GHCR) | Keep the newest; not deployment-critical |
 | `memex-portal-ai-base` | The custom runtime **base** image every portal build layers on | **Never delete `latest`** — it breaks every future build |
 
@@ -33,6 +33,45 @@ The repos under `meshweaver.azurecr.io`:
 > unpublished to the reconciler. Prune whole versions, never one repo's tag in isolation.
 
 ---
+
+## Retiring `memex-portal-next`
+
+The repository and its push credential are an infrastructure change. **Nobody runs these from a
+laptop**: it is a registry mutation, so it goes through the control instance's governed registry
+lane (the `RegistryRetention` path in `.github/scripts/acr-retention-tasks.sh` is the precedent —
+one approval, the registry name typed back) or a reviewed operator run. What is prepared here is the
+exact sequence and the checks that make each step safe.
+
+**Preconditions (read-only, all must hold):**
+
+1. Nothing pulls it. `kubectl get deploy,sts,job -A -o jsonpath='{..image}' | tr ' ' '\n' | grep memex-portal-next`
+   prints nothing, and no namespace still has a `portal-next-deployment`.
+2. Nothing names it. In Systemorph/Memex no overlay or record contains `memex-portal-next`
+   (`git grep memex-portal-next -- deployments/aks mesh/Deployments` finds comments only), and every
+   other deployment repository passes the same grep.
+3. Nothing builds it. MeshWeaver.Plugins `portal-next-image.yml` is retired (#3350), so no lane can
+   push a new tag behind the deletion.
+
+**Steps (each one a governed run):**
+
+1. **Release the lock.** `lock-pinned-digests` locks a pinned digest and never unlocks it, so
+   `memex-portal-next:3.0.0-next.43` (`sha256:ab02f4b0…`) is write- and delete-disabled. Re-enable
+   deletion on that manifest only:
+   `az acr repository update -n meshweaver --image memex-portal-next@<digest> --delete-enabled true --write-enabled true`.
+2. **Delete the repository.** `az acr repository delete -n meshweaver --repository memex-portal-next --yes`.
+3. **Narrow the push credential — do NOT delete it.** The scope-map token behind MeshWeaver.Plugins'
+   `ACR_PUSH_USERNAME`/`ACR_PUSH_PASSWORD` (`plugins-portal-next-push`) is SHARED: `log-watcher-image.yml`
+   pushes with the same secret pair. Remove only the `memex-portal-next` actions from its scope map
+   (`az acr scope-map update -n <scope-map> -r meshweaver --remove-repository memex-portal-next content/read content/write metadata/read metadata/write`)
+   and keep the log-watcher repository and the `dockerhub/node` read entry. Deleting the token would
+   turn the log-watcher lane red with a 401 that names neither the token nor the reason.
+4. **Retention record.** After the deletion, drop `--filter 'memex-portal-next:.*'` from
+   `.github/acr-retention/purge-old-images.yaml` and `purge-old-ci-releases.yaml` and apply them through
+   the governed `RegistryRetention` action — a filter on a deleted repository is harmless, but the record
+   should describe the registry that exists.
+
+**Afterwards:** `az acr repository list -n meshweaver | grep memex-portal-next` prints nothing, and
+the next `log-watcher-image.yml` run still pushes.
 
 ## Step 1 — Build the keeper list (do this FIRST)
 
