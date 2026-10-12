@@ -35,6 +35,14 @@ used `host~path` already. `ToString()` was the outlier, and it now delegates to 
 - **A segment holds neither `/` nor `~`.** Both are structural in the string form. A node id that
   could contain `~` is escaped before it becomes a segment (`AppDirectory` encodes `~` as `~7E`).
   A raw `~` in a segment cannot round-trip, and the parser will read it as a host separator.
+- **Exact equality round-trips only when no segment holds `/`.** Production does build such
+  addresses: `KernelContainer` writes `new Address("kernelExec", hub.Address.Path)`, a whole path in
+  ONE segment. Its string is the same text, and it parses back with the same `Path`, `Type` and host
+  chain, but re-segmented (`kernelExec`, `activity`, `x`, `y` instead of `kernelExec`, `activity/x/y`),
+  so `Address.Equals` is false. `StreamRoutingHotPathTest` pins that shape as production behaviour.
+  So the guarantee is: `ToString()` and parsing agree on `Path` and on the host chain for every
+  address, and on `Equals` for an address whose segments hold no `/`. Compare a key that may carry
+  an embedded `/` by `Path` (or by its string), never by `Equals` against a parsed copy.
 
 ## The one text that crosses a roll
 
@@ -51,6 +59,7 @@ message. During a roll an old pod's NACK is read by a new pod. So:
 
 - `AddressStringRoundTripTest` (MeshWeaver.Messaging.Hub.Test): seeded property test over one to four
   segments and zero to three nested hosts. It checks the parse round trip and that the wire form
-  agrees. A negative control shows the old rendering does not round-trip.
+  agrees. A negative control shows the old rendering does not round-trip. `AnEmbeddedSlash_KeepsPathAndHost_ButNotSegmentation`
+  pins the narrower guarantee for a segment that holds `/`.
 - `OwnerAnswerRecognitionGuard.ABannerFromThePreviousRelease_IsStillRecognised`
   (MeshWeaver.Hosting.Test): the roll window.

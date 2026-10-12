@@ -67,8 +67,11 @@ public sealed record Address
     /// key resolved by <c>GetAddress</c> — came back REVERSED, with no error (#6604). The
     /// wire serializer, <c>AccessContext.ObjectId</c> and the parser already used
     /// <c>host~path</c>; <c>ToString()</c> was the side that was wrong.
-    /// <c>(Address)address.ToString() == address</c> is pinned by
-    /// <c>AddressStringRoundTripTest</c>.</para>
+    /// <c>(Address)address.ToString() == address</c> holds for every address whose segments hold
+    /// no <c>/</c>, and is pinned by <c>AddressStringRoundTripTest</c>. A segment that carries a
+    /// whole path (<c>new Address("kernelExec", hubPath)</c>) renders the same text and parses back
+    /// with the same <see cref="Path"/> and host chain, but re-segmented, so <see cref="Equals(Address?)"/>
+    /// is false for it; compare such a key by <see cref="Path"/>.</para>
     ///
     /// <para>Need the node path? Use <see cref="Path"/>, never <c>ToString()</c> — the host
     /// chain says where an address is activated, not what it is.</para>

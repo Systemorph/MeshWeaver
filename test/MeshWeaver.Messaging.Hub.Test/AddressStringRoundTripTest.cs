@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Text.Json;
 using MeshWeaver.Messaging.Serialization;
@@ -26,7 +27,7 @@ namespace MeshWeaver.Messaging.Hub.Test;
 /// </summary>
 public class AddressStringRoundTripTest
 {
-    private static readonly string[] Types =
+    private static readonly ImmutableArray<string> Types =
         ["mesh", "portal", "cache", "client", "sync", "activity", "ui", "le", "ACME", "rbuergi"];
 
     private const string Alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.@";
@@ -101,6 +102,29 @@ public class AddressStringRoundTripTest
         ((Address)nested.ToString()).Host!.Host!.Should().Be(new Address("mesh", "root"));
 
         new Address("ACME", "Doc").ToString().Should().Be("ACME/Doc", "an unhosted address is its path");
+    }
+
+    /// <summary>
+    /// The narrower guarantee for a segment that carries a whole path — the shape
+    /// <c>KernelContainer</c> builds (<c>new Address("kernelExec", hub.Address.Path)</c>). The string
+    /// and the parse agree on <see cref="Address.Path"/>, <see cref="Address.Type"/> and the host
+    /// chain; only the segmentation differs, so <see cref="Address.Equals(Address?)"/> is false.
+    /// </summary>
+    [Fact]
+    public void AnEmbeddedSlash_KeepsPathAndHost_ButNotSegmentation()
+    {
+        var address = new Address("kernelExec", "activity/x/y").WithHost(new Address("portal", "p1"));
+        var text = address.ToString();
+        text.Should().Be("portal/p1~kernelExec/activity/x/y");
+
+        Address parsed = text;
+        parsed.Path.Should().Be(address.Path);
+        parsed.Type.Should().Be(address.Type);
+        parsed.Host.Should().Be(address.Host);
+        parsed.ToString().Should().Be(text);
+        parsed.Segments.Should().HaveCount(4, "the parser splits every '/'");
+        parsed.Should().NotBe(address,
+            "Equals compares segments, and the embedded '/' re-segments on parse — the documented limit");
     }
 
     /// <summary>
