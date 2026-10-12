@@ -2054,7 +2054,9 @@ public sealed class MessageHub : IMessageHub
     /// </summary>
     /// <typeparam name="TMessage">The message payload type.</typeparam>
     /// <param name="message">The message payload to send.</param>
-    /// <param name="configure">Optional configuration of the delivery (target, sender, response-correlation, message id).</param>
+    /// <param name="configure">Optional configuration of the delivery (target, response-correlation, message id). The
+    /// sender is NOT configurable: this hub stamps its own address, and a <see cref="PostOptions.Sender"/> written
+    /// here is replaced and logged (Doc/Architecture/SenderIsThePostingHub).</param>
     /// <returns>The created delivery wrapping <paramref name="message"/>, or <c>null</c> if it was not posted.</returns>
     public IMessageDelivery<TMessage>? Post<TMessage>(
         TMessage message,
@@ -2064,6 +2066,12 @@ public sealed class MessageHub : IMessageHub
         var options = new PostOptions(Address);
         if (configure != null)
             options = configure(options);
+        // 🚨 The sender is THIS hub — never the address the caller wrote (#6553). A guard that
+        // decides by sender (the stamped-field guard admits only the owning hub) can rely on it only
+        // if posting code cannot name another hub's address. The one exception is a parent carrying
+        // its hosted hub's own post, which only this assembly can mark.
+        if (!options.CarriedForHostedHub && !Equals(options.Sender, Address))
+            options = StampOwnSender(options, message?.GetType() ?? typeof(TMessage));
         // A platform principal stamped by the CALLER (WithAccessContext / ImpersonateAsHub) is an
         // impersonation like any other: check who asked (Doc/Architecture/InMeshImpersonation).
         if (options.ImpersonationRequestedBy is { } requestedBy && options.ImpersonateContext is { } stamped)
@@ -2090,6 +2098,38 @@ public sealed class MessageHub : IMessageHub
             logger.LogTrace("MESSAGE_FLOW: HUB_POST_RESULT | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}",
                 typeof(TMessage).Name, Address, result?.Id, options.Target);
         return result;
+    }
+
+    // One warning per (message type, call site) for this hub's lifetime: a caller that names a foreign
+    // sender does so on every post, and the line must stay readable. Keyed on STABLE data only — the
+    // claimed address is caller-controlled and may be fresh on every post — and capped, so neither a
+    // per-post address nor an unbounded set of call sites can grow it for the hub's lifetime.
+    private const int MaxForeignSenderReports = 64;
+    private readonly ConcurrentDictionary<string, byte> foreignSenderReported = new();
+
+    /// <summary>
+    /// Overwrites a caller-written <see cref="PostOptions.Sender"/> with this hub's address and logs
+    /// who wrote it (#6553, Doc/Architecture/SenderIsThePostingHub). The post still goes out — as
+    /// this hub, which is what it is — so a reply comes back here and a sender-keyed guard judges
+    /// the real poster.
+    /// </summary>
+    private PostOptions StampOwnSender(PostOptions options, Type messageType)
+    {
+        if (foreignSenderReported.Count < MaxForeignSenderReports)
+        {
+            var claimed = options.Sender;
+            // The stack, not the configure delegate: Observe wraps the caller's delegate in a lambda
+            // declared on this type, so the delegate would name MessageHub rather than the forger.
+            var callSite = DescribeCallSite();
+            var firstFrame = callSite.Split('\n', 2)[0].Trim();
+            if (foreignSenderReported.TryAdd($"{messageType.FullName}|{firstFrame}", 0))
+                logger.LogWarning(
+                    "[ForeignSender] Hub {Address} posted {MessageType} naming sender {ClaimedSender}. "
+                    + "The sender of a post is the hub that posts it: the claimed address was replaced by {Address} "
+                    + "(Doc/Architecture/SenderIsThePostingHub). Call site:\n{CallSite}",
+                    Address, messageType.Name, claimed?.ToString() ?? "(null)", Address, callSite);
+        }
+        return options with { Sender = Address };
     }
 
     // One report per (role, message type) for this hub's lifetime, keyed independently of the
@@ -2317,8 +2357,11 @@ public sealed class MessageHub : IMessageHub
             if (method is null)
                 continue;
             // Drop the leading frames inside this type (Post, ReportRouterTrafficOrigin and this
-            // method) — they are the same three lines on every report and push the answer down.
-            if (!started && method.DeclaringType == typeof(MessageHub))
+            // method) — they are the same three lines on every report and push the answer down. That
+            // includes the compiler-generated closures nested in it, the Observe extensions (which
+            // wrap the caller's delegate and post as object) and the Rx plumbing a cold Observe posts from on Subscribe, so the
+            // first line printed is the code that asked.
+            if (!started && IsPostPlumbing(method.DeclaringType))
                 continue;
             started = true;
             var file = frame.GetFileName();
@@ -2328,6 +2371,14 @@ public sealed class MessageHub : IMessageHub
                 break;
         }
         return lines.Count > 0 ? string.Join("\n", lines) : "   (no managed frames)";
+    }
+
+    private static bool IsPostPlumbing(Type? type)
+    {
+        for (var t = type; t is not null; t = t.DeclaringType)
+            if (t == typeof(MessageHub) || t == typeof(MessageHubExtensions))
+                return true;
+        return type?.Namespace?.StartsWith("System.Reactive", StringComparison.Ordinal) == true;
     }
 
     /// <summary>

@@ -10,7 +10,9 @@ namespace MeshWeaver.Messaging;
 /// metadata applied to a message as it is dispatched into the mesh. Immutable record — each
 /// <c>With…</c> method returns a new instance with the change applied.
 /// </summary>
-/// <param name="Sender">The address the message is sent from; also used as the identity when impersonating as a hub.</param>
+/// <param name="Sender">The address the message is sent from; also used as the identity when impersonating as a hub.
+/// Owned by the posting hub: <c>MessageHub.Post</c> constructs these options with its own address and replaces any
+/// other value a caller writes here (logged as <c>[ForeignSender]</c>; Doc/Architecture/SenderIsThePostingHub).</param>
 public record PostOptions(Address Sender)
 {
     /// <summary>
@@ -187,6 +189,22 @@ public record PostOptions(Address Sender)
         ImpersonationRequestedBy = requestedBy,
         ImpersonationSurface = nameof(ImpersonateAsHub),
     };
+
+    /// <summary>
+    /// 🚨 The ONE sanctioned way a post leaves a hub under another hub's address (#6553): a parent
+    /// CARRYING a delivery its hosted hub posted but can no longer send itself (a correlated reply or
+    /// a release posted during that hub's teardown). Only this assembly can set it.
+    ///
+    /// <para>Every other post is stamped with the address of the hub that actually posts it
+    /// (<see cref="MessageHub.Post{TMessage}"/>): a <see cref="Sender"/> the caller wrote is
+    /// overwritten, so a hub guard that decides by sender — the stamped-field guard admitting only
+    /// the owning hub — cannot be passed by code that merely names another hub's address.</para>
+    /// </summary>
+    internal bool CarriedForHostedHub { get; init; }
+
+    /// <summary>Marks these options as carried by a parent for one of its hosted hubs (see
+    /// <see cref="CarriedForHostedHub"/>).</summary>
+    internal PostOptions CarriedByParent() => this with { CarriedForHostedHub = true };
 
     internal string MessageId { get; init; } = Guid.NewGuid().AsString();
     /// <summary>
