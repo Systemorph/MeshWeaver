@@ -32,6 +32,16 @@ public sealed class ModuleOwnedRootSource(ModuleContexts contexts) : IRegistrati
             return KeyedStandIns(keyed.ServiceType, key, registrationAccessor(service).Any());
         if (service is not TypedService typed)
             return [];
+        // A module withdrawn at boot because its shared instances could not be built (MeshWeaver#6542)
+        // is reported where every other module that failed to install is: as an IncompatibleModule.
+        if (typed.ServiceType == typeof(IncompatibleModule))
+            return contexts.NotBuilt
+                .Select(record => (IComponentRegistration)RegistrationBuilder.ForDelegate((_, _) => record)
+                    .As<IncompatibleModule>()
+                    .ExternallyOwned()
+                    .SingleInstance()
+                    .CreateRegistration())
+                .ToArray();
         var resolvers = ModuleServices.RegistrationsElsewhere(contexts, null, typed.ServiceType);
         return resolvers.Count == 0
             ? []
@@ -56,4 +66,16 @@ public sealed class ModuleOwnedRootSource(ModuleContexts contexts) : IRegistrati
         // the LAST of the list unless the container registers the key itself.
         return explicitRegistrationsExist ? standIns : standIns.Reverse();
     }
+}
+
+/// <summary>
+/// Builds every held module's shared instances once the root container is built, before the root
+/// provider is handed to anyone (MeshWeaver#6542, <see cref="ModuleContexts.BuildAllBeforePublish"/>).
+/// Resolves the registry THROUGH the root, which attaches it to that root.
+/// </summary>
+internal sealed class ModulesBuiltBeforePublished : IRootContainerBuilt
+{
+    /// <inheritdoc />
+    public void Built(IServiceProvider root) =>
+        (root.GetService(typeof(ModuleContexts)) as ModuleContexts)?.BuildAllBeforePublish();
 }

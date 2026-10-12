@@ -288,12 +288,42 @@ public sealed class ModuleServices : IDisposable
             var context = LoadContext;
             var name = ModuleName;
             var contexts = root.GetService<ModuleContexts>();
+            // A STAGED generation's container sees the other generations of its swap in place of the
+            // current ones — it is built (BuildBeforePublish) before the swap commits, and must bind
+            // what it will serve with once it has. A released stage answers nothing, so once the commit
+            // has made every generation of the swap current this is the current generations, exactly as
+            // for a generation loaded at boot.
+            var stage = Stage;
             return scope = ModuleServiceProvider.Create(
                 services, root,
                 type => context is not null && IsOwned(type, context),
                 Prefix.Where(d => d.ServiceType.IsGenericTypeDefinition),
-                type => contexts is null ? [] : RegistrationsElsewhere(contexts, name, type));
+                type => contexts is null ? [] : ElsewhereSeenFrom(contexts, name, type, null, stage));
         }
+    }
+
+    /// <summary>The live swap this generation was staged in, or null (a generation loaded at boot).</summary>
+    internal ModuleSwapStage? Stage { get; set; }
+
+    /// <summary>
+    /// 🚨 <b>Built before published</b> (MeshWeaver#6542): builds every shared instance of this
+    /// generation's container — every singleton the root can reach through a forwarder, a module-type
+    /// stand-in or a health-check forwarder, and what their constructors take — BEFORE the generation
+    /// can be reached from the root: at boot, before the root provider is handed out; on a swap, before
+    /// the swap commits. The root then only ever reads built instances, so its lock never waits on this
+    /// container's. A module's HOSTED services are left to their own host: the root never reaches them,
+    /// and a hosted service that cannot be built costs its feature, never the module (#2449).
+    /// Throws what a constructor throws.
+    /// </summary>
+    /// <param name="root">The mesh's root provider.</param>
+    internal void BuildBeforePublish(IServiceProvider root)
+    {
+        var hosted = Registrations
+            .Where(r => r.Route == ModuleServiceRoute.Hosted)
+            .Select(r => (Autofac.Core.Service)new Autofac.Core.KeyedService(
+                r.Descriptor.IsKeyedService ? r.Descriptor.ServiceKey! : r.Key, typeof(IHostedService)))
+            .ToImmutableHashSet();
+        ModuleServiceProvider.BuildSharedInstances(Scope(root), hosted.Contains);
     }
 
     /// <summary>
@@ -314,7 +344,7 @@ public sealed class ModuleServices : IDisposable
     /// <param name="requester">The module whose container asks, or null for the root.</param>
     /// <param name="type">The service type asked for.</param>
     public static IReadOnlyList<Func<object>> RegistrationsElsewhere(ModuleContexts contexts, string? requester, Type type)
-        => ElsewhereByKey(contexts, requester, type, null);
+        => ElsewhereSeenFrom(contexts, requester, type, null, null);
 
     /// <summary>
     /// As <see cref="RegistrationsElsewhere(ModuleContexts, string?, Type)"/>, for the registrations of
@@ -329,20 +359,23 @@ public sealed class ModuleServices : IDisposable
     public static IReadOnlyList<Func<object>> KeyedRegistrationsElsewhere(ModuleContexts contexts, string? requester, Type type, object key)
     {
         ArgumentNullException.ThrowIfNull(key);
-        return ElsewhereByKey(contexts, requester, type, key);
+        return ElsewhereSeenFrom(contexts, requester, type, key, null);
     }
 
     // key null = the unkeyed registrations. An unkeyed request never sees a keyed registration and a
     // keyed one sees only the registrations under its own key: the module container holds a keyed
     // registration under that key, so counting it among the unkeyed positions would point ResolveAt
     // past the end of the type's registrations.
-    private static IReadOnlyList<Func<object>> ElsewhereByKey(ModuleContexts contexts, string? requester, Type type, object? key)
+    // stage non-null = asked from a container of that swap's STAGED generations: the stage's generations
+    // stand in for the current ones of the same name, while the stage is open (BuildBeforePublish).
+    internal static IReadOnlyList<Func<object>> ElsewhereSeenFrom(
+        ModuleContexts contexts, string? requester, Type type, object? key, ModuleSwapStage? stage)
     {
         ArgumentNullException.ThrowIfNull(contexts);
         ArgumentNullException.ThrowIfNull(type);
         if (type.IsGenericTypeDefinition)
             return [];
-        var generations = contexts.Generations
+        var generations = contexts.GenerationsSeenFrom(stage)
             .Where(g => g.Services is not null)
             .OrderBy(g => g.Name, StringComparer.Ordinal)
             .ToArray();
@@ -357,7 +390,7 @@ public sealed class ModuleServices : IDisposable
             {
                 if (owner.Services!.Registrations.Any(r => r.Route == ModuleServiceRoute.ModuleOwned
                         && r.Descriptor.ServiceType == type && Matches(r.Descriptor, key)))
-                    resolvers.Add(() => (contexts.ModuleScope(ownerName)
+                    resolvers.Add(() => (contexts.ModuleScopeSeenFrom(ownerName, stage)
                             ?? throw new InvalidOperationException($"Module {ownerName} holds no service scope."))
                         .GetRequiredKeyedService(type, key));
             }
@@ -369,7 +402,7 @@ public sealed class ModuleServices : IDisposable
                 {
                     var at = position;
                     resolvers.Add(() => ModuleServiceProvider.ResolveAt(
-                        contexts.ModuleScope(ownerName) ?? throw new InvalidOperationException($"Module {ownerName} holds no service scope."),
+                        contexts.ModuleScopeSeenFrom(ownerName, stage) ?? throw new InvalidOperationException($"Module {ownerName} holds no service scope."),
                         type, at));
                 }
             }
@@ -382,7 +415,7 @@ public sealed class ModuleServices : IDisposable
                              && (key is null ? !r.Descriptor.IsKeyedService : Matches(r.Descriptor, key))))
             {
                 var index = registration.Index;
-                resolvers.Add(() => contexts.ResolveModuleService(name, index));
+                resolvers.Add(() => contexts.ResolveModuleServiceSeenFrom(name, index, stage));
             }
         }
         return resolvers.ToImmutable();
