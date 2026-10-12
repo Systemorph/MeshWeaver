@@ -999,13 +999,17 @@ public class OrleansRoutingService : IRoutingService, IDisposable
         streams.TryGetValue(GetHostAddress(address), out var callback) ? callback : null;
 
     /// <summary>
-    /// Registers a local delivery callback for an address and subscribes the matching Orleans
-    /// memory stream so cross-process messages for that address are routed into the callback.
+    /// Registers a local delivery callback for an address: the local route goes live at once, and the
+    /// address's pod-hub claim is attached so a directed grain call from another process reaches the
+    /// callback. Only on a host that registered the Orleans memory stream (a single-process host, an
+    /// Orleans client) is the matching memory stream also subscribed; a multi-silo host registers
+    /// none (#4802), and the claim is its only cross-process transport.
     /// </summary>
     /// <param name="address">The mesh address this callback serves.</param>
     /// <param name="callback">The delivery callback invoked for messages targeting the address.</param>
-    /// <returns>A disposable that removes the local route and unsubscribes the Orleans stream
-    /// (the async unsubscribe is bridged onto the mesh IO pool).</returns>
+    /// <returns>A disposable that removes the local route and releases the pod-hub claim, and, where a
+    /// memory stream was subscribed, unsubscribes it (the async unsubscribe is bridged onto the mesh
+    /// IO pool).</returns>
     public IDisposable RegisterStream(Address address, AsyncDelivery callback)
     {
         // The LOCAL route goes live immediately and unconditionally — this is what makes in-process

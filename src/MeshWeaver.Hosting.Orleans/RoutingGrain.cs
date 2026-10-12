@@ -1280,8 +1280,7 @@ internal class RoutingGrain(
             if (nackLog.ShouldReport(senderPath, out var suppressedNacks))
                 logger.LogError(ex,
                     "[ROUTE] Cannot deliver the {ErrorType} DeliveryFailure for {DeliveryId} to sender {Sender}: "
-                    + "the directed call to its host's grain/pod-hub activation failed after its transient "
-                    + "retries, and there is no second carrier (the memory stream is retired, #4802). The "
+                    + "no available transport carried it (see the exception for which leg failed). The "
                     + "sender will wait out its own request budget — the original failure was: "
                     + "{FailureMessage}. {Suppressed} earlier undeliverable NACK(s) to this sender since the "
                     + "last such line were logged at Debug.",
@@ -1289,7 +1288,7 @@ internal class RoutingGrain(
             else
                 logger.LogDebug(ex,
                     "[ROUTE] Cannot deliver the {ErrorType} DeliveryFailure for {DeliveryId} to sender {Sender} "
-                    + "(the directed transport failed); windowed — see the Error line for this sender. "
+                    + "(no available transport carried it); windowed — see the Error line for this sender. "
                     + "Original failure: {FailureMessage}",
                     errorType, delivery.Id, delivery.Sender, failureMessage);
             return Observable.Return(Unit.Default);
