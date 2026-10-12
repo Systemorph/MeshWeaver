@@ -19,8 +19,10 @@ subscribed repository.
 > **Under the ladder** (policy `platform-backwards-compatibility`): a normal platform build needs no
 > wave and no re-seal — publications are keyed on the compatibility key `c<major>e<epoch>`, shared by
 > every build of one epoch, so a plugin publication keeps serving across platform rolls. A plugin
-> seal for a new platform is a precondition of anything only behind a DECLARED break, and then the
-> roll is held per plugin, by name — [Deploying Across Platform Versions](../DeployingAcrossPlatformVersions).
+> seal for a new platform is needed only behind a DECLARED break, and then for the PLUGIN to follow:
+> the platform still rolls, and each plugin without a replacement is named as a package advisory
+> (policy `platform-rolls-independently-of-packages`) and keeps its previous generation —
+> [Deploying Across Platform Versions](../DeployingAcrossPlatformVersions).
 
 This page exists because the wave has been mis-diagnosed twice in one day, in opposite directions —
 once by blaming a receiver's pin, once by blaming an emitter that did not exist. Both mistakes are
