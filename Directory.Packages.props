@@ -183,7 +183,10 @@
     <PackageVersion Include="Serilog.AspNetCore" Version="10.0.0" />
     <PackageVersion Include="Serilog.Settings.Configuration" Version="10.0.1" />
     <PackageVersion Include="Serilog.Sinks.File" Version="7.0.0" />
-    <PackageVersion Include="SixLabors.ImageSharp" Version="3.2.0" />
+    <!-- HELD at 3.1.12: 3.2.0 backports the Six Labors licence ENFORCEMENT into the 3.x line (its
+         MSBuild targets fail the build with "No Six Labors license found"), so every 3.2+ release is
+         pay-to-use exactly like 4.x. .github/dependabot.yml ignores ">=3.2.0" for the same reason. -->
+    <PackageVersion Include="SixLabors.ImageSharp" Version="3.1.12" />
     <!-- Share-card rendering (OgCardRenderer). SkiaSharp is MIT; the NoDependencies native build
          deliberately drops the fontconfig/libfreetype link, so the portal image needs NO apt
          packages and the base image stays as it is — the font is supplied from an embedded

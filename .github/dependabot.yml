@@ -77,13 +77,19 @@ updates:
       #   'sixlabors.lic' file ... Please obtain a license from https://sixlabors.com/pricing/
       #
       # So this is not a preference to weigh: 4.x cannot build here at all without a purchased key,
-      # and MeshWeaver ships Apache-2.0 / MIT. 3.1.x remains Apache-2.0 and keeps receiving security
-      # patches, which is why the floor is on the MAJOR and ordinary 3.1.x bumps still flow.
+      # and MeshWeaver ships Apache-2.0 / MIT. 3.1.x remains Apache-2.0, which is why ordinary 3.1.x bumps still flow.
       #
       # The exit is a commercial decision, not a technical one: if a Six Labors licence is ever
       # bought, drop this block AND provision the key for CI and every developer machine.
+      #
+      # 🚨 AND 3.2.0 IS THE SAME WALL: its release backports "licence enforcement" into the 3.x line.
+      # Measured on #6549 (3.1.12 -> 3.2.0): sixlabors.imagesharp/3.2.0/build/SixLabors.ImageSharp
+      # .targets(35,5): error : No Six Labors license found. So the hold starts at 3.2.0, not at the
+      # major; 3.1.x patches still flow. Holding here does NOT buy safety: GHSA-j3p4-wp97-rph4,
+      # GHSA-j9gm-c75j-xc9q and GHSA-jjfr-hcj7-qf5w (high, 2026-10-07) cover every version up to
+      # 4.1.1 and are patched only in 4.1.2 - the licence-or-replace decision above is now open.
       - dependency-name: "SixLabors.ImageSharp*"
-        versions: [">=4.0.0"]
+        versions: [">=3.2.0"]
 
   - package-ecosystem: pip
     directory: "/clients/python"
