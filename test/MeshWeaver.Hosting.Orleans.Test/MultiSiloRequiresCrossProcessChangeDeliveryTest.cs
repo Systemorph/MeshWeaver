@@ -40,7 +40,9 @@ public class MultiSiloRequiresCrossProcessChangeDeliveryTest
     private static void DurableStore(ISiloBuilder silo) =>
         silo.Services.AddKeyedSingleton<IGrainStorage>(StreamProviders.PubSubStore, new NeverCalledStore());
 
-    [Fact(Timeout = 30_000)]
+    // Bounded by the runner-wide outer bound (TestTimeouts.DefaultOuterBound); a hand-written
+    // literal is what TestTimeoutLiteralRatchetGuard holds down.
+    [Fact]
     public async Task ADurablePubSubStoreWithoutTheDeclaration_RefusesToStart()
     {
         using var host = BuildSilo(DurableStore, declare: false);
