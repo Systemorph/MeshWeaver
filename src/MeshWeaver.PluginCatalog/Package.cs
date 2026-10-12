@@ -433,9 +433,10 @@ public record PackageManifest
     /// install skipped the write, stamped the file's hash anyway, and every later install read the
     /// equal hash and never looked again: <c>Governance/NameCheck</c> stayed
     /// <c>keepsHistory: true</c> through a reinstall on a platform whose comparison could see the
-    /// difference (MeshWeaver.Plugins#2786). A record stamped under an OLDER rule is therefore not a
-    /// baseline: the next install of the package is a full one, which compares every stored node
-    /// with the package and stamps the current rule.</para>
+    /// difference (MeshWeaver.Plugins#2786). A record stamped under any OTHER rule than the installer
+    /// reading it applies — older, or newer from a pod on a later image during a roll — is therefore
+    /// not a baseline: the next install of the package is a full one, which compares every stored
+    /// node with the package and stamps that installer's rule.</para>
     ///
     /// <para>Only a FULL install stamps the current rule. An incremental update compares only the
     /// files whose hash moved, so it carries the previous value forward.</para>

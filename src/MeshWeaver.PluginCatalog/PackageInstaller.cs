@@ -61,9 +61,9 @@ public static class PackageInstaller
     /// <summary>
     /// 🚨 The version of the rule that decides, node by node, whether an install writes
     /// (<see cref="IsUnchanged"/>). A full install stamps it on the record
-    /// (<see cref="PackageManifest.ComparisonEpoch"/>); a record carrying an older value is not a
-    /// diff baseline, so the next install of that package is a full one
-    /// (<see cref="RecordPredatesTheComparisonRule"/>).
+    /// (<see cref="PackageManifest.ComparisonEpoch"/>); a record carrying any OTHER value — older or
+    /// newer — is not a diff baseline, so the next install of that package is a full one
+    /// (<see cref="RecordIsNotABaselineUnderThisRule"/>).
     ///
     /// <para><b>Raise it whenever the rule starts to see a difference it used to miss</b> — the
     /// change that made a write necessary where an earlier install skipped it. Every record stamped
@@ -79,14 +79,23 @@ public static class PackageInstaller
     public const int InstallComparisonEpoch = 1;
 
     /// <summary>
-    /// True when <paramref name="record"/> was stamped under an older comparison rule than this
-    /// installer applies, so its file hashes are no evidence of what the mesh stores and neither
-    /// the up-to-date exit nor the incremental diff may trust them.
+    /// True when <paramref name="record"/> was NOT stamped under exactly the comparison rule this
+    /// installer applies, so its file hashes are no evidence of what THIS installer's comparison would
+    /// have decided and neither the up-to-date exit nor the incremental diff may trust them.
+    ///
+    /// <para><b>Exact match, never "at least".</b> During a surge-first roll an older pod and a newer
+    /// one share the same install records. A record stamped by a NEWER rule is no baseline for an
+    /// older installer either: an incremental update there would compare with the older
+    /// <see cref="IsUnchanged"/>, skip a difference only the newer rule sees, and — under an "at
+    /// least" test — carry the newer value forward, leaving a record that falsely claims the newer
+    /// rule compared everything; the newer pod's equal-hash exit would then never repair it. Under an
+    /// exact match the older pod installs in full and stamps ITS rule, so the newer pod finds a
+    /// mismatch again and compares in full under its own rule.</para>
     /// </summary>
     /// <param name="record">The install record as stored.</param>
     /// <returns>True when the next install must compare every node in full.</returns>
-    public static bool RecordPredatesTheComparisonRule(PackageManifest record) =>
-        (record.ComparisonEpoch ?? 0) < InstallComparisonEpoch;
+    public static bool RecordIsNotABaselineUnderThisRule(PackageManifest record) =>
+        record.ComparisonEpoch != InstallComparisonEpoch;
 
     /// <summary>Bounded concurrency for the per-node upsert fan-out (mirrors <c>NodeCopyHelper</c>).</summary>
     public const int DefaultBatchSize = 8;

@@ -172,9 +172,17 @@ install that met `keepsHistory: false` under the narrow gate skipped the write a
 file's hash anyway, so every later install found an equal hash and never compared the node again.
 
 The record therefore carries the rule it was stamped under, `PackageManifest.ComparisonEpoch`, and
-the installer names the rule it applies, `PackageInstaller.InstallComparisonEpoch`. A record under an
-older rule is no baseline: the funnel installs in full, which compares every stored node with the
-package, writes only the ones that differ, and stamps the current rule. Only a full install may
+the installer names the rule it applies, `PackageInstaller.InstallComparisonEpoch`. A record under any
+other rule is no baseline (`PackageInstaller.RecordIsNotABaselineUnderThisRule`): the funnel installs
+in full, which compares every stored node with the package, writes only the ones that differ, and
+stamps the installer's own rule.
+
+The match is exact, never "at least". During a surge-first roll an older pod and a newer one share
+the install records. Were a newer rule's record a baseline for the older pod, its incremental update
+would compare under the older rule, skip a difference only the newer rule sees, and carry the newer
+value forward — a record falsely claiming the newer comparison, which the newer pod's equal-hash exit
+would then never repair. Under an exact match the older pod installs in full and stamps its own rule,
+and the newer pod, finding a mismatch, compares in full again under its own. Only a full install may
 stamp it; an incremental update compared only what it fetched and carries the previous value
 forward.
 
