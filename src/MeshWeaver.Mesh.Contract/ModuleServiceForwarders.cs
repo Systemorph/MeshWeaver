@@ -175,6 +175,13 @@ internal static class ModuleServiceForwarding
     /// <summary>
     /// Adds to the ROOT collection the forwarder for every platform-typed registration the module made
     /// — exactly the registrations the root would have held — and nothing that names a module type.
+    ///
+    /// <para>🚨 Every forwarder is a <see cref="NotOwnedServiceDescriptor"/>: the root scope that resolves it
+    /// never disposes what it returns. The instance belongs to the module — its generation's container
+    /// (a singleton) or the module scope the caller owns (scoped, MeshWeaver#6584) — and a forwarder the
+    /// caller's scope owned disposed a module SINGLETON when the first circuit ended, under every other
+    /// user, and a scoped instance twice. A proxy is not owned either: disposing a proxy over an
+    /// <see cref="IDisposable"/> interface forwards the call to the module's instance.</para>
     /// </summary>
     public static IServiceCollection AddForwarders(IServiceCollection root, ModuleServices services)
     {
@@ -190,19 +197,19 @@ internal static class ModuleServiceForwarding
                 switch (registration.Route)
                 {
                     case ModuleServiceRoute.Proxy when registration.Descriptor.Lifetime == ServiceLifetime.Singleton:
-                        root.Add(ServiceDescriptor.KeyedSingleton(type, key, (sp, _) => ModuleServiceProxy.Create(
-                            type, sp.GetRequiredService<ModuleContexts>(), module, index)));
+                        root.Add(NotOwnedServiceDescriptor.KeyedForwarder(type, key, (sp, _) => ModuleServiceProxy.Create(
+                            type, sp.GetRequiredService<ModuleContexts>(), module, index), ServiceLifetime.Singleton));
                         break;
                     case ModuleServiceRoute.Proxy:
                         // Scoped or transient: one proxy per caller, forwarding for it (MeshWeaver#6584).
-                        root.Add(new ServiceDescriptor(type, key, (sp, _) => ModuleServiceProxy.Create(
+                        root.Add(NotOwnedServiceDescriptor.KeyedForwarder(type, key, (sp, _) => ModuleServiceProxy.Create(
                             type, sp.GetRequiredService<ModuleContexts>(), module, index,
                             ModuleServiceProvider.CallerOfRootScope(sp)), registration.Descriptor.Lifetime));
                         break;
                     case ModuleServiceRoute.Current:
-                        root.Add(ServiceDescriptor.KeyedTransient(type, key, (sp, _) =>
+                        root.Add(NotOwnedServiceDescriptor.KeyedForwarder(type, key, (sp, _) =>
                             sp.GetRequiredService<ModuleContexts>().ResolveModuleService(module, index,
-                                ModuleServiceProvider.CallerOfRootScope(sp))));
+                                ModuleServiceProvider.CallerOfRootScope(sp)), ServiceLifetime.Transient));
                         break;
                 }
                 continue;
@@ -217,14 +224,14 @@ internal static class ModuleServiceForwarding
                 case ModuleServiceRoute.Proxy when registration.Descriptor.Lifetime == ServiceLifetime.Singleton:
                     // Singleton: ONE stable proxy, so every consumer holds the same forwarder.
                     // Resolving the registry through the container is what attaches it to the root.
-                    root.Add(ServiceDescriptor.Singleton(type, sp => ModuleServiceProxy.Create(
-                        type, sp.GetRequiredService<ModuleContexts>(), module, index)));
+                    root.Add(NotOwnedServiceDescriptor.Forwarder(type, sp => ModuleServiceProxy.Create(
+                        type, sp.GetRequiredService<ModuleContexts>(), module, index), ServiceLifetime.Singleton));
                     break;
                 case ModuleServiceRoute.Proxy:
                     // Scoped or transient: one proxy per caller scope, forwarding to that caller's instance
                     // in the module scope it owns — a singleton proxy would serve every circuit one
                     // instance (MeshWeaver#6584).
-                    root.Add(ServiceDescriptor.Describe(type, sp => ModuleServiceProxy.Create(
+                    root.Add(NotOwnedServiceDescriptor.Forwarder(type, sp => ModuleServiceProxy.Create(
                         type, sp.GetRequiredService<ModuleContexts>(), module, index,
                         ModuleServiceProvider.CallerOfRootScope(sp)), registration.Descriptor.Lifetime));
                     break;
@@ -232,8 +239,9 @@ internal static class ModuleServiceForwarding
                     // Resolved for the CALLER — the scope this transient forwarder is resolved in — so a
                     // module's scoped registration is that circuit's / request's / hub's instance, built
                     // against its NavigationManager and IJSRuntime (MeshWeaver#6584).
-                    root.Add(ServiceDescriptor.Transient(type, sp => sp.GetRequiredService<ModuleContexts>()
-                        .ResolveModuleService(module, index, ModuleServiceProvider.CallerOfRootScope(sp))));
+                    root.Add(NotOwnedServiceDescriptor.Forwarder(type, sp => sp.GetRequiredService<ModuleContexts>()
+                        .ResolveModuleService(module, index, ModuleServiceProvider.CallerOfRootScope(sp)),
+                        ServiceLifetime.Transient));
                     break;
             }
         }

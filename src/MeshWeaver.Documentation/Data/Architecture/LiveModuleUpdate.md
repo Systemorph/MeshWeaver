@@ -253,12 +253,35 @@ end afterwards finds nothing to do (`ACallersModuleScopeEndsWithTheGenerationTes
 the platform-class road; its negative control resolves the same registration with no caller and gets
 the uninitialised-state throw.
 
-**Residual.** A caller-owned module scope has its own Autofac shared-instance lock. A first build of a
-caller-scoped ROOT service whose constructor resolves a module's scoped service (caller lock, then the
-module scope's), overlapping a first build of that module service whose constructor takes a
-caller-scoped root service not built yet (the other order), could deadlock. It needs two threads making
-first builds in the same caller scope at once — a Blazor circuit serialises on its renderer, and a
-`Proxy` defers its resolve to the first call — and is not measured.
+**A forwarder owns nothing it returns (MeshWeaver#6588).** Every root forwarder of a module's
+platform-typed service — `Current`, and `Proxy` at every lifetime — is a `NotOwnedServiceDescriptor`,
+which every container MeshWeaver builds registers **externally owned** (`PopulateMeshWeaver`). An
+ordinary factory registration is owned by the scope that resolves it, so the forwarder used to hand
+ownership of a module's instance to whoever asked: the first circuit to end disposed a module
+SINGLETON under every other user, and disposed a module SCOPED instance a second time after the module
+scope that circuit owned had already disposed it; a `Proxy` over an `IDisposable` interface forwarded
+the same disposal. Ownership stays where the instance was built — the generation's container for a
+singleton, the caller-owned module scope for a scoped one. The forwarder is registered at its own
+position in the collection while `Populate` walks it, so the default registration of a service and the
+order of an `IEnumerable` of it are unchanged (`ANotOwnedForwarderKeepsItsPositionTest`).
+`AModuleForwarderOwnsNothingItReturnsTest` measures one circuit ending on the test mesh, on an
+`IHostApplicationBuilder` host and on a legacy `IHostBuilder` host: the singleton serves the other
+circuit undisposed, each scoped instance (class and proxy route) is disposed exactly once.
+
+**One lock owner per caller.** Autofac builds a scope's shared instances under that scope's one
+shared-instance lock. A caller-owned module scope is a scope of the MODULE container, and its root
+resolutions are made in the caller's own scope, so the two locks were taken in both orders: a
+caller-scoped ROOT service whose construction resolves a module's scoped service (caller, then module
+scope), and that module service's construction taking a caller-scoped root service not built yet
+(module scope, then caller) — two first builds overlapping in those orders deadlocked. So a
+caller-owned module scope, and every scope begun from it, takes its CALLER's lock as its own
+(`CallerSharedInstanceLock`): one monitor for the caller and everything it owns, re-entered by the
+thread that already holds it, so there is no order to invert — whichever road reaches the module scope,
+including a module service that keeps its `IServiceProvider` and resolves later. Autofac offers no API
+to hand a scope its lock, so the lock field is set before the scope is handed out; Autofac is pinned, and
+a version without that field fails loudly at the first caller rather than silently bringing the
+deadlock back. `CallerAndModuleScopedServicesBuildInOneLockTest` forces the overlap; its negative
+control gives the same module scope its own lock back and deadlocks.
 
 **Open: a withdrawn module's `InstalledModuleAssembly` (MeshWeaver#6557).** A module withdrawn at boot
 keeps the transient `InstalledModuleAssembly` registration it was given while the mesh was configured,
