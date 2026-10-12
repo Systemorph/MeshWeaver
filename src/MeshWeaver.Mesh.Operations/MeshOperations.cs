@@ -405,7 +405,10 @@ public partial class MeshOperations
 
         // Single-node content read via GetDataRequest + MeshNodeReference + hub.Observe(...).
         // See Doc/Architecture/CqrsAndContentAccess.md — queries are for sets only.
-        return TryResolveUnifiedPath(resolvedPath)
+        // 🚨 As the CALLER (ReadAs): the unified read posts its GetDataRequest when it is
+        // SUBSCRIBED, and the post carries the identity ambient at that moment — which, for an
+        // observable built by one principal and subscribed under another, is not the caller's.
+        return ReadAs(caller, () => TryResolveUnifiedPath(resolvedPath))
             .SelectMany(unified =>
             {
                 // A unified (UCR) interpretation that ERRORS may be shadowing a real node whose
@@ -868,7 +871,9 @@ public partial class MeshOperations
     /// </summary>
     private IObservable<string> GetAreaRoute(
         string fullPath, string nodePath, string? area, string? id, AccessContext caller) =>
-        RenderArea(nodePath, area, id)
+        // 🚨 As the CALLER (ReadAs): RenderArea takes its identity when it is SUBSCRIBED, so a get
+        // built by one principal and subscribed under another would render as the subscriber.
+        ReadAs(caller, () => RenderArea(nodePath, area, id))
             .Catch((Exception ex) => Observable.Return($"Error: {ex.Message}"))
             .SelectMany(result =>
             {

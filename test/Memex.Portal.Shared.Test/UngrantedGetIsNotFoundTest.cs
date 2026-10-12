@@ -117,4 +117,35 @@ public class UngrantedGetIsNotFoundTest(ITestOutputHelper output) : MonolithMesh
         answer.Should().StartWith("Not found",
             "a refused read of a plain path answers like an absent node");
     }
+
+    /// <summary>A unified read that SUCCEEDS for the holder — the direct-success branch, which posts
+    /// its <c>GetDataRequest</c> at subscribe time and never reaches the node-read fallback.</summary>
+    private const string PlainUnifiedPath = PlainScope + "/data/";
+
+    /// <summary>The MCP area route of the same node.</summary>
+    private const string PlainAreaPath = PlainScope + "/area/";
+
+    [Fact]
+    public async Task AUnifiedRead_IsDecidedForTheCaller_NotTheSubscriber()
+    {
+        var denied = await GetBuiltAsSubscribedAsHub(ViewerUser, PlainUnifiedPath);
+        var held = await GetBuiltAsSubscribedAsHub(HolderUser, PlainUnifiedPath);
+
+        held.Should().NotStartWith("Error",
+            "the holder reads the node's data — and the read must be decided for HER, not for the hub that subscribed");
+        denied.Should().StartWith("Error",
+            "the viewer holds no Read on the node, so its unified read is refused");
+        denied.Should().Contain(ViewerUser, "the refusal is decided for the caller, never for the subscribing hub");
+    }
+
+    [Fact]
+    public async Task TheAreaRoute_IsRenderedForTheCaller_NotTheSubscriber()
+    {
+        var denied = await GetBuiltAsSubscribedAsHub(ViewerUser, PlainAreaPath);
+        var held = await GetBuiltAsSubscribedAsHub(HolderUser, PlainAreaPath);
+
+        held.Should().Contain("\"areas\"", "the holder's render is the settled control tree — the control for the denial below");
+        denied.Should().NotContain("\"areas\"",
+            "the viewer holds no Read on the node, so nothing of its rendered area reaches her");
+    }
 }
