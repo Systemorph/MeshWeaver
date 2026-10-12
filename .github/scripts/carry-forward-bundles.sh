@@ -238,6 +238,30 @@ AZ
     bad "unstamped incumbent (rc=$RC): $(printf '%s' "$OUT" | tail -3)"
   fi
 
+  # A PER-PACKAGE SEAL carries a waiting package's MODULE package too (MeshWeaver.Plugins#3507):
+  # from the publication's modules/ directory, into the staged module set, verified the same way.
+  echo "per-package seal — a waiting package's module package (CARRY_SUBDIR=modules):"
+  setup Store.zip
+  mkdir -p "$REMOTE/modules" "$ST/bake/modules"
+  echo "sealed ai module" > "$REMOTE/modules/ai.module.nupkg"
+  printf '%s\t%s\n' "$(digest_of "$REMOTE/modules/ai.module.nupkg")" "Systemorph-MeshWeaver-1-1" > "$REMOTE/modules/ai.module.nupkg.meta"
+  echo "fresh maps module" > "$ST/bake/modules/maps.module.nupkg"
+  printf '%s\n' ai.module.nupkg > "$ST/listing"
+  OUT=$( ( unset GITHUB_STEP_SUMMARY; CARRY_SUBDIR=modules bash "$ME" "$ST/bake/modules" "$ST/listing" acct/share ID1 plugins 2>&1 ) ); RC=$?
+  if [ "$RC" -eq 0 ] && [ "$(cat "$ST/bake/modules/ai.module.nupkg")" = "sealed ai module" ] \
+     && [ "$(cat "$ST/bake/modules/maps.module.nupkg")" = "fresh maps module" ]; then
+    ok "the sealed module package is carried from modules/, beside this run's own"
+  else
+    bad "module carry (rc=$RC): $(printf '%s' "$OUT" | tail -3)"
+  fi
+  rm "$REMOTE/modules/ai.module.nupkg" "$ST/bake/modules/ai.module.nupkg"
+  OUT=$( ( unset GITHUB_STEP_SUMMARY; CARRY_SUBDIR=modules bash "$ME" "$ST/bake/modules" "$ST/listing" acct/share ID1 plugins 2>&1 ) ); RC=$?
+  [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -q "could not carry forward: ai.module.nupkg" \
+    && ok "a listed module package that cannot be fetched is FATAL — never a shrunk module set" \
+    || bad "unfetchable module package should be fatal (rc=$RC)"
+  OUT=$( ( CARRY_SUBDIR=../x bash "$ME" "$ST/bake/modules" "$ST/listing" acct/share ID1 plugins 2>&1 ) ); RC=$?
+  [ "$RC" -ne 0 ] && ok "a CARRY_SUBDIR other than 'modules' is refused" || bad "an arbitrary CARRY_SUBDIR should be fatal"
+
   if [ "$FAILED" -gt 0 ]; then
     echo "::error title=carry-forward self-test failed::$FAILED case(s) — this is the only thing preventing a narrowed bake from shrinking the publication."
     exit 1
@@ -253,7 +277,16 @@ AZ
   exit 0
 fi
 
-USAGE="usage: carry-forward-bundles.sh <bake-dir> <published-listing> <target> <identity> <source>"
+USAGE="usage: [CARRY_SUBDIR=modules] carry-forward-bundles.sh <bake-dir> <published-listing> <target> <identity> <source>"
+# CARRY_SUBDIR (optional, only `modules`): carry from the publication's `modules/` directory into
+# <bake-dir> instead of from its top level — how a per-package seal (seal-packages.py,
+# MeshWeaver.Plugins#3507) carries a waiting package's MODULE package forward beside its bundle,
+# with the same digest + one-publication verification and the same refuse-never-shrink postcondition.
+CARRY_SUBDIR="${CARRY_SUBDIR:-}"
+case "$CARRY_SUBDIR" in
+  ""|modules) ;;
+  *) echo "::error::CARRY_SUBDIR='$CARRY_SUBDIR' — only the publication's own 'modules' directory can be carried from"; exit 1 ;;
+esac
 BAKE_DIR="${1:?$USAGE}"
 LISTING="${2:?$USAGE}"
 TARGET="${3:?$USAGE}"
@@ -332,7 +365,7 @@ SRC_PREFIX="${BASE:+$BASE/}prebuilt-bundles/$IDENTITY/$SOURCE"
 # than being handed the directory keeps this script correct when its caller is pinned to a workflow
 # copy that does not know about generations.
 resolve_publication_dir "$ACCOUNT" "$SHARE" "$SRC_PREFIX"
-SRC_DIR="$RESOLVED_DIR"
+SRC_DIR="$RESOLVED_DIR${CARRY_SUBDIR:+/$CARRY_SUBDIR}"
 
 # 🚨 THE CARRY-FORWARD IS AN N+1 READ OF A DIRECTORY THAT CAN BE REPLACED UNDERNEATH IT
 # (MeshWeaver#3461). The listing came from the sealed publication `bake-scope.sh` read; each
@@ -455,7 +488,14 @@ fi
 # what is published today. A narrowed bake may legitimately ADD bundles (a new module) — it may
 # never publish fewer than the sentinel it is about to replace.
 listed=$(grep -c '[^[:space:]]' "$LISTING" || true)
-present=$(find "$BAKE_DIR" -maxdepth 1 -name '*.zip' | wc -l | tr -d ' ')
+if [ -n "$CARRY_SUBDIR" ]; then
+  # A module carry lands next to this run's own module packages: count the LISTED names present,
+  # not every file of the directory, so the postcondition is about exactly what was asked for.
+  present=0
+  while IFS= read -r name; do [ -n "$name" ] && [ -f "$BAKE_DIR/$name" ] && present=$((present + 1)); done < "$LISTING"
+else
+  present=$(find "$BAKE_DIR" -maxdepth 1 -name '*.zip' | wc -l | tr -d ' ')
+fi
 if [ "$present" -lt "$listed" ]; then
   echo "::error::after carry-forward the bake dir holds $present bundle(s) but the publication lists $listed — refusing to publish a shorter set."
   exit 1

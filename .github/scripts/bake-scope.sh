@@ -45,10 +45,16 @@
 #   STATE_DIR             a writable directory for the decision's artefacts
 #
 # OUTPUTS (to $GITHUB_OUTPUT when set, and always to stdout)
-#   scope, reason, baseline, mount
+#   scope, reason, baseline, range-base (the oldest build the publication carries), mount
 # ARTEFACTS in $STATE_DIR
-#   published-bundles.txt   the sealed publication's `_complete` listing (scope=narrowed)
+#   published-bundles.txt   the sealed publication's `_complete` listing (scope=narrowed, or
+#                           whenever WITHHOLD_PACKAGES is set)
+#   published-commit.txt / published-modules.txt / published-packages.json / publication-state
+#                           the rest of what a per-package seal carries from (seal-packages.py)
 #   affected.json           the selector's full answer (scope=narrowed)
+#
+# OPTIONAL: WITHHOLD_PACKAGES — the packages this run must not seal fresh (node-repo-publish-bake.yml
+# `withhold-packages`); when set, the sealed publication is read up front whatever the scope.
 #
 # AUTH: `az login` must already have happened; data-plane reads use --auth-mode login
 # --backup-intent, as publish-bake-bundles.sh does.
@@ -274,13 +280,68 @@ AZ
     printf '  FAIL published-bundles.txt is "%s"\n' "$(cat "$ST_TMP/state/published-bundles.txt" 2>&1)"
     FAILED=$((FAILED + 1))
   fi
+  expect_line "with no per-package listing the range starts at the publication commit" \
+    range-base "$BASE_SHA" "$OUT"
+
+  # ── PER-PACKAGE SEALS (MeshWeaver.Plugins#3507). The publication is sealed at HEAD but still
+  # ── carries Store's build from BASE; the next run (NEXT) must diff from BASE, or Store's change
+  # ── between BASE and HEAD would never be rebuilt.
+  echo "a publication sealed per package (the range covers every carried build):"
+  ( cd "$REPO" && echo next >> Store/index.json && git add -A && git commit -qm next ) > /dev/null
+  NEXT_SHA=$(git -C "$REPO" rev-parse HEAD)
+  listing_with() {  # <account/share> <store-commit> — a listing carrying Store at that commit
+    printf '{"schema":"mw-sealed-packages/1","publicationCommit":"%s","packages":[{"package":"Edu","sourceCommit":"%s"},{"package":"Store","sourceCommit":"%s","carried":true}]}\n' \
+      "$HEAD_SHA" "$HEAD_SHA" "$2" > "$ST_TMP/remote/${1%%/*}/${1#*/}/prebuilt-bundles/ID1/plugins/sealed-packages.json"
+  }
+  rm -rf "$ST_TMP/state"; write_selector 0 "$OK_JSON"
+  seal carry/share "$HEAD_SHA" Store.zip Edu.zip
+  listing_with carry/share "$BASE_SHA"
+  OUT=$(run_case push carry/share "$NEXT_SHA")
+  expect "a carried build narrows" narrowed "$OUT"
+  expect_line "…from the OLDEST carried build, not the publication commit" range-base "$BASE_SHA" "$OUT"
+  expect_line "…while the baseline (never-seal-backwards) stays the publication commit" baseline "$HEAD_SHA" "$OUT"
+  # The control, one variable apart: nothing carried — the range is the publication commit.
+  rm -rf "$ST_TMP/state"; listing_with carry/share "$HEAD_SHA"
+  OUT=$(run_case push carry/share "$NEXT_SHA")
+  expect_line "NEGATIVE CONTROL: a listing that carries nothing narrows from the publication commit" \
+    range-base "$HEAD_SHA" "$OUT"
+  rm -rf "$ST_TMP/state"; listing_with carry/share "$OTHER_SHA"
+  expect "a carried build from a commit that is not the publication's ancestor is a full bake" \
+    full "$(run_case push carry/share "$NEXT_SHA")"
+  rm -rf "$ST_TMP/state"
+  printf 'not json\n' > "$ST_TMP/remote/carry/share/prebuilt-bundles/ID1/plugins/sealed-packages.json"
+  expect "an unparseable per-package listing is a full bake" full "$(run_case push carry/share "$NEXT_SHA")"
+
+  echo "the publication a per-package seal carries from (read whatever the scope):"
+  rm -rf "$ST_TMP/state"; listing_with carry/share "$BASE_SHA"
+  ( unset GITHUB_STEP_SUMMARY GITHUB_ENV GITHUB_OUTPUT; export MOCK_AZ_ROOT="$ST_TMP/remote"
+    WITHHOLD_PACKAGES="Store" BAKE_PUBLISH_TARGETS=carry/share IDENTITY=ID1 SOURCE=plugins HEAD_SHA="$NEXT_SHA" \
+    REPO_DIR="$REPO" EVENT_NAME=repository_dispatch STATE_DIR="$ST_TMP/state" bash "$ME" > /dev/null 2>&1 )
+  if [ "$(cat "$ST_TMP/state/publication-state" 2>/dev/null)" = "sealed" ] \
+     && [ "$(cat "$ST_TMP/state/published-commit.txt" 2>/dev/null)" = "$HEAD_SHA" ] \
+     && [ -s "$ST_TMP/state/published-packages.json" ] && [ -s "$ST_TMP/state/published-bundles.txt" ]; then
+    printf '  OK   %s\n' "a FULL bake (a dispatch) still records the sealed listing, commit and per-package listing"
+  else
+    printf '  FAIL %s\n' "the carry's reading was not recorded on a full bake (state: $(cat "$ST_TMP/state/publication-state" 2>&1))"
+    FAILED=$((FAILED + 1))
+  fi
+  rm -rf "$ST_TMP/state"
+  ( unset GITHUB_STEP_SUMMARY GITHUB_ENV GITHUB_OUTPUT; export MOCK_AZ_ROOT="$ST_TMP/remote"
+    WITHHOLD_PACKAGES="Store" BAKE_PUBLISH_TARGETS=empty/share IDENTITY=ID1 SOURCE=plugins HEAD_SHA="$NEXT_SHA" \
+    REPO_DIR="$REPO" EVENT_NAME=push STATE_DIR="$ST_TMP/state" bash "$ME" > /dev/null 2>&1 )
+  if [ "$(cat "$ST_TMP/state/publication-state" 2>/dev/null)" = "absent" ]; then
+    printf '  OK   %s\n' "NEGATIVE CONTROL: a target with no seal records 'absent' — nothing to carry, never 'sealed'"
+  else
+    printf '  FAIL %s\n' "a target with no seal recorded '$(cat "$ST_TMP/state/publication-state" 2>&1)'"
+    FAILED=$((FAILED + 1))
+  fi
 
   if [ "$FAILED" -gt 0 ]; then
     echo "::error title=bake-scope self-test failed::$FAILED case(s) — this script decides what is NOT rebuilt; a fallback that stops falling back is a silent under-build."
     exit 1
   fi
   echo ""
-  echo "bake-scope self-test: 12 full-bake fallbacks, 2 verified nothing-to-do verdicts, 4 pointer-resolution assertions, 4 narrowed assertions — all green."
+  echo "bake-scope self-test: 12 full-bake fallbacks, 2 verified nothing-to-do verdicts, 4 pointer-resolution assertions, 5 narrowed assertions, 8 per-package-seal assertions — all green."
   exit 0
 fi
 
@@ -352,22 +413,94 @@ mkdir -p "$STATE_DIR"
 SCOPE="full"
 REASON=""
 BASELINE=""
+RANGE_BASE=""
 MOUNT=""
 
 emit() {
   echo "scope=$SCOPE"
   echo "reason=$REASON"
   echo "baseline=$BASELINE"
+  echo "range-base=$RANGE_BASE"
   echo "mount=$MOUNT"
   if [ -n "${GITHUB_OUTPUT:-}" ]; then
     {
       echo "scope=$SCOPE"
       echo "reason=$REASON"
       echo "baseline=$BASELINE"
+      echo "range-base=$RANGE_BASE"
       echo "mount=$MOUNT"
     } >> "$GITHUB_OUTPUT"
   fi
 }
+
+# ══════════════ THE PUBLICATION A PER-PACKAGE SEAL CARRIES FROM (MeshWeaver.Plugins#3507) ══════════════
+#
+# A caller that seals PER PACKAGE (`withhold-packages` on node-repo-publish-bake.yml) replaces every
+# waiting package's fresh bytes by the build the sealed publication already holds for it. That needs
+# the sealed listing whatever this bake's scope turns out to be — a FULL bake (a framework dispatch,
+# a tooling diff) still seals only what is publishable — so it is read up front, from the FIRST
+# target (the carry's source, as for a narrowed bake), and recorded as ONE of three states:
+#
+#   sealed      the listing, the commit, the module index and (when present) the per-package
+#               listing are in $STATE_DIR — the carry can verify every byte it takes against them;
+#   absent      the target holds no sealed publication for this identity: nothing was ever sealed,
+#               so a waiting package has nothing to carry and stays out;
+#   unreadable  it could not be READ. seal-packages.py refuses on it — carrying from an unknown
+#               publication either shrinks it or seals a guess.
+#
+# Read only when something is withheld, so every other caller's decision is byte-identical to before.
+read_sealed_files() { # <account> <share> <dest> <workdir> — the OPTIONAL files beside the sentinel
+  az storage file download --account-name "$1" --share-name "$2" \
+    --path "$3/sealed-packages.json" --dest "$4/sealed-packages.json" \
+    --auth-mode login --backup-intent --only-show-errors > /dev/null 2>&1 || rm -f "$4/sealed-packages.json"
+  az storage file download --account-name "$1" --share-name "$2" \
+    --path "$3/modules/_index" --dest "$4/modules-index" \
+    --auth-mode login --backup-intent --only-show-errors > /dev/null 2>&1 || rm -f "$4/modules-index"
+}
+record_sealed_state() { # <workdir> — the four artefacts seal-packages.py reads
+  cp "$1/$SENTINEL" "$STATE_DIR/published-bundles.txt"
+  tr -d '[:space:]' < "$1/$SOURCE_MARKER" > "$STATE_DIR/published-commit.txt"
+  if [ -f "$1/modules-index" ]; then cp "$1/modules-index" "$STATE_DIR/published-modules.txt"; else rm -f "$STATE_DIR/published-modules.txt"; fi
+  if [ -f "$1/sealed-packages.json" ]; then cp "$1/sealed-packages.json" "$STATE_DIR/published-packages.json"; else rm -f "$STATE_DIR/published-packages.json"; fi
+  echo "sealed" > "$STATE_DIR/publication-state"
+}
+read_publication_for_carry() {
+  local target account rest share base prefix dest exists work
+  target=$(printf '%s\n' $BAKE_PUBLISH_TARGETS | head -n 1)
+  account="${target%%/*}"; rest="${target#*/}"; share="${rest%%/*}"; base=""
+  case "$rest" in */*) base="${rest#*/}";; esac
+  if [ -z "$account" ] || [ -z "$share" ] || [ "$account" = "$target" ]; then
+    echo "unreadable the first publish target '$target' is malformed" > "$STATE_DIR/publication-state"; return 0
+  fi
+  prefix="${base:+$base/}prebuilt-bundles/$IDENTITY/$SOURCE"
+  resolve_publication_dir "$account" "$share" "$prefix"
+  dest="$RESOLVED_DIR"
+  exists=$(az storage file exists --account-name "$account" --share-name "$share" \
+    --path "$dest/$SENTINEL" --auth-mode login --backup-intent --query exists -o tsv \
+    --only-show-errors 2>/dev/null || echo "unknown")
+  case "$exists" in
+    false) echo "absent" > "$STATE_DIR/publication-state"
+           echo "withheld packages: $target holds no sealed publication under $dest — nothing to carry forward"
+           return 0 ;;
+    true) ;;
+    *) echo "unreadable az could not say whether $target holds a seal under $dest (answered '$exists')" > "$STATE_DIR/publication-state"; return 0 ;;
+  esac
+  work="$STATE_DIR/carry-read"; mkdir -p "$work"
+  if ! az storage file download --account-name "$account" --share-name "$share" \
+         --path "$dest/$SENTINEL" --dest "$work/$SENTINEL" --auth-mode login --backup-intent --only-show-errors > /dev/null 2>&1 \
+     || ! az storage file download --account-name "$account" --share-name "$share" \
+         --path "$dest/$SOURCE_MARKER" --dest "$work/$SOURCE_MARKER" --auth-mode login --backup-intent --only-show-errors > /dev/null 2>&1; then
+    echo "unreadable the sealed publication under $target/$dest exists but its $SENTINEL or $SOURCE_MARKER could not be downloaded" > "$STATE_DIR/publication-state"
+    return 0
+  fi
+  read_sealed_files "$account" "$share" "$dest" "$work"
+  record_sealed_state "$work"
+  if [ -n "${GITHUB_ENV:-}" ]; then echo "BAKE_CARRY_TARGET=${target}" >> "$GITHUB_ENV"; fi
+  echo "withheld packages: their sealed builds are carried from $target/$dest (sealed at $(cat "$STATE_DIR/published-commit.txt"))"
+}
+if [ -n "$(printf '%s' "${WITHHOLD_PACKAGES:-}" | tr -d '[:space:]')" ]; then
+  read_publication_for_carry
+fi
 
 # Every exit from this script other than "narrowed"/"none" goes through here, so a fallback can
 # never be silent: it names itself in the log AND in the job summary, where an operator looking at
@@ -407,6 +540,7 @@ esac
 # bake that brings them all back into step.
 prev_sha=""
 prev_listing=""
+prev_packages=""
 targets=0
 for target in $BAKE_PUBLISH_TARGETS; do
   account="${target%%/*}"
@@ -446,17 +580,25 @@ for target in $BAKE_PUBLISH_TARGETS; do
   [ -n "$sha" ] && [ "$sha" != "unknown" ] \
     || full "$account/$share: the publication under $dest records source '$sha' — no usable baseline commit, so the diff cannot be taken. Baking every module (which re-stamps a usable marker)."
   [ -n "$listing" ] || full "$account/$share: the $SENTINEL under $dest lists no bundles — baking every module."
+  # The per-package listing (MeshWeaver.Plugins#3507), when the publication carries one: it names
+  # the commit EACH package's bytes were baked from, and step 5b narrows from the oldest of them.
+  read_sealed_files "$account" "$share" "$dest" "$work"
+  packages=""
+  if [ -f "$work/sealed-packages.json" ]; then packages=$(cat "$work/sealed-packages.json"); fi
 
   if [ "$targets" -eq 0 ]; then
     prev_sha="$sha"
     prev_listing="$listing"
-    cp "$work/$SENTINEL" "$STATE_DIR/published-bundles.txt"
+    prev_packages="$packages"
+    record_sealed_state "$work"
     CARRY_TARGET="$target"
   else
     [ "$sha" = "$prev_sha" ] \
       || full "the publish targets disagree on what is published: '$prev_sha' vs '$sha' under $dest. A narrowed bake carries forward ONE publication, so it cannot serve both — one full bake brings every target back into step."
     [ "$listing" = "$prev_listing" ] \
       || full "the publish targets disagree on which bundles are published under $dest — one full bake brings every target back into step."
+    [ "$packages" = "$prev_packages" ] \
+      || full "the publish targets disagree on the per-package listing under $dest — one full bake brings every target back into step."
   fi
   targets=$((targets + 1))
 done
@@ -510,22 +652,50 @@ git -C "$REPO_DIR" cat-file -e "${prev_sha}^{commit}" 2>/dev/null \
 git -C "$REPO_DIR" merge-base --is-ancestor "$prev_sha" "$HEAD_SHA" 2>/dev/null \
   || full "the published baseline $prev_sha is not an ancestor of $HEAD_SHA — history was rewritten, so 'what changed since the publication' has no answer. Baking every module."
 
+# ── 5b. the RANGE starts at the oldest build the publication still carries (MeshWeaver.Plugins#3507) ──
+# A publication sealed per package carries a waiting package's build from an OLDER commit than
+# `source-commit.txt`. Diffing from the publication commit alone would never see what that package
+# changed before it — it would be carried forward forever and never rebuilt the run it becomes
+# publishable. So the range starts at the oldest commit the per-package listing names; every one of
+# them must be an ancestor of the publication commit and they must form ONE line, or "what changed
+# since every sealed build" has no single base — a full bake, named.
+RANGE_BASE="$prev_sha"
+if [ -n "$prev_packages" ]; then
+  carried_commits=$(printf '%s' "$prev_packages" | jq -r --arg p "$prev_sha" \
+      '[.packages[]? | .sourceCommit // empty | select(. != $p)] | unique | .[]' 2>/dev/null) \
+    || full "the sealed per-package listing (sealed-packages.json) could not be parsed — which commit each carried build came from is unknown, so the bake cannot be narrowed."
+  for c in $carried_commits; do
+    git -C "$REPO_DIR" cat-file -e "${c}^{commit}" 2>/dev/null \
+      || full "the per-package listing carries a build from $c, which this checkout does not have — what changed since it cannot be taken, so every module is baked."
+    git -C "$REPO_DIR" merge-base --is-ancestor "$c" "$prev_sha" 2>/dev/null \
+      || full "the per-package listing carries a build from $c, which is not an ancestor of the publication commit $prev_sha — baking every module."
+    if git -C "$REPO_DIR" merge-base --is-ancestor "$c" "$RANGE_BASE" 2>/dev/null; then
+      RANGE_BASE="$c"
+    elif ! git -C "$REPO_DIR" merge-base --is-ancestor "$RANGE_BASE" "$c" 2>/dev/null; then
+      full "the per-package listing carries builds from $RANGE_BASE and $c, neither of which contains the other — no single range covers both, so every module is baked."
+    fi
+  done
+  if [ "$RANGE_BASE" != "$prev_sha" ]; then
+    echo "::notice title=Narrowing from the oldest carried build::the publication ($prev_sha) still carries package build(s) sealed at older commits; the affected closure is taken from $RANGE_BASE so each of them is rebuilt the run it becomes publishable"
+  fi
+fi
+
 # ── 6. ask the selector ──────────────────────────────────────────────────────────────────────
 # It refuses an empty diff (a CI diff is never empty, so an empty answer is a WRONG answer), it
 # classifies scripts/ + .github/ + repo-root files + an unknown top-level dir (a DELETED module)
 # as ALL modules, and it closes over transitive DEPENDENTS with the runtime's own edge semantics.
 # Every one of those is load-bearing here; a non-zero exit is taken as "cannot narrow", never as
 # "nothing affected".
-if ! (cd "$REPO_DIR" && python3 "$SELECTOR" --range "${prev_sha}...${HEAD_SHA}" --json) \
+if ! (cd "$REPO_DIR" && python3 "$SELECTOR" --range "${RANGE_BASE}...${HEAD_SHA}" --json) \
       > "$STATE_DIR/affected.json" 2> "$STATE_DIR/affected.log"; then
   sed 's/^/    /' "$STATE_DIR/affected.log" || true
-  full "scripts/affected-modules.py could not compute the closure for ${prev_sha}...${HEAD_SHA} (see above) — baking every module."
+  full "scripts/affected-modules.py could not compute the closure for ${RANGE_BASE}...${HEAD_SHA} (see above) — baking every module."
 fi
 sed 's/^/    /' "$STATE_DIR/affected.log" || true
 
 run_all=$(jq -r '.runAll' "$STATE_DIR/affected.json" 2>/dev/null || echo "parse-error")
 case "$run_all" in
-  true)  full "the diff ${prev_sha}...${HEAD_SHA} touches the gate/tooling scope (scripts/, .github/, a repo-root file, or a module directory that no longer exists) — the selector answers ALL modules." ;;
+  true)  full "the diff ${RANGE_BASE}...${HEAD_SHA} touches the gate/tooling scope (scripts/, .github/, a repo-root file, or a module directory that no longer exists) — the selector answers ALL modules." ;;
   false) ;;
   *)     full "could not read runAll out of the selector's JSON — baking every module." ;;
 esac
@@ -533,7 +703,7 @@ esac
 MOUNT=$(jq -r '.mount | join(" ")' "$STATE_DIR/affected.json")
 if [ -z "$MOUNT" ]; then
   SCOPE="none"
-  REASON="nothing between $prev_sha and $HEAD_SHA reaches a module (docs/, e2e/, .claude/ …) — the published bundles are still exactly right, so nothing is rebuilt and nothing is republished."
+  REASON="nothing between $RANGE_BASE and $HEAD_SHA reaches a module (docs/, e2e/, .claude/ …) — the published bundles are still exactly right, so nothing is rebuilt and nothing is republished."
   echo "::notice title=Nothing to bake::$REASON"
   if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     printf '### ✅ No module content changed\n\n%s\n' "$REASON" >> "$GITHUB_STEP_SUMMARY"
@@ -555,6 +725,7 @@ REASON="rebuilding the affected closure since the published $prev_sha"
   echo "| | |"
   echo "|---|---|"
   echo "| baseline (published) | \`$prev_sha\` |"
+  echo "| range starts at (oldest carried build) | \`$RANGE_BASE\` |"
   echo "| head | \`$HEAD_SHA\` |"
   echo "| framework identity | \`$IDENTITY\` |"
   echo "| affected (changed + dependents) | \`${affected:-none}\` |"
