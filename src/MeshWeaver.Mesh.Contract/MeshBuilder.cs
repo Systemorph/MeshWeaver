@@ -807,7 +807,7 @@ public partial record MeshBuilder
                 // Declared HERE, in install order — the set is ordered (first-mount-wins static
                 // assets, the list-ordered compile reference surface), never "image-bound, then held".
                 var slot = InstalledModuleSet.AddHeld(name);
-                ConfigureServices(services => services.Add(slot));
+                ConfigureServices(services => { services.Add(slot); return services; });
             }
             else
                 RegisterImageBound(new InstalledModuleAssembly(assembly));
