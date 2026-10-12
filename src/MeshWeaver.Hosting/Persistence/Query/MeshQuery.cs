@@ -687,7 +687,8 @@ public class MeshQuery : IMeshQueryCore
             IReadOnlyList<string>?[] providerPartitions = new IReadOnlyList<string>?[observables.Count];
             // …and the subset each said it read only IN PART (QueryResultChange.PartiallyReadPartitions,
             // #6564). Unioned the same way: a partition one provider read in part is not made whole by
-            // another, and null throughout stays "not assessed".
+            // another, and null throughout stays "not assessed" — as does ANY provider that read
+            // partitions without assessing them (MergePartialReads).
             IReadOnlyList<string>?[] providerPartial = new IReadOnlyList<string>?[observables.Count];
 
             var subscriptions = new List<IDisposable>();
@@ -713,7 +714,7 @@ public class MeshQuery : IMeshQueryCore
                 observer.OnNext(clipped with
                 {
                     Partitions = UnionReportedPartitions(providerPartitions),
-                    PartiallyReadPartitions = UnionReportedPartitions(providerPartial),
+                    PartiallyReadPartitions = MergePartialReads(providerPartitions, providerPartial),
                     // Stamped on the merged frame, never on a delta: this says what the SNAPSHOT is
                     // worth. Empty stays null so the common case allocates nothing and reads as
                     // "every provider answered".
@@ -1168,6 +1169,27 @@ public class MeshQuery : IMeshQueryCore
             scores.Add(score);
         }
         return change with { Items = items, Scores = scores };
+    }
+
+    /// <summary>
+    /// The merged partial-read verdict (<see cref="QueryResultChange{T}.PartiallyReadPartitions"/>,
+    /// #6564): the union of the assessing providers' lists, or <see langword="null"/> ("not
+    /// assessed") as soon as ONE provider that read partitions (a non-empty
+    /// <see cref="QueryResultChange{T}.Partitions"/>) left its verdict null.
+    ///
+    /// <para>🚨 Unioning the partial lists alone would be a false pass: an unassessed provider
+    /// reporting <c>["legacy"]</c> next to an assessing one reporting <c>[]</c> would merge to
+    /// <c>[]</c>, which <c>search</c> renders as "every partition read is fully covered" over a
+    /// partition nobody assessed. A provider that reported no partitions contributed nothing to
+    /// the denominator, so its missing verdict leaves the merge unchanged.</para>
+    /// </summary>
+    private static IReadOnlyList<string>? MergePartialReads(
+        IReadOnlyList<string>?[] partitions, IReadOnlyList<string>?[] partial)
+    {
+        for (var i = 0; i < partitions.Length; i++)
+            if (partitions[i] is { Count: > 0 } && partial[i] is null)
+                return null;
+        return UnionReportedPartitions(partial);
     }
 
     /// <summary>

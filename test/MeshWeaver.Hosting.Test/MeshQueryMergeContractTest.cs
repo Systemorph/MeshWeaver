@@ -279,6 +279,38 @@ public class MeshQueryMergeContractTest
     }
 
     /// <summary>
+    /// The false pass the plain union would produce: one provider read <c>legacy</c> and did NOT
+    /// assess it (null verdict), another assessed its own partition and found it covered (empty
+    /// list). Unioning only the verdicts gives <c>[]</c>, "every partition read is fully covered",
+    /// over a partition nobody assessed. The merge must stay null ("not assessed") instead.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task AProviderThatReadPartitionsWithoutAssessing_KeepsTheMergedVerdictUnknown()
+    {
+        var legacy = new FakeProvider("legacy", () => Observable.Return(Initial(Node("legacy/one")) with
+        {
+            Partitions = ["legacy"],
+        }));
+        var covered = new FakeProvider("covered", () => Observable.Return(Initial(Node("acme/one")) with
+        {
+            Partitions = ["acme"],
+            PartiallyReadPartitions = [],
+        }));
+
+        var query = new MeshQuery([legacy, covered], hub: null!);
+
+        var change = await ((IMeshQueryCore)query)
+            .Query<MeshNode>(new MeshQueryRequest { Query = "nodeType:NodeType partitions:all", Limit = 10 }, Options)
+            .FirstAsync()
+            .Timeout(TestTimeouts.Convergence)
+            .Await(TestContext.Current.CancellationToken);
+
+        change.Partitions.Should().Equal(new[] { "legacy", "acme" });
+        change.PartiallyReadPartitions.Should().BeNull(
+            "'legacy' was read and never assessed, so 'none partial' would be a claim nobody measured");
+    }
+
+    /// <summary>
     /// The single-provider fast path clips through <c>ClipMergedInitial</c> with a <c>with</c>
     /// expression, so the provider's report must survive it unchanged.
     /// </summary>

@@ -170,7 +170,8 @@ request (`MeshQueryRequest.ReportPartialReads`), because it costs one read of th
 rows per partition. `search` sets it, and interactive listings do not. When it is
 non-empty the envelope also carries a `partialHint` sentence. The aggregator unions the
 reporting providers' lists, because a partition one provider read in part is not made whole by
-another.
+another. If any provider that read partitions did not assess them, the merged verdict is `null`:
+an empty list from one provider must not vouch for partitions another provider never assessed.
 
 ### `basePath` reaches the whole subtree
 
@@ -290,6 +291,12 @@ until N stops being a floor.
 - `MeshQueryMergeContractTest.PartiallyReadPartitions_AreUnionedOntoTheMergedInitial` /
   `AssessedAndFullyCovered_StaysEmptyNotNull` — the partial-read verdict survives the merge, and
   "assessed, none partial" stays distinct from "not assessed".
+- `MeshQueryMergeContractTest.AProviderThatReadPartitionsWithoutAssessing_KeepsTheMergedVerdictUnknown`
+  — a provider that read partitions and left its verdict null keeps the merged verdict null, so
+  another provider's empty list cannot turn it into "none partial".
+- `SearchReportsPartialReadsTest` — the `search` envelope itself: `partial` is null, `[]` or a
+  list as the provider reported, `partialHint` appears only for a non-empty list, and the opt-in
+  reaches the provider.
 - The Postgres provider's half, which computes the verdict from `user_effective_permissions`, is
   tested in MeshWeaver.Plugins (`MeshWeaver.Hosting.PostgreSql.Test`).
 
