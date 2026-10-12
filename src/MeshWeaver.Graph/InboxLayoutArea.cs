@@ -139,7 +139,7 @@ public static class InboxLayoutArea
                 Controls.ToggleButton(new JsonPointerReference($"sources/{key}")) with
                 {
                     DataContext = filterContext, Label = source.Label,
-                    Icon = source.Icon.Length > 0 ? source.Icon : source.Label[..1],
+                    Icon = source.Icon.Length > 0 ? source.Icon : Initial(source.Label),
                 }, "Toggle" + key);
             switches = switches.WithView(
                 Controls.Switch(new JsonPointerReference($"sources/{key}")) with
@@ -189,6 +189,14 @@ public static class InboxLayoutArea
             .WithView(Controls.Label(new JsonPointerReference(LayoutAreaReference.GetDataPointer(HiddenId))), "Hidden")
             .WithView(Grid(host, rows), "Grid"));
     }
+
+    /// <summary>
+    /// The glyph a source without a symbol is toggled by: the first user-perceived character of its
+    /// name — one text element, so an emoji or an accented letter is never split — or a bullet when the
+    /// name is empty (a contributed leg may leave it so; the page must still render).
+    /// </summary>
+    internal static string Initial(string label)
+        => string.IsNullOrWhiteSpace(label) ? "•" : StringInfo.GetNextTextElement(label.Trim());
 
     /// <summary>The keys that press Delete — as a mail client: Backspace or Delete, with the rows ticked.</summary>
     internal const string DeleteShortcut = "Backspace|Delete";
@@ -375,8 +383,8 @@ public static class InboxLayoutArea
             : null;
 
     /// <summary>
-    /// The grid: the selection column, what the row is, who brought it, which band it is in, when —
-    /// and Open, which hands off to the item's own page. The inbox lists and hands off; it is not a
+    /// The grid: the selection column, the source's symbol, what the row is, who brought it, when —
+    /// and Open, which hands off to the item's own page; an unread row is bold (its row class). The inbox lists and hands off; it is not a
     /// second mail client or chat client.
     /// </summary>
     private static DataGridControl Grid(LayoutAreaHost host, IObservable<ImmutableList<InboxRow>> rows)

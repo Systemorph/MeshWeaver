@@ -550,6 +550,19 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
     }
 
     /// <summary>
+    /// A source without a symbol is toggled by its initial — one whole text element, never half an
+    /// emoji — and a contributed leg with an empty name still renders.
+    /// </summary>
+    [Theory]
+    [InlineData("Approvals", "A")]
+    [InlineData("\U0001F4E5 Inbox", "\U0001F4E5")]
+    [InlineData("Ärger", "Ä")]
+    [InlineData("", "•")]
+    [InlineData("   ", "•")]
+    public void ASourceWithoutASymbol_IsToggledByItsInitial(string label, string expected)
+        => InboxLayoutArea.Initial(label).Should().Be(expected);
+
+    /// <summary>
     /// "By title" is alphabetical in the VIEWER's language: for a German viewer Ä sorts with A, not
     /// after Z as it does by code point.
     /// </summary>

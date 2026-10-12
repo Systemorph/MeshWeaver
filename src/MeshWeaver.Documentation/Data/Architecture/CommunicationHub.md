@@ -399,9 +399,9 @@ Three properties of that binding are load-bearing:
   changes — the grid's own rows included — and each emission is a freshly deserialized record. Read
   naively, the page feeds on its own writes: rows written, filter "changed", rows written again,
   without end. `InboxRows.Fingerprint` is what tells a change the viewer made from a re-emission.
-- **Importance stays the default order, in one list.** The bands are a column and a rank rather
-  than three stacked lists, so "what needs you" is still on top — and an order the page does not
-  recognise falls back to it.
+- **One list, newest first by default.** The bands are a rank rather than three stacked lists:
+  "what needs you first" is one choice in the settings menu, and an order the page does not
+  recognise falls back to newest first.
 
 **The list reads like a mail client's.** Each row starts with its source's symbol; its columns
 are what, from whom and when. A source with read state brings TWO legs — one selecting its unread
@@ -450,8 +450,8 @@ Three rules follow, and each is pinned by a test in `InboxSelectAndDeleteTest`:
   message bodies to render one line each.
 - **A provider band has a display name too.** `InboxQueryLeg.BandLabelKey` names its catalog text;
   core's own three bands are named by core.
-- **The orderings are a closed set**, owned by the page; a stored order outside it reads as
-  importance.
+- **The orderings are a closed set**, owned by the page; a stored order outside it reads as the
+  default, newest first.
 - **A source has an id and a display name.** `InboxQueryLeg.Source` keys the switch; `SourceLabelKey` names the catalog text the row and the switch show in the
   viewer's language. A provider gives no key only for a name that is the same in every language.
   A key the running platform's catalog does not define falls back to the provider's own name, so a
@@ -505,16 +505,18 @@ the activity legs document for `Running`.
 package cannot register a service, so the durable, node-contributed form of a leg described above is
 still owed (§11).
 
-### Ordering: by IMPORTANCE first, date second
+### Ordering: by date by default, importance one choice away
 
-🚨 **The default order is importance, not time.** What the viewer must act on comes **first, at the
-top**, above everything running and everything finished — a newest-first list buries the one item
-that needs a decision under twenty that need nothing, and the inbox then costs attention instead of
-saving it. Recency is a *tiebreaker within* a band, not the primary key.
+**The default order is newest first** — everything by date, as a mail client lists it (owner's
+decision, 2026-10-12: *"let's sort it all by date … same as outlook"*). The first design put
+importance first; in use, the noise that made importance necessary came from one source — the
+notification feed — so the fix is that source starting switched OFF, not a different primary key
+for everything. What must be acted on is kept visible by **unread state in bold** (below) and by the
+hidden-obligations notice when a switch hides it.
 
-Other orderings are offered and none is the default: **by date** (when the whole point is "what
-happened this morning"), **by source**, **by due date** for the obligations band. Ordering is a
-view preference, and it never changes which legs run — the same rows, arranged differently.
+The other orderings stay in the settings menu: **what needs you first** (band rank, newest within),
+oldest, by title, by source. Ordering is a view preference, and it never changes which legs run —
+the same rows, arranged differently.
 
 ### Styling: an obligation must LOOK like one
 
@@ -541,8 +543,8 @@ the platform's own, and the search still goes to the mesh query engine with each
 
 What carried over from the first design:
 
-- **Importance is the default order** — band rank first, newest within — and an order the page does
-  not recognise falls back to it.
+- **Ordering** is the page's own select; the default is newest first (it was importance first until
+  2026-10-12 — see "Ordering" above).
 - **The provider legs ARE the queries.** A provider contributing a leg contributes the query text
   the page runs; nothing is adapted between them.
 - **The term survives** a change of order or of the source switches: they are fields of the same
