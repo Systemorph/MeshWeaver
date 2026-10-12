@@ -468,7 +468,26 @@ public static class ModuleSetStore
         Action<string>? onCorrupt = null)
     {
         ArgumentNullException.ThrowIfNull(landed);
-        var generations = GenerationsOf(landed);
+        return ProposeGenerations(baseDirectory, GenerationsOf(landed), proposedBy, onCorrupt);
+    }
+
+    /// <summary>
+    /// <see cref="Propose"/> for an already-derived generation map (MeshWeaver#6192): the checked proposal
+    /// proposes the landed generations with an unmet dependent held back at the accepted set's generation. Identical
+    /// rules: a no-op when the map is byte-identical to the newest proposal, otherwise one write-once record.
+    /// </summary>
+    /// <param name="baseDirectory">The deployment root the <c>modules/</c> tree lives under.</param>
+    /// <param name="generations">Module simple name to the generation directory leaf the set activates.</param>
+    /// <param name="proposedBy">Diagnostics - which process completed the wave.</param>
+    /// <param name="onCorrupt">The loud channel for unreadable existing records.</param>
+    /// <returns>The set that was written, or null when nothing changed.</returns>
+    public static ModuleSet? ProposeGenerations(
+        string baseDirectory,
+        ImmutableSortedDictionary<string, string> generations,
+        string? proposedBy = null,
+        Action<string>? onCorrupt = null)
+    {
+        ArgumentNullException.ThrowIfNull(generations);
         var id = IdOf(generations);
         var index = Read(baseDirectory, onCorrupt);
         if (index.Proposed is { } newest && string.Equals(newest.Id, id, StringComparison.Ordinal))
