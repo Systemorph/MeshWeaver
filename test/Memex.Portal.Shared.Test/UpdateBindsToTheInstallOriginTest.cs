@@ -45,7 +45,10 @@ public class UpdateBindsToTheInstallOriginTest(ITestOutputHelper output) : Monol
     private System.Text.Json.JsonSerializerOptions Json => Mesh.JsonSerializerOptions;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
-        => base.ConfigureMesh(builder).AddPluginCatalog();
+        => base.ConfigureMesh(builder).AddPluginCatalog()
+            // The running platform is pinned so a candidate declaring FloorFixture.Above is HELD —
+            // the pinned arm below needs a candidate the floor gate would act on.
+            .ConfigureServices(services => services.AddSingleton(FloorFixture.Pin));
 
     [Fact]
     public void TheOriginIsCanonical_WhicheverSpellingOfTheRepositoryBuiltTheSource()
@@ -123,6 +126,51 @@ public class UpdateBindsToTheInstallOriginTest(ITestOutputHelper output) : Monol
     }
 
     [Fact]
+    public async Task APinnedRecord_IsNotHeldByAForeignCandidate()
+    {
+        // A pinned record never reached the origin gate, and the floor gate ran before the policy
+        // switch, so a FOREIGN candidate above the floor stamped a hold (and a blocking ticket) on a
+        // package the administrator pinned (review on MeshWeaver#6541).
+        const string id = "OriginPinnedPkg";
+        await Seed(id, origin: Honest, policy: PackageUpdatePolicy.None);
+        await Reconcile(id, Next, Bind(Impostor, _ => throw new InvalidOperationException(
+            "a pinned record must never need the census")), minMeshVersion: FloorFixture.Above);
+        var pinned = await Record(id);
+        pinned.HeldUpdate.Should().BeNull("nothing moves for a pinned package — no hold from any repository");
+        pinned.HeldUpdateDispatch.Should().BeNull();
+        pinned.Origin.Should().Be(Honest);
+
+        // Control: the same floor-held candidate on a NOTIFY record from its own repository IS held,
+        // so the arm above cannot pass because the floor gate never fired.
+        const string control = "OriginPinnedControlPkg";
+        await Seed(control, origin: Honest);
+        await Reconcile(control, Next, Bind(Honest, _ => throw new InvalidOperationException("not needed")),
+            minMeshVersion: FloorFixture.Above);
+        (await AwaitRecord(control, r => r.HeldUpdate is not null)).HeldUpdate.Should().Contain(FloorFixture.Above);
+    }
+
+    [Fact]
+    public async Task AnAdoptionLostToAConcurrentInstall_TakesNothing()
+    {
+        // The census sees a record with NO origin; before the adoption writes, a concurrent install
+        // stamps the impostor's origin. The adoption must decide on the record it WROTE, which now
+        // names another repository — not on its pre-write snapshot (review on MeshWeaver#6541).
+        const string id = "OriginRacePkg";
+        await Seed(id);
+        await Reconcile(id, Next, Bind(Honest, _ => Observable.Defer(() =>
+            Mesh.ServiceProvider.GetRequiredService<AccessService>()
+                .RunAsSystem(() => Mesh.GetMeshNodeStream(RecordPath(id))
+                    .Update<PackageManifest>(current => current with { Origin = Impostor }))
+                .Take(1)
+                .SelectMany(_ => Census()))));
+        var record = await Record(id);
+        record.Origin.Should().Be(Impostor, "the concurrent install's origin wins; adoption fills an EMPTY origin only");
+        record.NotifiedModuleVersion.Should().BeNull(
+            "the candidate is bound to a repository the record no longer names, so it is not taken");
+        (await Reminders(id, expectAny: false)).Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task NegativeControl_AnUnboundPassStillTakesTheImpostorsCandidate()
     {
         // The defect this fixture pins, reproduced: with no binding the reconciler matches by id
@@ -142,18 +190,20 @@ public class UpdateBindsToTheInstallOriginTest(ITestOutputHelper output) : Monol
         => Observable.Return(new OriginCensus(
             listing ?? ImmutableSortedSet<string>.Empty, unread ?? ImmutableSortedSet<string>.Empty));
 
-    private async Task Reconcile(string id, string candidate, InstallOriginBinding? binding)
+    private async Task Reconcile(string id, string candidate, InstallOriginBinding? binding,
+        string? minMeshVersion = null)
     {
         var logger = Mesh.ServiceProvider.GetRequiredService<ILoggerFactory>()
             .CreateLogger<UpdateBindsToTheInstallOriginTest>();
         await PackageUpdateReconciler
             .ReconcileInstalled(Mesh, new NoFetchSource(), "HEAD",
-                [new PackageManifest { Id = id, Name = id, Version = "1.0.1", ModuleVersion = candidate, TargetPartition = id }],
+                [new PackageManifest { Id = id, Name = id, Version = "1.0.1", ModuleVersion = candidate, TargetPartition = id, MinMeshVersion = minMeshVersion }],
                 "Built from test", logger, binding)
             .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
     }
 
-    private async Task Seed(string id, string? origin = null)
+    private async Task Seed(string id, string? origin = null,
+        PackageUpdatePolicy policy = PackageUpdatePolicy.Notify)
     {
         var manifest = new PackageManifest
         {
@@ -164,7 +214,7 @@ public class UpdateBindsToTheInstallOriginTest(ITestOutputHelper output) : Monol
             TargetPartition = id,
             Origin = origin,
             AutoUpdate = false,
-            UpdatePolicy = PackageUpdatePolicy.Notify,
+            UpdatePolicy = policy,
             UpdatePolicySetAt = DateTimeOffset.UtcNow,
         };
         var record = MeshNode.FromPath(RecordPath(id)) with
@@ -190,8 +240,11 @@ public class UpdateBindsToTheInstallOriginTest(ITestOutputHelper output) : Monol
             .Select(r => r!)
             .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
 
-    private async Task<IReadOnlyList<MeshNode>> Reminders(string id) =>
-        (await PlatformBell(id).FirstAsync().Timeout(TestTimeouts.Convergence)
+    /// <summary>The record's "Update available" rows. When a reminder is EXPECTED, wait for the bell
+    /// to show one: the query's initial snapshot can precede the index seeing the reminder, and an
+    /// empty first emission would read as "none" (review on MeshWeaver#6541).</summary>
+    private async Task<IReadOnlyList<MeshNode>> Reminders(string id, bool expectAny = true) =>
+        (await PlatformBell(id).Where(ns => !expectAny || ns.Count > 0).FirstAsync().Timeout(TestTimeouts.Convergence)
             .Await(TestContext.Current.CancellationToken))
         .Where(n => n.ContentAs<Notification>(Json)?.Title?.StartsWith("Update available", StringComparison.Ordinal) == true)
         .ToList();

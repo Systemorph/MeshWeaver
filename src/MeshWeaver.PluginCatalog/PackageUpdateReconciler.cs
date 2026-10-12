@@ -176,10 +176,21 @@ internal static class PackageUpdateReconciler
         // a repository the package was not installed from is not an update of THIS install. After
         // the equality gate, so an unchanged module never costs a census of the watched origins;
         // before the floor gate, so a foreign candidate cannot even stamp a hold on the record.
-        // A pinned package is skipped — nothing moves for it, so nothing is bound or refused.
-        if (binding is null || record.EffectiveUpdatePolicy == PackageUpdatePolicy.None)
+        if (binding is null)
             return DecideBound(hub, meshService, accessService, source, sourceRef, pkg, record, recordPath,
                 provenance, logger);
+        // A pinned package is skipped on a bound pass, BEFORE the floor gate: nothing moves for it, so
+        // nothing is bound, refused, held or dispatched. Handing it to DecideBound would let a candidate
+        // from ANY watched repository — a foreign one included — stamp or clear HeldUpdate and dispatch
+        // a blocking ticket for a package the administrator pinned (review on MeshWeaver#6541).
+        if (record.EffectiveUpdatePolicy == PackageUpdatePolicy.None)
+        {
+            logger?.LogInformation(
+                "Package update: {Id} is pinned; the candidate {Candidate} listed by {Origin} is not decided "
+                + "(nothing moves for a pinned package). {Provenance}",
+                pkg.Id, pkg.ModuleVersion, binding.Origin, provenance);
+            return Observable.Return(Unit.Default);
+        }
         return BindOrigin(hub, meshService, accessService, pkg, record, recordPath, binding, logger)
             .SelectMany(bound => bound is null
                 ? Observable.Return(Unit.Default)
@@ -272,21 +283,36 @@ internal static class PackageUpdateReconciler
     }
 
     /// <summary>Records <paramref name="origin"/> on an install record that named none, and hands
-    /// the decision the record carrying it. Only an EMPTY origin is filled: a concurrent install that
-    /// stamped one first wins.</summary>
+    /// the decision the record AS WRITTEN. Only an EMPTY origin is filled: a concurrent install that
+    /// stamped one first wins — and then the record names a different origin, so this candidate is
+    /// not bound to it and the pass takes nothing (the next pass decides against the live record).</summary>
     private static IObservable<PackageManifest?> AdoptOrigin(
         IMessageHub hub, AccessService accessService, string recordPath, PackageManifest record,
         string origin, ILogger? logger)
     {
-        var adopted = record with { Origin = origin };
         // RunAsSystem, never Observable.Using (#1790): the install-records partition is System-owned.
         return accessService.RunAsSystem(() => hub.GetMeshNodeStream(recordPath)
                 .Update<PackageManifest>(current => string.IsNullOrEmpty(current.Origin)
                     ? current with { Origin = origin }
                     : current))
             .Take(1)
-            .Select(_ => (PackageManifest?)adopted)
-            .DefaultIfEmpty(adopted)
+            // 🚨 The record the update EMITTED, never the pre-write snapshot: a concurrent install or
+            // policy edit may have won, and deciding on the snapshot would act on stale policy and
+            // authorization fields — or bind a candidate to an origin the record no longer names
+            // (review on MeshWeaver#6541).
+            .Select(node => node.ContentAs<PackageManifest>(hub.JsonSerializerOptions))
+            .Select(current =>
+            {
+                if (current is not null && string.Equals(current.Origin, origin, StringComparison.Ordinal))
+                    return current;
+                logger?.LogInformation(
+                    "Package update: {Path} was not adopted for {Origin} — the record now names {Recorded}; "
+                    + "nothing is taken this pass (MeshWeaver#6526).",
+                    recordPath, origin, current?.Origin ?? "(unreadable)");
+                return null;
+            })
+            // An update that answered nothing proves no adoption: take nothing this pass.
+            .DefaultIfEmpty(null)
             .Catch((Exception ex) =>
             {
                 // Not adopted ⇒ not bound ⇒ not updated this pass; the next pass adopts again.
