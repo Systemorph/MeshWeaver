@@ -355,7 +355,7 @@ public static class PublishedBundleCatalogue
             return PublishedReleaseCatalogue.Unreadable(
                 $"the published bundle root '{publishedRoot}' holds no '{ReleaseMarkerDirectoryName}' "
                 + "directory, so no release's framework identity is knowable here — cannot determine "
-                + "which release ships all plugins, which is not clearance to roll to the newest one");
+                + "which releases exist here, so none is selected from this root");
 
         try
         {
