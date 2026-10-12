@@ -30,6 +30,13 @@ public sealed record AppDirectoryEntry(
     string? LabelKey = null,
     bool BuiltIn = false);
 
+/// <summary>What the person tile shows for the viewer: their display name, their picture (null =
+/// the settings icon) and their language, for the description.</summary>
+/// <param name="Name">The display name.</param>
+/// <param name="Icon">The profile picture (the user node's icon), or null.</param>
+/// <param name="Locale">The viewer's UI language, or null for the default.</param>
+public sealed record PersonTile(string Name, string? Icon, string? Locale);
+
 /// <summary>An app ROOT as read off the instance: a partition root whose content says <c>app: true</c>.</summary>
 /// <param name="Path">The root's path — the app id.</param>
 /// <param name="Name">The root's name.</param>
@@ -101,6 +108,10 @@ public sealed class AppDirectory
     /// <summary>The Administration built-in's id — the Admin app, global admins only.</summary>
     public const string AdminId = AdminAppNodeType.Path;
 
+    /// <summary>The catalog key of the person tile's description — "your profile, accounts and
+    /// connections: your settings".</summary>
+    public const string PersonSettingsDescriptionKey = "launcher.personSettingsDescription";
+
     /// <summary>The icon the Settings and Administration built-ins carry.</summary>
     public const string SettingsIcon = "/static/NodeTypeIcons/settings.svg";
 
@@ -142,9 +153,79 @@ public sealed class AppDirectory
             .Do(_ => { }, exception => logger?.LogWarning(exception,
                 "[AppDirectory] admin check failed for {Viewer}; the directory recomputes on the next subscriber", viewer))
             .DistinctUntilChanged();
+        // The viewer's own node names the Settings tile (their name, their picture, their
+        // language). It is COSMETIC: the list never waits for it (StartWith) and a failed read
+        // falls back to the plain "Settings" tile rather than taking the launcher down.
+        var person = PersonOf(viewer);
         return visible
-            .CombineLatest(admin, (apps, isAdmin) => Compose(viewer, apps, isAdmin))
+            .CombineLatest(admin, person, (apps, isAdmin, who) => Compose(viewer, apps, isAdmin, who))
             .DistinctUntilChanged(EntryListComparer.Instance);
+    }
+
+    /// <summary>The viewer's own user node, read as <see cref="PersonTile"/> — live, never blocking:
+    /// it starts with <c>null</c> (the plain Settings tile) and re-emits when the name, the picture
+    /// or the language changes.
+    /// <para>🚨 EXISTENCE first, through an OWNED, empty-on-absent query (<see cref="PersonQuery"/>,
+    /// <see cref="IMeshQueryCore"/> — torn down with the viewer's directory slot, never a
+    /// process-resident cached query), and the authoritative node stream only once the node is
+    /// seen: the directory also serves System-backed <c>{owner}/_Apps</c> reads for arbitrary
+    /// owners, and a point read of an owner with no node answers NotFound and opens the stream
+    /// cache's storm breaker for that path. The same shape as
+    /// <see cref="LauncherArrangementSource.Observe"/>.</para></summary>
+    private IObservable<PersonTile?> PersonOf(string viewer)
+    {
+        if (string.IsNullOrWhiteSpace(viewer))
+            return Observable.Return<PersonTile?>(null);
+        // Resolved ONCE, on the caller's thread — never inside a long-lived selector (#2679).
+        var core = hub.ServiceProvider.GetRequiredService<IMeshQueryCore>();
+        var cache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+        var options = hub.JsonSerializerOptions;
+        var request = MeshQueryRequest.FromQuery(PersonQuery(viewer)) with { UserId = WellKnownUsers.System };
+        return LauncherArrangementSource.Fold(core.Query<MeshNode>(request, options))
+            .Select(nodes => nodes.ContainsKey(viewer))
+            .DistinctUntilChanged()
+            .Select(exists => exists
+                ? cache.GetStream(viewer, options).Select(node => ReadPerson(node, options))
+                : Observable.Return<PersonTile?>(null))
+            .Switch()
+            .Catch<PersonTile?, Exception>(exception =>
+            {
+                logger?.LogDebug(exception,
+                    "[AppDirectory] user node of {Viewer} unreadable; the Settings tile keeps its plain label", viewer);
+                return Observable.Return<PersonTile?>(null);
+            })
+            .StartWith((PersonTile?)null)
+            .DistinctUntilChanged();
+    }
+
+    /// <summary>The person-tile existence query: the viewer's own root, narrowed to the User type —
+    /// empty when there is no such node, and never a Space or another root that happens to sit at
+    /// an owner path the directory is asked about. Pure.</summary>
+    public static string PersonQuery(string viewer) => $"path:{viewer} nodeType:{UserNodeType.NodeType}";
+
+    /// <summary>The person tile's facts from a user node: the display name (the node's name, else
+    /// <c>fullName</c>), the picture (the node's icon) and the language (<c>locale</c>). Null when
+    /// the node carries no name at all. Pure.</summary>
+    public static PersonTile? ReadPerson(MeshNode? node, JsonSerializerOptions options)
+    {
+        // Only a USER node names the person tile — a Space (or any other root) at the same path never does.
+        if (node is null || !string.Equals(node.NodeType, UserNodeType.NodeType, StringComparison.Ordinal))
+            return null;
+        var content = ElementOf(node, options);
+        string? Text(string name) => content is { } c && Property(c, name) is { ValueKind: JsonValueKind.String } v
+            ? v.GetString()
+            : null;
+        var name = !string.IsNullOrWhiteSpace(node.Name) && !string.Equals(node.Name, node.Path, StringComparison.Ordinal)
+            ? node.Name
+            : Text("fullName");
+        if (string.IsNullOrWhiteSpace(name))
+            return null;
+        // The picture is resolved HERE, against the user node: an uploaded one is stored relative
+        // (`content:<file>`), and the tile is painted from a synthetic {viewer}/_Apps row, where a
+        // relative value would resolve against the wrong node. The profile page's own classifier
+        // (ResolvePictureUrl): an emoji, inline SVG or Fluent icon name is no picture (null → the settings icon).
+        var picture = MeshNodeImageHelper.ResolvePictureUrl(node.Icon, node.Path);
+        return new PersonTile(name.Trim(), string.IsNullOrWhiteSpace(picture) ? null : picture, Text("locale"));
     }
 
     private IObservable<ImmutableList<AppRoot>> VisibleRoots(ImmutableList<AppRoot> roots, string viewer)
@@ -175,9 +256,9 @@ public sealed class AppDirectory
     /// (the <c>Admin</c> root) never appears twice. Pure.
     /// </summary>
     public static ImmutableList<AppDirectoryEntry> Compose(
-        string viewer, IEnumerable<AppRoot> visibleRoots, bool isGlobalAdmin)
+        string viewer, IEnumerable<AppRoot> visibleRoots, bool isGlobalAdmin, PersonTile? person = null)
     {
-        var builtIns = BuiltIns(viewer, isGlobalAdmin);
+        var builtIns = BuiltIns(viewer, isGlobalAdmin, person);
         var builtInIds = builtIns.Select(b => b.Id).ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
         var apps = visibleRoots
             .Where(r => !builtInIds.Contains(r.Path))
@@ -192,12 +273,23 @@ public sealed class AppDirectory
     /// (the person app, <c>{viewer}/Settings</c>), <b>Inbox</b> (the Inbox area on the viewer's own
     /// hub, the target <c>SeedInboxAppLogonAction</c> seeds), and <b>Administration</b>
     /// (<c>Admin</c>) for a global admin only. Names are catalog keys, resolved per viewer. Pure.
+    /// <para>The person app is the viewer's OWN app, so once their node is known
+    /// (<paramref name="person"/>) its tile carries their name and picture — "Roland Bürgi", not
+    /// "Settings" — and a description, in their language, that says it holds their settings
+    /// (<see cref="PersonSettingsDescriptionKey"/>). Without it the tile is the plain catalog
+    /// "Settings".</para>
     /// </summary>
-    public static ImmutableList<AppDirectoryEntry> BuiltIns(string viewer, bool isGlobalAdmin)
+    public static ImmutableList<AppDirectoryEntry> BuiltIns(string viewer, bool isGlobalAdmin, PersonTile? person = null)
     {
+        var settingsPath = $"{viewer}/{MeshNodeLayoutAreas.SettingsArea}";
+        var settings = person is { Name.Length: > 0 }
+            ? new AppDirectoryEntry(SettingsId, person.Name, person.Icon ?? SettingsIcon,
+                LocalizationCatalog.Get(PersonSettingsDescriptionKey, person.Locale), null,
+                settingsPath, LabelKey: null, BuiltIn: true)
+            : new AppDirectoryEntry(SettingsId, "Settings", SettingsIcon, null, null,
+                settingsPath, LabelKey: "common.settings", BuiltIn: true);
         var list = ImmutableList.Create(
-            new AppDirectoryEntry(SettingsId, "Settings", SettingsIcon, null, null,
-                $"{viewer}/{MeshNodeLayoutAreas.SettingsArea}", LabelKey: "common.settings", BuiltIn: true),
+            settings,
             new AppDirectoryEntry(InboxId, "Inbox", UserActivityLayoutAreas.InboxIcon, null, null,
                 $"{viewer}/{InboxLayoutArea.AreaName}", LabelKey: UserActivityLayoutAreas.InboxLabelKey, BuiltIn: true));
         return isGlobalAdmin

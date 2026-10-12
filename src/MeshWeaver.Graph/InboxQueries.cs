@@ -152,36 +152,22 @@ public static class InboxQueries
     /// </summary>
     public static ImmutableArray<InboxQueryLeg> BuiltIn { get; } =
     [
-        new()
-        {
-            Source = "Notifications",
-            SourceLabelKey = "inbox.source.Notifications",
-            Band = InboxBand.NeedsYou,
-            Order = 10,
-            // Not put away. `Dismissed` defaults to false and is therefore OMITTED from stored
-            // JSON, so the leg negates the stamped `true` — a positive match on `false` would
-            // select nothing (the same trap as the activity legs below).
-            Query = $"namespace:{ViewerToken}/{NotificationService.SatelliteSegment} "
-                    + $"nodeType:{NotificationNodeType.NodeType} -content.dismissed:true "
-                    + $"sort:CreatedAt-desc {RowProjection}",
-        },
-        new()
-        {
-            Source = "Mail",
-            SourceLabelKey = "inbox.source.Mail",
-            Band = InboxBand.NeedsYou,
-            Order = 20,
-            // The viewer's own stored mail, inbound and not archived. Both defaults (Inbound, New)
-            // are omitted from stored JSON, so the leg negates the two stamped values it excludes.
-            Query = $"namespace:{ViewerToken}/{EmailNodeType.UserEmailSegment} "
-                    + $"nodeType:{EmailNodeType.NodeType} -content.status:{nameof(EmailStatus.Archived)} "
-                    + $"-content.direction:{nameof(EmailDirection.Outbound)} "
-                    + $"sort:LastModified-desc {RowProjection}",
-        },
+        // Notifications — OFF by default: the feed is long and mostly informational, so it stays
+        // one switch away (the bell still shows it). Two legs: unread (bold) and read. `IsRead` and
+        // `Dismissed` default to false and are OMITTED from stored JSON, so unread negates the
+        // stamped `true` and read matches it — a positive match on `false` would select nothing.
+        Notifications(unread: true),
+        Notifications(unread: false),
+        // The viewer's own stored mail, inbound and not archived. Both defaults (Inbound, New) are
+        // omitted from stored JSON, so the legs negate the stamped values they exclude: unread is
+        // "not Read", read is "Read".
+        Mail(unread: true),
+        Mail(unread: false),
         new()
         {
             Source = "Activities",
             SourceLabelKey = "inbox.source.Activities",
+            SourceIcon = ActivitiesIcon,
             Band = InboxBand.Running,
             Order = 10,
             // Not terminal — every stamped terminal state negated (Running itself is omitted).
@@ -193,6 +179,7 @@ public static class InboxQueries
         {
             Source = "Activities",
             SourceLabelKey = "inbox.source.Activities",
+            SourceIcon = ActivitiesIcon,
             Band = InboxBand.Recent,
             Order = 20,
             // Terminal — any stamped terminal state.
@@ -201,6 +188,40 @@ public static class InboxQueries
                     + $" sort:LastModified-desc {RowProjection}",
         },
     ];
+
+    private const string NotificationsIcon = "🔔";
+    private const string MailIcon = "✉️";
+    private const string ActivitiesIcon = "⚙️";
+
+    private static InboxQueryLeg Notifications(bool unread) => new()
+    {
+        Source = "Notifications",
+        SourceLabelKey = "inbox.source.Notifications",
+        SourceIcon = NotificationsIcon,
+        ShownByDefault = false,
+        Unread = unread,
+        Band = InboxBand.NeedsYou,
+        Order = unread ? 10 : 11,
+        Query = $"namespace:{ViewerToken}/{NotificationService.SatelliteSegment} "
+                + $"nodeType:{NotificationNodeType.NodeType} -content.dismissed:true "
+                + (unread ? "-content.isRead:true " : "content.isRead:true ")
+                + $"sort:CreatedAt-desc {RowProjection}",
+    };
+
+    private static InboxQueryLeg Mail(bool unread) => new()
+    {
+        Source = "Mail",
+        SourceLabelKey = "inbox.source.Mail",
+        SourceIcon = MailIcon,
+        Unread = unread,
+        Band = InboxBand.NeedsYou,
+        Order = unread ? 20 : 21,
+        Query = $"namespace:{ViewerToken}/{EmailNodeType.UserEmailSegment} "
+                + $"nodeType:{EmailNodeType.NodeType} -content.status:{nameof(EmailStatus.Archived)} "
+                + $"-content.direction:{nameof(EmailDirection.Outbound)} "
+                + (unread ? $"-content.status:{nameof(EmailStatus.Read)} " : $"content.status:{nameof(EmailStatus.Read)} ")
+                + $"sort:LastModified-desc {RowProjection}",
+    };
 
     /// <summary>
     /// Every leg on this mesh: core's own plus each one a package registered as a service
