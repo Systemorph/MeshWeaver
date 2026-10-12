@@ -280,10 +280,19 @@ public class FaultInjectionSiloConfigurator : ISiloConfigurator, IHostConfigurat
     /// <param name="builder">The mesh builder.</param>
     protected virtual MeshBuilder ConfigureAdditional(MeshBuilder builder) => builder;
 
+    /// <summary>
+    /// The durable PubSubStore a MULTI-SILO host supplies, or null for the default single-process
+    /// shape. Non-null makes every silo of this cluster configure itself exactly as a multi-silo
+    /// portal does — and since #4802 that means NO Orleans memory stream, so every cross-silo leg is
+    /// a directed grain call. In-process, any store will do: what is under test is the shape the
+    /// marker selects, not the store's durability.
+    /// </summary>
+    protected virtual Action<ISiloBuilder>? PubSubStore => null;
+
     /// <inheritdoc />
     public virtual void Configure(ISiloBuilder siloBuilder)
     {
-        siloBuilder.ConfigureMeshWeaverServer()
+        siloBuilder.ConfigureMeshWeaverServer(PubSubStore)
             .AddMemoryGrainStorageAsDefault()
             .ConfigureLogging(logging => logging.AddXUnitLogger());
         siloBuilder.Configure<ClusterMembershipOptions>(o =>
@@ -298,7 +307,10 @@ public class FaultInjectionSiloConfigurator : ISiloConfigurator, IHostConfigurat
     /// <inheritdoc />
     public virtual void Configure(IHostBuilder hostBuilder)
     {
-        var configured = hostBuilder.UseOrleansMeshServer()
+        // The SAME store marker on the host path as on the silo path above: both run
+        // ConfigureMeshWeaverServer, and a null here would register the memory stream that the
+        // multi-silo shape deliberately omits.
+        var configured = hostBuilder.UseOrleansMeshServer(PubSubStore)
             .ConfigurePortalMesh()
             .AddGraph()
             .ConfigureServices(services => services.Configure<SyncStreamOptions>(o =>

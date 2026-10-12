@@ -1032,6 +1032,22 @@ public class OrleansRoutingService : IRoutingService, IDisposable
         // is correct rather than degraded — and it is why the fallback is not a temporary scaffold.
         var podHub = AttachPodHub(address);
 
+        // 🚨 NO MEMORY STREAM ON THIS HOST — #4802. A multi-silo host registers none: the pod-hub
+        // claim above is this hub's ONLY cross-process transport there, for forward traffic and NACKs
+        // alike (RoutingGrain routes both as directed grain calls). So there is nothing to subscribe,
+        // nothing to re-attach on a membership change and nothing to gate outbound dispatch on; the
+        // registration is the local route plus the claim.
+        if (!HasMemoryStream)
+        {
+            OrleansRouteTrace.Write($"OrleansRoutingService.RegisterStream NO_STREAM addr={address}");
+            return Disposable.Create(() =>
+            {
+                // The same value-matched removal and claim-first release as the stream case below.
+                streams.TryRemove(new KeyValuePair<Address, AsyncDelivery>(address, callback));
+                podHub.Dispose();
+            });
+        }
+
         // 🚨 Attach the Orleans memory-stream subscription once Orleans streaming is READY — never
         // before. GetStream on a PersistentStreamProvider whose lifecycle Init has not yet run throws
         // an NRE from deep inside the Orleans stream runtime (issue #1129): the process-wide cache/mesh
@@ -2113,6 +2129,17 @@ public class OrleansRoutingService : IRoutingService, IDisposable
 
     private IStreamProvider GetStreamProvider(string streamProvider) =>
         serviceProvider.GetRequiredKeyedService<IStreamProvider>(streamProvider);
+
+    /// <summary>
+    /// Whether this host registered the Orleans memory stream at all. A multi-silo silo does not
+    /// (#4802 — <c>ConfigureMeshWeaverServer</c> with a durable PubSubStore); a single-process host,
+    /// an in-process test cluster and an Orleans client do. Read from the container once: the
+    /// registration is fixed when the host is built.
+    /// </summary>
+    internal bool HasMemoryStream => hasMemoryStream ??=
+        serviceProvider.GetKeyedService<IStreamProvider>(StreamProviders.Memory) is not null;
+
+    private bool? hasMemoryStream;
 
     internal static Address GetHostAddress(Address address)
     {
