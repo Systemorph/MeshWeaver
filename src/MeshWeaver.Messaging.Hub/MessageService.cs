@@ -349,27 +349,33 @@ public class MessageService : IMessageService
     /// nothing reads to the next person as "there was nothing to report" — the very defect this
     /// issue was filed on.</para>
     /// </summary>
-    /// <summary>
-    /// The discarded message as the discard Error prints it: its own rendering (a record prints its
-    /// members, so a <c>GetDataRequest</c> names its reference and through it the producer that
-    /// issued it — #5718), bounded so a large payload cannot flood the line.
-    /// </summary>
-    /// <param name="message">The discarded message.</param>
-    /// <returns>At most <see cref="MaxDiscardedMessageRendering"/> characters.</returns>
-    internal static string DescribeDiscardedMessage(object message)
-    {
-        var rendered = message.ToString() ?? message.GetType().Name;
-        return rendered.Length <= MaxDiscardedMessageRendering
-            ? rendered
-            : rendered[..MaxDiscardedMessageRendering] + "…";
-    }
-
-    /// <summary>The bound on <see cref="DescribeDiscardedMessage"/>.</summary>
-    internal const int MaxDiscardedMessageRendering = 300;
-
     private string DisposalAttribution() =>
         (hub as MessageHub)?.DisposalAttribution
         ?? "not attributable (this hub is not a MessageHub, so it records no disposal cause)";
+
+    /// <summary>
+    /// The discarded message as the discard Error prints it: its TYPE, plus — only when the type
+    /// opts in through <see cref="IDescribedForDiagnostics"/> — the description it declared safe to
+    /// print (a <c>GetDataRequest</c> names its reference and through it the producer that issued
+    /// it — #5718), bounded so a large description cannot flood the line.
+    ///
+    /// <para>🚨 Never the message's own <c>ToString()</c>: a record prints every member, so a
+    /// token-validation request discarded during bring-up would log its raw credential in full.</para>
+    /// </summary>
+    /// <param name="message">The discarded message.</param>
+    /// <returns>At most <see cref="MaxDiscardedMessageRendering"/> characters, ellipsis included.</returns>
+    internal static string DescribeDiscardedMessage(object message)
+    {
+        var typeName = message.GetType().Name;
+        var description = (message as IDescribedForDiagnostics)?.DiagnosticDescription;
+        var rendered = string.IsNullOrEmpty(description) ? typeName : $"{typeName} {{ {description} }}";
+        return rendered.Length <= MaxDiscardedMessageRendering
+            ? rendered
+            : rendered[..(MaxDiscardedMessageRendering - 1)] + "…";
+    }
+
+    /// <summary>The bound on <see cref="DescribeDiscardedMessage"/>, ellipsis included.</summary>
+    internal const int MaxDiscardedMessageRendering = 300;
 
     /// <summary>
     /// Answers and retires every delivery currently parked behind the gates — the ONE drain shared
@@ -3431,7 +3437,9 @@ public class MessageService : IMessageService
             // re-asks), by the content-collection reads (HubStreamProviderFactory, ContentStaging,
             // ContentFileResolver) and by MeshOperations' `get`, which do not. The type name alone
             // cannot tell them apart, and the payload can: its reference (MeshNodeReference vs
-            // ContentCollectionReference …) names the producer. MEASURED on memex-cloud,
+            // ContentCollectionReference …) names the producer. Printed ONLY through the opt-in
+            // IDescribedForDiagnostics, never ToString() — a record renders every member,
+            // credentials included. MEASURED on memex-cloud,
             // 2026-10-11 19:16Z: ~200 of these in one module live-update, every one a partition
             // root discarding a GetDataRequest from one of its own NodeType hubs, and no line could
             // say which read it was.

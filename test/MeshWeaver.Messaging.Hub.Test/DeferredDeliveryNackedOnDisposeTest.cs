@@ -332,7 +332,13 @@ public class DeferredDeliveryNackedOnDisposeTest : HubTestBase
     }
 
     /// <summary>A request whose payload names the read it is — the shape of a GetDataRequest's reference.</summary>
-    private record ReferencedRead(string Reference) : IRequest<GatedResponse>;
+    private record ReferencedRead(string Reference) : IRequest<GatedResponse>, IDescribedForDiagnostics
+    {
+        string IDescribedForDiagnostics.DiagnosticDescription => Reference;
+    }
+
+    /// <summary>A request carrying a credential and NOT opting in — the shape of a token-validation request.</summary>
+    private record CredentialBearingRead(string RawToken) : IRequest<GatedResponse>;
 
     private static readonly Address ReferencedAddress = new("referenced", "1");
 
@@ -368,6 +374,70 @@ public class DeferredDeliveryNackedOnDisposeTest : HubTestBase
                  && m.Contains("ContentCollectionReference-content", StringComparison.Ordinal),
             "the discard Error must carry the request's payload, which is what names the producer "
             + "that may or may not re-ask on the ShuttingDown NACK");
+    }
+
+    /// <summary>
+    /// The negative control of the test above: a message that does NOT opt in through
+    /// <see cref="IDescribedForDiagnostics"/> is named by its type alone. A record's own rendering
+    /// prints every member, so printing it would log a token-validation request's raw token.
+    /// </summary>
+    [Fact]
+    public async Task ADiscardError_NeverPrintsAnUndeclaredPayload()
+    {
+        const string secret = "raw-token-must-never-be-logged";
+        var host = GetHost();
+        var address = new Address("credential", "1");
+        var gated = host.GetHostedHub(
+            address,
+            c => c.WithTypes(typeof(CredentialBearingRead), typeof(GatedResponse))
+                .WithInitializationGate("credential-gate-never-opens", _ => false)
+                .WithHandler<CredentialBearingRead>((_, d) => d.Processed()));
+        gated.Should().NotBeNull();
+
+        host.Post(new CredentialBearingRead(secret), o => o.WithTarget(address));
+        await WaitForDeferredBacklog(host);
+
+        ((MessageHub)gated!).NoteDirectDisposalBy("a module live-update", "a recycle cascade");
+        gated.Dispose();
+
+        await WaitForDiscardLine("credential-gate-never-opens");
+
+        log.At(LogLevel.Error).Should().Contain(
+            m => m.Contains("credential-gate-never-opens", StringComparison.Ordinal)
+                 && m.Contains("Request: " + nameof(CredentialBearingRead), StringComparison.Ordinal),
+            "the discard Error still names the request by its type");
+        log.Messages.Should().NotContain(m => m.Contains(secret, StringComparison.Ordinal),
+            "a payload that did not declare a safe description must never reach a log line");
+    }
+
+    /// <summary>
+    /// The declared description is bounded to 300 characters INCLUDING its ellipsis, so a large
+    /// reference cannot flood the Error line.
+    /// </summary>
+    [Fact]
+    public async Task ADiscardError_BoundsTheDescription_EllipsisIncluded()
+    {
+        var host = GetHost();
+        var address = new Address("bounded", "1");
+        var gated = host.GetHostedHub(
+            address,
+            c => c.WithTypes(typeof(ReferencedRead), typeof(GatedResponse))
+                .WithInitializationGate("bounded-gate-never-opens", _ => false)
+                .WithHandler<ReferencedRead>((_, d) => d.Processed()));
+        gated.Should().NotBeNull();
+
+        host.Post(new ReferencedRead(new string('x', 1000)), o => o.WithTarget(address));
+        await WaitForDeferredBacklog(host);
+
+        ((MessageHub)gated!).NoteDirectDisposalBy("a module live-update", "a recycle cascade");
+        gated.Dispose();
+
+        await WaitForDiscardLine("bounded-gate-never-opens");
+
+        var line = log.At(LogLevel.Error).Single(m => m.Contains("bounded-gate-never-opens", StringComparison.Ordinal));
+        var rendered = line[(line.IndexOf("Request: ", StringComparison.Ordinal) + "Request: ".Length)..];
+        rendered.Length.Should().Be(300, "the bound is 300 characters with the ellipsis counted");
+        rendered.Should().EndWith("…");
     }
 
     /// <summary>
