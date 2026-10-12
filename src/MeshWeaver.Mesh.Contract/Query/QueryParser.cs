@@ -571,6 +571,11 @@ public partial class QueryParser
                     // the value reading as the complement of the glob (see QueryWildcard).
                     if (token.Condition!.Operator is QueryOperator.NotEqual)
                     {
+                        // A negated WILDCARD is widened with its positive twin once `scope:` is
+                        // known — to the AND of the two negated patterns, the complement of the
+                        // positive's self-or-below OR pair (WidenWildcardNamespacesToSubtree).
+                        if (QueryWildcard.ContainsWildcard(value))
+                            (namespaceWildcardIndices ??= []).Add(filterTokens.Count);
                         filterTokens.Add(new Token(TokenType.Comparison, string.Empty,
                             new QueryCondition("namespace", QueryOperator.NotEqual, [value.Trim('/')])));
                         continue;
@@ -802,13 +807,25 @@ public partial class QueryParser
             if (filterTokens[index].Condition is not { } self || self.Value.Length == 0)
                 continue;
             var pattern = self.Value;
+            var negated = self.Operator == QueryOperator.NotEqual;
             // Same vocabulary as the pattern being widened: `*`, not SQL's `%` (issue #1235). The
             // widened form carries TWO wildcards (`*/Source/*`), which is exactly the shape both
             // in-memory matchers used to mishandle by splitting on the first one only.
             var below = new QueryCondition(
-                self.Selector, QueryOperator.Like,
+                self.Selector, self.Operator,
                 [$"{pattern.TrimEnd('/')}/{QueryWildcard.Wildcard}"]);
             filterTokens.RemoveAt(index);
+            // A NEGATED wildcard (`-namespace:*/X`, #6581) is the complement of the positive's
+            // `(self OR below)` — De Morgan: `NOT self AND NOT below`, two adjacent comparisons.
+            if (negated)
+            {
+                filterTokens.InsertRange(index,
+                [
+                    new Token(TokenType.Comparison, string.Empty, self),
+                    new Token(TokenType.Comparison, string.Empty, below),
+                ]);
+                continue;
+            }
             filterTokens.InsertRange(index,
             [
                 new Token(TokenType.LeftParen, "("),

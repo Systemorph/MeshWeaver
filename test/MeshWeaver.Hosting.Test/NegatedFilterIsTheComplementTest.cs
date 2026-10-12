@@ -91,4 +91,45 @@ public class NegatedFilterIsTheComplementTest
         Evaluator.Matches(excluded, parsed).Should().BeFalse($"`{query}` must exclude {excluded.Namespace}");
         Evaluator.Matches(elsewhere, parsed).Should().BeTrue($"`{query}` must keep {elsewhere.Namespace}");
     }
+
+    /// <summary>
+    /// A SCOPED wildcard namespace: the positive widens to self-or-below
+    /// (<c>namespace LIKE '*/_Thread' OR namespace LIKE '*/_Thread/*'</c>), so its negation must be
+    /// the AND of the two negated patterns — a node BELOW a thread namespace is matched by the
+    /// positive and must therefore be excluded by the negation. Unscoped, the pair is the plain
+    /// one-pattern complement (negative control: the below-node is outside BOTH).
+    /// </summary>
+    [Theory]
+    [InlineData("scope:subtree", true)]
+    [InlineData("scope:descendants", true)]
+    [InlineData("", false)]
+    public void ANegatedScopedWildcardNamespaceIsTheComplementOfItsPositive(string scope, bool widened)
+    {
+        MeshNode[] nodes =
+        [
+            new("t", "Acme/_Thread") { Name = "t" },
+            new("below", "Acme/_Thread/topic") { Name = "below" },
+            new("open", "Acme/Open") { Name = "open" },
+            new("root", "") { Name = "root" },
+        ];
+        var positive = Parser.Parse($"namespace:*/_Thread {scope} partitions:all");
+        var negated = Parser.Parse($"-namespace:*/_Thread {scope} partitions:all");
+        var pos = nodes.Where(n => Evaluator.Matches(n, positive)).Select(n => n.Id).ToArray();
+        var neg = nodes.Where(n => Evaluator.Matches(n, negated)).Select(n => n.Id).ToArray();
+
+        Set(pos).Should().Be(widened ? "below,t" : "t", $"the positive under `{scope}`");
+        Set(pos.Intersect(neg)).Should().Be("", $"`-namespace:*/_Thread {scope}` must exclude what the positive matches");
+        Set(pos.Concat(neg)).Should().Be(Set(nodes.Select(n => n.Id)), "together they cover every node");
+    }
+
+    /// <summary>The public pair is complementary for every accepted input — a wildcard-free pattern
+    /// (contains semantics) included.</summary>
+    [Theory]
+    [InlineData("foobar", "foo")]
+    [InlineData("barbaz", "foo")]
+    [InlineData("foobar", "foo*")]
+    [InlineData("barfoo", "foo*")]
+    public void IsNotLikeMatchIsTheComplementOfIsLikeMatch(string value, string pattern) =>
+        QueryWildcard.IsNotLikeMatch(value, pattern).Should().Be(!QueryWildcard.IsLikeMatch(value, pattern),
+            $"`{value}` against `{pattern}`");
 }

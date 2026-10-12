@@ -178,7 +178,10 @@ same null-inclusive rule `NotEqual` and `NotIn` already followed.
 
 The same parser pass dropped the operator of a negated single namespace: `-namespace:X` became a
 positive path anchor and `-namespace:*/X` a positive `namespace LIKE` filter. Both are now a
-`namespace NotEqual` **filter**, never an anchor — the shape #4296 gave `-path:`.
+`namespace NotEqual` **filter**, never an anchor — the shape #4296 gave `-path:`. Under
+`scope:subtree`/`scope:descendants` the positive `namespace:*/X` is widened to self-or-below
+(`LIKE '*/X' OR LIKE '*/X/*'`), so the negation is widened by De Morgan to the AND of the two
+negated patterns — a node in `Acme/X/topic` is in exactly one of the pair.
 
 `test/MeshWeaver.Fixture/NegationCorpus.cs` holds the node set and the exact expected result of
 every case, positives beside their negations; core runs it through `QueryEvaluator`

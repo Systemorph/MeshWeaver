@@ -138,6 +138,9 @@ public static class QueryWildcard
     /// Issue #6581: the executors used to compare the pattern literally, so the negation matched
     /// every node — the ones it was written to exclude included.
     /// </summary>
+    /// <remarks>Defined as the negation of <see cref="IsLikeMatch"/> for every input, so the public
+    /// pair is complementary for a wildcard-free pattern too (contains semantics), not only for the
+    /// glob form the evaluator routes here.</remarks>
     public static bool IsNotLikeMatch(string? value, string pattern) =>
-        value is null || !IsMatch(value, pattern);
+        value is null || !IsLikeMatch(value, pattern);
 }
