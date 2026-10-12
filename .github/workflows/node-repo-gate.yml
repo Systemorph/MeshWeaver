@@ -913,7 +913,7 @@ jobs:
           print(f"platform-set={rows['set']}")
           print("baseline=" + json.dumps(rows, separators=(",", ":")))
           PY
-          echo "platform: resolved $(grep '^set=' "$ROWS" | cut -d= -f2-) (core $(grep '^sha=' "$ROWS" | cut -d= -f2- | cut -c1-9)); plugins publication: $(grep '^plugins-set=' "$ROWS" | cut -d= -f2-)"
+          echo "platform: resolved $(grep '^set=' "$ROWS" | cut -d= -f2-) (core $(grep '^sha=' "$ROWS" | cut -d= -f2- | cut -c1-9)); the plugins publication is read by identity at the upstream fetch"
 
   # ─────────────────────────── 2. THE GATE, one job per shard ───────────────────────────
   gate:
