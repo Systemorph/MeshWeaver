@@ -117,6 +117,38 @@ public class ARecycleWaveSharesItsReadsTest(ITestOutputHelper output) : Monolith
     }
 
     /// <summary>
+    /// 🚨 Settled reads leave nothing behind on the owning hub. The read-issuing hub lives as long as
+    /// the mesh and its disposal registry is append-only, so a read that registered an owner of its
+    /// own with that hub grew the registry by one per read, for the life of the process.
+    /// SHOULD-FAIL-IF each read registers its own owner with the hub again.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task SettledReads_DoNotGrowTheOwningHubsDisposalRegistry()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var owner = (MessageHub)Owner;
+
+        // One read first, so the owner registry this singleton keeps for the hub exists.
+        (await Reads.Instances("Warm/Type", Owner, () => Observable.Return(ImmutableList<string>.Empty))
+            .Should().Within(TestTimeouts.Convergence).Emit("the warm-up read answers", ct)).Should().BeEmpty();
+        var before = owner.DisposalRegistrantCount;
+
+        const int waves = 25;
+        for (var i = 0; i < waves; i++)
+        {
+            (await Reads.Instances($"Wave{i}/Type", Owner, () => Observable.Return(ImmutableList.Create("x")))
+                .Should().Within(TestTimeouts.Convergence).Emit("each read answers", ct)).Should().ContainSingle();
+            (await Reads.Definitions(Owner, () => Observable.Return(ImmutableDictionary<string, NodeTypeDefinition?>.Empty))
+                .Should().Within(TestTimeouts.Convergence).Emit("each enumeration answers", ct)).Should().BeEmpty();
+        }
+
+        // Other services may register with the same hub meanwhile, so the bound is loose — but it is
+        // far below one registrant per read (2 × waves = 50).
+        (owner.DisposalRegistrantCount - before).Should().BeLessThan(waves,
+            $"{2 * waves} settled reads must not each leave a registrant on the long-lived read hub");
+    }
+
+    /// <summary>
     /// The wiring: a cascade started while a NodeType enumeration is in flight JOINS it — it emits
     /// nothing until that read answers and then answers from it — and a whole wave of cascades still
     /// finds the instance.
