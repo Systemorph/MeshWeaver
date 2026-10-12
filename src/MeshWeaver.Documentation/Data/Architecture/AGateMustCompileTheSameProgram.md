@@ -177,7 +177,7 @@ printed `✓ compile gate GREEN … 0 clean` and exited `0`.
 | 2 | usage: an unknown or empty `--modules`, `--image` with `--refs`, `--gen-allow` with `--modules` |
 | 3 | REFUSED: the framework checkout is behind `origin/main` (local runs only — CI checks out fresh) |
 | 4 | REFUSED: the reference set is absent or short |
-| 5 | REFUSED: nothing was judged |
+| 5 | REFUSED: nothing was judged — including `--gen-allow`, which refuses before writing so an empty run can never rewrite the allow-file to empty and erase the ratchet |
 
 Every refusal ends with one line, `✗ REFUSED (exit N): <reason>`. The `✓ compile gate GREEN` line
 is printed only when the judged count is above zero. A refused run writes no `--report`, so a caller

@@ -1873,6 +1873,18 @@ def _self_test_exit_codes(failures: list) -> None:
             if "compile gate GREEN" in out:
                 failures.append(f"  exit codes: {label}: printed the GREEN line without judging anything")
 
+        # --gen-allow over a run that judged nothing must refuse BEFORE writing: an empty rewrite
+        # would erase the ratchet and exit 0 (#6567 review). The sentinel proves the file survived.
+        sentinel = "Some/Type  fp=CS0103  # sentinel debt\n"
+        (tmp / "none.allow").write_text(sentinel, encoding="utf-8")
+        code, out = run(empty_repo, "--refs", str(complete), "--gen-allow")
+        if code != EXIT_REFUSED_NOTHING_JUDGED or f"REFUSED (exit {EXIT_REFUSED_NOTHING_JUDGED})" not in out:
+            failures.append(f"  exit codes: --gen-allow over a tree with zero NodeTypes: exit {code}, "
+                            f"expected {EXIT_REFUSED_NOTHING_JUDGED} with a REFUSED line\n{out[-800:]}")
+        if (tmp / "none.allow").read_text(encoding="utf-8") != sentinel:
+            failures.append("  exit codes: --gen-allow judged nothing and still REWROTE the allow-file")
+        (tmp / "none.allow").unlink()
+
         # THE CONTROL ARM: a NodeType-less --modules unit is not a failure (its caller ran it because
         # the package changed) — exit 0, said in words, and still never the GREEN line.
         code, out = run(typeless, "--refs", str(complete), "--modules", "Mail")
@@ -2124,6 +2136,14 @@ def main() -> int:
             print("error: --gen-allow needs a full run — it rewrites the allow-file for every "
                   "package, and a scoped run has not compiled the others. Drop --modules.")
             return refuse(EXIT_USAGE, "--gen-allow was combined with --modules")
+        # 🚨 A rewrite needs the same positive count as a verdict (#6567): a run that compiled
+        # nothing (0 NodeTypes found, or every one UNVERIFIABLE) would write an EMPTY allow-file and
+        # exit 0 — erasing the ratchet while reading like a successful re-baseline. Refuse first.
+        n_judged_gen = sum(1 for st, _ in result.values() if st in ("ok", "fail"))
+        if n_judged_gen == 0:
+            return refuse(EXIT_REFUSED_NOTHING_JUDGED,
+                          f"--gen-allow judged nothing (full tree): {len(types)} NodeType(s) found, "
+                          f"0 compiled — {ALLOW_FILE.name} was NOT rewritten")
         lines = [
             "# compile-check.allow — the compile-debt backlog (RATCHET: must only ever SHRINK).",
             "#",
