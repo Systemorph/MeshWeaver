@@ -182,6 +182,74 @@ public class StampedFieldsTest(ITestOutputHelper output) : MonolithMeshTestBase(
         await WaitFor(path, c => c.ConfirmedBy == "victim", "the client value landed");
     }
 
+    /// <summary>
+    /// 🚨 <b>A type declared in mesh CONTENT (not registered in code) must not reorder client
+    /// writes.</b> Its declaration is a durable row read; the guard used to start that read on the
+    /// first client write, hold the write back, and continue it from the store's thread — outside the
+    /// hub's action block, where the writes behind it could overtake it. The declaration is now
+    /// settled while the hub initializes, so every write is judged on the hub's own turn.
+    ///
+    /// <para>Writes are posted back-to-back from one sender to a freshly created node of such a type;
+    /// each must commit at a higher version than the one posted before it, and the last one posted is
+    /// the value that stays. The hub's declaration is settled — without a fault and naming the declared
+    /// field. The control is a mesh-content
+    /// type that declares nothing: the same writes land in order there too, and its settled
+    /// declaration is empty.</para>
+    /// </summary>
+    [Theory(Timeout = 180000)]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ContentDeclaredType_ClientWritesPostedInOrder_CommitInOrder(bool declares)
+    {
+        const int Writes = 20;
+        var ct = TestContext.Current.CancellationToken;
+        var typeId = "SfType" + Guid.NewGuid().ToString("N")[..8];
+        var typePath = $"{TestPartition}/{typeId}";
+        await MeshService.CreateNode(new MeshNode(typeId, TestPartition)
+            {
+                Name = typeId,
+                NodeType = MeshNode.NodeTypePath,
+                Content = new NodeTypeDefinition
+                {
+                    Description = "Mesh-content type for stamped-field ordering.",
+                    StampedFields = declares ? ["confirmedBy"] : null,
+                },
+            }).Take(1)
+            .Should().Within(60.Seconds()).Emit("the content-declared type must exist first", cancellationToken: ct);
+
+        var id = NewId();
+        var path = $"{TestPartition}/{id}";
+        await MeshService.CreateNode(Probe(id, typePath, new StampedProbeContent { Title = "w0" })).Take(1)
+            .Should().Within(60.Seconds()).Emit("the instance must exist first", cancellationToken: ct);
+
+        var commits = await Enumerable.Range(1, Writes)
+            .Select(i => RequestHub
+                .Observe<PatchDataResponse>(
+                    new PatchDataRequest(new MeshNodeReference(), new RawJson($$"""{"content":{"title":"w{{i}}"}}""")),
+                    o => o.WithTarget(new Address(path)))
+                .Take(1)
+                .Select(r => (Index: i, r.Message.Success, r.Message.Version)))
+            .Merge()
+            .ToList()
+            .Timeout(60.Seconds())
+            .Await(ct);
+
+        commits.Should().HaveCount(Writes).And.OnlyContain(c => c.Success, "every write leaves the stamped field alone");
+        var byPostOrder = commits.OrderBy(c => c.Index).Select(c => c.Version).ToList();
+        byPostOrder.Should().BeInAscendingOrder(
+            "writes posted in order by one sender commit in that order — a write the guard held back and "
+            + "continued off the hub's turn commits after writes posted behind it");
+        byPostOrder.Should().OnlyHaveUniqueItems();
+
+        await WaitFor(path, c => c.Title == $"w{Writes}", "the last write posted is the value that stays");
+
+        var hub = Mesh.GetHostedHub(new Address(path), HostedHubCreation.Never);
+        hub.Should().NotBeNull("the node's hub is hosted after the writes it answered");
+        var settled = hub!.ServiceProvider.GetRequiredService<StampedFieldDeclarationHolder>().Current;
+        settled.Fault.Should().BeNull("the declaration was resolved while the hub initialized");
+        settled.Fields.Should().BeEquivalentTo(declares ? ["confirmedBy"] : Array.Empty<string>());
+    }
+
     [Fact]
     public void MergePatch_ChangeDetection_IsPerFieldAndIgnoresNoOps()
     {

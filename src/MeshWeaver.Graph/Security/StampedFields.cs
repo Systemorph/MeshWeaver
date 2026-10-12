@@ -9,7 +9,6 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
-using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -195,10 +194,15 @@ public static class StampedFields
     /// Installs the stamped-field guard on a node hub: every <see cref="PatchDataRequest"/> on its own
     /// node that reaches it from ANOTHER address is checked against the stamped fields the hub's
     /// NodeType declares, and refused — naming the field — when it would change one. A synced
-    /// subscriber's write-back answers to <see cref="StampedFieldDataValidator"/> on the same hub. The
-    /// declaration is read once per activation and kept for the hub's life
-    /// (<see cref="StampedFieldDeclarationHolder"/>), the same binding the rest of the hub's
-    /// configuration gets. A type that declares no field costs one cached lookup per client write.
+    /// subscriber's write-back answers to <see cref="StampedFieldDataValidator"/> on the same hub.
+    ///
+    /// <para>🚨 <b>The declaration is resolved while the hub INITIALIZES, never on a write.</b> It is
+    /// one of the hub's buildup actions (<see cref="StampedFieldDeclarationHolder.Load"/>), so the
+    /// framework's Initialize gate holds every message until it is settled; by the time the first
+    /// client write reaches this step the verdict is computed synchronously on the hub's own turn and
+    /// the write continues on THAT turn. Resolving it lazily on the first write held that write back
+    /// and let it continue on the store's thread, outside the action block — where it could be
+    /// reordered against the hub's later writes.</para>
     /// </summary>
     /// <param name="config">The node hub's configuration.</param>
     /// <returns>The configuration with the guard installed.</returns>
@@ -207,6 +211,7 @@ public static class StampedFields
             .WithServices(services => services
                 .AddSingleton<StampedFieldDeclarationHolder>()
                 .AddScoped<IDataValidator, StampedFieldDataValidator>())
+            .WithInitialization(LoadDeclaration)
             .AddDeliveryPipeline(pipeline =>
             {
                 var hub = pipeline.Hub;
@@ -220,60 +225,27 @@ public static class StampedFields
                     logger ??= hub.ServiceProvider.GetService<ILoggerFactory>()
                         ?.CreateLogger("MeshWeaver.Graph.StampedFields");
 
-                    var verdicts = hub.ServiceProvider.GetRequiredService<StampedFieldDeclarationHolder>()
-                        .Declaration
-                        .Select(declared => VerdictFor(hub, (PatchDataRequest)delivery.Message, declared));
-
-                    // A settled declaration answers synchronously, and the delivery then continues on
-                    // THIS call exactly as if the step were not here — only the first write of an
-                    // activation, while the declaration is being read, takes the deferred shape (the
-                    // same shape the access gate uses for every check it runs).
-                    // 🚨 The verdict is STORED before the state is published: the delivery thread
-                    // reads it the moment it sees Answered, so publishing first would let it read
-                    // "no refusal" and forward a forbidden write.
-                    const int Pending = 0, Answered = 1, Deferred = 2;
-                    var state = Pending;
-                    string? syncRefusal = null;
-                    Exception? syncFault = null;
-                    verdicts.Subscribe(
-                        refusal =>
-                        {
-                            syncRefusal = refusal;
-                            if (Interlocked.CompareExchange(ref state, Answered, Pending) == Pending)
-                                return;
-                            if (refusal is null)
-                                next.Invoke(delivery, ct).Subscribe(
-                                    _ => { },
-                                    ex => logger?.LogError(ex,
-                                        "StampedFields: downstream pipeline faulted for {MessageType} on {Hub}",
-                                        delivery.Message.GetType().Name, hub.Address));
-                            else
-                                Refuse(hub, delivery, ErrorType.Unauthorized, refusal, logger);
-                        },
-                        ex =>
-                        {
-                            syncFault = ex;
-                            if (Interlocked.CompareExchange(ref state, Answered, Pending) == Pending)
-                                return;
-                            Refuse(hub, delivery, ErrorType.Unavailable, Unavailable(hub, ex), logger);
-                        });
-
-                    if (Interlocked.CompareExchange(ref state, Deferred, Pending) == Pending)
-                        return Observable.Return(delivery.Forwarded());
-
-                    if (syncFault is not null)
+                    // Synchronous on this turn: the declaration was settled during initialization.
+                    var holder = hub.ServiceProvider.GetRequiredService<StampedFieldDeclarationHolder>();
+                    var declared = holder.Current;
+                    if (declared.Fault is { } fault)
                     {
-                        Refuse(hub, delivery, ErrorType.Unavailable, Unavailable(hub, syncFault), logger);
+                        holder.RetryAfterFault();
+                        Refuse(hub, delivery, ErrorType.Unavailable, Unavailable(hub, fault), logger);
                         return Observable.Return(delivery.Forwarded());
                     }
-                    if (syncRefusal is not null)
+                    if (VerdictFor(hub, (PatchDataRequest)delivery.Message, declared) is { } refusal)
                     {
-                        Refuse(hub, delivery, ErrorType.Unauthorized, syncRefusal, logger);
+                        Refuse(hub, delivery, ErrorType.Unauthorized, refusal, logger);
                         return Observable.Return(delivery.Forwarded());
                     }
                     return next.Invoke(delivery, ct);
                 });
             });
+
+    /// <summary>The buildup action that settles the declaration before the hub accepts messages.</summary>
+    private static IObservable<System.Reactive.Unit> LoadDeclaration(IMessageHub hub)
+        => hub.ServiceProvider.GetRequiredService<StampedFieldDeclarationHolder>().Load();
 
     /// <summary>
     /// A merge patch ADDRESSED to this hub's own node that came from anywhere but this hub. The owning
@@ -439,22 +411,66 @@ public sealed class StampedFieldCreateValidator(IMessageHub hub) : INodeValidato
 }
 
 /// <summary>
-/// The stamped-field declaration of the type a node hub runs, read once per activation and kept for
-/// the hub's life — shared by the hub's delivery guard and its data validator. Registered as a
-/// singleton of the node hub's own container, so its lifetime is the hub's; a fault is evicted, so the
-/// next write reads again.
+/// The stamped-field declaration of the type a node hub runs, resolved while the hub initializes
+/// (<see cref="Load"/>, a buildup action — so the Initialize gate holds every message until it is
+/// settled) and kept for the hub's life. Shared by the hub's delivery guard and its data validator,
+/// both of which read <see cref="Current"/> synchronously on the hub's own turn. Registered as a
+/// singleton of the node hub's own container, so its lifetime is the hub's.
+///
+/// <para>A read that faults is kept as a fault, never folded into "declares nothing": every write it
+/// would judge is refused as <c>Unavailable</c> on its own turn, and the first such refusal starts
+/// ONE re-read that replaces the fault when it settles. No write ever waits for it.</para>
 /// </summary>
 /// <param name="hub">The node hub.</param>
-public sealed class StampedFieldDeclarationHolder(IMessageHub hub)
+public sealed class StampedFieldDeclarationHolder(IMessageHub hub) : IDisposable
 {
-    private readonly PromiseSlot<StampedFieldDeclaration> slot = new();
+    private static readonly StampedFieldDeclaration NotYetResolved = new(
+        ImmutableList<string>.Empty,
+        new InvalidOperationException("the stamped-field declaration has not been resolved for this activation"));
 
-    /// <summary>The declaration: one value, replayed to every later write of this activation.</summary>
-    public IObservable<StampedFieldDeclaration> Declaration
-        => slot.GetOrCreate(() => StampedFields.Resolve(hub, StampedFields.OwnNodeType(hub))
-                .Replay(1)
-                .AutoConnectOwnedBy(hub, nameof(StampedFieldDeclarationHolder)))
-            .Take(1);
+    private volatile StampedFieldDeclaration current = NotYetResolved;
+    private int retrying;
+    private readonly System.Reactive.Disposables.SerialDisposable retry = new();
+
+    /// <summary>
+    /// The declaration as settled for this activation. Before <see cref="Load"/> has settled it — which
+    /// a message the Initialize gate holds can never observe — it reads as a fault, so a write is
+    /// refused rather than judged against "declares nothing".
+    /// </summary>
+    public StampedFieldDeclaration Current => current;
+
+    /// <summary>
+    /// Resolves the declaration for the type this hub was bound to and stores it, fault included.
+    /// Never errors: a fault is a stored value, so the hub still starts and refuses what it cannot judge.
+    /// </summary>
+    /// <returns>One value once the declaration is stored.</returns>
+    public IObservable<System.Reactive.Unit> Load()
+        => Read().Do(d => current = d).Select(_ => System.Reactive.Unit.Default);
+
+    /// <summary>Starts one re-read after a faulted resolution; a re-read already running is not doubled.</summary>
+    public void RetryAfterFault()
+    {
+        if (Interlocked.CompareExchange(ref retrying, 1, 0) != 0)
+            return;
+        retry.Disposable = Read().Subscribe(
+            d =>
+            {
+                current = d;
+                Interlocked.Exchange(ref retrying, 0);
+            });
+    }
+
+    // Bound to the NodeType this hub's configuration was built for (NodeTypePathHolder): the type is
+    // known before any data loads, so nothing here waits for the hub's own node.
+    private IObservable<StampedFieldDeclaration> Read()
+        => StampedFields.Resolve(hub, hub.Configuration.Get<NodeTypePathHolder>()?.Path)
+            .Take(1)
+            .DefaultIfEmpty(StampedFieldDeclaration.None)
+            .Catch<StampedFieldDeclaration, Exception>(ex =>
+                Observable.Return(new StampedFieldDeclaration(ImmutableList<string>.Empty, ex)));
+
+    /// <inheritdoc />
+    public void Dispose() => retry.Dispose();
 }
 
 /// <summary>
@@ -477,11 +493,17 @@ internal sealed class StampedFieldDataValidator(IMessageHub hub) : IDataValidato
         if (context.Operation != DataOperation.Update)
             return Observable.Return(DataValidationResult.Valid());
 
-        return hub.ServiceProvider.GetRequiredService<StampedFieldDeclarationHolder>().Declaration
-            .Select(declared => StampedFields.VerdictForUpdate(hub, context.Entity, declared) is { } refusal
-                ? DataValidationResult.Invalid(refusal, DataValidationRejectionReason.Unauthorized)
-                : DataValidationResult.Valid())
-            .Catch<DataValidationResult, Exception>(ex => Observable.Return(DataValidationResult.Invalid(
-                StampedFields.Unavailable(hub, ex), DataValidationRejectionReason.Unknown)));
+        // Settled while the hub initialized — read synchronously, never awaited.
+        var holder = hub.ServiceProvider.GetRequiredService<StampedFieldDeclarationHolder>();
+        var declared = holder.Current;
+        if (declared.Fault is { } fault)
+        {
+            holder.RetryAfterFault();
+            return Observable.Return(DataValidationResult.Invalid(
+                StampedFields.Unavailable(hub, fault), DataValidationRejectionReason.Unknown));
+        }
+        return Observable.Return(StampedFields.VerdictForUpdate(hub, context.Entity, declared) is { } refusal
+            ? DataValidationResult.Invalid(refusal, DataValidationRejectionReason.Unauthorized)
+            : DataValidationResult.Valid());
     }
 }

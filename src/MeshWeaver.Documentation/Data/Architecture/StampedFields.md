@@ -66,10 +66,15 @@ runs elsewhere is still a client of the node.
 
 ## What it costs
 
-- **Per activation:** the node hub reads its type's declaration once — synchronously for a type
-  registered in code, one durable row read for a type declared in mesh content — and keeps it for its
-  life, the same binding the rest of its configuration gets. A read that faults is not cached; the
-  write it was judging is refused as `Unavailable` (retryable), never let through.
+- **Per activation:** the node hub reads its type's declaration once, **while it initializes** —
+  synchronously for a type registered in code, one durable row read for a type declared in mesh
+  content — and keeps it for its life, the same binding the rest of its configuration gets. The read
+  is one of the hub's buildup actions, so the hub accepts no message until it is settled, and every
+  client write is then judged synchronously on the hub's own turn. 🚨 It must never be read lazily on
+  the first write: holding that write back while the row loads and continuing it from the store's
+  thread runs it outside the hub's action block, where a later write can overtake it. A read that
+  faults is kept as a fault: every write it would judge is refused as `Unavailable` (retryable),
+  never let through, and the first refusal starts one re-read — no write waits for it.
 - **Per client write:** one cached lookup; a type that declares nothing is not parsed further. Only a
   write to a type that declares stamped fields has its patch inspected.
 - **Per create:** one declaration read for a type declared in mesh content (none for a type
