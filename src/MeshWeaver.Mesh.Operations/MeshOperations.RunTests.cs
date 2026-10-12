@@ -51,8 +51,10 @@ public partial class MeshOperations
                 message = "run_tests needs a signed-in caller: the run's activity is written to the caller's own partition.",
             }));
         var budget = TimeSpan.FromSeconds(Math.Clamp(timeoutSeconds, 1, 3600));
-        var accessService = hub.ServiceProvider.GetService<AccessService>();
         var pathResolver = hub.ServiceProvider.GetRequiredService<IPathResolver>();
+        // The caller whose read the Tests area is rendered under — captured at the entry, never at
+        // subscribe time, which may be inside another response's continuation (MeshWeaver#6570).
+        var caller = CaptureCaller();
 
         return Observable.Create<string>(observer =>
         {
@@ -63,7 +65,6 @@ public partial class MeshOperations
                 observer.OnNext(json);
                 observer.OnCompleted();
             }
-            var caller = accessService?.Context ?? accessService?.CircuitContext;
             // The run OUTLIVES this call on purpose: the caller gets the activity path and polls it.
             // Its lifetime is the activity's — bounded by the budget below, cancellable through the
             // activity's own RequestedStatus, and tracked by ActivityRunner for teardown.
