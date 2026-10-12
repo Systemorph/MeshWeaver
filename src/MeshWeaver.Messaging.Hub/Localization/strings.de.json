@@ -1929,6 +1929,7 @@
   "inbox.search": "Suche",
   "inbox.search.placeholder": "Posteingang durchsuchen",
   "inbox.order": "Reihenfolge",
+  "inbox.settings": "Posteingang-Einstellungen",
   "inbox.order.Importance": "Zuerst, was auf Sie wartet",
   "inbox.order.Newest": "Neueste zuerst",
   "inbox.order.Oldest": "Älteste zuerst",
