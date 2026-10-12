@@ -97,7 +97,7 @@ public class NodeTypePagesReviewedBehaviourTest(ITestOutputHelper output) : Mono
     {
         var stream = GetClient().GetWorkspace()
             .GetRemoteStream<JsonElement, LayoutAreaReference>(new Address(ProbeNode), new LayoutAreaReference(ProbeArea));
-        var ticks = Walk(stream, ProbeArea).OfType<LabelControl>()
+        var ticks = stream.WalkTree(ProbeArea).OfType<LabelControl>()
             .Select(label => label.Data?.ToString())
             .Replay();
         using var connection = ticks.Connect();
@@ -169,19 +169,6 @@ public class NodeTypePagesReviewedBehaviourTest(ITestOutputHelper output) : Mono
             "sort:CreatedAt-desc resolves in the release CONTENT (a MeshNode has no CreatedAt), so the "
             + "history is newest-first by the release's own time — not by creation or path order");
     }
-
-    /// <summary>Every control rendered at <paramref name="area"/> and, recursively, in its sub-areas.</summary>
-    private static IObservable<UiControl?> Walk(ISynchronizationStream<JsonElement> stream, string area)
-        => stream.GetControlStream(area)
-            .Select(control => control is IContainerControl container
-                ? container.Areas
-                    .Select(named => named.Area?.ToString())
-                    .OfType<string>()
-                    .Select(subArea => Walk(stream, subArea))
-                    .Merge()
-                    .StartWith(control)
-                : Observable.Return(control))
-            .Switch();
 }
 
 /// <summary>

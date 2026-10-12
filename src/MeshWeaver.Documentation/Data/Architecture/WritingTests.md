@@ -446,6 +446,14 @@ Todo-*instance* hubs do **not** self-activate from a layout-area subscription th
 
 ---
 
+### ❌ A sub-area key read from an early frame, then waited on
+
+A node page **re-shapes while it loads** (MeshWeaver#6548). Its `Overview` paints first as the page alone, and when the index rail's queries answer it re-renders as a splitter — the rail beside the page — and the first frame's child areas are gone for good. A test that reads `stack.Areas.First().Area` off an early frame and then subscribes to that key waits on an area nobody will fill again: a timeout reporting `Last of 1 emission(s) was: <null>` when the re-render lands between the two reads, a pass when it does not. Skipping children that "did not render", or retrying the walk, only hides it.
+
+Read below an area's root through `NodePageAreas` in `MeshWeaver.Hosting.Monolith.TestBase` instead: `stream.WalkTree(area)` emits every control of the area's **current** tree, and `stream.TreeSnapshots(area)` emits the whole current tree as a list. Both re-resolve on every frame (`Select` + `Switch`), so whichever shape is current is the one read — wait on them with a predicate, never on their first emission. `TypedPageIndexRailTest.AKeyReadFromTheFirstFrame_IsLostWhenTheRailReshapesThePage_TheLiveWalkFollowsThePage` forces the re-shape (a child created under a page that had nothing to index) and shows both halves: the first-frame key no longer reaches the header, the live walk does.
+
+---
+
 ## Hot vs. Replayed Signals — `ReplaySubject` When the Producer Can Fire First
 
 A plain `Subject<T>` is **hot**: emissions made before a subscriber attaches are lost. If a handler can call `OnNext` before the test's assertion subscribes, use a `ReplaySubject<T>(1)` so the late subscriber still sees it:

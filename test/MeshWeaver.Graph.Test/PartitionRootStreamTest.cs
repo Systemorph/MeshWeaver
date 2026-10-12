@@ -44,10 +44,6 @@ public class PartitionRootStreamTest(ITestOutputHelper output) : MonolithMeshTes
     /// </summary>
     private static TimeSpan ReadBudget => TestTimeouts.Quick;
 
-    /// <summary>How long the icon walk waits on ONE area before reading it as "renders nothing".
-    /// Short deliberately: the walk begins after the whole frame has arrived.</summary>
-    private static TimeSpan ProbeBudget => TimeSpan.FromSeconds(2);
-
     /// <summary>A layout-area render round-trip, which settles later than a node read.</summary>
     private static TimeSpan RenderBudget => TestTimeouts.Convergence;
 
@@ -160,15 +156,16 @@ public class PartitionRootStreamTest(ITestOutputHelper output) : MonolithMeshTes
     private const string IconTileMarker = "width: 56px; height: 56px";
 
     /// <summary>
-    /// The node's rendered Overview header icon tile, awaited until the area carries
+    /// The node's rendered Overview header icon tile, awaited until it carries
     /// <paramref name="awaitedFragment"/>.
     ///
-    /// <para>The wait is on the AREA STORE — one condition, one stream — rather than on a sub-area
-    /// resolved by name, because the header's inner area names are generated and a re-render is free
-    /// to renumber them. <paramref name="awaitedFragment"/> is therefore chosen to read identically
-    /// in the rendered HTML and in the JSON the store travels as. Once the store carries the answer
-    /// the tree is walked for the tile itself, so the assertion is still about the ICON and not about
-    /// the payload at large.</para>
+    /// <para>The wait is on the page's WHOLE current tree (<see cref="NodePageAreas.TreeSnapshots"/>),
+    /// re-resolved on every frame — never on a sub-area whose key was read from an earlier frame.
+    /// The header's inner area names are generated, and the page RE-SHAPES when its index rail
+    /// arrives (MeshWeaver#6548): it paints as the page alone, then re-renders as a splitter with
+    /// the rail beside the page, and the first frame's child areas are gone for good. The tree is
+    /// searched for the tile itself, so the assertion is still about the ICON and not about the
+    /// payload at large; an area that renders nothing by design simply contributes nothing.</para>
     /// </summary>
     private async Task<string> IconTile(string nodePath, string awaitedFragment, CancellationToken cancellationToken)
     {
@@ -177,46 +174,14 @@ public class PartitionRootStreamTest(ITestOutputHelper output) : MonolithMeshTes
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             new Address(nodePath), reference);
 
-        await stream.Should().Within(RenderBudget).Match(
-            frame => frame.Value.ToString().Contains(awaitedFragment),
-            $"the Overview of '{nodePath}' renders '{awaitedFragment}'", cancellationToken);
-
-        var tiles = new List<string>();
-        await Collect(reference.Area!, 0);
-        return Assert.Single(tiles);
-
-        async Task Collect(string area, int depth)
-        {
-            if (depth > 6)
-                return;
-            // 🚨 AN AREA THAT RENDERS NOTHING IS NOT A FAILURE. The walk starts only after the
-            // store already carries the awaited fragment, so every area that will render has
-            // rendered; an area still empty here is one that renders null by design (the supplied
-            // navigation says so in as many words). Asserting a non-null control on every area
-            // turned "this page also has an index" into a 12 s timeout that said nothing about
-            // the icon under test.
-            // Whichever comes first: the area's first real control, or "nothing" once the probe
-            // budget runs out. Awaited through the package's own wait (Should().Within), never an
-            // observable-to-task bridge (ObservableToTaskBridgeGuard: "no ToTask ever").
-            var control = await stream.GetControlStream(area)
-                .Where(c => c != null)
-                .Take(1)
-                .Amb(Observable.Timer(ProbeBudget).Select(_ => (UiControl?)null))
-                .Should().Within(ProbeBudget + ReadBudget).Match(_ => true, cancellationToken: cancellationToken);
-            if (control is null)
-                return;
-            if (control is HtmlControl html
-                && (html.Data?.ToString() ?? "").Contains(IconTileMarker))
-                tiles.Add(html.Data!.ToString()!);
-            // 🚨 EVERY container, not just a stack. Since the default index became the page's
-            // SPACE (DefaultNodeNavigation.IndexRoot), a page one level under a Space renders
-            // inside a SplitterControl — content beside its index — so a walker that descends
-            // only through StackControl finds nothing and the assertion fails on an EMPTY
-            // collection, saying nothing about the icon it is actually about.
-            if (control is IContainerControl container)
-                foreach (var name in container.Areas.Select(a => a.Area?.ToString())
-                             .Where(n => !string.IsNullOrEmpty(n)))
-                    await Collect(name!, depth + 1);
-        }
+        var tiles = await stream.TreeSnapshots(reference.Area!)
+            .Select(tree => tree.OfType<HtmlControl>()
+                .Select(html => html.Data?.ToString() ?? "")
+                .Where(data => data.Contains(IconTileMarker))
+                .ToList())
+            .Should().Within(RenderBudget).Match(
+                found => found.Any(tile => tile.Contains(awaitedFragment)),
+                $"the Overview of '{nodePath}' renders its icon tile with '{awaitedFragment}'", cancellationToken);
+        return Assert.Single(tiles!);
     }
 }
