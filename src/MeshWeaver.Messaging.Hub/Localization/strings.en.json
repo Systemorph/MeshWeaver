@@ -1783,6 +1783,8 @@
   "notification.packageUpdate.authorizationRequired.title": "Update needs a Global Admin: {name}",
   "notification.packageUpdate.authorizationRequired.bodyFiles": "A new build of {name} is available ({changed} file(s) changed, {removed} removed), but it is a commercial package and was not applied automatically. {reason}",
   "notification.packageUpdate.authorizationRequired.bodyContent": "A new build of {name} is available (content changed), but it is a commercial package and was not applied automatically. {reason}",
+  "notification.packageUpdate.originAmbiguous.title": "Update refused: {name}",
+  "notification.packageUpdate.originAmbiguous.body": "A new build of {name} is available, but this install does not record which repository it came from, and {count} watched repositories list it: {origins}. It was NOT applied. Install it again from the repository it belongs to; later updates then come from there only.",
   "notification.import.startupFailed.title": "Startup import failed: {partition}",
   "notification.import.startupFailed.body": "Import failed during startup.",
   "notification.accessGranted.title": "You've been given access to {name}",

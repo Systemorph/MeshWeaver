@@ -63,6 +63,15 @@ public sealed class PluginUpdateWatcher : Microsoft.Extensions.Hosting.IHostedSe
     /// second subscription for the same repository. Instance state — one per mesh.</summary>
     private readonly ConcurrentDictionary<string, byte> watched = new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// Every watched repository by its <see cref="InstallOrigin"/> — the census an install record
+    /// that names no origin is decided against (MeshWeaver#6526). Kept for EVERY catalog with a
+    /// repository URL, including a second catalog on an already-watched repository (another
+    /// subdirectory is another origin). Instance state — one per mesh.
+    /// </summary>
+    private ImmutableDictionary<string, PluginCatalogContent> watchedOrigins =
+        ImmutableDictionary<string, PluginCatalogContent>.Empty.WithComparers(StringComparer.Ordinal);
+
     /// <summary>Initializes a new instance of the <see cref="PluginUpdateWatcher"/> class.</summary>
     public PluginUpdateWatcher(IMessageHub hub, ILogger<PluginUpdateWatcher>? logger = null)
     {
@@ -212,6 +221,9 @@ public sealed class PluginUpdateWatcher : Microsoft.Extensions.Hosting.IHostedSe
         if (parsed.Owner.Length == 0 || parsed.Repo.Length == 0)
             return;
 
+        if (InstallOrigin.ForRepo(src, content.SourceSubdir) is { } origin)
+            ImmutableInterlocked.TryAdd(ref watchedOrigins, origin, content);
+
         var buildPath = BuildCompletion.PathFor(parsed.Owner, parsed.Repo);
         if (!watched.TryAdd(buildPath, 0))
             return; // already watching this repository for another catalog
@@ -284,9 +296,14 @@ public sealed class PluginUpdateWatcher : Microsoft.Extensions.Hosting.IHostedSe
                 // so no authorization that binds on Source/Package (the deployment configuration's,
                 // policy deployment-config-authorizes-named-commercial) can be claimed by a repository
                 // writing the configured source's name. The install record keeps the source it was
-                // stamped with (PackageInstaller.SeedSource carries it forward).
-                hub, source, build.HeadSha, packages.Select(p => p with { Source = null }).ToImmutableList(),
-                $"Built from {build.HeadSha[..Math.Min(7, build.HeadSha.Length)]}", logger)
+                // stamped with (PackageInstaller.SeedSource carries it forward). An authored `origin`
+                // is stripped for the same reason; the binding below names the real one.
+                hub, source, build.HeadSha,
+                packages.Select(p => p with { Source = null, Origin = null }).ToImmutableList(),
+                $"Built from {build.HeadSha[..Math.Min(7, build.HeadSha.Length)]}", logger,
+                // 🚨 BOUND to the repository each install came from (MeshWeaver#6526): a second
+                // watched repository listing the same id never updates a package it did not install.
+                BindingFor(source))
             .Subscribe(
                 _ => { },
                 ex => logger?.LogWarning(ex,
@@ -303,6 +320,67 @@ public sealed class PluginUpdateWatcher : Microsoft.Extensions.Hosting.IHostedSe
     // Internal for the BuildCompletionSubscriptionTest pin (InternalsVisibleTo).
     internal static bool ShouldAutoApply(PackageManifest record) =>
         record.EffectiveUpdatePolicy == PackageUpdatePolicy.Auto;
+
+    /// <summary>
+    /// The origin binding for a pass over <paramref name="source"/>'s listing: its origin, and a
+    /// census of which OTHER watched repositories list a package id — read only for an install
+    /// record that names no origin yet. Null when the source carries no origin (one not built by
+    /// <see cref="PackageSources.FromRepo"/>), which leaves the pass unbound as before.
+    /// </summary>
+    private InstallOriginBinding? BindingFor(IPackageSource source)
+        => InstallOrigin.Of(source) is { } origin
+            ? new InstallOriginBinding(origin, id => Census(origin, id))
+            : null;
+
+    /// <summary>Which watched repositories other than <paramref name="self"/> list
+    /// <paramref name="packageId"/>, read through each catalog's own source at its own ref (the
+    /// listing cache makes a repeat free). A repository that cannot be listed is reported UNREAD,
+    /// never as "does not list it" — an adoption over a census with a hole could adopt the
+    /// impostor.</summary>
+    internal IObservable<OriginCensus> Census(string self, string packageId)
+        => Census(hub, watchedOrigins, self, packageId, logger);
+
+    /// <summary>The census over an explicit set of watched catalogs (pinnable without a webhook).</summary>
+    internal static IObservable<OriginCensus> Census(
+        IMessageHub hub, IReadOnlyDictionary<string, PluginCatalogContent> catalogs, string self,
+        string packageId, ILogger? logger)
+        => catalogs
+            .Where(kv => !string.Equals(kv.Key, self, StringComparison.Ordinal))
+            .Select(kv => ListsPackage(hub, kv.Value, packageId, logger)
+                .Select(lists => (Origin: kv.Key, Lists: lists)))
+            .ToObservable()
+            .Concat()
+            .Aggregate(
+                new OriginCensus(ImmutableSortedSet<string>.Empty, ImmutableSortedSet<string>.Empty),
+                (census, read) => read.Lists switch
+                {
+                    true => census with { Listing = census.Listing.Add(read.Origin) },
+                    false => census,
+                    null => census with { Unread = census.Unread.Add(read.Origin) },
+                });
+
+    /// <summary>Whether one watched catalog lists <paramref name="packageId"/>; null when it could
+    /// not be read.</summary>
+    private static IObservable<bool?> ListsPackage(
+        IMessageHub hub, PluginCatalogContent content, string packageId, ILogger? logger)
+    {
+        var source = PackageSources.FromRepo(
+            hub, content.SourceRepoPath, content.SourceSubdir, logger,
+            nodeRepo: PackageSources.IsNodeRepoFormatOrDetected(content.Format, content.SourceRepoPath, content.SourceSubdir));
+        if (source is null)
+            return Observable.Return<bool?>(null);
+        return source.ListPackages(content.SourceRef)
+            .Take(1)
+            .Select(listing => (bool?)listing.Any(p => string.Equals(p.Id, packageId, StringComparison.Ordinal)))
+            .DefaultIfEmpty(null)
+            .Catch((Exception ex) =>
+            {
+                logger?.LogWarning(ex,
+                    "Plugin update watcher: listing {Repo} for the origin census of {Id} failed.",
+                    content.SourceRepoPath, packageId);
+                return Observable.Return<bool?>(null);
+            });
+    }
 
     private static (string Owner, string Repo) OctokitParse(string url)
     {
