@@ -1,4 +1,7 @@
+using System.Collections.Concurrent;
 using MeshWeaver.Fixture;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace MeshWeaver.Messaging.Hub.Test;
@@ -16,8 +19,16 @@ namespace MeshWeaver.Messaging.Hub.Test;
 /// the reply arriving back at the real poster is itself the proof — a delivery that left under the
 /// forged address would have been answered to that address, and the poster's wait would time out.</para>
 /// </summary>
-public class SenderIsThePostingHubTest(ITestOutputHelper output) : HubTestBase(output)
+public class SenderIsThePostingHubTest : HubTestBase
 {
+    private readonly ForeignSenderCapture capture = new();
+
+    public SenderIsThePostingHubTest(ITestOutputHelper output) : base(output)
+    {
+        // Registered after TestBase's ctor cleared the providers, so it sits beside the xUnit sink.
+        Services.AddLogging(l => l.Services.AddSingleton<ILoggerProvider>(capture));
+    }
+
     private record WhoSentMe : IRequest<SenderSeen>;
 
     private record SenderSeen(Address Sender);
@@ -73,5 +84,68 @@ public class SenderIsThePostingHubTest(ITestOutputHelper output) : HubTestBase(o
         Bare(response.Message.Sender).Should().Be(Bare(client.Address),
             "the target is handed the address of the hub that actually posted, never the one the caller wrote");
         Bare(response.Message.Sender).Should().NotBe(Bare(forged));
+    }
+
+    /// <summary>
+    /// The report is keyed on STABLE data: a caller writing a fresh address on every post — the
+    /// claimed sender is caller-controlled — gets ONE warning for that call site, never one per post.
+    /// The control is the first post: it must be reported, so a capture that saw nothing fails here.
+    /// </summary>
+    [HubFact]
+    public void AFreshForgedSenderOnEveryPost_IsReportedOncePerCallSite()
+    {
+        var client = GetClient();
+        var host = CreateHostAddress();
+        for (var i = 0; i < 50; i++)
+            client.Post(new SenderSeen(client.Address), o => o.WithTarget(host) with { Sender = new Address("forged", $"n{i}") });
+
+        var reports = capture.Lines.Where(l => l.Contains(nameof(SenderSeen))).ToArray();
+        reports.Should().HaveCount(1, "fifty posts from one call site with fifty different claimed senders are one defect");
+        reports[0].Should().Contain(nameof(AFreshForgedSenderOnEveryPost_IsReportedOncePerCallSite),
+            "the report names the code that wrote the sender");
+    }
+
+    /// <summary>
+    /// <c>Observe</c> wraps the caller's options delegate in a lambda declared on the hub, so a call
+    /// site read off that delegate names the hub's own plumbing. The report must name the caller.
+    /// </summary>
+    [HubFact]
+    public async Task AForgedSenderThroughObserve_NamesTheCallerNotTheHubsPlumbing()
+    {
+        var client = GetClient();
+        var host = CreateHostAddress();
+        await client
+            .Observe<SenderSeen>(new WhoSentMe(), o => o.WithTarget(host) with { Sender = new Address("forged", "observe") })
+            .Should().Within(10.Seconds()).Emit("the post leaves as the client",
+                cancellationToken: TestContext.Current.CancellationToken);
+
+        var report = capture.Lines.Single(l => l.Contains(nameof(WhoSentMe)));
+        var firstFrame = report[(report.IndexOf("Call site:", StringComparison.Ordinal) + "Call site:".Length)..]
+            .TrimStart().Split('\n', 2)[0];
+        firstFrame.Should().NotContain("MeshWeaver.Messaging.MessageHub",
+            "the first frame printed is the code that asked, not the hub's own Observe wrapper");
+        firstFrame.Should().NotStartWith("at System.Reactive");
+    }
+
+    /// <summary>Collects the formatted [ForeignSender] warnings; instance state only.</summary>
+    private sealed class ForeignSenderCapture : ILoggerProvider
+    {
+        private readonly ConcurrentQueue<string> lines = new();
+        internal string[] Lines => lines.ToArray();
+        public ILogger CreateLogger(string categoryName) => new CapturingLogger(lines);
+        public void Dispose() { }
+
+        private sealed class CapturingLogger(ConcurrentQueue<string> sink) : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+            public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Warning;
+            public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+                Func<TState, Exception?, string> formatter)
+            {
+                var line = formatter(state, exception);
+                if (line.StartsWith("[ForeignSender]", StringComparison.Ordinal))
+                    sink.Enqueue(line);
+            }
+        }
     }
 }

@@ -23,7 +23,11 @@ but in-process code could.
 
 **`hub.Post` stamps the sender itself: it is the address of the hub that posts.** A sender the
 caller wrote that differs is replaced by the posting hub's address, and the hub logs one
-`[ForeignSender]` warning per message type, claimed address and call site, naming the call site.
+`[ForeignSender]` warning per message type and call site, naming the claimed address and the
+calling code's stack. The key holds only stable data — the claimed address is caller-controlled
+and may be fresh on every post — and the set is capped per hub, so a misbehaving caller cannot grow
+it or flood the log. The call site is read off the stack, skipping the hub's own `Post`/`Observe`
+plumbing and Rx, so it names the code that wrote the sender.
 The post is not refused — it goes out as the hub that actually sent it, so the reply comes back to
 that hub and a sender-keyed guard judges the real poster.
 

@@ -10,7 +10,9 @@ namespace MeshWeaver.Messaging;
 /// metadata applied to a message as it is dispatched into the mesh. Immutable record — each
 /// <c>With…</c> method returns a new instance with the change applied.
 /// </summary>
-/// <param name="Sender">The address the message is sent from; also used as the identity when impersonating as a hub.</param>
+/// <param name="Sender">The address the message is sent from; also used as the identity when impersonating as a hub.
+/// Owned by the posting hub: <c>MessageHub.Post</c> constructs these options with its own address and replaces any
+/// other value a caller writes here (logged as <c>[ForeignSender]</c>; Doc/Architecture/SenderIsThePostingHub).</param>
 public record PostOptions(Address Sender)
 {
     /// <summary>
