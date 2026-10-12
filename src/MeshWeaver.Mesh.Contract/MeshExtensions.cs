@@ -53,11 +53,11 @@ public static class MeshExtensions
         config.TypeRegistry.WithType(typeof(PingResponse), nameof(PingResponse));
         config.TypeRegistry.WithType(typeof(MeshNode), nameof(MeshNode));
         config.TypeRegistry.WithType(typeof(MeshNodeState), nameof(MeshNodeState));
-        // MeshChangeEvent rides over the Orleans memory stream for the cross-silo change-feed
-        // relay (OrleansMeshChangeFeed). The Orleans allowed-types gate (MeshTypeNameFilter) only
-        // permits IMessageDelivery + types the hub's ITypeRegistry knows; unregistered, a
-        // MeshChangeEvent published to the stream is rejected at the manifest gate and never
-        // reaches a cross-silo subscriber. Register it (short name) so it can cross that boundary.
+        // MeshChangeEvent once rode the Orleans memory stream for a cross-silo change-feed relay
+        // that is retired (#4802: cross-process delivery is the storage layer's own feed). The
+        // registration stays because the Orleans allowed-types gate (MeshTypeNameFilter) only
+        // permits IMessageDelivery + types the hub's ITypeRegistry knows, and a silo of the
+        // previous generation may still serialize one during a rolling update.
         config.TypeRegistry.WithType(typeof(MeshWeaver.Mesh.Services.MeshChangeEvent), nameof(MeshWeaver.Mesh.Services.MeshChangeEvent));
         config.TypeRegistry.WithType(typeof(MeshWeaver.Mesh.Services.MeshChangeKind), nameof(MeshWeaver.Mesh.Services.MeshChangeKind));
         // AccessContext rides as a TYPED field on every IMessageDelivery. Unregistered, the
