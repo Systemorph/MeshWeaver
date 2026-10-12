@@ -199,6 +199,42 @@ public sealed class ModulesRunInTheirOwnContextTest : IDisposable
         versions.Should().ContainSingle("the whole swap is published as ONE step, never module-then-dependents");
     }
 
+    /// <summary>
+    /// MeshWeaver#6542 — <see cref="ModuleContexts.CommitAll"/> makes a swap's generations current one
+    /// at a time. A staged container binds its siblings through the stage, so the stage must keep
+    /// answering them until EVERY one of them is current: a stage that stopped answering at the seal let
+    /// a container reached through the first committed generation fall back to the RETIRING generation
+    /// of a module later in the same swap. The commit's one <see cref="ModuleContexts.VersionChanged"/>
+    /// emission comes after the last generation is current, so it is where the bracket is observable.
+    /// </summary>
+    [Fact]
+    public void AStagedSwap_KeepsAnsweringItsGenerations_UntilEveryOneIsCurrent()
+    {
+        using var contexts = new ModuleContexts();
+        var (libG2, depPath) = InstallLibAndDependent(contexts);
+
+        var stage = new ModuleSwapStage();
+        var lib2 = contexts.LoadStaged(libG2, stage);
+        stage.Add(lib2);
+        var dep2 = contexts.LoadStaged(depPath, stage);
+        stage.Add(dep2);
+        ModuleGeneration? libSeenAtPublish = null, depSeenAtPublish = null;
+        using var watch = contexts.VersionChanged.Subscribe(_ =>
+        {
+            libSeenAtPublish = stage.Get(Lib);
+            depSeenAtPublish = stage.Get(Dependent);
+        });
+
+        contexts.CommitAll(stage);
+
+        libSeenAtPublish.Should().BeSameAs(lib2,
+            "the stage answers its generations until the commit has made all of them current");
+        depSeenAtPublish.Should().BeSameAs(dep2);
+        stage.Get(Lib).Should().BeNull("once the commit is done the stage is released and holds nothing");
+        stage.Get(Dependent).Should().BeNull();
+        contexts.Current(Lib).Should().BeSameAs(lib2);
+    }
+
     [Fact]
     public void AStagedSwapThatIsDiscarded_LeavesTheServingGenerationsCurrent_AndPublishesNothing()
     {

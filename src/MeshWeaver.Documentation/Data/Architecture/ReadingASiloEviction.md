@@ -301,10 +301,18 @@ instance; a scoped service is that scope's; a transient's disposal ends with the
 `AScopedRootServiceIsNeverBuiltInTheRootTest` pins it with this dump's two threads forced to
 overlap, and a negative control that builds the scoped service in the root and deadlocks.
 
-**What is still open, and not this incident:** a root SINGLETON whose construction calls a module's
-service (root lock, then module lock) while a module singleton's construction takes a root singleton
-(module lock, then root lock) deadlocks the same way. It was reproduced with real containers while
-reading this dump; no dump has shown it.
+**The sibling shape, found while reading this dump and fixed separately (MeshWeaver#6542):** a root
+SINGLETON whose construction calls a module's service (root lock, then module lock) while a module
+singleton's construction takes a root singleton (module lock, then root lock) deadlocked the same way.
+It was reproduced with real containers; no dump has shown it. Taking the root's lock first on the
+module side cured the repro and was rejected — a module constructor then ran under the root's lock,
+so one slow module constructor stalled every first-time root resolve, which is this incident's shape
+again. The fix is **built before published**: every shared instance of a module's container is built
+before the root can reach it — at boot before the root provider is handed out, on a live swap before
+it commits — so the root only ever reads a module's built instances and its lock never waits on a
+module's ([Live Module Update](../LiveModuleUpdate) → "Built before published").
+`RootAndModuleSingletonsBuildInOneLockOrderTest` forces the two first-time builds to overlap; its
+negative control publishes the same container unbuilt and deadlocks.
 
 ## Procedure
 
