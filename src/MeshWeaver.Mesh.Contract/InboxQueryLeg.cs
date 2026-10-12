@@ -96,8 +96,11 @@ public record InboxQueryLeg
     public bool ShownByDefault { get; init; } = true;
 
     /// <summary>
-    /// The source's symbol — an emoji or short glyph shown before each row it brings and on its
-    /// switch. Language-neutral by nature, so it needs no catalog key. Empty shows none.
+    /// The source's symbol — an emoji, a short glyph, or any form an icon control accepts (a Fluent
+    /// icon name, a URL, an SVG). Shown before each row the leg brings and on the source's toggle.
+    /// Language-neutral by nature, so it needs no catalog key. Left empty, the rows show no symbol and
+    /// the toggle shows the first character of the source's display name instead (a bullet when the
+    /// name is empty) — a toggle is never blank.
     /// </summary>
     public string? SourceIcon { get; init; }
 }

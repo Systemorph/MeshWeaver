@@ -507,9 +507,8 @@ still owed (§11).
 
 ### Ordering: by date by default, importance one choice away
 
-**The default order is newest first** — everything by date, as a mail client lists it (owner's
-decision, 2026-10-12: *"let's sort it all by date … same as outlook"*). The first design put
-importance first; in use, the noise that made importance necessary came from one source — the
+**The default order is newest first** — everything by date, as a mail client lists it (policy
+`inbox-newest-first`). The first design put importance first; in use, the noise that made importance necessary came from one source — the
 notification feed — so the fix is that source starting switched OFF, not a different primary key
 for everything. What must be acted on is kept visible by **unread state in bold** (below) and by the
 hidden-obligations notice when a switch hides it.
@@ -543,8 +542,8 @@ the platform's own, and the search still goes to the mesh query engine with each
 
 What carried over from the first design:
 
-- **Ordering** is the page's own select; the default is newest first (it was importance first until
-  2026-10-12 — see "Ordering" above).
+- **Ordering** is the page's own select; the default is newest first (policy `inbox-newest-first`;
+  see "Ordering" above).
 - **The provider legs ARE the queries.** A provider contributing a leg contributes the query text
   the page runs; nothing is adapted between them.
 - **The term survives** a change of order or of the source switches: they are fields of the same
