@@ -86,6 +86,31 @@ public record QueryResultChange<T>
     public IReadOnlyList<string>? Partitions { get; init; }
 
     /// <summary>
+    /// The subset of <see cref="Partitions"/> that the caller reads only IN PART: the provider
+    /// listed the partition as read from, but the caller's OWN grants do not cover everything in
+    /// it - no read grant on the partition root, or a read deny somewhere below it. Row-level
+    /// security drops the uncovered subtree from the rows while the partition stays in
+    /// <see cref="Partitions"/>, because that list is built from partition membership alone.
+    ///
+    /// <para>🚨 <b>A listed partition is not a fully read one</b> (MeshWeaver #6564). The pre-deploy
+    /// NodeType sweep answered <c>count: 0</c> with the partition in its coverage while the subtree
+    /// holding a broken type was invisible to the caller, and "0 of N over M readable partitions"
+    /// counted that partition as read. A zero over a partition named here is a zero over the part
+    /// the caller can see, never "none exist".</para>
+    ///
+    /// <para>The test needs only the caller's own grants, so naming a partition here discloses
+    /// nothing the caller could not learn by asking for it, and over-reporting is the safe side.
+    /// </para>
+    ///
+    /// <para><see langword="null"/> means the provider did NOT report - unknown, never "none
+    /// partial". An EMPTY list is a statement: every partition read was read in full. The
+    /// aggregator (<c>MeshQuery.MergeProviderObservables</c>) unions the lists of the providers
+    /// that reported and stays null when none did. Meaningful on the Initial; live deltas leave it
+    /// null.</para>
+    /// </summary>
+    public IReadOnlyList<string>? PartiallyReadablePartitions { get; init; }
+
+    /// <summary>
     /// The providers that COMPLETED WITHOUT emitting an <see cref="QueryChangeType.Initial"/> and
     /// were counted as EMPTY so the merged query could proceed — never <see langword="null"/>-safe
     /// to ignore, and never the same statement as an empty <see cref="Items"/>.

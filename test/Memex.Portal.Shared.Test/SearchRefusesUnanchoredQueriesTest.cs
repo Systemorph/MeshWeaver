@@ -112,6 +112,8 @@ public class SearchRefusesUnanchoredQueriesTest(ITestOutputHelper output) : Mono
         coverage.GetProperty("scope").GetString().Should().Be("declared");
         coverage.GetProperty("partitions").ValueKind.Should().Be(JsonValueKind.Null,
             "no provider reported what it read, and an unknown denominator must never read as 'all'");
+        coverage.GetProperty("partial").ValueKind.Should().Be(JsonValueKind.Null,
+            "no provider reported how fully it read, and an unknown partial set must never read as every partition read in full (#6564)");
     }
 
     /// <summary>

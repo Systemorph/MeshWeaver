@@ -1413,7 +1413,7 @@ public partial class MeshOperations
 
     /// <summary>
     /// Runs a mesh query and returns a JSON envelope
-    /// <c>{count, limit, truncated, coverage:{scope, partitions}, results:[{path,name,nodeType,version,lastModified}]}</c>.
+    /// <c>{count, limit, truncated, coverage:{scope, partitions, partial}, results:[{path,name,nodeType,version,lastModified}]}</c>.
     /// When <paramref name="basePath"/> is set the query is scoped to everything UNDER that path
     /// (<c>namespace:{base} scope:descendants</c>, unless the query states its own <c>scope:</c>);
     /// <c>truncated</c> flags that more matches exist than were returned.
@@ -1516,6 +1516,13 @@ public partial class MeshOperations
                     ["coverage"] = new JsonObject
                     {
                         ["scope"] = coverage.Value.Scope,
+                        // The partitions of `partitions` the caller reads only IN PART - their own grants do
+                        // not cover everything in them (#6564). A zero over such a partition is a zero over
+                        // the part the caller can see. null is explicitly unknown (the provider did not
+                        // report it); [] is the statement that every partition was read in full.
+                        ["partial"] = change.PartiallyReadablePartitions is null
+                            ? null
+                            : new JsonArray(change.PartiallyReadablePartitions.Select(p => (JsonNode?)JsonValue.Create(p)).ToArray()),
                         ["partitions"] = partitions is null
                             ? null
                             : new JsonArray(partitions.Select(p => (JsonNode?)JsonValue.Create(p)).ToArray()),
