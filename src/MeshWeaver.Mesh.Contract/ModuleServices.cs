@@ -290,8 +290,9 @@ public sealed class ModuleServices : IDisposable
             var contexts = root.GetService<ModuleContexts>();
             // A STAGED generation's container sees the other generations of its swap in place of the
             // current ones — it is built (BuildBeforePublish) before the swap commits, and must bind
-            // what it will serve with once it has. A sealed stage answers nothing, so from the commit
-            // on this is the current generations, exactly as for a generation loaded at boot.
+            // what it will serve with once it has. A released stage answers nothing, so once the commit
+            // has made every generation of the swap current this is the current generations, exactly as
+            // for a generation loaded at boot.
             var stage = Stage;
             return scope = ModuleServiceProvider.Create(
                 services, root,

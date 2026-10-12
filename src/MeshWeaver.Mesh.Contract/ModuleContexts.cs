@@ -464,7 +464,11 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
     /// only AFTER all of them loaded, materialised and prepared, with ONE <see cref="VersionChanged"/>
     /// emission, so no reader of the generations (the module endpoint table, the view registrations,
     /// the static-node catalog) ever observes part of a swap, or a swap that can still fail. Seals
-    /// the stage: from here on its contexts resolve modules through the current generations.
+    /// the stage, and RELEASES it only once every one of its generations is current: from then on its
+    /// contexts resolve modules through the current generations. While the generations are made
+    /// current one at a time, the stage still answers them — so a staged container that is already
+    /// reachable through the first one never falls back to a retiring generation of a module later in
+    /// the same swap (all-or-none binding, MeshWeaver#6542).
     /// </summary>
     public void CommitAll(ModuleSwapStage stage)
     {
@@ -472,6 +476,7 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
         foreach (var generation in stage.Seal())
             current[generation.Name] = generation;
         Bump();
+        stage.Release();
     }
 
     /// <summary>
@@ -481,7 +486,9 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
     public void DiscardStaged(ModuleSwapStage stage)
     {
         ArgumentNullException.ThrowIfNull(stage);
-        foreach (var generation in stage.Seal())
+        var generations = stage.Seal();
+        stage.Release();
+        foreach (var generation in generations)
             Discard(generation);
     }
 
@@ -778,6 +785,7 @@ public sealed class ModuleSwapStage
 {
     private ImmutableList<ModuleGeneration> staged = ImmutableList<ModuleGeneration>.Empty;
     private int sealedFlag;
+    private int releasedFlag;
 
     /// <summary>Adds <paramref name="generation"/> to the stage; later contexts in the stage bind it.</summary>
     public void Add(ModuleGeneration generation)
@@ -788,19 +796,31 @@ public sealed class ModuleSwapStage
         ImmutableInterlocked.Update(ref staged, list => list.Add(generation));
     }
 
-    /// <summary>The staged generation of <paramref name="moduleName"/>, or null; always null once sealed.</summary>
+    /// <summary>The staged generation of <paramref name="moduleName"/>, or null; always null once the
+    /// commit or discard that sealed the stage has released it. Between the seal and the release — while
+    /// <see cref="ModuleContexts.CommitAll"/> makes the generations current one at a time — it still
+    /// answers them, so a staged container never sees half of its swap.</summary>
     public ModuleGeneration? Get(string moduleName) =>
-        Volatile.Read(ref sealedFlag) != 0
+        Volatile.Read(ref releasedFlag) != 0
             ? null
             : Volatile.Read(ref staged).LastOrDefault(g => string.Equals(g.Name, moduleName, StringComparison.Ordinal));
 
+    /// <summary>Refuses any further <see cref="Add"/>, commit or discard, and hands over the generations;
+    /// the stage keeps answering them until <see cref="Release"/>.</summary>
     internal ImmutableList<ModuleGeneration> Seal()
     {
         if (Interlocked.Exchange(ref sealedFlag, 1) != 0)
             throw new InvalidOperationException("The swap stage was already committed or discarded.");
-        // Handed over and FORGOTTEN: a context, and a staged container's fallback, keep a reference to
-        // their stage for life, so a stage that kept its list would pin every generation it ever held —
-        // one of them retired by a later swap of that module alone.
-        return Interlocked.Exchange(ref staged, ImmutableList<ModuleGeneration>.Empty);
+        return Volatile.Read(ref staged);
+    }
+
+    /// <summary>Stops answering, once the generations were made current or discarded.</summary>
+    internal void Release()
+    {
+        Volatile.Write(ref releasedFlag, 1);
+        // FORGOTTEN: a context, and a staged container's fallback, keep a reference to their stage for
+        // life, so a stage that kept its list would pin every generation it ever held — one of them
+        // retired by a later swap of that module alone.
+        Interlocked.Exchange(ref staged, ImmutableList<ModuleGeneration>.Empty);
     }
 }
