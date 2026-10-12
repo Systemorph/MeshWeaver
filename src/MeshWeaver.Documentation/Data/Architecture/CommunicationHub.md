@@ -446,6 +446,10 @@ Three rules follow, and each is pinned by a test in `InboxSelectAndDeleteTest`:
   importance.
 - **A source has an id and a display name.** `InboxQueryLeg.Source` keys the switch; `SourceLabelKey` names the catalog text the row and the switch show in the
   viewer's language. A provider gives no key only for a name that is the same in every language.
+  A key the running platform's catalog does not define falls back to the provider's own name, so a
+  package may name a key a newer platform adds without the viewer ever reading the raw key. The
+  Threads app's word-like sources (`Chat`, `Conversations`) have core keys; channel names
+  (WhatsApp, Teams, iMessage) are the same in every language and carry none.
   The row's date is written in the viewer's time zone AND the viewer's date format.
 - **A bulk act never leaves the owner's partition.** A search runs with the viewer's rights and may
   list a node elsewhere; a ticked row outside `{owner}/` is not a target.

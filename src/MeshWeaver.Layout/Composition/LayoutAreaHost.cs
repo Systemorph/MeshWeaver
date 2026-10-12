@@ -650,7 +650,21 @@ public record LayoutAreaHost : IDisposable
     /// </summary>
     private IMessageDelivery OnClick(IMessageDelivery<ClickedEvent> request)
     {
-        if (GetControl(request.Message.Area) is not UiControl { ClickAction: not null } control)
+        var rendered = GetControl(request.Message.Area);
+
+        // 🚨 A click on an area this host holds NO control for is REFUSED, never accepted. It used to
+        // answer UserActionAccepted, so the sender's pending state cleared as if the action had run —
+        // the click dropped while reporting success. Refused, not queued: this host's stream is the
+        // source the client renders FROM, so a control the client could click is in Current before the
+        // client ever sees it. A missing one is therefore not "still on its way" — it was re-rendered
+        // away, or never existed — and nothing would ever arrive to release a queued click.
+        // See Doc/Architecture/RefusingALostUserAction → "A click on an area with no control".
+        if (rendered is null)
+            return RefuseClickOnMissingControl(request);
+
+        // A control that declares no click action has nothing to run: the click is accepted as the
+        // no-op it is (a container or a label that forwards every click), exactly as before.
+        if (rendered is not UiControl { ClickAction: not null } control)
             return AcceptUserAction(request);
 
         // 🚨 IDEMPOTENT: a click on a control whose previous click is still running JOINS that run —
@@ -804,6 +818,29 @@ public record LayoutAreaHost : IDisposable
         where TAction : IUserAction
     {
         Hub.Post(new UserActionAccepted(), options => options.ResponseFor(request));
+        return request.Processed();
+    }
+
+    /// <summary>
+    /// Refuses a click whose area holds no control on this host: one Warning naming the area, the
+    /// stream and the sender, and a <see cref="DeliveryFailure"/> with <see cref="ErrorType.Rejected"/>
+    /// and the clicking person's localized sentence, which reaches the sender's <c>onRefused</c> arm.
+    /// The action did not run; nothing is retried or queued.
+    /// </summary>
+    private IMessageDelivery RefuseClickOnMissingControl(IMessageDelivery<ClickedEvent> request)
+    {
+        logger.LogWarning(
+            "REFUSING click on area {Area} of stream {StreamId} on {Hub}: no control is rendered at that "
+            + "area, so there is no action to run. The click did NOT run. Sender: {Sender}",
+            request.Message.Area, request.Message.StreamId, Hub.Address, request.Sender);
+        Hub.Post(
+            new DeliveryFailure(request)
+            {
+                ErrorType = ErrorType.Rejected,
+                Message = LocalizationCatalog.Get(
+                    "click.noControl", request.AccessContext?.Locale, request.Message.Area)
+            },
+            o => o.ResponseFor(request));
         return request.Processed();
     }
 

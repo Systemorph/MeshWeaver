@@ -237,6 +237,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Agent Task Collaboration](AgentTaskCollaboration) — launch shared work only through `start_collaboration`; participant effort, harness, and model are creation-time settings, not follow-up-message overrides
 - [Thread Execution Streaming](ThreadExecutionStreaming)
 - [Activity Control Plane](ActivityControlPlane)
+- [Action-Link Contracts](ActionLinkContracts) — the neutral invocation, handler and recipient contract modules share, and the durable action reference an activity keeps after its execution hub has unloaded
 - [Activity Mirror Release Lifetime](/Doc/Architecture/ActivityMirrorReleaseLifetime)
 - [Activity Operations](ActivityOperations)
 - [The Communication Hub](CommunicationHub) — one participant registry, one message-type family (approvals, notifications, information requests) and the master-plus-copies fan-out that keeps every inbox query anchored to one schema
