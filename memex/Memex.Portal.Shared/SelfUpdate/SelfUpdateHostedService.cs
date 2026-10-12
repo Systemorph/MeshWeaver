@@ -1368,8 +1368,7 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
     private static UpdatabilityVerdict WithComboAdvisory(UpdatabilityVerdict? availability, ComboClearance clearance)
     {
         var current = availability ?? new UpdatabilityVerdict(true, [], null);
-        var existing = current.Advisories.IsDefault ? [] : current.Advisories;
-        return current with
+        return (current with
         {
             Packages =
             [
@@ -1380,14 +1379,15 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
                         PackageAvailabilityKind.ComboVerificationFailed,
                         module.Failures.Count > 0 ? module.Failures[0] : clearance.Reason)),
             ],
-            Advisories =
-            [
+        }).WithAdvisories(
+        [
+            LocalizableText.Keyed(
                 "the platform rolls independently of packages — the combo gate recorded RED for this "
                 + $"release: {clearance.Reason}; those modules keep their previous generation and catch "
                 + "up through their own update policy",
-                .. existing,
-            ],
-        };
+                ReleaseAdvisoryCode.ComboRed, ("reason", clearance.Reason)),
+            .. current.AdvisoryTexts,
+        ]);
     }
 
     /// <summary>
@@ -1647,6 +1647,12 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
                     var advisories = verdict is { Advisories.IsDefaultOrEmpty: false }
                         ? string.Join("; ", verdict.Advisories)
                         : null;
+                    // 🌍 The same advisories with their reason codes (#6540), so the Updates tab
+                    // renders them in the viewer's language; the joined English above stays for
+                    // older readers and is what an unkeyed item falls back to.
+                    ImmutableList<UpdateAdvisory>? advisoryItems = advisories is null
+                        ? null
+                        : [.. verdict!.AdvisoryTexts.Select(UpdateAdvisory.From)];
                     return node with
                     {
                         Content = verdict is null || verdict.IsUpdatable
@@ -1656,6 +1662,7 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
                                 HeldIndeterminate = false, HeldAt = null,
                                 AdvisoriesTag = advisories is null ? null : tag,
                                 Advisories = advisories,
+                                AdvisoryItems = advisoryItems,
                             }
                             : current with
                             {
@@ -1665,6 +1672,7 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
                                 HeldAt = DateTimeOffset.UtcNow,
                                 AdvisoriesTag = advisories is null ? null : tag,
                                 Advisories = advisories,
+                                AdvisoryItems = advisoryItems,
                             },
                     };
                 })

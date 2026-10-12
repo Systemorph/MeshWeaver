@@ -85,14 +85,14 @@ public class ContentFormIsReadGatedTest(ITestOutputHelper output) : MonolithMesh
     {
         var stream = Open(WithoutRead);
 
-        await Walk(stream, WithoutRead).OfType<LabelControl>()
+        await stream.WalkTree(WithoutRead).OfType<LabelControl>()
             .Should().Within(TestTimeouts.Convergence)
             .Match(label => label.Data?.ToString() == "Access denied",
                 "a viewer without Read on the node gets the access-denied view, like Overview and Data");
 
         // A negative assertion spends its whole window by construction, and the positive terminal
         // (the denial view) is already in hand, so the window is a fraction of the budget.
-        await Walk(stream, WithoutRead).OfType<UiControl>().Where(IsPartOfTheForm)
+        await stream.WalkTree(WithoutRead).OfType<UiControl>().Where(IsPartOfTheForm)
             .Should().NotEmit(TestTimeouts.Quick / 10,
                 "the property form shows the node's content; without Read it must not be rendered at all");
     }
@@ -106,7 +106,7 @@ public class ContentFormIsReadGatedTest(ITestOutputHelper output) : MonolithMesh
     {
         var stream = Open(WithRead);
 
-        await Walk(stream, WithRead).OfType<UiControl>()
+        await stream.WalkTree(WithRead).OfType<UiControl>()
             .Should().Within(TestTimeouts.Convergence)
             .Match(IsPartOfTheForm,
                 "with Read the slot renders the property form over the node's content");
@@ -124,17 +124,4 @@ public class ContentFormIsReadGatedTest(ITestOutputHelper output) : MonolithMesh
     private ISynchronizationStream<JsonElement> Open(string area)
         => GetClient().GetWorkspace()
             .GetRemoteStream<JsonElement, LayoutAreaReference>(new Address(NodePath), new LayoutAreaReference(area));
-
-    /// <summary>Every control rendered at <paramref name="area"/> and, recursively, in its sub-areas.</summary>
-    private static IObservable<UiControl?> Walk(ISynchronizationStream<JsonElement> stream, string area)
-        => stream.GetControlStream(area)
-            .Select(control => control is IContainerControl container
-                ? container.Areas
-                    .Select(named => named.Area?.ToString())
-                    .OfType<string>()
-                    .Select(subArea => Walk(stream, subArea))
-                    .Merge()
-                    .StartWith(control)
-                : Observable.Return(control))
-            .Switch();
 }

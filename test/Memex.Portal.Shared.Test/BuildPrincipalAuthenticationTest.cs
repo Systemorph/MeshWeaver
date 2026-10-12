@@ -50,6 +50,7 @@ public class BuildPrincipalAuthenticationTest(ITestOutputHelper output) : Monoli
 {
     private const string Audience = "https://registry.build-principal.test";
     private const string Repository = "Systemorph/MeshWeaver.SocialMedia";
+    private const string DeclaredRepository = "Systemorph/MeshWeaver.Declared";
     private const string Identity = "s0123456789abcdef0123456789abcdef";
     private const string Source = "plugins";
 
@@ -78,6 +79,15 @@ public class BuildPrincipalAuthenticationTest(ITestOutputHelper output) : Monoli
                     .AddInMemoryCollection(new Dictionary<string, string?>
                     {
                         [BuildPrincipalConfiguration.AudienceConfigKey] = Audience,
+                        // One repository this deployment DECLARES instead of holding a node for —
+                        // in the key shape a portal's environment produces. The ids are the ones
+                        // GitHubTokenFactory mints.
+                        [$"{DeclaredBuildPrincipals.ConfigSection}:0:Repository"] = DeclaredRepository,
+                        [$"{DeclaredBuildPrincipals.ConfigSection}:0:RepositoryId"] = "123456789",
+                        [$"{DeclaredBuildPrincipals.ConfigSection}:0:RepositoryOwnerId"] = "9999",
+                        [$"{DeclaredBuildPrincipals.ConfigSection}:0:Events:workflow_run:0"] = BuildVerbs.Verify,
+                        [$"{DeclaredBuildPrincipals.ConfigSection}:0:EventRefs:workflow_run:0"] = "refs/heads/main",
+                        [$"{DeclaredBuildPrincipals.ConfigSection}:0:Scopes:0"] = "verify:combo",
                     })
                     .Build())
                 // 🚨 TRANSIENT here, singleton in production. The service caches a key set for an
@@ -97,6 +107,20 @@ public class BuildPrincipalAuthenticationTest(ITestOutputHelper output) : Monoli
 
     private Task<InstanceAuthResult> Authenticate(string token, CancellationToken cancellationToken = default) =>
         Authenticator().AuthenticateOutcome($"Bearer {token}")
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(cancellationToken);
+
+    /// <summary>
+    /// The answer once it satisfies <paramref name="seen"/>. The authenticator reads the principal
+    /// from the process-wide node mirror, which the change feed keeps current: an UPDATE of a node
+    /// the mirror already holds is seen when the feed delivers it, not when the write returns. So a
+    /// read that follows an update waits on the answer it is about, never on the write.
+    /// </summary>
+    private Task<InstanceAuthResult> AuthenticateUntil(
+        string token, Func<InstanceAuthResult, bool> seen, CancellationToken cancellationToken = default) =>
+        Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .Select(_ => Authenticator().AuthenticateOutcome($"Bearer {token}").FirstAsync())
+            .Concat()
+            .Where(seen)
             .FirstAsync().Timeout(TestTimeouts.Convergence).Await(cancellationToken);
 
     /// <summary>Writes a build principal into the Admin partition — the create a global admin
@@ -453,6 +477,85 @@ public class BuildPrincipalAuthenticationTest(ITestOutputHelper output) : Monoli
         using var response = await PostVerdict(app,
             tokens.Mint(Audience, eventName: "workflow_run"), body);
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    // ── a principal DECLARED in configuration (policy declared-not-derived) ───
+
+    [Fact(Timeout = 240_000)]
+    public async Task ADeclaredPrincipal_ReachesTheComboRoutes_WithNoNode_AndOnlyAsDeclared()
+    {
+        // 🚨 No Grant(...) anywhere in this fact: nothing under Admin/_BuildPrincipal names the
+        // repository. The only thing that trusts it is the deployment's configuration.
+        jwks = () => tokens.Jwks();
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        await access.RunAsSystem(() => Mesh.ServiceProvider.GetRequiredService<IMeshService>()
+            .CreateOrUpdateNode(new MeshNode(UpdatePolicyNodeType.NodeId, UpdatePolicyNodeType.AdminPartition)
+            {
+                Name = "Update policy", NodeType = UpdatePolicyNodeType.NodeType,
+                State = MeshNodeState.Active,
+                Content = new UpdatePolicyContent { Policy = UpdatePolicyKind.None },
+            })).Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
+
+        var designed = tokens.Mint(Audience, repository: DeclaredRepository, eventName: "workflow_run");
+        var authenticated = await Authenticate(designed);
+        Assert.False(authenticated.IsUnavailable);
+        Assert.NotNull(authenticated.Build);
+        Assert.Null(authenticated.Instance);
+        Assert.Equal($"{DeclaredBuildPrincipals.ConfigSection}:0", authenticated.Build!.PrincipalPath);
+        Assert.True(authenticated.Build.Allows(BuildVerbs.Verify, "combo"));
+        Assert.False(authenticated.Build.Allows(BuildVerbs.Fetch, Source));
+
+        await using var app = await StartHost(Path.GetTempPath());
+        using var combo = await Get(app, ReleaseGateEndpoints.ComboRoute, designed);
+        Assert.Equal(HttpStatusCode.OK, combo.StatusCode);
+
+        // The refusal matrix, one input moved at a time from the token that was just admitted.
+        foreach (var refused in new[]
+                 {
+                     tokens.Mint(Audience, repository: DeclaredRepository, eventName: "push"),
+                     tokens.Mint(Audience, repository: DeclaredRepository, eventName: "workflow_run",
+                         gitRef: "refs/heads/feature"),
+                     tokens.Mint(Audience, repository: DeclaredRepository, eventName: "workflow_run",
+                         repositoryId: "1"),
+                     tokens.Mint(Audience, repository: DeclaredRepository + ".Evil", eventName: "workflow_run"),
+                     tokens.Mint("https://another.portal.test", repository: DeclaredRepository,
+                         eventName: "workflow_run"),
+                 })
+        {
+            using var denied = await Get(app, ReleaseGateEndpoints.ComboRoute, refused);
+            Assert.Equal(HttpStatusCode.Unauthorized, denied.StatusCode);
+        }
+
+        // A declaration grants verify:combo and nothing else — the publication routes stay shut.
+        // 403, exactly: the declared principal authenticated and was refused for the scope it lacks.
+        // Anything else (a 401, a 404, a 500) would mean the request never reached that decision.
+        using var fetch = await Get(app, $"/api/plugins/bundles/prebuilt/{Identity}/{Source}", designed);
+        Assert.Equal(HttpStatusCode.Forbidden, fetch.StatusCode);
+    }
+
+    [Fact(Timeout = 240_000)]
+    public async Task ANode_OverridesItsDeclaration_SoARevokeTakesEffectWithoutARoll()
+    {
+        jwks = () => tokens.Jwks();
+        var token = tokens.Mint(Audience, repository: DeclaredRepository, eventName: "workflow_run");
+        Assert.NotNull((await Authenticate(token, TestContext.Current.CancellationToken)).Build);
+
+        // A node narrower than the declaration: the NODE decides, so the declared scope is gone.
+        await Grant(VerificationPrincipal() with { Repository = DeclaredRepository, Scopes = ["fetch:plugins"] });
+        var narrowed = await Authenticate(token);
+        Assert.NotNull(narrowed.Build);
+        Assert.Equal(BuildPrincipal.PathFor(DeclaredRepository), narrowed.Build!.PrincipalPath);
+        Assert.False(narrowed.Build.Allows(BuildVerbs.Verify, "combo"));
+
+        // …and a revoking node stops the declared principal with no roll: as soon as the mirror the
+        // authenticator reads has the update, the token is refused — by a verdict, not by a read
+        // that could not be made.
+        await Grant(VerificationPrincipal() with
+        {
+            Repository = DeclaredRepository, RequestedAction = BuildPrincipalActions.Revoke,
+        });
+        var revoked = await AuthenticateUntil(token, r => r.Build is null, TestContext.Current.CancellationToken);
+        Assert.False(revoked.IsUnavailable);
     }
 
     private static BuildPrincipal VerificationPrincipal() => Principal() with

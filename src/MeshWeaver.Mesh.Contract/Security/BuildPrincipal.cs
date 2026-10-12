@@ -12,8 +12,12 @@ namespace MeshWeaver.Mesh.Security;
 /// event it exists for (<c>AADSTS700213</c>, measured 2026-08-27). Nothing in the mesh recorded that
 /// those credentials existed, which repos held one, or who authorised them. That is the shape of the
 /// plaintext-provider-key incident: a security fact with no record a reader can point at. Here the
-/// rule IS a node — <c>search nodeType:BuildPrincipal</c> is the complete list of repositories this
-/// mesh trusts and exactly what each may do.</para>
+/// rule IS a node — <c>search nodeType:BuildPrincipal</c> lists every repository this mesh trusts
+/// through a node and exactly what each may do. A deployment may also DECLARE a principal in its
+/// configuration (<see cref="DeclaredBuildPrincipals"/>): that one is in no node, is consulted only
+/// when no node exists for the repository, and is listed by the public <c>/health</c> body
+/// (<see cref="DeclaredBuildPrincipals.HealthCheckName"/>). The two readings together are the
+/// complete list.</para>
 ///
 /// <para>🚨 <b>It lives in the Admin partition</b> (<see cref="Namespace"/>), exactly like
 /// <see cref="PluginGrant"/> and for exactly the same reason: the subject of an access decision must
@@ -28,10 +32,14 @@ namespace MeshWeaver.Mesh.Security;
 /// wildcard. Same discipline as <see cref="MeshWeaverInstanceIndex"/>, and for the same reason: an
 /// index that has drifted must not authenticate anybody.</para>
 ///
-/// <para><b>Revocation is immediate, not deferred.</b> Setting <see cref="RequestedAction"/> to
-/// <see cref="BuildPrincipalActions.Revoke"/> stops this principal authenticating on the very next
-/// request, on every replica, before any watcher has folded it into <see cref="IsRevoked"/>. A
-/// security stop that waits for a reactor is a security stop with a window.</para>
+/// <para><b>Revocation does not wait for a watcher.</b> Setting <see cref="RequestedAction"/> to
+/// <see cref="BuildPrincipalActions.Revoke"/> stops this principal authenticating as soon as the
+/// authenticator reads the revoking node — before any watcher has folded it into
+/// <see cref="IsRevoked"/>, because the authenticator honours the request itself. The authenticator
+/// reads the node from the process-wide node mirror the change feed keeps current, so on each
+/// replica the revoke decides from the moment that feed has delivered the write, not the instant
+/// the write returns. A security stop that waited for a reactor would add a window on top of that
+/// propagation; this one adds none.</para>
 /// </summary>
 public record BuildPrincipal
 {

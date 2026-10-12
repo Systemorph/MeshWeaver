@@ -69,7 +69,8 @@ public sealed class ModuleRootServicesSwapTest : MonolithMeshTestBase
         base.ConfigureMesh(builder)
             .ConfigureServices(s => s
                 .AddSingleton<HostedServiceJournal>()
-                .AddSingleton<CachingGreeterConsumer>())
+                .AddSingleton<CachingGreeterConsumer>()
+                .AddScoped<CircuitBoundState>())
             .InstallAssemblies(V1);
 
     private ModuleContexts Contexts => Mesh.ServiceProvider.GetRequiredService<ModuleContexts>();
@@ -213,7 +214,54 @@ public sealed class ModuleRootServicesSwapTest : MonolithMeshTestBase
             "the label follows the swap; a name taken at boot would still say 'Greeter', the retired class");
     }
 
-    private static string ModuleSource(int version, bool extraGreeter = false, bool classService = false, bool extraHosted = false, string greeterClass = "Greeter") => $$"""
+    /// <summary>
+    /// 🚨 <b>Built before published</b> (MeshWeaver#6542): every shared instance of N+1's container is
+    /// built BEFORE the swap commits. A singleton whose constructor throws therefore refuses the swap —
+    /// nothing of N+1 was ever reachable, N keeps serving every consumer, and N's hosted service was
+    /// never stopped. Its negative control is the live swap above: the same N+1 without the throwing
+    /// singleton commits.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task AnUpdateWhoseSingletonCannotBeBuilt_IsRefusedBeforeItCommits_AndNKeepsServing()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var consumer = Mesh.ServiceProvider.GetRequiredService<CachingGreeterConsumer>();
+        var journal = Mesh.ServiceProvider.GetRequiredService<HostedServiceJournal>();
+        var serving = HeldGeneration(Module).Location;
+
+        var outcome = await Updater.Swap(Write("g2", ModuleSource(2, brokenSingleton: true)), "test: a singleton that cannot be built")
+            .Timeout(Budget).Await(ct);
+
+        outcome.Kind.Should().Be(ModuleSwapKind.Failed, outcome.Reason);
+        outcome.Reason.Should().Contain("could not be built before the swap commits")
+            .And.Contain("broken by design in v2", "the constructor's own sentence is what an operator acts on");
+        HeldGeneration(Module).Location.Should().Be(serving, "a generation that could not be built is never made current");
+        consumer.Ask().Should().Be("hello v1 (options v1)", "the cached proxy still forwards to N");
+        OwnKeyedGreeting().Should().Be("own v1", "the root's module-type stand-ins still answer from N");
+        journal.Entries.Should().Equal(["start v1"], "N's hosted service was never stopped, and N+1's never started");
+    }
+
+    /// <summary>
+    /// MeshWeaver#6556 — the Radzen shape on a LIVE SWAP. N+1 adds services that belong to a circuit:
+    /// a scoped one over circuit state, a singleton whose constructor takes circuit state, and a
+    /// singleton that takes that one — all module types, so the forwarded shape stays the same. None is a process-lifetime
+    /// instance the root reaches, so none is built before the commit, and the swap goes live. Its
+    /// negative control is the refused swap above: a root-reachable singleton that throws still refuses it.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task AnUpdateWithCircuitBoundServices_SwapsLive()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var consumer = Mesh.ServiceProvider.GetRequiredService<CachingGreeterConsumer>();
+
+        var outcome = await Updater.Swap(Write("g2", ModuleSource(2, circuitBound: true)), "test: circuit-bound services")
+            .Timeout(Budget).Await(ct);
+
+        outcome.Kind.Should().Be(ModuleSwapKind.Live, outcome.Reason);
+        consumer.Ask().Should().Be("hello v2 (options v2)", "N+1 is current and serves");
+    }
+
+    private static string ModuleSource(int version, bool extraGreeter = false, bool classService = false, bool extraHosted = false, string greeterClass = "Greeter", bool brokenSingleton = false, bool circuitBound = false) => $$"""
         using Microsoft.Extensions.DependencyInjection;
         using Microsoft.Extensions.Options;
         [assembly: MeshWeaver.Test.LiveServices.Module]
@@ -230,6 +278,10 @@ public sealed class ModuleRootServicesSwapTest : MonolithMeshTestBase
         }
         public interface IOwnGreeter { string Greet(); }
         public sealed class OwnGreeter : IOwnGreeter { public string Greet() => "own v{{version}}"; }
+        public sealed class Unbuildable { public Unbuildable() => throw new System.InvalidOperationException("broken by design in v{{version}}"); }
+        public sealed class CircuitDialog { public CircuitDialog(MeshWeaver.Graph.Test.CircuitBoundState state) => state.Subscribe(); }
+        public sealed class CircuitBoundSingleton { public CircuitBoundSingleton(MeshWeaver.Graph.Test.CircuitBoundState state) => state.Subscribe(); }
+        public sealed class TakesACircuitBoundSingleton { public TakesACircuitBoundSingleton(CircuitBoundSingleton inner) { } }
         public class Journal2 : MeshWeaver.Graph.Test.HostedServiceJournalBase { }
         public sealed class ExtraJournaling(MeshWeaver.Graph.Test.HostedServiceJournal journal) : Microsoft.Extensions.Hosting.IHostedService
         {
@@ -250,6 +302,8 @@ public sealed class ModuleRootServicesSwapTest : MonolithMeshTestBase
                         {{(classService ? "services.AddSingleton<MeshWeaver.Graph.Test.HostedServiceJournalBase, Journal2>();" : "")}}
                         services.AddHostedService<Journaling>();
                         {{(extraHosted ? "services.AddHostedService<ExtraJournaling>();" : "")}}
+                        {{(brokenSingleton ? "services.AddSingleton<Unbuildable>();" : "")}}
+                        {{(circuitBound ? "services.AddScoped<CircuitDialog>(); services.AddSingleton<CircuitBoundSingleton>(); services.AddSingleton<TakesACircuitBoundSingleton>();" : "")}}
                         return services;
                     })];
         }

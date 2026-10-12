@@ -261,7 +261,7 @@ public class NodePageAreasAreTemplatesTest(ITestOutputHelper output) : MonolithM
     {
         var (stream, area) = Open(TypePath, MeshNodeLayoutAreas.SearchArea);
         var slot = Assert.IsType<LayoutAreaControl>(
-            await Walk(stream, area).Should().Within(TestTimeouts.Convergence).Match(
+            await stream.WalkTree(area).Should().Within(TestTimeouts.Convergence).Match(
                 c => c is LayoutAreaControl, "a definition's Search page is the frame with the instance slot"));
 
         slot.Reference.Area.Should().Be(MeshNodeLayoutAreas.NodeTypeInstancesArea);
@@ -301,24 +301,12 @@ public class NodePageAreasAreTemplatesTest(ITestOutputHelper output) : MonolithM
     /// under the breadcrumbs, or inside a NodeType's shell.
     /// </summary>
     private static async Task<MeshSearchControl?> CatalogOf(ISynchronizationStream<JsonElement> stream, string area)
-        => await Walk(stream, area).Should().Within(TestTimeouts.Convergence).Match(c => c is MeshSearchControl,
+        => await stream.WalkTree(area).Should().Within(TestTimeouts.Convergence).Match(c => c is MeshSearchControl,
             "the Search area shows a catalog") as MeshSearchControl;
 
     /// <summary>The hidden query of every catalog the area renders, as it changes.</summary>
     private static IObservable<string?> QueryOf(ISynchronizationStream<JsonElement> stream, string area)
-        => Walk(stream, area).OfType<MeshSearchControl>().Select(s => s.HiddenQuery?.ToString());
-
-    /// <summary>Every control rendered at <paramref name="area"/> and, recursively, in its sub-areas.</summary>
-    private static IObservable<UiControl?> Walk(ISynchronizationStream<JsonElement> stream, string area)
-        => stream.GetControlStream(area)
-            .Select(control => control is IContainerControl container
-                ? container.Areas
-                    .Where(a => a.Area is not null)
-                    .Select(a => Walk(stream, a.Area!.ToString()!))
-                    .Merge()
-                    .StartWith(control)
-                : Observable.Return(control))
-            .Switch();
+        => stream.WalkTree(area).OfType<MeshSearchControl>().Select(s => s.HiddenQuery?.ToString());
 
     private (ISynchronizationStream<JsonElement> Stream, string Area) Open(string path, string area)
     {
