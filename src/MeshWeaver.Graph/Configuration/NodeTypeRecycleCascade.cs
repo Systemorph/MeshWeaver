@@ -249,16 +249,21 @@ public static class NodeTypeRecycleCascade
         var meshService = reader.ServiceProvider.GetRequiredService<IMeshService>();
         var accessService = reader.ServiceProvider.GetService<AccessService>();
 
+        // 🚨 A wave of recycles shares each read while it is in flight (#6520): every cascade of
+        // the wave asks the SAME mesh-wide questions, and asking them once per leg is the load that
+        // stalled the provider. The budget stays per caller, outside the shared read.
+        var reads = reader.ServiceProvider.GetRequiredService<RecycleCascadeReads>();
+
         IObservable<EnumerationLeg> Instances(string type) =>
-            accessService.RunAsSystem(() => meshService
-                    .Query<MeshNode>(MeshQueryRequest.FromQuery(MeshWideQuery.Declare($"nodeType:{type}"))
-                        with { Limit = MeshQueryRequest.NoLimit })
-                    .Take(1)
-                    .Timeout(EnumerationBudget))
-                .Select(change => new EnumerationLeg(type, change.Items
-                    .Where(n => !string.IsNullOrEmpty(n.Path) && n.State == MeshNodeState.Active)
-                    .Select(n => n.Path!)
-                    .ToImmutableList()))
+            reads.Instances(type, reader, () => accessService.RunAsSystem(() => meshService
+                        .Query<MeshNode>(MeshQueryRequest.FromQuery(MeshWideQuery.Declare($"nodeType:{type}"))
+                            with { Limit = MeshQueryRequest.NoLimit }))
+                    .Select(change => change.Items
+                        .Where(n => !string.IsNullOrEmpty(n.Path) && n.State == MeshNodeState.Active)
+                        .Select(n => n.Path!)
+                        .ToImmutableList()))
+                .Timeout(EnumerationBudget)
+                .Select(paths => new EnumerationLeg(type, paths))
                 .Catch<EnumerationLeg, Exception>(ex =>
                 {
                     logger?.LogError(ex,
@@ -268,17 +273,16 @@ public static class NodeTypeRecycleCascade
                     return Observable.Return(new EnumerationLeg(type, ImmutableList<string>.Empty, Describe(ex)));
                 });
 
-        return accessService.RunAsSystem(() => meshService
-                .Query<MeshNode>(MeshQueryRequest.FromQuery(MeshWideQuery.OfType(MeshNode.NodeTypePath)))
-                .Take(1)
-                .Timeout(EnumerationBudget))
-            .Select(change => change.Items
-                .Where(n => !string.IsNullOrEmpty(n.Path) && n.State == MeshNodeState.Active)
-                .GroupBy(n => n.Path!, StringComparer.OrdinalIgnoreCase)
-                .ToImmutableDictionary(
-                    g => g.Key,
-                    g => g.First().ContentAs<NodeTypeDefinition>(reader.JsonSerializerOptions, logger),
-                    StringComparer.OrdinalIgnoreCase))
+        return reads.Definitions(reader, () => accessService.RunAsSystem(() => meshService
+                    .Query<MeshNode>(MeshQueryRequest.FromQuery(MeshWideQuery.OfType(MeshNode.NodeTypePath))))
+                .Select(change => change.Items
+                    .Where(n => !string.IsNullOrEmpty(n.Path) && n.State == MeshNodeState.Active)
+                    .GroupBy(n => n.Path!, StringComparer.OrdinalIgnoreCase)
+                    .ToImmutableDictionary(
+                        g => g.Key,
+                        g => g.First().ContentAs<NodeTypeDefinition>(reader.JsonSerializerOptions, logger),
+                        StringComparer.OrdinalIgnoreCase)))
+            .Timeout(EnumerationBudget)
             .Select(types => new DependentsLeg(DependentsOf(types, nodeTypePath), null))
             .Catch<DependentsLeg, Exception>(ex =>
             {
