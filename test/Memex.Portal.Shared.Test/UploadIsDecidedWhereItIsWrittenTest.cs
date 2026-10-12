@@ -281,4 +281,40 @@ public class UploadIsDecidedWhereItIsWrittenTest(ITestOutputHelper output) : Mon
         File.Exists(abandoned).Should().BeFalse("a staged upload reclaims a dead producer's residue before staging");
         Directory.GetFiles(staging).Should().BeEmpty("and its own blob is reclaimed when the write answers");
     }
+
+    [Fact]
+    public async Task AStagedBlob_IsNeitherListedNorServed_ToAReaderOfTheNode()
+    {
+        // A staged blob is bytes the owner has not admitted yet — an oversized upload's, before its
+        // owner decides Update, or one an abandoned upload left until the age sweep. A reader of the
+        // node must reach it through neither the listing nor the content route (#6585 review).
+        var bytes = System.Text.Encoding.UTF8.GetBytes("staged, not admitted");
+        var staging = Path.Combine(_contentRoot, ContentStaging.Folder);
+        Directory.CreateDirectory(staging);
+        var handle = ContentStaging.ComputeHandle(bytes);
+        await File.WriteAllBytesAsync(Path.Combine(staging, handle), bytes, TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(_contentRoot, "visible.txt"), "content", TestContext.Current.CancellationToken);
+
+        var reader = new AccessContext { ObjectId = ReaderUser, Name = ReaderUser };
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        access.SetContext(reader);
+        var operations = new MeshOperations(SessionHub());
+        var root = operations.ContentList($"{Target}/content");
+        var folder = operations.ContentList($"{Target}/content/{ContentStaging.Folder}");
+        var resolved = ContentFileResolver.Resolve(SessionHub(), $"{Target}/content/{ContentStaging.BlobPath(handle)}", reader);
+        string rootAnswer, folderAnswer;
+        ContentFileResolutionResult resolution;
+        using (access.ImpersonateAsHub(Mesh))
+        {
+            rootAnswer = await root.Timeout(Budget).Await(TestContext.Current.CancellationToken);
+            folderAnswer = await folder.Timeout(Budget).Await(TestContext.Current.CancellationToken);
+            resolution = await resolved.Timeout(Budget).Await(TestContext.Current.CancellationToken);
+        }
+        Output.WriteLine($"root: {rootAnswer}\nfolder: {folderAnswer}\nresolve: {resolution}");
+
+        rootAnswer.Should().Contain("visible.txt", "the reader may list the collection — else the absences below prove nothing")
+            .And.NotContain(ContentStaging.Folder, "the staging folder is framework state, never listed");
+        folderAnswer.Should().StartWith("Error:").And.NotContain(handle, "the staging folder lists like an absent one");
+        resolution.Resolution.Should().BeNull("a staged blob is never served as content");
+    }
 }

@@ -3158,8 +3158,14 @@ public partial class MeshOperations
                         {
                             if (collection == null)
                                 return Observable.Return($"Error: failed to initialize collection '{qualifiedCollectionName}'.");
+                            // 🚨 The staging folder is framework state, never content (#6585): an
+                            // oversized upload's bytes sit there BEFORE the owner has decided Update
+                            // for them. It is never listed, and listing it answers like an absent folder.
+                            if (ContentStaging.IsStagingPath(dir))
+                                return Observable.Return($"Error: Folder not found: {dir}");
 
                             return collection.GetCollectionItems(dir)
+                                .Where(item => !ContentStaging.IsStagingPath(item.Path?.TrimStart('/')))
                                 .Select(item => item switch
                                 {
                                     FolderItem f => (object)new { kind = "folder", name = f.Name, path = f.Path, itemCount = f.ItemCount },
