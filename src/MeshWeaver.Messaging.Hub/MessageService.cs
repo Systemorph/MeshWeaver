@@ -3006,6 +3006,13 @@ public class MessageService : IMessageService
         if (message == null)
             throw new ArgumentNullException(nameof(message));
 
+        // THE SENDER OF A POST IS THE HUB THAT POSTS IT (Systemorph/MeshWeaver#6553). PostOptions.Sender is public and
+        // settable, so before this line a post could name ANY hub as its sender, and a hub-side guard that decides by the
+        // sender (the stamped-field guard admits only the owning hub) was passable from in-process code. Every post
+        // converges here, so the stamp is applied once, before the delivery is built; the teardown forwards below carry
+        // the child's options on, and those alone keep their sender (PostOptions.ForwardsSender).
+        opt = StampSender(opt);
+
         var delivery = new MessageDelivery<TMessage>(message, opt, hub.JsonSerializerOptions)
         {
             Id = opt.MessageId
@@ -3071,7 +3078,8 @@ public class MessageService : IMessageService
             {
                 try
                 {
-                    replyParent.Post(message, _ => opt);
+                    // The ONE legitimate foreign-sender post: this reply goes out in the child's name (ForwardsSender), see StampSender.
+                    replyParent.Post(message, _ => opt with { ForwardsSender = true });
                     postFate?.Add($"REPLY_FORWARDED_THROUGH_PARENT runLevel={hub.RunLevel}", Address);
                     replyFate?.Add($"REPLY_FORWARDED_THROUGH_PARENT runLevel={hub.RunLevel} parent={replyParent.Address}", Address);
                     return delivery;
@@ -3122,7 +3130,7 @@ public class MessageService : IMessageService
                     var releaseOptions = releaseParent.Address.Type != AddressExtensions.MeshType
                         ? opt with { Sender = opt.Sender.WithHost(releaseParent.Address) }
                         : opt;
-                    var forwarded = releaseParent.Post(message, _ => releaseOptions);
+                    var forwarded = releaseParent.Post(message, _ => releaseOptions with { ForwardsSender = true });
                     postFate?.Add($"RELEASE_FORWARDED_THROUGH_PARENT runLevel={hub.RunLevel} parent={releaseParent.Address}", Address);
                     if (forwarded is not null)
                         return forwarded;
@@ -3214,6 +3222,14 @@ public class MessageService : IMessageService
             : delivery;
     }
     private readonly Lock locker = new();
+
+    /// <summary>
+    /// The sender of a post is the hub that posts it: any other <c>Sender</c> the options carry is replaced by this
+    /// hub's address, unless the options are a forward the infrastructure itself minted (<c>PostOptions.ForwardsSender</c>
+    /// is internal, so no code outside this assembly and its declared friends can set it). Systemorph/MeshWeaver#6553.
+    /// </summary>
+    private PostOptions StampSender(PostOptions opt) =>
+        opt.ForwardsSender || object.Equals(opt.Sender, Address) ? opt : opt with { Sender = Address };
 
     /// <summary>
     /// Disposes the message service: opens any remaining gates to release buffered messages, tears
