@@ -306,24 +306,46 @@ public sealed class ModuleServices : IDisposable
     internal ModuleSwapStage? Stage { get; set; }
 
     /// <summary>
-    /// 🚨 <b>Built before published</b> (MeshWeaver#6542): builds every shared instance of this
-    /// generation's container — every singleton the root can reach through a forwarder, a module-type
-    /// stand-in or a health-check forwarder, and what their constructors take — BEFORE the generation
-    /// can be reached from the root: at boot, before the root provider is handed out; on a swap, before
-    /// the swap commits. The root then only ever reads built instances, so its lock never waits on this
-    /// container's. A module's HOSTED services are left to their own host: the root never reaches them,
-    /// and a hosted service that cannot be built costs its feature, never the module (#2449).
-    /// Throws what a constructor throws.
+    /// 🚨 <b>Built before published</b> (MeshWeaver#6542, MeshWeaver#6556): builds every
+    /// process-lifetime instance the ROOT can reach in this generation's container — each SINGLETON the
+    /// root reaches through a forwarder (<see cref="ModuleServiceRoute.Proxy"/>, which carries the
+    /// health-check and options forwarders, and <see cref="ModuleServiceRoute.Current"/>) or a
+    /// module-type stand-in of <see cref="ModuleOwnedRootSource"/> (<see cref="ModuleServiceRoute.ModuleOwned"/>,
+    /// <see cref="ModuleServiceRoute.Contributed"/>), and what their constructors take — BEFORE the
+    /// generation can be reached from the root: at boot, before the root provider is handed out; on a
+    /// swap, before the swap commits. The root then only ever reads built instances, so its lock never
+    /// waits on this container's.
+    ///
+    /// <para>NOT built: a SCOPED registration, and a singleton whose constructor graph reaches one
+    /// (<see cref="ModuleServiceProvider.BuildRootReachableSingletons"/>) — their instances belong to a
+    /// circuit or a request, and the one a boot would build runs against scoped state nobody initialised
+    /// (Radzen's <c>DialogService</c> and its <c>NavigationManager</c>, MeshWeaver#6556); a module's
+    /// PRIVATE registration unless a built one takes it; and a module's HOSTED services, which are left
+    /// to their own host — the root never reaches them, and a hosted service that cannot be built costs
+    /// its feature, never the module (#2449). Throws what a constructor throws.</para>
     /// </summary>
     /// <param name="root">The mesh's root provider.</param>
     internal void BuildBeforePublish(IServiceProvider root)
     {
-        var hosted = Registrations
-            .Where(r => r.Route == ModuleServiceRoute.Hosted)
-            .Select(r => (Autofac.Core.Service)new Autofac.Core.KeyedService(
-                r.Descriptor.IsKeyedService ? r.Descriptor.ServiceKey! : r.Key, typeof(IHostedService)))
+        var reachable = Registrations
+            .Where(r => r.Route is ModuleServiceRoute.Proxy or ModuleServiceRoute.Current
+                or ModuleServiceRoute.ModuleOwned or ModuleServiceRoute.Contributed)
+            .Select(RootReachesItAs)
             .ToImmutableHashSet();
-        ModuleServiceProvider.BuildSharedInstances(Scope(root), hosted.Contains);
+        ModuleServiceProvider.BuildRootReachableSingletons(Scope(root), root, reachable.Contains);
+    }
+
+    // The Autofac service a registration is held under in the module container (see Scope): a keyed
+    // registration under its own key, an unkeyed forwarded or contributed one under its index key, an
+    // unkeyed module-owned one under its type.
+    private static Autofac.Core.Service RootReachesItAs(ModuleServiceRegistration registration)
+    {
+        var descriptor = registration.Descriptor;
+        if (descriptor.IsKeyedService)
+            return new Autofac.Core.KeyedService(descriptor.ServiceKey!, descriptor.ServiceType);
+        return registration.Route == ModuleServiceRoute.ModuleOwned
+            ? new Autofac.Core.TypedService(descriptor.ServiceType)
+            : new Autofac.Core.KeyedService(registration.Key, descriptor.ServiceType);
     }
 
     /// <summary>

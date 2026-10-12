@@ -2219,7 +2219,7 @@ public sealed class MessageHub : IMessageHub
         // explicit Sender.
         var role = RouterTrafficRule.RoleOf(delivery.Target?.Type, delivery.Sender?.Type, delivery.Message,
             delivery.Properties.ContainsKey(PostOptions.RequestId));
-        if (role is null)
+        if (role is null || IsNackOfAnAnswerThisRouterPosted(delivery))
             return;
 
         // A NACK names nothing by its own type: every undeliverable message the router reports is
@@ -2252,6 +2252,17 @@ public sealed class MessageHub : IMessageHub
             messageType, role, delivery.Sender?.ToString() ?? "(none)",
             delivery.Target?.ToString() ?? "(none)", DescribeCallSite());
     }
+
+    /// <summary>
+    /// The bounce of an answer the router posted is not router traffic — see
+    /// <see cref="RouterTrafficRule.IsNackOfAnAnswerTheRouterPosted"/> (#5713). Both detector sites
+    /// ask, so the receiver side cannot report what the origin side has ruled out.
+    /// </summary>
+    /// <param name="delivery">The delivery a detector site is about to report.</param>
+    /// <returns><c>true</c> when it must not be reported.</returns>
+    private static bool IsNackOfAnAnswerThisRouterPosted(IMessageDelivery delivery) =>
+        RouterTrafficRule.IsNackOfAnAnswerTheRouterPosted(delivery.Message,
+            failed => failed.Properties.ContainsKey(PostOptions.RequestId));
 
     /// <summary>The longest failure reason a NACK's origin line quotes — a reason is one sentence,
     /// and a NACK about an oversized message must not become one.</summary>
@@ -2438,7 +2449,7 @@ public sealed class MessageHub : IMessageHub
         // ResponseFor (see RouterTrafficRule.RoleOf's isResponse doc).
         var role = RouterTrafficRule.RoleOf(delivery.Target?.Type, delivery.Sender?.Type, delivery.Message,
             delivery.Properties.ContainsKey(PostOptions.RequestId));
-        if (role is null)
+        if (role is null || IsNackOfAnAnswerThisRouterPosted(delivery))
             return;
 
         var messageType = delivery.Message?.GetType().Name ?? "(null)";

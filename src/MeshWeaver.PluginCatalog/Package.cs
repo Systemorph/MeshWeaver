@@ -436,6 +436,29 @@ public record PackageManifest
     public ImmutableSortedDictionary<string, string>? InstalledFiles { get; init; }
 
     /// <summary>
+    /// 🚨 The COMPARISON RULE under which a full install last compared every declared node of this
+    /// package with the node the mesh stored (<see cref="PackageInstaller.InstallComparisonEpoch"/>);
+    /// null on a record stamped before the rule was versioned.
+    ///
+    /// <para><b>Why the record has to carry it.</b> <see cref="InstalledFiles"/> and
+    /// <see cref="ModuleVersion"/> are hashes of the SOURCE. The up-to-date exit and the
+    /// incremental diff trust them as a statement about the MESH — "every file at this hash is
+    /// stored as the package ships it" — and that statement is only as good as the comparison that
+    /// decided, file by file, whether to write. When that comparison was blind to a member, the
+    /// install skipped the write, stamped the file's hash anyway, and every later install read the
+    /// equal hash and never looked again: <c>Governance/NameCheck</c> stayed
+    /// <c>keepsHistory: true</c> through a reinstall on a platform whose comparison could see the
+    /// difference (MeshWeaver.Plugins#2786). A record stamped under any OTHER rule than the installer
+    /// reading it applies — older, or newer from a pod on a later image during a roll — is therefore
+    /// not a baseline: the next install of the package is a full one, which compares every stored
+    /// node with the package and stamps that installer's rule.</para>
+    ///
+    /// <para>Only a FULL install stamps the current rule. An incremental update compares only the
+    /// files whose hash moved, so it carries the previous value forward.</para>
+    /// </summary>
+    public int? ComparisonEpoch { get; init; }
+
+    /// <summary>
     /// 🚨 The declared files this install PARSED and could NOT turn into a node — the half of "is
     /// this file a node" that only the writer can answer (MeshWeaver#3659).
     ///

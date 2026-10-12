@@ -117,4 +117,42 @@ public class RouterTrafficRuleTest
     [InlineData(Mesh, Mesh, true, "sender AND target")]
     public void OnlyTheRoutersOwnAnswer_IsExcluded(string target, string sender, bool isResponse, string expected) =>
         Assert.Equal(expected, RouterTrafficRule.RoleOf(target, sender, new object(), isResponse));
+
+    private static IMessageDelivery Failed(string sender, string target) =>
+        new MessageDelivery<string>(new Address(sender, "s"), new Address(target, "t"), "payload",
+            new System.Text.Json.JsonSerializerOptions());
+
+    /// <summary>
+    /// 🚨 #5713. A NACK inherits the verdict of the delivery it is about. The bounce of an ANSWER
+    /// the router posted comes back addressed at the router — <c>sender AND target</c> — and proves
+    /// no router-issued request, so it is not reported.
+    /// </summary>
+    [Fact]
+    public void TheBounceOfAnAnswerTheRouterPosted_IsNotRouterTraffic() =>
+        Assert.True(RouterTrafficRule.IsNackOfAnAnswerTheRouterPosted(
+            new DeliveryFailure(Failed(Mesh, "portal")), _ => true));
+
+    /// <summary>
+    /// The exemption must not widen: the bounce of a REQUEST the router posted, of anything
+    /// addressed AT the router, of a delivery the router did not send, and any message that is not
+    /// a NACK at all keep the verdict <see cref="RouterTrafficRule.RoleOf(string?, string?, object?, bool)"/> gives them.
+    /// </summary>
+    [Fact]
+    public void OnlyTheBounceOfTheRoutersOwnAnswer_IsExempt()
+    {
+        Assert.False(RouterTrafficRule.IsNackOfAnAnswerTheRouterPosted(
+            new DeliveryFailure(Failed(Mesh, "portal")), _ => false));    // a router-posted REQUEST
+        Assert.False(RouterTrafficRule.IsNackOfAnAnswerTheRouterPosted(
+            new DeliveryFailure(Failed(Mesh, Mesh)), _ => true));         // addressed AT the router
+        Assert.False(RouterTrafficRule.IsNackOfAnAnswerTheRouterPosted(
+            new DeliveryFailure(Failed("portal", "client")), _ => true)); // not the router's delivery
+        Assert.False(RouterTrafficRule.IsNackOfAnAnswerTheRouterPosted(
+            new DeliveryFailure(new MessageDelivery<string>(new Address(Mesh, "s"), null!, "payload",
+                new System.Text.Json.JsonSerializerOptions())), _ => true)); // addressed at NO hub: not an answer to one
+        Assert.False(RouterTrafficRule.IsNackOfAnAnswerTheRouterPosted(
+            new DeliveryFailure(new MessageDelivery<string>(new Address(Mesh, "s"), new Address(), "payload",
+                new System.Text.Json.JsonSerializerOptions())), _ => true)); // an EMPTY address names no hub either
+        Assert.False(RouterTrafficRule.IsNackOfAnAnswerTheRouterPosted(new object(), _ => true));
+        Assert.False(RouterTrafficRule.IsNackOfAnAnswerTheRouterPosted(null, _ => true));
+    }
 }

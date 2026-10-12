@@ -249,6 +249,12 @@ public static class Controls
     public static SwitchControl Switch(object isChecked) =>
         new(isChecked);
 
+    /// <summary>Creates an icon toggle button bound to <paramref name="isPressed"/>.</summary>
+    /// <param name="isPressed">The bound boolean value or data-binding expression controlling the pressed state.</param>
+    /// <returns>A new <see cref="ToggleButtonControl"/>.</returns>
+    public static ToggleButtonControl ToggleButton(object isPressed) =>
+        new(isPressed);
+
     /// <summary>Creates a range slider control with the given bounds and step.</summary>
     /// <param name="min">The minimum selectable value.</param>
     /// <param name="max">The maximum selectable value.</param>

@@ -448,6 +448,156 @@ public class StampedFieldsTest(ITestOutputHelper output) : MonolithMeshTestBase(
                 "each retyped node's pre-existing value is cleared and its new type stamps it");
     }
 
+    /// <summary>
+    /// 🚨 <b>The <c>sync/{id}</c> route</b> (#6527, item 1). A subscriber's per-stream sync hub is
+    /// hosted ON the node's hub and handles a <see cref="DataChangeRequest"/> addressed straight to it
+    /// — a route the node hub's patch check does not sit in front of. A change of the stamped field sent
+    /// that way must not reach the node's data; an unrelated change sent the same way is the positive
+    /// signal that the route was measured (it either lands, proving the route reaches the data and is
+    /// guarded, or nothing sent that way reaches the data at all).
+    /// </summary>
+    [Fact(Timeout = 180000)]
+    public async Task DataChange_SentToTheOwnersSyncHub_CannotChangeAStampedField()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var path = await CreateConfirmedAndStamped(StampedProbeTypeProvider.Declaring);
+        using var keepAlive = Mesh.GetWorkspace().GetMeshNodeStream(path)
+            .Subscribe(_ => { }, ex => Output.WriteLine($"keep-alive stream for {path} faulted: {ex}"));
+        var current = await WaitFor(path, c => c.ConfirmedBy == Stamp, "stamped");
+
+        var owner = new Address(path);
+        var syncHub = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .Select(_ => Mesh.GetHostedHub(owner, HostedHubCreation.Never)?.ServiceProvider
+                .GetRequiredService<HostedHubsCollection>().Hubs
+                .FirstOrDefault(h => h.Address.Type == SynchronizationAddress.AddressType && !h.IsDisposing))
+            .Where(h => h is not null)
+            .Select(h => h!)
+            .Should().Within(60.Seconds()).Emit("a live subscriber has a sync hub hosted on the node's hub",
+                cancellationToken: ct);
+        var route = syncHub.Address with { Host = owner };
+        Output.WriteLine($"sync route: {route.ToFullString()}");
+
+        ValueTask<Exception?> SendThroughTheSyncRoute(StampedProbeContent content) => Record.ExceptionAsync(() => RequestHub
+            .Observe<DataChangeResponse>(DataChangeRequest.Update([current with { Content = content }]),
+                o => o.WithTarget(route))
+            .Take(1)
+            .Timeout(60.Seconds())
+            .Await(ct));
+
+        var forged = await SendThroughTheSyncRoute(ContentOf(current)! with { ConfirmedBy = "victim" });
+        var unrelated = await SendThroughTheSyncRoute(ContentOf(current)! with { Title = "via-sync" });
+        Output.WriteLine($"forged: {forged?.Message}\nunrelated: {unrelated?.Message}");
+
+        // Measured: the sync hub has no workspace of its own to apply a data change to, so EVERY data
+        // change sent to it is answered with a delivery failure — the unrelated one included, which is
+        // what shows the route reaches no data at all rather than that the guard happened to fire.
+        unrelated.Should().BeOfType<DeliveryFailureException>(
+            "a data change sent to a sync hub is answered with a failure: the route applies nothing");
+        unrelated!.Message.Should().Contain(nameof(IWorkspace),
+            "the sync hub cannot resolve a workspace — the reason the route applies nothing");
+        forged.Should().BeOfType<DeliveryFailureException>("the stamped-field change is refused the same way");
+
+        var node = await WaitFor(path, c => c.ConfirmedBy == Stamp,
+            "a change of the stamped field through the sync route never lands");
+        ContentOf(node)!.ConfirmedBy.Should().Be(Stamp);
+        ContentOf(node)!.Title.Should().NotBe("via-sync", "nothing sent through the sync route reaches the node's data");
+    }
+
+    /// <summary>
+    /// <b>The durable row</b> (#6527, item 3): the refusal holds for a node an activation read back
+    /// from persistence, not only for the in-memory node the stamping activation held. The node's hub
+    /// is recycled, the fresh activation serves the stored stamp, and a client change of it is refused.
+    /// </summary>
+    [Fact(Timeout = 180000)]
+    public async Task AfterARecycle_TheNodeReadBackFromStorage_StillRefusesAChangeOfTheStamp()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var path = await CreateConfirmedAndStamped(StampedProbeTypeProvider.Declaring);
+        var before = Mesh.GetHostedHub(new Address(path), HostedHubCreation.Never);
+
+        var reread = await RequestHub
+            .RecycleNode(path, reason: "StampedFieldsTest: re-activate the node from its durable row")
+            .Take(1)
+            .Should().Within(90.Seconds()).Emit("the recycled address answers again", cancellationToken: ct);
+        reread.Should().NotBeNull();
+        ContentOf(reread!)!.ConfirmedBy.Should().Be(Stamp, "the stamp is durable");
+
+        var after = await ReboundTo(path, StampedProbeTypeProvider.Declaring);
+        after.Should().NotBeSameAs(before, "a fresh activation serves the node");
+        after.ServiceProvider.GetRequiredService<StampedFieldDeclarationHolder>().Current.Fields
+            .Should().Equal(["confirmedBy"], "the fresh activation guards the field from its start");
+
+        var failure = await Record.ExceptionAsync(() =>
+            Mesh.GetWorkspace().GetMeshNodeStream(path)
+                .Update(n => n with { Content = ContentOf(n)! with { ConfirmedBy = "victim" } })
+                .Take(1).Timeout(60.Seconds()).Await(ct));
+        failure.Should().NotBeNull("a client change of the stamp is refused on the re-read node");
+        failure!.Message.Should().Contain("confirmedBy");
+        var node = await WaitFor(path, c => c.ConfirmedBy == Stamp, "the stored value is still the owner's stamp");
+        ContentOf(node)!.ConfirmedBy.Should().Be(Stamp);
+    }
+
+    /// <summary>
+    /// <b>A type declared in mesh content, declaration changed while an instance runs</b> (#6527,
+    /// item 2). The instance activates under a type that declares nothing; the type's stored row then
+    /// gains <c>stampedFields</c>. After the instance is recycled — the documented step after a
+    /// declaration changes (Doc/Architecture/StampedFields, "Recycle after a declaration changes") —
+    /// the activation reads the new declaration from the durable type row and refuses a client change
+    /// of the field.
+    /// </summary>
+    [Fact(Timeout = 180000)]
+    public async Task ContentDeclaredType_DeclarationAddedWhileRunning_IsEnforcedAfterTheRecycle()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var typeId = "SfType" + Guid.NewGuid().ToString("N")[..8];
+        var typePath = $"{TestPartition}/{typeId}";
+        await MeshService.CreateNode(new MeshNode(typeId, TestPartition)
+            {
+                Name = typeId,
+                NodeType = MeshNode.NodeTypePath,
+                Content = new NodeTypeDefinition { Description = "Mesh-content type, declaration added later." },
+            }).Take(1)
+            .Should().Within(60.Seconds()).Emit("the content-declared type must exist first", cancellationToken: ct);
+
+        var id = NewId();
+        var path = $"{TestPartition}/{id}";
+        await MeshService.CreateNode(Probe(id, typePath,
+                new StampedProbeContent { Title = "t0", Confirmed = true, ConfirmedBy = "pre" })).Take(1)
+            .Should().Within(60.Seconds()).Emit("a type that declares nothing accepts the value", cancellationToken: ct);
+        await Mesh.GetWorkspace().GetMeshNodeStream(path)
+            .Update(n => n with { Content = ContentOf(n)! with { Title = "t1" } })
+            .Should().Within(60.Seconds()).Emit("the instance is active and writable", cancellationToken: ct);
+
+        await Mesh.GetWorkspace().GetMeshNodeStream(typePath)
+            .Update(n => n with
+            {
+                Content = n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)! with { StampedFields = ["confirmedBy"] },
+            })
+            .Should().Within(60.Seconds()).Emit("the type row gains the declaration", cancellationToken: ct);
+
+        await RequestHub
+            .RecycleNode(path, reason: "StampedFieldsTest: the type's declaration changed")
+            .Take(1)
+            .Should().Within(90.Seconds()).Emit("the recycled instance answers again", cancellationToken: ct);
+        var hub = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .Select(_ => Mesh.GetHostedHub(new Address(path), HostedHubCreation.Never))
+            .Where(h => h is { IsDisposing: false } && h.Started.IsCompletedSuccessfully
+                && h.ServiceProvider.GetRequiredService<StampedFieldDeclarationHolder>().Current.Fields.Contains("confirmedBy"))
+            .Select(h => h!)
+            .Should().Within(60.Seconds()).Emit("the re-activated instance binds the declaration from the stored type row",
+                cancellationToken: ct);
+        hub.ServiceProvider.GetRequiredService<StampedFieldDeclarationHolder>().Current.Fault.Should().BeNull();
+
+        var failure = await Record.ExceptionAsync(() =>
+            Mesh.GetWorkspace().GetMeshNodeStream(path)
+                .Update(n => n with { Content = ContentOf(n)! with { ConfirmedBy = "victim" } })
+                .Take(1).Timeout(60.Seconds()).Await(ct));
+        failure.Should().NotBeNull("the declaration now stamps the field");
+        failure!.Message.Should().Contain("confirmedBy");
+        var node = await WaitFor(path, c => c.Title == "t1", "the instance is readable");
+        ContentOf(node)!.ConfirmedBy.Should().Be("pre", "the refused write changed nothing");
+    }
+
     [Fact]
     public void WithoutValues_RemovesOnlyFieldsThatCarryAValue_AndKeepsTheContentType()
     {

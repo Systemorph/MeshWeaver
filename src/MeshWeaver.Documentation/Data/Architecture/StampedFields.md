@@ -137,13 +137,21 @@ every client write is refused as `Unavailable`, and the first refusal re-runs th
 recycles the hub itself once it lands — the new type never receives a node its settlement did not
 finish.
 
+## The `sync/{id}` route, measured
+
+A `DataChangeRequest` addressed directly to one of the node hub's hosted `sync/{id}` stream hubs
+(rather than to the node's own address) is handled there by `SynchronizationStream`'s stream
+handler, which this guard does not sit in front of. **It reaches no data.** The sync hub cannot
+resolve a workspace of its own (`An exception was thrown while activating MeshWeaver.Data.IWorkspace`),
+so every data change sent that way is answered with a `DeliveryFailure`. That includes a change that
+leaves the stamped field alone, which is how the test tells "the route applies nothing" apart from
+"the guard happened to fire". The framework's own subscribers never send their write-back there:
+they address the owner. Test: `DataChange_SentToTheOwnersSyncHub_CannotChangeAStampedField`. If that
+handler is ever made to apply changes, it must apply them through the owner, where the guard and
+`StampedFieldDataValidator` sit, and that test will fail on the unrelated change first.
+
 ## Not established
 
-- A `DataChangeRequest` addressed directly to one of the node hub's hosted `sync/{id}` stream hubs
-  (rather than to the node's own address) is handled there by `SynchronizationStream`'s stream
-  handler, which this guard does not sit in front of. Whether that handler reaches the node's own
-  data source was not measured when the rule shipped; the framework's own subscribers never send
-  their write-back there (they address the owner).
 - **The window between a retype's commit and its settlement is not crash-proof.** The clear is the
   retiring activation's write after the retype has committed. If the process dies, or something
   other than the rebind watcher disposes that activation (an operator's recycle, an installer's own
@@ -182,7 +190,10 @@ nightly runner, that the stamped confirmer still holds Update on the case immedi
   declared in mesh content commit in that order; a retype into a stamping type clears a pre-written
   value and the new type's own stamp then lands, a retype into a type that declares nothing leaves
   the value alone (the negative control), and an installer-style retype of many nodes lands and
-  clears each.
+  clears each. Three more tests cover the paths around those. After a recycle, the node read back
+  from its durable row still refuses a change of the stamp. A type declared in mesh content that
+  gains `stampedFields` while an instance runs is enforced once that instance is recycled, with the
+  declaration read from the stored type row. A data change sent to a `sync/{id}` hub reaches no data.
 
 ## Related
 

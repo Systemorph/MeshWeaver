@@ -111,6 +111,51 @@ public class AppDirectoryPureTest
     }
 
     [Fact]
+    public void ThePersonTile_CarriesTheViewersName_PictureAndASettingsDescription_InTheirLanguage()
+    {
+        var person = new PersonTile("Roland Bürgi", "data:image/png;base64,AAAA", "de");
+        var tile = AppDirectory.BuiltIns("rbuergi", isGlobalAdmin: false, person)[0];
+        tile.Id.Should().Be(AppDirectory.SettingsId);
+        tile.Name.Should().Be("Roland Bürgi");
+        tile.LabelKey.Should().BeNull("a label key would repaint the tile as the catalog's \"Settings\"");
+        tile.Icon.Should().Be("data:image/png;base64,AAAA");
+        tile.OpenPath.Should().Be($"rbuergi/{MeshNodeLayoutAreas.SettingsArea}");
+        tile.Description.Should().Be(LocalizationCatalog.Get(AppDirectory.PersonSettingsDescriptionKey, "de"))
+            .And.Contain("Einstellungen");
+
+        var noPicture = AppDirectory.BuiltIns("rbuergi", isGlobalAdmin: false, person with { Icon = null, Locale = null })[0];
+        noPicture.Icon.Should().Be(AppDirectory.SettingsIcon);
+        noPicture.Description.Should().Contain("settings");
+    }
+
+    [Fact]
+    public void WithoutAName_TheTileStaysThePlainSettings()
+    {
+        var options = new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web);
+        AppDirectory.ReadPerson(null, options).Should().BeNull();
+        AppDirectory.ReadPerson(new MeshNode("acme") { NodeType = "Space", Name = "Acme Space" }, options)
+            .Should().BeNull("only a USER node names the person tile");
+        AppDirectory.PersonQuery("alice").Should().Be($"path:alice nodeType:{UserNodeType.NodeType}");
+        AppDirectory.ReadPerson(new MeshNode("carol") { NodeType = "User", Name = "Carol Roe", Icon = "content:me.png" }, options)!
+            .Icon.Should().Be(MeshNodeImageHelper.ResolvePictureUrl("content:me.png", "carol"))
+            .And.NotStartWith("content:", "the synthetic _Apps row would resolve a relative picture against itself");
+        foreach (var glyph in new[] { "Person", "🙂", "<svg xmlns='http://www.w3.org/2000/svg'/>" })
+            AppDirectory.ReadPerson(new MeshNode("dave") { NodeType = "User", Name = "Dave Roe", Icon = glyph }, options)!
+                .Icon.Should().BeNull($"'{glyph}' is no picture — the tile keeps the settings icon");
+        AppDirectory.ReadPerson(new MeshNode("alice") { NodeType = "User", Name = "alice" }, options)
+            .Should().BeNull("a name that is just the id says nothing the plain tile does not");
+        AppDirectory.ReadPerson(new MeshNode("alice")
+        {
+            NodeType = "User",
+            Name = "alice",
+            Content = System.Text.Json.JsonSerializer.SerializeToElement(new { fullName = "Alice Muster", locale = "de" }),
+        }, options).Should().Be(new PersonTile("Alice Muster", null, "de"));
+        AppDirectory.ReadPerson(new MeshNode("bob") { NodeType = "User", Name = "Bob Roe", Icon = "/pic.png" }, options)
+            .Should().Be(new PersonTile("Bob Roe", "/pic.png", null));
+        AppDirectory.Compose("alice", [], isGlobalAdmin: false, person: null)[0].LabelKey.Should().Be("common.settings");
+    }
+
+    [Fact]
     public void Compose_PutsBuiltInsFirst_AppsByName_AndNeverListsTheAdminRootTwice()
     {
         var roots = new[]
@@ -459,6 +504,7 @@ public class AppDirectoryTest(ITestOutputHelper output) : MonolithMeshTestBase(o
     private const string Admin = "dir-admin";
     private const string Revoked = "dir-revoked";
     private const string Seeded = "dir-seeded";
+    private const string Named = "dir-named";
 
     /// <summary>A package root's content as a package carries it: its OWN typed record (the Store's
     /// <c>PluginContent</c> in production), with <c>app</c> and <c>entryPoint</c>.</summary>
@@ -486,6 +532,8 @@ public class AppDirectoryTest(ITestOutputHelper output) : MonolithMeshTestBase(o
             .ConfigureHub(config => config.WithType<TestPackageContent>(nameof(TestPackageContent)))
             .AddMeshNodes(
             AppRootNode("DirApp", app: true),
+            // A person with a display name: their Settings tile carries it.
+            new MeshNode(Named) { NodeType = "User", Name = "Max Muster", State = MeshNodeState.Active },
             AppRootNode("DirNotAnApp", app: false),
             // Readable ONLY at its entry point: the probe must be the entry point, not the root.
             AppRootNode("DirEntryOnly", app: true),
@@ -517,6 +565,27 @@ public class AppDirectoryTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         var list = await Directory.Compute(viewer).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
         list.Select(e => e.Id).Should().Equal(expected);
         list.Should().NotContain(e => e.Id == "DirNotAnApp", "a package without app:true is no tile, whatever the grant");
+    }
+
+    [Fact(Timeout = 60000)]
+    public async Task TheSettingsTile_BecomesTheViewersName_OnceTheirNodeIsRead()
+    {
+        _ = TestContext.Current.CancellationToken; // Settled waits on it
+        var list = await Settled(Directory.Compute(Named),
+            l => l.Count > 0 && l[0].Name == "Max Muster");
+        list[0].Id.Should().Be(AppDirectory.SettingsId);
+        list[0].LabelKey.Should().BeNull();
+        list[0].Description.Should().NotBeNullOrWhiteSpace();
+    }
+
+    [Fact(Timeout = 60000)]
+    public async Task AnAbsentOwner_KeepsThePlainSettingsTile()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string ghost = "dir-no-such-owner";
+        var list = await Directory.Compute(ghost).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        list[0].Id.Should().Be(AppDirectory.SettingsId);
+        list[0].LabelKey.Should().Be("common.settings");
     }
 
     [Fact(Timeout = 60000)]

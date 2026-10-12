@@ -138,6 +138,7 @@ public class SealedSetConsistencyTest
             Assert.Contains(Bundle, package.Reason, StringComparison.Ordinal);
             Assert.Contains(Module, package.Reason, StringComparison.Ordinal);
             Assert.Contains(recorded, package.Reason, StringComparison.Ordinal);
+            Assert.DoesNotContain("nothing rolls", package.Reason, StringComparison.Ordinal);
             Assert.Contains(SealedMvid, package.Reason, StringComparison.Ordinal);
             Assert.Contains("dependency record mismatch", package.Reason, StringComparison.Ordinal);
         }
@@ -395,7 +396,7 @@ public class SealedSetConsistencyTest
         Assert.True(verdict.IsIndeterminate);
         var package = Assert.Single(verdict.Packages);
         Assert.Equal(PackageAvailabilityKind.Indeterminate, package.Kind);
-        Assert.Contains("not clearance to proceed", package.Reason!, StringComparison.Ordinal);
+        Assert.Contains("never read as consistent", package.Reason!, StringComparison.Ordinal);
     }
 
     [Fact]
