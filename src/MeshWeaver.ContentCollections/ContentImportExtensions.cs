@@ -1240,15 +1240,24 @@ public sealed class SaveContentFileBuilder
             new SaveContentFileRequest(_collection, _filePath) { Content = file.Content });
         return OutOfBandContentTransfer.ResolveDestination(
                 _hub, address, _collection,
-                o => ContentImportExtensions.ConfigurePost(o, address, captured))
-            .Catch<ContentCollection?, Exception>(ex =>
+                o => ContentImportExtensions.ConfigurePost(o, address, captured),
+                // 🚨 Staging writes on THIS hub, where no owner gate sees it — so a collection the
+                // node only inherits (the host's store, shared with its siblings) is refused before a
+                // byte lands there, with the same answer the owner's write gives.
+                declaredByNodeOnly: true)
+            .Select(destination => (Destination: destination, Refusal: (string?)null))
+            .Catch<(ContentCollection? Destination, string? Refusal), Exception>(ex =>
             {
+                if (ex is CollectionNotDeclaredByNodeException notDeclared)
+                    return Observable.Return<(ContentCollection?, string?)>((null, notDeclared.Message));
                 logger?.LogWarning(ex,
                     "Out-of-band transfer unavailable for {Node}/{Collection}/{Path}; the file travels inline",
                     _nodePath, _collection, _filePath);
-                return Observable.Return<ContentCollection?>(null);
+                return Observable.Return<(ContentCollection?, string?)>((null, null));
             })
-            .SelectMany(destination => destination is null
+            .SelectMany(resolved => resolved.Refusal is { } refusal
+                ? Observable.Return(ImportContentResponse.Fail(refusal))
+                : resolved.Destination is not { } destination
                 ? inline
                 // Reclaim a dead producer's residue before adding to the folder, never after — the
                 // same order as SyncContentFilesBuilder.Stage, so the sweep cannot see this upload's
@@ -1256,7 +1265,10 @@ public sealed class SaveContentFileBuilder
                 // cancellation, a crashed caller) would leave its blob for good on a collection that
                 // is only ever uploaded to.
                 : OutOfBandContentTransfer.SweepStale(destination, DateTime.UtcNow, logger)
-                    .SelectMany(_ => OutOfBandContentTransfer.Stage(destination, pool, file))
+                    // A per-transfer nonce: the blob is this upload's alone, so another upload of
+                    // identical bytes reclaiming ITS blob can never delete this one mid-read.
+                    .SelectMany(_ => OutOfBandContentTransfer.Stage(
+                        destination, pool, file, Guid.NewGuid().ToString("N")))
                     .SelectMany(staged =>
                     {
                         // Reclaimed IN the chain, ahead of the caller's answer — the same contract

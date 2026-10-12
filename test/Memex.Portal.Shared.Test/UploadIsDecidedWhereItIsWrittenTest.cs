@@ -221,6 +221,47 @@ public class UploadIsDecidedWhereItIsWrittenTest(ITestOutputHelper output) : Mon
     }
 
     [Fact]
+    public async Task AnOversizedUpload_IntoAnInheritedCollection_StagesNothingInTheHostStore()
+    {
+        // Over budget, so the bytes would travel staged — and staging writes on the CALLING hub,
+        // where no owner gate sees it. The inherited collection must be refused before staging, or
+        // the host's staging folder holds an editor-of-one-node's blob until the age sweep (and for
+        // good when the post is cancelled after staging).
+        var bytes = new byte[ContentDeliveryBudget.BudgetBytes + 64 * 1024];
+        new Random(65930).NextBytes(bytes);
+
+        var answer = await UploadAs(EditorUser, $"{Target}/{HostCollection}/planted-large.bin", bytes);
+        Output.WriteLine($"inherited, staged: {answer}");
+
+        answer.Should().StartWith("Error:").And.Contain("not declared by this node");
+        Directory.EnumerateFileSystemEntries(_hostRoot, "*", SearchOption.AllDirectories)
+            .Should().BeEmpty("nothing — neither the file nor a staged blob — lands in the host's store");
+    }
+
+    [Fact]
+    public async Task AStagedUpload_NeverReclaimsABlobAnotherTransferOfTheSameBytesStaged()
+    {
+        // Deterministic form of two concurrent uploads of identical bytes: the OTHER transfer's blob
+        // is already in staging, fresh, under the bytes' content hash — exactly where it sits while
+        // that transfer's owner is still probing or reading it. Content-addressed staging would adopt
+        // that blob and reclaim it when THIS upload answers, deleting it under the other's read.
+        var bytes = new byte[ContentDeliveryBudget.BudgetBytes + 64 * 1024];
+        new Random(65931).NextBytes(bytes);
+        var staging = Path.Combine(_contentRoot, ContentStaging.Folder);
+        Directory.CreateDirectory(staging);
+        var othersBlob = Path.Combine(staging, ContentStaging.ComputeHandle(bytes));
+        await File.WriteAllBytesAsync(othersBlob, bytes, TestContext.Current.CancellationToken);
+
+        var answer = await UploadAs(EditorUser, $"{Target}/content/twin.bin", bytes);
+        Output.WriteLine($"twin: {answer}");
+
+        answer.Should().Contain("\"Uploaded\"");
+        (await File.ReadAllBytesAsync(Stored("twin.bin"), TestContext.Current.CancellationToken)).Should().Equal(bytes);
+        File.Exists(othersBlob).Should().BeTrue("a transfer reclaims only the blob it staged itself");
+        Directory.GetFiles(staging).Should().Equal([othersBlob], "and its own blob is reclaimed when the write answers");
+    }
+
+    [Fact]
     public async Task AStagedUpload_SweepsAStaleBlobADeadProducerLeft()
     {
         // A blob abandoned by an upload that never terminated (an HTTP cancellation after staging):

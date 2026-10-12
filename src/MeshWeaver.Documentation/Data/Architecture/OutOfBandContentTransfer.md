@@ -112,6 +112,15 @@ once. A sync that runs twice writes the same blob at the same key and the same f
 destination path — no duplication anywhere. A staged blob that is already present with the right
 length is not rewritten, so a retry after a partial run does not re-copy 100 MB over SMB.
 
+**A single-file upload is the one writer that does NOT share a blob.** `hub.SaveContentFile(node)`
+(behind `upload`) reclaims its blob the moment its own write answers, and two uploads of identical
+bytes are independent posts — so under a shared content-addressed key the first to answer would
+delete the blob while the second's owner is still probing or reading it. Its handle is therefore the
+content hash followed by a per-transfer nonce (still one hex segment): each upload stages, reads and
+reclaims a blob nobody else names. It also refuses, before staging, a collection whose config names
+another hub as its owner — the node only inherits it, the owner's write would refuse it, and staging
+runs on the producer where no owner gate sees it.
+
 ## Who owns the lifetime
 
 **The producer owns every blob it stages, from `Post()` to the last delivery's answer.**
