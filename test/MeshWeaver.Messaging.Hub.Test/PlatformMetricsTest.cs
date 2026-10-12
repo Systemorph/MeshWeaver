@@ -122,11 +122,9 @@ public class PlatformMetricsTest(ITestOutputHelper output) : HubTestBase(output)
     ///
     /// <para><c>KindOf</c> first derived the kind by splitting <c>Address.ToString()</c> at its
     /// first <c>/</c>. That is wrong by construction, and this test says why:
-    /// <c>ToString()</c> is <c>Path + '~' + Host</c>, so for a path of ONE segment the first
-    /// <c>/</c> comes out of the HOST chain — the kind becomes <c>solo~portal</c>, host ids are
-    /// back in the tag, and the unbounded cardinality the tag exists to bound is recreated. The
-    /// two-segment case above cannot catch it: there the first <c>/</c> is inside the path, so the
-    /// parse looks right.</para>
+    /// <c>ToString()</c> carries the HOST chain (canonically <c>host~path</c> since #6604; it was
+    /// <c>path~host</c> before), so the first <c>/</c> can come out of the host — host ids are
+    /// back in the tag, and the unbounded cardinality the tag exists to bound is recreated.</para>
     ///
     /// <para>The fix is to stop parsing — <c>Address.Type</c> IS <c>Segments[0]</c>, host-free.
     /// This asserts both halves of that claim on <see cref="Address"/> itself, because a hub whose
@@ -138,11 +136,11 @@ public class PlatformMetricsTest(ITestOutputHelper output) : HubTestBase(output)
     {
         var hosted = new Address("solo") { Host = new Address("portal", "xyz") };
 
-        hosted.ToString().Should().Be("solo~portal/xyz",
-            "PRECONDITION: ToString appends the host, and for a one-segment path the FIRST '/' in "
-            + "it therefore belongs to the host — which is what made the old parse wrong");
-        hosted.ToString().IndexOf('/').Should().Be("solo~portal".Length,
-            "…and precisely there, so splitting on it yielded 'solo~portal' as the kind");
+        hosted.ToString().Should().Be("portal/xyz~solo",
+            "PRECONDITION: ToString carries the host chain, so the FIRST '/' in it belongs to the "
+            + "host — which is what made a parse of ToString() wrong");
+        hosted.ToString().IndexOf('/').Should().Be("portal".Length,
+            "…and precisely there, so splitting on it yields the HOST's type, not the address's");
 
         hosted.Type.Should().Be("solo",
             "Type is Segments[0]: the type segment by construction, with no host and no parsing");

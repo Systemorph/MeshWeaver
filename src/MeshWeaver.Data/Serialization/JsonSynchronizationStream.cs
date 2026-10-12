@@ -1199,7 +1199,7 @@ public static class JsonSynchronizationStream
             // on the owner's path. This was the sole recycled-grain detector until the heartbeat
             // learned to name its stream (#6047); it remains the detector for a stream the owner has
             // not yet acknowledged and for a write's VERSION the mirror missed. Compare against Address.Path (segments
-            // only) — ToString() can include a "~host" suffix for hosted addresses
+            // only) — ToString() carries the host chain ("host~path") for hosted addresses
             // which never matches MeshChangeEvent.Path (the bare node.Path).
             //
             // 🚨 COALESCE the change-feed-triggered resubscribe. The mesh change feed fires

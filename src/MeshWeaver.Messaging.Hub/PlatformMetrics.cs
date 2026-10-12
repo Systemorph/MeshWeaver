@@ -115,9 +115,9 @@ public sealed class PlatformMetrics : IDisposable
     /// question is "how many of each sort", and the sort is the type.</para>
     ///
     /// <para>🚨 <b><see cref="Address.Type"/>, never <c>ToString()</c>.</b> This first split
-    /// <c>ToString()</c> at its first <c>/</c>, and <c>ToString()</c> is <c>Path + '~' + Host</c>
-    /// for a hosted address — so for a SINGLE-segment path the first <c>/</c> comes out of the HOST
-    /// chain and the kind became <c>admin~portal</c>, silently re-admitting host ids to the tag and
+    /// <c>ToString()</c> at its first <c>/</c>, and <c>ToString()</c> carries the HOST chain for a
+    /// hosted address — so the first <c>/</c> can come out of the host and the kind became a
+    /// host-derived string like <c>admin~portal</c>, silently re-admitting host ids to the tag and
     /// recreating the exact unbounded cardinality the paragraph above forbids. <c>Type</c> is
     /// <c>Segments[0]</c>: the type segment by construction, host-free, no parsing.</para>
     /// </summary>
