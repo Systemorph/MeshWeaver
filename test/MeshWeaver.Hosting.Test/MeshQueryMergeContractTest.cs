@@ -215,6 +215,99 @@ public class MeshQueryMergeContractTest
             .Await(TestContext.Current.CancellationToken);
 
         change.Partitions.Should().BeNull("an unreported denominator is unknown, not empty");
+        change.PartiallyReadPartitions.Should().BeNull("an unassessed partial-read verdict is unknown, not 'none partial'");
+    }
+
+    /// <summary>
+    /// #6564: a partition the caller reads only IN PART (its grants do not cover the partition
+    /// root, so the row filter hid a subtree) must reach the merged Initial, unioned across the
+    /// providers that assessed it. A partition one provider read in part is not made whole by
+    /// another, and a provider that did not assess adds nothing. Dropping it here is exactly how a
+    /// pre-deploy sweep read a clean zero over a broken NodeType it could not see.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task PartiallyReadPartitions_AreUnionedOntoTheMergedInitial()
+    {
+        var a = new FakeProvider("a", () => Observable.Return(Initial(Node("acme/one")) with
+        {
+            Partitions = ["acme", "meshweaver"],
+            PartiallyReadPartitions = ["meshweaver"],
+        }));
+        var b = new FakeProvider("b", () => Observable.Return(Initial() with
+        {
+            Partitions = ["meshweaver", "docs"],
+            PartiallyReadPartitions = ["docs", "meshweaver"],
+        }));
+        var unassessed = new FakeProvider("unassessed", () => Observable.Return(Initial()));
+
+        var query = new MeshQuery([a, b, unassessed], hub: null!);
+
+        var change = await ((IMeshQueryCore)query)
+            .Query<MeshNode>(new MeshQueryRequest { Query = "nodeType:NodeType partitions:all", Limit = 10 }, Options)
+            .FirstAsync()
+            .Timeout(TestTimeouts.Convergence)
+            .Await(TestContext.Current.CancellationToken);
+
+        change.PartiallyReadPartitions.Should().Equal(new[] { "meshweaver", "docs" },
+            "the union of what the assessing providers read only in part, deduplicated");
+    }
+
+    /// <summary>
+    /// The negative control for <see cref="PartiallyReadPartitions_AreUnionedOntoTheMergedInitial"/>:
+    /// a provider that assessed and found every partition covered reports an EMPTY list, and the
+    /// merged Initial keeps it empty ("assessed, none partial"). It must not collapse to null
+    /// ("unknown"), which would make a fully covered sweep unable to pass.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task AssessedAndFullyCovered_StaysEmptyNotNull()
+    {
+        var covered = new FakeProvider("covered", () => Observable.Return(Initial(Node("acme/one")) with
+        {
+            Partitions = ["acme"],
+            PartiallyReadPartitions = [],
+        }));
+
+        var query = new MeshQuery([covered], hub: null!);
+
+        var change = await ((IMeshQueryCore)query)
+            .Query<MeshNode>(new MeshQueryRequest { Query = "nodeType:NodeType partitions:all", Limit = 10 }, Options)
+            .FirstAsync()
+            .Timeout(TestTimeouts.Convergence)
+            .Await(TestContext.Current.CancellationToken);
+
+        change.PartiallyReadPartitions.Should().NotBeNull().And.BeEmpty();
+    }
+
+    /// <summary>
+    /// The false pass the plain union would produce: one provider read <c>legacy</c> and did NOT
+    /// assess it (null verdict), another assessed its own partition and found it covered (empty
+    /// list). Unioning only the verdicts gives <c>[]</c>, "every partition read is fully covered",
+    /// over a partition nobody assessed. The merge must stay null ("not assessed") instead.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task AProviderThatReadPartitionsWithoutAssessing_KeepsTheMergedVerdictUnknown()
+    {
+        var legacy = new FakeProvider("legacy", () => Observable.Return(Initial(Node("legacy/one")) with
+        {
+            Partitions = ["legacy"],
+        }));
+        var covered = new FakeProvider("covered", () => Observable.Return(Initial(Node("acme/one")) with
+        {
+            Partitions = ["acme"],
+            PartiallyReadPartitions = [],
+        }));
+
+        var query = new MeshQuery([legacy, covered], hub: null!);
+
+        var change = await ((IMeshQueryCore)query)
+            .Query<MeshNode>(new MeshQueryRequest { Query = "nodeType:NodeType partitions:all", Limit = 10 }, Options)
+            .FirstAsync()
+            .Timeout(TestTimeouts.Convergence)
+            .Await(TestContext.Current.CancellationToken);
+
+        change.Partitions.Should().Equal(new[] { "legacy", "acme" });
+        change.PartiallyReadPartitions.Should().BeNull(
+            "'legacy' was read and never assessed, so 'none partial' would be a claim nobody measured");
     }
 
     /// <summary>
