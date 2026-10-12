@@ -772,14 +772,21 @@ a proxy's runtime type is a generated class whose name says nothing. The validat
 same label, so a validator a module contributes is named the same way.
 
 Pinned twice. `LifecycleRequestsAlwaysReachAVerdictTest` arms a handler that never completes and
-reads its type name in the verdict. `ACreateWaitsOnAModuleContainerUnderConstructionTest`
-(MeshWeaver.Compiler.Pipeline.Test) loads a real module into its own container, parks the
-construction of one of its singletons, and creates a node of an unrelated type: the row is written,
-the verdict reads `post-creation-handlers: matching INodePostCreationHandler [module …,
-registration …]`, and the module's handler was never built. After the release the reply to that
-create carries the SAME `Unavailable` verdict (it was claimed at the deadline and is not answered
-twice); only the next create is answered `Ok`. Its control, with nothing under construction, succeeds on the first create and
-shows the dependency from the other side: that create built the module's handler.
+reads its type name in the verdict. `ACreateNeverWaitsOnAModuleContainerUnderConstructionTest`
+(MeshWeaver.Compiler.Pipeline.Test) loads a real module into its own container, parks its handler's
+`Matches`, and creates a node of an unrelated type: the row is written and the verdict reads
+`post-creation-handlers: matching INodePostCreationHandler [module …, registration …]`. After the
+release the reply to that create carries the SAME `Unavailable` verdict (it was claimed at the
+deadline and is not answered twice); only the next create is answered `Ok`. Its control, with
+nothing held, succeeds on the first create.
+
+The same test used to park the construction of one of the module's singletons and pin that the
+create WAITED on the module's container — Autofac builds a container's shared instances one at a
+time, so the handler behind the proxy could not be built meanwhile. That state no longer exists:
+every shared instance of a module's container is built before the module is published (MeshWeaver#6542,
+[Live Module Update](../LiveModuleUpdate) → "Built before published"), so the proxy only reads a built
+handler. The test now parks a singleton of the NEXT generation inside its constructor during a live
+swap and pins that a create is answered `Ok` meanwhile.
 
 **Two things the repro corrected on the way.** Both come from the leg running INSIDE the chain's
 `OnNext`, so a leg that parks its thread is still on the chain's stack when the deadline passes:
