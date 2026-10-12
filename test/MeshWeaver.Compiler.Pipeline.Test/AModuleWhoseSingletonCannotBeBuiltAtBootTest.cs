@@ -68,7 +68,7 @@ public abstract class ModuleSingletonsBuiltAtBootTestBase(ITestOutputHelper outp
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder) =>
         base.ConfigureMesh(builder)
             .ConfigureServices(services => services.AddScoped<CircuitBoundState>())
-            .InstallAssemblies(Write(Source(Broken, CircuitBound)));
+            .InstallAssemblies(WriteModule(root, Broken, CircuitBound));
 
     /// <summary>The mesh's module registry.</summary>
     protected ModuleContexts Contexts => Mesh.ServiceProvider.GetRequiredService<ModuleContexts>();
@@ -128,7 +128,12 @@ public abstract class ModuleSingletonsBuiltAtBootTestBase(ITestOutputHelper outp
                                 services.AddSingleton<TakesACircuitBoundSingleton>();
         """;
 
-    private string Write(string source)
+    /// <summary>Compiles the test module under <paramref name="directoryRoot"/> and returns its entry DLL —
+    /// for hosts this base does not build (MeshWeaver#6557's plain MS DI host).</summary>
+    internal static string WriteModule(string directoryRoot, bool broken, bool circuitBound) =>
+        Write(directoryRoot, Source(broken, circuitBound));
+
+    private static string Write(string directoryRoot, string source)
     {
         var references = PlatformReferences.Platform()
             .Add(MetadataReference.CreateFromFile(typeof(IBootBuiltProbe).Assembly.Location));
@@ -138,7 +143,7 @@ public abstract class ModuleSingletonsBuiltAtBootTestBase(ITestOutputHelper outp
         var result = compilation.Emit(buffer);
         result.Success.Should().BeTrue(string.Join(Environment.NewLine,
             result.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error)));
-        var directory = Path.Combine(root, "modules", $"{Module}@g1");
+        var directory = Path.Combine(directoryRoot, "modules", $"{Module}@g1");
         Directory.CreateDirectory(directory);
         var path = Path.Combine(directory, Module + ".dll");
         File.WriteAllBytes(path, buffer.ToArray());
