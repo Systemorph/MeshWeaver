@@ -359,6 +359,16 @@ stays with the package's own policy (the reconciler applies `Auto`; a human's cl
 rest — both restore absent declared nodes as they go, #4259); a package no source lists any more
 cannot be re-fetched and is named as an orphan for the admin list.
 
+**…and only from the source the record names, by provenance** (MeshWeaver#6512). Several sources can
+list the same package id, and a directly read repository can AUTHOR any `source` in its
+`package.json`. So where the install record names a source, the repair takes only a listing that is
+*trusted* to be that source — a registry's stamp, or a source whose configured name is the recorded
+one — never a listing that merely claims the name. When no such listing serves the package, it is
+not re-asserted, and the line says so by name. Only a legacy record that names no source takes the
+first listing. Pinned by `ARepairBindsToATrustedSourceTest`: a repository configured as another
+source, listed first and authoring the recorded name, landed its own files over the installed
+package before the change, and the recorded source's files come back after it.
+
 The sweep's own line follows the same predicate: an `Incomplete` it is about to hand over is
 logged at **Warning** (a detection followed by a repair — the shape the install gate already uses),
 and one nothing here will repair stays at **Error** with the reason on the line. The Error for a
