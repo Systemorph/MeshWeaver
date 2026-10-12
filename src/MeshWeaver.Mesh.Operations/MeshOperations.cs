@@ -2789,12 +2789,24 @@ public partial class MeshOperations
     /// or <c>Doc/Architecture/content/diagrams/flow.svg</c>. The collection must exist on the node
     /// and be <c>IsEditable = true</c>.</para>
     ///
+    /// <para>Authorized as a WRITE: Update on the node that owns the collection (the node the path
+    /// resolves to), for the caller captured at entry - the same pre-flight <see cref="Recycle(string)"/>
+    /// and <see cref="Patch"/> take (<c>CheckUpdateOutcome</c>). A caller who may not even READ that node
+    /// is answered exactly as an absent path is; an unfinished check writes nothing and says so.</para>
+    ///
     /// <para>Returns a JSON string <c>{"status":"Uploaded","path":"…","bytes":N}</c> on success, or an
     /// <c>"Error: …"</c> string on any validation/resolution failure (mirrors the other tool methods).</para>
     /// </summary>
     public IObservable<string> Upload(string path, byte[] bytes)
     {
         logger.LogInformation("Upload path={Path} bytes={Bytes}", path, bytes?.Length ?? 0);
+
+        // The caller, captured at the verb's ENTRY (as Patch does): the resolver, the permission folds and
+        // the save answer on later reactive callbacks, and the authorization below must be asked for THIS
+        // caller, not for whichever identity happens to be ambient when those callbacks run.
+        var access = hub.ServiceProvider.GetService<AccessService>();
+        var caller = access?.Context ?? access?.CircuitContext
+            ?? new AccessContext { ObjectId = WellKnownUsers.Anonymous, Name = "Anonymous", IsVirtual = true };
 
         if (string.IsNullOrWhiteSpace(path))
             return Observable.Return("Error: path is required.");
@@ -2811,8 +2823,19 @@ public partial class MeshOperations
             return Observable.Return("Error: path is required.");
 
         var pathResolver = hub.ServiceProvider.GetRequiredService<IPathResolver>();
-        return pathResolver.ResolvePath(resolvedPath).SelectMany(resolution =>
+        // Authorized BEFORE anything else is asked or answered about the node (remainder validation, the
+        // collection-config read, the save): Read first - a caller who may not read the node is answered
+        // exactly as an absent path - then Update on the node that owns the collection.
+        return pathResolver.ResolvePath(resolvedPath)
+            .CarryAccessContext(hub.ServiceProvider, caller)
+            .SelectMany(resolved => AuthorizeUpload(resolved?.Prefix, resolvedPath, caller)
+                .CarryAccessContext(hub.ServiceProvider, caller)
+                .Select(refusal => (Resolution: resolved, Refusal: refusal)))
+            .SelectMany(authorized =>
         {
+            var resolution = authorized.Resolution;
+            if (authorized.Refusal is { } authorizationRefusal)
+                return Observable.Return(authorizationRefusal);
             if (resolution == null)
                 return Observable.Return($"Error: no matching node for path '{resolvedPath}'");
             if (string.IsNullOrEmpty(resolution.Remainder))
@@ -4579,6 +4602,57 @@ public partial class MeshOperations
             .SelectMany(outcome => outcome.IsGranted || outcome.IsUndetermined
                 ? Observable.Return(outcome)
                 : ReconsiderUpdateThroughNodeTypeRule(resolvedPath, verb));
+
+    /// <summary>
+    /// The authorization <see cref="Upload"/> takes BEFORE it reads the collection configuration or writes
+    /// a byte: Read on the node that owns the collection, then Update on it (the same
+    /// <see cref="CheckUpdateOutcome"/> pre-flight Recycle and Patch take). Emits the refusal to answer
+    /// with, or <c>null</c> when the caller may write. Fail closed on every leg: an unfinished check is
+    /// answered as such (nothing written), and a caller without Read is answered exactly as an absent
+    /// path is, so the answer never discloses that the node exists.
+    /// </summary>
+    /// <param name="ownerPath">The node the upload path resolved to, or null when nothing resolved.</param>
+    /// <param name="resolvedPath">The full upload path, for the answer.</param>
+    /// <param name="caller">The caller captured at the verb's entry.</param>
+    private IObservable<string?> AuthorizeUpload(string? ownerPath, string resolvedPath, AccessContext caller)
+    {
+        // Nothing resolved: the caller's own "no matching node" answer follows, and nothing is written on it.
+        if (ownerPath is null)
+            return Observable.Return<string?>(null);
+
+        return hub.CheckPermissionOutcome(ownerPath, MeshWeaver.Mesh.Security.Permission.Read)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(10))
+            .Catch((Exception ex) => Observable.Return(
+                MeshWeaver.Mesh.Security.PermissionCheckOutcome.Undetermined(
+                    $"the permission check for Read on '{ownerPath}' did not complete: "
+                    + $"{ex.GetType().Name}")))
+            .CarryAccessContext(hub.ServiceProvider, caller)
+            .SelectMany(read =>
+            {
+                if (read.IsUndetermined)
+                    return Observable.Return<string?>(UploadRefusal(read, resolvedPath, ownerPath));
+                if (!read.IsGranted)
+                    return Observable.Return<string?>($"Error: no matching node for path '{resolvedPath}'");
+                return CheckUpdateOutcome(ownerPath, "Upload")
+                    .Select(update => UploadRefusal(update, resolvedPath, ownerPath));
+            });
+    }
+
+    /// <summary>
+    /// The answer an upload's permission check gives: <c>null</c> when it granted, a retryable "did not
+    /// complete" when it reached no verdict (nothing written - and no accusation: this is not a statement
+    /// about the caller's rights), and the named missing permission on a definitive denial.
+    /// </summary>
+    internal static string? UploadRefusal(
+        MeshWeaver.Mesh.Security.PermissionCheckOutcome outcome, string resolvedPath, string ownerPath)
+        => outcome.IsGranted
+            ? null
+            : outcome.IsUndetermined
+                ? $"Error: uploading to {resolvedPath}: the permission check did not complete "
+                    + $"({outcome.UndeterminedReason}). Nothing was written; retry."
+                : $"Error: uploading to {resolvedPath}: access denied - Update permission on '{ownerPath}', "
+                    + "the node that owns the collection, is required. Nothing was written."
 
     /// <summary>
     /// Re-decides a DENIED Update pre-flight (<see cref="Recycle(string)"/>, Patch's no-change answer) through the target node's own

@@ -75,3 +75,16 @@ repo's `MeshWeaver.Mcp` against the branch — 0 errors — and that build prove
 module that was already published. `landed-modules-gate` had the same blind spot by construction —
 it compiled module SOURCE — and it no longer exists at all, so nothing in core's CI compiles a line
 of module source today.
+
+## Upload is a write
+
+`Upload` saves bytes into a node's editable content collection on the CALLING hub's content service,
+straight against the collection's storage - so no owner-side delivery gate ever sees a write, and the
+collection-config lookup it makes first is served to any reader. It therefore authorizes ITSELF, before
+it reads the configuration or writes a byte (Systemorph/MeshWeaver#6575): Read on the node the path
+resolves to - a caller who may not read it is answered exactly as an absent path is ("no matching node") -
+then Update on that node, through the same `CheckUpdateOutcome` pre-flight `Recycle` and `Patch` take
+(the raw permission fold, re-decided through the node type's access rule on a definitive denial). Both
+legs fail closed: an unfinished check writes nothing and says so (retry), a definite denial names the
+missing Update permission. `Import` re-uploads through `Upload`, so each file it restores meets the same
+check. Pinned by `UploadRequiresUpdateTest` (Memex.Portal.Shared.Test).
