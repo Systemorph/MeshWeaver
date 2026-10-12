@@ -77,8 +77,11 @@ the RUNNING platform (floor ≤ running, no platform roll). A normal platform bu
 seal anywhere — not in CD (`delivery-verdict` judges the platform legs only; the Plugins re-seal is
 `report-plugins-seal`, never on the critical path), not in the roll selection, not in the sealed-sync
 gate. A plugin seal is a precondition ONLY behind a DECLARED break (epoch/major bump in
-`src/MeshWeaver.Compiler/platform-compatibility.json`, with a ceiling on the old builds), and then the
-roll is HELD per installed plugin, by name, until a replacement covering the target is sealed.
+`src/MeshWeaver.Compiler/platform-compatibility.json`, with a ceiling on the old builds), and then it
+is the precondition for that PLUGIN to follow: the platform still rolls (policy
+`platform-rolls-independently-of-packages`), each installed plugin with no sealed replacement covering
+the target is named as a package advisory on `Admin/UpdatePolicy`, and that plugin keeps its previous
+generation until its replacement is sealed.
 **Never seal or pin around a break — declare it.** Full procedure: [Deploying Across Platform Versions](../../../src/MeshWeaver.Documentation/Data/Architecture/DeployingAcrossPlatformVersions.md).
 
 🚨 **A platform roll no longer waits for every satellite to re-seal** (2026-09-08,
@@ -242,8 +245,10 @@ cadence. #1780 added **`SelfUpdate__MinRollInterval`**, a restart budget set to 
 
 🚨 **Promoted is not SEALED.** `Promote` and `Verify every image shipped` can be green while
 `Plugins: bake + seal` failed — the images exist, no install can adopt them, and a tag on that
-commit is refused by `release.yml`. The self-updater holds such a build with
-`heldReason: no sealed content bake …` on `Admin/UpdatePolicy`.
+commit is refused by `release.yml`. The self-updater does NOT hold the platform roll for it (policy
+`platform-rolls-independently-of-packages`): it rolls, and names each package without a sealed bake as
+an advisory on `Admin/UpdatePolicy` (`… no sealed content bake …`); those packages boot-compile or keep
+their previous generation. A `heldReason` of that shape on an old record is history, not a hold.
 
 🚨 **But a seal never holds CONTENT SOURCES any more** (policy `module-sync-per-manifest-hash`). An
 instance syncs every module it has, each judged alone by the content hash in its `manifest.lock`:
@@ -325,9 +330,10 @@ Two mechanisms, both live:
   `Hosting/BuildAndReleaseProcess` (MeshWeaver.Plugins; `get Hosting/BuildAndReleaseProcess` through the mesh MCP).*
 - **Pull (self-update):** `SelfUpdateHostedService` runs on EVERY install. It reads
   `Admin/UpdatePolicy` (default **Stable** — clean tags only, i.e. what `release.yml` promoted),
-  lists ACR tags, walks the eligible ones newest-first and takes the first one whose set is SEALED
-  for its identity (`VersionSelect.SelectCandidates` + `ReleaseAvailability`), then patches its own
-  Deployment in-pod. `Continuous` + `pattern` (e.g. `3.*`) makes that major's run-numbered builds
+  lists ACR tags, takes the newest ADMITTED one (`VersionSelect.SelectCandidates` +
+  `RollSelection`), asks `ReleaseAvailability` once about the installed packages and reports what it
+  refuses as advisories, never a reason to take an older tag (policy
+  `platform-rolls-independently-of-packages`), then patches its own Deployment in-pod. `Continuous` + `pattern` (e.g. `3.*`) makes that major's run-numbered builds
   eligible; `Continuous` without a pattern is `Stable`.
 
 Confirm a roll-out — the RUNNING version per instance is on the Fleet Console (`/Hosting/Console`
