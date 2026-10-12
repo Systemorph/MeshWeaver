@@ -2788,6 +2788,20 @@ public static class PackageInstaller
         string.IsNullOrWhiteSpace(manifest.Source) ? existingRecord?.Source : manifest.Source;
 
     /// <summary>
+    /// The install record's <see cref="PackageManifest.Origin"/> on a (re-)stamp: the origin of the
+    /// source THIS install ran through when it has one, otherwise the one already recorded — the
+    /// same carry-forward as <see cref="SeedSource"/>. The manifest's value is trustworthy here
+    /// because <see cref="CatalogLayoutAreas.InstallOrUpdate"/> overwrote it from the source.
+    /// A stated origin wins: an administrator installing from another repository rebinds the
+    /// package there, which is the newer fact (MeshWeaver#6526).
+    /// </summary>
+    /// <param name="existingRecord">The install record being re-stamped, or null on a first install.</param>
+    /// <param name="manifest">The manifest this install is being written from.</param>
+    /// <returns>The origin to record.</returns>
+    internal static string? SeedOrigin(PackageManifest? existingRecord, PackageManifest manifest) =>
+        string.IsNullOrWhiteSpace(manifest.Origin) ? existingRecord?.Origin : manifest.Origin;
+
+    /// <summary>
     /// Publishes the package's CONTENT-COLLECTION assets — the raw binaries it commits under
     /// <c>{package}/content/**</c> (course videos and their posters, og images, fonts) — into the
     /// target partition root's <c>content</c> collection, so merging a course or plugin publishes it
@@ -3054,6 +3068,8 @@ public static class PackageInstaller
                     // against when it asks this instance for the package's bundle (#1772). Carried
                     // forward for the same reason as AuthorizedBy: not every lister stamps it.
                     Source = SeedSource(existingRecord, manifest),
+                    // WHERE it came from — what an unattended update is bound to (#6526).
+                    Origin = SeedOrigin(existingRecord, manifest),
                 },
             };
             // System-impersonated like every installer write (Using — see Upsert): this runs after
