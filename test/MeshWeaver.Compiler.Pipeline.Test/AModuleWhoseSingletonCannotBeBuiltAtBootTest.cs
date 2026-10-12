@@ -15,11 +15,41 @@ public interface IBootBuiltProbe
 }
 
 /// <summary>
-/// MeshWeaver#6542 — <b>built before published, at boot.</b> Every shared instance of a module's
-/// container is built once the root container exists and before the root provider is handed to
-/// anyone. A module whose singleton cannot be built is WITHDRAWN — never left half-published — and
-/// reported as an <see cref="IncompatibleModule"/>, the record <c>/health</c> and the module-status
-/// surfaces read; the mesh boots without it.
+/// A stand-in for CIRCUIT-scoped platform state — Blazor's <c>NavigationManager</c>, which a Blazor
+/// circuit initialises and nothing else does. Registered SCOPED in the root; using one that no scope
+/// initialised throws exactly as <c>RemoteNavigationManager</c> does (MeshWeaver#6556).
+/// </summary>
+public sealed class CircuitBoundState
+{
+    private int initialized;
+
+    /// <summary>What the circuit does when it starts.</summary>
+    public void Initialize() => Volatile.Write(ref initialized, 1);
+
+    /// <summary>What a consumer's constructor does — Radzen's <c>DialogService</c> subscribes to
+    /// <c>NavigationManager.LocationChanged</c>.</summary>
+    public void Subscribe()
+    {
+        if (Volatile.Read(ref initialized) == 0)
+            throw new InvalidOperationException("'CircuitBoundState' has not been initialized.");
+    }
+}
+
+/// <summary>A platform CLASS a module registers SCOPED over circuit state — the route a Radzen service
+/// takes when its assembly is in the image (<c>Current</c>).</summary>
+public sealed class CircuitPlatformService
+{
+    /// <summary>Takes the circuit's state, as <c>DialogService</c> takes a <c>NavigationManager</c>.</summary>
+    public CircuitPlatformService(CircuitBoundState state) => state.Subscribe();
+}
+
+/// <summary>
+/// MeshWeaver#6542 — <b>built before published, at boot.</b> Every process-lifetime instance the root
+/// can reach in a module's container is built once the root container exists and before the root
+/// provider is handed to anyone. A module whose such singleton cannot be built is WITHDRAWN — never left
+/// half-published — and reported as an <see cref="IncompatibleModule"/>, the record <c>/health</c> and
+/// the module-status surfaces read; the mesh boots without it. MeshWeaver#6556: what belongs to a
+/// circuit is never built at boot, so it can never withdraw the module.
 /// </summary>
 public abstract class ModuleSingletonsBuiltAtBootTestBase(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -31,9 +61,14 @@ public abstract class ModuleSingletonsBuiltAtBootTestBase(ITestOutputHelper outp
     /// <summary>Whether the module carries a singleton whose constructor throws.</summary>
     protected abstract bool Broken { get; }
 
+    /// <summary>Whether the module carries circuit-bound registrations (MeshWeaver#6556).</summary>
+    protected virtual bool CircuitBound => false;
+
     /// <inheritdoc />
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder) =>
-        base.ConfigureMesh(builder).InstallAssemblies(Write(Source(Broken)));
+        base.ConfigureMesh(builder)
+            .ConfigureServices(services => services.AddScoped<CircuitBoundState>())
+            .InstallAssemblies(Write(Source(Broken, CircuitBound)));
 
     /// <summary>The mesh's module registry.</summary>
     protected ModuleContexts Contexts => Mesh.ServiceProvider.GetRequiredService<ModuleContexts>();
@@ -42,7 +77,14 @@ public abstract class ModuleSingletonsBuiltAtBootTestBase(ITestOutputHelper outp
     protected IncompatibleModule[] Incompatible =>
         Mesh.ServiceProvider.GetServices<IncompatibleModule>().Where(m => m.Name == Module).ToArray();
 
-    private static string Source(bool broken) => $$"""
+    /// <summary>The installed modules of this name, as the compile references, the fingerprint and the
+    /// pre-warm sweep read them.</summary>
+    protected InstalledModuleAssembly[] Installed =>
+        Mesh.ServiceProvider.GetServices<InstalledModuleAssembly>()
+            .Where(m => m.Assembly.GetName().Name == Module)
+            .ToArray();
+
+    private static string Source(bool broken, bool circuitBound) => $$"""
         using Microsoft.Extensions.DependencyInjection;
         [assembly: MeshWeaver.Test.BootBuilt.Module]
         namespace MeshWeaver.Test.BootBuilt;
@@ -50,6 +92,18 @@ public abstract class ModuleSingletonsBuiltAtBootTestBase(ITestOutputHelper outp
         public sealed class Fragile
         {
             public Fragile() { {{(broken ? "throw new System.InvalidOperationException(\"cannot be built by design\");" : "")}} }
+        }
+        public sealed class CircuitDialog
+        {
+            public CircuitDialog(MeshWeaver.Graph.Test.CircuitBoundState state) => state.Subscribe();
+        }
+        public sealed class CircuitBoundSingleton
+        {
+            public CircuitBoundSingleton(MeshWeaver.Graph.Test.CircuitBoundState state) => state.Subscribe();
+        }
+        public sealed class TakesACircuitBoundSingleton
+        {
+            public TakesACircuitBoundSingleton(CircuitBoundSingleton inner) { }
         }
         public sealed class ModuleAttribute : MeshWeaver.Mesh.MeshNodeProviderAttribute
         {
@@ -59,9 +113,19 @@ public abstract class ModuleSingletonsBuiltAtBootTestBase(ITestOutputHelper outp
                     {
                         services.AddSingleton<MeshWeaver.Graph.Test.IBootBuiltProbe, Probe>();
                         services.AddSingleton<Fragile>();
+                        {{(circuitBound ? CircuitBoundRegistrations : "")}}
                         return services;
                     })];
         }
+        """;
+
+    // The Radzen shape: scoped services over circuit state (a module class and a platform class), a
+    // singleton that takes circuit state, and a singleton that takes that singleton.
+    private const string CircuitBoundRegistrations = """
+        services.AddScoped<CircuitDialog>();
+                                services.AddScoped<MeshWeaver.Graph.Test.CircuitPlatformService>();
+                                services.AddSingleton<CircuitBoundSingleton>();
+                                services.AddSingleton<TakesACircuitBoundSingleton>();
         """;
 
     private string Write(string source)
@@ -118,6 +182,33 @@ public sealed class AModuleWhoseSingletonsBuildAtBootTest(ITestOutputHelper outp
     {
         Contexts.Current(Module).Should().NotBeNull();
         Incompatible.Should().BeEmpty();
+        Installed.Should().ContainSingle("a published module is an installed module");
+        Mesh.ServiceProvider.GetRequiredService<IBootBuiltProbe>().Answer().Should().Be("boot-built");
+    }
+}
+
+/// <summary>
+/// MeshWeaver#6556 — the Radzen shape. A module registers services that belong to a CIRCUIT: scoped
+/// ones over circuit state (a module class and a platform class), a singleton whose constructor takes
+/// circuit state, and a singleton that takes THAT one. None is a process-lifetime instance the root
+/// reaches, so none is built at boot — building one ran against state no circuit had initialised,
+/// threw, and withdrew the module. The module is published and serves.
+/// </summary>
+public sealed class AModuleWithCircuitBoundServicesLoadsAtBootTest(ITestOutputHelper output)
+    : ModuleSingletonsBuiltAtBootTestBase(output)
+{
+    /// <inheritdoc />
+    protected override bool Broken => false;
+
+    /// <inheritdoc />
+    protected override bool CircuitBound => true;
+
+    [Fact]
+    public void TheModuleIsPublished_AndServes()
+    {
+        Incompatible.Should().BeEmpty("nothing that belongs to a circuit is built at boot, so nothing withdraws the module");
+        Contexts.Current(Module).Should().NotBeNull();
+        Installed.Should().ContainSingle("a published module is an installed module");
         Mesh.ServiceProvider.GetRequiredService<IBootBuiltProbe>().Answer().Should().Be("boot-built");
     }
 }

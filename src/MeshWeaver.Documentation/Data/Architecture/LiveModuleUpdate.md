@@ -198,13 +198,42 @@ the module implements.
 
 ### Built before published (MeshWeaver#6542)
 
-🚨 **The root only ever READS a module's instances.** Every shared instance of a module's container —
-each singleton, and each scoped registration (shared at the container's root) — is built before the
-container can be reached from the root: **at boot**, once the root container is built and before the
-root provider is handed to anyone (`IRootContainerBuilt`, `ModuleContexts.BuildAllBeforePublish`, a
-module after the modules it depends on); **on a live swap**, after every staged generation has loaded,
-materialised and prepared its services and before `CommitAll` (`ModuleServices.BuildBeforePublish`,
-`ModuleServiceProvider.BuildSharedInstances`).
+🚨 **The root only ever READS a module's instances.** Every PROCESS-LIFETIME instance the root can
+reach in a module's container — each SINGLETON behind one of the four paths below (a `Proxy` or
+`Current` forwarder, a `ModuleOwned` or `Contributed` stand-in), and what its constructor takes — is
+built before the container can be reached from the root: **at boot**, once the root container is
+built and before the root provider is handed to anyone (`IRootContainerBuilt`,
+`ModuleContexts.BuildAllBeforePublish`, a module after the modules it depends on); **on a live swap**,
+after every staged generation has loaded, materialised and prepared its services and before
+`CommitAll` (`ModuleServices.BuildBeforePublish`, `ModuleServiceProvider.BuildRootReachableSingletons`).
+
+**What belongs to a circuit is never built here (MeshWeaver#6556).** A SCOPED registration is one
+instance per scope — a Blazor circuit, a request — so the one a boot would build is an instance no
+scope asked for, made against scoped state no scope initialised. The first version of this section
+built scoped registrations too, and on image `3.1.10611` that withdrew the Radzen view pack:
+Radzen's `DialogService` (scoped) subscribes to a `NavigationManager` in its constructor, and a
+boot-built one threw `'RemoteNavigationManager' has not been initialized`. So a scoped registration is
+left to its first resolve, and so is a singleton whose constructor graph reaches a scoped registration
+— read STRUCTURALLY off the registrations (`ScopedDependencyWalk`: every public constructor's
+parameters of a reflection-activated registration, through transients and the module's own
+singletons, into the root's registrations for every type that names no collectible assembly; a root
+singleton ends the walk). Neither is a path the lock order needs: a root singleton that takes a scoped
+service is a captive dependency, not a way the root reaches a module. A module's PRIVATE registration
+is built only when a built one takes it. A delegate-activated singleton names no dependencies and is
+built. `AModuleWithCircuitBoundServicesLoadsAtBootTest` and
+`ModuleRootServicesSwapTest.AnUpdateWithCircuitBoundServices_SwapsLive` carry the Radzen shape, against
+a root-scoped stand-in that throws exactly as `RemoteNavigationManager` does.
+
+**Open: a withdrawn module's `InstalledModuleAssembly` (MeshWeaver#6557).** A module withdrawn at boot
+keeps the transient `InstalledModuleAssembly` registration it was given while the mesh was configured,
+and once its boot assembly is collected that registration throws "no longer held by this mesh's module
+registry" from inside every `GetServices<InstalledModuleAssembly>()`. That is how the Radzen
+withdrawal above refused the pod's readiness: the pre-warm sweep enumerates installed modules. With
+circuit-bound services no longer built at boot, Radzen is not withdrawn; a module whose root-reachable
+singleton genuinely throws still is, and still meets this. Moving the registration into an Autofac
+registration source was tried and rejected: hosts that build the collection with MS DI's own
+`BuildServiceProvider()` ignore sources and lost every held module's `InstalledModuleAssembly`
+(`ConfiguredModuleActivationTest`).
 
 **Why.** Autofac holds a scope's shared-instance lock for the whole build of a shared instance, and
 that one lock covers every shared instance of the scope; an instance that exists is answered without
@@ -236,8 +265,8 @@ module-status surfaces read); the mesh boots without it
 (`AModuleWhoseSingletonCannotBeBuiltAtBootTest`, with its negative control). Its load context stays
 loaded until the restart: a dependent may already hold its types.
 
-**The cost:** module singletons are constructed at boot or at the swap instead of on first use, so
-their constructors' side effects — and their failures — move there.
+**The cost:** root-reachable module singletons are constructed at boot or at the swap instead of on
+first use, so their constructors' side effects — and their failures — move there.
 
 **What it does NOT cover.** A module's HOSTED services are left to their own host: the root never
 reaches them, and a hosted service that cannot be built costs its feature, never the module (#2449).
