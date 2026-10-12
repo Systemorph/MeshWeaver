@@ -569,6 +569,24 @@ public class AppDirectoryTest(ITestOutputHelper output) : MonolithMeshTestBase(o
     }
 
     [Fact(Timeout = 60000)]
+    public async Task AnAbsentOwner_KeepsThePlainSettingsTile_AndNeverPointReadsTheMissingRoot()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string ghost = "dir-no-such-owner";
+        var list = await Directory.Compute(ghost).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        list[0].Id.Should().Be(AppDirectory.SettingsId);
+        list[0].LabelKey.Should().Be("common.settings");
+
+        // The person read went through the empty-on-absent query and settled EMPTY — no point read
+        // of the absent root, so nothing tripped the stream cache's breaker for that path.
+        var cache = Mesh.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+        var query = cache.GetQuery(AppDirectory.PersonQueryId(ghost));
+        Assert.True(query is not null, "the person tile reads the owner through its query, not a point read");
+        var rows = await query.FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        rows.Should().BeEmpty();
+    }
+
+    [Fact(Timeout = 60000)]
     public async Task ARevoke_ReEmitsWithoutTheApp_OnTheSameSubscription()
     {
         var ct = TestContext.Current.CancellationToken;

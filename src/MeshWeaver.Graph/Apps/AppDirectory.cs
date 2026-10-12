@@ -164,7 +164,12 @@ public sealed class AppDirectory
 
     /// <summary>The viewer's own user node, read as <see cref="PersonTile"/> — live, never blocking:
     /// it starts with <c>null</c> (the plain Settings tile) and re-emits when the name, the picture
-    /// or the language changes.</summary>
+    /// or the language changes.
+    /// <para>🚨 Read through an EMPTY-ON-ABSENT query (<see cref="PersonQuery"/>), never a point read:
+    /// the directory also serves System-backed <c>{owner}/_Apps</c> reads for arbitrary owners, and a
+    /// point read of an owner with no node answers NotFound and opens the stream cache's storm
+    /// breaker for that path — which a <c>Catch</c> would only hide. An absent owner is an empty
+    /// result here, i.e. the plain tile.</para></summary>
     private IObservable<PersonTile?> PersonOf(string viewer)
     {
         // Resolved ONCE, on the caller's thread — never inside a long-lived selector (#2679).
@@ -172,8 +177,9 @@ public sealed class AppDirectory
         if (cache is null || string.IsNullOrWhiteSpace(viewer))
             return Observable.Return<PersonTile?>(null);
         var options = hub.JsonSerializerOptions;
-        return cache.GetStream(viewer, options)
-            .Select(node => ReadPerson(node, options))
+        return cache.GetQuery(PersonQueryId(viewer), options, PersonQuery(viewer))
+            .Select(nodes => ReadPerson(
+                nodes.FirstOrDefault(n => string.Equals(n.Path, viewer, StringComparison.OrdinalIgnoreCase)), options))
             .Catch<PersonTile?, Exception>(exception =>
             {
                 logger?.LogDebug(exception,
@@ -183,6 +189,13 @@ public sealed class AppDirectory
             .StartWith((PersonTile?)null)
             .DistinctUntilChanged();
     }
+
+    /// <summary>The stable id of the person-tile query for <paramref name="viewer"/>.</summary>
+    public static string PersonQueryId(string viewer) => $"$person-tile:{viewer}";
+
+    /// <summary>The person-tile query: the viewer's own root by exact path — empty when no such node
+    /// exists, so an absent owner never becomes a NotFound point read. Pure.</summary>
+    public static string PersonQuery(string viewer) => $"path:{viewer}";
 
     /// <summary>The person tile's facts from a user node: the display name (the node's name, else
     /// <c>fullName</c>), the picture (the node's icon) and the language (<c>locale</c>). Null when
