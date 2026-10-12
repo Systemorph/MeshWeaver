@@ -64,11 +64,15 @@ public abstract class ModuleSingletonsBuiltAtBootTestBase(ITestOutputHelper outp
     /// <summary>Whether the module carries circuit-bound registrations (MeshWeaver#6556).</summary>
     protected virtual bool CircuitBound => false;
 
+    /// <summary>Whether the module registers a further <see cref="InstalledModuleAssembly"/> of its own —
+    /// the reference assembly it ships, as MeshWeaver.Testing registers its xunit closure (MeshWeaver#6557).</summary>
+    protected virtual bool ShipsReferences => false;
+
     /// <inheritdoc />
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder) =>
         base.ConfigureMesh(builder)
             .ConfigureServices(services => services.AddScoped<CircuitBoundState>())
-            .InstallAssemblies(WriteModule(root, Broken, CircuitBound));
+            .InstallAssemblies(WriteModule(root, Broken, CircuitBound, ShipsReferences));
 
     /// <summary>The mesh's module registry.</summary>
     protected ModuleContexts Contexts => Mesh.ServiceProvider.GetRequiredService<ModuleContexts>();
@@ -84,7 +88,14 @@ public abstract class ModuleSingletonsBuiltAtBootTestBase(ITestOutputHelper outp
             .Where(m => m.Assembly.GetName().Name == Module)
             .ToArray();
 
-    private static string Source(bool broken, bool circuitBound) => $$"""
+    /// <summary>The module's simple name, for tests that build their own host.</summary>
+    public const string ModuleName = Module;
+
+    /// <summary>The simple name of the reference assembly the module ships when
+    /// <see cref="ShipsReferences"/> — one no image-bound module of the test mesh installs.</summary>
+    public const string ShippedReferenceName = "System.Private.Xml";
+
+    private static string Source(bool broken, bool circuitBound, bool shipsReferences) => $$"""
         using Microsoft.Extensions.DependencyInjection;
         [assembly: MeshWeaver.Test.BootBuilt.Module]
         namespace MeshWeaver.Test.BootBuilt;
@@ -114,6 +125,7 @@ public abstract class ModuleSingletonsBuiltAtBootTestBase(ITestOutputHelper outp
                         services.AddSingleton<MeshWeaver.Graph.Test.IBootBuiltProbe, Probe>();
                         services.AddSingleton<Fragile>();
                         {{(circuitBound ? CircuitBoundRegistrations : "")}}
+                        {{(shipsReferences ? ShippedReferenceRegistration : "")}}
                         return services;
                     })];
         }
@@ -128,10 +140,15 @@ public abstract class ModuleSingletonsBuiltAtBootTestBase(ITestOutputHelper outp
                                 services.AddSingleton<TakesACircuitBoundSingleton>();
         """;
 
+    // The MeshWeaver.Testing shape: the module registers an assembly it ships as an installed module.
+    private const string ShippedReferenceRegistration = """
+        services.AddSingleton(new MeshWeaver.Mesh.InstalledModuleAssembly(typeof(System.Xml.XmlDocument).Assembly));
+        """;
+
     /// <summary>Compiles the test module under <paramref name="directoryRoot"/> and returns its entry DLL —
     /// for hosts this base does not build (MeshWeaver#6557's plain MS DI host).</summary>
-    internal static string WriteModule(string directoryRoot, bool broken, bool circuitBound) =>
-        Write(directoryRoot, Source(broken, circuitBound));
+    internal static string WriteModule(string directoryRoot, bool broken, bool circuitBound, bool shipsReferences = false) =>
+        Write(directoryRoot, Source(broken, circuitBound, shipsReferences));
 
     private static string Write(string directoryRoot, string source)
     {

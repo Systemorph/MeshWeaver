@@ -46,10 +46,14 @@ public partial record MeshBuilder
         var installedModules = InstalledModuleSet;
         ConfigureServices(services =>
         {
+            // Its first resolve also runs the boot publication when nothing claimed it yet
+            // (MeshWeaver#6557): the hook every host kind calls, so a host built with plain MS DI
+            // withdraws a module whose shared instances cannot be built just as the Autofac root does
+            // (which claims it earlier, outside any lock — ModulesBuiltBeforePublished).
             services.TryAddSingleton(sp => modules.Attach(
                 sp.GetService<CollectibleContextUnloads>(),
                 sp.GetService<ILoggerFactory>()?.CreateLogger<ModuleContexts>(),
-                sp));
+                sp).PublishOnce());
             // The layout client re-reads held modules' views from their current generations.
             services.TryAddSingleton<MeshWeaver.Layout.Client.IViewContributionSource>(sp => sp.GetRequiredService<ModuleContexts>());
             // 🚨 The installed-module set is ONE registry the mesh owns (MeshWeaver#6557), and the
@@ -63,6 +67,11 @@ public partial record MeshBuilder
                 services.AddSingleton(installedModules);
                 services.AddTransient<IEnumerable<InstalledModuleAssembly>>(sp =>
                     sp.GetRequiredService<InstalledModules>().Current(sp));
+                // The modules this replica carries and does not run — the same registry, so a module
+                // withdrawn at boot is listed on every container kind (an Autofac registration source
+                // served it before, which a plain MS DI host ignores).
+                services.AddTransient<IEnumerable<IncompatibleModule>>(sp =>
+                    sp.GetRequiredService<InstalledModules>().Incompatible(sp));
             }
             return services;
         });
@@ -85,7 +94,7 @@ public partial record MeshBuilder
             // Built before published (MeshWeaver#6542): every held module's shared instances are built
             // once the root container exists and before the provider is handed out.
             if (!services.Any(d => d.ImplementationInstance is ModulesBuiltBeforePublished))
-                services.AddSingleton<MeshWeaver.ServiceProvider.IRootContainerBuilt>(new ModulesBuiltBeforePublished());
+                services.AddSingleton<MeshWeaver.ServiceProvider.IRootContainerBuilt>(new ModulesBuiltBeforePublished(modules));
             return services;
         });
     }
@@ -1058,7 +1067,7 @@ public partial record MeshBuilder
                         sp.GetRequiredService<ModuleContexts>(),
                         sp.GetService<ILoggerFactory>()?.CreateLogger<ModuleHostedServicesHost>()));
                 }
-                return ModuleServiceForwarding.AddForwarders(services, probed);
+                return ModuleServiceForwarding.AddForwarders(services, probed, InstalledModuleSet);
             }
             generation.RootServiceBlockers = probed.Blockers;
             foreach (var node in list)

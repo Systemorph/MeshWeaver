@@ -159,14 +159,29 @@ internal static class ModuleServiceForwarding
     /// <summary>
     /// Adds to the ROOT collection the forwarder for every platform-typed registration the module made
     /// — exactly the registrations the root would have held — and nothing that names a module type.
+    ///
+    /// <para>🚨 One exception (MeshWeaver#6557): an <see cref="InstalledModuleAssembly"/> the module
+    /// registers (the further reference assemblies a module ships — MeshWeaver.Testing's xunit closure)
+    /// gets NO root forwarder. A forwarder can only throw once its module is withdrawn, and every
+    /// enumeration of the installed-module set — the boot pre-warm sweep's included — would fault on it.
+    /// It is recorded in the mesh's <see cref="InstalledModules"/> registry instead, which answers it from
+    /// the module's current generation while the registry holds the module and leaves it out once the
+    /// module is withdrawn or retired.</para>
     /// </summary>
-    public static IServiceCollection AddForwarders(IServiceCollection root, ModuleServices services)
+    public static IServiceCollection AddForwarders(IServiceCollection root, ModuleServices services, InstalledModules installed)
     {
         var module = services.ModuleName;
         foreach (var registration in services.Registrations)
         {
             var index = registration.Index;
             var type = registration.Descriptor.ServiceType;
+            if (type == typeof(InstalledModuleAssembly)
+                && !registration.Descriptor.IsKeyedService
+                && registration.Route == ModuleServiceRoute.Current)
+            {
+                installed.AddModuleRegistered(module, index);
+                continue;
+            }
             if (registration.Descriptor.IsKeyedService)
             {
                 // Forwarded under the module's OWN key, so a consumer asking by key gets the module's.

@@ -5,7 +5,6 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
-using MeshWeaver.ServiceProvider;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -59,18 +58,12 @@ public sealed class AWithdrawnModuleIsAbsentFromTheSweepTest(ITestOutputHelper o
         builder.InstallAssemblies(WriteModule(directory, broken: true, circuitBound: false));
         using var provider = services.BuildServiceProvider();
 
-        // Held and listed before the withdrawal — the negative control on this host's own reading.
-        provider.GetServices<InstalledModuleAssembly>()
-            .Should().Contain(m => m.Assembly.GetName().Name == Module, "a held module is installed until it is withdrawn");
-
-        // What a host does once its root container is built (built before published) — withdraws it.
-        foreach (var hook in provider.GetServices<IRootContainerBuilt>())
-            hook.Built(provider);
+        // No host hook is called here: the registry's first resolve runs the boot publication on a
+        // host that never ran it (MeshWeaver#6557), and every read of the set resolves it first.
+        CollectEverything();
+        AssertAbsentFromEveryRead(provider);
         provider.GetRequiredService<ModuleContexts>().Current(Module)
             .Should().BeNull("the precondition: the module was withdrawn");
-        CollectEverything();
-
-        AssertAbsentFromEveryRead(provider);
     }
 
     private static void AssertAbsentFromEveryRead(IServiceProvider provider)

@@ -243,6 +243,26 @@ registration source was tried first and rejected for that reason: MS DI ignores 
 `AWithdrawnModuleIsAbsentFromTheSweepTest` covers both hosts and runs the probe and the warm-up sweep
 over a withdrawn module.
 
+The same registry closes the two neighbouring gaps of that class, again on both host kinds:
+
+- **The withdrawal is reported, and happens, on every host.** The `IncompatibleModule` records — the
+  declared ones plus every module withdrawn at boot — are served by an explicit
+  `IEnumerable<IncompatibleModule>` factory over `InstalledModules`, not by an Autofac registration
+  source a plain MS DI host ignores. And the boot publication that withdraws a failing module runs from
+  the module registry's own singleton registration on its first resolve (`ModuleContexts.PublishOnce`),
+  which every host kind calls; every read of the installed or incompatible set resolves the registry
+  first. The Autofac root still claims the publication earlier, from `IRootContainerBuilt`, so there it
+  runs outside the root's shared-instance lock (the lock-order reasoning below is unchanged).
+- **No forwarder of a withdrawn module is enumerated.** A held module that registers further
+  `InstalledModuleAssembly` instances itself (MeshWeaver.Testing registers its xunit closure that way)
+  used to get a root `Current` forwarder per instance, and a forwarder can only throw once its module is
+  withdrawn. Those registrations get no root forwarder: they are recorded in `InstalledModules` by
+  (module, registration) when the module installs and answered from its current generation while the
+  registry holds it, so they follow a live swap and leave with a withdrawal.
+
+`AWithdrawnModuleLeavesNoForwarderBehindTest` (Autofac) and `AWithdrawnModuleOnAPlainMsDiHostTest`
+(plain MS DI, no hook called by the test) pin both, with published twins as negative controls.
+
 **Why.** Autofac holds a scope's shared-instance lock for the whole build of a shared instance, and
 that one lock covers every shared instance of the scope; an instance that exists is answered without
 the lock. The root reaches a module's services from inside its own builds — `ModuleOwnedRootSource`'s
