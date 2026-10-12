@@ -44,11 +44,13 @@ public static class UpdatePolicySettingsTab
     internal static IObservable<string> StatusFeed(LayoutAreaHost host)
     {
         var zoneId = host.Hub.ServiceProvider.GetService<AccessService>().ViewerZoneId();
+        var locale = host.ViewerLocale();
         return host.Hub.GetWorkspace().GetMeshNodeStream(UpdatePolicyNodeType.NodePath)
             .Select(node => StatusMarkdown(
                 UpdatePolicyNodeType.Parse(node, host.Hub.JsonSerializerOptions),
                 (key, args) => host.Localize(key, args),
-                zoneId));
+                zoneId,
+                locale));
     }
 
     internal static UiControl BuildContent(LayoutAreaHost host, StackControl stack)
@@ -190,7 +192,7 @@ public static class UpdatePolicySettingsTab
                     var clearance = combo is null
                         ? ComboVerificationGate.NotRegistered(tag)
                         : combo.Recorded(content, tag);
-                    var decision = ManualRollDecision(raw, clearance, key => h.Localize(key));
+                    var decision = ManualRollDecision(raw, clearance, key => h.Localize(key), h.ViewerLocale());
                     if (decision.ProceedsOverPackageAnswer)
                         h.Hub.ServiceProvider.GetService<ILoggerFactory>()
                             ?.CreateLogger(typeof(UpdatePolicySettingsTab))
@@ -308,8 +310,12 @@ public static class UpdatePolicySettingsTab
     /// (#2302), and on Blazor Server the ambient culture is the CONTAINER's, identical for every
     /// simultaneous viewer.
     /// </param>
+    /// <param name="locale">The viewer's language tag (<c>host.ViewerLocale()</c>), for the parts the
+    /// RECORD carries as reason codes rather than through <paramref name="localize"/> — the
+    /// release-availability advisories (#6540); null renders English.</param>
     internal static string StatusMarkdown(
-        UpdatePolicyContent content, Func<string, object?[], string> localize, string? zoneId = null) =>
+        UpdatePolicyContent content, Func<string, object?[], string> localize, string? zoneId = null,
+        string? locale = null) =>
         // 🚨 ABOVE everything else, on every branch (#3543). An install whose own version has been
         // withdrawn from the registry cannot start a new pod and can never see anything "newer" —
         // nothing outranks a tag that already outranks what is left. Until this line existed, that
@@ -320,7 +326,7 @@ public static class UpdatePolicySettingsTab
         (string.IsNullOrEmpty(content.UnresolvedInstalledTag)
             ? ""
             : localize("ui.updateInstalledTagWithdrawn", [content.UnresolvedInstalledTag!]) + "\n\n")
-        + AvailabilityMarkdown(content, localize, zoneId);
+        + AvailabilityMarkdown(content, localize, zoneId, locale);
 
     /// <summary>
     /// The hand-over sentence for <paramref name="tag"/> (#4098): where and when this install handed
@@ -342,7 +348,7 @@ public static class UpdatePolicySettingsTab
     /// <summary>The availability half of <see cref="StatusMarkdown"/>: the latest tag, the check
     /// time, the hand-over state, the availability hold and the combo verdict.</summary>
     private static string AvailabilityMarkdown(
-        UpdatePolicyContent content, Func<string, object?[], string> localize, string? zoneId)
+        UpdatePolicyContent content, Func<string, object?[], string> localize, string? zoneId, string? locale)
     {
         // 🚨 "No newer version detected yet" is a CLAIM, and until #2553 this surface made it
         // without evidence. An install that has checked hourly and found nothing and an install
@@ -411,11 +417,9 @@ public static class UpdatePolicySettingsTab
         if (content.HasAdvisoriesFor(tag))
             available += "\n\n"
                 + localize("ui.updateAdvisories", [tag])
-                // The record joins its advisories with "; " — each is bounded on its own, so one
-                // long advisory (a waived package hold) never cuts off the ones after it.
-                + "\n\n> " + string.Join("; ", content.Advisories!
-                    .Split("; ", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                    .Select(Sanitize));
+                // Each advisory is bounded on its own, so one long advisory (a waived package
+                // hold) never cuts off the ones after it.
+                + "\n\n> " + string.Join("; ", AdvisoryLines(content, locale).Select(Sanitize));
 
         var verdict = content.VerificationFor(tag);
         if (verdict is null)
@@ -448,6 +452,21 @@ public static class UpdatePolicySettingsTab
                 + CaveatList(verdict, localize) + "\n\n" + verifiedAt,
         };
     }
+
+    /// <summary>
+    /// 🌍 The recorded advisories in the VIEWER's language (MeshWeaver#6540): each
+    /// <see cref="UpdatePolicyContent.AdvisoryItems"/> entry through its reason code, falling back
+    /// to its stored English when it carries no code or the catalog does not know it. A record
+    /// written before the items existed carries only the joined English
+    /// (<see cref="UpdatePolicyContent.Advisories"/>, "; "-separated) and renders exactly that.
+    /// </summary>
+    /// <param name="content">The policy record.</param>
+    /// <param name="locale">The viewer's language tag; null renders English.</param>
+    internal static IEnumerable<string> AdvisoryLines(UpdatePolicyContent content, string? locale) =>
+        content.AdvisoryItems is { Count: > 0 } items
+            ? items.Select(item => item.Localize(locale))
+            : (content.Advisories ?? "")
+                .Split("; ", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
     /// <summary>Every failing module — never truncated — with its first failure line (and a count
     /// of the rest).</summary>
@@ -508,8 +527,12 @@ public static class UpdatePolicySettingsTab
     /// not-enforced stand-in), before <see cref="UpdatabilityVerdict.ForPlatformRoll"/>.</param>
     /// <param name="clearance">The recorded combo answer for the tag.</param>
     /// <param name="localize">The localizer for the note's heading.</param>
+    /// <param name="locale">The viewer's language tag, for the advisories that carry a reason code
+    /// (#6540); null renders English. The returned <see cref="ManualRollAdvisories.Advisories"/>
+    /// stay English — they are the log line.</param>
     internal static ManualRollAdvisories ManualRollDecision(
-        UpdatabilityVerdict availability, ComboClearance clearance, Func<string, string> localize)
+        UpdatabilityVerdict availability, ComboClearance clearance, Func<string, string> localize,
+        string? locale = null)
     {
         var verdict = availability.ForPlatformRoll();
         // EVERY advisory the verdict carries, then the combo one. A waived hold leads
@@ -521,12 +544,19 @@ public static class UpdatePolicySettingsTab
             .. verdict.Advisories.IsDefault ? [] : verdict.Advisories,
             .. clearance.Refuses ? new[] { clearance.Reason } : [],
         ];
+        // The same lines in the viewer's language: the verdict's through their reason codes, the
+        // combo gate's reason verbatim (it is that gate's own diagnostic).
+        ImmutableArray<string> rendered =
+        [
+            .. verdict.AdvisoryTexts.Select(text => text.Localize(locale)),
+            .. clearance.Refuses ? new[] { clearance.Reason } : [],
+        ];
         var note = advisories.IsEmpty
             ? ""
             : "\n\n" + localize("ui.updatePackageAdvisoriesManual") + "\n\n> "
               // Each advisory bounded on its OWN — bounding the joined text would cut the first
               // long one short and drop every one after it.
-              + string.Join("; ", advisories.Select(Sanitize));
+              + string.Join("; ", rendered.Select(Sanitize));
         return new(advisories, note, verdict.WaivedHold is not null || clearance.Refuses);
     }
 

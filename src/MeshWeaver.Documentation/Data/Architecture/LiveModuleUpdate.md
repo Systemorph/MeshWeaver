@@ -196,6 +196,64 @@ did not add, a keyed registration, a class-typed platform service the module imp
 implementation that also implements another platform interface (a proxy would hide it), an open generic
 the module implements.
 
+### Built before published (MeshWeaver#6542)
+
+🚨 **The root only ever READS a module's instances.** Every shared instance of a module's container —
+each singleton, and each scoped registration (shared at the container's root) — is built before the
+container can be reached from the root: **at boot**, once the root container is built and before the
+root provider is handed to anyone (`IRootContainerBuilt`, `ModuleContexts.BuildAllBeforePublish`, a
+module after the modules it depends on); **on a live swap**, after every staged generation has loaded,
+materialised and prepared its services and before `CommitAll` (`ModuleServices.BuildBeforePublish`,
+`ModuleServiceProvider.BuildSharedInstances`).
+
+**Why.** Autofac holds a scope's shared-instance lock for the whole build of a shared instance, and
+that one lock covers every shared instance of the scope; an instance that exists is answered without
+the lock. The root reaches a module's services from inside its own builds — `ModuleOwnedRootSource`'s
+stand-ins, the `Current` route's transient forwarder, `ModuleServiceProxy.Invoke` (a module's
+`IConfigureOptions<T>` run when a root singleton reads `IOptions<T>.Value`), and the
+`ModuleHealthCheckOptionsForwarder` run from `DefaultHealthCheckService`'s constructor — while a module
+singleton's constructor takes root singletons. Two FIRST builds in those two orders deadlocked (root
+lock then module lock, against module lock then root lock). With every module instance built before
+publication, the first order never waits, so there is no cycle.
+`RootAndModuleSingletonsBuildInOneLockOrderTest` forces the overlap; its negative control publishes
+the same container unbuilt and deadlocks.
+
+**Why not one lock order.** Making every module build enter the ROOT's lock first cured the repro and
+was rejected: a module constructor then ran under the root's lock, so one slow module constructor
+stalled every first-time root resolve in the process — the silo-wide wedge of
+[Reading a Silo Eviction](../ReadingASiloEviction) (#6432). Built before published runs module
+constructors under no lock but their own container's: a slow one delays its own boot step or swap, and
+nothing else. `ACreateNeverWaitsOnAModuleContainerUnderConstructionTest` parks a singleton of the
+NEXT generation inside its constructor and has a create answered `Ok` meanwhile, from the generation
+still serving.
+
+**A constructor that throws fails the publication, never half of it.** On a swap the swap is refused
+as `Failed`, naming the constructor's own message; nothing of N+1 was ever reachable, N keeps serving
+and N's hosted services are never stopped (`ModuleRootServicesSwapTest`). At boot the module is
+WITHDRAWN — no longer current, its container disposed — together with every module that depends on
+it, and each is reported as an `IncompatibleModule` (stderr, the log, and the records `/health` and the
+module-status surfaces read); the mesh boots without it
+(`AModuleWhoseSingletonCannotBeBuiltAtBootTest`, with its negative control). Its load context stays
+loaded until the restart: a dependent may already hold its types.
+
+**The cost:** module singletons are constructed at boot or at the swap instead of on first use, so
+their constructors' side effects — and their failures — move there.
+
+**What it does NOT cover.** A module's HOSTED services are left to their own host: the root never
+reaches them, and a hosted service that cannot be built costs its feature, never the module (#2449).
+The residual: a shared instance that only a registration SOURCE makes on demand and that no
+constructor takes — a closed generic over a module type (`ILogger<ItsType>`, `IOptions<ItsOptions>`)
+resolved later from inside a factory or a method rather than taken by a constructor. Its first build
+still takes the module container's lock while the root may hold its own. Such a type is built with
+the instance that takes it in its constructor, which is the shape to prefer.
+
+**A staged generation binds its swap.** Its container is built before the commit, so it sees the
+other generations of the SAME swap in place of the ones they replace (`ModuleServices.Stage`, the
+stage-aware lookups in `ModuleContexts`) — the AI module's catalog is built with its re-loaded
+providers' contributions, not the retiring ones'. A sealed stage answers nothing and forgets its
+list, so from the commit on every lookup is the current generations, and no stage pins a generation
+a later swap retires.
+
 **Three pins found and fixed on the way — each caught by the collection assertion failing, then read off
 a heap dump (`dotnet-dump` `gcroot`, ClrMD for the referrers):**
 

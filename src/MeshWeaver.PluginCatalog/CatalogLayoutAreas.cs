@@ -676,6 +676,13 @@ public static partial class CatalogLayoutAreas
         IMessageHub hub, IPackageSource source, string sourceRef, PackageManifest pkg, ILogger? logger,
         string? authorizingUserId = null)
     {
+        // 🚨 WHERE this install comes from is the SOURCE's identity, never the manifest's: a listed
+        // package.json may author any `origin` it likes, so it is overwritten here — on the one
+        // funnel every lane (click, boot install, unattended apply) goes through — and the record
+        // binds every later unattended update to it (MeshWeaver#6526). A source with no origin
+        // stamps null, and the record keeps the one it already had (PackageInstaller.SeedOrigin).
+        pkg = pkg with { Origin = InstallOrigin.Of(source) };
+
         // The entitlement gate runs FIRST, before a single file travels: a commercial package needs
         // a global admin (#830), and fetching a package that may not be installed is work nobody
         // asked for. The installer carries the same gate — that one is the enforcement (no caller

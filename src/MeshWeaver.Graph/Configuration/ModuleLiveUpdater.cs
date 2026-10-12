@@ -308,6 +308,23 @@ public sealed class ModuleLiveUpdater : IDisposable
             return refused with { Outcome = Fail(name, old.Location, target, $"a dependent did not re-bind to N+1: {ex.GetType().Name}: {ex.Message}") };
         }
 
+        // 🚨 Built before published (MeshWeaver#6542): every shared instance of every staged container is
+        // built NOW, while nothing can reach it, so the root's forwarders only ever read built instances
+        // and the root container's lock never waits on a module container's. Its constructors run here,
+        // on this pool thread, under no lock but their own container's — a slow one delays this swap and
+        // nothing else (#6432). One that throws refuses the swap: nothing was made current, N keeps
+        // serving, and the staged generations are unloaded with their partly-built containers.
+        foreach (var generation in serving)
+            if (contexts.BuildBeforePublish(generation) is { } notBuilt)
+            {
+                contexts.DiscardStaged(stage);
+                return refused with
+                {
+                    Outcome = Fail(name, old.Location, target,
+                        $"{generation.Name}'s shared instances could not be built before the swap commits: {notBuilt}"),
+                };
+            }
+
         // The swap commits as ONE step: every reader of the generations sees all of N+1 or none of it.
         contexts.CommitAll(stage);
         return new SwapPlan(null, retiring, serving, old.Location, target);

@@ -378,6 +378,40 @@ edit, so neither is evidence of equal content. It is the same reason
 an unversioned partition instead of a version number, and why `ModuleLandingService.GenerationIdOf`
 appends each file's bytes and not only its length.
 
+## 🚨 An update comes only from the repository the install came from (#6526)
+
+A package id is not an identity. Two watched repositories can list the same id, and the reconciler
+used to match install records by id alone, so a green build in the SECOND repository could update —
+or remind about — a package it never installed. The install record now carries `Origin`: the
+canonical identity of the source the install ran through (`InstallOrigin`) — the repository URL
+without scheme, `.git` or trailing `/`, lower-cased, plus `#subdir` when packages live in one; a
+registry is `registry:<url>`.
+
+- **Where it comes from.** The origin is attached to the SOURCE where it is built from its configured
+  repository and subdirectory (`PackageSources.FromRepo`) or by the registry client, and the one
+  install funnel (`CatalogLayoutAreas.InstallOrUpdate`) stamps it onto the record — the catalog
+  click, the boot install and the unattended apply alike. Whatever `origin` a listed manifest
+  authors is overwritten: a repository cannot claim to be another one, the same rule
+  [Install Completeness](/Doc/Architecture/InstallCompleteness) applies to the repair lane's
+  `Source` (#6512). A re-stamp from a source with no origin keeps the recorded one; an install from
+  another repository rebinds the package there.
+- **The gate.** The watcher binds each pass to its repository. After the content-identity gate and
+  before the floor and policy decisions, a candidate is taken only for a record whose `Origin` is
+  that repository; a candidate from any other repository is ignored, with an Information line — no
+  hold stamped, no reminder raised.
+- **A record that predates the field: adopt or refuse.** On its first changed candidate the watcher
+  counts the watched repositories (every catalog node with a repository URL) that list the id.
+  Exactly one — this one — and the record ADOPTS it as its origin, then proceeds. Two or more and
+  the update is REFUSED: a Warning line and a notification on the platform bell, `Update refused`,
+  naming the package and every candidate repository; it stays refused until an administrator
+  installs it again from the right repository, which records the origin. A watched repository that
+  cannot be listed makes the count incomplete, and then the record is neither adopted nor updated
+  that pass: an adoption over a census with a hole could adopt the impostor.
+- **Not bound:** a pinned package (nothing moves for it), and the registry lane
+  (`RegistryUpdateReconciler`), whose single configured registry is the consumer's trust root and
+  stamps provenance itself. A package installed through a registry records `registry:<url>`, so a
+  watcher on the same instance never adopts it for a repository.
+
 ## 🚨 One policy PER PACKAGE — separate from the platform's image policy (2026-09-14)
 
 > **Maintainer, 2026-09-14:** *"continuous update is set globally — it should be separate for the
