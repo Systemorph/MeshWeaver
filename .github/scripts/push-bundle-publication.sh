@@ -17,7 +17,9 @@
 #      the same manifest is then copied by digest into the publication repository
 #      `plugins/<source>`, untagged, because an index may only reference manifests of its own
 #      repository;
-#   2. the sidecars — EVERY file of the publication that is not a bundle or a module — as one
+#      (the module is matched to its bundle CASE-INSENSITIVELY: the lanes write it lowercased);
+#   2. the sidecars — EVERY file of the publication that is not a bundle or a module riding with
+#      one (so a module whose package bakes no bundle travels here, under its own title) — as one
 #      image manifest in `plugins/<source>`, untagged, each file a layer titled with its
 #      publication-relative name (so `oras pull` writes it back under that name, byte for byte),
 #      with a config blob of media type application/vnd.meshweaver.publication.v1+json carrying
@@ -56,8 +58,8 @@
 # bundles=<n> …` and one `bundle-publication: bundle=<package> digest=<digest> module=<yes|no>` per
 # bundle; also `index_digest` and `bundle_count` into $GITHUB_OUTPUT when set.
 #
-# Callers: main-cd.yml (`publish-bake`, the platform's own content, and `plugins-bake` through the
-# reusable lane) and node-repo-publish-bake.yml (every satellite), after the share seal succeeds,
+# Callers: main-cd.yml (`publish-bake`, the platform's own content) and node-repo-publish-bake.yml
+# (MeshWeaver.Plugins and every satellite), after the share seal succeeds,
 # on the directory publish-bake-bundles.sh materialises (BAKE_PUBLICATION_DIR). Behaviour tests:
 # .github/scripts/test-bundle-registry.py (chart-gate's `Bundle registry scripts (executed)`).
 set -euo pipefail
@@ -145,6 +147,35 @@ if [ -f "$DIR/$MODULES_INDEX" ]; then
   done < "$DIR/$MODULES_INDEX"
 fi
 
+# ---- which module rides with which bundle — matched CASE-INSENSITIVELY ------------------------
+# 🚨 The lanes write a module package under its LOWERCASED name (`modules/essentials.module.nupkg`)
+# while the bundle keeps the package's own case (`Essentials.zip`), so an exact-case lookup of
+# `$package.module.nupkg` attached NO module to ANY bundle: measured on MeshWeaver.Plugins run
+# 38215076376 (`plugins/plugins:c003e001`), 43 bundles all `module=no` beside 8 listed modules.
+# A module whose package bakes no bundle (a module-only package) has no manifest to ride in, and it
+# used to be skipped as a "module" AND as a sidecar, so it never reached the registry at all while
+# the `modules/_index` sidecar still listed it — a torn module set, the very shape the checks above
+# refuse locally. It now travels in the sidecar manifest under its publication-relative title, so
+# what `oras pull` writes back is the whole publication, byte for byte.
+MODULE_OF_BUNDLE=()   # parallel to BUNDLES: the module file attached to that bundle, or empty
+ATTACHED=()           # module file names attached to some bundle
+for zip in "${BUNDLES[@]}"; do
+  want=$(lower "${zip%.zip}.module.nupkg")
+  match=""
+  for m in ${MODULES[@]+"${MODULES[@]}"}; do
+    [ "$(lower "$m")" = "$want" ] || continue
+    [ -z "$match" ] || fail "$MODULES_INDEX lists both '$match' and '$m' for bundle '$zip' — two module packages differing only in case cannot both ride with it"
+    match="$m"
+  done
+  if [ -n "$match" ]; then
+    for a in ${ATTACHED[@]+"${ATTACHED[@]}"}; do
+      [ "$a" != "$match" ] || fail "module '$match' matches more than one bundle (bundle names differing only in case) — refusing to guess which it rides with"
+    done
+    ATTACHED+=("$match")
+  fi
+  MODULE_OF_BUNDLE+=("$match")
+done
+
 # Every OTHER file is a sidecar and travels as a titled layer. Names must survive a JSON string
 # and an OCI title unescaped, so the config blob can be composed without a JSON library.
 SIDECARS=()
@@ -152,7 +183,7 @@ while IFS= read -r rel; do
   rel="${rel#./}"
   skip=0
   for b in "${BUNDLES[@]}"; do [ "$rel" = "$b" ] && skip=1; done
-  for m in ${MODULES[@]+"${MODULES[@]}"}; do [ "$rel" = "$MODULES_DIR/$m" ] && skip=1; done
+  for m in ${ATTACHED[@]+"${ATTACHED[@]}"}; do [ "$rel" = "$MODULES_DIR/$m" ] && skip=1; done
   [ "$skip" -eq 1 ] && continue
   case "$rel" in
     *[!A-Za-z0-9._/@+-]*) fail "sidecar '$rel' carries a character outside [A-Za-z0-9._/@+-]; the config blob cannot carry it" ;;
@@ -300,15 +331,17 @@ fi
 # ---- 1. the bundles ----------------------------------------------------------------------------
 BUNDLE_FACTS=()
 INDEX_ENTRIES=()
-for zip in "${BUNDLES[@]}"; do
+for i in "${!BUNDLES[@]}"; do
+  zip="${BUNDLES[$i]}"
   package="${zip%.zip}"
   package_lc=$(lower "$package")
   valid_component "$package_lc" || fail "package '$package' is not a valid repository name component"
   repo="$REGISTRY/plugins/$SOURCE_LC/$package_lc"
   files=("$zip:application/vnd.meshweaver.bundle.v1.zip")
   has_module=no
-  if [ -f "$DIR/$MODULES_DIR/$package.module.nupkg" ]; then
-    files+=("$MODULES_DIR/$package.module.nupkg:application/vnd.meshweaver.module.v1.nupkg")
+  module="${MODULE_OF_BUNDLE[$i]}"
+  if [ -n "$module" ]; then
+    files+=("$MODULES_DIR/$module:application/vnd.meshweaver.module.v1.nupkg")
     has_module=yes
   fi
   digest=$(cd "$DIR" && "$ORAS" push "${OFLAGS[@]}" "$repo:$IDENTITY" \
@@ -338,6 +371,7 @@ for rel in "${SIDECARS[@]}"; do
   case "$rel" in
     *.json) mt="application/json" ;;
     *.txt|*/_index|_complete|*/_current|_current) mt="text/plain" ;;
+    "$MODULES_DIR"/*.module.nupkg) mt="application/vnd.meshweaver.module.v1.nupkg" ;;   # a module with no bundle to ride in
     *) mt="application/octet-stream" ;;
   esac
   SIDECAR_ARGS+=("$rel:$mt")
