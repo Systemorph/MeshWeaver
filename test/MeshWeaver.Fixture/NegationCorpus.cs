@@ -36,6 +36,12 @@ public sealed record NegationCase(string Filter, ImmutableArray<string> Expected
 /// match <c>field:val*</c>, so <c>-field:val*</c> INCLUDES it. That is the rule SQL's
 /// <c>NotEqual</c>/<c>NotIn</c> already followed (<c>… OR sel IS NULL</c>), now stated for the
 /// wildcard form too.</para>
+///
+/// <para><b><c>*</c> is the only wildcard.</b> The <c>content.code</c> cases put SQL's LIKE
+/// metacharacters (<c>%</c>, <c>_</c> and the escape character <c>\</c>) into a user value beside a
+/// wildcard, each with a decoy node that matches only if the executor reads the character as a
+/// metacharacter. A SQL generator must escape them and translate only <c>*</c>; the in-memory glob
+/// (<c>QueryWildcard.IsMatch</c>) already reads them literally.</para>
 /// </summary>
 public static class NegationCorpus
 {
@@ -50,6 +56,14 @@ public static class NegationCorpus
         new("plain", "Gamma", """{"apiKey":"plain-ccc","kind":"public"}"""),
         new("no-key", "Delta", """{"kind":"public"}"""),
         new("no-content", "foo", null),
+        // `*` is the ONLY wildcard (each pair: the value a literal reading must match, and the decoy
+        // that a SQL reading of `%` / `_` / `\` as LIKE metacharacters would match as well).
+        new("pct", "Epsilon", """{"code":"50%off"}"""),
+        new("pct-decoy", "Zeta", """{"code":"50xoff"}"""),
+        new("under", "Eta", """{"code":"a_b"}"""),
+        new("under-decoy", "Theta", """{"code":"axb"}"""),
+        new("backslash", "Iota", """{"code":"c\\d"}"""),
+        new("backslash-decoy", "Kappa", """{"code":"cd"}"""),
     ];
 
     private static ImmutableArray<string> Ids(params string[] ids) => [.. ids];
@@ -59,22 +73,34 @@ public static class NegationCorpus
     [
         new("content.apiKey:enc*", Ids("enc-lower", "enc-upper"),
             "Positive prefix wildcard, case-insensitive on both executors (ILIKE / glob)."),
-        new("-content.apiKey:enc*", Ids("plain", "no-key", "no-content"),
+        new("-content.apiKey:enc*", Ids("plain", "no-key", "no-content", "pct", "pct-decoy", "under", "under-decoy", "backslash", "backslash-decoy"),
             "THE DEFECT: the negated wildcard must be the complement — including nodes that lack the field."),
         new("content.apiKey:*ccc", Ids("plain"),
             "Positive suffix wildcard."),
-        new("-content.apiKey:*ccc", Ids("enc-lower", "enc-upper", "no-key", "no-content"),
+        new("-content.apiKey:*ccc", Ids("enc-lower", "enc-upper", "no-key", "no-content", "pct", "pct-decoy", "under", "under-decoy", "backslash", "backslash-decoy"),
             "Negated suffix wildcard."),
         new("content.kind:secret", Ids("enc-lower", "enc-upper"),
             "Positive non-wildcard content field."),
-        new("-content.kind:secret", Ids("plain", "no-key", "no-content"),
+        new("-content.kind:secret", Ids("plain", "no-key", "no-content", "pct", "pct-decoy", "under", "under-decoy", "backslash", "backslash-decoy"),
             "Control: the negated NON-wildcard content field — NotEqual, null-inclusive."),
         new("name:foo", Ids("no-content"),
             "Positive plain node field."),
-        new("-name:foo", Ids("enc-lower", "enc-upper", "plain", "no-key"),
+        new("-name:foo", Ids("enc-lower", "enc-upper", "plain", "no-key", "pct", "pct-decoy", "under", "under-decoy", "backslash", "backslash-decoy"),
             "Control: the negated plain node field."),
-        new("-content.apiKey:enc* -name:foo", Ids("plain", "no-key"),
+        new("-content.apiKey:enc* -name:foo", Ids("plain", "no-key", "pct", "pct-decoy", "under", "under-decoy", "backslash", "backslash-decoy"),
             "Two negations AND together."),
+        new("content.code:50%*", Ids("pct"),
+            "`%` is LITERAL — only `*` is a wildcard. Read as SQL's `%` it would match `50xoff` too."),
+        new("-content.code:50%*", Ids("enc-lower", "enc-upper", "plain", "no-key", "no-content", "pct-decoy", "under", "under-decoy", "backslash", "backslash-decoy"),
+            "The negated form: `%` literal there too, so the decoy is kept."),
+        new("content.code:a_*", Ids("under"),
+            "`_` is LITERAL. Read as SQL's single-character `_` it would match `axb` too."),
+        new("-content.code:a_*", Ids("enc-lower", "enc-upper", "plain", "no-key", "no-content", "pct", "pct-decoy", "under-decoy", "backslash", "backslash-decoy"),
+            "The negated form of the literal `_`."),
+        new(@"content.code:c\d*", Ids("backslash"),
+            "The LIKE escape character is LITERAL. Read as an escape, `c\\d%` is `cd%` — the decoy, not the value."),
+        new(@"-content.code:c\d*", Ids("enc-lower", "enc-upper", "plain", "no-key", "no-content", "pct", "pct-decoy", "under", "under-decoy", "backslash-decoy"),
+            "The negated form of the literal backslash."),
     ];
 
     /// <summary>
@@ -88,5 +114,8 @@ public static class NegationCorpus
         ("content.apiKey:*ccc", "-content.apiKey:*ccc"),
         ("content.kind:secret", "-content.kind:secret"),
         ("name:foo", "-name:foo"),
+        ("content.code:50%*", "-content.code:50%*"),
+        ("content.code:a_*", "-content.code:a_*"),
+        (@"content.code:c\d*", @"-content.code:c\d*"),
     ];
 }
