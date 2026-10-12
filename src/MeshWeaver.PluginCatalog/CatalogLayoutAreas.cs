@@ -699,8 +699,63 @@ public static partial class CatalogLayoutAreas
             // declares a minMeshVersion above the running platform is HELD before a file travels —
             // the installed version keeps running and the record says why. Every lane funnels
             // here (the boot install, the Store's click, the auto-update apply).
+            // …then the DEPENDENCY floor (MeshWeaver#6192): an update whose candidate declares a
+            // requirement the LOADED dependency does not meet is held the same way, on the same
+            // funnel — the boot install is one of its lanes, and it is the one that moved install
+            // records onto unmet floors.
             .SelectMany(_ => HoldIfPlatformBelowFloor(hub, pkg, logger,
-                () => InstallOrUpdateCore(hub, source, sourceRef, pkg, logger, authorizingUserId)));
+                () => HoldIfADependencyIsBelowItsFloor(hub, pkg, logger,
+                    () => InstallOrUpdateCore(hub, source, sourceRef, pkg, logger, authorizingUserId))));
+    }
+
+    /// <summary>
+    /// 🚨 The UPDATE half of the dependency floor on the one install orchestrator (MeshWeaver#6192):
+    /// when a requirement <paramref name="pkg"/> declares is not met by the module this process has
+    /// LOADED for that dependency (<see cref="PackageDependencyFloorGate.Evaluate"/>) and an install
+    /// record with a DIFFERENT content hash exists, nothing is fetched or written — the installed
+    /// version keeps running, the record carries <see cref="PackageManifest.HeldUpdate"/>, and the
+    /// result is an empty <see cref="InstallResult"/>. Everything else proceeds: every judged
+    /// requirement met, a record at the SAME hash (re-landing what is here replaces nothing), and
+    /// NO record — a fresh install is not held, the installer orders its dependencies first and
+    /// there is no installed version to keep.
+    ///
+    /// <para>🚨 A read of the install record that FAULTS stops the attempt (the fault propagates to
+    /// the caller's per-package handling): only an ANSWERED absence is a fresh install. Reading a
+    /// failed read as "no record" would proceed past the hold on a transient storage fault and
+    /// advance the record onto the very floor this gate exists to keep it off.</para>
+    /// </summary>
+    private static IObservable<InstallResult> HoldIfADependencyIsBelowItsFloor(
+        IMessageHub hub, PackageManifest pkg, ILogger? logger, Func<IObservable<InstallResult>> proceed)
+        => hub.ServiceProvider.GetService<IStorageAdapter>() is { } persistence
+            ? HoldIfADependencyIsBelowItsFloor(hub, pkg, logger, proceed, persistence)
+            : proceed();
+
+    /// <summary>The dependency hold over an explicit store — the production overload resolves the
+    /// mesh's; the pin for <c>PackageDependencyFloorHoldTest</c> (InternalsVisibleTo) passes one
+    /// whose read faults.</summary>
+    /// <param name="hub">The calling hub.</param>
+    /// <param name="pkg">The candidate.</param>
+    /// <param name="logger">Diagnostics.</param>
+    /// <param name="proceed">The install, when nothing holds it.</param>
+    /// <param name="persistence">The store the install record is read from.</param>
+    /// <returns>Cold; the install's result, an empty result when held, or the read's fault.</returns>
+    internal static IObservable<InstallResult> HoldIfADependencyIsBelowItsFloor(
+        IMessageHub hub, PackageManifest pkg, ILogger? logger, Func<IObservable<InstallResult>> proceed,
+        IStorageAdapter persistence)
+    {
+        return PackageDependencyFloorGate.Evaluate(hub, pkg, logger).SelectMany(unmet => unmet is null
+            ? proceed()
+            : persistence.Read($"{PackageInstaller.InstalledPartition}/{pkg.Id}", hub.JsonSerializerOptions)
+                .Take(1)
+                .DefaultIfEmpty()
+                .Select(n => n?.ContentAs<PackageManifest>(hub.JsonSerializerOptions))
+                .SelectMany(record =>
+                    record is null
+                    || (!string.IsNullOrEmpty(pkg.ModuleVersion)
+                        && string.Equals(record.ModuleVersion, pkg.ModuleVersion, StringComparison.Ordinal))
+                        ? proceed()
+                        : PackageDependencyFloorGate.RecordHold(hub, pkg, record, unmet, logger)
+                            .Select(_ => new InstallResult(0, 0))));
     }
 
     /// <summary>
