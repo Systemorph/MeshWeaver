@@ -303,4 +303,115 @@ public class MeshQueryMergeContractTest
 
         await act.Should().ThrowAsync<InvalidOperationException>();
     }
+
+    /// <summary>
+    /// A partition a provider READ FROM can still be read only IN PART (MeshWeaver #6564): the caller is
+    /// a member of it, but their own grants do not cover everything in it. That subset rides the merge
+    /// exactly as <c>Partitions</c> does - unioned in first-seen order, deduplicated - so the search
+    /// envelope can state it beside the denominator it qualifies.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task PartiallyReadablePartitions_AreUnionedOntoTheMergedInitial()
+    {
+        var reporting = new FakeProvider("reporting",
+            () => Observable.Return(Initial(Node("meshweaver/samples/one")) with
+            {
+                Partitions = ["meshweaver", "acme"],
+                PartiallyReadablePartitions = ["meshweaver"],
+            }));
+        var alsoReporting = new FakeProvider("alsoReporting",
+            () => Observable.Return(Initial(Node("shared/two")) with
+            {
+                Partitions = ["shared", "docs"],
+                PartiallyReadablePartitions = ["shared", "meshweaver"],
+            }));
+        var silent = new FakeProvider("silent", () => Observable.Return(Initial()));
+
+        var query = new MeshQuery([reporting, alsoReporting, silent], hub: null!);
+
+        var change = await ((IMeshQueryCore)query)
+            .Query<MeshNode>(new MeshQueryRequest { Query = "nodeType:Markdown partitions:all", Limit = 10 }, Options)
+            .FirstAsync()
+            .Timeout(TestTimeouts.Convergence)
+            .Await(TestContext.Current.CancellationToken);
+
+        change.PartiallyReadablePartitions.Should().Equal(new[] { "meshweaver", "shared" },
+            "the union of what the reporting providers read in part, deduplicated, and a silent provider adds nothing");
+        change.Partitions.Should().Equal(new[] { "meshweaver", "acme", "shared", "docs" },
+            "the denominator is unchanged: a partly read partition stays listed as read from");
+    }
+
+    /// <summary>
+    /// The control: providers that read every partition in FULL say so with an EMPTY list, which is a
+    /// statement and not silence - so a fully granted read is told apart from one nobody reported.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task FullyReadPartitions_ReportAnEmptyPartialList_NotNull()
+    {
+        var a = new FakeProvider("a", () => Observable.Return(
+            Initial(Node("p/one")) with { Partitions = ["p"], PartiallyReadablePartitions = [] }));
+        var b = new FakeProvider("b", () => Observable.Return(
+            Initial(Node("q/two")) with { Partitions = ["q"], PartiallyReadablePartitions = [] }));
+
+        var query = new MeshQuery([a, b], hub: null!);
+
+        var change = await ((IMeshQueryCore)query)
+            .Query<MeshNode>(new MeshQueryRequest { Query = "nodeType:Markdown partitions:all", Limit = 10 }, Options)
+            .FirstAsync()
+            .Timeout(TestTimeouts.Convergence)
+            .Await(TestContext.Current.CancellationToken);
+
+        change.PartiallyReadablePartitions.Should().NotBeNull().And.BeEmpty(
+            "providers that read every partition in full SAY so - an empty list is a statement, not silence");
+    }
+
+    /// <summary>
+    /// The negative control that keeps the union honest: a provider that reports the partitions it read
+    /// but not how fully leaves the partial set null - unknown, never an empty list that would read as
+    /// "every partition was read in full".
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task NoProviderReportingPartial_LeavesItNull()
+    {
+        var a = new FakeProvider("a", () => Observable.Return(Initial(Node("p/one")) with { Partitions = ["p"] }));
+        var b = new FakeProvider("b", () => Observable.Return(Initial(Node("q/two")) with { Partitions = ["q"] }));
+
+        var query = new MeshQuery([a, b], hub: null!);
+
+        var change = await ((IMeshQueryCore)query)
+            .Query<MeshNode>(new MeshQueryRequest { Query = "nodeType:Markdown partitions:all", Limit = 10 }, Options)
+            .FirstAsync()
+            .Timeout(TestTimeouts.Convergence)
+            .Await(TestContext.Current.CancellationToken);
+
+        change.Partitions.Should().Equal(new[] { "p", "q" });
+        change.PartiallyReadablePartitions.Should().BeNull(
+            "an unreported partial set is unknown, not empty - reporting partitions says nothing about how fully they were read");
+    }
+
+    /// <summary>
+    /// The single-provider fast path clips through <c>ClipMergedInitial</c> with a <c>with</c>
+    /// expression, so the provider's partial report must survive it unchanged.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task SingleProvider_PartiallyReadablePartitionsSurviveTheClip()
+    {
+        var a = new FakeProvider("a",
+            () => Observable.Return(Initial(Node("p/one"), Node("p/two")) with
+            {
+                Partitions = ["p"],
+                PartiallyReadablePartitions = ["p"],
+            }));
+
+        var query = new MeshQuery([a], hub: null!);
+
+        var change = await ((IMeshQueryCore)query)
+            .Query<MeshNode>(new MeshQueryRequest { Query = "namespace:p", Limit = 1 }, Options)
+            .FirstAsync()
+            .Timeout(TestTimeouts.Convergence)
+            .Await(TestContext.Current.CancellationToken);
+
+        change.Items.Should().HaveCount(1, "the Limit clip applied");
+        change.PartiallyReadablePartitions.Should().Equal("p");
+    }
 }

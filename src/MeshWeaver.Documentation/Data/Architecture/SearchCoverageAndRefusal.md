@@ -129,6 +129,24 @@ the same reasoning that leaves `count` out of a `search_chunks` answer under `"s
 (#2741). The aggregator unions the lists of the providers that reported and stays null when none
 did (`MeshQuery.MergeProviderObservables`).
 
+### `coverage.partial` - a partition listed is not a partition read in full
+
+`coverage.partitions` is built from partition **membership** - the schemas the caller may open at all - while the rows that come back are filtered by a second, finer rule: the caller's longest-prefix `Read` grants inside each partition. A subtree that no grant of the caller's covers returns nothing, and the partition stays listed. Measured on a live portal (MeshWeaver #6564, one global-admin credential): `get MeshWeaver/samples/Graph/Data/Type/article` returned the node at `compilationStatus: Error`, the declared NodeType sweep answered `count: 0` with `meshweaver` among its 141 `coverage.partitions`, `whoami` on that path read `permissions: []`, and every query under `Type/` read 0. "0 of N over M readable partitions" counted that partition as read.
+
+The envelope therefore carries a third field:
+
+| `coverage.partial` | meaning |
+|---|---|
+| a non-empty list | the partitions of `coverage.partitions` the caller reads only **in part** - their own grants do not cover everything in them; a zero over such a partition is a zero over the part the caller can see |
+| `[]` | every partition read was read in full |
+| `null` | the provider does not report it (an image whose provider half is not deployed yet) - unknown, never "none partial" |
+
+`QueryResultChange.PartiallyReadablePartitions` is the core seam, unioned across providers exactly like `Partitions` (`MeshQuery.MergeProviderObservables`; null when no provider reported). The check needs only the caller's **own** grants, so naming a partition there discloses nothing the caller could not learn by asking for it, and over-reporting is the safe side. "No grant on the partition root" is necessary but not sufficient to call a partition fully read: the fold is per subject, closest scope, so a deeper `Read` deny under a root allow hides a subtree just the same.
+
+**A sweep with a non-empty `coverage.partial`, or a `null` one, does not pass on a zero.** It names the partitions it did not read in full (AGENTS.md, the pre-deploy sweep). The Postgres provider's report - the partitions where the caller's grants do not cover the partition root, or a `Read` deny exists below it - is the MeshWeaver.Plugins half, tracked on #6564; until it is on the image `coverage.partial` is `null`, which already stops a sweep reading clean.
+
+Tests: `MeshQueryMergeContractTest.PartiallyReadablePartitions_*`, `FullyReadPartitions_*`, `NoProviderReportingPartial_*` and `SingleProvider_PartiallyReadablePartitionsSurviveTheClip` pin the union, the empty-list-is-a-statement rule and the null-when-unreported rule.
+
 ### `basePath` reaches the whole subtree
 
 `basePath` now becomes `namespace:{base} scope:descendants` unless the query states its own
