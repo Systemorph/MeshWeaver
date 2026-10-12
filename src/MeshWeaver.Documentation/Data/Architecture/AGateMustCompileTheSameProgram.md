@@ -174,7 +174,7 @@ printed `✓ compile gate GREEN … 0 clean` and exited `0`.
 |---|---|
 | 0 | GREEN: at least one NodeType compiled and was judged, and nothing gates — or a `--modules` unit whose packages declare no NodeType, printed as `NOTHING TO COMPILE` and never as GREEN |
 | 1 | RED: a new break, a fingerprint drift, or a stale allow entry |
-| 2 | usage: an unknown or empty `--modules`, `--image` with `--refs`, `--gen-allow` with `--modules` |
+| 2 | usage: an unknown or empty `--modules`, `--image` with `--refs`, `--gen-allow` with `--modules`, a tree root (`MW_REPO_ROOT`) that is missing or unreadable. Refused before any reference lookup, so the code names the caller's mistake |
 | 3 | REFUSED: the framework checkout is behind `origin/main` (local runs only — CI checks out fresh) |
 | 4 | REFUSED: the reference set is absent or short |
 | 5 | REFUSED: nothing was judged — including `--gen-allow`, which refuses before writing so an empty run can never rewrite the allow-file to empty and erase the ratchet |

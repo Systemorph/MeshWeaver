@@ -36,7 +36,8 @@ Exit codes (#6567) — a run that could not answer never shares a code with an a
   0  GREEN — at least one NodeType was compiled and judged, no gate fail (or a `--modules` unit
      whose packages declare no NodeType at all, which is SAID, never printed as GREEN);
   1  RED — a real verdict: a new break, a fingerprint drift, a stale allow entry;
-  2  usage — an unknown/empty `--modules`, `--image` together with `--refs` (argparse's own code);
+  2  usage — an unknown/empty `--modules`, `--image` together with `--refs`, `--gen-allow` together
+     with `--modules`, a tree root (MW_REPO_ROOT) that is missing or unreadable (argparse's own code);
   3  REFUSED — the framework checkout is behind its remote (local runs only);
   4  REFUSED — the reference set is absent or short (no shared frameworks, no Rx, a missing
      registry-served module assembly);
@@ -1858,6 +1859,13 @@ def _self_test_exit_codes(failures: list) -> None:
              EXIT_REFUSED_NOTHING_JUDGED, "nothing was judged"),
             ("an unknown --modules id", typeless, ["--refs", str(complete), "--modules", "Nope"],
              EXIT_USAGE, "Nope"),
+            # Both usage errors below are refused before the reference set is read: with an EMPTY
+            # refs dir they would otherwise exit 4, which names the wrong mistake.
+            ("--gen-allow with --modules, before any reference lookup", typeless,
+             ["--refs", str(empty_refs), "--gen-allow", "--modules", "Mail"],
+             EXIT_USAGE, "--gen-allow was combined with --modules"),
+            ("a tree root that does not exist", tmp / "no-such-root", ["--refs", str(complete)],
+             EXIT_USAGE, "not a readable directory"),
         ]
         if git_ok:
             cases.append(("a framework checkout behind origin/main", empty_repo,
@@ -1952,9 +1960,25 @@ def main() -> int:
         print()
         return 0
 
+    # A usage error is refused before ANY work, so its exit code names the caller's mistake rather
+    # than whatever later step the doomed run happened to reach first (#6568 review: with no refs,
+    # `--gen-allow --modules X` used to exit 4 before this combination was ever checked).
+    if args.gen_allow and args.modules is not None:
+        # A regenerated allow-file describes the WHOLE tree; a scoped run has only seen part
+        # of it and would silently drop every other unit's debt from the ratchet.
+        print("error: --gen-allow needs a full run — it rewrites the allow-file for every "
+              "package, and a scoped run has not compiled the others. Drop --modules.")
+        return refuse(EXIT_USAGE, "--gen-allow was combined with --modules")
+
     # Resolve the scope BEFORE touching the reference set: a broken selection must be refused in
-    # milliseconds and by name, not after an image pull.
-    packages = known_packages(ROOT)
+    # milliseconds and by name, not after an image pull. A tree root that is missing or unreadable
+    # (a mis-set MW_REPO_ROOT) is a caller error too, and is refused like one rather than escaping
+    # as a traceback with the exit code of a real compile break (#6568 review).
+    try:
+        packages = known_packages(ROOT)
+    except OSError as e:
+        print(f"error: the tree root {ROOT} cannot be enumerated: {e}")
+        return refuse(EXIT_USAGE, f"the tree root (MW_REPO_ROOT) is not a readable directory: {ROOT}")
     selected, scope_error = parse_modules(args.modules, packages)
     if scope_error:
         print(f"error: {scope_error}")
@@ -2130,12 +2154,7 @@ def main() -> int:
     failing = {n for n, (st, _) in result.items() if st == "fail"}
 
     if args.gen_allow:
-        if selected is not None:
-            # A regenerated allow-file describes the WHOLE tree; a scoped run has only seen part
-            # of it and would silently drop every other unit's debt from the ratchet.
-            print("error: --gen-allow needs a full run — it rewrites the allow-file for every "
-                  "package, and a scoped run has not compiled the others. Drop --modules.")
-            return refuse(EXIT_USAGE, "--gen-allow was combined with --modules")
+        # (--gen-allow with --modules is refused before any work; see the top of main.)
         # 🚨 A rewrite needs the same positive count as a verdict (#6567): a run that compiled
         # nothing (0 NodeTypes found, or every one UNVERIFIABLE) would write an EMPTY allow-file and
         # exit 0 — erasing the ratchet while reading like a successful re-baseline. Refuse first.
