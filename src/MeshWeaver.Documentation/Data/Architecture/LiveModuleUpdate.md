@@ -224,6 +224,42 @@ built. `AModuleWithCircuitBoundServicesLoadsAtBootTest` and
 `ModuleRootServicesSwapTest.AnUpdateWithCircuitBoundServices_SwapsLive` carry the Radzen shape, against
 a root-scoped stand-in that throws exactly as `RemoteNavigationManager` does.
 
+### A module's scoped service is the caller's (MeshWeaver#6584)
+
+Not building a scoped registration at boot only moved its construction to its first resolve — and
+every resolve of a module service used to land in the module container's OWN root: one instance per
+generation, shared by every circuit, built against a root child scope no circuit initialised. Radzen's
+`ThemeService` was one instance for every user (one user's theme was the next user's), and
+`DialogService` threw `'RemoteNavigationManager' has not been initialized` on its first real resolve.
+
+So a resolve now carries its **caller** — the root-side scope it is made in (a Blazor circuit's, a
+request's, a hub's; null for the root container itself, i.e. a singleton or a resolve off the root
+provider) — down every road the root reaches a module by: `ModuleOwnedRootSource`'s stand-ins, the
+`Current` forwarder, a `Proxy` over a scoped or transient registration (one proxy per caller scope,
+forwarding for it; a singleton keeps its one stable proxy), and a module type asked from ANOTHER
+module's container (`ModuleFallbackSource`, which passes on the caller its own scope serves). A
+registration that is not a singleton is then resolved in a module scope **owned by that caller**
+(`ModuleServiceProvider.InCallerScope`, `ModuleCallerScopes`): begun on first use, tagged with the
+caller, and handed to the caller's own disposer, so it ends when the caller ends — asynchronously, as a
+circuit's scope is disposed. Its `RootResolutionScope` is the caller's own scope, so every root
+registration it takes (`NavigationManager`, `IJSRuntime`) is that caller's instance. A singleton is
+still the generation's one instance, built before published as above.
+
+**Which ends first.** A caller can outlive a generation (a hub scope across a live swap): the
+generation's container, as it ends, ends every caller's module scope FIRST — before its own singletons
+— and lets go of it, so the caller's disposer holds nothing of the retired generation; the caller's own
+end afterwards finds nothing to do (`ACallersModuleScopeEndsWithTheGenerationTest`).
+`AModulesScopedServicesAreTheCallersTest` measures two circuits through both the module-declared and
+the platform-class road; its negative control resolves the same registration with no caller and gets
+the uninitialised-state throw.
+
+**Residual.** A caller-owned module scope has its own Autofac shared-instance lock. A first build of a
+caller-scoped ROOT service whose constructor resolves a module's scoped service (caller lock, then the
+module scope's), overlapping a first build of that module service whose constructor takes a
+caller-scoped root service not built yet (the other order), could deadlock. It needs two threads making
+first builds in the same caller scope at once — a Blazor circuit serialises on its renderer, and a
+`Proxy` defers its resolve to the first call — and is not measured.
+
 **Open: a withdrawn module's `InstalledModuleAssembly` (MeshWeaver#6557).** A module withdrawn at boot
 keeps the transient `InstalledModuleAssembly` registration it was given while the mesh was configured,
 and once its boot assembly is collected that registration throws "no longer held by this mesh's module
