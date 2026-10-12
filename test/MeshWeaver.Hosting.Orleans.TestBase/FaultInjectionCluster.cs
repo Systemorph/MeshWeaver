@@ -87,6 +87,10 @@ public class FaultInjectionCluster : IAsyncLifetime
                         {
                             _backingStore.Register(services);
                             WrapTheStore(services, siloName);
+                            // The relay IS the LISTEN/NOTIFY model, so this cluster has what a
+                            // multi-silo host must declare (#4802).
+                            services.DeclareCrossProcessChangeDelivery(
+                                "test: CrossProcessChangeRelay (the PostgreSQL LISTEN/NOTIFY model)");
                         }));
             },
             withClient: false);
