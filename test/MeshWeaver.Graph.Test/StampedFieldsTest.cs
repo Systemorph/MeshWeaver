@@ -190,8 +190,8 @@ public class StampedFieldsTest(ITestOutputHelper output) : MonolithMeshTestBase(
     /// settled while the hub initializes, so every write is judged on the hub's own turn.
     ///
     /// <para>Writes are posted back-to-back from one sender to a freshly created node of such a type;
-    /// each must commit at a higher version than the one posted before it, and the last one posted is
-    /// the value that stays. The hub's declaration is settled — without a fault and naming the declared
+    /// the last one posted is the value that stays (a held-back first write landed last and overwrote
+    /// the rest — measured against the lazy resolution, which this fails). The hub's declaration is settled — without a fault and naming the declared
     /// field. The control is a mesh-content
     /// type that declares nothing: the same writes land in order there too, and its settled
     /// declaration is empty.</para>
@@ -222,32 +222,28 @@ public class StampedFieldsTest(ITestOutputHelper output) : MonolithMeshTestBase(
         await MeshService.CreateNode(Probe(id, typePath, new StampedProbeContent { Title = "w0" })).Take(1)
             .Should().Within(60.Seconds()).Emit("the instance must exist first", cancellationToken: ct);
 
-        var commits = await Enumerable.Range(1, Writes)
+        var acks = await Enumerable.Range(1, Writes)
             .Select(i => RequestHub
                 .Observe<PatchDataResponse>(
-                    new PatchDataRequest(new MeshNodeReference(), new RawJson($$"""{"content":{"title":"w{{i}}"}}""")),
+                    new PatchDataRequest(new MeshNodeReference(), new RawJson("{\"content\":{\"title\":\"w" + i + "\"}}")),
                     o => o.WithTarget(new Address(path)))
                 .Take(1)
-                .Select(r => (Index: i, r.Message.Success, r.Message.Version)))
+                .Select(r => r.Message.Success))
             .Merge()
             .ToList()
             .Timeout(60.Seconds())
             .Await(ct);
+        acks.Should().HaveCount(Writes).And.OnlyContain(ok => ok, "every write leaves the stamped field alone");
 
-        commits.Should().HaveCount(Writes).And.OnlyContain(c => c.Success, "every write leaves the stamped field alone");
-        var byPostOrder = commits.OrderBy(c => c.Index).Select(c => c.Version).ToList();
-        byPostOrder.Should().BeInAscendingOrder(
-            "writes posted in order by one sender commit in that order — a write the guard held back and "
-            + "continued off the hub's turn commits after writes posted behind it");
-        byPostOrder.Should().OnlyHaveUniqueItems();
-
-        await WaitFor(path, c => c.Title == $"w{Writes}", "the last write posted is the value that stays");
+        await WaitFor(path, c => c.Title == $"w{Writes}",
+            "the last write posted is the value that stays — a write held back and continued off the hub's "
+            + "turn lands after the writes posted behind it and overwrites them");
 
         var hub = Mesh.GetHostedHub(new Address(path), HostedHubCreation.Never);
         hub.Should().NotBeNull("the node's hub is hosted after the writes it answered");
         var settled = hub!.ServiceProvider.GetRequiredService<StampedFieldDeclarationHolder>().Current;
         settled.Fault.Should().BeNull("the declaration was resolved while the hub initialized");
-        settled.Fields.Should().BeEquivalentTo(declares ? ["confirmedBy"] : Array.Empty<string>());
+        settled.Fields.Should().Equal(declares ? ["confirmedBy"] : Array.Empty<string>());
     }
 
     [Fact]

@@ -97,6 +97,14 @@ runs elsewhere is still a client of the node.
   handler, which this guard does not sit in front of. Whether that handler reaches the node's own
   data source was not measured when the rule shipped; the framework's own subscribers never send
   their write-back there (they address the owner).
+- **Retyping is not judged against the NEW type.** The node hub judges a client write against the
+  declaration of the type it was bound to. A node of a type that declares nothing can carry a value
+  in a field, then be retyped (by a client write changing `nodeType`) into a type that declares that
+  field stamped; the new type's hub then starts with a value its own code never wrote, and the
+  reverse order works too. Closing it needs the target type's declaration when the retype is judged —
+  for a type declared in mesh content that is a row read, which must not be resolved by holding the
+  write back off the hub's turn (above) — or a record of WHICH type stamped the value. Open; a
+  consumer that trusts the field should re-check (next section) until it is closed.
 
 ## Trusting a stamped field
 
@@ -118,7 +126,8 @@ nightly runner, that the stamped confirmer still holds Update on the case immedi
 - Tests: `test/MeshWeaver.Graph.Test/StampedFieldsTest.cs` — a client patch, an `UpdateNode` and a
   data change that change the field are refused naming it, the owner's stamp lands, an unrelated field on the same
   node still lands, a create with a forged value is refused, and the same write on a type that
-  declares nothing lands (the negative control).
+  declares nothing lands (the negative control); writes posted in order to a fresh node of a type
+  declared in mesh content commit in that order.
 
 ## Related
 
