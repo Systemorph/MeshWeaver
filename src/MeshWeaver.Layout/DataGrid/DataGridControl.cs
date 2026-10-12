@@ -171,9 +171,16 @@ public record DataGridControl(object Data)
     
     // Row Properties
     /// <summary>
-    /// CSS class name(s) applied to each data row. Accepts a string or a row-contextual binding expression.
+    /// CSS class name(s) applied to every data row — one value for all rows. For a class that
+    /// depends on the row, name a row property with <see cref="RowClassProperty"/>.
     /// </summary>
     public object? RowClass { get; init; }
+    /// <summary>
+    /// The row property whose value is that row's CSS class (camelCase, as serialized) — e.g. a row
+    /// carrying <c>rowClass: "inbox-unread"</c> renders bold. Takes precedence over
+    /// <see cref="RowClass"/> for a row whose property is non-empty.
+    /// </summary>
+    public string? RowClassProperty { get; init; }
     /// <summary>
     /// Inline CSS style applied to each data row. Accepts a string or a row-contextual binding expression.
     /// </summary>
@@ -272,6 +279,10 @@ public record DataGridControl(object Data)
     /// <summary>Returns a copy of the control with <paramref name="rowClass"/> as the per-row CSS class expression.</summary>
     /// <param name="rowClass">The CSS class name or binding expression for rows.</param>
     public DataGridControl WithRowClass(object rowClass) => This with { RowClass = rowClass };
+
+    /// <summary>Names the row property whose value is each row's CSS class (<see cref="RowClassProperty"/>).</summary>
+    /// <param name="property">The camelCase row property.</param>
+    public DataGridControl WithRowClassProperty(string property) => This with { RowClassProperty = property };
     /// <summary>Returns a copy of the control with <paramref name="rowStyle"/> as the per-row inline style expression.</summary>
     /// <param name="rowStyle">The inline CSS style or binding expression for rows.</param>
     public DataGridControl WithRowStyle(object rowStyle) => This with { RowStyle = rowStyle };
