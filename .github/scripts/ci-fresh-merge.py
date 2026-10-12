@@ -158,6 +158,15 @@ def walkable_merge_bases(path: str, a: str, b: str, deepen_refs: tuple[str, ...]
             errors.append(f"deepen {depth}: {(d.stderr or d.stdout).strip()[:200]}")
             continue
         bases = local_merge_bases(path, a, b)
+    if not bases and shallow_boundary(path):
+        # ZERO visible bases while the checkout is still shallow: every base is beyond the boundary (or
+        # every deepen failed). The caller's last resort, GitHub Compare, names ONE merge-base, and for a
+        # criss-cross that is a subset — the same false conflict as merging over the visible half. So a
+        # shallow checkout never falls through to it: completeness cannot be proven, and that is a refusal.
+        raise Refused(f"{a[:12]} and {b[:12]} show NO merge-base in this shallow checkout after deepening "
+                      f"{ladder[-1] if ladder else 0} — every base lies behind a shallow boundary, and a single "
+                      f"merge-base named by the compare read may be one of several "
+                      f"({'; '.join(errors) or 'history not deep enough'}) — the fresh merge cannot be computed")
     if bases and not merge_bases_complete(path, a, b, bases):
         raise Refused(f"{a[:12]} and {b[:12]} show {len(bases)} merge-base(s) in this shallow checkout, but a shallow boundary "
                       f"still lies above them after deepening {ladder[-1] if ladder else 0} — another merge-base may be hidden "
@@ -493,6 +502,17 @@ def self_test() -> int:
             check(False, "a ladder that ends before completeness is established REFUSES")
         except Refused as e:
             check("shallow boundary" in str(e), "a ladder that ends before completeness is established REFUSES, naming the boundary")
+        # 5b''. A cut ladder with ZERO visible bases (every deepen fails here: an empty ladder stands for
+        #      it). The compare read would name ONE base of a criss-cross; a shallow checkout must refuse
+        #      instead of merging over it.
+        zero = clone("straddle-zero", shallow=True, tip=deep_head)
+        git(zero, "fetch", "-q", "--depth=1", "origin", deep_main)
+        check(local_merge_bases(zero, deep_main, deep_head) == [], "control: a depth-1 checkout of the criss-cross sees NO merge-base")
+        try:
+            walkable_merge_bases(zero, deep_main, deep_head, (deep_main, deep_head), [], ladder=())
+            check(False, "a shallow checkout with ZERO visible bases REFUSES (never falls through to the compare read)")
+        except Refused as e:
+            check("NO merge-base" in str(e), "a shallow checkout with ZERO visible bases REFUSES, naming why")
         straddle = clone("straddle", shallow=True, tip=deep_head)
         try:
             _, straddle_merged = fresh_merge(straddle, deep_main, deep_head, compare)

@@ -65,9 +65,12 @@ git checkout --detach <commit>
   bases only once no boundary commit reachable from either tip lies ABOVE them — every hidden common
   ancestor is then an ancestor of a base it already has, so none of them is a merge-base. Until then
   it keeps deepening, and when the deepening ladder ends first it is red, naming the boundary, rather
-  than merging over a subset of the bases. The self-test carries a criss-cross whose second base lies
-  past the first deepening: one base visible after it (the control), merged over both once the
-  history is read, and refused when the ladder is cut short.
+  than merging over a subset of the bases. The same holds when NO base is visible yet: a checkout
+  that is still shallow with zero bases is red too, and never falls through to GitHub Compare, whose
+  single `merge_base_commit` can be one base of several. The self-test carries a criss-cross whose
+  second base lies past the first deepening: one base visible after it (the control), merged over
+  both once the history is read, refused when the ladder is cut short, and refused with zero bases
+  visible.
 - **It is reported.** Every applying job prints, and adds to its summary:
   *Tested: head `abc…` merged onto `main@def…` → `123…` (merged) (GitHub's merge ref was built on main@456…)*.
 - **A selector sees the right diff.** A scope that diffs `origin/<base>...HEAD` now gets exactly the
