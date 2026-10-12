@@ -129,6 +129,21 @@ public record PackageManifest
     public string? Source { get; init; }
 
     /// <summary>
+    /// 🚨 WHERE this install came from — the repository (and subdirectory) or the registry whose
+    /// source performed it, in <see cref="InstallOrigin"/>'s canonical form. Install-record only:
+    /// stamped by the install funnel (<see cref="CatalogLayoutAreas.InstallOrUpdate"/>) from the
+    /// SOURCE's own identity, overwriting anything a listed manifest carried, and carried forward
+    /// on a re-stamp by a source that names none (<c>PackageInstaller.SeedOrigin</c>).
+    ///
+    /// <para>It is what an UNATTENDED update binds to (MeshWeaver#6526): the update watcher takes a
+    /// candidate only from the origin recorded here, so a second watched repository listing the same
+    /// id is ignored. A record that predates the field ADOPTS its origin on its first unattended
+    /// update when exactly one watched repository lists the package, and is refused — by name, on
+    /// the platform bell — when two or more do (<see cref="InstallOrigin.Decide"/>).</para>
+    /// </summary>
+    public string? Origin { get; init; }
+
+    /// <summary>
     /// The licence this package is offered under, as an SPDX id or expression
     /// (<c>Apache-2.0</c>, <c>Apache-2.0 OR MIT</c>). Authored on the plugin root's
     /// <c>content.license</c>; when absent it is filled from the SOURCE's declared default (a
@@ -419,6 +434,29 @@ public record PackageManifest
     /// install path).
     /// </summary>
     public ImmutableSortedDictionary<string, string>? InstalledFiles { get; init; }
+
+    /// <summary>
+    /// 🚨 The COMPARISON RULE under which a full install last compared every declared node of this
+    /// package with the node the mesh stored (<see cref="PackageInstaller.InstallComparisonEpoch"/>);
+    /// null on a record stamped before the rule was versioned.
+    ///
+    /// <para><b>Why the record has to carry it.</b> <see cref="InstalledFiles"/> and
+    /// <see cref="ModuleVersion"/> are hashes of the SOURCE. The up-to-date exit and the
+    /// incremental diff trust them as a statement about the MESH — "every file at this hash is
+    /// stored as the package ships it" — and that statement is only as good as the comparison that
+    /// decided, file by file, whether to write. When that comparison was blind to a member, the
+    /// install skipped the write, stamped the file's hash anyway, and every later install read the
+    /// equal hash and never looked again: <c>Governance/NameCheck</c> stayed
+    /// <c>keepsHistory: true</c> through a reinstall on a platform whose comparison could see the
+    /// difference (MeshWeaver.Plugins#2786). A record stamped under any OTHER rule than the installer
+    /// reading it applies — older, or newer from a pod on a later image during a roll — is therefore
+    /// not a baseline: the next install of the package is a full one, which compares every stored
+    /// node with the package and stamps that installer's rule.</para>
+    ///
+    /// <para>Only a FULL install stamps the current rule. An incremental update compares only the
+    /// files whose hash moved, so it carries the previous value forward.</para>
+    /// </summary>
+    public int? ComparisonEpoch { get; init; }
 
     /// <summary>
     /// 🚨 The declared files this install PARSED and could NOT turn into a node — the half of "is

@@ -410,8 +410,15 @@ public record StreamEndedEvent(string StreamId) : StreamMessage(StreamId)
 /// </summary>
 /// <param name="Reference">The workspace reference to retrieve data for</param>
 [RequiresPermission(Permission.Read)]
-public record GetDataRequest(WorkspaceReference Reference) : IRequest<GetDataResponse>
+public record GetDataRequest(WorkspaceReference Reference) : IRequest<GetDataResponse>, IDescribedForDiagnostics
 {
+    /// <summary>
+    /// The reference alone: it names the read, and through it the producer that issued it (the
+    /// point read's <c>MeshNodeReference</c> vs a content-collection read), which is what a
+    /// bring-up discard Error needs to say (#5718). Explicit, so it never reaches the wire.
+    /// </summary>
+    string IDescribedForDiagnostics.DiagnosticDescription => Reference?.ToString() ?? "(no reference)";
+
     /// <summary>
     /// Optional MIME type to request content conversion.
     /// When set to "text/markdown", binary documents (.docx, .pptx, .xlsx) are converted to markdown.

@@ -182,7 +182,14 @@ public static class PackageSources
         // edit on the very next listing (LocalSourceContentVersionTest). Caching one would make a
         // local-dev or air-gapped registry report yesterday's content for five minutes.
         var inner = Build(hub, src, subdir, logger, nodeRepo);
-        return inner is null || !IsUrl(src) ? inner : Cached(hub, inner, src, subdir, nodeRepo);
+        if (inner is null)
+            return null;
+        // 🚨 The ORIGIN rides on the source built from the configured repository, never on what a
+        // listed manifest authors (MeshWeaver#6526): the install funnel stamps it onto the record,
+        // and an unattended update is bound to it (InstallOrigin).
+        return InstallOrigin.Bind(
+            IsUrl(src) ? Cached(hub, inner, src, subdir, nodeRepo) : inner,
+            InstallOrigin.ForRepo(src, subdir));
     }
 
     private static IPackageSource? Build(
@@ -441,7 +448,7 @@ public static class PackageSources
     public static bool IsLocalCheckout(string? repo) =>
         !string.IsNullOrWhiteSpace(repo) && !IsUrl(repo!.Trim());
 
-    private static bool IsUrl(string s) =>
+    internal static bool IsUrl(string s) =>
         s.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
         || s.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
         || s.StartsWith("git@", StringComparison.Ordinal);

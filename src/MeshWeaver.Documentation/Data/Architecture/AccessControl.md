@@ -815,6 +815,13 @@ The evaluator holds **no per-process mutable state**: no `_permissionCache`, no 
 
 Creating or editing a grant is `workspace.GetMeshNodeStream(path).Update(...)` (or `CreateNodeRequest` / `DeleteNodeRequest` for lifecycle) — exactly like every other MeshNode; see [`GetMeshNodeStream().Update()` is the only mutation API](/Doc/Architecture/RequestViaStreamUpdate). The write goes through the usual validator chain (`RlsNodeValidator`, `AccessAssignmentGuard`) and the usual persistence path; the shared `$security-access:{partition}` query then re-emits and subsequent checks reflect it.
 
+### Narrower than Update: stamped fields
+
+Update on a node lets a caller write its content — except a field the node's type declares
+**stamped** (`NodeTypeDefinition.StampedFields`): that one only the node's own hub writes, and a
+client patch, data change or create that would set or change it is refused, naming the field. See
+[Stamped Fields](../StampedFields).
+
 ---
 
 # Anonymous and Public access
@@ -1179,13 +1186,16 @@ live in the Entra tenant — four of them, every one scoped to `ref:refs/heads/m
 recorded that those credentials existed, which repositories held one, or who authorised them.
 
 That is the shape of the plaintext-provider-key incident: **a security fact with no record a reader
-can point at.** Here the rule IS a node — `search nodeType:BuildPrincipal partitions:all` is the complete list of
-repositories this mesh trusts and exactly what each may do, and revoking one is a node write.
+can point at.** Here the rule IS a node — `search nodeType:BuildPrincipal partitions:all` lists every
+repository this mesh trusts through a node and exactly what each may do, and revoking one is a node
+write. An instance may also DECLARE a principal in its configuration (below); those are in no node,
+and the public `/health` body lists them on its `build_principals` line. The two readings together
+are the complete list.
 
 |  | Azure OIDC federated credential | Build principal |
 |---|---|---|
 | what is stored | a subject rule, in Entra | a subject rule, on a mesh node |
-| who can see which repos may fetch | whoever has tenant access | `search nodeType:BuildPrincipal partitions:all` |
+| who can see which repos may fetch | whoever has tenant access | `search nodeType:BuildPrincipal partitions:all`, plus `/health` → `build_principals` for a declared one (which can never carry a fetch scope) |
 | PR vs main | one credential per event subject, per subject *format* | one node; `event_name` is a claim it reads |
 | secret in the repo | none (already) | none |
 | verified by | Azure | the mesh, the way it already verifies `mwa_` tokens |
@@ -1199,7 +1209,7 @@ matters (`iss` included) is re-read from the verified payload afterwards.
 | `iss` | verified against | resolves to |
 |---|---|---|
 | the registry itself | `SyncTokenSigningKeyService`'s HMAC material (HS256) | a `MeshWeaverInstance` + its `PluginGrant` |
-| `https://token.actions.githubusercontent.com` | GitHub's published JWKS (RS256) | a `BuildPrincipal` node |
+| `https://token.actions.githubusercontent.com` | GitHub's published JWKS (RS256) | a `BuildPrincipal` node, or, only when no node exists for the repository, the principal the configuration declares |
 
 Neither leg ever honours a token's own `alg`. The HS256 leg accepts `HS256` and nothing else; the
 RS256 leg accepts `RS256` and nothing else, so `alg: none` and an RSA-public-key-as-HMAC-secret
@@ -1212,7 +1222,8 @@ only *which repository, on which event, asked*. A verifier that checked it and s
 authenticate the entire public GitHub's CI.
 
 So the token is checked on five things — signature, `iss`, `aud`, validity window, and a non-empty
-`repository` — and then resolved to a node. **No node ⇒ no caller ⇒ 401.**
+`repository` — and then resolved to a node, or to a declared principal when no node exists. **No
+node and no declaration ⇒ no caller ⇒ 401.**
 
 * **`aud` is mandatory and unconfigured means REFUSE.** A registry with no
   `Plugins:Registry:BuildPrincipalAudience` has no build-principal surface at all, rather than one
@@ -1253,6 +1264,25 @@ role check beside it that could drift.
 | `issuedBy` / `issuedAt` | the audit trail the Entra credentials could not answer |
 | `lastSeen` | advisory, and **nothing writes it yet** — stamping it on the authentication path is a write per request, so an absent value means *not recorded*, never *never used* |
 | `requestedAction` / `isRevoked` | the stop, below |
+
+### A principal a deployment declares
+
+A deployment may also **declare** a principal in configuration, under
+`Plugins:Registry:BuildPrincipals:<n>` (policy `declared-not-derived`), so an estate provisions the
+same trust on every instance through its deployment records instead of a node created by hand on
+each. It is deliberately narrower than a node: both immutable ids are **required**, every listed
+event needs a ref allow-list, and the only scope it may carry is `verify:combo`. A declaration that
+breaks a rule is refused whole.
+
+The node stays the authority. The authenticator consults a declaration only when **no node exists**
+for the repository, so a node narrows or revokes a declared principal with no roll, and an
+unreadable node never falls through to it. "No roll" is not "the same instant": the authenticator
+reads the node from the process-wide mirror the change feed keeps current, on every replica, so a
+node write decides from the moment that feed has delivered it — the same propagation every node
+revoke on this leg has always had. Because a declared principal is in no node, the search above is no
+longer the complete list on an instance that declares one; the public `/health` body names every
+declaration in force, and every refused one, on its `build_principals` line. Shape and rules:
+[Combo gate wiring](../ComboGateWiring) → *Provisioning an instance*.
 
 **The scope split is the security tie.** The identity that publishes a source is the identity that
 may fetch what it depends on, and it can do neither outside its scopes: SocialMedia's principal holds

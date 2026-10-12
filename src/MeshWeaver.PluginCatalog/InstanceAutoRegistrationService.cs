@@ -1952,6 +1952,20 @@ public sealed class InstanceAutoRegistrationService(
 
     /// <summary>Whether two source names are the same non-empty source (case-insensitive, like
     /// <see cref="PluginGrantEntry.Matches"/>). Pure.</summary>
+    /// <summary>
+    /// The listing the repair lane re-asserts an installed package from (#6512), or null when the
+    /// record names a source and no listing is TRUSTED to be that source. Trusted means a registry's
+    /// stamp, or the candidate's source being the name its source was configured under
+    /// (<see cref="ProvenanceIsTrusted"/>); a manifest that merely authors the recorded name is not
+    /// enough. A legacy record with no source keeps the first listing. Pure.
+    /// </summary>
+    /// <param name="listings">Every listing of one package id, in source order.</param>
+    /// <param name="recordedSource">The source the install record was stamped with, or null.</param>
+    private static InstallCandidate? RepairCandidate(IReadOnlyList<InstallCandidate> listings, string? recordedSource) =>
+        string.IsNullOrWhiteSpace(recordedSource)
+            ? listings.FirstOrDefault()
+            : listings.FirstOrDefault(c => ProvenanceIsTrusted(c) && SameSource(c.Package.Source, recordedSource));
+
     private static bool SameSource(string? a, string? b) =>
         !string.IsNullOrWhiteSpace(a) && string.Equals(a.Trim(), b?.Trim(), StringComparison.OrdinalIgnoreCase);
 
@@ -2581,22 +2595,36 @@ public sealed class InstanceAutoRegistrationService(
                 {
                     var listingIncomplete = answers.Any(a => a.Failed);
                     var sourceUnreachable = answers.Any(a => a.Failed && !a.Held);
-                    // Bound by (source, id), not id alone: where several sources list the same id,
-                    // the one the install record was stamped with is preferred, so a repair never
-                    // re-asserts another source's files over the package that is installed.
+                    // Bound by (source, id), not id alone, and by PROVENANCE, not by what a manifest
+                    // says (#6512): a record that names its source is re-asserted only from a listing
+                    // whose source is trusted to be that one — a registry's stamp, or the name the
+                    // source was configured under. A directly read repository can AUTHOR any
+                    // `source` in its package.json, so "the candidate says it is from X" would let
+                    // another repository listing the same id land its files over the installed
+                    // package. Only a legacy record that names no source takes the first listing.
                     var catalog = answers
                         .SelectMany(a => a.Candidates)
                         .GroupBy(c => c.Package.Id, StringComparer.Ordinal)
                         .ToImmutableDictionary(
                             g => g.Key,
-                            g => g.FirstOrDefault(c => SameSource(c.Package.Source, recordedSources.GetValueOrDefault(g.Key)))
-                                 ?? g.First(),
+                            g => RepairCandidate(g.ToList(), recordedSources.GetValueOrDefault(g.Key)),
                             StringComparer.Ordinal);
 
                     var atRecordedHash = ImmutableList.CreateBuilder<InstallCandidate>();
                     foreach (var (id, recorded) in recordedModuleVersions.OrderBy(kv => kv.Key, StringComparer.Ordinal))
                     {
-                        if (!catalog.TryGetValue(id, out var candidate))
+                        if (catalog.TryGetValue(id, out var bound) && bound is null)
+                        {
+                            logger.LogWarning(
+                                "[PackageRepair] {Id} is NOT re-asserted: its record names source "
+                                + "'{Source}', and no listing whose provenance is trusted to be that "
+                                + "source serves it — only listings that merely CLAIM it, or other "
+                                + "sources. A repair never lands another repository's files over the "
+                                + "installed package (MeshWeaver#6512).",
+                                id, recordedSources.GetValueOrDefault(id));
+                            continue;
+                        }
+                        if (bound is not { } candidate)
                         {
                             // Say WHICH of two things this is: the listing was partial (a held or
                             // failed source may well be the one that serves it), or every source

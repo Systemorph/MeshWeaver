@@ -68,6 +68,10 @@ public partial record MeshBuilder
         {
             if (!services.Any(d => d.ImplementationInstance is ModuleOwnedRootSource))
                 services.AddSingleton<Autofac.Core.IRegistrationSource>(new ModuleOwnedRootSource(modules));
+            // Built before published (MeshWeaver#6542): every held module's shared instances are built
+            // once the root container exists and before the provider is handed out.
+            if (!services.Any(d => d.ImplementationInstance is ModulesBuiltBeforePublished))
+                services.AddSingleton<MeshWeaver.ServiceProvider.IRootContainerBuilt>(new ModulesBuiltBeforePublished());
             return services;
         });
     }

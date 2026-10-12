@@ -372,6 +372,9 @@ public static class GraphConfigurationExtensions
                 // resolves INodeTypeInstanceLocations with GetService, so this registration is what
                 // arms it). One per mesh: the static fold plus the live definitions on this process.
                 services.AddSingleton<NodeTypeInstanceLocations>();
+
+                // A recycle wave shares each dependency-network read while it is in flight (#6520).
+                services.AddSingleton<RecycleCascadeReads>();
                 services.AddSingleton<INodeTypeInstanceLocations>(sp =>
                     sp.GetRequiredService<NodeTypeInstanceLocations>());
 
@@ -436,6 +439,11 @@ public static class GraphConfigurationExtensions
                 // Instance secrets are written only through the InstanceSecrets verbs (rights,
                 // slot and encryption checked, then written as system); a direct write is refused.
                 services.AddScoped<INodeValidator, InstanceSecretWriteGuard>();
+
+                // A create may not bring a field its type declares STAMPED — only the node's own hub
+                // writes it, once the node exists (the update half is the node hub's delivery guard,
+                // StampedFields.AddStampedFieldGuard). Doc/Architecture/StampedFields.
+                services.AddScoped<INodeValidator, Security.StampedFieldCreateValidator>();
 
                 // A service principal never holds platform administration: no Admin-partition grant
                 // may name one, and a service caller writes nothing in the Admin partition.
