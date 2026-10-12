@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -212,44 +213,58 @@ internal sealed class LimitedConcurrencyLevelTaskScheduler : TaskScheduler
     /// <see cref="QueueTask"/> wakes it; exit only once <see cref="Complete"/> has been called. The
     /// park is a wait for WORK on a thread this scheduler owns — never a hub turn, a grain turn or a
     /// ThreadPool worker — so it holds up no scheduler the mesh runs on.
+    ///
+    /// <para>🚨 This frame holds NO reference to a task: each take-and-execute is <see cref="RunOne"/>,
+    /// a frame of its own that returns before the next park. Inlined here, the previous iteration's
+    /// dequeued node and task stayed in their stack slots while the thread parked — a Debug JIT reports
+    /// them live — so a parked lane rooted the last task it ran and that task's RESULT until it ran
+    /// something else. Measured: a live module swap's plan, naming the generation it retires, kept that
+    /// collectible context loaded (<c>AParkedLaneHoldsNothingItRanTest</c>).</para>
     /// </summary>
     private void LaneLoop()
     {
-        while (true)
+        while (RunOne())
         {
-            Task? item = null;
-            Action? drained = null;
-            var exit = false;
-            lock (_tasks)
-            {
-                while (_tasks.Count == 0)
-                {
-                    if (_completed)
-                    {
-                        --_delegatesQueuedOrRunning;
-                        drained = TakeDrainedLocked();
-                        exit = true;
-                        break;
-                    }
-                    ++_parked;
-                    Monitor.Wait(_tasks);
-                }
-
-                if (!exit)
-                {
-                    item = _tasks.First!.Value;
-                    _tasks.RemoveFirst();
-                }
-            }
-
-            if (exit)
-            {
-                drained?.Invoke();
-                return;
-            }
-
-            TryExecuteTask(item!);
         }
+    }
+
+    /// <summary>
+    /// One lane iteration: park until there is work or the scheduler completes, then run ONE task.
+    /// False when the lane must exit. Never inlined — see <see cref="LaneLoop"/>.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private bool RunOne()
+    {
+        Task? item = null;
+        Action? drained = null;
+        lock (_tasks)
+        {
+            while (_tasks.Count == 0 && !_completed)
+            {
+                ++_parked;
+                Monitor.Wait(_tasks);
+            }
+
+            if (_tasks.Count > 0)
+            {
+                item = _tasks.First!.Value;
+                _tasks.RemoveFirst();
+            }
+            else
+            {
+                --_delegatesQueuedOrRunning;
+                drained = TakeDrainedLocked();
+            }
+        }
+
+        if (item is null)
+        {
+            drained?.Invoke();
+            return false;
+        }
+
+        TryExecuteTask(item);
+        return true;
     }
 
     /// <summary>
