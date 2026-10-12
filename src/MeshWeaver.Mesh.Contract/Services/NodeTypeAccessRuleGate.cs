@@ -156,11 +156,29 @@ public static class NodeTypeAccessRuleGate
         var userId = string.IsNullOrEmpty(caller?.ObjectId) || caller.IsVirtual
             ? WellKnownUsers.Anonymous
             : caller.ObjectId;
+        // 🚨 TakeDecisionOutsideGate, never a bare Take(1) (#899): on a warm cache the fold emits
+        // synchronously while holding its gate, and what follows — the subject-node read, the rule,
+        // and the CALLER's write chained onto this verdict — must not run inside that lock.
+        // 🚨 And a TERMINAL for silence: a fold that never emits nor completes would otherwise hang
+        // the verb forever. Bounded by the same PermissionEstablishmentBudget the owner's write
+        // validator (RlsNodeValidator) uses, and reported as Undetermined — fail closed, never a
+        // denial nobody established.
+        var budget = (hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions())
+            .PermissionEstablishmentBudget;
         return hub.CheckPermissionOutcome(path, userId, permission)
-            .Take(1)
+            .TakeDecisionOutsideGate()
             .SelectMany(outcome => outcome.IsGranted || outcome.IsUndetermined
                 ? Observable.Return(outcome)
-                : ReconsiderThroughRule(hub, path, caller, userId, permission, logger));
+                : ReconsiderThroughRule(hub, path, caller, userId, permission, logger))
+            .Timeout(budget)
+            .Catch((TimeoutException ex) =>
+            {
+                logger?.LogWarning(ex,
+                    "The {Permission} pre-flight on {Path} for {User} reached no verdict within {Budget} — "
+                    + "reporting an availability failure, not a denial", permission, path, userId, budget);
+                return Observable.Return(PermissionCheckOutcome.Undetermined(
+                    $"the {permission} check on '{path}' reached no verdict within {budget.TotalSeconds:0.#}s"));
+            });
     }
 
     private static IObservable<PermissionCheckOutcome> ReconsiderThroughRule(

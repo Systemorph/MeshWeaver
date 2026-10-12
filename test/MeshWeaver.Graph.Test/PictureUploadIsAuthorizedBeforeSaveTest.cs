@@ -6,6 +6,8 @@ using MeshWeaver.ContentCollections;
 using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -43,7 +45,7 @@ public class PictureUploadIsAuthorizedBeforeSaveTest(ITestOutputHelper output) :
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
         Directory.CreateDirectory(_contentRoot);
-        return ConfigureMeshBase(builder)
+        return ConfigureGate(ConfigureMeshBase(builder))
             .AddMeshNodes(
                 new MeshNode(PictureType)
                 {
@@ -63,12 +65,15 @@ public class PictureUploadIsAuthorizedBeforeSaveTest(ITestOutputHelper output) :
                 AssignmentNodeFactory.UserRole(EditorUser, "Editor", Target));
     }
 
+    /// <summary>A subclass's hook on the permission machinery; the base leaves it untouched.</summary>
+    protected virtual MeshBuilder ConfigureGate(MeshBuilder builder) => builder;
+
     private static byte[] Png() => [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 7, 7, 7];
 
-    private string PictureFolder => Path.Combine(_contentRoot, NodeImageUpload.Folder);
+    protected string PictureFolder => Path.Combine(_contentRoot, NodeImageUpload.Folder);
 
     /// <summary>Builds the upload as <paramref name="userId"/>, subscribes it as the hub.</summary>
-    private IObservable<System.Reactive.Notification<string>> UploadBuiltAsSubscribedAsHub(string userId)
+    protected IObservable<System.Reactive.Notification<string>> UploadBuiltAsSubscribedAsHub(string userId)
     {
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         access.SetContext(new AccessContext { ObjectId = userId, Name = userId });
@@ -115,5 +120,46 @@ public class PictureUploadIsAuthorizedBeforeSaveTest(ITestOutputHelper output) :
         File.Exists(Path.Combine(_contentRoot, NodeImageUpload.ManagedFilePath(icon)!)).Should().BeTrue();
         await Mesh.GetMeshNodeStream(Target).Where(n => n.Icon == icon)
             .Should().Within(TestTimeouts.Convergence).Emit("the Icon points at the new picture");
+    }
+}
+
+/// <summary>
+/// The pre-flight has a TERMINAL for silence: a permission fold that never emits (nor completes)
+/// for the caller is bounded by <see cref="MeshOperationOptions.PermissionEstablishmentBudget"/> and
+/// answered as <see cref="NodeImageUploadFailure.PermissionUndetermined"/> — fail closed, nothing
+/// stored, never a hang and never a denial nobody established. The fold is silenced through the
+/// framework's own <c>WithPermissionEvaluator</c> seam for ONE identity; every other identity keeps
+/// the real evaluator, and the base class's editor case on this same configuration is the control.
+/// </summary>
+public class PictureUploadWithASilentPermissionFoldTest(ITestOutputHelper output)
+    : PictureUploadIsAuthorizedBeforeSaveTest(output)
+{
+    private const string SilentUser = "picturegate-silent";
+
+    /// <summary>Rung 1 of the budget ladder; the pre-flight's bound is two rungs below it.</summary>
+    private static readonly TimeSpan Budget = TimeSpan.FromSeconds(15);
+
+    /// <inheritdoc />
+    protected override MeshBuilder ConfigureGate(MeshBuilder builder)
+        => builder
+            .ConfigureServices(s => s.AddSingleton(new MeshOperationOptions { Timeout = Budget }))
+            .ConfigureHub(c => c.WithPermissionEvaluator(
+                (hub, nodePath, userId) => userId == SilentUser
+                    ? Observable.Never<Permission>()
+                    : PermissionEvaluator.GetEffectivePermissions(hub, nodePath, userId)));
+
+    [Fact(Timeout = 120_000)]
+    public async Task ASilentFold_IsAnsweredUndetermined_AndNothingIsStored()
+    {
+        var outcome = await UploadBuiltAsSubscribedAsHub(SilentUser)
+            .Should().Within(Budget + TimeSpan.FromSeconds(10))
+            .Match(n => n.Kind != System.Reactive.NotificationKind.OnCompleted,
+                "an upload whose permission fold never answers must still answer", TestContext.Current.CancellationToken);
+
+        outcome.Kind.Should().Be(System.Reactive.NotificationKind.OnError);
+        outcome.Exception.Should().BeOfType<NodeImageUploadException>()
+            .Which.Reason.Should().Be(NodeImageUploadFailure.PermissionUndetermined,
+                "no verdict was reached — an availability failure, not a refusal");
+        Directory.Exists(PictureFolder).Should().BeFalse("nothing is saved without a verdict");
     }
 }
