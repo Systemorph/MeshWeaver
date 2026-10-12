@@ -248,11 +248,18 @@ public class CatalogAdminActionsNeedTheAdministratorTest(ITestOutputHelper outpu
     /// <summary>
     /// Sends the click as <paramref name="actingUser"/> and returns the owner's answer:
     /// <c>null</c> when the click was accepted (its action has run by then), the refusal sentence
-    /// otherwise.
+    /// otherwise. The click is sent only once the control is on this stream's page: the rows can
+    /// reach the client before the item template's buttons, and a click on an area that holds no
+    /// control is refused for that reason alone (RefusingALostUserAction) — which would answer a
+    /// question this test does not ask.
     /// </summary>
     private static async Task<string?> Answer(
         ISynchronizationStream<JsonElement> stream, string area, RowContext row, AccessContext actingUser)
     {
+        await stream.GetControlStream(area).Should().Within(TestTimeouts.Convergence).Match(
+            control => control is not null,
+            $"the control at {area} must be rendered before it is clicked",
+            cancellationToken: TestContext.Current.CancellationToken);
         var answer = new ReplaySubject<string?>(1);
         stream.SubmitUserAction(new ClickedEvent(area, stream.StreamId) { Row = row }, actingUser,
             onRefused: answer.OnNext,
