@@ -113,11 +113,18 @@ public abstract class ModuleSingletonsBuiltAtBootTestBase(ITestOutputHelper outp
                     {
                         services.AddSingleton<MeshWeaver.Graph.Test.IBootBuiltProbe, Probe>();
                         services.AddSingleton<Fragile>();
+                        {{(broken ? ContributedInstalledModule : "")}}
                         {{(circuitBound ? CircuitBoundRegistrations : "")}}
                         return services;
                     })];
         }
         """;
+
+    // A module that registers an installed module through its OWN services — a further reference
+    // assembly (MeshWeaver#6557): the root forwards it, and once the module is withdrawn that member
+    // must be absent from the set, never a forwarder that can only throw.
+    private const string ContributedInstalledModule =
+        "services.AddSingleton(new MeshWeaver.Mesh.InstalledModuleAssembly(typeof(Probe).Assembly));";
 
     // The Radzen shape: scoped services over circuit state (a module class and a platform class), a
     // singleton that takes circuit state, and a singleton that takes that singleton.

@@ -9,15 +9,18 @@ namespace MeshWeaver.Mesh;
 /// <c>IEnumerable&lt;InstalledModuleAssembly&gt;</c> and <see cref="Current"/> all read, on every
 /// container kind.
 ///
-/// <para><b>Two kinds of member.</b> (1) Every <see cref="InstalledModuleAssembly"/> DECLARED in the
-/// mesh's service collection — the image-bound modules <see cref="MeshBuilder.InstallAssemblies"/>
-/// records, and whatever else registers one (a module shipping extra reference assemblies, a test).
-/// (2) Every module held in its own collectible context, answered by NAME from the module registry
-/// (<see cref="ModuleContexts"/>) at each read, so it follows a live swap (policy
-/// <c>module-live-update-default</c>). A held module the registry no longer holds — withdrawn at boot
-/// because its shared instances could not be built (<see cref="ModuleContexts"/>' "built before
-/// published"), or retired — is simply ABSENT; its withdrawal is reported where every module that
-/// failed to install is (<see cref="IncompatibleModule"/>, <c>/health</c>, the module-status
+/// <para><b>One ordered sequence of slots</b>, in the order they were declared in the mesh's service
+/// collection — order is load-bearing (first-mount-wins static assets, the list-ordered compile
+/// reference surface). A slot is (1) a FIXED member — an image-bound module
+/// <see cref="MeshBuilder.InstallAssemblies"/> records, or whatever else registers one (a module's
+/// builder hook shipping extra reference assemblies, a test); or (2) a member that can GO
+/// (<see cref="InstalledModuleSlot"/>) — a module held in its own collectible context, answered by
+/// NAME from the module registry (<see cref="ModuleContexts"/>) at each read so it follows a live swap
+/// (policy <c>module-live-update-default</c>), or an <see cref="InstalledModuleAssembly"/> such a module
+/// registers through its own services. A member whose module the registry no longer holds — withdrawn
+/// at boot because its shared instances could not be built (<see cref="ModuleContexts"/>' "built
+/// before published"), or retired — is simply ABSENT; its withdrawal is reported where every module
+/// that failed to install is (<see cref="IncompatibleModule"/>, <c>/health</c>, the module-status
 /// surfaces).</para>
 ///
 /// <para><b>Why not one transient registration per held module</b> (what this replaced). A DI
@@ -43,11 +46,17 @@ public sealed class InstalledModules
         this.contexts = contexts ?? throw new ArgumentNullException(nameof(contexts));
 
     /// <summary>Records <paramref name="moduleName"/> as a module installed at boot in its own load
-    /// context, answered from the registry's CURRENT generation at each read.</summary>
-    internal void AddHeld(string moduleName)
+    /// context, answered from the registry's CURRENT generation at each read, and returns the
+    /// declaration that holds its SLOT — added to the service collection where the module was
+    /// installed, so the set keeps install order across held and image-bound modules.</summary>
+    internal ServiceDescriptor AddHeld(string moduleName)
     {
         if (!string.IsNullOrEmpty(moduleName))
             ImmutableInterlocked.Update(ref held, list => list.Contains(moduleName) ? list : list.Add(moduleName));
+        var registry = contexts;
+        return InstalledModuleSlot.Declare(_ => registry.Resolve(moduleName) is { } assembly
+            ? new InstalledModuleAssembly(assembly)
+            : null, $"Module {moduleName} is no longer held by this mesh's module registry.");
     }
 
     /// <summary>The service collection the mesh's container is built from — read once, at the first
@@ -60,8 +69,9 @@ public sealed class InstalledModules
     public IReadOnlyList<string> HeldModuleNames => held;
 
     /// <summary>
-    /// The installed modules NOW: every declared one, then every held module the registry still holds,
-    /// as its current generation. Never throws for a module that is gone — it is absent.
+    /// The installed modules NOW, in the order they were declared — an image-bound module, a held
+    /// module (as its CURRENT generation) and one a module contributes, each in its own slot. Never
+    /// throws for a module that is gone — it is absent.
     /// </summary>
     /// <param name="services">The provider a declared factory or type is activated against.</param>
     public IReadOnlyList<InstalledModuleAssembly> Current(IServiceProvider services)
@@ -69,13 +79,18 @@ public sealed class InstalledModules
         ArgumentNullException.ThrowIfNull(services);
         var result = new List<InstalledModuleAssembly>();
         foreach (var descriptor in Declared())
+        {
+            if (descriptor.ImplementationFactory?.Target is InstalledModuleSlot slot)
+            {
+                if (slot.Current(services) is { } present)
+                    result.Add(present);
+                continue;
+            }
             result.Add(descriptor.ImplementationInstance as InstalledModuleAssembly
                        ?? (descriptor.ImplementationFactory is { } factory
                            ? (InstalledModuleAssembly)factory(services)
                            : (InstalledModuleAssembly)ActivatorUtilities.CreateInstance(services, descriptor.ImplementationType!)));
-        foreach (var name in held)
-            if (contexts.Resolve(name) is { } assembly)
-                result.Add(new InstalledModuleAssembly(assembly));
+        }
         return result;
     }
 
@@ -91,4 +106,36 @@ public sealed class InstalledModules
                     ?? [];
         return Interlocked.CompareExchange(ref declared, found, null) ?? found;
     }
+}
+
+/// <summary>
+/// One slot of the installed-module set whose member can GO — a held module (withdrawn at boot, or
+/// retired) or an <see cref="InstalledModuleAssembly"/> a held module contributes through its own
+/// services (MeshWeaver#6557). <see cref="InstalledModules.Current"/> recognises the slot by its
+/// factory's target and asks <see cref="Current"/>, so a gone member is ABSENT from the set; the
+/// factory itself — what a single <c>GetService&lt;InstalledModuleAssembly&gt;()</c> invokes — still
+/// names the module it can no longer answer for.
+/// </summary>
+internal sealed class InstalledModuleSlot
+{
+    private readonly Func<IServiceProvider, InstalledModuleAssembly?> current;
+    private readonly string gone;
+
+    private InstalledModuleSlot(Func<IServiceProvider, InstalledModuleAssembly?> current, string gone)
+    {
+        this.current = current;
+        this.gone = gone;
+    }
+
+    /// <summary>A transient declaration of <see cref="InstalledModuleAssembly"/> served by a slot.</summary>
+    /// <param name="current">The member now, or null once it is gone.</param>
+    /// <param name="gone">What a single resolve throws once it is gone.</param>
+    internal static ServiceDescriptor Declare(Func<IServiceProvider, InstalledModuleAssembly?> current, string gone) =>
+        ServiceDescriptor.Transient(typeof(InstalledModuleAssembly), new InstalledModuleSlot(current, gone).Create);
+
+    /// <summary>The member now, or null once it is gone.</summary>
+    internal InstalledModuleAssembly? Current(IServiceProvider services) => current(services);
+
+    private object Create(IServiceProvider services) =>
+        current(services) ?? throw new InvalidOperationException(gone);
 }

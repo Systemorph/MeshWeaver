@@ -231,9 +231,13 @@ kept it: once its boot assembly was collected, that registration threw "no longe
 module registry" from inside every `GetServices<InstalledModuleAssembly>()`. That is how the Radzen
 withdrawal above refused the pod's readiness: the pre-warm sweep enumerates installed modules, so one
 broken module refused readiness for the whole pod. Now the set is ONE registry the mesh owns,
-`InstalledModules`: the `InstalledModuleAssembly` instances declared in the service collection
-(image-bound modules, and anything else that registers one), plus every held module by NAME, answered
-from `ModuleContexts` at each read and simply absent when the registry no longer holds it. The
+`InstalledModules`: ONE ordered sequence of slots, in the order they were declared in the service
+collection — order is load-bearing (first-mount-wins static assets, the list-ordered compile
+reference surface), so a held module keeps the position it was installed at. A slot is a fixed
+`InstalledModuleAssembly` (an image-bound module, anything else that registers one) or a member that
+can GO — a held module by NAME, answered from `ModuleContexts` at each read, or an
+`InstalledModuleAssembly` a held module registers through its OWN services — and a member whose
+module the registry no longer holds is simply absent. The
 `IEnumerable<InstalledModuleAssembly>` every consumer resolves is an explicit factory registration over
 that registry, which MS DI and Autofac both answer ahead of the per-descriptor collection, so a host
 built with plain `BuildServiceProvider()` reads the same set as the Autofac host. (An Autofac

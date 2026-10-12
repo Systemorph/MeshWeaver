@@ -197,6 +197,19 @@ internal static class ModuleServiceForwarding
                     root.Add(ServiceDescriptor.Singleton(type, sp => ModuleServiceProxy.Create(
                         type, sp.GetRequiredService<ModuleContexts>(), module, index)));
                     break;
+                case ModuleServiceRoute.Current when type == typeof(InstalledModuleAssembly):
+                    // A member of the installed-module set the module contributes: ABSENT once the
+                    // module is withdrawn or retired, never a fault in whoever enumerates the set
+                    // (MeshWeaver#6557, InstalledModules).
+                    root.Add(InstalledModuleSlot.Declare(sp =>
+                        {
+                            var contexts = sp.GetRequiredService<ModuleContexts>();
+                            return contexts.Current(module) is null
+                                ? null
+                                : (InstalledModuleAssembly)contexts.ResolveModuleService(module, index);
+                        },
+                        $"Module {module} is no longer held by this mesh's module registry — the installed module it contributed is gone with it."));
+                    break;
                 case ModuleServiceRoute.Current:
                     root.Add(ServiceDescriptor.Transient(type, sp => sp.GetRequiredService<ModuleContexts>().ResolveModuleService(module, index)));
                     break;

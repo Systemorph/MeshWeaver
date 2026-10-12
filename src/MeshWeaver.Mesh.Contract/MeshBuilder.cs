@@ -803,7 +803,12 @@ public partial record MeshBuilder
         {
             var name = assembly.GetName().Name ?? "";
             if (ModuleContexts.Current(name) is { } held && ReferenceEquals(held.Assembly, assembly))
-                InstalledModuleSet.AddHeld(name);
+            {
+                // Declared HERE, in install order — the set is ordered (first-mount-wins static
+                // assets, the list-ordered compile reference surface), never "image-bound, then held".
+                var slot = InstalledModuleSet.AddHeld(name);
+                ConfigureServices(services => services.Add(slot));
+            }
             else
                 RegisterImageBound(new InstalledModuleAssembly(assembly));
         }

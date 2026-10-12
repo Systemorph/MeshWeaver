@@ -73,12 +73,41 @@ public sealed class AWithdrawnModuleIsAbsentFromTheSweepTest(ITestOutputHelper o
         AssertAbsentFromEveryRead(provider);
     }
 
+    /// <summary>
+    /// The set is ORDERED as it was declared: a held module keeps the slot it was installed at, between
+    /// the members declared before and after it — never "every image-bound member, then every held one"
+    /// (first-mount-wins static assets and the list-ordered compile reference surface read this order).
+    /// </summary>
+    [Fact]
+    public void OnAPlainMsDiHost_AHeldModuleKeepsItsInstallPosition()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "ordered-msdi-" + Guid.NewGuid().ToString("N"));
+        var services = new ServiceCollection();
+        var before = typeof(FactAttribute).Assembly;
+        var after = typeof(ServiceCollection).Assembly;
+        services.AddSingleton(new InstalledModuleAssembly(before));
+        var builder = new MeshBuilder(configure => configure(services), new Address("mesh", "ordered"));
+        builder.InstallAssemblies(WriteModule(directory, broken: false, circuitBound: false));
+        services.AddSingleton(new InstalledModuleAssembly(after));
+        using var provider = services.BuildServiceProvider();
+
+        var names = provider.GetServices<InstalledModuleAssembly>()
+            .Select(m => m.Assembly)
+            .Where(a => a == before || a == after || a.GetName().Name == Module)
+            .Select(a => a.GetName().Name)
+            .ToArray();
+        names.Should().Equal([before.GetName().Name, Module, after.GetName().Name],
+            "the held module is answered in the slot it was installed at");
+    }
+
     private static void AssertAbsentFromEveryRead(IServiceProvider provider)
     {
         var enumerated = Record.Exception(() => provider.GetServices<InstalledModuleAssembly>().ToArray());
-        enumerated.Should().BeNull("enumerating the installed modules never faults on a withdrawn one");
+        enumerated.Should().BeNull("enumerating the installed modules never faults on a withdrawn one — "
+            + "neither on its held slot nor on the installed module it registered through its own services");
         provider.GetServices<InstalledModuleAssembly>()
-            .Should().NotContain(m => m.Assembly.GetName().Name == Module, "a withdrawn module is not installed");
+            .Should().NotContain(m => m.Assembly.GetName().Name == Module,
+                "a withdrawn module is not installed, and neither is what it contributed");
         provider.GetRequiredService<InstalledModules>().Current(provider)
             .Should().NotContain(m => m.Assembly.GetName().Name == Module);
         provider.GetRequiredService<InstalledModules>().HeldModuleNames
