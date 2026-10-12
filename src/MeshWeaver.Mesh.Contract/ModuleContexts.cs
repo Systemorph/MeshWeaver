@@ -187,6 +187,106 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
     public IServiceProvider? ModuleScope(string module) =>
         Current(module)?.Services?.Scope(Root);
 
+    /// <summary>The current generations, with <paramref name="stage"/>'s generations in place of the
+    /// current ones of the same name while it is open — what a STAGED generation's container sees.</summary>
+    internal IReadOnlyCollection<ModuleGeneration> GenerationsSeenFrom(ModuleSwapStage? stage) =>
+        stage is null
+            ? Generations
+            : current.Values.Select(g => stage.Get(g.Name) ?? g).ToArray();
+
+    /// <summary>As <see cref="ModuleScope"/>, seen from a container of <paramref name="stage"/>.</summary>
+    internal IServiceProvider? ModuleScopeSeenFrom(string module, ModuleSwapStage? stage) =>
+        (stage?.Get(module) ?? Current(module))?.Services?.Scope(Root);
+
+    /// <summary>As <see cref="ResolveModuleService"/>, seen from a container of <paramref name="stage"/>.</summary>
+    internal object ResolveModuleServiceSeenFrom(string module, int index, ModuleSwapStage? stage) =>
+        ((stage?.Get(module) ?? Current(module))?.Services ?? throw new InvalidOperationException(
+            $"Module {module} holds no service scope in this mesh."))
+        .Resolve(Root, index);
+
+    /// <summary>
+    /// 🚨 <b>Built before published</b> (MeshWeaver#6542): builds every shared instance of
+    /// <paramref name="generation"/>'s container (<see cref="ModuleServices.BuildBeforePublish"/>) while
+    /// nothing can reach it yet. Returns why it could not be built — the generation must then not be
+    /// published — or null.
+    /// </summary>
+    internal string? BuildBeforePublish(ModuleGeneration generation)
+    {
+        ArgumentNullException.ThrowIfNull(generation);
+        if (generation.Services is not { } services)
+            return null;
+        try
+        {
+            services.BuildBeforePublish(Root);
+            return null;
+        }
+        catch (Exception exception)
+        {
+            var cause = exception;
+            // Autofac wraps a constructor's exception in one DependencyResolutionException per level;
+            // the sentence an operator acts on is the innermost one, the outer ones name the path.
+            while (cause.InnerException is not null)
+                cause = cause.InnerException;
+            return $"{cause.GetType().Name}: {cause.Message} (while building {exception.Message})";
+        }
+    }
+
+    private ImmutableList<IncompatibleModule> notBuilt = [];
+
+    /// <summary>The modules whose shared instances could not be built at boot, so were never published
+    /// — served as <see cref="IncompatibleModule"/> records by <see cref="ModuleOwnedRootSource"/>.</summary>
+    internal ImmutableList<IncompatibleModule> NotBuilt => notBuilt;
+
+    /// <summary>
+    /// 🚨 <b>Built before published, at boot</b> (MeshWeaver#6542): called once the root container is
+    /// built and before the provider is handed out (<see cref="MeshWeaver.ServiceProvider.IRootContainerBuilt"/>).
+    /// Builds every held generation's shared instances, a module after the modules it depends on. A
+    /// module whose instances cannot be built is withdrawn — never left half-published — together with
+    /// every module that depends on it, and each is reported as an <see cref="IncompatibleModule"/>
+    /// (stderr, the log, and the records <c>/health</c> and the module-status surfaces read).
+    /// </summary>
+    internal void BuildAllBeforePublish()
+    {
+        var ordered = new List<ModuleGeneration>();
+        var visited = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var generation in current.Values.OrderBy(g => g.Name, StringComparer.Ordinal))
+            Visit(generation);
+        var withdrawn = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var generation in ordered)
+        {
+            if (withdrawn.Contains(generation.Name) || BuildBeforePublish(generation) is not { } failed)
+                continue;
+            Withdraw(generation, failed);
+            foreach (var dependent in DependentsOf(generation.Name).Where(d => !withdrawn.Contains(d.Name)).ToArray())
+                Withdraw(dependent, $"it depends on {generation.Name}, whose shared instances could not be built: {failed}");
+        }
+        return;
+
+        void Visit(ModuleGeneration generation)
+        {
+            if (!visited.Add(generation.Name))
+                return;
+            foreach (var dependency in generation.Context.DependsOn.OrderBy(d => d, StringComparer.Ordinal))
+                if (Current(dependency) is { } held)
+                    Visit(held);
+            ordered.Add(generation);
+        }
+
+        void Withdraw(ModuleGeneration generation, string why)
+        {
+            withdrawn.Add(generation.Name);
+            Uncommit(generation);
+            // Its singletons go with it; its context stays loaded — a dependent may already hold
+            // types from it, and unloading under it is the use-after-unload the leases exist for.
+            generation.Services?.Dispose();
+            var record = new IncompatibleModule(generation.Location, generation.Name,
+                $"its shared instances could not be built before it was published, so it was withdrawn: {why}", null);
+            ImmutableInterlocked.Update(ref notBuilt, list => list.Add(record));
+            Console.Error.WriteLine($"[MeshWeaver.Mesh.IncompatibleModule] {record.Report()}");
+            logger?.LogError("[MeshWeaver.Mesh.IncompatibleModule] {Report}", record.Report());
+        }
+    }
+
     internal Task StartAllModuleHosted(ModuleGeneration generation, CancellationToken ct, ILogger? log) =>
         generation.Services is { } services
             ? services.StartAllHosted(Root, ct, log ?? logger)
@@ -229,6 +329,9 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
         if (!fresh.Shape.SequenceEqual(old.Shape))
             return "the new generation's root services changed shape (the platform services it forwards to the root differ) — "
                    + $"was [{string.Join(", ", old.Shape)}], is [{string.Join(", ", fresh.Shape)}]";
+        // Its container is built before the swap commits (BuildBeforePublish), so it binds the other
+        // generations of the same swap, not the ones it is replacing.
+        fresh.Stage = to.Context.Stage;
         to.Services = fresh;
         return null;
     }
@@ -361,7 +464,11 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
     /// only AFTER all of them loaded, materialised and prepared, with ONE <see cref="VersionChanged"/>
     /// emission, so no reader of the generations (the module endpoint table, the view registrations,
     /// the static-node catalog) ever observes part of a swap, or a swap that can still fail. Seals
-    /// the stage: from here on its contexts resolve modules through the current generations.
+    /// the stage, and RELEASES it only once every one of its generations is current: from then on its
+    /// contexts resolve modules through the current generations. While the generations are made
+    /// current one at a time, the stage still answers them — so a staged container that is already
+    /// reachable through the first one never falls back to a retiring generation of a module later in
+    /// the same swap (all-or-none binding, MeshWeaver#6542).
     /// </summary>
     public void CommitAll(ModuleSwapStage stage)
     {
@@ -369,6 +476,7 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
         foreach (var generation in stage.Seal())
             current[generation.Name] = generation;
         Bump();
+        stage.Release();
     }
 
     /// <summary>
@@ -378,7 +486,9 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
     public void DiscardStaged(ModuleSwapStage stage)
     {
         ArgumentNullException.ThrowIfNull(stage);
-        foreach (var generation in stage.Seal())
+        var generations = stage.Seal();
+        stage.Release();
+        foreach (var generation in generations)
             Discard(generation);
     }
 
@@ -675,6 +785,7 @@ public sealed class ModuleSwapStage
 {
     private ImmutableList<ModuleGeneration> staged = ImmutableList<ModuleGeneration>.Empty;
     private int sealedFlag;
+    private int releasedFlag;
 
     /// <summary>Adds <paramref name="generation"/> to the stage; later contexts in the stage bind it.</summary>
     public void Add(ModuleGeneration generation)
@@ -685,16 +796,31 @@ public sealed class ModuleSwapStage
         ImmutableInterlocked.Update(ref staged, list => list.Add(generation));
     }
 
-    /// <summary>The staged generation of <paramref name="moduleName"/>, or null; always null once sealed.</summary>
+    /// <summary>The staged generation of <paramref name="moduleName"/>, or null; always null once the
+    /// commit or discard that sealed the stage has released it. Between the seal and the release — while
+    /// <see cref="ModuleContexts.CommitAll"/> makes the generations current one at a time — it still
+    /// answers them, so a staged container never sees half of its swap.</summary>
     public ModuleGeneration? Get(string moduleName) =>
-        Volatile.Read(ref sealedFlag) != 0
+        Volatile.Read(ref releasedFlag) != 0
             ? null
             : Volatile.Read(ref staged).LastOrDefault(g => string.Equals(g.Name, moduleName, StringComparison.Ordinal));
 
+    /// <summary>Refuses any further <see cref="Add"/>, commit or discard, and hands over the generations;
+    /// the stage keeps answering them until <see cref="Release"/>.</summary>
     internal ImmutableList<ModuleGeneration> Seal()
     {
         if (Interlocked.Exchange(ref sealedFlag, 1) != 0)
             throw new InvalidOperationException("The swap stage was already committed or discarded.");
         return Volatile.Read(ref staged);
+    }
+
+    /// <summary>Stops answering, once the generations were made current or discarded.</summary>
+    internal void Release()
+    {
+        Volatile.Write(ref releasedFlag, 1);
+        // FORGOTTEN: a context, and a staged container's fallback, keep a reference to their stage for
+        // life, so a stage that kept its list would pin every generation it ever held — one of them
+        // retired by a later swap of that module alone.
+        Interlocked.Exchange(ref staged, ImmutableList<ModuleGeneration>.Empty);
     }
 }

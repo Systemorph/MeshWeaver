@@ -129,6 +129,21 @@ public record PackageManifest
     public string? Source { get; init; }
 
     /// <summary>
+    /// 🚨 WHERE this install came from — the repository (and subdirectory) or the registry whose
+    /// source performed it, in <see cref="InstallOrigin"/>'s canonical form. Install-record only:
+    /// stamped by the install funnel (<see cref="CatalogLayoutAreas.InstallOrUpdate"/>) from the
+    /// SOURCE's own identity, overwriting anything a listed manifest carried, and carried forward
+    /// on a re-stamp by a source that names none (<c>PackageInstaller.SeedOrigin</c>).
+    ///
+    /// <para>It is what an UNATTENDED update binds to (MeshWeaver#6526): the update watcher takes a
+    /// candidate only from the origin recorded here, so a second watched repository listing the same
+    /// id is ignored. A record that predates the field ADOPTS its origin on its first unattended
+    /// update when exactly one watched repository lists the package, and is refused — by name, on
+    /// the platform bell — when two or more do (<see cref="InstallOrigin.Decide"/>).</para>
+    /// </summary>
+    public string? Origin { get; init; }
+
+    /// <summary>
     /// The licence this package is offered under, as an SPDX id or expression
     /// (<c>Apache-2.0</c>, <c>Apache-2.0 OR MIT</c>). Authored on the plugin root's
     /// <c>content.license</c>; when absent it is filled from the SOURCE's declared default (a
