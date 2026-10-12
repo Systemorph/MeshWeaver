@@ -431,7 +431,7 @@ At-least-once, and deliberately so:
 | Read window | `[cursor, now − IngestLag)` | Promtail ships with a delay; reading to `now` would step the cursor past lines that had not landed yet, losing them for good. |
 | Queue reports | **before** delivery | A crash between detection and delivery costs a redelivery, not an un-ticketed error. |
 | Advance cursor | **after** queueing | Same reason, one level up. |
-| Split | every queued report into pieces under `LogIncidentDelivery.MaxReportBytes` | A report of any size is delivered; see below. |
+| Split | every queued report into pieces under `LogIncidentDelivery.MaxReportBytes` | A report too large for one request is no longer refused whole; see below for what a split preserves and the two cases it cannot. |
 | Deliver | oldest first, stop at first retryable failure | A wedged portal is retried next tick, not hammered once per queued report. |
 
 Only a status that describes the PAYLOAD is permanent (`LogIncidentDelivery.IsPermanent`: 400, 414,
@@ -445,10 +445,13 @@ The ingest endpoint takes at most `LogIncidentDelivery.MaxReportBytes` (256 KiB)
 bound is **declared in the contract**, so the watcher knows it before it sends anything, rather than
 learning it by losing a report to it. It bounds a request, not a report: a report's shape ledger
 grows with the flood it describes (one `ShapeCount` per path shape, each with a representative
-line), so no fixed limit holds every report whole. Measured on 2026-10-11 (MeshWeaver#6521): a module
-live-update recycle cascade produced 275 `[DISPOSE-DISCARD]` bursts in one window, the report
-serialised past 256 KiB, the portal answered 413, and the watcher — which then counted 413 as
-permanent — dropped it. Raising the limit would only move the flood that loses evidence.
+line), so no fixed limit holds every report whole. Observed on 2026-10-11 (MeshWeaver#6521): the
+portal answered one red-log report with 413 at its 262144-byte body cap, and the watcher — which then
+counted 413 as permanent — dropped it. The refused report's size and namespace were not recorded.
+The cause named on the issue is a reconstruction, not a measurement of that request: a module
+live-update recycle cascade produced 275 `[DISPOSE-DISCARD]` bursts sharing one fingerprint, and one
+`ShapeCount` per path shape with a representative line of up to 2000 characters puts such a report
+past the cap. Raising the limit would only move the flood that loses evidence.
 
 So the drain first runs `LogIncidentReportChunking.Split` over the durable queue, in one write:
 
@@ -458,12 +461,15 @@ So the drain first runs `LogIncidentReportChunking.Split` over the durable queue
 | The pieces sum to the report | each piece's `Occurrences` and window are its own subset's; together they count exactly the bursts the report counted |
 | Every piece lands on the same incident | each piece carries the report's identity fields and samples unchanged, and the portal votes the identity over the samples |
 | A single entry too large to fit is cut, not refused | the longest text field is cut (halving, down to 256 characters) and ends `…[truncated N bytes]`, naming the bytes dropped; `IsCut` recognises it beside the sample cut `…[truncated]` |
-| A retried piece is counted once | each piece carries a `DeliveryId` hashed from its own content (the same piece always gets the same id, after any restart); the portal remembers each incident's last 256 ids in `RecentDeliveries` and folds a known id as a no-op |
+| A recent retry of a piece is counted once | each piece carries a `DeliveryId` hashed from its own content (the same piece always gets the same id, after any restart); the portal remembers each incident's last 256 ids in `RecentDeliveries` and folds a known id as a no-op. The guarantee is bounded by that window: a piece replayed after its id has aged out of the last 256 counts again, so this is dedupe of recent retries, not at-most-once delivery |
 
 A 413 that still happens — an ingress enforcing a smaller limit, or a contract that declares a
-different one — is **not** a loss. The watcher logs it at Critical, keeps the report, re-splits it in
+different one — no longer drops the report. The watcher logs it at Critical, keeps the report, re-splits it in
 place at half its own size (down to 16 KiB) and moves on to the next report; the pieces go next
-pass. A report that cannot be made smaller stays queued and is retried every pass, loudly. The portal
+pass. A report that cannot be made smaller stays queued and is retried every pass, loudly — it is
+not lost, but it is not delivered either until the limit it meets changes. And a piece whose single
+entry had to be cut is delivered without the bytes its `…[truncated N bytes]` marker names: the
+split preserves every burst and the occurrence sum, not every byte of every representative line. The portal
 still answers a 413 at Error and files its own `log-ingest-refused-{ns}` finding, because a current
 watcher never sends more than the declared limit: a 413 there means a watcher image that predates
 the split (and drops the report) or a contract mismatch.
