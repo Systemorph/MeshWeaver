@@ -156,6 +156,80 @@ public class StampedFieldsTest(ITestOutputHelper output) : MonolithMeshTestBase(
         ContentOf(node)!.ConfirmedBy.Should().Be(Stamp);
     }
 
+    /// <summary>
+    /// A <see cref="PatchDataRequest"/> may name ANY workspace reference; a JSON pointer into the
+    /// node hub's store reaches the same data source through its reducer's reverse patch, with a
+    /// shape the field comparison cannot read. On a declaring type it is refused naming the field;
+    /// on a type that declares nothing the guard stays out of it (the control: the refusal is the
+    /// declaration's doing, not the reference's).
+    /// </summary>
+    [Theory(Timeout = 180000)]
+    [InlineData(StampedProbeTypeProvider.Declaring, true)]
+    [InlineData(StampedProbeTypeProvider.NotDeclaring, false)]
+    public async Task PatchThroughAnotherReference_IsRefusedOnlyWhereDeclared(string type, bool refused)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var path = await CreateConfirmedAndStamped(type);
+
+        var failure = await Record.ExceptionAsync(() => RequestHub
+            .Observe<PatchDataResponse>(
+                new PatchDataRequest(new JsonPointerReference("/MeshNode"),
+                    new RawJson("{\"content\":{\"confirmedBy\":\"victim\"}}")),
+                o => o.WithTarget(new Address(path)))
+            .Take(1)
+            .Timeout(60.Seconds())
+            .Await(ct));
+
+        if (!refused)
+        {
+            (failure?.Message ?? string.Empty).Should().NotContain("stamped field",
+                "a type that declares nothing is not the stamped-field guard's to judge");
+            return;
+        }
+        failure.Should().NotBeNull("a patch through a reference the guard cannot compare must be refused");
+        failure!.Message.Should().Contain("confirmedBy", "the refusal names the declared field")
+            .And.Contain(nameof(JsonPointerReference), "and the reference it could not judge");
+        var node = await WaitFor(path, c => c.ConfirmedBy == Stamp, "the stored value is still the owner's stamp");
+        ContentOf(node)!.ConfirmedBy.Should().Be(Stamp);
+    }
+
+    /// <summary>
+    /// A data change's CREATION entry for the hub's own, existing node is applied as a replace — so a
+    /// creation that omits the stamped field would clear the owner's stamp past the create validator
+    /// (which only refuses a non-empty value). The data-layer half judges it like an update.
+    /// </summary>
+    [Theory(Timeout = 180000)]
+    [InlineData(StampedProbeTypeProvider.Declaring, false)]
+    [InlineData(StampedProbeTypeProvider.NotDeclaring, true)]
+    public async Task DataChangeCreation_ReplacingTheOwnNode_CannotClearTheStamp(string type, bool lands)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var path = await CreateConfirmedAndStamped(type);
+        var current = await WaitFor(path, c => c.ConfirmedBy == Stamp, "stamped");
+
+        var response = await RequestHub
+            .Observe<DataChangeResponse>(
+                DataChangeRequest.Create([current with { Content = ContentOf(current)! with { ConfirmedBy = null } }],
+                    "stamped-fields-test"),
+                o => o.WithTarget(new Address(path)))
+            .FirstAsync()
+            .Timeout(60.Seconds())
+            .Await(ct);
+
+        if (lands)
+        {
+            response.Message.Status.Should().Be(DataChangeStatus.Committed,
+                "without a declaration the replace is an ordinary write");
+            return;
+        }
+        response.Message.Status.Should().Be(DataChangeStatus.Failed,
+            "a creation entry that replaces the own node and clears a stamped field must be refused");
+        string.Join(" | ", response.Message.Log.Messages.Select(m => m.Message))
+            .Should().Contain("confirmedBy", "the refusal names the field it refused");
+        var node = await WaitFor(path, c => c.ConfirmedBy == Stamp, "the stored value is still the owner's stamp");
+        ContentOf(node)!.ConfirmedBy.Should().Be(Stamp);
+    }
+
     [Fact(Timeout = 180000)]
     public async Task Create_CarryingAForgedStampedField_IsRefusedNamingIt()
     {
@@ -432,7 +506,7 @@ internal sealed class StampedProbeTypeProvider : IStaticNodeProvider
     /// </summary>
     private static IObservable<Unit> StampOnConfirm(IMessageHub hub)
     {
-        var access = hub.ServiceProvider.GetService<AccessService>();
+        var access = hub.ServiceProvider.GetRequiredService<AccessService>();
         var options = hub.JsonSerializerOptions;
         var sub = hub.GetWorkspace().GetMeshNodeStream()
             .Where(n => n?.ContentAs<StampedProbeContent>(options) is { Confirmed: true, ConfirmedBy: null })

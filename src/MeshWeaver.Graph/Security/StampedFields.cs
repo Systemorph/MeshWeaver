@@ -237,12 +237,25 @@ public static class StampedFields
                         Refuse(hub, delivery, ErrorType.Unavailable, Unavailable(hub, fault), logger);
                         return Observable.Return(delivery.Forwarded());
                     }
-                    if (holder.IsRebinding && RetypesOwnNode(hub, (PatchDataRequest)delivery.Message))
+                    var patchRequest = (PatchDataRequest)delivery.Message;
+                    if (patchRequest.Reference is not MeshNodeReference)
+                    {
+                        // Any other reference (a JSON pointer, an entity, a collection…) reaches the
+                        // same data source through its reducer's reverse patch, and its shape says
+                        // nothing this guard can compare field by field. No caller in the platform
+                        // patches a node that way; on a type that declares stamped fields it is refused.
+                        if (declared.Fields.IsEmpty)
+                            return next.Invoke(delivery, ct);
+                        Refuse(hub, delivery, ErrorType.Unauthorized,
+                            NotJudgeable(hub, patchRequest.Reference, declared.Fields), logger);
+                        return Observable.Return(delivery.Forwarded());
+                    }
+                    if (holder.IsRebinding && RetypesOwnNode(hub, patchRequest))
                     {
                         Refuse(hub, delivery, ErrorType.Unavailable, Rebinding(hub), logger);
                         return Observable.Return(delivery.Forwarded());
                     }
-                    if (VerdictFor(hub, (PatchDataRequest)delivery.Message, declared) is { } refusal)
+                    if (VerdictFor(hub, patchRequest, declared) is { } refusal)
                     {
                         Refuse(hub, delivery, ErrorType.Unauthorized, refusal, logger);
                         return Observable.Return(delivery.Forwarded());
@@ -262,7 +275,7 @@ public static class StampedFields
     /// </summary>
     private static bool IsClientPatchOfThisHub(IMessageHub hub, IMessageDelivery delivery)
     {
-        if (delivery.Message is not PatchDataRequest { Reference: MeshNodeReference })
+        if (delivery.Message is not PatchDataRequest)
             return false;
         var ownPath = hub.Address.Path;
         if (delivery.Target is { } target && !string.Equals(target.Path, ownPath, StringComparison.OrdinalIgnoreCase))
@@ -390,7 +403,7 @@ public static class StampedFields
         var copy = (JsonObject)content.DeepClone();
         foreach (var field in present)
             foreach (var key in copy.Select(kvp => kvp.Key)
-                         .Where(k => string.Equals(k, field, StringComparison.OrdinalIgnoreCase)).ToList())
+                         .Where(k => string.Equals(k, field, StringComparison.OrdinalIgnoreCase)).ToImmutableList())
                 copy.Remove(key);
         object? next = node.Content switch
         {
@@ -401,6 +414,13 @@ public static class StampedFields
         };
         return node with { Content = next };
     }
+
+    /// <summary>The refusal for a client patch of this hub's data through a reference other than the node's own.</summary>
+    internal static string NotJudgeable(IMessageHub hub, WorkspaceReference reference, IReadOnlyList<string> fields)
+        => $"Access denied: a patch of '{hub.Address.Path}' through a {reference.GetType().Name} was refused — its "
+           + $"type declares stamped field(s) {string.Join(", ", fields.Select(f => $"'{f}'"))}, and only a "
+           + "patch of the node itself (MeshNodeReference, i.e. GetMeshNodeStream(path).Update) can be checked "
+           + "for them. Nothing was changed; patch the node instead.";
 
     internal static string Rebinding(IMessageHub hub)
         => $"Write to '{hub.Address.Path}' refused: the node was just retyped and this activation is handing "
@@ -640,6 +660,13 @@ public sealed class StampedFieldDeclarationHolder(IMessageHub hub) : IDisposable
             {
                 current = d;
                 Interlocked.Exchange(ref retrying, 0);
+            },
+            // Read() turns a fault into a stored value; should anything still error, the declaration
+            // stays faulted (fail-closed) and the next refusal starts another re-read.
+            ex =>
+            {
+                current = new StampedFieldDeclaration(ImmutableList<string>.Empty, ex);
+                Interlocked.Exchange(ref retrying, 0);
             });
     }
 
@@ -670,12 +697,17 @@ public sealed class StampedFieldDeclarationHolder(IMessageHub hub) : IDisposable
 internal sealed class StampedFieldDataValidator(IMessageHub hub) : IDataValidator
 {
     /// <inheritdoc />
-    public IReadOnlyCollection<DataOperation> SupportedOperations => [DataOperation.Update];
+    public IReadOnlyCollection<DataOperation> SupportedOperations => [DataOperation.Update, DataOperation.Create];
 
     /// <inheritdoc />
     public IObservable<DataValidationResult> Validate(DataValidationContext context)
     {
-        if (context.Operation != DataOperation.Update)
+        if (context.Operation is not (DataOperation.Update or DataOperation.Create))
+            return Observable.Return(DataValidationResult.Valid());
+        // A creation entry for a node that does not exist yet answers to the create-validator chain.
+        // One for the hub's OWN, existing node is applied as a REPLACE by the change pipeline, so it
+        // is judged exactly like an update — otherwise it could clear or overwrite the owner's stamp.
+        if (context.Operation == DataOperation.Create && StampedFields.LiveOwnNode(hub) is null)
             return Observable.Return(DataValidationResult.Valid());
 
         // Settled while the hub initialized — read synchronously, never awaited.

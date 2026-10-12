@@ -39,6 +39,8 @@ on its own node that writes the field through `GetMeshNodeStream().Update(...)`.
 |---|---|---|
 | A cross-hub patch — `GetMeshNodeStream(path).Update(...)` from any other hub, MCP `update` / `patch` / `edit_content`, the update branch of an upsert, a restore, a GitSync import | a delivery step on the node's own hub, before the merge runs | **refused** when the patch would CHANGE the field (a different value, a removal, a splice); naming it re-asserting the live value is a no-op and passes |
 | A data change from another address (a synced subscriber's write-back, a direct data change) updating the node | `StampedFieldDataValidator`, a validator in the data layer's change pipeline on the same hub | **refused** (a failed `DataChangeResponse` naming the field) when the resulting content differs in the field |
+| A patch of the node hub's data through any reference OTHER than the node itself (a `JsonPointerReference`, an entity or collection reference) | the same delivery step | **refused** on a type that declares stamped fields, naming the field and the reference: its shape cannot be compared field by field, and no platform caller patches a node that way |
+| A `DataChangeRequest` creation entry for the node's OWN, existing node (the change pipeline applies it as a replace) | `StampedFieldDataValidator`, judged as an update | **refused** when the resulting content differs in the field — including a removal |
 | A create (`CreateNodeRequest`, an upsert's create branch, a `DataChangeRequest` creation) | `StampedFieldCreateValidator`, a create validator | **refused** when the content carries a non-empty value for the field |
 | The node's own hub writing its own node (`GetMeshNodeStream().Update(...)` on its own workspace) | — | allowed: this is the only path that sets the field |
 | Any read | — | unchanged |
@@ -144,6 +146,11 @@ finish.
   `DisposeRequest`), in that window, the next activation binds the new type with the old value — no
   durable record says the retype is unsettled. Measured only through the rebind path; a consumer
   that trusts the field still re-checks (next section).
+- **Between a retype's commit and its settlement the forged value is VISIBLE.** The clear runs after
+  the retype commits, so a live subscriber of the node (a stream, a change feed) can observe a value
+  written under the old type in a field the new type stamps, until the clear lands. What the rule
+  guarantees is the state the activation bound to the new type starts from, not every intermediate
+  emission — one more reason a consumer re-checks before it acts (next section).
 - A write straight to storage that changes `nodeType` (a repair migration, a raw import) passes no
   node hub and therefore no guard at all, retype or otherwise.
 
