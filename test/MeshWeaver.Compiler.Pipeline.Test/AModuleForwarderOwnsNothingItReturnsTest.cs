@@ -258,4 +258,32 @@ public sealed class ANotOwnedForwarderKeepsItsPositionTest
         forwarded.Disposed.Should().Be(0, "a forwarder's instance belongs to whoever built it");
         provider.GetService<ILifetimeScope>().Should().NotBeNull("an Autofac container, as every mesh root is");
     }
+
+    /// <summary>
+    /// A keyed forwarder whose key is NULL is the UNKEYED service — as <c>Populate</c> reads any descriptor
+    /// with a null key — and is still not owned by the scope that resolved it.
+    /// </summary>
+    [Fact]
+    public void ANullKeyedForwarder_IsTheUnkeyedService_AndNotOwned()
+    {
+        var forwarded = new Owned();
+        object? keyPassed = "not called";
+        IServiceCollection services = new ServiceCollection();
+        services.Add(NotOwnedServiceDescriptor.KeyedForwarder(typeof(Owned), null, (_, key) =>
+        {
+            keyPassed = key;
+            return forwarded;
+        }, ServiceLifetime.Transient));
+        var provider = services.CreateMeshWeaverServiceProvider();
+        using (var scope = provider.CreateScope())
+        {
+            scope.ServiceProvider.GetRequiredService<Owned>().Should().BeSameAs(forwarded,
+                "a null key registers the unkeyed service");
+            scope.ServiceProvider.GetRequiredKeyedService<Owned>(null).Should().BeSameAs(forwarded,
+                "and asking with a null key answers it too");
+        }
+
+        keyPassed.Should().BeNull("the keyed factory is still the one invoked, with the null key");
+        forwarded.Disposed.Should().Be(0, "a forwarder's instance belongs to whoever built it");
+    }
 }

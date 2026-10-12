@@ -1,8 +1,10 @@
 #nullable enable
 using System.Collections.Immutable;
+using System.Reflection;
 using Autofac;
 using Autofac.Builder;
 using Autofac.Core;
+using Autofac.Core.Lifetime;
 using Autofac.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -401,6 +403,8 @@ internal sealed class ModuleCallerScopes : IDisposable
                 return live;
             begun = (container ?? throw new InvalidOperationException("The module container is not built yet."))
                 .BeginLifetimeScope(new CallerTag(caller));
+            // ONE lock for the caller and every module scope it owns, before anything can resolve in it.
+            CallerSharedInstanceLock.Share(caller, begun);
             created = new CallerOwnedModuleScope(this, caller, begun);
             scopes = scopes.SetItem(caller, created);
         }
@@ -444,6 +448,61 @@ internal sealed class ModuleCallerScopes : IDisposable
         foreach (var owned in ending.Values)
             owned.Dispose();
     }
+}
+
+/// <summary>
+/// 🚨 <b>One lock owner per caller</b> (MeshWeaver#6584). Autofac builds every shared instance of a scope
+/// under that scope's one shared-instance lock, held for the whole build. A module scope a caller owns is
+/// a scope of the MODULE container, so it had a lock of its own — and the two are taken in both orders: a
+/// caller-scoped ROOT service whose construction reaches a module's scoped service holds the caller's lock
+/// and waits for the module scope's, while that module service's construction, taking a caller-scoped
+/// root service not built yet (its root resolutions are made in the caller's own scope), holds the module
+/// scope's lock and waits for the caller's. Two first builds overlapping in those orders deadlocked.
+///
+/// <para>So a caller-owned module scope — and every scope begun from it — takes its CALLER's lock as its
+/// own: one monitor for the caller and everything it owns, re-entered (never waited for) by the thread
+/// already holding it, so no order between them exists to invert. Every road into the module scope is
+/// covered, including a module service that keeps its <see cref="IServiceProvider"/> and resolves later.
+/// <c>CallerAndModuleScopedServicesBuildInOneLockTest</c> forces the overlap; its negative control begins
+/// the same scope without the shared lock and deadlocks.</para>
+///
+/// <para>Autofac exposes no way to hand a scope its lock, so the scope's lock field is set before the
+/// scope is handed to anyone. Autofac is pinned (<c>Directory.Packages.props</c>); a version whose
+/// <c>LifetimeScope</c> no longer carries that field fails here, loudly, at the first caller — never a
+/// silent return of the deadlock — and <c>CallerAndModuleScopedServicesBuildInOneLockTest</c> fails with it.</para>
+/// </summary>
+internal static class CallerSharedInstanceLock
+{
+    private static readonly FieldInfo? SyncRoot =
+        typeof(LifetimeScope).GetField("_synchRoot", BindingFlags.Instance | BindingFlags.NonPublic);
+
+    /// <summary>Makes <paramref name="owned"/> — and every scope later begun from it — build its shared
+    /// instances under <paramref name="caller"/>'s lock.</summary>
+    /// <param name="caller">The root-side scope that owns <paramref name="owned"/>.</param>
+    /// <param name="owned">A module scope just begun for <paramref name="caller"/>, not yet handed out.</param>
+    public static void Share(ILifetimeScope caller, ILifetimeScope owned)
+    {
+        var callerLock = LockOf(caller);
+        Adopt(owned, callerLock);
+    }
+
+    private static void Adopt(ILifetimeScope scope, object callerLock)
+    {
+        SyncRoot!.SetValue(AsLifetimeScope(scope), callerLock);
+        scope.ChildLifetimeScopeBeginning += (_, args) => Adopt(args.LifetimeScope, callerLock);
+    }
+
+    private static object LockOf(ILifetimeScope scope) =>
+        SyncRoot?.GetValue(AsLifetimeScope(scope))
+        ?? throw new InvalidOperationException(
+            "Autofac's LifetimeScope no longer carries the shared-instance lock field '_synchRoot': a module "
+            + "scope a caller owns cannot share its caller's lock, and the two would deadlock (MeshWeaver#6584). "
+            + "Re-establish the shared lock for this Autofac version before upgrading.");
+
+    private static LifetimeScope AsLifetimeScope(ILifetimeScope scope) =>
+        scope as LifetimeScope
+        ?? throw new InvalidOperationException(
+            $"A caller scope must be an Autofac LifetimeScope to share its lock; got {scope.GetType()} (MeshWeaver#6584).");
 }
 
 /// <summary>
