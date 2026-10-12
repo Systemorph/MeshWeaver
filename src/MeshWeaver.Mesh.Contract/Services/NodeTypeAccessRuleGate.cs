@@ -126,7 +126,70 @@ public static class NodeTypeAccessRuleGate
     }
 
     /// <summary>
-    /// The non-CRUD twin of <see cref="Find"/>: the <see cref="INodeTypePermissionRule"/> that decides
+    /// A write PRE-FLIGHT for <paramref name="caller"/>: the raw <c>(path, permission)</c> fold, and a
+    /// DEFINITIVE denial re-decided through the node's own <see cref="INodeTypeAccessRule"/> — the
+    /// same two questions the owner's write gate asks, so a verb that has to decide BEFORE it causes
+    /// an effect the owner never sees (bytes saved into a content collection) cannot refuse what the
+    /// owner would allow, nor allow what it would refuse.
+    ///
+    /// <para>🚨 The identity is EXPLICIT: the caller captured at the verb's entry, never the ambient
+    /// context at subscribe time, which inside a continuation is the delivering thread's.</para>
+    ///
+    /// <para>Every terminal is the honest one: a fold or rule that faults or produces no verdict is
+    /// <see cref="PermissionCheckOutcome.Undetermined(string)"/> (<c>IsGranted = false</c>, so a
+    /// consumer fails closed), a node no rule governs leaves the fold's denial standing.</para>
+    /// </summary>
+    /// <param name="hub">The hub whose evaluator, rule index and storage answer.</param>
+    /// <param name="path">The node the write targets.</param>
+    /// <param name="caller">The caller captured at the verb's entry; null is anonymous.</param>
+    /// <param name="permission">The permission the write needs.</param>
+    /// <param name="logger">Operator log for a faulting rule or read; optional.</param>
+    /// <returns>Exactly one outcome.</returns>
+    public static IObservable<PermissionCheckOutcome> CheckFor(
+        IMessageHub hub,
+        string path,
+        AccessContext? caller,
+        Permission permission,
+        ILogger? logger = null)
+    {
+        ArgumentNullException.ThrowIfNull(hub);
+        var userId = string.IsNullOrEmpty(caller?.ObjectId) || caller.IsVirtual
+            ? WellKnownUsers.Anonymous
+            : caller.ObjectId;
+        return hub.CheckPermissionOutcome(path, userId, permission)
+            .Take(1)
+            .SelectMany(outcome => outcome.IsGranted || outcome.IsUndetermined
+                ? Observable.Return(outcome)
+                : ReconsiderThroughRule(hub, path, caller, userId, permission, logger));
+    }
+
+    private static IObservable<PermissionCheckOutcome> ReconsiderThroughRule(
+        IMessageHub hub, string path, AccessContext? caller, string userId, Permission permission, ILogger? logger)
+    {
+        if (SubjectOperationFor(permission) is not { } operation)
+            return Observable.Return(PermissionCheckOutcome.Denied);
+        return ReadSubjectNode(hub, path)
+            .SelectMany(node => node is null || Find(hub, node.NodeType, operation) is not { } rule
+                ? Observable.Return(PermissionCheckOutcome.Denied)
+                : Evaluate(rule, new NodeValidationContext
+                {
+                    Operation = operation,
+                    Node = node,
+                    AccessContext = caller,
+                }, userId, logger))
+            .Catch((Exception ex) =>
+            {
+                logger?.LogWarning(ex,
+                    "Could not read the node at {Path} to apply its node-type access rule for {User} — "
+                    + "reporting an availability failure, not a denial", path, userId);
+                return Observable.Return(PermissionCheckOutcome.Undetermined(
+                    $"the node at '{path}' could not be read to apply its node-type access rule "
+                    + $"({ex.GetType().Name})"));
+            });
+    }
+
+    /// <summary>
+    /// The non-CRUD twin of <see cref="Find"/>:the <see cref="INodeTypePermissionRule"/> that decides
     /// <paramref name="permission"/> (Comment, Thread, Execute, …) on a node of
     /// <paramref name="nodeType"/>, or <c>null</c> when none does. <c>null</c> is "no rule has an
     /// opinion" — the caller's denial stands.
