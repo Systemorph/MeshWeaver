@@ -38,6 +38,15 @@ public static class LocalizationCatalog
             : ImmutableHashSet<string>.Empty;
 
     /// <summary>
+    /// Whether the default (English) catalog defines <paramref name="key"/> — a membership test with
+    /// no allocation, for render paths that only need to know whether a key exists (<see cref="Keys"/>
+    /// copies the whole catalog into a new set on every call).
+    /// </summary>
+    /// <param name="key">The catalog key.</param>
+    public static bool ContainsKey(string key)
+        => Catalogs.TryGetValue(Locales.Default, out var en) && en.ContainsKey(key);
+
+    /// <summary>
     /// Returns the keys defined for <paramref name="locale"/>, for completeness checking.
     /// </summary>
     public static ImmutableHashSet<string> KeysFor(string locale)

@@ -62,6 +62,12 @@ public static class ModuleServiceProvider
     {
         var builder = new ContainerBuilder();
         builder.Populate(services);
+        if (root.GetService<ILifetimeScope>() is { } rootScope)
+            // One root child scope per module scope, disposed with it — where every root registration
+            // a module scope asks for is resolved (see RootResolutionScope).
+            builder.Register(_ => new RootResolutionScope(rootScope.BeginLifetimeScope()))
+                .AsSelf()
+                .InstancePerLifetimeScope();
         builder.RegisterSource(new ModuleFallbackSource(root, isModuleType, rootOpenGenerics, registrationsElsewhere));
         return new AutofacServiceProvider(builder.Build());
     }
@@ -118,6 +124,22 @@ public static class ModuleServiceProvider
                 $"{serviceType} has no registration at position {position} in this module container.");
         return scope.ResolveComponent(new ResolveRequest(service, registration, []));
     }
+}
+
+/// <summary>
+/// A root child scope owned by one module scope — the module container's own root scope or a scope
+/// begun from it — and disposed with it. Every root registration that module scope asks for is
+/// resolved here, so the root's lifetimes keep their meaning across the container boundary: a
+/// singleton is the root's one instance, while a scoped service is never built — and shared, under
+/// the root container's lock — in the root itself (MeshWeaver#6432).
+/// </summary>
+internal sealed class RootResolutionScope(ILifetimeScope scope) : IDisposable
+{
+    /// <summary>The root child scope.</summary>
+    public ILifetimeScope Scope { get; } = scope;
+
+    /// <inheritdoc />
+    public void Dispose() => Scope.Dispose();
 }
 
 /// <summary>
@@ -201,9 +223,20 @@ internal sealed class ModuleFallbackSource(
             // root's LAST, as in the root. Both halves are pinned by
             // ModuleServicesKeepEveryRegistrationTest (yielded first-first, the single resolve
             // answered the root's FIRST registration).
+            // 🚨 Resolved in the requesting module scope's OWN root child scope, never in the root
+            // itself (MeshWeaver#6432, #6391). A root registration's lifetime is relative to the scope
+            // that resolves it: resolved in the root, a SCOPED service (PortalApplication) became a
+            // root-shared instance, built under the root container's shared-instance lock — and its
+            // constructor reads the mesh hub's scope. A grain activation building a mesh-hub-scope
+            // service whose constructor needs a root singleton takes the two locks the other way
+            // round, and the silo stood still for the rest of its life. In a child scope a singleton
+            // is still the root's one instance, a scoped service is that scope's, and a transient's
+            // disposal is tracked there and ends with the module scope — as when the module's
+            // registrations lived in the root and it resolved them from root child scopes.
             var standIns = rootRegistrations
                 .Select(rootRegistration => RegistrationBuilder
-                    .ForDelegate(type, (_, _) => rootScope.ResolveComponent(new ResolveRequest(service, rootRegistration, [])))
+                    .ForDelegate(type, (context, _) => context.Resolve<RootResolutionScope>().Scope
+                        .ResolveComponent(new ResolveRequest(service, rootRegistration, [])))
                     .ExternallyOwned()
                     .InstancePerDependency()
                     .CreateRegistration())

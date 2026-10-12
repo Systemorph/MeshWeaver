@@ -447,13 +447,17 @@ would be a confidently wrong hold, not a missing measurement. `mw-plugin-test pl
 [<app-dir> --shared-frameworks <dir>]` writes the same document by hand for a bake that predates it.
 
 At the gate (`ReleaseAvailability`, fed by `ModuleLinkObservation.Measure` — the one IO step, on the
-file-system pool), per installed package that ships a compiled module:
+file-system pool), per installed package that ships a compiled module — the PACKAGE verdict. On a
+platform-roll path that verdict is an advisory, never a hold (policy
+`platform-rolls-independently-of-packages`, [Release Gates](../ReleaseGates) → "What a refusal
+does"): an unlinkable module keeps its previous generation and the boot-time probe below refuses
+its load, while the platform rolls.
 
 | Situation | Answer |
 |---|---|
 | The target's sealed module set **declares** a build of the module | it will be adopted at the roll (MeshWeaver#3650); nothing to measure — its consistency is the sealed-set rule's business (MeshWeaver#3175) |
-| No such build, and **nothing landed** on this instance | nothing keeps running across the roll; nothing to hold on |
-| No such build, and a **landed generation** — the bytes that keep running | `ModulePlatformLink.Check(landed entry DLL, target surface)`: **`Unlinkable` ⇒ `ModuleUnloadable`, the hold**, naming the module and the missing types; `Linkable` ⇒ clear; `Indeterminate` ⇒ **reported** |
+| No such build, and **nothing landed** on this instance | nothing keeps running across the roll; nothing to refuse |
+| No such build, and a **landed generation** — the bytes that keep running | `ModulePlatformLink.Check(landed entry DLL, target surface)`: **`Unlinkable` ⇒ `ModuleUnloadable`, the package refusal** (on a roll path: an advisory, and the module keeps its previous generation), naming the module and the missing types; `Linkable` ⇒ clear; `Indeterminate` ⇒ **reported** |
 
 🚨 **`Indeterminate` is REPORTED at the roll, not refused — and that is the opposite of what this
 page says for boot and landing, on purpose.** At boot and at landing the thing being refused is one
@@ -472,8 +476,10 @@ The same verdict carries the missing content bakes as a **cost**, not a hold
 (`UpdatabilityVerdict.BootCompiles`, "would recompile at boot on …: education, crm"): the compile
 is the code path every pull request of that content already proved green. `Modules:RequirePrebuilt`
 — the opt-in strict mode in which the seeder refuses a boot compile and parks the type — keeps it
-the hold it used to be everywhere. `RollSelection` therefore walks newest-first and stops at the
-first release with no unloadable module; "no complete release" names the module.
+a package refusal. Before policy `platform-rolls-independently-of-packages` `RollSelection` walked
+newest-first and stopped at the first release with no unloadable module; it now selects the newest
+admitted release and names the unloadable module among the advisories
+([Roll Selection](../RollSelection)).
 
 ### How it composes with the generation pin
 
@@ -555,7 +561,7 @@ surface document with one type removed as "the older target":
 | `ToJson_ThenFromJson_CarriesTheIdentityAndEveryAssemblysTypes` | the document round-trips the identity and exactly the set `TypesOf` answers |
 | `ARealModule_LinksIdenticallyAgainstTheLiveSurfaceAndTheDocument` | the same module, the same verdict and the same denominator on both |
 | `ADocumentThatIsNotASurface_IsRefused_NeverReadAsAnEmptySurface` | fail closed on shape — an empty surface would refuse everything |
-| `AModuleUnlinkableAgainstTheTargetSurface_HoldsTheRoll_NamingTheModule` | THE hold: `ModuleUnloadable`, module and type named, never Indeterminate |
+| `AModuleUnlinkableAgainstTheTargetSurface_HoldsTheRoll_NamingTheModule` | THE package refusal: `ModuleUnloadable`, module and type named, never Indeterminate (the test name predates the policy; it pins the package verdict) |
 | `ALandedModuleThatLinksAgainstTheTarget_Clears` | the gate is a gate, not a wall |
 | `AModuleWithABuildPublishedForTheTarget_IsNotHeldOnItsLandedGeneration` | the published build is what will be adopted; the landed one does not decide |
 | `AReleaseWithNoPublishedSurface_IsIndeterminate_ReportedNeitherClearanceNorHold` | the roll-time direction of the third state |

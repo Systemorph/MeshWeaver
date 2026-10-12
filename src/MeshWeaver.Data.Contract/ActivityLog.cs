@@ -132,6 +132,32 @@ public record ActivityLog(string Category)
     public ImmutableList<string> AffectedPaths { get; init; } = [];
 
     /// <summary>
+    /// The durable actions this activity offers once it has run ("Open QR card") — plain data, so
+    /// they can be rendered after the execution hub has unloaded, the process has restarted or the
+    /// module that wrote them was refreshed. Empty for every activity written before the field
+    /// existed, and for every activity that offers none.
+    ///
+    /// <para>🚨 Add through <see cref="WithAction"/>, never <c>Actions.Add(…)</c>: recording the
+    /// same action twice (a retried publication) must leave ONE entry.</para>
+    /// </summary>
+    public ImmutableList<ActivityActionReference> Actions { get; init; } = [];
+
+    /// <summary>
+    /// Records <paramref name="action"/> on this activity: REPLACES the entry carrying the same
+    /// <see cref="ActivityActionReference.Id"/> in place, otherwise appends. Idempotent, so a
+    /// retried or duplicated write converges on one entry per action.
+    /// </summary>
+    /// <param name="action">The action to record.</param>
+    /// <returns>The activity log carrying the action exactly once.</returns>
+    public ActivityLog WithAction(ActivityActionReference action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        var actions = Actions ?? [];
+        var index = actions.FindIndex(a => string.Equals(a.Id, action.Id, StringComparison.Ordinal));
+        return this with { Actions = index < 0 ? actions.Add(action) : actions.SetItem(index, action) };
+    }
+
+    /// <summary>
     /// The primary node path — the hub that generated this activity.
     /// </summary>
     public string? PrimaryNodePath => HubPath;
