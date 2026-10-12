@@ -1,5 +1,6 @@
 ﻿using System.Collections.Concurrent;
 using System.Collections.Immutable;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reflection;
 using MeshWeaver.Data;
@@ -256,7 +257,7 @@ public static class AccessControlPipeline
             // below — by then the hub's DI scope is fully built.
             ILogger? logger = null;
             // One per hub, owned by this closure — the hub's lifetime is its lifetime (#6589).
-            var ordered = new SenderOrderedRelease();
+            var ordered = new SenderOrderedRelease(hub);
 
             return pipeline.AddPipeline((delivery, ct, next) =>
             {
@@ -740,6 +741,31 @@ public static class AccessControlPipeline
     private sealed class SenderOrderedRelease
     {
         private readonly ConcurrentDictionary<string, Lane> lanes = new(StringComparer.Ordinal);
+        private readonly IMessageHub hub;
+        private CompositeDisposable? connections;
+
+        /// <summary>Creates the per-hub release whose in-flight verdict connections <paramref name="hub"/> owns.</summary>
+        public SenderOrderedRelease(IMessageHub hub) => this.hub = hub;
+
+        /// <summary>
+        /// The owner of every verdict connection: one <see cref="CompositeDisposable"/> registered with
+        /// the hub, so the hub's disposal releases a verdict that never terminates instead of leaving it
+        /// subscribed (and the delivery it captures retained) past the hub. Registered on first use —
+        /// on a delivery, when the hub is fully built — never at pipeline registration, which runs
+        /// inside the hub's own construction.
+        /// </summary>
+        private CompositeDisposable Connections()
+        {
+            var existing = Volatile.Read(ref connections);
+            if (existing is not null)
+                return existing;
+            var created = new CompositeDisposable();
+            var winner = Interlocked.CompareExchange(ref connections, created, null);
+            if (winner is not null)
+                return winner;
+            hub.RegisterForDisposal(created);
+            return created;
+        }
 
         /// <summary>The ordering key of a delivery: its sender.</summary>
         public static string KeyOf(IMessageDelivery delivery) => delivery.Sender?.ToString() ?? string.Empty;
@@ -757,7 +783,7 @@ public static class AccessControlPipeline
         {
             // Hot from here: the verdict is computed concurrently with everything queued ahead.
             var verdict = decision.Take(1).Replay(1);
-            verdict.Connect();
+            verdict.ConnectOwnedBy(Connections());
             var release = Observable.Create<System.Reactive.Unit>(observer => verdict.Subscribe(
                 value =>
                 {
