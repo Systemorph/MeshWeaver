@@ -51,6 +51,13 @@ public class ActivityTrackingHubCrossSiloTest : IClassFixture<TwoSiloCacheUpdate
     private static IMessageHub SiloMeshHub(TestCluster cluster, int index)
         => Services(cluster, index).GetRequiredService<IMessageHub>();
 
+    private static Task<Unit> ClaimSettled(
+        OrleansRoutingService routing, Address address, CancellationToken ct) =>
+        (routing.PodHubClaimSettled(address) ?? Observable.Return(Unit.Default))
+            .FirstAsync()
+            .Timeout(TestTimeouts.Convergence)
+            .Await(ct);
+
     /// <summary>
     /// Each process's tracking hub has its OWN address, of a type the router carries to the
     /// process that hosts it. With one shared address there is nothing a router on another silo
@@ -80,12 +87,12 @@ public class ActivityTrackingHubCrossSiloTest : IClassFixture<TwoSiloCacheUpdate
     /// The fixed arm: a request from silo B to silo A's tracking hub is answered BY silo A's
     /// tracking hub.
     /// </summary>
-    [Fact(Timeout = 120000)]
+    // Bounded by the runner-wide outer bound (TestTimeouts.DefaultOuterBound), which dominates
+    // every shared budget the waits below use; a literal here would undercut it on CI.
+    [Fact]
     public async Task ARequestFromTheOtherSilo_ReachesThisSilosTrackingHub()
     {
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        deadline.CancelAfter(TimeSpan.FromSeconds(100));
-        var ct = deadline.Token;
+        var ct = TestContext.Current.CancellationToken;
         var cluster = fixture.Cluster;
         cluster.Silos.Count.Should().BeGreaterThanOrEqualTo(2, "the request has to CROSS silos");
 
@@ -104,6 +111,14 @@ public class ActivityTrackingHubCrossSiloTest : IClassFixture<TwoSiloCacheUpdate
             "silo B must not hold a local route for silo A's tracking hub. If it does, the delivery "
             + "never crosses silos and lands on B's hub instead");
 
+        // 🚨 WAIT FOR THE POD-HUB CLAIM before sending (OrleansTestRoutingPattern, PodHubTransportTest).
+        // The claim is attached asynchronously; until it lands a directed call can answer
+        // PodHubNotHere, and this fixture declares `portal` client-hosted, so the delivery could fall
+        // back to the memory stream and pass without exercising the production directed route.
+        var routingA = Services(cluster, 0).GetRequiredService<IRoutingService>()
+            .Should().BeOfType<OrleansRoutingService>().Subject;
+        await ClaimSettled(routingA, trackingA.Address, ct);
+
         var pong = await hubB.Observe<PingResponse>(new PingRequest(), o => o.WithTarget(trackingA.Address))
             .FirstAsync()
             .Timeout(TestTimeouts.Convergence)
@@ -119,12 +134,12 @@ public class ActivityTrackingHubCrossSiloTest : IClassFixture<TwoSiloCacheUpdate
     /// the route never runs, and the sender gets a <see cref="DeliveryFailure"/>. The arm above
     /// therefore owes its delivery to the address, not to the rig.
     /// </summary>
-    [Fact(Timeout = 120000)]
+    // Bounded by the runner-wide outer bound (TestTimeouts.DefaultOuterBound), which dominates
+    // every shared budget the waits below use; a literal here would undercut it on CI.
+    [Fact]
     public async Task TheOldAddressShape_IsUnreachableFromTheOtherSilo_AndTheSenderIsTold()
     {
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        deadline.CancelAfter(TimeSpan.FromSeconds(100));
-        var ct = deadline.Token;
+        var ct = TestContext.Current.CancellationToken;
         var cluster = fixture.Cluster;
         cluster.Silos.Count.Should().BeGreaterThanOrEqualTo(2, "the delivery has to CROSS silos");
 
@@ -136,6 +151,11 @@ public class ActivityTrackingHubCrossSiloTest : IClassFixture<TwoSiloCacheUpdate
             Interlocked.Increment(ref reached);
             return Observable.Return(delivery.Processed());
         });
+
+        // Wait for the claim, so the refusal below is the router's verdict on the address shape and
+        // not a claim that had not landed yet.
+        await ClaimSettled(
+            routingA.Should().BeOfType<OrleansRoutingService>().Subject, oldShape, ct);
 
         var outcome = await SiloMeshHub(cluster, 1)
             .Observe<PingResponse>(new PingRequest(), o => o.WithTarget(oldShape))

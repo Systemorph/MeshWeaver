@@ -10,8 +10,11 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 > **The rule:** a hub that exists once per PROCESS — hosted under the mesh root, not backed by a
 > node — is addressed `portal/{role}-{meshRootId}`. The mesh id makes the address unique to the
 > process. The `portal` type is stream-routed, so the router carries a delivery from any silo to the
-> process that hosts the hub, by the pod-hub transport or the stream. If that process has gone, the
-> router refuses the delivery loudly.
+> process that hosts the hub. In production that carrier is the directed pod-hub transport:
+> production declares no client-hosted address types, and a multi-silo host registers no memory
+> stream (#6603). The memory-stream fallback exists only where an address type is declared
+> client-hosted, such as the test rig. If the hosting process has gone, the router refuses the
+> delivery loudly.
 
 | Hub | Address | Role |
 |---|---|---|
