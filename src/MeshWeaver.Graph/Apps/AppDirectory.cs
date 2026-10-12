@@ -222,9 +222,9 @@ public sealed class AppDirectory
             return null;
         // The picture is resolved HERE, against the user node: an uploaded one is stored relative
         // (`content:<file>`), and the tile is painted from a synthetic {viewer}/_Apps row, where a
-        // relative value would resolve against the wrong node. A Fluent icon NAME is no picture
-        // (null → the settings icon).
-        var picture = MeshNodeImageHelper.ResolveContentPath(node.Icon, node.Path);
+        // relative value would resolve against the wrong node. The profile page's own classifier
+        // (ResolvePictureUrl): an emoji, inline SVG or Fluent icon name is no picture (null → the settings icon).
+        var picture = MeshNodeImageHelper.ResolvePictureUrl(node.Icon, node.Path);
         return new PersonTile(name.Trim(), string.IsNullOrWhiteSpace(picture) ? null : picture, Text("locale"));
     }
 

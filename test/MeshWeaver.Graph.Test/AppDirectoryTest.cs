@@ -137,10 +137,11 @@ public class AppDirectoryPureTest
             .Should().BeNull("only a USER node names the person tile");
         AppDirectory.PersonQuery("alice").Should().Be($"path:alice nodeType:{UserNodeType.NodeType}");
         AppDirectory.ReadPerson(new MeshNode("carol") { NodeType = "User", Name = "Carol Roe", Icon = "content:me.png" }, options)!
-            .Icon.Should().Be(MeshNodeImageHelper.ResolveContentPath("content:me.png", "carol"))
+            .Icon.Should().Be(MeshNodeImageHelper.ResolvePictureUrl("content:me.png", "carol"))
             .And.NotStartWith("content:", "the synthetic _Apps row would resolve a relative picture against itself");
-        AppDirectory.ReadPerson(new MeshNode("dave") { NodeType = "User", Name = "Dave Roe", Icon = "Person" }, options)!
-            .Icon.Should().BeNull("a Fluent icon name is no picture — the tile keeps the settings icon");
+        foreach (var glyph in new[] { "Person", "🙂", "<svg xmlns='http://www.w3.org/2000/svg'/>" })
+            AppDirectory.ReadPerson(new MeshNode("dave") { NodeType = "User", Name = "Dave Roe", Icon = glyph }, options)!
+                .Icon.Should().BeNull($"'{glyph}' is no picture — the tile keeps the settings icon");
         AppDirectory.ReadPerson(new MeshNode("alice") { NodeType = "User", Name = "alice" }, options)
             .Should().BeNull("a name that is just the id says nothing the plain tile does not");
         AppDirectory.ReadPerson(new MeshNode("alice")
