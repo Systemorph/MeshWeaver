@@ -27,6 +27,14 @@ namespace Memex.Portal.Shared.Test;
 /// ungranted caller and SUBSCRIBED under a hub principal (the continuation-on-another-identity
 /// shape). The ungranted caller must learn nothing a reader learns; the grant holder, under the
 /// same split, must still read (the positive control — without it a denial proves nothing).</para>
+///
+/// <para><b>Probed here:</b> autocomplete, search, render-area, the content listing, upload's
+/// collection lookup and recycle's Update pre-flight. <c>get</c> has its own class
+/// (<c>UngrantedGetIsNotFoundTest</c>). Patch's pre-flight is the same <c>CheckUpdateOutcome</c>
+/// recycle's test drives. <c>run_tests</c> and <c>visit</c> are NOT probed: the first renders the
+/// Tests area inside an activity that outlives the call, the second copies only a node's name into
+/// the caller's own activity log — their captures are held by
+/// <c>CallerCapturedAtEntryGuard</c>, not by a behavioural probe.</para>
 /// </summary>
 public class CallerFacingReadsDecideForTheCallerTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -34,6 +42,7 @@ public class CallerFacingReadsDecideForTheCallerTest(ITestOutputHelper output) :
     private const string Hidden = "ReadGateHidden";
     private const string ViewerUser = "readgate-viewer";
     private const string HolderUser = "readgate-holder";
+    private const string EditorUser = "readgate-editor";
 
     /// <summary>A name no other node in the mesh carries, so finding it anywhere is the leak.</summary>
     private const string SecretName = "Zephyrinequartz";
@@ -49,7 +58,8 @@ public class CallerFacingReadsDecideForTheCallerTest(ITestOutputHelper output) :
                 new MeshNode(Granted) { Name = "Granted", NodeType = "Markdown" },
                 new MeshNode(Hidden) { Name = "Hidden", NodeType = "Markdown" },
                 AssignmentNodeFactory.UserRole(ViewerUser, "Viewer", Granted),
-                AssignmentNodeFactory.UserRole(HolderUser, "Viewer", Hidden));
+                AssignmentNodeFactory.UserRole(HolderUser, "Viewer", Hidden),
+                AssignmentNodeFactory.UserRole(EditorUser, "Editor", Hidden));
 
     /// <summary>
     /// 🚨 The secret node is WRITTEN, not declared with <c>AddMeshNodes</c>: a declared node is a
@@ -231,5 +241,55 @@ public class CallerFacingReadsDecideForTheCallerTest(ITestOutputHelper output) :
 
         answer.Should().Contain(ServedAsReader,
             "the holder's grant covers the node — if this fails, the denial above proves nothing");
+    }
+
+    private Task<string> Upload(string userId)
+        => BuiltAsSubscribedAsHub(userId, () =>
+            new MeshOperations(SessionHub()).Upload(SecretPath + "/content/probe.txt", [1, 2, 3]));
+
+    [Fact]
+    public async Task Upload_ForAnUngrantedCaller_IsNotServedByTheOwner()
+    {
+        var denied = await Upload(ViewerUser);
+        Output.WriteLine($"viewer: {denied}");
+
+        denied.Should().NotContain(ServedAsReader,
+            "the owner hub must refuse the collection lookup of a caller holding no Read on the node");
+        denied.Should().Contain(ViewerUser, "the refusal is decided for the caller, never for the subscribing hub");
+    }
+
+    [Fact]
+    public async Task Upload_TheGrantHolder_IsServed_UnderTheSameSplit()
+    {
+        var answer = await Upload(HolderUser);
+        Output.WriteLine($"holder: {answer}");
+
+        answer.Should().Contain(ServedAsReader,
+            "the holder's grant covers the node — if this fails, the denial above proves nothing");
+    }
+
+    private Task<string> Recycle(string userId)
+        => BuiltAsSubscribedAsHub(userId, () =>
+            new MeshOperations(SessionHub()).Recycle(SecretPath, "test: caller captured at entry"));
+
+    [Fact]
+    public async Task Recycle_ForACallerWithoutUpdate_IsRefused()
+    {
+        var denied = await Recycle(HolderUser);
+        Output.WriteLine($"reader: {denied}");
+
+        denied.Should().Contain("\"status\":\"Error\"",
+            "a reader holds no Update on the node, so the pre-flight refuses the recycle");
+    }
+
+    [Fact]
+    public async Task Recycle_TheEditor_RecyclesIt_UnderTheSameSplit()
+    {
+        var answer = await Recycle(EditorUser);
+        Output.WriteLine($"editor: {answer}");
+
+        answer.Should().Contain("\"status\":\"Recycled\"",
+            "the editor holds Update — the pre-flight decides for HER, not for the hub that subscribed; "
+            + "if this fails, the refusal above proves nothing");
     }
 }

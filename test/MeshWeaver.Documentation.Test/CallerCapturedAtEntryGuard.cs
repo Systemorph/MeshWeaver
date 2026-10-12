@@ -37,18 +37,22 @@ public class CallerCapturedAtEntryGuard(ITestOutputHelper output)
     ];
 
     /// <summary>
-    /// The methods allowed to read the ambient identity: the capture helper, and entries that read
-    /// it once in their synchronous prologue (an admin verb's "who is asking", <c>whoami</c>'s
-    /// name/email echo) before any observable is composed.
+    /// The EXACT ambient-identity reads approved, per file and method: the capture helpers, and
+    /// entries that read it once in their synchronous prologue (an admin verb's "who is asking",
+    /// <c>whoami</c>'s name/email echo) before any observable is composed. A count, not a method
+    /// name: approving a method by name alone would let a later read inside one of its
+    /// continuations pass unseen, which is the #6570 shape itself. A second read in an approved
+    /// method is red; an approved read that is gone is stale and red until its entry goes.
     /// </summary>
-    private static readonly ImmutableHashSet<string> Allowed =
-    [
-        "CaptureCaller",
-        "WhoAmI",
-        "ReloadModule",
-        "UninstallPackage",
-        "RebootInstance",
-    ];
+    private static readonly ImmutableDictionary<string, int> Approved = new Dictionary<string, int>
+    {
+        ["src/MeshWeaver.Mesh.Operations/MeshOperations.cs::CaptureCaller"] = 1,
+        ["src/MeshWeaver.Mesh.Operations/MeshOperations.cs::WhoAmI"] = 1,
+        ["src/MeshWeaver.Mesh.Operations/MeshOperations.cs::ReloadModule"] = 1,
+        ["src/MeshWeaver.Mesh.Operations/MeshOperations.cs::UninstallPackage"] = 1,
+        ["src/MeshWeaver.Mesh.Operations/MeshOperations.cs::RebootInstance"] = 1,
+        ["src/MeshWeaver.Hosting/Completion/ChatCompletionOrchestrator.cs::CaptureCaller"] = 1,
+    }.ToImmutableDictionary();
 
     private static readonly Regex AmbientRead = new(@"\.Context\s*\?\?", RegexOptions.Compiled);
 
@@ -81,6 +85,7 @@ public class CallerCapturedAtEntryGuard(ITestOutputHelper output)
     {
         var root = SourceScan.FindRepoRoot();
         var offenders = new List<string>();
+        var counts = new Dictionary<string, int>();
         var seen = 0;
         foreach (var relative in Surfaces)
         {
@@ -91,9 +96,19 @@ public class CallerCapturedAtEntryGuard(ITestOutputHelper output)
             {
                 seen++;
                 output.WriteLine($"{relative}:{line} in {method}");
-                if (!Allowed.Contains(method))
+                var key = $"{relative}::{method}";
+                counts[key] = counts.GetValueOrDefault(key) + 1;
+                if (!Approved.ContainsKey(key))
                     offenders.Add($"{relative}:{line} in {method}");
             }
+        }
+        foreach (var (key, approved) in Approved)
+        {
+            var found = counts.GetValueOrDefault(key);
+            if (found > approved)
+                offenders.Add($"{key}: {found} ambient reads, {approved} approved — a read beyond the entry's one is the #6570 shape");
+            else if (found < approved)
+                offenders.Add($"{key}: {found} ambient reads, {approved} approved — the approval is STALE; remove it");
         }
 
         seen.Should().BeGreaterThan(0,
