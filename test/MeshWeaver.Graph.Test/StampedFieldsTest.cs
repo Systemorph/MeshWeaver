@@ -339,11 +339,17 @@ public class StampedFieldsTest(ITestOutputHelper output) : MonolithMeshTestBase(
         return path;
     }
 
-    /// <summary>The node's hub, re-activated and bound to <paramref name="nodeType"/>.</summary>
+    /// <summary>
+    /// The node's hub, re-activated, bound to <paramref name="nodeType"/> and STARTED. A hosted hub is
+    /// visible before its buildup actions ran; until then its declaration holder still reads
+    /// "not yet resolved" (no fields, a fault), which is what the Initialize gate keeps every message
+    /// from observing — so a direct read must wait for the same gate (<see cref="IMessageHub.Started"/>).
+    /// </summary>
     private Task<IMessageHub> ReboundTo(string path, string nodeType)
         => Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
             .Select(_ => Mesh.GetHostedHub(new Address(path), HostedHubCreation.Never))
             .Where(h => h is { IsDisposing: false }
+                && h.Started.IsCompletedSuccessfully
                 && string.Equals(h.Configuration.Get<NodeTypePathHolder>()?.Path, nodeType, StringComparison.OrdinalIgnoreCase))
             .Select(h => h!)
             .Should().Within(60.Seconds()).Emit($"the node's hub re-activates bound to {nodeType}",
