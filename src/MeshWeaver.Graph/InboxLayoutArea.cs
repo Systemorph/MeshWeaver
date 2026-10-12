@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
@@ -97,14 +98,18 @@ public static class InboxLayoutArea
                     refused.Source, refused.Band, refused.Query);
         var sections = Sections(legs, owner);
         var sources = sections.GroupBy(section => section.Source, StringComparer.Ordinal)
-            .Select(source => (Id: source.Key, Label: SourceLabel(host, source.First())))
+            .Select(source => (Id: source.Key, Label: SourceLabel(host, source.First()),
+                Shown: source.Any(s => s.ShownByDefault),
+                Icon: source.Select(s => s.SourceIcon).FirstOrDefault(i => i.Length > 0) ?? string.Empty))
             .ToImmutableList();
         // Seeded ONCE per session: a re-render must not reset what the viewer typed, switched or ticked.
         if (host.TryMarkEditStateInitialized("inbox:" + InboxRows.FilterId))
         {
             host.UpdateData(InboxRows.FilterId, new InboxFilter
             {
-                Sources = sources.ToImmutableDictionary(source => InboxRows.SourceKey(source.Id), _ => true),
+                // A source is shown at first when any of its legs says so — the noisy ones are a
+                // switch away, never removed.
+                Sources = sources.ToImmutableDictionary(source => InboxRows.SourceKey(source.Id), source => source.Shown),
             });
             host.UpdateData(UnreadId, string.Empty);
             host.UpdateData(CappedId, string.Empty);
@@ -122,36 +127,57 @@ public static class InboxLayoutArea
         var rows = Rows(host, sections, owner, access.ViewerZoneId());
 
         var filterContext = LayoutAreaReference.GetDataPointer(InboxRows.FilterId);
-        var switches = Controls.Stack.WithOrientation(Orientation.Horizontal).WithStyle("gap: 16px; flex-wrap: wrap;");
+        // One icon toggle per source, always in view: a source is switched on or off with one click,
+        // its name the tooltip. Bound to the same filter field the settings menu's switches are.
+        var toggles = Controls.Stack.WithOrientation(Orientation.Horizontal).WithStyle("gap: 4px; flex-wrap: wrap; align-items: center;");
+        // The labelled switches, kept in the settings menu for the viewer who wants names, not symbols.
+        var switches = Controls.Stack.WithVerticalGap(4);
         foreach (var source in sources)
-            switches = switches.WithView(
-                Controls.Switch(new JsonPointerReference($"sources/{InboxRows.SourceKey(source.Id)}")) with
+        {
+            var key = InboxRows.SourceKey(source.Id);
+            toggles = toggles.WithView(
+                Controls.ToggleButton(new JsonPointerReference($"sources/{key}")) with
                 {
                     DataContext = filterContext, Label = source.Label,
-                }, "Show" + InboxRows.SourceKey(source.Id));
+                    Icon = source.Icon.Length > 0 ? source.Icon : source.Label[..1],
+                }, "Toggle" + key);
+            switches = switches.WithView(
+                Controls.Switch(new JsonPointerReference($"sources/{key}")) with
+                {
+                    DataContext = filterContext,
+                    Label = source.Icon.Length > 0 ? $"{source.Icon} {source.Label}" : source.Label,
+                }, "Show" + key);
+        }
 
-        return Observable.Return<UiControl?>(Controls.Stack.WithWidth("100%").WithVerticalGap(12)
+        // Settings out of the way: the order and the labelled source switches sit behind one icon.
+        var settings = Controls.MenuItem(host.Localize("inbox.settings"), FluentIcons.Settings()).WithIconOnly()
+            .WithView(Controls.Select(new JsonPointerReference("order"),
+                InboxOrder.All.Select(order => (Option)new Option<string>(order, host.Localize("inbox.order." + order))).ToArray()) with
+            {
+                DataContext = filterContext, Label = host.Localize("inbox.order"),
+            }, "Order")
+            .WithView(switches, "Sources");
+
+        return Observable.Return<UiControl?>(Controls.Stack.WithWidth("100%").WithVerticalGap(8)
             .WithView(Controls.H2(host.Localize("inbox.title")).WithStyle("margin: 0;"), "Title")
-            .WithView(Controls.Stack.WithOrientation(Orientation.Horizontal).WithStyle("gap: 12px; flex-wrap: wrap; align-items: end;")
+            // One command row, as a mail client has it: search, the acts, the source toggles, settings.
+            .WithView(Controls.Stack.WithOrientation(Orientation.Horizontal).WithStyle("gap: 8px; flex-wrap: wrap; align-items: end;")
                 .WithView(Controls.Text(new JsonPointerReference("search")) with
                 {
                     DataContext = filterContext, Label = host.Localize("inbox.search"),
                     Placeholder = host.Localize("inbox.search.placeholder"),
                 }, "Search")
-                .WithView(Controls.Select(new JsonPointerReference("order"),
-                    InboxOrder.All.Select(order => (Option)new Option<string>(order, host.Localize("inbox.order." + order))).ToArray()) with
-                {
-                    DataContext = filterContext, Label = host.Localize("inbox.order"),
-                }, "Order"), "Find")
-            .WithView(switches, "Sources")
-            // Ordinary buttons: the framework keeps each busy while its bulk act runs and shows the
-            // outcome line that names every item that was not put away (Doc/GUI/ButtonPendingState).
-            .WithView(Controls.Toolbar
+                // Ordinary buttons: the framework keeps each busy while its bulk act runs and shows
+                // the outcome line that names every item that was not put away
+                // (Doc/GUI/ButtonPendingState). Backspace / Delete press Delete, as in a mail client
+                // — never while typing in the search box.
                 .WithView(Controls.Button(host.Localize("inbox.delete")).WithAppearance(Appearance.Accent)
+                    .WithIconStart(FluentIcons.Delete()).WithShortcut(DeleteShortcut)
                     .WithReactiveClickAction(ctx => Delete(ctx, acts, owner, rows)), "Delete")
                 .WithView(Controls.Button(host.Localize("inbox.undo")).WithAppearance(Appearance.Neutral)
-                    .WithReactiveClickAction(ctx => Undo(ctx, acts)), "Undo"),
-                "Actions")
+                    .WithReactiveClickAction(ctx => Undo(ctx, acts)), "Undo")
+                .WithView(toggles, "Sources")
+                .WithView(settings, "Settings"), "Commands")
             // Says which sources could not be read — an unreadable source must never look like an
             // empty one. Bound: it appears and clears with the reads, with no re-render.
             .WithView(Controls.Label(new JsonPointerReference(LayoutAreaReference.GetDataPointer(UnreadId))), "Unread")
@@ -163,6 +189,9 @@ public static class InboxLayoutArea
             .WithView(Controls.Label(new JsonPointerReference(LayoutAreaReference.GetDataPointer(HiddenId))), "Hidden")
             .WithView(Grid(host, rows), "Grid"));
     }
+
+    /// <summary>The keys that press Delete — as a mail client: Backspace or Delete, with the rows ticked.</summary>
+    internal const string DeleteShortcut = "Backspace|Delete";
 
     /// <summary>
     /// The grid's rows: every leg's result for the term the viewer typed, merged, then narrowed to
@@ -354,12 +383,18 @@ public static class InboxLayoutArea
     {
         var grid = rows.Select(set => (IEnumerable<InboxRow>)set)
             .BindGrid(InboxRows.GridId, host.Localize("inbox.band.empty"), reason => host.Localize("inbox.listFailed", reason))
-            .WithRowSelection(InboxRows.SelectionId, InboxRows.KeyProperty, InboxRows.BlockedReasonProperty);
+            .WithRowSelection(InboxRows.SelectionId, InboxRows.KeyProperty, InboxRows.BlockedReasonProperty)
+            // Unread rows carry their class (bold), as a mail client shows new mail.
+            .WithRowClassProperty(InboxRows.RowClassProperty)
+            // The source's symbol first, so a glance tells mail from a message from an approval.
+            .WithColumn(new TemplateColumnControl(Controls.Icon(new ContextProperty(InboxRows.SourceIconProperty)))
+                .WithTitle(string.Empty).WithWidth("40px").WithSortable(false));
+        // Outlook's columns: what, from whom, when. (The band still decides the "what needs you
+        // first" order in the settings menu; it is no longer a column of its own.)
         foreach (var (property, key) in new[]
                  {
                      (nameof(InboxRow.Title), "inbox.column.item"),
                      (nameof(InboxRow.Source), "inbox.column.source"),
-                     (nameof(InboxRow.Band), "inbox.column.status"),
                      (nameof(InboxRow.When), "inbox.column.when"),
                  })
             // The order is the select's: a header sort would be a second, unbound ordering.
@@ -549,6 +584,7 @@ public static class InboxLayoutArea
                 .Select(leg => new InboxSection(leg.Band, leg.Source, leg.Order, leg.Query)
                 {
                     SourceLabelKey = leg.SourceLabelKey, BandLabelKey = leg.BandLabelKey,
+                    Unread = leg.Unread, ShownByDefault = leg.ShownByDefault, SourceIcon = leg.SourceIcon ?? string.Empty,
                 })
         ];
 

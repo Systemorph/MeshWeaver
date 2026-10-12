@@ -80,4 +80,24 @@ public record InboxQueryLeg
 
     /// <summary>Disabled legs are skipped, and a deployment may disable one without a build.</summary>
     public bool Enabled { get; init; } = true;
+
+    /// <summary>
+    /// Whether every row this leg selects is UNREAD — shown bold, as a mail client shows new mail.
+    /// A source with read state brings two legs: one selecting its unread items (this set) and one
+    /// selecting the rest. The query decides what unread means, so the page never reads content.
+    /// </summary>
+    public bool Unread { get; init; }
+
+    /// <summary>
+    /// Whether the source is shown before the viewer touches its switch. A noisy source (the
+    /// notification feed) is off by default: it stays one switch away, and the bell still shows it.
+    /// Every leg of one source should agree; the page shows a source when ANY of its legs says so.
+    /// </summary>
+    public bool ShownByDefault { get; init; } = true;
+
+    /// <summary>
+    /// The source's symbol — an emoji or short glyph shown before each row it brings and on its
+    /// switch. Language-neutral by nature, so it needs no catalog key. Empty shows none.
+    /// </summary>
+    public string? SourceIcon { get; init; }
 }

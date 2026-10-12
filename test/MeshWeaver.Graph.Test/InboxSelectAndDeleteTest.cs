@@ -27,8 +27,8 @@ namespace MeshWeaver.Graph.Test;
 /// </summary>
 public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private const string DeleteArea = InboxLayoutArea.AreaName + "/Actions/Delete";
-    private const string UndoArea = InboxLayoutArea.AreaName + "/Actions/Undo";
+    private const string DeleteArea = InboxLayoutArea.AreaName + "/Commands/Delete";
+    private const string UndoArea = InboxLayoutArea.AreaName + "/Commands/Undo";
     private const string GridArea = InboxLayoutArea.AreaName + "/Grid";
 
     /// <inheritdoc />
@@ -70,6 +70,10 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
                  && r.EnumerateArray().Select(x => x.GetProperty("path").GetString()).OrderBy(x => x)
                      .SequenceEqual(ids.Select(id => $"{ns}/{id}").OrderBy(x => x)),
             because, ct);
+        // Notifications are a switch away by default (the feed is long); this test is about them,
+        // so it switches them on — the same field the source toggle writes.
+        stream.UpdatePointer(JsonValue.Create(true), LayoutAreaReference.GetDataPointer(InboxRows.FilterId),
+            new JsonPointerReference($"sources/{InboxRows.SourceKey("Notifications")}"));
         await Listed("every notification is listed", "keep", "bin", "bin2");
 
         var pointer = grid.SelectedItems.Should().BeOfType<JsonPointerReference>().Subject.Pointer;
@@ -131,7 +135,9 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
         void Set(string field, JsonNode value) => stream.UpdatePointer(value, filter, new JsonPointerReference(field));
 
         // Both are in "Needs you"; the mail was created last, so it is the newer one.
-        await Titles("the default order lists the newest first within a band", "Zulu workshop", "Alpha invoice");
+        await Titles("notifications are off by default: only the mail is listed", "Zulu workshop");
+        Set($"sources/{InboxRows.SourceKey("Notifications")}", JsonValue.Create(true));
+        await Titles("switched on, the notification joins — newest first, the default order", "Zulu workshop", "Alpha invoice");
 
         // The page must settle: its own row writes re-emit the data section, and a page that read
         // those as filter changes would rewrite the rows without end (dozens of writes in this window).
@@ -155,6 +161,48 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
         await Titles("a term is evaluated by the query engine, per leg", "Zulu workshop");
         Set("search", JsonValue.Create(""));
         await Titles("clearing the box restores the list", "Alpha invoice", "Zulu workshop");
+    }
+
+    /// <summary>
+    /// The page as a mail client shows it: an unread mail is bold and a read one is not, every row
+    /// carries its source's symbol, Delete answers Backspace, and each source has a one-click icon
+    /// toggle beside the command row — notifications start switched off.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task UnreadIsBold_RowsCarryTheirSourceSymbol_AndDeleteAnswersBackspace()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string owner = "inbox-outlook";
+        await CreateUserAsync(owner, ct);
+        var mail = $"{owner}/{EmailNodeType.UserEmailSegment}";
+        await CreateAsync(Mail("fresh", mail, owner, new Email { Id = "fresh", Subject = "Fresh one" }), ct);
+        await CreateAsync(Mail("seen", mail, owner, new Email { Id = "seen", Subject = "Seen one", Status = EmailStatus.Read }), ct);
+        TestUsers.DevLogin(Mesh, new AccessContext { ObjectId = owner, Name = owner, Email = $"{owner}@meshweaver.io" });
+
+        var stream = GetClient().GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new Address(owner), new LayoutAreaReference(InboxLayoutArea.AreaName));
+        var rows = await stream.GetDataStream<JsonElement>(new JsonPointerReference(LayoutAreaReference.GetDataPointer(InboxRows.GridId)))
+            .Should().Within(TestTimeouts.Convergence).Match(r => r.ValueKind == JsonValueKind.Array && r.GetArrayLength() == 2, "both mails are listed", ct);
+        var byTitle = rows.EnumerateArray().ToDictionary(r => r.GetProperty("title").GetString()!);
+        byTitle["Fresh one"].GetProperty(InboxRows.RowClassProperty).GetString().Should().Be(InboxRows.UnreadClass, "a new mail is bold");
+        byTitle["Seen one"].GetProperty(InboxRows.RowClassProperty).GetString().Should().BeEmpty("a read mail is not");
+        byTitle["Fresh one"].GetProperty(InboxRows.SourceIconProperty).GetString().Should().NotBeNullOrEmpty("each row shows its source's symbol");
+
+        var grid = (DataGridControl)(await stream.GetControlStream(GridArea).Should().Within(TestTimeouts.Convergence)
+            .Match(c => c is DataGridControl, "the grid", ct))!;
+        grid.RowClassProperty.Should().Be(InboxRows.RowClassProperty, "the grid applies each row's own class");
+
+        var delete = (ButtonControl)(await stream.GetControlStream(DeleteArea).Should().Within(TestTimeouts.Convergence)
+            .Match(c => c is ButtonControl, "the Delete button", ct))!;
+        delete.Shortcut.Should().Be("Backspace|Delete", "Backspace deletes the ticked rows, as in a mail client");
+
+        var toggle = (ToggleButtonControl)(await stream.GetControlStream(
+                $"{InboxLayoutArea.AreaName}/Commands/Sources/Toggle{InboxRows.SourceKey("Notifications")}")
+            .Should().Within(TestTimeouts.Convergence).Match(c => c is ToggleButtonControl, "the notifications toggle", ct))!;
+        toggle.Icon.Should().NotBeNull("a source is switched by its symbol");
+        (await stream.GetDataStream<InboxFilter>(new JsonPointerReference(LayoutAreaReference.GetDataPointer(InboxRows.FilterId)))
+                .Should().Within(TestTimeouts.Convergence).Match(f => f is not null, "the filter", ct))!
+            .Sources[InboxRows.SourceKey("Notifications")].Should().BeFalse("notifications start switched off");
     }
 
     private static async Task Click(ISynchronizationStream<JsonElement> stream, string area, string summary, CancellationToken ct)
@@ -186,7 +234,7 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
             State = MeshNodeState.Active,
             Content = new Notification { Id = "n1", Title = "Please look at this", Recipient = owner },
         }, ct);
-        var leg = Leg(owner, "Notifications");
+        var leg = Legs(owner, "Notifications");
         var handler = Handler(NotificationNodeType.NodeType);
 
         (await Ids(leg, ids => ids.Contains("n1"), ct)).Should().Contain("n1", "the control: the leg selects it before Delete");
@@ -215,7 +263,7 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
         {
             Id = "out1", Direction = EmailDirection.Outbound, Status = EmailStatus.Sending, Subject = "Queued reply",
         }), ct);
-        var leg = Leg(owner, "Mail");
+        var leg = Legs(owner, "Mail");
         var handler = Handler(EmailNodeType.NodeType);
 
         (await Ids(leg, ids => ids.Contains("m1"), ct)).Should().Equal(["m1"], "inbound mail is listed; a queued outbound one is not an inbox item");
@@ -614,8 +662,8 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
     }
 
     /// <summary>
-    /// Every ordering the select offers — and an order the page does not know falls back to
-    /// importance, so a stale stored value can never bury what needs the viewer.
+    /// Every ordering the select offers — and an order the page does not know falls back to the
+    /// default, newest first.
     /// </summary>
     [Theory]
     [InlineData(InboxOrder.Importance, "urgentNew,urgentOld,doneNewest")]
@@ -623,7 +671,7 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
     [InlineData(InboxOrder.Oldest, "urgentOld,urgentNew,doneNewest")]
     [InlineData(InboxOrder.Title, "doneNewest,urgentNew,urgentOld")]
     [InlineData(InboxOrder.Source, "doneNewest,urgentNew,urgentOld")]
-    [InlineData("SomethingElse", "urgentNew,urgentOld,doneNewest")]
+    [InlineData("SomethingElse", "doneNewest,urgentNew,urgentOld")]
     public void TheChosenOrder_ArrangesTheRows(string order, string expected)
     {
         var needs = new InboxSection(InboxBand.NeedsYou, "Mail", 20, "q1");
@@ -804,7 +852,11 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
            ?? throw new InvalidOperationException($"no inbox handler registered for {nodeType}");
 
     private static string Leg(string owner, string source)
-        => InboxQueries.Resolve(InboxQueries.BuiltIn, owner).Single(l => l.Source == source && l.Band == InboxBand.NeedsYou).Query;
+        => InboxQueries.Resolve(InboxQueries.BuiltIn, owner).First(l => l.Source == source && l.Band == InboxBand.NeedsYou).Query;
+
+    /// <summary>Every leg of <paramref name="source"/> — a source with read state brings two (unread and read).</summary>
+    private static string[] Legs(string owner, string source)
+        => [.. InboxQueries.Resolve(InboxQueries.BuiltIn, owner).Where(l => l.Source == source && l.Band == InboxBand.NeedsYou).Select(l => l.Query)];
 
     private static MeshNode Mail(string id, string ns, string owner, Email mail) => new(id, ns)
     {
@@ -822,8 +874,12 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
     /// read that raced the write would then wait forever on an initial set that still held the row.
     /// </summary>
     private async Task<string[]> Ids(string query, Func<string[], bool> until, CancellationToken ct)
-        => await Mesh.GetQuery($"test:{Guid.NewGuid():N}", query)
-            .Select(nodes => nodes.Select(n => n.Id).ToArray())
+        => await Ids([query], until, ct);
+
+    /// <summary>The ids every one of <paramref name="queries"/> selects, together — what the source lists.</summary>
+    private async Task<string[]> Ids(string[] queries, Func<string[], bool> until, CancellationToken ct)
+        => await queries.Select(query => Mesh.GetQuery($"test:{Guid.NewGuid():N}", query)).CombineLatest()
+            .Select(legs => legs.SelectMany(nodes => nodes.Select(n => n.Id)).Distinct().OrderBy(id => id, StringComparer.Ordinal).ToArray())
             .Where(until)
             .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
 

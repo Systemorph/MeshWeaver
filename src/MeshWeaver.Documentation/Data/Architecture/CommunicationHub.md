@@ -379,8 +379,8 @@ function of the filter and the legs.
 | Control | Bound to | What it does |
 |---|---|---|
 | search box | `search` | the term goes to the query engine with EVERY leg, as free text (full text and the semantic index), under the owner's identity — never a match over the rows already loaded |
-| order select | `order` | an `InboxOrder` constant: what needs you first (default — band rank, newest within), newest, oldest, by title, by source — the last two alphabetical in the viewer's language |
-| one switch per source | `sources/{key}` (the id, hex-encoded) | shows or hides what one provider brought (Mail, WhatsApp, Notifications, …); a source with no entry is shown, so a leg a package brings later never arrives switched off |
+| one icon toggle per source (`ToggleButtonControl`), beside the search | `sources/{key}` (the id, hex-encoded) | shows or hides what one provider brought, by its symbol (`InboxQueryLeg.SourceIcon`), its name the tooltip; a source with no entry is shown, so a leg a package brings later never arrives switched off — unless its legs say `ShownByDefault: false` (notifications: the feed is long, so it is one click away and the bell still shows it) |
+| ⚙︎ settings menu (`MenuItemControl`, icon only) | `order`, `sources/{key}` | the order select — `InboxOrder.Newest` by default, everything by date as a mail client lists it; also oldest, by title, by source, and what needs you first (band rank) — and the same source switches with their names |
 | the grid's checkboxes | `inboxSelection` | the ticked row keys, read by Delete |
 
 Three properties of that binding are load-bearing:
@@ -403,7 +403,15 @@ Three properties of that binding are load-bearing:
   than three stacked lists, so "what needs you" is still on top — and an order the page does not
   recognise falls back to it.
 
-The toolbar's two buttons act on every ticked row.
+**The list reads like a mail client's.** Each row starts with its source's symbol; its columns
+are what, from whom and when. A source with read state brings TWO legs — one selecting its unread
+items (`InboxQueryLeg.Unread`), one the rest — so "unread" is decided by the query, never by
+reading content on the page: unread mail is "not `Read`", an unread notification is "not
+`isRead`". An unread row carries `rowClass: inbox-unread` and the grid applies it per row
+(`DataGridControl.WithRowClassProperty`), so it renders bold.
+
+The command row's two buttons act on every ticked row; **Backspace or Delete presses Delete**
+(`ButtonControl.WithShortcut`) — never while typing in the search box.
 
 | Button | Does | Never does |
 |---|---|---|
