@@ -210,6 +210,9 @@ public static class StampedFields
         => config
             .WithServices(services => services
                 .AddSingleton<StampedFieldDeclarationHolder>()
+                // Clear on retype: the rebind watcher settles the new type's stamped fields through
+                // the same holder before it recycles the hub.
+                .AddSingleton<INodeRetypeSettlement>(sp => sp.GetRequiredService<StampedFieldDeclarationHolder>())
                 .AddScoped<IDataValidator, StampedFieldDataValidator>())
             .WithInitialization(LoadDeclaration)
             .AddDeliveryPipeline(pipeline =>
@@ -232,6 +235,11 @@ public static class StampedFields
                     {
                         holder.RetryAfterFault();
                         Refuse(hub, delivery, ErrorType.Unavailable, Unavailable(hub, fault), logger);
+                        return Observable.Return(delivery.Forwarded());
+                    }
+                    if (holder.IsRebinding && RetypesOwnNode(hub, (PatchDataRequest)delivery.Message))
+                    {
+                        Refuse(hub, delivery, ErrorType.Unavailable, Rebinding(hub), logger);
                         return Observable.Return(delivery.Forwarded());
                     }
                     if (VerdictFor(hub, (PatchDataRequest)delivery.Message, declared) is { } refusal)
@@ -328,6 +336,77 @@ public static class StampedFields
     private static bool IsOwn(string? candidate, string ownPath)
         => string.Equals(candidate, ownPath, StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>Whether a merge patch of the hub's own node changes its <c>nodeType</c>.</summary>
+    private static bool RetypesOwnNode(IMessageHub hub, PatchDataRequest patchRequest)
+    {
+        if (JsonNode.Parse(patchRequest.Patch.Content ?? "{}") is not JsonObject patch)
+            return false;
+        var key = hub.JsonSerializerOptions.PropertyNamingPolicy?.ConvertName(nameof(MeshNode.NodeType))
+            ?? nameof(MeshNode.NodeType);
+        if (!TryGet(patch, key, out var value))
+            return false;
+        var proposed = value is JsonValue v && v.TryGetValue<string>(out var s) ? s : null;
+        return IsRetype(LiveOwnNode(hub)?.NodeType, proposed);
+    }
+
+    /// <summary>Whether a data-change entity of the hub's own node changes its <c>nodeType</c>.</summary>
+    internal static bool RetypesOwnNode(IMessageHub hub, object entity)
+    {
+        var options = hub.JsonSerializerOptions;
+        var live = LiveOwnNode(hub);
+        if (live is null)
+            return false;
+        var after = entity switch
+        {
+            EntityDeltaUpdate delta when delta.Collection == nameof(MeshNode)
+                && (delta.Id == live.Id || IsOwn(delta.Id, live.Path))
+                => EntityDelta.Apply(live, delta, options) as MeshNode,
+            EntityDeltaUpdate => null,
+            _ when entity.As<MeshNode>(options) is { } node && IsOwn(node.Path, live.Path) => node,
+            _ => null
+        };
+        return after is not null && IsRetype(live.NodeType, after.NodeType);
+    }
+
+    private static bool IsRetype(string? live, string? proposed)
+        => !string.Equals(live ?? string.Empty, proposed ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// <paramref name="node"/> with every <paramref name="fields"/> entry that carries a value
+    /// removed from its content (so it reads as the content type's default) — the same instance when
+    /// none carries one. The content keeps its CLR shape: a typed record stays that record, raw JSON
+    /// stays raw JSON. Pure.
+    /// </summary>
+    /// <param name="node">The node.</param>
+    /// <param name="fields">The stamped fields to clear.</param>
+    /// <param name="options">The hub's serializer options.</param>
+    /// <returns>The node without values in those fields.</returns>
+    public static MeshNode WithoutValues(MeshNode node, IReadOnlyList<string> fields, JsonSerializerOptions options)
+    {
+        var content = ContentObject(node, options);
+        var present = Present(content, fields);
+        if (content is null || present.IsEmpty)
+            return node;
+        var copy = (JsonObject)content.DeepClone();
+        foreach (var field in present)
+            foreach (var key in copy.Select(kvp => kvp.Key)
+                         .Where(k => string.Equals(k, field, StringComparison.OrdinalIgnoreCase)).ToList())
+                copy.Remove(key);
+        object? next = node.Content switch
+        {
+            JsonElement => JsonSerializer.SerializeToElement(copy, options),
+            JsonObject => copy,
+            { } typed => copy.Deserialize(typed.GetType(), options),
+            null => null,
+        };
+        return node with { Content = next };
+    }
+
+    internal static string Rebinding(IMessageHub hub)
+        => $"Write to '{hub.Address.Path}' refused: the node was just retyped and this activation is handing "
+           + "it to one bound to the new type, so a further change of its type cannot be judged here. "
+           + "This is NOT a statement about the caller's rights. Retry shortly.";
+
     internal static string Unavailable(IMessageHub hub, Exception ex)
         => $"Write to '{hub.Address.Path}' refused: the stamped fields its type declares could not be read, "
            + "so whether this write changes one could not be decided. This is NOT a statement about the "
@@ -422,7 +501,7 @@ public sealed class StampedFieldCreateValidator(IMessageHub hub) : INodeValidato
 /// ONE re-read that replaces the fault when it settles. No write ever waits for it.</para>
 /// </summary>
 /// <param name="hub">The node hub.</param>
-public sealed class StampedFieldDeclarationHolder(IMessageHub hub) : IDisposable
+public sealed class StampedFieldDeclarationHolder(IMessageHub hub) : IDisposable, INodeRetypeSettlement
 {
     private static readonly StampedFieldDeclaration NotYetResolved = new(
         ImmutableList<string>.Empty,
@@ -430,7 +509,94 @@ public sealed class StampedFieldDeclarationHolder(IMessageHub hub) : IDisposable
 
     private volatile StampedFieldDeclaration current = NotYetResolved;
     private int retrying;
+    private int rebinding;
     private readonly System.Reactive.Disposables.SerialDisposable retry = new();
+
+    /// <summary>
+    /// Set once this activation has started settling a retype of its node: from then on it is on its
+    /// way out (the rebind recycle follows the settlement), and a client write that would retype the
+    /// node AGAIN is refused as retryable — the retry reaches the activation bound to the new type,
+    /// which settles that retype in turn. Without it a second retype landing after the clear and
+    /// before the recycle would hand the next activation a value its type never judged.
+    /// </summary>
+    public bool IsRebinding => Volatile.Read(ref rebinding) == 1;
+
+    /// <summary>
+    /// 🚨 <b>Clear on retype.</b> The node was retyped while this activation — bound to its previous
+    /// type — served it; the rebind watcher calls this post-commit, before it recycles the hub. When
+    /// the type the node carries NOW differs from the bound one and declares stamped fields, every
+    /// such field that carries a value is cleared by THIS hub's own write (it never travels as a
+    /// message, so no guard judges it) and flushed durably; the guard and the data validator judge
+    /// every later client write against the new type's declaration. So the activation bound to the
+    /// new type starts from a node in which only its own code can set those fields.
+    ///
+    /// <para>Off the write path: the retype itself was never held back — the declaration is read
+    /// here, after the commit, exactly as a hub start reads its own. A read or clear that faults
+    /// keeps a FAULTED declaration (every client write refused as <c>Unavailable</c>) and errors, so
+    /// the watcher does not recycle; the first refused write re-runs the settlement, which recycles
+    /// the hub itself once it lands.</para>
+    /// </summary>
+    IObservable<System.Reactive.Unit> INodeRetypeSettlement.Settle(string? newNodeType)
+        => Observable.Defer(() =>
+        {
+            Volatile.Write(ref rebinding, 1);
+            return SettleRetype();
+        });
+
+    private string? BoundNodeType => hub.Configuration.Get<NodeTypePathHolder>()?.Path;
+
+    private IObservable<System.Reactive.Unit> SettleRetype()
+        => Observable.Defer(() =>
+        {
+            // The type the node carries NOW, not the one the change event named: a second retype
+            // committed before this settlement started is settled here too (later ones are refused).
+            var nodeType = StampedFields.LiveOwnNode(hub)?.NodeType;
+            if (string.Equals(nodeType ?? string.Empty, BoundNodeType ?? string.Empty, StringComparison.OrdinalIgnoreCase))
+                // Retyped back: every write in between was judged against this very declaration.
+                return Observable.Return(System.Reactive.Unit.Default);
+            return Read(nodeType)
+                .SelectMany(declared =>
+                {
+                    if (declared.Fault is { } fault)
+                        return Observable.Throw<System.Reactive.Unit>(fault);
+                    current = declared;
+                    return declared.Fields.IsEmpty
+                        ? Observable.Return(System.Reactive.Unit.Default)
+                        : ClearOwn(declared.Fields);
+                })
+                .Catch<System.Reactive.Unit, Exception>(ex =>
+                {
+                    current = new StampedFieldDeclaration(ImmutableList<string>.Empty, ex);
+                    return Observable.Throw<System.Reactive.Unit>(ex);
+                });
+        });
+
+    /// <summary>
+    /// Clears every <paramref name="fields"/> entry that carries a value, as this hub's OWN write
+    /// (run as System — it is the node's maintenance by its own hub, not anyone's edit), then flushes
+    /// it durably so the next activation, which reads the node back from storage, sees it cleared.
+    /// </summary>
+    private IObservable<System.Reactive.Unit> ClearOwn(ImmutableList<string> fields)
+    {
+        var options = hub.JsonSerializerOptions;
+        var cleared = 0;
+        MeshNode Clear(MeshNode node)
+        {
+            var next = StampedFields.WithoutValues(node, fields, options);
+            if (!ReferenceEquals(next, node))
+                Volatile.Write(ref cleared, 1);
+            return next;
+        }
+        IObservable<MeshNode> Write() => hub.GetWorkspace().GetMeshNodeStream().Update(Clear).Take(1);
+        var access = hub.ServiceProvider.GetService<AccessService>();
+        var flush = hub.ServiceProvider.GetService<IPostCommitFlush>();
+        return (access is null ? Write() : access.RunAsSystem(Write))
+            .SelectMany(node => Volatile.Read(ref cleared) == 1 && flush is not null
+                ? flush.Flush(node).Take(1).Select(_ => System.Reactive.Unit.Default)
+                    .DefaultIfEmpty(System.Reactive.Unit.Default)
+                : Observable.Return(System.Reactive.Unit.Default))
+            .DefaultIfEmpty(System.Reactive.Unit.Default);
+    }
 
     /// <summary>
     /// The declaration as settled for this activation. Before <see cref="Load"/> has settled it — which
@@ -452,6 +618,23 @@ public sealed class StampedFieldDeclarationHolder(IMessageHub hub) : IDisposable
     {
         if (Interlocked.CompareExchange(ref retrying, 1, 0) != 0)
             return;
+        if (IsRebinding)
+        {
+            // The fault is a retype settlement that did not land; re-run it, and recycle once it
+            // has — the watcher that would have recycled gave up on the first attempt's error.
+            retry.Disposable = SettleRetype().Subscribe(
+                _ =>
+                {
+                    Interlocked.Exchange(ref retrying, 0);
+                    if (!hub.IsDisposing)
+                        hub.RecycleSelfAfterAcceptedWork(
+                            $"StampedFields: node '{hub.Address.Path}' was retyped away from "
+                            + $"'{BoundNodeType ?? "(none)"}' and its stamped fields are now settled",
+                            hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Graph.StampedFields"));
+                },
+                _ => Interlocked.Exchange(ref retrying, 0));
+            return;
+        }
         retry.Disposable = Read().Subscribe(
             d =>
             {
@@ -462,8 +645,10 @@ public sealed class StampedFieldDeclarationHolder(IMessageHub hub) : IDisposable
 
     // Bound to the NodeType this hub's configuration was built for (NodeTypePathHolder): the type is
     // known before any data loads, so nothing here waits for the hub's own node.
-    private IObservable<StampedFieldDeclaration> Read()
-        => StampedFields.Resolve(hub, hub.Configuration.Get<NodeTypePathHolder>()?.Path)
+    private IObservable<StampedFieldDeclaration> Read() => Read(BoundNodeType);
+
+    private IObservable<StampedFieldDeclaration> Read(string? nodeType)
+        => StampedFields.Resolve(hub, nodeType)
             .Take(1)
             .DefaultIfEmpty(StampedFieldDeclaration.None)
             .Catch<StampedFieldDeclaration, Exception>(ex =>
@@ -502,6 +687,9 @@ internal sealed class StampedFieldDataValidator(IMessageHub hub) : IDataValidato
             return Observable.Return(DataValidationResult.Invalid(
                 StampedFields.Unavailable(hub, fault), DataValidationRejectionReason.Unknown));
         }
+        if (holder.IsRebinding && StampedFields.RetypesOwnNode(hub, context.Entity))
+            return Observable.Return(DataValidationResult.Invalid(
+                StampedFields.Rebinding(hub), DataValidationRejectionReason.Unknown));
         return Observable.Return(StampedFields.VerdictForUpdate(hub, context.Entity, declared) is { } refusal
             ? DataValidationResult.Invalid(refusal, DataValidationRejectionReason.Unauthorized)
             : DataValidationResult.Valid());

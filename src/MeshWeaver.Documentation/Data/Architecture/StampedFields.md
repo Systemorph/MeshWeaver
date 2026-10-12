@@ -86,9 +86,50 @@ runs elsewhere is still a client of the node.
   a copy (a create carrying the value) is refused, and a restore or import that would change the
   value is refused. Create the copy without the field and let its own hub stamp it; for a restore,
   the type's stamp re-derives the value from the restored node.
+- **Retyping clears.** A value a field held while the node's type declared nothing (or declared
+  other fields) is not the new type's stamp. When a node is retyped into a type that declares
+  stamped fields, those fields are cleared by the node's own hub before an activation bound to the
+  new type ever serves it, and only the new type's own code can set them again. Installers that
+  retype nodes into newly installed types keep working; they lose any pre-existing value in a
+  stamped field, by design. See "Clear on retype" below.
+- **Move and copy do not retype.** Both re-create the node at its target with its `nodeType`
+  carried verbatim, through `CreateNodeRequest`, so the create half above judges them against the
+  same type: a moved or copied node whose stamped field is set is refused, as for any copy.
 - **Recycle after a declaration changes.** The declaration is bound when the hub activates (see
   [Stale State Until Recycle](../StaleStateUntilRecycle)); a running activation keeps the declaration
   it read until it is disposed.
+
+## Clear on retype
+
+A node hub is bound to the type its node had when it activated, and judges every client write
+against THAT type's declaration. A retype — a client patch, `UpdateNode` or data change that changes
+`nodeType` — is such a write: it lands on the activation bound to the OLD type, and is never held
+back or refused for the new type's sake (that would need the new type's declaration on the write
+path, a row read for a type declared in mesh content).
+
+What follows is the platform's rebind ([`NodeTypeRebindWatcher`](../StaleStateUntilRecycle)): the
+retiring activation sees the retype post-commit and recycles itself, so the next access binds the
+new type. Before that recycle it SETTLES the retype (`INodeRetypeSettlement`, implemented by
+`StampedFieldDeclarationHolder`):
+
+1. It reads the declaration of the type the node carries NOW — the same read a hub start makes, off
+   the write path.
+2. From then on its guard and data validator judge every client write against the NEW declaration,
+   and refuse a further change of `nodeType` as retryable (the retry reaches the new activation,
+   which settles that retype in turn).
+3. When the new type declares stamped fields, every one that carries a value is removed from the
+   content by the hub's OWN write (as System; it never travels as a message, so no guard judges it)
+   and flushed durably (`IPostCommitFlush`) — a value written in between, judged against the old
+   declaration, is cleared with it.
+4. Only then does the watcher post the recycle. The activation bound to the new type reads the node
+   back from storage, cleared, and its own code is the only thing that can stamp it again.
+
+A node retyped back to the type its activation was bound to is left alone: every write in between
+was judged against that very declaration. A retype into a type that declares nothing clears nothing.
+When the read or the clear faults, the activation keeps a faulted declaration and does NOT recycle:
+every client write is refused as `Unavailable`, and the first refusal re-runs the settlement, which
+recycles the hub itself once it lands — the new type never receives a node its settlement did not
+finish.
 
 ## Not established
 
@@ -97,14 +138,14 @@ runs elsewhere is still a client of the node.
   handler, which this guard does not sit in front of. Whether that handler reaches the node's own
   data source was not measured when the rule shipped; the framework's own subscribers never send
   their write-back there (they address the owner).
-- **Retyping is not judged against the NEW type.** The node hub judges a client write against the
-  declaration of the type it was bound to. A node of a type that declares nothing can carry a value
-  in a field, then be retyped (by a client write changing `nodeType`) into a type that declares that
-  field stamped; the new type's hub then starts with a value its own code never wrote, and the
-  reverse order works too. Closing it needs the target type's declaration when the retype is judged —
-  for a type declared in mesh content that is a row read, which must not be resolved by holding the
-  write back off the hub's turn (above) — or a record of WHICH type stamped the value. Open; a
-  consumer that trusts the field should re-check (next section) until it is closed.
+- **The window between a retype's commit and its settlement is not crash-proof.** The clear is the
+  retiring activation's write after the retype has committed. If the process dies, or something
+  other than the rebind watcher disposes that activation (an operator's recycle, an installer's own
+  `DisposeRequest`), in that window, the next activation binds the new type with the old value — no
+  durable record says the retype is unsettled. Measured only through the rebind path; a consumer
+  that trusts the field still re-checks (next section).
+- A write straight to storage that changes `nodeType` (a repair migration, a raw import) passes no
+  node hub and therefore no guard at all, retype or otherwise.
 
 ## Trusting a stamped field
 
@@ -127,7 +168,10 @@ nightly runner, that the stamped confirmer still holds Update on the case immedi
   data change that change the field are refused naming it, the owner's stamp lands, an unrelated field on the same
   node still lands, a create with a forged value is refused, and the same write on a type that
   declares nothing lands (the negative control); writes posted in order to a fresh node of a type
-  declared in mesh content commit in that order.
+  declared in mesh content commit in that order; a retype into a stamping type clears a pre-written
+  value and the new type's own stamp then lands, a retype into a type that declares nothing leaves
+  the value alone (the negative control), and an installer-style retype of many nodes lands and
+  clears each.
 
 ## Related
 

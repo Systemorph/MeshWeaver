@@ -246,6 +246,115 @@ public class StampedFieldsTest(ITestOutputHelper output) : MonolithMeshTestBase(
         settled.Fields.Should().Equal(declares ? ["confirmedBy"] : Array.Empty<string>());
     }
 
+    /// <summary>
+    /// Creates a node of a type that declares NOTHING carrying a client-chosen confirmer — legal
+    /// there — and retypes it with a client patch.
+    /// </summary>
+    private async Task<string> CreateUnstampedWithValueAndRetype(string newType, string value)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var id = NewId();
+        var path = $"{TestPartition}/{id}";
+        await MeshService.CreateNode(Probe(id, StampedProbeTypeProvider.NotDeclaring,
+                new StampedProbeContent { Title = "pre", Confirmed = true, ConfirmedBy = value })).Take(1)
+            .Should().Within(60.Seconds()).Emit("a type that declares nothing accepts the value", cancellationToken: ct);
+        await Mesh.GetWorkspace().GetMeshNodeStream(path)
+            .Update(n => n with { NodeType = newType })
+            .Should().Within(60.Seconds()).Emit("a client retype lands — the clear never refuses it",
+                cancellationToken: ct);
+        return path;
+    }
+
+    /// <summary>The node's hub, re-activated and bound to <paramref name="nodeType"/>.</summary>
+    private Task<IMessageHub> ReboundTo(string path, string nodeType)
+        => Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .Select(_ => Mesh.GetHostedHub(new Address(path), HostedHubCreation.Never))
+            .Where(h => h is { IsDisposing: false }
+                && string.Equals(h.Configuration.Get<NodeTypePathHolder>()?.Path, nodeType, StringComparison.OrdinalIgnoreCase))
+            .Select(h => h!)
+            .Should().Within(60.Seconds()).Emit($"the node's hub re-activates bound to {nodeType}",
+                cancellationToken: TestContext.Current.CancellationToken);
+
+    /// <summary>
+    /// 🚨 <b>Clear on retype.</b> A value written while the node's type declared nothing must not
+    /// survive retyping the node into a type that declares the field stamped: the activation that
+    /// committed the retype clears it before handing the node over, and the new type's own stamp then
+    /// lands (the probe stamps only an EMPTY confirmer, so seeing its stamp proves the clear).
+    /// </summary>
+    [Fact(Timeout = 180000)]
+    public async Task Retype_IntoAStampingType_ClearsAPreWrittenValue_AndTheOwnersStampLands()
+    {
+        var path = await CreateUnstampedWithValueAndRetype(StampedProbeTypeProvider.Declaring, "victim");
+
+        var node = await WaitFor(path, c => c.ConfirmedBy == Stamp,
+            "the pre-written value is cleared on retype and the new type's own hub stamps the field");
+        node.NodeType.Should().Be(StampedProbeTypeProvider.Declaring);
+
+        var hub = await ReboundTo(path, StampedProbeTypeProvider.Declaring);
+        hub.ServiceProvider.GetRequiredService<StampedFieldDeclarationHolder>().Current.Fields
+            .Should().Equal(["confirmedBy"], "the new activation guards the field from its own start");
+        var failure = await Record.ExceptionAsync(() =>
+            Mesh.GetWorkspace().GetMeshNodeStream(path)
+                .Update(n => n with { Content = ContentOf(n)! with { ConfirmedBy = "victim" } })
+                .Take(1).Timeout(60.Seconds()).Await(TestContext.Current.CancellationToken));
+        failure.Should().NotBeNull("after the retype the field answers to the new type's declaration");
+    }
+
+    /// <summary>
+    /// The negative control: retyping into a type that declares NOTHING leaves the same value alone —
+    /// the clear above is the new type's declaration at work, not a side effect of the retype.
+    /// </summary>
+    [Fact(Timeout = 180000)]
+    public async Task NegativeControl_Retype_IntoANonStampingType_LeavesFieldsAlone()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var path = await CreateUnstampedWithValueAndRetype(StampedProbeTypeProvider.NotDeclaringOther, "victim");
+        ct.ThrowIfCancellationRequested();
+
+        // Keep the address subscribed so it re-activates, and wait for the activation bound to the
+        // new type: by then the retiring activation's settlement has run.
+        using var keepAlive = Mesh.GetWorkspace().GetMeshNodeStream(path).Subscribe(_ => { }, ex => Output.WriteLine($"keep-alive stream for {path} faulted: {ex}"));
+        await ReboundTo(path, StampedProbeTypeProvider.NotDeclaringOther);
+        var node = await WaitFor(path, c => c.Title == "pre", "the node is readable under its new type");
+        node.NodeType.Should().Be(StampedProbeTypeProvider.NotDeclaringOther);
+        ContentOf(node)!.ConfirmedBy.Should().Be("victim", "a type that declares nothing clears nothing");
+    }
+
+    /// <summary>
+    /// An installer retypes many nodes into a newly installed type: every retype lands, and each node
+    /// loses its pre-existing value in the stamped field (by design) and gets the type's own stamp.
+    /// </summary>
+    [Fact(Timeout = 180000)]
+    public async Task InstallerStyleRetype_OfManyNodes_Succeeds_AndClearsEach()
+    {
+        const int Count = 8;
+        var paths = await Task.WhenAll(Enumerable.Range(0, Count)
+            .Select(i => CreateUnstampedWithValueAndRetype(StampedProbeTypeProvider.Declaring, $"preexisting-{i}")));
+        paths.Should().HaveCount(Count, "every retype lands");
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+
+        foreach (var path in paths)
+            await WaitFor(path, c => c.ConfirmedBy == Stamp,
+                "each retyped node's pre-existing value is cleared and its new type stamps it");
+    }
+
+    [Fact]
+    public void WithoutValues_RemovesOnlyFieldsThatCarryAValue_AndKeepsTheContentType()
+    {
+        var options = Mesh.JsonSerializerOptions;
+        var node = new MeshNode("x", TestPartition)
+        {
+            Content = new StampedProbeContent { Title = "t", Confirmed = true, ConfirmedBy = "victim" },
+        };
+        var cleared = StampedFields.WithoutValues(node, ["confirmedBy"], options);
+        cleared.Content.Should().BeOfType<StampedProbeContent>()
+            .Which.Should().Be(new StampedProbeContent { Title = "t", Confirmed = true, ConfirmedBy = null });
+
+        var empty = node with { Content = new StampedProbeContent { Title = "t" } };
+        StampedFields.WithoutValues(empty, ["confirmedBy"], options).Should().BeSameAs(empty,
+            "nothing to clear is no write");
+    }
+
     [Fact]
     public void MergePatch_ChangeDetection_IsPerFieldAndIgnoresNoOps()
     {
@@ -285,10 +394,11 @@ internal sealed class StampedProbeTypeProvider : IStaticNodeProvider
 {
     public const string Declaring = "StampedProbe";
     public const string NotDeclaring = "UnstampedProbe";
+    public const string NotDeclaringOther = "UnstampedProbeB";
 
     public IEnumerable<MeshNode> GetStaticNodes()
     {
-        foreach (var (type, declares) in new[] { (Declaring, true), (NotDeclaring, false) })
+        foreach (var (type, declares) in new[] { (Declaring, true), (NotDeclaring, false), (NotDeclaringOther, false) })
         {
             yield return new MeshNode(type)
             {
