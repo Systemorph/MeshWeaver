@@ -299,6 +299,76 @@ live until the owner goes down. Whether anything should end such a read earlier 
 `Observe` completes on the first answer) is a separate question, not measured here. A read that ends
 EMPTY on a healthy hub also stays registered on purpose: its caller is still owed the teardown NACK.
 
+## 9. The 2026-10-11 census: every `sync/` hub is the fixed complement of a live owner
+
+Three in-process, read-only censuses on images carrying every fix this page names (core
+`e438ab89e7`, image `3.1.10517`). They walk the live hosted-hub tree by field reads and resolve
+nothing from DI. This is the reading #3432 was closed on, and it is the issue's own third outcome
+row: **the `sync/` population is per-hub cost, not retention of `sync/` hubs.** No `sync/` hub was
+found outliving or lacking its owner. That moves the lifetime question to the owners and does not
+answer it: whether the node hubs themselves retire once idle is NOT established here (end of this
+section), so this reading does not say the owners are all needed.
+
+| replica | uptime | hubs | `sync/` | node hubs | last-GC heap |
+|---|---:|---:|---:|---:|---:|
+| instance A, pod `…5c74fb9855-d9wfp` | 26.7 min | 276 | 228 | 48 | 974 MiB (`GC.GetTotalMemory`) |
+| instance B, pod `…688f5555d6-pzvwj` | 30.9 min | 670 | 569 | 101 | 1 303 MiB |
+| instance B, pod `…688f5555d6-8f2g5` (the FIRST replica of its generation to boot) | 32.9 min | 4 795 | 3 736 | 1 059 | 5 563 MiB, of which 1 779 MiB fragmented |
+
+**Attribution, instance A** (the v7.2 census, identity exact — a stream counts only when its
+`ClientId` equals the hub's `Address.Id`): `sync=228 attributed=228`, every other bucket zero. All
+228 read `Started / <not started>` except one `Starting`. Each is one of the owner hub's own
+data-source reduces (`MeshNodeReference`, `CollectionReference`, `CollectionsReference` on
+`host=X, owner=ds/X`) or one mesh-node cache hydration (`host=cache/…`, 68 of them). The duplicate
+discriminator reads `streams=228 distinctPairs=197 excess=31`, and **every** duplicate group reads
+`refsEqual=YES hash=SAME`, the configured (deliberately uncached) branch. No group reads
+`refsEqual=NO`: the reference that could not be a cache key (`ContentCollectionReference`, 24 of the
+80 excess on 2026-09-16) is gone.
+
+**Shape, instance B, the busy replica** — `sync/` hubs per parent:
+
+| `sync/` children | parents | hubs |
+|---:|---:|---:|
+| 1 | 1 | 1 |
+| 3 | 696 | 2 088 |
+| 4 | 284 | 1 136 |
+| 5–12 | 65 | 354 |
+| 157 | 1 (`cache/…`, one per cached path) | 157 |
+
+980 of 1 047 parents hold exactly three or four. A hub that accumulated streams per read, per write
+or per subscriber would stand out of that histogram, and the only parent above twelve is the cache
+hub, whose count is its entry count. **So the number of `sync/` hubs is bounded per live node hub —
+three or four for 980 of the 1 046 non-cache parents, at most twelve for any — plus the cache
+entries.** The 66 parents outside three-or-four (one with a single child, 65 with five to twelve,
+354 hubs) were NOT attributed stream by stream on this replica; the per-stream attribution was run
+on instance A, where the whole excess over the base set (31 of 228) was the configured, deliberately
+uncached branch. That is the likely reading of the 65 here and it is an inference, not a
+measurement.
+
+🚨 **The working hypothesis is that the heap follows the number of live node hubs, and that on the
+first replica of a generation the boot sets that number.** It is a correlation across two replicas,
+not a root attribution. Of the 1 059 node hubs on `8f2g5` thirty minutes after it started, 930 fall
+in buckets that are not request traffic: 403 are two-segment addresses (NodeType definitions, the
+bake), 128 are partition roots, 115 are `…/_Policy`, 115 `…/_Entitlements`, 43 `…/_GitSync`, 82
+`Admin/Build/…`, 44 `MeshWeaver/samples/…`. The other 129 were not classified. Its sibling, booted
+ninety seconds later and serving the same instance, holds 101 node hubs. The two readings differ
+by 958 node hubs and 4 260 MiB of last-GC heap, about 4.4 MiB per node hub (its own scope, type
+registry, workspace and its three or four `sync/` hubs would be in that figure). That fan-out is the candidate for the multi-GiB
+`[HEAPSTEP]` series every roll prints in its first minutes: the sampled allocation of those steps
+is `System.String`, `System.Byte[]`, `Entry[System.String][]` and Autofac's
+`IResolvePipelineBuilder` handlers and `MiddlewareDeclaration`, which is what hub construction
+allocates. `[HEAPSTEP]` names allocated types, not retained roots, and this section has neither a
+quiet-process root attribution nor a before/after on one process, so the per-hub figure and the
+link to the heap step are to be confirmed, not cited.
+
+🚨 **NOT established:** whether those boot-activated hubs retire once idle. The replica was replaced
+by the next roll 20 minutes after the reading (the instance rolled twice inside one hour), so no
+second reading on the same process exists, and at 33 minutes an idle activation is only just past
+the keep-alive window plus the collection age. The 2026-09-25 reading on a 30 h process (post-GC
+floor level at about 3.3 GiB from hour 18) is the newest evidence that the population plateaus. A
+replica that lives a day is the instrument; `HubCensusByOwner` (a `Code` node in the operator's own
+partition, the script behind the tables above) is the reading to repeat on it.
+
 ## Related
 
 - [Stream Liveness and the Hub Reference](../StreamLivenessAndTheHubReference) — #3321 step 3, the
