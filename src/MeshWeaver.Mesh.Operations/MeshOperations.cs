@@ -4652,7 +4652,7 @@ public partial class MeshOperations
                 ? $"Error: uploading to {resolvedPath}: the permission check did not complete "
                     + $"({outcome.UndeterminedReason}). Nothing was written; retry."
                 : $"Error: uploading to {resolvedPath}: access denied - Update permission on '{ownerPath}', "
-                    + "the node that owns the collection, is required. Nothing was written."
+                    + "the node that owns the collection, is required. Nothing was written.";
 
     /// <summary>
     /// Re-decides a DENIED Update pre-flight (<see cref="Recycle(string)"/>, Patch's no-change answer) through the target node's own
