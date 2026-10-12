@@ -156,6 +156,31 @@ gone, a watcher armed on the way out — the resolve belongs to a survivor. `Hos
 own commentary names this the `ObjectDisposedException` straggler class, "whose one escape onto a
 scheduler thread is the anonymous *Catastrophic failure* that reds an otherwise green shard".
 
+## A wave asks each question once (#6520)
+
+Reading from a survivor makes one cascade derivable. A recycle WAVE — a roll, a build, a recycle job
+touching many types — runs one cascade per type at once, and before #6520 each leg issued the SAME
+mesh-wide enumeration, `nodeType:NodeType partitions:all`, for itself. Measured on a portal pod: one
+wave issued it for every leg inside one second, the Postgres provider emitted no Initial within the
+query fan-in's bound for any of them, and every leg was reported INCOMPLETE — dependents not recycled.
+Two governed `Logs` reads of that window separated the candidate causes: no stall on any OTHER query
+(`Ops/Actions/logs-memex-cloud-20261011-6520-other-consumers`, 0 lines), against a positive control
+with the identical pattern that found the enumeration's own lines
+(`Ops/Actions/logs-memex-cloud-20261011-6520-positive-control`). The cascade made its own load.
+
+So the cascade's two reads go through `RecycleCascadeReads`, a mesh-scoped singleton: a read already
+**in flight** is joined, not repeated — concurrent legs share one query and one answer — and it is
+released the moment it settles, so the next recycle asks the index afresh and a fault is never
+replayed to a later caller (the `PromiseCache` contract). The per-cascade budget stays outside the
+shared read, and every cascade still reports its own INCOMPLETE leg when the shared read fails.
+`ARecycleWaveSharesItsReadsTest` pins it: twenty concurrent callers issue one read (twenty without
+the sharing), and a cascade started while an enumeration is in flight waits for it instead of issuing
+its own.
+
+**What this does not establish:** why the provider stalled on the burst rather than queueing it —
+fewer concurrent scans remove this consumer's load, not the provider's behaviour under load
+([Query Fan-In Stall Terminal](../QueryFanInStallTerminal) keeps that trail).
+
 ## The same shape on the WRITE side: a release create issued from the hub its compile recycles
 
 A request/response has a second dependency on the hub it is issued from, and it is not the DI
