@@ -138,6 +138,7 @@ public class SealedSetConsistencyTest
             Assert.Contains(Bundle, package.Reason, StringComparison.Ordinal);
             Assert.Contains(Module, package.Reason, StringComparison.Ordinal);
             Assert.Contains(recorded, package.Reason, StringComparison.Ordinal);
+            Assert.DoesNotContain("nothing rolls", package.Reason, StringComparison.Ordinal);
             Assert.Contains(SealedMvid, package.Reason, StringComparison.Ordinal);
             Assert.Contains("dependency record mismatch", package.Reason, StringComparison.Ordinal);
         }

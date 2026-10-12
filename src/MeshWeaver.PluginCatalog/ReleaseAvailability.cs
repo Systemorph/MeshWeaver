@@ -560,8 +560,8 @@ public static class ReleaseAvailability
                         $"'{package.BundleName}' ({record.NodePath}) binds module {name}, which the set "
                         + $"sealed for framework identity {target.FrameworkIdentity} carries as TWO "
                         + $"DIFFERENT builds ({conflict}) — the loader keeps whichever it sees first, so "
-                        + "the other's NodeTypes are declined at adoption; the set is inconsistent and "
-                        + "nothing rolls");
+                        + "the other's NodeTypes are declined at adoption; the set is inconsistent, so this "
+                        + "package cannot be served by that release until the module set is re-sealed");
 
                 // 🚨 THE ONE CHECK THE FLOOR RETIRES, and only for a floor-shaped id (#3934):
                 // "the bundle and the module are two BUILDS" stopped being a refusal the moment a

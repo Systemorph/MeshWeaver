@@ -570,14 +570,15 @@ surface document with one type removed as "the older target":
 | `AModuleWithABuildPublishedForTheTarget_IsNotHeldOnItsLandedGeneration` | the published build is what will be adopted; the landed one does not decide |
 | `AReleaseWithNoPublishedSurface_IsIndeterminate_ReportedNeitherClearanceNorHold` | the roll-time direction of the third state |
 | `AMissingContentBake_IsACostTheVerdictNames_AndAHoldOnlyUnderRequirePrebuilt` | both arms of the bake rule on one fixture |
-| `TheWalkStopsAtTheFirstReleaseWithNoUnloadableModule` | newest-first, past the unloadable one, naming it; the cost said on the outcome |
-| `WhenEveryCandidateCannotLoadTheModule_NothingIsSelected_AndTheModuleIsNamed` | "no complete release" stays put and names the module |
+| `AnUnloadableModuleIsAnAdvisory_TheNewestIsSelected` | the newest admitted release is selected after one verdict; the unloadable module is named on the advisories |
+| `WhenEveryCandidateCannotLoadTheModule_TheNewestIsSelected_AndTheModuleIsNamed` | "no complete release" no longer stays put: the newest is selected and the module is named as the package that does not follow |
+| `AReleaseWithNoSurface_IsSelectedWithTheUnmeasuredModuleReported` | an unmeasured module is reported, never a reason to skip the release |
 
 ## Related
 
 - [Module Adoption Policy](../ModuleAdoptionPolicy) — the rule this gate is the only instrument of: run the newest thing that loads, keep what you have until then, never let a string decide.
 - [Release Availability Gates](../ReleaseGates) — the roll gate that consumes the published surface.
-- [Roll Selection](../RollSelection) — the walk that stops at the first release with no unloadable module.
+- [Roll Selection](../RollSelection) — selects the newest admitted release; an unloadable module is a package advisory there, never a reason to walk past it.
 - [Module Versioning](../ModuleVersioning) — what the pack lane records, what the build derives.
 - [Module Build Architecture](../ModuleBuildArchitecture) — the one build shape, every repo.
 - [NodeType Compilation](../NodeTypeCompilation) — the *other* identity lane, where MVID equality
