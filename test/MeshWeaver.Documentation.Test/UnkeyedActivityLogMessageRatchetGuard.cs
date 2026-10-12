@@ -274,6 +274,12 @@ public class UnkeyedActivityLogMessageRatchetGuard(ITestOutputHelper output)
             // record's own fields — "the page localizes its own copy from the same fields" — so a
             // second, divergent translation of them in the catalog would be the defect, not the fix.
             ["src/MeshWeaver.Compiler.Pipeline/BuildDeliveryHold.cs"] = 2,
+            // #6540: UpdatabilityVerdict.AdvisoryTexts falls back to the STORED English of an
+            // advisory no key accompanies — a verdict deserialized from an older writer, which
+            // persisted the sentence alone. That sentence was authored by another build; binding
+            // it to a key it may not describe would be the defect. Every producer in this tree
+            // sets the keyed form through WithAdvisories.
+            ["src/MeshWeaver.PluginCatalog/ReleaseAvailability.cs"] = 1,
         };
         var verbatim = new Regex(@"LocalizableText\s*\.\s*Verbatim\s*\(",
             RegexOptions.Compiled | RegexOptions.CultureInvariant);
