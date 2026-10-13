@@ -181,6 +181,16 @@ public enum SelfUpdateOutcome
     /// never a final <c>Failed</c> (MeshWeaver#6172). Appended, never inserted.
     /// </summary>
     RestartHandoverFailed,
+
+    /// <summary>
+    /// The activation record marks a landed module generation for activation, but the per-process
+    /// reader establishes that NOTHING landed is pending here — so nothing went live, and a restart
+    /// would load nothing new (MeshWeaver#6620). The verdict carries the reader's own line, which names
+    /// why (a generation declined in favour of the image's copy, quarantined, or running a previous
+    /// generation). Before this it was reported as <see cref="ActivatedLive"/> — "went LIVE without a
+    /// restart" — while the old assembly kept serving. Appended, never inserted.
+    /// </summary>
+    NothingToActivate,
 }
 
 /// <summary>
@@ -563,6 +573,19 @@ public sealed record SelfUpdateVerdict(SelfUpdateOutcome Outcome, string Message
         SelfUpdateOutcome.ActivatedLive,
         $"{after.Message} A landed module generation was pending activation and went LIVE without a "
         + $"restart ({detail}).",
+        after.Tag)
+    {
+        UnresolvedInstalledTag = after.UnresolvedInstalledTag,
+    };
+
+    /// <summary>
+    /// A landed generation is marked for activation and NOTHING is pending in this process — nothing
+    /// went live, no restart is taken, and the reader's own line says why (#6620).
+    /// </summary>
+    public static SelfUpdateVerdict NothingToActivate(SelfUpdateVerdict after, string detail) => new(
+        SelfUpdateOutcome.NothingToActivate,
+        $"{after.Message} A landed module generation is marked for activation, but nothing landed is "
+        + $"pending in this process: nothing went live and a restart would load nothing new ({detail}).",
         after.Tag)
     {
         UnresolvedInstalledTag = after.UnresolvedInstalledTag,

@@ -52,6 +52,8 @@ public class SelfUpdateVerdictTest
     [InlineData(SelfUpdateOutcome.ActivatedLive, false)]
     // A restart hand-over that failed activates an already-landed module — nothing newer was waiting.
     [InlineData(SelfUpdateOutcome.RestartHandoverFailed, false)]
+    // A marker with nothing pending here (#6620) found no release either.
+    [InlineData(SelfUpdateOutcome.NothingToActivate, false)]
     public void FoundNewerRelease_IsTrueExactlyWhenAReleaseWasWaiting(
         SelfUpdateOutcome outcome, bool expected)
         => Assert.Equal(expected, new SelfUpdateVerdict(outcome, "…").FoundNewerRelease);
@@ -91,6 +93,8 @@ public class SelfUpdateVerdictTest
                 SelfUpdateVerdict.NoNewerRelease(7, "3.0.0"), "went live without a restart: MeshWeaver.Test.Widget"),
             SelfUpdateVerdict.RestartHandoverFailed(
                 SelfUpdateVerdict.NoNewerRelease(7, "3.0.0"), "3.0.0", "the control inbox was unreachable"),
+            SelfUpdateVerdict.NothingToActivate(
+                SelfUpdateVerdict.NoNewerRelease(7, "3.0.0"), "nothing landed is pending activation in this process"),
         ];
 
         Assert.Equal(
