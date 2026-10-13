@@ -241,7 +241,8 @@ public static class InboxLayoutArea
                 .Select(nodes => (nodes
                     .Select(node => InboxRows.Of(node, section, zone,
                         BlockedReason(section.Band, InboxItemHandlers.For(handlers, node.NodeType), running, noHandler),
-                        bands[section.Band].Title, bands[section.Band].rank, labels[section.Source], culture))
+                        bands[section.Band].Title, bands[section.Band].rank, labels[section.Source], culture,
+                        hub.JsonSerializerOptions))
                     .ToImmutableList(), (string?)null))
                 .Catch((Exception ex) =>
                 {

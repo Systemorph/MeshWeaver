@@ -223,10 +223,13 @@ public static class InboxQueries
         Unread = unread,
         Band = InboxBand.NeedsYou,
         Order = unread ? 10 : 11,
+        // Timed by when it ARRIVED: reading a notification flips isRead, and that write must not
+        // move it ahead of newer ones.
+        TimeField = "createdAt",
         Query = $"namespace:{ViewerToken}/{NotificationService.SatelliteSegment} "
                 + $"nodeType:{NotificationNodeType.NodeType} -content.dismissed:true "
                 + (unread ? "-content.isRead:true " : "content.isRead:true ")
-                + $"sort:CreatedAt-desc {RowProjection}",
+                + $"sort:CreatedAt-desc {TimedRowProjection}",
     };
 
     private static InboxQueryLeg Mail(bool unread) => new()
@@ -237,11 +240,14 @@ public static class InboxQueries
         Unread = unread,
         Band = InboxBand.NeedsYou,
         Order = unread ? 20 : 21,
+        // Timed by when it was RECEIVED: marking a mail read is a write, and it must not move the
+        // mail ahead of newer ones. The bound still keeps the newest-touched (LastModified).
+        TimeField = "receivedAt",
         Query = $"namespace:{ViewerToken}/{EmailNodeType.UserEmailSegment} "
                 + $"nodeType:{EmailNodeType.NodeType} -content.status:{nameof(EmailStatus.Archived)} "
                 + $"-content.direction:{nameof(EmailDirection.Outbound)} "
                 + (unread ? $"-content.status:{nameof(EmailStatus.Read)} " : $"content.status:{nameof(EmailStatus.Read)} ")
-                + $"sort:LastModified-desc {RowProjection}",
+                + $"sort:LastModified-desc {TimedRowProjection}",
     };
 
     /// <summary>

@@ -421,8 +421,12 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
         foreach (var leg in new[] { "namespace:alice/_Thread nodeType:Thread", "namespace:alice/_Thread select:path,content" })
             parser.Parse(InboxQueries.Bounded(leg)).Select.Should().BeEquivalentTo(InboxQueries.RowFields, new JsonSerializerOptions(),
                 because: $"'{leg}' must not fetch whole bodies to render one row");
-        var built = InboxQueries.BuiltIn.Select(l => l.Query.Replace(InboxQueries.ViewerToken, "alice")).First();
-        InboxQueries.Bounded(built).Should().Be($"{built} limit:{InboxQueries.LegLimit}", "a leg already projected is not re-projected");
+        foreach (var builtIn in InboxQueries.BuiltIn)
+        {
+            var built = builtIn.Query.Replace(InboxQueries.ViewerToken, "alice");
+            InboxQueries.Bounded(built, builtIn.TimeField).Should().Be($"{built} limit:{InboxQueries.LegLimit}",
+                $"a leg already projected (for its time, when timed) is not re-projected: {builtIn.Source}");
+        }
         InboxQueries.BuiltIn.Should().OnlyContain(leg => leg.Query.Contains("sort:"),
             "the bound keeps the NEWEST rows only because every leg sorts newest first");
     }

@@ -44,6 +44,37 @@ public class InboxTimeFieldTest(ITestOutputHelper output) : MonolithMeshTestBase
             "the stamp the newest-first order reads is the source's time");
     }
 
+    /// <summary>
+    /// The built-in sources whose items a READ rewrites are timed by when they arrived — notifications
+    /// by <c>createdAt</c>, mail by <c>receivedAt</c> — on the real page path (<see cref="InboxLayoutArea.Sections"/>),
+    /// and their queries already project <c>content</c>, so the page adds no second projection.
+    /// </summary>
+    [Fact]
+    public void TheBuiltInReadableSources_AreTimedByArrival_OnThePagesOwnSections()
+    {
+        var sections = InboxLayoutArea.Sections(InboxQueries.BuiltIn, "alice");
+        sections.Where(s => s.Source == "Notifications").Should().OnlyContain(s => s.TimeField == "createdAt");
+        sections.Where(s => s.Source == "Mail").Should().OnlyContain(s => s.TimeField == "receivedAt");
+        sections.Where(s => s.Source is "Notifications" or "Mail").Should().HaveCount(4, "an unread and a read leg each");
+        sections.Where(s => s.TimeField != null).Should().OnlyContain(s =>
+            InboxQueries.Bounded(s.Query, s.TimeField) == $"{s.Query} limit:{InboxQueries.LegLimit}",
+            "a timed built-in leg is already projected for its time");
+    }
+
+    /// <summary>Typed content no serializer can convert is unreadable — the row falls back, the inbox does not fault.</summary>
+    [Fact]
+    public void UnconvertibleContent_FallsBackToLastModified()
+    {
+        var modified = new DateTimeOffset(2026, 10, 13, 7, 0, 0, TimeSpan.Zero);
+        var node = new MeshNode("n", "alice/_X") { LastModified = modified, Content = new Unconvertible() };
+        InboxRows.TimeOf(node, "createdAt").Should().Be(modified);
+    }
+
+    private sealed class Unconvertible
+    {
+        public IntPtr Handle { get; init; } = new(1);
+    }
+
     /// <summary>A timed leg keeps <c>content</c> in its projection; an untimed one does not.</summary>
     [Fact]
     public void ATimedLeg_KeepsContentInItsProjection()
@@ -105,7 +136,7 @@ public class InboxTimeFieldTest(ITestOutputHelper output) : MonolithMeshTestBase
     };
 
     private async Task CreateAsync(MeshNode node, CancellationToken ct)
-        => await Mesh.ServiceProvider.GetService<AccessService>()
+        => await Mesh.ServiceProvider.GetRequiredService<AccessService>()
             .RunAsSystem(() => Mesh.ServiceProvider.GetRequiredService<IMeshService>().CreateNode(node))
             .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
 

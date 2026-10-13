@@ -202,8 +202,13 @@ public static class InboxRows
     /// <param name="sourceLabel">The source's display name; its id when omitted.</param>
     /// <param name="culture">The viewer's culture, resolved once on the render turn; invariant when omitted.</param>
     public static InboxRow Of(MeshNode node, InboxSection section, string? zone, string? blockedReason,
-        string? band = null, int rank = 0, string? sourceLabel = null, CultureInfo? culture = null)
-        => new()
+        string? band = null, int rank = 0, string? sourceLabel = null, CultureInfo? culture = null,
+        JsonSerializerOptions? options = null)
+    {
+        // ONE read of the row's time: a timed row's content is converted to find it, and that cost is
+        // paid per row on every render.
+        var at = TimeOf(node, section.TimeField, options);
+        return new()
         {
             Path = node.Path,
             Title = string.IsNullOrWhiteSpace(node.Name) ? node.Id : node.Name,
@@ -214,14 +219,15 @@ public static class InboxRows
             Rank = rank,
             // A stored instant, shown where the viewer is and the way the viewer writes a date —
             // never the container's UTC, never one fixed pattern for every language.
-            When = DisplayTimeExtensions.ToDisplayTime(TimeOf(node, section.TimeField), zone)
+            When = DisplayTimeExtensions.ToDisplayTime(at, zone)
                 .ToString("g", culture ?? CultureInfo.InvariantCulture),
-            Stamp = TimeOf(node, section.TimeField).UtcDateTime.ToString("O", CultureInfo.InvariantCulture),
+            Stamp = at.UtcDateTime.ToString("O", CultureInfo.InvariantCulture),
             BlockedReason = blockedReason ?? string.Empty,
             SourceIcon = section.SourceIcon,
             Unread = section.Unread,
             RowClass = section.Unread ? UnreadClass : string.Empty,
         };
+    }
 
     private static readonly JsonSerializerOptions ContentOptions = new(JsonSerializerDefaults.Web);
 
@@ -232,17 +238,28 @@ public static class InboxRows
     /// </summary>
     /// <param name="node">The node a leg returned.</param>
     /// <param name="timeField">The leg's <see cref="InboxQueryLeg.TimeField"/>, or null.</param>
-    public static DateTimeOffset TimeOf(MeshNode node, string? timeField)
+    /// <param name="options">The hub's serializer options — typed content may need a converter only
+    /// the mesh registers; Web defaults when omitted.</param>
+    public static DateTimeOffset TimeOf(MeshNode node, string? timeField, JsonSerializerOptions? options = null)
     {
         if (string.IsNullOrWhiteSpace(timeField))
             return node.LastModified;
-        var element = node.Content switch
+        JsonElement? element;
+        try
         {
-            null => (JsonElement?)null,
-            JsonElement je => je,
-            System.Text.Json.Nodes.JsonNode jn => JsonSerializer.SerializeToElement(jn, ContentOptions),
-            var typed => JsonSerializer.SerializeToElement(typed, typed.GetType(), ContentOptions),
-        };
+            element = node.Content switch
+            {
+                null => null,
+                JsonElement je => je,
+                System.Text.Json.Nodes.JsonNode jn => JsonSerializer.SerializeToElement(jn, options ?? ContentOptions),
+                var typed => JsonSerializer.SerializeToElement(typed, typed.GetType(), options ?? ContentOptions),
+            };
+        }
+        catch (Exception ex) when (ex is NotSupportedException or JsonException or InvalidOperationException)
+        {
+            // Unreadable content is the documented fallback, never a fault of the whole inbox.
+            return node.LastModified;
+        }
         if (element is not { ValueKind: JsonValueKind.Object } content)
             return node.LastModified;
         foreach (var property in content.EnumerateObject())
