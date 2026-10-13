@@ -753,7 +753,8 @@ public static class MeshExtensions
         // identity, and the subscriber matches the end on its StreamId alone
         // (JsonSynchronizationStream's StreamEndedEvent registration), so the sender does not change
         // what it does.
-        hub.StreamSubscribingHub().Post(new StreamEndedEvent(streamId), o => o.WithTarget(subscriber));
+        hub.StreamSubscribingHub().Post(new StreamEndedEvent(streamId) { Activation = ShutdownNack.ActivationToken(hub) },
+            o => o.WithTarget(subscriber));
     }
 
     /// <summary>
