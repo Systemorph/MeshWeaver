@@ -100,6 +100,16 @@ public class PlatformFileReaderGuard
             Assert.Equal("", unreachable.Stdout);
             Assert.Contains("INFRASTRUCTURE", unreachable.Stderr, StringComparison.Ordinal);
             Assert.Contains("not a fault in the caller's code or its pin", unreachable.Stderr, StringComparison.Ordinal);
+            // …and a ref the server answers it does NOT HAVE — a mistyped branch, a full sha that is not in
+            // the repository — is the caller's pin, never called infrastructure (#6633 review).
+            foreach (var absentRef in new[] { "no-such-branch", "0123456789012345678901234567890123456789" })
+            {
+                var notFound = Read(Path.Combine(work.FullName, $"absent-ref-job-{absentRef[..4]}"), url, absentRef, ".github/scripts/x.py");
+                Assert.Equal(1, notFound.Exit);
+                Assert.Equal("", notFound.Stdout);
+                Assert.Contains("REF NOT FOUND", notFound.Stderr, StringComparison.Ordinal);
+                Assert.DoesNotContain("INFRASTRUCTURE", notFound.Stderr, StringComparison.Ordinal);
+            }
         }
         finally
         {

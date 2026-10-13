@@ -79,13 +79,16 @@ a stubbed `curl` (a normal reading, the 80 % warning, an unanswered request); it
 proves both detectors fire on the old shapes.
 
 **A refused read is named as infrastructure, never as an old pin (#6633).** The reader exits `1`
-when the ref cannot be FETCHED (a network failure, GitHub refusing or throttling the read, or a ref
-that does not exist) and says `INFRASTRUCTURE — … not a fault in the caller's code or its pin`; it
-exits `3` only when the ref WAS fetched and the path is absent at it — the one case a lane may read
-as "a pin older than the file". The lanes' own `::error::` lines no longer guess: they point at the
-reader's line. Before this, a throttled read surfaced as *"a pin older than core #3761"* and PR
-owners chased a code fault that did not exist. `PlatformFileReaderGuard` asserts both codes and
-that the absent-path case never says infrastructure.
+when the ref cannot be FETCHED, and its line says which of two causes it was. When the server
+answers that it has no such ref (git's `couldn't find remote ref` / `not our ref`: a mistyped or
+deleted branch or tag, a full sha that is not in the repository) it says `REF NOT FOUND — … This IS
+the caller's pin`. Every other fetch failure (a network failure, GitHub refusing or throttling the
+read) says `INFRASTRUCTURE — … not a fault in the caller's code or its pin`. It exits `3` only when
+the ref WAS fetched and the path is absent at it — the one case a lane may read as "a pin older than
+the file". The lanes' own `::error::` lines no longer guess: every caller in the lane workflows
+points at the reader's line. Before this, a throttled read surfaced as *"a pin older than core
+#3761"* and PR owners chased a code fault that did not exist. `PlatformFileReaderGuard` asserts all
+three outcomes, and that neither the absent path nor the absent ref is ever called infrastructure.
 
 **2. The stage-advance listener answers `pull_request_review` only.** The comment trigger was a
 pure duplicate (above); dropping it removes ~60 of ~100 runs an hour at ~10 calls each. The caller

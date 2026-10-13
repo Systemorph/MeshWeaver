@@ -76,8 +76,20 @@ if [ ! -f "$root/.fetched" ]; then
   rm -rf "$root"
   git init -q "$root"
   git -C "$root" remote add origin "${MW_CORE_GIT_URL:-https://github.com/Systemorph/MeshWeaver.git}"
-  git -C "$root" -c advice.fetchShowForcedUpdates=false fetch -q --depth 1 --filter=blob:none --no-tags origin "$ref" \
-    || { echo "mw-core-file: INFRASTRUCTURE — ref '$ref' of Systemorph/MeshWeaver could not be fetched over git (git's own line above names why: a network failure, GitHub refusing or throttling the read, or a ref that does not exist — a branch, a tag or a FULL sha). This is not a fault in the caller's code or its pin." >&2; exit 1; }
+  # git's own stderr is kept (and re-printed) so the verdict below can tell a ref the server says it
+  # does NOT HAVE — the caller's pin (#6633 review) — from a read that never got an answer.
+  fetch_err="$root.fetch-err"
+  if ! git -C "$root" -c advice.fetchShowForcedUpdates=false fetch -q --depth 1 --filter=blob:none --no-tags origin "$ref" 2> "$fetch_err"; then
+    cat "$fetch_err" >&2
+    if grep -Eq "couldn't find remote ref|not our ref|unadvertised object" "$fetch_err"; then
+      echo "mw-core-file: REF NOT FOUND — Systemorph/MeshWeaver answered that it has no '$ref' (a mistyped or deleted branch or tag, or a full sha that is not in the repository). This IS the caller's pin: fix the ref it passes." >&2
+    else
+      echo "mw-core-file: INFRASTRUCTURE — ref '$ref' of Systemorph/MeshWeaver could not be fetched over git, and the server never said the ref is missing (git's own line above names why: a network failure, GitHub refusing or throttling the read). This is not a fault in the caller's code or its pin." >&2
+    fi
+    rm -f "$fetch_err"
+    exit 1
+  fi
+  rm -f "$fetch_err"
   git -C "$root" update-ref refs/mw-core/at FETCH_HEAD
   : > "$root/.fetched"
 fi
