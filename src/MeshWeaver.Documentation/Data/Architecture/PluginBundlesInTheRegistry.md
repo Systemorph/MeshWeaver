@@ -27,8 +27,8 @@ represented as an **OCI image index** whose entries are the bundles:
 | object | OCI form | name |
 |---|---|---|
 | the publication | image index (`application/vnd.oci.image.index.v1+json`, `artifactType: application/vnd.meshweaver.publication.v1+json`) naming the sidecar manifest and every bundle manifest by digest | `cr.meshweaver.cloud/plugins/<source>`, tag `<identity>` (and an immutable `<identity>-<run>`) |
-| one bundle | image manifest (`artifactType: application/vnd.meshweaver.bundle.v1+json`) with two layers: `<package>.zip` (`application/vnd.meshweaver.bundle.v1.zip`) and `modules/<package>.module.nupkg` (`application/vnd.meshweaver.module.v1.nupkg`, absent for a content-only package), each titled with its publication-relative name | referenced from the index, resident in `plugins/<source>` by digest; also tagged as `cr.meshweaver.cloud/plugins/<source>/<package>`, tag `<identity>` |
-| the sidecars | one image manifest (`artifactType: application/vnd.meshweaver.publication.v1+json`) whose layers are EVERY file of the publication that is not a bundle or a module — `_complete`, `source-commit.txt`, `repository.txt`, `architecture.txt`, `platform-surface.json`, `modules/_index`, and any file a later publisher adds — each titled with its publication-relative name; its config blob (`application/vnd.meshweaver.publication.v1+json`) carries the facts: `identity`, `source`, `sourceCommit`, `repository`, `architecture`, `release`, `bundles` (`package`, `digest`, `module`), `files` | referenced from the index, resident in `plugins/<source>` by digest |
+| one bundle | image manifest (`artifactType: application/vnd.meshweaver.bundle.v1+json`) with two layers: `<package>.zip` (`application/vnd.meshweaver.bundle.v1.zip`) and the package's module (`application/vnd.meshweaver.module.v1.nupkg`, absent for a content-only package), each titled with its publication-relative name. The module is matched to its bundle **case-insensitively**: the lanes write it lowercased (`modules/essentials.module.nupkg` beside `Essentials.zip`), and an exact-case match once attached no module to any bundle (43 of 43 `module=no` on the `plugins` publication of MeshWeaver.Plugins run 38215076376) | referenced from the index, resident in `plugins/<source>` by digest; also tagged as `cr.meshweaver.cloud/plugins/<source>/<package>`, tag `<identity>` |
+| the sidecars | one image manifest (`artifactType: application/vnd.meshweaver.publication.v1+json`) whose layers are EVERY file of the publication that is not a bundle or a module riding with one — `_complete`, `source-commit.txt`, `repository.txt`, `architecture.txt`, `platform-surface.json`, `modules/_index`, a module whose package bakes no bundle (a module-only package, which has no bundle manifest to ride in; media type `application/vnd.meshweaver.module.v1.nupkg`), and any file a later publisher adds — each titled with its publication-relative name; its config blob (`application/vnd.meshweaver.publication.v1+json`) carries the facts: `identity`, `source`, `sourceCommit`, `layout`, `repository`, `architecture`, `release`, `bundles` (`package`, `digest`, `module`), `files` | referenced from the index, resident in `plugins/<source>` by digest |
 | a release's identity | image manifest with no layer; config `{ "identity": "<identity>", "version": "<version>" }` (`application/vnd.meshweaver.release.v1+json`) | `cr.meshweaver.cloud/plugins/releases`, tag `<version>` |
 
 An OCI image index carries no config blob of its own, which is why the sidecars are a manifest
@@ -261,10 +261,15 @@ secret stores (Actions and Dependabot); core's `main-cd.yml` asserts the same se
 🚨 **`--skip-if-published` is the registry's sealed-skip, and it needs positive proof.** The
 shares skip a publication when the sealed directory's `source-commit.txt` equals this bake's
 (content × framework); the registry applies the same rule to the tag: `plugins/<source>:<identity>`
-resolves, its sidecar manifest's config blob is readable, and its `sourceCommit` equals the
-publication's — then nothing is pushed and the existing index digest is reported. Anything less
-(an absent tag, an unreadable index, a different commit) pushes, because a push is idempotent and
-never leaves the registry worse, while a wrong skip would freeze the tag on a publication the run
+resolves, its sidecar manifest's config blob is readable, its `sourceCommit` equals the
+publication's, and its `layout` equals the publisher's current layout — then nothing is pushed and
+the existing index digest is reported. Anything less (an absent tag, an unreadable index, a
+different commit, an older or absent `layout`) pushes. The layout is part of the proof because a
+change to WHAT is pushed for the same content (layout 2: a module matched to its bundle
+case-insensitively, a module-only package carried as a sidecar) would otherwise never reach an
+unchanged source, whose commit does not move — its torn publication would stay under the tag
+forever. Bump `PUBLICATION_LAYOUT` in the script whenever that shape changes. Pushing is the
+default because a push is idempotent and never leaves the registry worse, while a wrong skip would freeze the tag on a publication the run
 was asked to replace. The reason the skip exists at all: a compile is not byte-reproducible, so
 without it every core merge under an unchanged identity would push a full set of new blobs to a
 registry that runs no garbage collection.
