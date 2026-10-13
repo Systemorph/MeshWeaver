@@ -88,9 +88,26 @@ public partial class MeshOperations
 
     // ONE subscription to the Tests area for the whole run: every changed row becomes a log line,
     // and the first frame that is not a progress frame is the verdict.
+    //
+    // 🚨 The budget bounds the WHOLE run — preflight included — as ONE absolute deadline taken when
+    // the run starts (Plugins#3513). It used to be armed only around the verdict, AFTER the
+    // preflight: a preflight that converges the mesh (CatalogTestRunPreflight runs a reconcile pass
+    // under its own 10-minute bound) held the activity at its title line, with no Failed, for longer
+    // than the caller's timeoutSeconds — measured: an activity dispatched with 300 s said nothing for
+    // 8 min 35 s. Now a preflight still running at the deadline fails the run, naming the phase.
     private IObservable<Unit> WatchTestsArea(
         string nodePath, AccessContext? caller, IPathResolver pathResolver, TimeSpan budget, ActivityContext ctx) =>
-        Preflight(ctx).SelectMany(_ => WatchVerdict(nodePath, caller, pathResolver, budget, ctx));
+        Observable.Defer(() =>
+        {
+            var deadline = DateTimeOffset.UtcNow + budget;
+            return Preflight(ctx)
+                .Timeout(deadline)
+                .Catch<Unit, TimeoutException>(_ => Observable.Throw<Unit>(new TimeoutException(
+                    $"no verdict from the Tests area of {nodePath} within {budget.TotalSeconds:F0}s — "
+                    + "the run never started its cases: the preflight (reading the versions under test, "
+                    + "converging the mesh to its target set) was still running")))
+                .SelectMany(_ => WatchVerdict(nodePath, caller, pathResolver, deadline, budget, ctx));
+        });
 
     /// <summary>
     /// 🚨 THE FIRST STEP OF THE RUN, the framework's (maintainer, 2026-10-04: "should be always
@@ -119,7 +136,8 @@ public partial class MeshOperations
             });
 
     private IObservable<Unit> WatchVerdict(
-        string nodePath, AccessContext? caller, IPathResolver pathResolver, TimeSpan budget, ActivityContext ctx) =>
+        string nodePath, AccessContext? caller, IPathResolver pathResolver, DateTimeOffset deadline, TimeSpan budget,
+        ActivityContext ctx) =>
         Observable.Defer(() =>
         {
             // The last frame seen, so a timeout can NAME the case that never finished. Written only
@@ -129,7 +147,7 @@ public partial class MeshOperations
                 .Do(frame => last = frame)
                 .SkipWhile(frame => frame.Transient)
                 .Take(1)
-                .Timeout(budget)
+                .Timeout(deadline)
                 .Catch<TestsAreaFrame, TimeoutException>(_ =>
                 {
                     var running = last?.Rows.Where(r => r.Result == "▶").Select(r => r.Case).ToImmutableArray() ?? [];
