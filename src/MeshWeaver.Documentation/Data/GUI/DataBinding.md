@@ -527,6 +527,15 @@ this page forbids above (a write that leaves the node it was bound to untouched)
 accident rather than by design — but a different address, and diagnosing it against the `/data`
 storage model sends the reader to the wrong place.
 
+**A data id may contain any character, `/` and `~` included.** `GetDataPointer` escapes the id per
+RFC 6901 (`/data/"a~1b"/prop` for id `a/b`), and every hop that maps a pointer or patch path back to
+(collection, id) — the owner's entity-store patch, the patch-to-update conversion, the client's
+pointer filter — decodes the segment ONCE with `JsonPointerSegment.Decode`, never with
+`GetSegment(i).ToString()` (that is the escaped text) and never with two `Replace` calls (they decode
+`~01` to `/`). Until #6629 the owner read the escaped text as the id, so a client write into a data id
+containing `/` was applied on the client and silently lost on the owner. Pinned by
+`SlashDataIdClientWriteTest` (MeshWeaver.Layout.Test) over `a/b`, `a~b`, `a~1b` and two plain-id controls.
+
 Two consequences:
 
 1. **Never "fix" such a crash by making the id decode tolerant.** It converts the loud case into the

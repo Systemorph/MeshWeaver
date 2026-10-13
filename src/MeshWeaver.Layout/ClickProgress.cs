@@ -69,16 +69,15 @@ public record ClickProgress
         };
 
     /// <summary>
-    /// The data id the click state of <paramref name="area"/> is written under. The area's '/' separators
-    /// are folded to '|': a client write (the Cancel request) into a data id that contains '/' does not
-    /// reach the owner's value today (measured by ClickBusyStateTest), so the ids carry none.
+    /// The data id the click state of <paramref name="area"/> is written under — the area as-is, '/'
+    /// separators included (a data id may carry any character; the pointer escapes it).
     /// </summary>
     /// <param name="area">The clicked control's area.</param>
-    public static string DataId(string area) => "click_" + area.Replace("/", "|");
+    public static string DataId(string area) => "click_" + area;
 
     /// <summary>The data id a client writes a cancel request for <paramref name="area"/> to (a <see cref="ClickCancellation"/>).</summary>
     /// <param name="area">The clicked control's area.</param>
-    public static string CancelDataId(string area) => "clickCancel_" + area.Replace("/", "|");
+    public static string CancelDataId(string area) => "clickCancel_" + area;
 
     /// <summary>The JSON pointer a client binds the click state of <paramref name="area"/> by.</summary>
     /// <param name="area">The clicked control's area.</param>
