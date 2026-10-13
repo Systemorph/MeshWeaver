@@ -275,7 +275,7 @@ public record SubscribeRequest(string StreamId, WorkspaceReference Reference)
     public string? Identity { get; init; }
 
     /// <summary>
-    /// 🚨 THE ONE NEGOTIATED WIRE CAPABILITY of the owner→subscriber fan-out: this subscriber can
+    /// 🚨 THE FIRST NEGOTIATED WIRE CAPABILITY of the owner→subscriber fan-out: this subscriber can
     /// apply a <c>splice</c> operation — a changed string leaf carried as
     /// <c>{ "$sd": [start, removed, "inserted"], "$sdb": [baseLength, "fingerprint"] }</c> instead
     /// of the whole new string. Default <c>false</c>, and that default is load-bearing.

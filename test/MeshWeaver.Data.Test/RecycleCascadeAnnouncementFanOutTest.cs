@@ -67,6 +67,9 @@ public class RecycleCascadeAnnouncementFanOutTest(ITestOutputHelper output) : Hu
     // Instance state -- never static, so nothing bleeds between tests.
     private int recycling;
     private int reAsksAfterRecycle;
+    // Each DISTINCT mirror that re-asked, as (owner address, stream id): an aggregate count alone
+    // passes when a subset of mirrors loops while the rest stay stranded.
+    private readonly ConcurrentDictionary<(string Owner, string StreamId), int> reAskedMirrors = new();
     private readonly ConcurrentDictionary<string, int> postedByCarrier = new();
 
     private static MessageHubConfiguration ConfigureOwner(MessageHubConfiguration configuration)
@@ -98,8 +101,12 @@ public class RecycleCascadeAnnouncementFanOutTest(ITestOutputHelper output) : Hu
                 // the hosted-hub route below, which re-creates the owner -- the reactivation.
                 .RouteAddress(OwnerType, (_, delivery) =>
                 {
-                    if (Volatile.Read(ref recycling) == 1 && delivery.Message is SubscribeRequest)
+                    if (Volatile.Read(ref recycling) == 1 && delivery.Message is SubscribeRequest reAsk)
+                    {
                         Interlocked.Increment(ref reAsksAfterRecycle);
+                        reAskedMirrors.AddOrUpdate(
+                            (delivery.Target?.ToString() ?? string.Empty, reAsk.StreamId), 1, (_, n) => n + 1);
+                    }
                     return delivery;
                 })
                 .RouteAddressToHostedHub(OwnerType, ConfigureOwner));
@@ -165,21 +172,27 @@ public class RecycleCascadeAnnouncementFanOutTest(ITestOutputHelper output) : Hu
                 await owner.DisposalCompleted.Should().Within(TestTimeouts.Convergence).Emit(
                     "each recycled owner must finish its teardown -- its announcement is delivered off it");
 
-            // THE CONTROL: every mirror was told and re-asked. Reaching this count also means every
-            // announcement has been posted, so the count below is complete.
+            // THE CONTROL: every DISTINCT mirror was told and re-asked. Counted per (owner, stream
+            // id), never in aggregate: a retry loop on a few mirrors would satisfy a total while the
+            // others stay stranded. Reaching this also means every announcement has been posted, so
+            // the carrier count below is complete.
             await Observable.Interval(TimeSpan.FromMilliseconds(20)).StartWith(0L)
-                .Select(_ => Volatile.Read(ref reAsksAfterRecycle))
+                .Select(_ => reAskedMirrors.Count)
                 .Should().Within(TestTimeouts.Convergence)
                 .Match(n => n >= Owners * StreamsPerOwner,
-                    "every mirror of a recycled owner must still re-ask it once -- an announcement that "
-                    + "reaches fewer mirrors strands the rest on a dead activation (#2533, #3986)");
+                    "every one of the Owners x StreamsPerOwner mirrors must re-ask its owner -- an "
+                    + "announcement that reaches fewer mirrors strands the rest on a dead activation "
+                    + "(#2533, #3986)");
+            reAskedMirrors.Keys.Select(k => k.Owner).Distinct().Should().HaveCount(Owners,
+                "the re-asks must come back to every recycled owner, not pile onto one");
 
             var perTarget = postedByCarrier.ToArray();
             Output.WriteLine(
                 "DIAG carrier posts per target after the recycle: "
                 + string.Join(", ", perTarget.Select(kv => kv.Key + "=" + kv.Value)));
             Output.WriteLine(
-                $"DIAG re-asks that crossed the router after the recycle: {Volatile.Read(ref reAsksAfterRecycle)}");
+                $"DIAG re-asks that crossed the router after the recycle: {Volatile.Read(ref reAsksAfterRecycle)} "
+                + $"from {reAskedMirrors.Count} distinct mirrors");
 
             perTarget.Length.Should().BeGreaterThan(0,
                 "the recycle must be announced through the carrier -- the mirrors above were told by it");
@@ -195,5 +208,43 @@ public class RecycleCascadeAnnouncementFanOutTest(ITestOutputHelper output) : Hu
             foreach (var stream in streams)
                 stream.Dispose();
         }
+    }
+
+    /// <summary>
+    /// THE ROLLING-DEPLOY CONTRACT of the coalescing. Only a subscription whose subscribe DECLARED
+    /// <c>AcceptsCoalescedStreamEnd</c> is folded into one end; every other one (a JS or Python
+    /// client, a pod on the previous image) keeps one plain <see cref="StreamEndedEvent"/> per
+    /// stream with no <c>AlsoEndedStreamIds</c>, because a subscriber that does not know the
+    /// property handles <c>StreamId</c> alone and would strand the rest. The end-to-end test above
+    /// only mints declaring subscribers, so it cannot see this branch; this pins it on the one
+    /// seam both paths go through.
+    /// </summary>
+    [Fact]
+    public void AnUndeclaredSubscriberKeepsOneEndPerStream_ADeclaredOneGetsOne()
+    {
+        var declaring = new Address("circuit", "declaring");
+        var legacy = new Address("circuit", "legacy");
+        var subscriptions = new (Address, string, bool)[]
+        {
+            (declaring, "d1", true), (declaring, "d2", true), (declaring, "d3", true),
+            (legacy, "l1", false), (legacy, "l2", false), (legacy, "l3", false),
+        };
+
+        var ends = Workspace.CoalesceRecycleEnds(subscriptions);
+
+        var toLegacy = ends.Where(e => e.Subscriber.Equals(legacy)).Select(e => e.Ended).ToArray();
+        // A subscriber that did not declare the capability is told once per stream, exactly as
+        // before the coalescing existed.
+        toLegacy.Select(e => e.StreamId).OrderBy(id => id, StringComparer.Ordinal).ToArray()
+            .Should().Equal("l1", "l2", "l3");
+        toLegacy.Should().OnlyContain(e => e.AlsoEndedStreamIds == null,
+            "an undeclared subscriber skips AlsoEndedStreamIds as unmapped, so it must never carry one");
+
+        var toDeclaring = ends.Where(e => e.Subscriber.Equals(declaring)).Select(e => e.Ended).ToArray();
+        toDeclaring.Should().ContainSingle("a declaring subscriber is told once for all its streams");
+        // The one coalesced end names every stream the subscriber held, none twice.
+        new[] { toDeclaring[0].StreamId }.Concat(toDeclaring[0].AlsoEndedStreamIds ?? [])
+            .OrderBy(id => id, StringComparer.Ordinal).ToArray()
+            .Should().Equal("d1", "d2", "d3");
     }
 }

@@ -127,7 +127,9 @@ public class Workspace : IWorkspace
             .ToArray();
         // What is POSTED: one end per (owner, subscriber) for a subscriber that can split it, one per
         // stream for every other; see CoalesceRecycleEnds (#5532). Built from the same snapshot.
-        var ends = CoalesceRecycleEnds(snapshot);
+        var ends = CoalesceRecycleEnds(snapshot
+            .Select(kv => (kv.Value.Subscriber, kv.Key.StreamId, kv.Value.AcceptsCoalescedEnd))
+            .ToArray());
         if (orphaned.Length == 0)
             return;
 
@@ -278,20 +280,23 @@ public class Workspace : IWorkspace
     /// reaches a <c>sync/{id}</c> sub-hub, so the same ends reach the same mirrors; nothing is
     /// bounded, paced or dropped. Pinned by <c>RecycleCascadeAnnouncementFanOutTest</c>.</para>
     /// </summary>
-    private static (Address Subscriber, StreamEndedEvent Ended)[] CoalesceRecycleEnds(
-        KeyValuePair<(string Subscriber, string StreamId), ClientSubscription>[] subscriptions)
+    /// <param name="subscriptions">Every live client subscription: its subscriber address, its stream
+    /// id, and whether the subscribe that opened it declared it can split a coalesced end.</param>
+    /// <returns>The ends to post, each with the address it is posted to.</returns>
+    internal static (Address Subscriber, StreamEndedEvent Ended)[] CoalesceRecycleEnds(
+        (Address Subscriber, string StreamId, bool AcceptsCoalescedEnd)[] subscriptions)
     {
         var ends = new List<(Address Subscriber, StreamEndedEvent Ended)>();
-        foreach (var group in subscriptions.GroupBy(kv => kv.Key.Subscriber, StringComparer.Ordinal))
+        foreach (var group in subscriptions.GroupBy(s => s.Subscriber.ToString(), StringComparer.Ordinal))
         {
-            var subscriber = group.First().Value.Subscriber;
+            var subscriber = group.First().Subscriber;
             var coalesced = new List<string>();
-            foreach (var (key, subscription) in group)
+            foreach (var (_, streamId, acceptsCoalescedEnd) in group)
             {
-                if (subscription.AcceptsCoalescedEnd)
-                    coalesced.Add(key.StreamId);
+                if (acceptsCoalescedEnd)
+                    coalesced.Add(streamId);
                 else
-                    ends.Add((subscriber, new StreamEndedEvent(key.StreamId)));
+                    ends.Add((subscriber, new StreamEndedEvent(streamId)));
             }
             if (coalesced.Count > 0)
                 ends.Add((subscriber, new StreamEndedEvent(coalesced[0])
