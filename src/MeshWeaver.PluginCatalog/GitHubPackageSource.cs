@@ -111,14 +111,32 @@ public sealed class GitHubPackageSource : IPackageSource
     /// others — the plain fetch transferred the whole repository and read the folder out of it.
     /// The answer is identical either way.</remarks>
     public IObservable<IReadOnlyList<PackageFile>> FetchPackageFiles(PackageManifest package, string gitRef) =>
+        FetchFolder(package, gitRef).Select(fetched => fetched.Files);
+
+    /// <inheritdoc />
+    /// <remarks>The commit is the snapshot's own, so an install records the exact commit it
+    /// materialised (MeshWeaver#3848).</remarks>
+    IObservable<PackageFetch> IPackageSource.FetchPackage(
+        PackageManifest package, string gitRef, IReadOnlyCollection<string>? paths) =>
+        FetchFolder(package, gitRef).Select(fetched => paths is null
+            ? fetched
+            : fetched with
+            {
+                Files = fetched.Files
+                    .Where(f => paths.Contains(f.RelativePath, StringComparer.Ordinal))
+                    .ToList(),
+            });
+
+    private IObservable<PackageFetch> FetchFolder(PackageManifest package, string gitRef) =>
         tokenProvider().SelectMany(token => NarrowFetch is { } narrow
                 ? narrow(repoUrl, gitRef, NullIfEmpty(package.SourceFolder ?? package.Id), token, static _ => true)
                 : fetch(repoUrl, gitRef, NullIfEmpty(package.SourceFolder ?? package.Id), token))
             // Carry `Binary` too — a non-UTF-8 blob's `Content` is EMPTY by design (the bytes live
             // on `RepoFile.Binary`), so projecting only `Content` publishes an empty file. See
             // PackageFile / issue #848.
-            .Select(snapshot => (IReadOnlyList<PackageFile>)snapshot.Files
-                .Select(f => new PackageFile(f.Path, f.Content, f.Binary)).ToList());
+            .Select(snapshot => new PackageFetch(
+                snapshot.Files.Select(f => new PackageFile(f.Path, f.Content, f.Binary)).ToList(),
+                snapshot.CommitSha));
 
     private static bool IsManifest(string path) =>
         path.EndsWith("/" + ManifestFile, StringComparison.OrdinalIgnoreCase)

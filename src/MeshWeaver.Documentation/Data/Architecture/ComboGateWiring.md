@@ -732,6 +732,65 @@ route, the confirmed landing and a mint before every call, refuses any return of
 the admin token or the raw patch, and executes the lander once without an OIDC request URL to prove
 it stops red naming `id-token: write`.
 
+## The recorded commit is the reference, and a retired package is reported, not failed (#3848)
+
+Decided by the maintainer ("Record commit on install"). Before the decision, every roster instance
+that the run's identity reached came back `NotVerifiable` with **zero modules verified**
+(memex: 86 modules, memex-cloud: 124; run 38416709107). The cause was not the candidate. The
+assembler refuses the whole root when any one module cannot be pinned, and two classes of module
+could never be pinned:
+
+| class | before | now |
+|---|---|---|
+| an install record with a `moduleVersion` but no exact commit | fetched at `HEAD` and proved against the hash, which fails for every package changed since its install | the registry's install response names the commit it served, the record stores it, and the module is fetched **at that commit** |
+| a package whose source folder has left its repository | `Failed`, which refused the whole root | **retired, not verifiable**: reported, and it does not fail the verification |
+
+### How the commit reaches the record
+
+1. `POST /api/plugins/files` answers `{ files, commit }`. `commit` is the snapshot sha the
+   registry's source read the folder at (`IPackageSource.FetchPackage` → `PackageFetch.Commit`).
+   An answer from an older registry carries no `commit`, and a value that is not a full sha is
+   never written.
+2. The install funnel (`CatalogLayoutAreas.InstallOrUpdate`: full install and incremental update
+   alike) records `PackageFetch.InstalledFromRef(sourceRef)` as the record's `installedFromRef`.
+   That value is the served commit when there is one, and otherwise the ref the install asked
+   for, as before. An incremental update that carries only removals still makes the (empty) read,
+   because that read is what names the commit.
+3. `InstanceComboAssembler` already fetched a sha-shaped `installedFromRef` directly. It now also
+   **proves** the recorded `moduleVersion` there. Content that diverges from its recorded commit
+   fails (`moduleVersion mismatch at the recorded commit`), and no `--allow-moving` excuses it,
+   because a commit does not move.
+
+**No backfill.** A record written before the decision carries the requested ref (`main`, `HEAD`)
+and keeps the old path (fetch the moving ref and prove the hash) until its next update restamps
+it. Nothing rewrites existing records.
+
+### Retired, not verifiable
+
+`ModuleAssemblyStatus` is an open vocabulary of string constants (policy
+`open-vocabulary-string-constants`). It replaced the enum of the same name, and the manifest's
+wire spelling is unchanged. The decision adds `Retired`:
+
+- A module is `Retired` only when its folder is absent at the ref it was fetched at **and** at the
+  source repository's `HEAD`. That takes one extra `HEAD` read per fetch group, and only when a
+  member was absent. A folder absent at the recorded ref but **present at `HEAD`** stays `Failed`:
+  the record is wrong, and the package is not gone. A `HEAD` read that fails proves nothing, so
+  the module stays `Failed` and the line says so.
+- `ComboAssemblyReport.Success` counts a retired module as not failing. A combo whose every module
+  is retired is still **not** a success, because the gate would otherwise run over an empty root.
+- The verdict carries retired modules on their own list, `ComboVerification.RetiredModules`. They
+  are absent from `Modules`, so they make a verdict neither Red nor NotVerifiable. A separate list
+  was chosen deliberately over a new `ModuleVerificationOutcome` member. A portal on an older image
+  deserializes the verdict when the build posts it. An unknown enum member would refuse the whole
+  verdict there, while an unknown property is ignored.
+- Surfaces: the Updates tab lists them under the localized heading `ui.updateRetiredModules`
+  ("Retired, not verifiable" / "Stillgelegt, nicht prüfbar"). The clearance sentence names them.
+  The recording route refuses a verdict that lists a module both as verified and as retired.
+
+Pinned by `ComboVerifiesTheRecordedCommitTest` (the assembler and verifier over an in-memory
+repository whose `HEAD` has moved) and `InstallRecordsTheServedCommitTest` (the registry's answer
+and the install record). Each test file carries its own negative controls.
+
 ## Known boundary: the combo moves
 
 A verdict names the `ComboReadAt` of the snapshot it verified. An instance whose modules sync forward

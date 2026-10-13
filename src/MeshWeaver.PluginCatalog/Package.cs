@@ -400,7 +400,16 @@ public record PackageManifest
 
     // ── install-record metadata (null on catalog entries; set when written to the registry) ──
 
-    /// <summary>The git ref (commit/branch) this package was installed from. Null until installed.</summary>
+    /// <summary>
+    /// The git ref this package was installed from. Null until installed.
+    ///
+    /// <para>🚨 An install records the EXACT COMMIT the source served
+    /// (<see cref="PackageFetch.Commit"/> — the registry's install response carries it), so the
+    /// combo verifier checks the installed content against that commit rather than the source
+    /// repository's moving <c>HEAD</c> (MeshWeaver#3848). Only when the source cannot name a
+    /// commit is the requested ref (a branch, <c>HEAD</c>) recorded instead — the shape every
+    /// record written before the decision carries until its next update restamps it.</para>
+    /// </summary>
     public string? InstalledFromRef { get; init; }
 
     /// <summary>When the package was installed (UTC). Null until installed.</summary>
@@ -736,6 +745,53 @@ public interface IPackageSource
                         .Where(f => wanted.Contains(f.RelativePath))
                         .ToList();
                 });
+
+    /// <summary>
+    /// The same read as
+    /// <see cref="FetchPackageFiles(PackageManifest, string, IReadOnlyCollection{string})"/>,
+    /// together with the exact commit the files were read at — what an install record stores
+    /// (<see cref="PackageManifest.InstalledFromRef"/>) so the combo verifier can fetch the
+    /// content the instance installed instead of whatever the source's moving ref says now
+    /// (MeshWeaver#3848, decision "Record commit on install").
+    ///
+    /// <para>The default answers <see cref="PackageFetch.Commit"/> = <c>null</c>: a source that
+    /// cannot name a commit says so, and the installer then records the ref it asked for, exactly
+    /// as before. Sources that resolve a commit (a git snapshot, a registry that reports the one
+    /// it served) override it, and so must every decorator that forwards to one.</para>
+    /// </summary>
+    /// <param name="package">The package whose folder is read.</param>
+    /// <param name="gitRef">The ref to read at.</param>
+    /// <param name="paths">Repo-relative paths to restrict to, or <c>null</c> for the whole folder.</param>
+    /// <returns>The files and, when the source knows it, the commit they were read at.</returns>
+    IObservable<PackageFetch> FetchPackage(
+        PackageManifest package, string gitRef, IReadOnlyCollection<string>? paths) =>
+        FetchPackageFiles(package, gitRef, paths).Select(files => new PackageFetch(files, null));
+}
+
+/// <summary>
+/// One package read: its files and the exact commit the source served them at, when the source
+/// can name it (<see cref="IPackageSource.FetchPackage"/>).
+/// </summary>
+/// <param name="Files">The package's files.</param>
+/// <param name="Commit">The full commit sha the files were read at; <c>null</c> when the source
+/// does not know it (an old registry, a source with no git snapshot behind it).</param>
+public sealed record PackageFetch(IReadOnlyList<PackageFile> Files, string? Commit)
+{
+    /// <summary>
+    /// The ref an install record states for this read: the served <see cref="Commit"/> when it is
+    /// a full commit sha, else <paramref name="requestedRef"/> — the pre-decision behaviour, which
+    /// an existing install keeps until its next update restamps it. Pure.
+    /// </summary>
+    /// <param name="requestedRef">The ref the install asked the source for (a branch, <c>HEAD</c>).</param>
+    /// <returns>What <see cref="PackageManifest.InstalledFromRef"/> records.</returns>
+    public string InstalledFromRef(string requestedRef) =>
+        IsCommitSha(Commit) ? Commit! : requestedRef;
+
+    /// <summary>A 40- or 64-character hex string — a full git commit sha. Pure.</summary>
+    /// <param name="value">The candidate.</param>
+    /// <returns>Whether <paramref name="value"/> names one commit.</returns>
+    public static bool IsCommitSha(string? value) =>
+        value is { Length: 40 or 64 } && value.All(char.IsAsciiHexDigit);
 }
 
 /// <summary>

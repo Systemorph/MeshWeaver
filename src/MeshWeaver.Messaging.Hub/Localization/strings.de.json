@@ -825,6 +825,7 @@
   "ui.updateMoreFailures": "(+{0} weitere)",
   "ui.updateMoreItems": "… und {0} weitere",
   "ui.updateCaveats": "**Mit Vorbehalten:**",
+  "ui.updateRetiredModules": "**Stillgelegt, nicht prüfbar** ({0}): Der Quellordner dieser Pakete existiert nicht mehr; sie werden aufgeführt und lassen die Prüfung nicht scheitern.",
   "ui.agentDetails": "Agent-Details",
   "ui.platformInstances": "Plattform-Instanzen",
   "ui.syncParties": "Sync-Partner",
