@@ -637,13 +637,12 @@ public class QueryEvaluator
         var open = selector.IndexOf('(');
         if (open > 0 && selector.EndsWith(')'))
             selector = selector[(open + 1)..^1].Trim();
-        var root = selector.Split('.')[0];
+        // The SAME selector-to-node-field mapping ResolveSortSelector reads with — never a looser one,
+        // or a selector classified as a node field would have its real (content) key elided.
+        var root = NodeFieldAlias(selector.Split('.')[0]);
         if (root.Equals(ContentProperty, StringComparison.OrdinalIgnoreCase))
             return true;
-        var property = root.Equals("display_order", StringComparison.OrdinalIgnoreCase)
-            ? "order"
-            : root.Replace("_", "", StringComparison.Ordinal);
-        return typeof(MeshNode).GetProperty(property,
+        return typeof(MeshNode).GetProperty(root,
             BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase) is null;
     }
 
@@ -653,8 +652,11 @@ public class QueryEvaluator
     /// so one <c>sort:</c> means one thing on every backend.
     /// </summary>
     private object? ResolveSortSelector(object obj, string selector)
-    {
-        var property = selector.ToLowerInvariant() switch
+        => GetPropertyValue(obj, NodeFieldAlias(selector), rawJsonNumbers: true);
+
+    /// <summary>The node field a snake_case column spelling names; any other selector unchanged.</summary>
+    private static string NodeFieldAlias(string selector)
+        => selector.ToLowerInvariant() switch
         {
             "last_modified" => "lastModified",
             "display_order" => "order",
@@ -667,8 +669,6 @@ public class QueryEvaluator
             "sync_behavior" => "syncBehavior",
             _ => selector,
         };
-        return GetPropertyValue(obj, property, rawJsonNumbers: true);
-    }
 
     /// <summary>
     /// Applies limit to results.

@@ -64,7 +64,7 @@ public static class QuerySortKey
         DateOnly d => d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
         TimeOnly t => t.ToString("HH:mm:ss.fffffff", CultureInfo.InvariantCulture),
         TimeSpan ts => ts.ToString("c", CultureInfo.InvariantCulture),
-        Enum e => e.ToString(),
+        Enum e => EnumWireName(e),
         // Exact where the source is exact: every integral type and decimal fit a decimal without
         // loss (2^53 + 1 stays distinct from 2^53); only binary floating point stays double.
         sbyte or byte or short or ushort or int or uint or long or ulong or decimal
@@ -123,6 +123,21 @@ public static class QuerySortKey
            && (exact != 0 || value == 0)
             ? exact
             : value;
+
+    /// <summary>
+    /// An enum member as the hub serializer writes it (<c>EnumMemberJsonStringEnumConverter</c>):
+    /// its <see cref="System.Runtime.Serialization.EnumMemberAttribute"/> value when it declares one,
+    /// else its name — so typed content and the same value read back from JSON share one key.
+    /// </summary>
+    private static string EnumWireName(Enum value)
+    {
+        var name = value.ToString();
+        return value.GetType().GetField(name)
+                   ?.GetCustomAttributes(typeof(System.Runtime.Serialization.EnumMemberAttribute), false)
+                   .OfType<System.Runtime.Serialization.EnumMemberAttribute>()
+                   .FirstOrDefault()?.Value
+               ?? name;
+    }
 
     /// <summary>The comparer for canonical keys in the given direction — nulls last either way.</summary>
     /// <param name="descending">Whether the sort runs descending.</param>

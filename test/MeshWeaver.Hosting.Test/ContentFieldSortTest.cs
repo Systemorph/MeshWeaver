@@ -252,6 +252,25 @@ public class ContentFieldSortTest
             .Compare(QuerySortKey.Normalize(0.1f), new QueryEvaluator().GetSortKey(Node("j", Json("""{"x":0.1000000001}""")), "content.x"))
             .Should().BeNegative();
 
+    /// <summary>A content enum keys on its wire value (<c>[EnumMember]</c>), as JSON stores it.</summary>
+    [Fact]
+    public void ContentEnum_KeysOnItsWireValue()
+        => QuerySortKey.Normalize(Hold.OnHold).Should().Be("on-hold");
+
+    /// <summary>
+    /// A snake_case selector that is NOT a mapped column alias reads content, and is classified so —
+    /// otherwise a projection would elide the very key the sort reads.
+    /// </summary>
+    [Fact]
+    public void UnmappedSnakeCaseSelector_IsAContentSort()
+        => QueryEvaluator.SortReadsContent("pre_rendered_html").Should().BeTrue();
+
+    private enum Hold
+    {
+        [System.Runtime.Serialization.EnumMember(Value = "on-hold")]
+        OnHold,
+    }
+
     /// <summary>A null or absent key is last whichever way the sort runs.</summary>
     [Fact]
     public void NullsAndAbsentKeys_SortLast_InBothDirections()
