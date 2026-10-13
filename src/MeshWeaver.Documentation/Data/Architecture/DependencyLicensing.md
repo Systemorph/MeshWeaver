@@ -28,7 +28,7 @@ beside it would have shipped AGPL code into every portal image.
 `.github/scripts/check-licenses.py`, run by the **`Dependency licences`** job in
 `dotnet-test.yml`. It:
 
-1. restores the solution, then reads every package in the **restored dependency
+1. reads every package in the **restored dependency
    graph** from the `project.assets.json` files — **direct and transitive**,
    because a copyleft library that arrives indirectly binds the product exactly
    as hard as one we chose ourselves;
@@ -76,6 +76,25 @@ two legitimate kinds:
   the issue that removes it. An exception of this kind is **not an approval**, and
   a passing run still prints it so it cannot quietly become permanent.
 
+### One restore per run
+
+The gate does **not** restore on its own. The `build` job's restore — the one
+restore of the run, of the tree CI actually builds and ships — stages the gate's
+evidence (`check-licenses.py --stage-evidence`): the restored graph as
+`restored-packages.json`, and per restored package its `.nuspec` plus the licence
+file that nuspec names. That is about 1 MB. The `Dependency licences` job
+downloads it and judges it (`--evidence`). The verdict is the same as for a local
+restore: every shipping package resolves the same way.
+
+Why: the gate used to restore the whole solution a second time under its own
+15-minute cap, and one package in the graph (`Microsoft.Playwright`, 213 MB)
+sometimes takes more than 10 minutes to download from nuget.org. Restores of
+440 s, 675 s and 729 s were measured. On main `3229abd` the restore was cut at
+908 s, the gate was **cancelled** having judged nothing, the required check went
+red, and that commit never published (MeshWeaver#6596). The verdict step now also
+tells a gate that produced **no verdict** (cancelled or skipped) apart from a
+licence finding. Both stay red, but only a finding accuses a licence.
+
 ## Gate shape
 
 Per the repo's no-skip-trapdoor rule (`AGENTS.md` → "A gate NEVER tests its own
@@ -96,6 +115,10 @@ inputs"), this gate:
 dotnet restore MeshWeaver.slnx
 python3 .github/scripts/check-licenses.py            # the gate
 python3 .github/scripts/check-licenses.py --report   # the full table
+
+# the CI split: stage after the restore, judge elsewhere
+python3 .github/scripts/check-licenses.py --stage-evidence /tmp/licence-evidence
+python3 .github/scripts/check-licenses.py --evidence /tmp/licence-evidence --report
 ```
 
 The report marks each package: `X` violation, `~` documented exception, `.`

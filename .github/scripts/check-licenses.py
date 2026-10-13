@@ -23,6 +23,17 @@ Usage:
     python3 .github/scripts/check-licenses.py            # gate: exit 1 on violation
     python3 .github/scripts/check-licenses.py --report   # print the full table
 
+In CI the restore happens ONCE, in the build job, and the gate reads what that
+restore produced instead of restoring a second time (MeshWeaver#6596):
+
+    python3 .github/scripts/check-licenses.py --stage-evidence DIR    # after the restore
+    python3 .github/scripts/check-licenses.py --evidence DIR --report # the gate, elsewhere
+
+The evidence is exactly what the gate reads and nothing more: the restored graph
+(package id -> version, from every project.assets.json) and, per restored
+package, its .nuspec plus the licence file the nuspec names. The packages
+themselves (dlls, drivers - one of them is 213 MB) never travel.
+
 This script NEVER skips. It has no "if the cache is missing, pass" branch: an
 unresolvable licence is reported as a violation, because a gate that goes green
 on absent evidence is worse than no gate at all (AGENTS.md: "A gate NEVER tests
@@ -36,6 +47,7 @@ import glob
 import json
 import os
 import re
+import shutil
 import sys
 import xml.etree.ElementTree as ET
 
@@ -153,9 +165,9 @@ def classify_body(body: str) -> str:
     return "UNKNOWN"
 
 
-def resolve_license(pid: str, version: str) -> str:
+def resolve_license(pid: str, version: str, cache: str | None = None) -> str:
     """Resolve a package's licence from the .nuspec in the local NuGet cache."""
-    pdir = os.path.join(nuget_cache(), pid.lower())
+    pdir = os.path.join(cache or nuget_cache(), pid.lower())
     if not os.path.isdir(pdir):
         return "UNRESOLVED(not-restored)"
     candidates = [version] + sorted(os.listdir(pdir), reverse=True)
@@ -234,18 +246,95 @@ def is_allowed(license_id: str) -> bool:
     return False
 
 
+RESTORED_MANIFEST = "restored-packages.json"
+EVIDENCE_PACKAGES = "packages"
+
+
+def licence_files(pid: str, version: str) -> list[str]:
+    """The files of one restored package the gate reads: its .nuspec, and the licence
+    file the nuspec names (when it names one). Paths are relative to the package's
+    version folder. Mirrors resolve_license, which is the only reader."""
+    vdir = os.path.join(nuget_cache(), pid.lower(), version.lower())
+    nuspec = pid.lower() + ".nuspec"
+    if not os.path.isfile(os.path.join(vdir, nuspec)):
+        return []
+    files = [nuspec]
+    try:
+        meta = ET.parse(os.path.join(vdir, nuspec)).getroot().find(".//{*}metadata")
+    except ET.ParseError:
+        return files
+    lic = meta.find("{*}license") if meta is not None else None
+    if lic is not None and lic.text and lic.get("type") == "file":
+        relative = lic.text.strip().replace("\\", "/")
+        if os.path.isfile(os.path.join(vdir, relative)):
+            files.append(relative)
+    return files
+
+
+def stage_evidence(target: str) -> int:
+    """Copy what the gate reads out of THIS restore into `target`, so the gate can run
+    in another job without restoring again. Fails closed: an empty graph is no evidence."""
+    restored = restored_packages()
+    if not restored:
+        print(
+            "LICENCE EVIDENCE NOT STAGED: no project.assets.json found - run "
+            "`dotnet restore MeshWeaver.slnx` first.",
+            file=sys.stderr,
+        )
+        return 1
+    copied = 0
+    for pid, ver in restored.values():
+        for relative in licence_files(pid, ver):
+            source = os.path.join(nuget_cache(), pid.lower(), ver.lower(), relative)
+            dest = os.path.join(target, EVIDENCE_PACKAGES, pid.lower(), ver.lower(), relative)
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            shutil.copyfile(source, dest)
+            copied += 1
+    with open(os.path.join(target, RESTORED_MANIFEST), "w", encoding="utf-8") as handle:
+        json.dump({key: [pid, ver] for key, (pid, ver) in sorted(restored.items())}, handle, indent=0)
+    print(f"Staged licence evidence for {len(restored)} restored packages ({copied} files) in {target}.")
+    return 0
+
+
+def load_evidence(directory: str) -> dict[str, tuple[str, str]]:
+    path = os.path.join(directory, RESTORED_MANIFEST)
+    if not os.path.isfile(path):
+        return {}
+    with open(path, encoding="utf-8") as handle:
+        data = json.load(handle)
+    return {key: (pid, ver) for key, (pid, ver) in data.items()}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--report", action="store_true", help="print the full licence table")
+    parser.add_argument(
+        "--stage-evidence",
+        metavar="DIR",
+        help="after a restore: copy the restored graph and every package's nuspec/licence file into DIR, then exit",
+    )
+    parser.add_argument(
+        "--evidence",
+        metavar="DIR",
+        help="judge the evidence a --stage-evidence run wrote, instead of this checkout's restore",
+    )
     args = parser.parse_args()
 
+    if args.stage_evidence:
+        return stage_evidence(args.stage_evidence)
+
     declared = declared_packages()
-    restored = restored_packages()
+    restored = load_evidence(args.evidence) if args.evidence else restored_packages()
+    cache = os.path.join(args.evidence, EVIDENCE_PACKAGES) if args.evidence else None
 
     if not restored:
+        where = (
+            f"no {RESTORED_MANIFEST} in {args.evidence} - the build job's restore staged no evidence"
+            if args.evidence
+            else "no project.assets.json found. Run `dotnet restore MeshWeaver.slnx` before this gate"
+        )
         print(
-            "LICENCE GATE FAILED: no project.assets.json found. Run "
-            "`dotnet restore MeshWeaver.slnx` before this gate - it resolves licences "
+            f"LICENCE GATE FAILED: {where} - it resolves licences "
             "from the restored graph and must never pass on absent evidence.",
             file=sys.stderr,
         )
@@ -258,7 +347,7 @@ def main() -> int:
     rows = []
     for key in sorted(everything):
         pid, ver = everything[key]
-        license_id = resolve_license(pid, ver)
+        license_id = resolve_license(pid, ver, cache)
         if key in declared and key in restored:
             scope = "direct"
         elif key in declared:
