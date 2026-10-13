@@ -189,9 +189,8 @@ public static class AreaProbe
         if (renderError is not null)
             return new AreaVerdict(CheckOutcome.Failed, FirstLines(renderError));
 
-        var red = strings.FirstOrDefault(s => s.Contains('❌'));
-        if (red is not null)
-            return new AreaVerdict(CheckOutcome.Failed, FailingRows(red));
+        if (strings.Any(s => s.Contains('❌')))
+            return new AreaVerdict(CheckOutcome.Failed, RedDetail(frame, strings));
 
         foreach (var candidate in strings)
         {
@@ -317,13 +316,89 @@ public static class AreaProbe
         => areaKey.StartsWith("$", StringComparison.Ordinal)
            || areaKey.StartsWith("\"$", StringComparison.Ordinal);
 
-    // The ❌ rows (plus the summary) of a red table — the actionable lines, not the whole page.
-    private static string FailingRows(string markdown)
+    // A failing case's row, capped so one case's stack trace cannot bury the others.
+    private const int MaxRowLength = 2000;
+
+    /// <summary>
+    /// The actionable lines of a red verdict frame: every failing case WITH its reason, then the
+    /// "N/M passed" summary. Two shapes carry the ❌: a markdown table (one string, a row per line)
+    /// and the streaming runner's data grid, where a case is an OBJECT whose cells are separate
+    /// strings — <c>{class, case, result: "❌ FAIL", time, output}</c>. Reading the ❌ string alone
+    /// in the second shape reported a bare "❌ FAIL": the case and the failing assertion sit in the
+    /// sibling cells. So a ❌ cell is reported with every cell of its row.
+    /// </summary>
+    private static string RedDetail(JsonElement frame, IReadOnlyList<string> strings)
     {
-        var lines = markdown.ReplaceLineEndings("\n").Split('\n')
-            .Where(l => l.Contains('❌') || PassSummary.IsMatch(l))
-            .ToList();
-        return lines.Count > 0 ? string.Join("\n", lines) : FirstLines(markdown);
+        var lines = new List<string>();
+        foreach (var content in ContentRoots(frame))
+            CollectRedRows(content, lines);
+        if (lines.Count == 0)
+            lines.Add(FirstLines(strings.First(s => s.Contains('❌'))));
+        var summary = strings
+            .SelectMany(s => s.ReplaceLineEndings("\n").Split('\n'))
+            .FirstOrDefault(l => PassSummary.IsMatch(l));
+        if (summary is not null && !lines.Any(l => l.Contains(summary, StringComparison.Ordinal)))
+            lines.Add(summary);
+        return string.Join("\n", lines.Distinct());
+    }
+
+    // The non-chrome parts of a frame — the same scope CollectStrings reads.
+    private static IEnumerable<JsonElement> ContentRoots(JsonElement frame)
+    {
+        if (frame.ValueKind != JsonValueKind.Object)
+        {
+            yield return frame;
+            yield break;
+        }
+        foreach (var property in frame.EnumerateObject())
+        {
+            if (string.Equals(property.Name, LayoutAreaReference.Areas, StringComparison.Ordinal)
+                && property.Value.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var area in property.Value.EnumerateObject())
+                    if (!IsChromeArea(area.Name))
+                        yield return area.Value;
+            }
+            else
+            {
+                yield return property.Value;
+            }
+        }
+    }
+
+    private static void CollectRedRows(JsonElement node, List<string> into)
+    {
+        switch (node.ValueKind)
+        {
+            case JsonValueKind.String:
+                // A markdown table, or a bare row string: its ❌ lines carry their own reasons.
+                if (node.GetString() is { } text && text.Contains('❌'))
+                    into.AddRange(text.ReplaceLineEndings("\n").Split('\n')
+                        .Where(l => l.Contains('❌'))
+                        .Select(Cap));
+                break;
+            case JsonValueKind.Object:
+                var cells = node.EnumerateObject()
+                    .Where(p => p.Value.ValueKind == JsonValueKind.String && !p.Name.StartsWith('$'))
+                    .Select(p => p.Value.GetString())
+                    .Where(v => !string.IsNullOrEmpty(v))
+                    .Select(v => v!)
+                    .ToList();
+                if (cells.Any(c => c.Contains('❌') && !c.Contains('\n')))
+                    // A row of cells: the case, its result AND its output, in the row's own order.
+                    into.Add(Cap(string.Join(" · ", cells)));
+                else
+                    foreach (var property in node.EnumerateObject())
+                        CollectRedRows(property.Value, into);
+                break;
+            case JsonValueKind.Array:
+                foreach (var item in node.EnumerateArray())
+                    CollectRedRows(item, into);
+                break;
+        }
+
+        static string Cap(string row) =>
+            row.Length <= MaxRowLength ? row : row[..MaxRowLength] + " …";
     }
 
     private static string FirstLines(string text, int count = 6)

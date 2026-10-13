@@ -3684,7 +3684,11 @@ public static class MeshNodeStreamExtensions
                             new GetDataRequest(new MeshNodeReference()),
                             o =>
                             {
-                                o = o.WithTarget(new Address(path));
+                                // This read rides a ShuttingDown answer out (the arm below re-issues
+                                // it against the next activation), so it says so on the request: a
+                                // teardown that discards it parked is then teardown-normal, not an
+                                // Error naming lost work (MeshWeaver#5718).
+                                o = o.WithTarget(new Address(path)).ReaskingOnShutdown();
                                 return caller is null ? o : o.WithAccessContext(caller);
                             })
                         .Subscribe(

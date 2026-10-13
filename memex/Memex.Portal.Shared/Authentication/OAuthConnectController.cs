@@ -592,12 +592,13 @@ public class OAuthConnectController(
 
     /// <summary>
     /// The creation stamp of the token this exchange just minted — the ordering key
-    /// <see cref="SupersedePreviousTokens"/> compares against. Falls back to "now" if the content
-    /// is not the expected shape, which only ever makes the sweep MORE conservative on the tie
-    /// (it can then supersede a token minted in the same instant, never a newer one).
+    /// <see cref="SupersedePreviousTokens"/> compares against. It is the stamp the mint WROTE,
+    /// carried on <see cref="TokenCreationResult.CreatedAt"/>: reading it back off the node's
+    /// content needed a cast that yields nothing for an untyped payload, and its "now" fallback was
+    /// taken after the read-back, so it was LATER than the real stamp and ranked every token minted
+    /// in between as older — more eviction, not less (#6636).
     /// </summary>
-    private static DateTimeOffset MintedAt(TokenCreationResult creation) =>
-        creation.Node.Content is ApiToken t ? t.CreatedAt : DateTimeOffset.UtcNow;
+    private static DateTimeOffset MintedAt(TokenCreationResult creation) => creation.CreatedAt;
 
     /// <summary>
     /// Lifetime for OAuth-issued API tokens. Single source of truth — the

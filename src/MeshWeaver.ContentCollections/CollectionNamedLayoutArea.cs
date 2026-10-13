@@ -64,6 +64,12 @@ public static class CollectionNamedLayoutArea
                 if (path.Length == 0)
                     return Observable.Return<UiControl?>(Browser(host, contentService, collectionName, "/"));
 
+                // 🚨 The staging folder is framework state, never content (#6585): neither browsed
+                // nor rendered, and answered exactly as an absent path.
+                if (ContentStaging.IsStagingPath(path))
+                    return Observable.Return<UiControl?>(
+                        new MarkdownControl($"'{path}' not found in collection '{collectionName}'."));
+
                 // Type the target by listing its parent folder — the same listing the browser
                 // itself performs — so folders and files are told apart by the provider, not by
                 // an extension heuristic.
