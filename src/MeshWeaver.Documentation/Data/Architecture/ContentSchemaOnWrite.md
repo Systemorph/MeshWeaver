@@ -136,6 +136,14 @@ JSON converter has no view of the record it is nested in. Read the two together.
 path-bearing line blamed a missing registration for this case too, which sent the reader to fix the
 wrong thing.
 
+A stored `$type` decides which case it is: content whose discriminator names nothing known is a
+missing registration even on a node whose NodeType maps to a registered type, because it contradicts
+that type. The NodeType mapping is used only when the content carries no `$type`. A bind failure is
+also warned at the read even inside the boot registration window. That window defers only the
+missing-registration verdict, and its settle drops every type that has registered, so a deferred
+bind failure would never be reported after a roll. The marker exception attached to the warning
+states the same cause as the message (`MarkdownContentWithoutBodyTest`).
+
 ## Where it deliberately says nothing
 
 Each of these answers Valid, and each is a decision rather than an omission:

@@ -3027,17 +3027,23 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 // writes this warning for whatever is still untyped when it settles
                 // (ContentDegradationRegistry.SettleDeferredWarnings). Record-and-answer is one
                 // atomic step with the settle, so a read racing the close is warned exactly once.
-                var deferred = degradations?.RecordDeferringWarning(
-                    node.NodeType, node.Path, "MeshNodeStreamCache.GetStream", Discriminator(degraded)) == true;
+                // A BIND failure of a type this process already knows is decided now — the boot
+                // registration window only waits for registrations, and its settle drops every type
+                // that registered (#6639 review) — so it is recorded and warned at once, never deferred.
+                var (bindFailure, cause) = DegradationCause(node.NodeType, degraded, contentTypeRegistry);
+                var deferred = bindFailure
+                    ? RecordNow(degradations, node.NodeType, node.Path, "MeshNodeStreamCache.GetStream", Discriminator(degraded))
+                    : degradations?.RecordDeferringWarning(
+                        node.NodeType, node.Path, "MeshNodeStreamCache.GetStream", Discriminator(degraded)) == true;
                 if (!deferred)
                     logger.LogWarning(
                         new MeshNodeContentDegradedException(
-                            "MeshNodeStreamCache.GetStream", node.Path, node.NodeType, TruncateRaw(je)),
+                            "MeshNodeStreamCache.GetStream", node.Path, node.NodeType, TruncateRaw(je), cause, inner: null),
                         "MeshNodeStreamCache.GetStream: Content for {Path} stayed an untyped JsonElement after "
                         + "deserialization ({Cause}) — downstream "
                         + "'Content is X'/'as X' consumers will fail (renders empty, reactive waits time out). "
                         + "Raw: {RawJson}",
-                        node.Path, DegradationCause(node.NodeType, degraded, contentTypeRegistry), TruncateRaw(je));
+                        node.Path, cause, TruncateRaw(je));
             }
             return node with { Content = deserialized };
         }
@@ -3057,21 +3063,38 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     /// view of the record it is nested in — and this line, the one that names the node, blamed a
     /// registration that was not missing, and unbindable <c>MarkdownContent</c> rows were
     /// reported as a type problem nobody could act on.</para>
+    ///
+    /// <para>🚨 A stored <c>$type</c> is AUTHORITATIVE (#6639 review): content whose discriminator
+    /// names nothing this process knows is unresolvable even on a node whose NodeType maps to a
+    /// registered type — it contradicts that type and cannot be recovered as it. The NodeType mapping
+    /// is consulted only when the content carries no <c>$type</c>.</para>
     /// </summary>
-    private static string DegradationCause(
+    private static (bool BindFailure, string Cause) DegradationCause(
         string? nodeType, JsonElement degraded,
         MeshWeaver.Mesh.Services.IMeshContentTypeRegistry? contentTypeRegistry)
     {
         if (contentTypeRegistry is not null)
         {
             var discriminator = Discriminator(degraded);
-            if ((!string.IsNullOrEmpty(nodeType) && contentTypeRegistry.TryResolveByNodeType(nodeType, out var known))
-                || (discriminator is not null && contentTypeRegistry.TryResolveByDiscriminator(discriminator, out known)))
-                return $"its content type '{known.Name}' is registered, but the stored JSON does not bind to it — "
+            Type? known = null;
+            var resolved = discriminator is not null
+                ? contentTypeRegistry.TryResolveByDiscriminator(discriminator, out known)
+                : !string.IsNullOrEmpty(nodeType) && contentTypeRegistry.TryResolveByNodeType(nodeType, out known);
+            if (resolved && known is not null)
+                return (true, $"its content type '{known.Name}' is registered, but the stored JSON does not bind to it — "
                        + "a member it requires is missing or a value contradicts its declared type; the "
-                       + "serializer's 'could not be deserialized' warning names the member";
+                       + "serializer's 'could not be deserialized' warning names the member");
         }
-        return "TypeRegistry lacks the $type discriminator";
+        return (false, "TypeRegistry lacks the $type discriminator");
+    }
+
+    /// <summary>Records a degraded read whose warning is written now, never deferred; answers
+    /// <c>false</c> ("not deferred") so the caller writes it.</summary>
+    private static bool RecordNow(
+        ContentDegradationRegistry? degradations, string? nodeType, string? nodePath, string seam, string? discriminator)
+    {
+        degradations?.Record(nodeType, nodePath, seam, discriminator);
+        return false;
     }
 
     /// <summary>The stored <c>$type</c> of a degraded element, or <c>null</c> when it carries
@@ -3868,17 +3891,21 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 // A record with no exception object cannot reach the trace log, which is the only
                 // sink the untyped-content shard gate scans (#3625).
                 // Plugins#2799 — deferred during the boot registration window, as at the GetStream seam.
-                if (degradations?.RecordDeferringWarning(
-                        node.NodeType, node.Path, "MeshNodeStreamCache.GetQuery", Discriminator(degraded)) == true)
+                // A bind failure of a known type is warned at once, never deferred — as at GetStream.
+                var (bindFailure, cause) = DegradationCause(node.NodeType, degraded, contentTypeRegistry);
+                if (bindFailure
+                        ? RecordNow(degradations, node.NodeType, node.Path, "MeshNodeStreamCache.GetQuery", Discriminator(degraded))
+                        : degradations?.RecordDeferringWarning(
+                            node.NodeType, node.Path, "MeshNodeStreamCache.GetQuery", Discriminator(degraded)) == true)
                     return node;
                 var rawText = QueryDiagnosticRaw(node.Content);
                 logger.LogWarning(
                     new MeshNodeContentDegradedException(
-                        "MeshNodeStreamCache.GetQuery", node.Path, node.NodeType, rawText),
+                        "MeshNodeStreamCache.GetQuery", node.Path, node.NodeType, rawText, cause, inner: null),
                     "MeshNodeStreamCache.GetQuery: Content for {Path} stayed an untyped JsonElement after "
                     + "deserialization ({Cause}) — downstream "
                     + "'Content is X'/'as X' consumers will fail (renders empty). Raw: {RawJson}",
-                    node.Path, DegradationCause(node.NodeType, degraded, contentTypeRegistry), rawText);
+                    node.Path, cause, rawText);
                 return node;
             }
             return node with { Content = deserialized };

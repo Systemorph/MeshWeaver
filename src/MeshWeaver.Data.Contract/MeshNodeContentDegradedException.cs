@@ -71,4 +71,30 @@ public sealed class MeshNodeContentDegradedException : System.Exception
         NodeType = nodeType;
         RawJson = rawJson;
     }
+
+    /// <summary>
+    /// Creates the degradation marker with the CAUSE the read seam classified (#6639), so the
+    /// marker never states a different cause than the warning it rides on: a <c>$type</c> nothing
+    /// resolves, or a registered type whose stored JSON does not bind to it.
+    /// </summary>
+    /// <param name="seam">The read seam that observed it.</param>
+    /// <param name="nodePath">The node path.</param>
+    /// <param name="nodeType">The node's NodeType.</param>
+    /// <param name="rawJson">Truncated raw JSON of the unreadable content.</param>
+    /// <param name="cause">Why the content stayed untyped, in the seam's words.</param>
+    /// <param name="inner">The deserialization exception, when there was one.</param>
+    public MeshNodeContentDegradedException(
+        string seam, string? nodePath, string? nodeType, string? rawJson, string cause, System.Exception? inner)
+        : base(
+            $"{seam}: content for '{nodePath ?? "<unknown>"}' (nodeType '{nodeType ?? "<none>"}') "
+            + $"stayed an untyped JsonElement — {cause}. Downstream 'Content is X' / 'as X' consumers "
+            + "read it as ABSENT: views render empty and reactive waits never complete. "
+            + $"Raw: {rawJson ?? "<none>"}",
+            inner)
+    {
+        Seam = seam;
+        NodePath = nodePath;
+        NodeType = nodeType;
+        RawJson = rawJson;
+    }
 }

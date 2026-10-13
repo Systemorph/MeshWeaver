@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -30,13 +31,14 @@ public class MarkdownContentWithoutBodyTest
     /// <summary>The two read seams that can degrade content.</summary>
     public static TheoryData<string> Seams() => ["GetStream", "GetQuery"];
 
-    private static MeshNode Run(string seam, MeshNode node, ILogger logger, IMeshContentTypeRegistry registry)
+    private static MeshNode Run(string seam, MeshNode node, ILogger logger, IMeshContentTypeRegistry registry,
+        ContentDegradationRegistry? degradations = null)
     {
         var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
         return seam switch
         {
-            "GetStream" => MeshNodeStreamCache.ConvertContentJsonElementToTyped(node, options, logger, registry),
-            "GetQuery" => MeshNodeStreamCache.DeserializeContent(node, options, logger, registry),
+            "GetStream" => MeshNodeStreamCache.ConvertContentJsonElementToTyped(node, options, logger, registry, degradations),
+            "GetQuery" => MeshNodeStreamCache.DeserializeContent(node, options, logger, registry, degradations),
             _ => throw new ArgumentOutOfRangeException(nameof(seam), seam, "unknown read seam"),
         };
     }
@@ -109,6 +111,69 @@ public class MarkdownContentWithoutBodyTest
     /// The other cause keeps its own words: a <c>$type</c> nothing in the process resolves is still
     /// reported as a missing registration.
     /// </summary>
+    /// <summary>
+    /// 🚨 #6639 review — the marker exception rides on the same record and is appended to it by
+    /// every fault sink, so it must name the SAME cause as the message, never the old fixed one.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Seams))]
+    public void TheMarkerException_NamesTheSameCauseAsTheMessage(string seam)
+    {
+        var registry = new MeshContentTypeRegistry();
+        registry.Register(typeof(MarkdownContent), MarkdownNodeType);
+        var logger = new RecordingLogger();
+
+        Run(seam, NodeWith(MarkdownNodeType, """{"$type":"MarkdownContent","text":"wrong key"}"""), logger, registry);
+
+        var record = Assert.Single(logger.Records.Where(r => r.Level >= LogLevel.Warning));
+        Assert.NotNull(record.ExceptionMessage);
+        Assert.Contains("does not bind", record.ExceptionMessage);
+        Assert.DoesNotContain("resolved to no registered", record.ExceptionMessage);
+    }
+
+    /// <summary>
+    /// 🚨 #6639 review — a stored <c>$type</c> is authoritative: content whose discriminator names
+    /// nothing known is unresolvable even on a node whose NodeType maps to a registered type.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Seams))]
+    public void AContradictingDiscriminator_IsAMissingRegistration_NotABindFailure(string seam)
+    {
+        var registry = new MeshContentTypeRegistry();
+        registry.Register(typeof(MarkdownContent), MarkdownNodeType);
+        var logger = new RecordingLogger();
+
+        Run(seam, NodeWith(MarkdownNodeType, """{"$type":"NothingKnowsThis","label":"x"}"""), logger, registry);
+
+        var record = Assert.Single(logger.Records.Where(r => r.Level >= LogLevel.Warning));
+        Assert.Contains("TypeRegistry lacks the $type discriminator", record.Message);
+        Assert.DoesNotContain("MarkdownContent' is registered", record.Message);
+    }
+
+    /// <summary>
+    /// 🚨 #6639 review — during the boot registration window a MISSING registration is deferred, but a
+    /// bind failure of a known type is decided now and warned at once: the settle drops every type
+    /// that registered, so a deferred bind failure would never be reported after a roll.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Seams))]
+    public void ABindFailure_IsWarnedAtOnce_EvenInsideTheBootRegistrationWindow(string seam)
+    {
+        var registry = new MeshContentTypeRegistry();
+        registry.Register(typeof(MarkdownContent), MarkdownNodeType);
+        var degradations = new ContentDegradationRegistry();
+        degradations.DeferWarningsUntilRegistrationSettles();
+        var logger = new RecordingLogger();
+
+        Run(seam, NodeWith(MarkdownNodeType, """{"$type":"MarkdownContent","text":"wrong key"}"""),
+            logger, registry, degradations);
+
+        var record = Assert.Single(logger.Records.Where(r => r.Level >= LogLevel.Warning));
+        Assert.Contains("Space/APageWithoutABody", record.Message);
+        Assert.Contains("does not bind", record.Message);
+        Assert.Empty(degradations.SettleDeferredWarnings(registry));
+    }
+
     [Theory]
     [MemberData(nameof(Seams))]
     public void UnresolvableType_IsStillReportedAsAMissingRegistration(string seam)
@@ -122,13 +187,13 @@ public class MarkdownContentWithoutBodyTest
         Assert.Contains("TypeRegistry lacks the $type discriminator", record.Message);
     }
 
-    private sealed record Record(LogLevel Level, string Message);
+    private sealed record Record(LogLevel Level, string Message, string? ExceptionMessage);
 
     private sealed class RecordingLogger : ILogger
     {
-        private readonly List<Record> records = [];
+        private ImmutableList<Record> records = ImmutableList<Record>.Empty;
 
-        public IReadOnlyList<Record> Records => records;
+        public IReadOnlyList<Record> Records => Volatile.Read(ref records);
 
         public IDisposable BeginScope<TState>(TState state) where TState : notnull => NullScope.Instance;
 
@@ -136,7 +201,7 @@ public class MarkdownContentWithoutBodyTest
 
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
             Func<TState, Exception?, string> formatter)
-            => records.Add(new Record(logLevel, formatter(state, exception)));
+            => ImmutableInterlocked.Update(ref records, r => r.Add(new Record(logLevel, formatter(state, exception), exception?.Message)));
 
         private sealed class NullScope : IDisposable
         {
