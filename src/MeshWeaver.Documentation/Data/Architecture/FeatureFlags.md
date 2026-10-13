@@ -121,7 +121,7 @@ onboard (and become platform admin), so the platform can never lock itself out.
 |---|---|---|---|
 | `false` | `true` (default) | **Open** | Anyone who authenticates. |
 | `false` | `false` | **Closed** | First user only — everyone else sees "Registration Closed". |
-| `true` | *(any)* | **Invitation-only** | Only an email with a Pending invitation (plus the first user). |
+| `true` | *(any)* | **Invitation-only** | Only an email with a Pending invitation (plus the first user) — **exempt** where the instance's own tenant directory gates sign-in (Microsoft the only route, a named tenant): there, whom the directory signed in. See [Invitation-Only Onboarding](/Doc/Architecture/InvitationOnlyOnboarding#exempt-where-the-instances-own-directory-gates-sign-in). |
 
 `InvitationOnly` **takes precedence**: when it is on, the gate is "has a Pending invitation"
 regardless of `AllowSelfOnboarding`. The security boundary is enforced at the `CreateUser` call in

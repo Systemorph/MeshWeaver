@@ -95,6 +95,24 @@ matches the email. On success it chains `InvitationService.MarkAccepted`. The pa
 for invited users and an **"Invitation Required"** message for everyone else (messaging only — the
 real gate is at `CreateUser`).
 
+### Exempt where the instance's own directory gates sign-in
+
+Invitation-only is **exempt** on an instance whose own tenant directory already decides who may sign
+in: Microsoft is the **only** sign-in route, and `Authentication:Microsoft:TenantId` names one
+directory (not unset, `common`, `organizations` or `consumers`). The Microsoft handler signs in with
+the authorization-code flow against that tenant's authority, so every identity that reaches the
+portal was authenticated by that directory — a member, or a guest its owner invited — and the
+directory's application assignment is the invitation list. On that shape the gate admits a signed-in
+visitor without a Pending invitation. Any second route (Google, LinkedIn, Apple, GitHub, the
+developer login) voids the exemption, because it admits identities no directory issued. The
+exemption never opens a closed registration (`InvitationOnly` and `AllowSelfOnboarding` both off) and
+never promotes anybody: the first-user rule is unchanged. Keep that directory's enterprise application
+on **assignment required**, or "the directory" means everyone in it.
+
+The decision lives in the portal's onboarding gate (MeshWeaver.Plugins `OnboardingGate.Decide`, fed
+by `SignInProviderCatalog.OwnDirectoryGatesSignIn`); the deployment-record pre-flight applies the same
+test. Decided on Systemorph/Memex#633.
+
 ### A request that died while its identity was being resolved
 
 `OnboardingMiddleware` runs in front of every page and API route and decides — from the signed-in
