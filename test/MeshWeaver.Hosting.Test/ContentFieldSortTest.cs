@@ -219,6 +219,26 @@ public class ContentFieldSortTest
     public void SnakeCaseSyncBehavior_ResolvesTheNodeField()
         => new QueryEvaluator().GetSortKey(Node("x", null), "sync_behavior").Should().NotBeNull();
 
+    /// <summary>A typed date/time is measured as written: a whole-second UTC instant is 20 characters.</summary>
+    [Fact]
+    public void SortFunction_OnATypedInstant_SeesTheSerializedText()
+        => new QueryEvaluator().GetSortKey(
+                Node("t", new Stamp(new DateTimeOffset(2026, 10, 13, 8, 30, 0, TimeSpan.Zero))), "length(content.at)")
+            .Should().Be((decimal)JsonSerializer.Serialize(new DateTimeOffset(2026, 10, 13, 8, 30, 0, TimeSpan.Zero)).Trim('"').Length);
+
+    /// <summary>A typed <see cref="TimeOnly"/> and the same time written as JSON share one key.</summary>
+    [Fact]
+    public void TimeOnly_TypedAndJson_ShareOneKey()
+        => QuerySortKey.Normalize(new TimeOnly(9, 30))
+            .Should().Be(QuerySortKey.Normalize(Json("\"09:30:00\"")));
+
+    /// <summary>A double below decimal's resolution keeps its sign against zero.</summary>
+    [Fact]
+    public void TinyPositiveDouble_SortsAfterZero()
+        => QuerySortKey.Comparer(descending: false)
+            .Compare(QuerySortKey.Normalize(double.Epsilon), QuerySortKey.Normalize(0))
+            .Should().BePositive();
+
     /// <summary>A null or absent key is last whichever way the sort runs.</summary>
     [Fact]
     public void NullsAndAbsentKeys_SortLast_InBothDirections()

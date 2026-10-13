@@ -611,6 +611,9 @@ public class QueryEvaluator
         JsonElement { ValueKind: JsonValueKind.String } e => e.GetString(),
         JsonElement { ValueKind: JsonValueKind.Number } e => e.GetRawText(),
         Enum member when !readsContent => Convert.ToDecimal(member, CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture),
+        // A typed date/time is stored as the serializer writes it — that text is what the function
+        // sees on Postgres (a whole-second UTC DateTime is "…:00Z", 20 characters, not the 28 of the key).
+        DateTime or DateTimeOffset or DateOnly or TimeOnly => JsonSerializer.SerializeToElement(value).GetString(),
         _ => QuerySortKey.Normalize(value) switch
         {
             null => null,

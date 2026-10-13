@@ -93,6 +93,11 @@ public static class QuerySortKey
     /// </summary>
     private static string NormalizeText(string text)
     {
+        // An ISO time of day (HH:mm, HH:mm:ss, HH:mm:ss.f…) — the fixed-width form a typed TimeOnly gets.
+        if (text.Length is >= 5 and <= 16 && text[2] == ':' && char.IsAsciiDigit(text[0])
+            && text.All(c => char.IsAsciiDigit(c) || c is ':' or '.')
+            && TimeOnly.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.None, out var time))
+            return time.ToString("HH:mm:ss.fffffff", CultureInfo.InvariantCulture);
         if (text.Length < 16 || text[4] != '-' || text[7] != '-' || (text[10] != 'T' && text[10] != 't')
             || !char.IsAsciiDigit(text[0]))
             return text;
@@ -153,7 +158,8 @@ public static class QuerySortKey
         private static decimal? AsDecimal(object value) => value switch
         {
             decimal d => d,
-            double d when double.IsFinite(d) && Math.Abs(d) < 7.9e28 => (decimal)d,
+            // Only where decimal holds it: below ~1e-28 a nonzero double would underflow to 0.
+            double d when d == 0 || (double.IsFinite(d) && Math.Abs(d) < 7.9e28 && Math.Abs(d) >= 1e-28) => (decimal)d,
             _ => null,
         };
 
