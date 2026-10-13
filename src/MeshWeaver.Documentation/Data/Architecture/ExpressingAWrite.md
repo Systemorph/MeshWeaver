@@ -231,6 +231,15 @@ carries the LIVE node's claim when the caller's JSON does not name `syncBehavior
 explicitly named value as given (naming `Include` is how a caller resumes sync). Pinned by
 `UpdateKeepsTheSyncClaimTest` (Memex.Portal.Shared.Test).
 
+🚨 **Creation metadata (`createdDate`, `createdBy`) is exempt the same way, one layer lower.** It is
+set once at creation, and an `update` payload that leaves it out deserialises to `default` / `null`
+— which `IMeshService.UpdateNode` wrote wholesale, resetting the node's creation time and creator.
+`NodeUpdatePipeline` therefore carries the LIVE node's values when the caller omits them, before the
+no-op gate (so a payload differing only by that omission changes nothing), and writes a value the
+caller names as given (an importer preserving source metadata). It sits in the pipeline rather than
+in `MeshOperations`, so every `UpdateNode` caller gets it, not only MCP and the CLI. Pinned by
+`UpdateKeepsCreationMetadataTest` (MeshWeaver.Graph.Test).
+
 ## Status
 
 **The fold half of the lowering is BUILT; the text splice and the general expression lowering are
