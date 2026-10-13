@@ -26,7 +26,10 @@ public sealed record InMeshImpersonationReference(string Symbol, string Location
 /// installs an identity without going through one (<c>IMessageDelivery.SetAccessContext</c>,
 /// <c>IMessageHub.DeliverMessage</c>, <c>MeshQueryRequest.AsSystem</c> / <c>ForViewer</c> and a WRITE
 /// to <c>MeshQueryRequest.UserId</c>, a <c>MeshQueryRequest.FromQuery</c> / <c>FromQueries</c> call
-/// that SUPPLIES its <c>userId</c> parameter, a write to <c>AccessContext.IsHub</c>); the System
+/// that SUPPLIES its <c>userId</c> parameter, a write to <c>AccessContext.IsHub</c>); every API that
+/// mints or routes a delivery envelope without <c>hub.Post</c> stamping its sender (a
+/// <c>MessageDelivery</c> constructor called with arguments, a write to <c>MessageDelivery.Sender</c>,
+/// <c>IRoutingService.DeliverMessage</c> and the Orleans grain entry points); the System
 /// identity's names (<c>WellKnownUsers.System</c> / <c>SystemContext</c>,
 /// <c>AccessService.SystemObjectId</c>) and the literal itself — wherever it stands, a comparison
 /// included: a syntactic scan cannot follow a value from a local into an identity, so it reports
@@ -65,6 +68,16 @@ public static class InMeshImpersonationReferences
             ["MeshWeaver.Messaging.MessageDelivery"] = ["SetAccessContext"],
             ["MeshWeaver.Messaging.IMessageHub"] = ["DeliverMessage"],
             ["MeshWeaver.Messaging.MessageHub"] = ["DeliverMessage"],
+            // The routing entry points a hand-built envelope reaches without hub.Post, which is the
+            // only path that stamps the sender (Doc/Architecture/SenderIsThePostingHub, #6619).
+            ["MeshWeaver.Mesh.Services.IRoutingService"] = ["DeliverMessage"],
+            ["MeshWeaver.Connection.Orleans.OrleansRoutingService"] = ["DeliverMessage"],
+            ["MeshWeaver.Connection.Orleans.IMessageHubGrain"] = ["DeliverMessage"],
+            ["MeshWeaver.Connection.Orleans.IRoutingGrain"] = ["RouteMessage"],
+            ["MeshWeaver.Connection.Orleans.IPodHubGrain"] = ["Deliver"],
+            // The public concrete stream forwards a caller-built envelope straight to its hub, keeping
+            // the sender it names (the interface member is internal; the class's is public).
+            ["MeshWeaver.Data.Serialization.SynchronizationStream"] = ["DeliverMessage"],
             ["MeshWeaver.Mesh.Security.AccessContextScope"] = ["AsSystem"],
             ["MeshWeaver.Mesh.Security.WellKnownUsers"] = ["System", "SystemContext"],
             ["MeshWeaver.Mesh.Services.MeshQueryRequest"] = ["AsSystem", "ForViewer"],
@@ -78,7 +91,25 @@ public static class InMeshImpersonationReferences
         {
             ["MeshWeaver.Mesh.Services.MeshQueryRequest"] = ["UserId"],
             ["MeshWeaver.Messaging.AccessContext"] = ["IsHub"],
+            // A delivery's sender rewritten on an envelope (`d with { Sender = … }`, #6619).
+            ["MeshWeaver.Messaging.MessageDelivery"] = ["Sender"],
         }.ToImmutableDictionary(p => p.Key, p => p.Value.ToImmutableHashSet(StringComparer.Ordinal), StringComparer.Ordinal);
+
+    /// <summary>
+    /// Types whose constructors are reported when called WITH arguments, keyed by
+    /// <c>Namespace.TypeName</c> (no arity). A delivery envelope built in-mesh names its own sender
+    /// (directly, or through a caller-written <c>PostOptions.Sender</c>), and only <c>hub.Post</c>
+    /// stamps the sender (#6619). The parameterless constructor carries no sender and is not
+    /// reported; a sender written onto it afterwards is (<see cref="WrittenMembers"/>).
+    /// Immutable constant lookup.
+    /// </summary>
+    public static readonly ImmutableHashSet<string> Constructors =
+        ImmutableHashSet.Create(StringComparer.Ordinal, "MeshWeaver.Messaging.MessageDelivery");
+
+    // The simple type names of Constructors: the prefilter for an explicit `new T(…)` (plus every
+    // using-alias name of the compilation, see Find).
+    private static readonly ImmutableHashSet<string> ConstructorTypeNames =
+        Constructors.Select(t => t[(t.LastIndexOf('.') + 1)..]).ToImmutableHashSet(StringComparer.Ordinal);
 
     /// <summary>
     /// Methods reported only when the reference SUPPLIES an argument for the named parameter — the
@@ -107,10 +138,30 @@ public static class InMeshImpersonationReferences
     /// AUTHORED source (before platform source generators run) so platform-generated code is not
     /// attributed to the author.
     /// </summary>
-    public static ImmutableList<InMeshImpersonationReference> Find(Compilation compilation, CancellationToken ct = default)
+    public static ImmutableList<InMeshImpersonationReference> Find(Compilation compilation, CancellationToken ct = default) =>
+        Find(compilation, compilation.SyntaxTrees, ct);
+
+    /// <summary>
+    /// Every reference in <paramref name="trees"/>, each a syntax tree of <paramref name="compilation"/>.
+    /// The compile path passes the AUTHORED trees plus the trees a NODE-SUPPLIED source generator added
+    /// (<c>GeneratorPipeline.RunSourceGeneratorsWithNodeOutput</c>'s untrusted output): code a node's own
+    /// <c>#r</c>'d generator emits is the author's code, however it was produced. Only the platform's
+    /// built-in generators' output is left out.
+    /// </summary>
+    public static ImmutableList<InMeshImpersonationReference> Find(
+        Compilation compilation, IEnumerable<SyntaxTree> trees, CancellationToken ct = default)
     {
         var found = ImmutableList.CreateBuilder<InMeshImpersonationReference>();
-        foreach (var tree in compilation.SyntaxTrees)
+        // 🚨 A using ALIAS renames a type (`using D = MeshWeaver.Messaging.MessageDelivery<string>;
+        // new D(forged, …)`), so the constructor prefilter also accepts every alias name declared in
+        // ANY tree of the compilation (a `global using` alias reaches every file). An alias can only
+        // be introduced by a using directive, so this set is complete and the binding below decides.
+        var constructorNames = ConstructorTypeNames.Union(compilation.SyntaxTrees
+            .SelectMany(t => t.GetRoot(ct).DescendantNodes(n => n is CompilationUnitSyntax or BaseNamespaceDeclarationSyntax)
+                .OfType<UsingDirectiveSyntax>())
+            .Where(u => u.Alias is not null)
+            .Select(u => u.Alias!.Name.Identifier.ValueText));
+        foreach (var tree in trees)
         {
             ct.ThrowIfCancellationRequested();
             SemanticModel? model = null;
@@ -118,6 +169,23 @@ public static class InMeshImpersonationReferences
             {
                 switch (node)
                 {
+                    // A constructor call: an explicit `new MessageDelivery<T>(…)` (prefiltered by its
+                    // type name), a target-typed `new(…)` with enough arguments to carry a sender, or
+                    // a derived type's `: base(…)`. The last two are rare and are bound.
+                    case ObjectCreationExpressionSyntax creation
+                        when constructorNames.Contains(RightmostName(creation.Type)):
+                    case ImplicitObjectCreationExpressionSyntax { ArgumentList.Arguments.Count: >= 3 }:
+                    case ConstructorInitializerSyntax:
+                    case PrimaryConstructorBaseTypeSyntax:
+                        model ??= compilation.GetSemanticModel(tree);
+                        if (model.GetSymbolInfo(node, ct).Symbol is IMethodSymbol
+                            {
+                                MethodKind: MethodKind.Constructor, Parameters.Length: > 0,
+                            } constructor
+                            && Constructors.Contains(TypeName(constructor.ContainingType.OriginalDefinition)))
+                            found.Add(new($"{TypeName(constructor.ContainingType.OriginalDefinition)}..ctor", Where(node)));
+                        break;
+
                     case LiteralExpressionSyntax literal
                         when literal.IsKind(SyntaxKind.StringLiteralExpression)
                              && string.Equals(literal.Token.ValueText, SystemLiteral, StringComparison.OrdinalIgnoreCase):
@@ -153,6 +221,14 @@ public static class InMeshImpersonationReferences
         }
         return found.ToImmutable();
     }
+
+    private static string RightmostName(TypeSyntax type) => type switch
+    {
+        QualifiedNameSyntax qualified => qualified.Right.Identifier.ValueText,
+        AliasQualifiedNameSyntax alias => alias.Name.Identifier.ValueText,
+        SimpleNameSyntax simple => simple.Identifier.ValueText,
+        _ => string.Empty,
+    };
 
     private static string TypeName(INamedTypeSymbol type) =>
         type.ContainingNamespace is { IsGlobalNamespace: false } ns ? $"{ns.ToDisplayString()}.{type.Name}" : type.Name;
