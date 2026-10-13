@@ -105,13 +105,15 @@ apart from the message they already receive.
 ### What the sync stream does now
 
 ```text
-rejection arrives
-  ├─ activation differs from the last one (or is unknown)
+rejection arrives (a ShuttingDown NACK, or the owner's StreamEndedEvent)
+  ├─ activation not yet seen since the last answer (or unknown)
   │     → charge the ACTIVATION budget (MaxRecycleReArms = 3)
   │     → join on the rejecting instance's DisposalCompleted, then re-ask
-  └─ activation is the SAME one that refused us last time
-        → charge the TIME budget (MaxSameActivationReAsks = 16)
-        → REST first (SyncStreamOptions.RecycleReAskPace, 500 ms), then re-ask
+  ├─ activation already refused us since the last answer
+  │     → charge the TIME budget (MaxSameActivationReAsks = 16)
+  │     → REST first (SyncStreamOptions.RecycleReAskPace, 500 ms), then re-ask
+  └─ a budget is spent
+        → GIVE UP: one Warning, and the stream ENDS with SyncStreamOwnerRefusedException
 ```
 
 `16 × 500 ms` is sized to reach `MessageHub.DisposalWatchdogTimeout` (8 s): at that point a wedged
@@ -185,9 +187,55 @@ If you write code that must survive a `ShuttingDown` answer:
    `RunLevel = Dead`, and it does not, on its own, mean the corpse has stopped being resolved.
 4. **Bound both axes, separately.** Distinct activations on one counter; consecutive re-asks at one
    activation on another, paced.
-5. **Say so when you give up.** A rider that stops trying in silence turns a refused read into a
-   timeout, and a timeout points the next engineer at the wrong system entirely. Both give-up paths
-   log one Warning naming the owner, the activation and which bound was hit.
+5. **Say so when you give up — to the log AND to the reader.** A rider that stops trying in silence
+   turns a refused read into a timeout, and a timeout points the next engineer at the wrong system
+   entirely. Both give-up paths log one Warning naming the owner, the activation and which bound was
+   hit, and END the stream (see [A give-up ends the stream](#a-give-up-ends-the-stream-6602)). Rule 1
+   is about ONE `ShuttingDown` answer; a spent budget is a different fact.
+
+## A give-up ends the stream (#6602)
+
+Until #6602 the sync stream's give-up disarmed the re-ask and left the stream **alive on its last
+value**, "the pre-existing orphaned-stream behaviour". The Warning was the only trace. Every reader
+held a frozen snapshot that rendered exactly like a live one, with no error and no completion, so its
+own recovery never ran. On memex-cloud during rolls this hit `Hosting/PlatformBuilds`,
+`Hosting/Modules` and `Ops/Status/*`, and it is the candidate cause for the fleet watch reading a
+stale `Ops/Status/build` while the store held fresh rows (#5011).
+
+Now the give-up ends the stream the way an owner **verdict** does: `OnError` with the typed
+`SyncStreamOwnerRefusedException` (it names the stream and the owner), and the keep-alive stops. The
+stream itself still does not retry. The reader decides when to read again, on its own signal:
+
+- `MeshNodeStreamCache` marks the entry faulted and evicts it, so the next read opens a fresh
+  subscription. `IsTransientOwnerFailure` classifies the type as transient, so the negative cache stays clean.
+- A layout area classifies it as transient (`AreaErrorClassifier.IsTransientHubFailure`) and
+  re-subscribes, bounded by `RetryAreaWithBackoff`.
+- The fleet watch (`FleetWatchHeartbeat.HeldReadings`, MeshWeaver.Plugins) reports the read as lost
+  and opens it again on the node's next mention by its listing: a write (`Updated`) or a fresh frame.
+  It does not re-open while the read is live, and it does not use a timer.
+
+### Why a roll spent the budget
+
+The activation budget counts distinct activations since the last answered re-ask. Two carriers made one
+teardown count as more than one:
+
+- `StreamEndedEvent` carried no activation identity, so every announcement was charged as a NEW
+  activation, and it also broke the same-activation chain the NACKs had built. It now carries
+  `Activation` (`ShutdownNack.ActivationToken(hub)`), stamped by all three producers: the recycle
+  announcement, the owner's end of a served stream, and the heartbeat answer for a stream the
+  activation does not serve.
+- `MessageHubGrain.RefuseBecauseTheHostIsLeaving` tagged its NACK with the GRAIN's identity, while
+  the hub's own NACKs tag the HUB's. So one activation on a leaving silo had two tags. It now tags
+  the hub when there is one.
+
+The budget also counts against the **set** of activations seen since the last answer, not only "the
+previous one": a NACK and an announcement from one teardown can interleave with another carrier's,
+and A, B, A is two activations.
+
+Pinned by `ASyncStreamThatGivesUpOnItsOwnerEndsTest` (MeshWeaver.Data.Test). Its negative controls
+were run by hand. With the terminal removed, the distinct-activations case never sees the stream end.
+With the announcement's activation ignored, the one-activation case gives up on a teardown that was
+only settling.
 
 ## One request type, several producers: `GetDataRequest`
 
@@ -227,6 +275,7 @@ Debug by the rule above. Producers in other repositories and in mesh-compiled co
 | `SubscribeDuringRecycleTest` (`MeshWeaver.Layout.Test`) | a layout area subscribing into the recycle window rendering an error instead of a "coming back" state |
 | `RecyclingShapeDiagnosticTest` (`MeshWeaver.Graph.Test`) | the diagnostic naming both shapes at once, or inventing one from zero observations |
 | `ChangeFeedResubscribeCoalesceTest` (`MeshWeaver.Data.Test`) | a burst of owner change events producing one resubscribe per event |
+| `ASyncStreamThatGivesUpOnItsOwnerEndsTest` (`MeshWeaver.Data.Test`) | a give-up that leaves the stream alive on its last value, or one activation's NACK and announcement charged as two activations (#6602) |
 | `ADrainingSiloDoesNotSilenceItsSubscribersTest` (`MeshWeaver.Hosting.Orleans.Test`) | a grain on a stopping silo accepting a subscribe it can only answer into the void (#5256) |
 | `DeferredDeliveryNackedOnDisposeTest.ADiscardError_NamesTheRequest_SoItsProducerCanBeTold` (`MeshWeaver.Messaging.Hub.Test`) | a bring-up discard Error that names the request type but not its declared description (#5718), or that prints an undeclared payload |
 

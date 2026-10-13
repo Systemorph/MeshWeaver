@@ -221,7 +221,10 @@ public class Workspace : IWorkspace
             {
                 try
                 {
-                    carrier.Post(ended, o => o.WithTarget(subscriber));
+                    // The activation token rides every end, coalesced or not (#6602), so the
+                    // subscriber's re-arm budget counts this teardown once.
+                    carrier.Post(ended with { Activation = ShutdownNack.ActivationToken(Hub) },
+                        o => o.WithTarget(subscriber));
                 }
                 catch (Exception ex)
                 {

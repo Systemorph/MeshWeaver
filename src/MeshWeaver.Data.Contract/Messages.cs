@@ -403,6 +403,17 @@ public record StreamEndedEvent(string StreamId) : StreamMessage(StreamId)
     /// <see cref="SubscribeRequest.AcceptsStringSplice"/> states for the fan-out.</para>
     /// </summary>
     public IReadOnlyList<string>? AlsoEndedStreamIds { get; init; }
+
+    /// <summary>
+    /// The announcing owner ACTIVATION's token (<c>ShutdownNack.ActivationToken</c>), or null when
+    /// the owner runs an image that does not stamp one.
+    ///
+    /// <para>🚨 Why it rides here (#6602). The subscriber's recycle re-arm budget counts DISTINCT
+    /// refusing activations. Without an identity every announcement read as a new activation, so
+    /// ONE owner teardown — its announcement plus the <c>ShuttingDown</c> NACK of the re-ask that
+    /// raced it — was charged twice, and two ordinary recycles in a roll spent the whole budget.</para>
+    /// </summary>
+    public string? Activation { get; init; }
 }
 
 /// <summary>

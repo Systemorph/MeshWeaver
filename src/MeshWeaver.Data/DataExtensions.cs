@@ -307,7 +307,7 @@ public static class DataExtensions
         {
             _ = RouteStreamMessage(hub, request.WithMessage(coalesced with { AlsoEndedStreamIds = null }));
             foreach (var streamId in more)
-                _ = RouteStreamMessage(hub, request.WithMessage(new StreamEndedEvent(streamId)));
+                _ = RouteStreamMessage(hub, request.WithMessage(new StreamEndedEvent(streamId) { Activation = coalesced.Activation }));
             return Observable.Return(request.Forwarded());
         }
 
