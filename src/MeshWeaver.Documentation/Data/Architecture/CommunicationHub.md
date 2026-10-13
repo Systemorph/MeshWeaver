@@ -410,6 +410,15 @@ reading content on the page: unread mail is "not `Read`", an unread notification
 `isRead`". An unread row carries `rowClass: inbox-unread` and the grid applies it per row
 (`DataGridControl.WithRowClassProperty`), so it renders bold.
 
+**Reading never reorders.** A row is timed by its node's `LastModified` unless its source names a
+content property instead (`InboxQueryLeg.TimeField`, e.g. a conversation's last reply). Name one
+whenever a write that is not news touches the node: clearing an unread mark refreshes
+`LastModified`, and timing by it would move the item ahead of genuinely newer ones. The page keeps
+`content` in such a leg's projection (`InboxQueries.TimedRowProjection`), and a row whose field is
+missing falls back to `LastModified`. 🚨 The leg's own `sort:` still chooses which rows its bound
+keeps: sort on the field only when every node carries it — a descending sort puts a missing value
+FIRST on Postgres, so older nodes without it would crowd newer ones out.
+
 **Approvals are their own source (✅), shown by default.** An approval request is the "approval
 required" notification its flow sends the approver — a document approval, an instance action, a
 governed-activity signature — so the Approvals leg reads the viewer's own `_Notification` partition

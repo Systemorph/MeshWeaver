@@ -163,7 +163,8 @@ never receives a tag a consumer can select, so the red lands on the run that pro
 on six satellites that did not.
 
 **Invariant 1** compares the host's `/app` and surface manifest against the composed-module set —
-**read out of `main-cd.yml` itself** (`jobs.plugins-modules.with.modules`), never restated. The
+**read out of `main-cd.yml` itself** (`jobs.published-modules.env.PUBLISHED_MODULES`; it was
+`jobs.plugins-modules.with.modules` until #6143 removed that job), never restated. The
 compose set and the set the image is forbidden to carry must be one list, or they drift, and a
 drifted second list is how a gate stays green while asserting the wrong names.
 
@@ -210,7 +211,7 @@ Each of those was **made to fail on purpose**, because prose that asserts a guar
 | a directory holding 1 assembly | `1` | *"…holds 1 assemblies at its root — that is not a platform reference set (the portal ships ~214)."* |
 | 214 assemblies, surface manifest removed | `1` | *"…has no meshweaver-surface.manifest beside its assemblies… EITHER this gate pointed at the wrong directory OR the manifest silently stopped being published (#1699). Both are RED."* |
 | surface manifest truncated to 5 entries | `1` | *"…names only 5 assemblies; the platform's MeshWeaver.\* compile surface is ~44. A truncated manifest would make the one-producer half compare almost nothing."* |
-| pointed at a workflow with no `plugins-modules` job | `1` | *"jobs.plugins-modules.with.modules is absent or empty … refuses to fall back to a hard-coded list."* |
+| pointed at a workflow with no `PUBLISHED_MODULES` on the `published-modules` job | `1` | *"jobs.published-modules.env.PUBLISHED_MODULES is absent or empty"* — the guard reads the set from there since #6143 (before it, from `jobs.plugins-modules.with.modules`); `test-cd-steps.py` renames the key and asserts the refusal |
 
 ### Mutation proof
 

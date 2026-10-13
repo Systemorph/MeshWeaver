@@ -280,6 +280,14 @@ public class ContentService : IContentService
                 .AutoConnectOwnedBy(hub, nameof(ContentService)));
     }
 
+    /// <summary>
+    /// Whether the hosting hub's content service also declares <paramref name="collection"/> — the
+    /// store <see cref="GetCollectionConfig"/> falls back to, and whose registrations a child hub's
+    /// container inherits.
+    /// </summary>
+    internal bool HostDeclares(string collection)
+        => GetParentContentService()?.GetCollectionConfig(collection) is not null;
+
     /// <inheritdoc />
     public ContentCollectionConfig? GetCollectionConfig(string collection)
     {

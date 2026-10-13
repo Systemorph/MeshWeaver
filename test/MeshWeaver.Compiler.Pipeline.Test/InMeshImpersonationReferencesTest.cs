@@ -33,11 +33,16 @@ public class InMeshImpersonationReferencesTest
         using MeshWeaver.ContentCollections;
         """;
 
-    private static Compilation Compile(string body)
+    private static Compilation Compile(string body) =>
+        CompileSource($"{Usings}\npublic static class Probe {{\n{body}\n}}");
+
+    private static CSharpCompilation CompileSource(string source)
     {
         // Touch every assembly the snippets bind against so it is loaded and has a Location.
         _ = new[] { typeof(AccessService), typeof(WellKnownUsers), typeof(MeshQueryRequest),
-                    typeof(ContentImportBuilder), typeof(System.Reactive.Linq.Observable) };
+                    typeof(ContentImportBuilder), typeof(System.Reactive.Linq.Observable),
+                    typeof(System.Text.Json.JsonSerializerOptions), typeof(MessageDelivery<>),
+                    typeof(MeshWeaver.Data.Serialization.SynchronizationStream<>) };
         // 🚨 Only assemblies whose file is STILL on disk. Other classes of this project compile
         // node assemblies into temp folders, load them and delete the folder when they finish; such
         // an assembly stays in the AppDomain with a Location that no longer exists, and referencing
@@ -47,7 +52,7 @@ public class InMeshImpersonationReferencesTest
             .Where(a => !a.IsDynamic && !string.IsNullOrEmpty(a.Location) && System.IO.File.Exists(a.Location))
             .Select(a => MetadataReference.CreateFromFile(a.Location));
         var compilation = CSharpCompilation.Create("InMeshProbe",
-            [CSharpSyntaxTree.ParseText($"{Usings}\npublic static class Probe {{\n{body}\n}}", path: "Probe.cs")],
+            [CSharpSyntaxTree.ParseText(source, path: "Probe.cs")],
             references,
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
         var errors = compilation.GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error).ToList();
@@ -126,6 +131,36 @@ public class InMeshImpersonationReferencesTest
         Assert.Contains(expected, Found(body));
     }
 
+    /// <summary>
+    /// #6619: a delivery envelope in-mesh code builds itself names its own sender, and nothing
+    /// stamps it — only <c>hub.Post</c> does (Doc/Architecture/SenderIsThePostingHub). Every way to
+    /// MINT such an envelope and every entry point that ROUTES one without <c>hub.Post</c> is
+    /// reported, so under <c>Enforce</c> the compile is refused and the forged sender never runs.
+    /// </summary>
+    [Theory]
+    // Minting: the constructor that takes a sender, the one that takes caller-written PostOptions,
+    // a target-typed `new(…)`, a sender rewritten on an envelope, and a derived envelope.
+    [InlineData("public static IMessageDelivery M(Address forged, Address target) => new MessageDelivery<string>(forged, target, \"x\", new System.Text.Json.JsonSerializerOptions());",
+        "MeshWeaver.Messaging.MessageDelivery..ctor")]
+    [InlineData("public static IMessageDelivery M(Address forged, Address target) => new MessageDelivery<string>(\"x\", new PostOptions(forged).WithTarget(target), new System.Text.Json.JsonSerializerOptions());",
+        "MeshWeaver.Messaging.MessageDelivery..ctor")]
+    [InlineData("public static MessageDelivery<string> M(Address forged, Address target) => new(forged, target, \"x\", new System.Text.Json.JsonSerializerOptions());",
+        "MeshWeaver.Messaging.MessageDelivery..ctor")]
+    [InlineData("public static MessageDelivery<string> M(MessageDelivery<string> d, Address forged) => d with { Sender = forged };",
+        "MeshWeaver.Messaging.MessageDelivery.Sender (written)")]
+    [InlineData("public static MessageDelivery<string> M(Address forged) => new() { Sender = forged };",
+        "MeshWeaver.Messaging.MessageDelivery.Sender (written)")]
+    // Routing without hub.Post.
+    [InlineData("public static IObservable<IMessageDelivery> M(IRoutingService r, IMessageDelivery d) => r.DeliverMessage(d);",
+        "MeshWeaver.Mesh.Services.IRoutingService.DeliverMessage")]
+    // The public concrete stream's DeliverMessage forwards a caller-built envelope with its sender.
+    [InlineData("public static IMessageDelivery M(MeshWeaver.Data.Serialization.SynchronizationStream<object> s, IMessageDelivery d) => s.DeliverMessage(d);",
+        "MeshWeaver.Data.Serialization.SynchronizationStream.DeliverMessage")]
+    public void AForgedSenderEnvelope_IsFound(string body, string expected)
+    {
+        Assert.Contains(expected, Found(body));
+    }
+
     [Fact]
     public void OrdinaryIdentityCode_IsNotReported()
     {
@@ -144,6 +179,28 @@ public class InMeshImpersonationReferencesTest
                 // `System` in a namespace-or-type position is never the WellKnownUsers member.
                 System.Collections.Generic.List<int> numbers = new();
                 var now = System.DateTimeOffset.UtcNow;
+            }
+            """);
+
+        Assert.Empty(found);
+    }
+
+    [Fact]
+    public void OrdinaryMessaging_IsNotReported()
+    {
+        // NEGATIVE CONTROL for #6619 — posting through the hub (which stamps the sender), READING a
+        // delivery's sender, a caller-written PostOptions sender (overwritten at Post), retargeting a
+        // received delivery, an empty envelope and an unrelated `new(…)` must produce nothing.
+        var found = Found("""
+            public sealed record Ping(string A, string B, string C);
+            public static void M(IMessageHub h, IMessageDelivery d, Address target)
+            {
+                h.Post(new Ping("a", "b", "c"), o => o.WithTarget(target));
+                h.Post(new Ping("a", "b", "c"), o => o.WithTarget(target) with { Sender = target });
+                var from = d.Sender;
+                var onward = d.ForwardTo(target);
+                var empty = new MessageDelivery<string>();
+                Ping ping = new("a", "b", "c");
             }
             """);
 
@@ -184,5 +241,81 @@ public class InMeshImpersonationReferencesTest
             "public static IDisposable M(AccessService a)\n=> a.ImpersonateAsSystem();")).Single();
 
         Assert.Contains("Probe.cs(", reference.Location);
+    }
+
+    /// <summary>
+    /// A using ALIAS renames the envelope type, so a name-only prefilter would skip the constructor
+    /// (#6619 review). Both a file-local and a global alias are found.
+    /// </summary>
+    [Theory]
+    [InlineData("using D = MeshWeaver.Messaging.MessageDelivery<string>;")]
+    [InlineData("global using D = MeshWeaver.Messaging.MessageDelivery<string>;")]
+    public void AnAliasedEnvelopeConstructor_IsFound(string alias)
+    {
+        var compilation = CompileSource($$"""
+            {{alias}}
+            {{Usings}}
+            public static class Probe
+            {
+                public static IMessageDelivery M(Address forged, Address target) =>
+                    new D(forged, target, "x", new System.Text.Json.JsonSerializerOptions());
+            }
+            """);
+
+        Assert.Contains("MeshWeaver.Messaging.MessageDelivery..ctor",
+            InMeshImpersonationReferences.Find(compilation).Select(r => r.Symbol));
+    }
+
+    /// <summary>
+    /// A NODE-SUPPLIED source generator (one the node #r'd) runs code the node chose, so what it emits
+    /// is scanned (#6619 review): <c>GeneratorPipeline.RunSourceGeneratorsWithNodeOutput</c> hands back its trees,
+    /// and the scan over authored + those trees finds the forged envelope. Negative control: the
+    /// authored trees alone — what the compile path scanned before — find nothing.
+    /// </summary>
+    [Fact]
+    public void ANodeSuppliedGeneratorsForgedEnvelope_IsFound()
+    {
+        var generatorPath = BuildGenerator();
+        var authored = CompileSource($"{Usings}\npublic static class Probe {{ }}");
+
+        var generated = GeneratorPipeline.RunSourceGeneratorsWithNodeOutput(
+            authored, [generatorPath], Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance,
+            TestContext.Current.CancellationToken, out var nodeGenerated);
+
+        Assert.Contains(nodeGenerated, t => t.FilePath.EndsWith("Forged.g.cs", StringComparison.Ordinal));
+        Assert.Empty(InMeshImpersonationReferences.Find(generated, authored.SyntaxTrees));
+        Assert.Contains("MeshWeaver.Messaging.MessageDelivery..ctor",
+            InMeshImpersonationReferences.Find(generated, authored.SyntaxTrees.Concat(nodeGenerated))
+                .Select(r => r.Symbol));
+    }
+
+    // A generator assembly built here, on disk, the way a node's #r "nuget:" resolve hands one over.
+    private static string BuildGenerator()
+    {
+        const string source = """
+            using Microsoft.CodeAnalysis;
+            [Generator]
+            public sealed class ForgeGenerator : ISourceGenerator
+            {
+                public void Initialize(GeneratorInitializationContext context) { }
+                public void Execute(GeneratorExecutionContext context) =>
+                    context.AddSource("Forged.g.cs",
+                        "public static class Forged { public static MeshWeaver.Messaging.IMessageDelivery M(MeshWeaver.Messaging.Address a, MeshWeaver.Messaging.Address t) => new MeshWeaver.Messaging.MessageDelivery<string>(a, t, \"x\", new System.Text.Json.JsonSerializerOptions()); }");
+            }
+            """;
+        var name = $"ForgeGenerator_{Guid.NewGuid():N}";
+        var references = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!)
+            .Split(System.IO.Path.PathSeparator)
+            .Append(typeof(ISourceGenerator).Assembly.Location)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(p => (MetadataReference)MetadataReference.CreateFromFile(p));
+        var compilation = CSharpCompilation.Create(name, [CSharpSyntaxTree.ParseText(source)], references,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        var directory = System.IO.Directory.CreateTempSubdirectory("forge-gen-").FullName;
+        var path = System.IO.Path.Combine(directory, name + ".dll");
+        var emitted = compilation.Emit(path);
+        Assert.True(emitted.Success, "the test generator must build: "
+            + string.Join("; ", emitted.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error)));
+        return path;
     }
 }

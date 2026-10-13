@@ -94,7 +94,9 @@ each row needs its own state: a row-scoped click is keyed by the row's `Key` (a 
 `DataGridControl.RowKey` / `WithRowKey`), path, pointer or index. A row known only by its value has
 none, so while a click runs on such a control a click on another of its rows is **refused**
 ("Another action on this control is still running", `click.busyElsewhere`) rather than sharing — and
-overwriting — the running click's state. The window
+overwriting — the running click's state. So **a grid with a per-row action declares its row key**
+(`WithRowKey("path")`): otherwise a person acting on two rows in quick succession is refused on the
+second. The window
 is the click's own lifetime — once it settled, the next click is a new one; an action that must be
 idempotent across clicks (an approval that may only happen once) still says so in its own state, as
 the domain owner's watcher does. The session is per layout-area stream, so two viewers each get

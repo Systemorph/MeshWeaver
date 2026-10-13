@@ -582,9 +582,10 @@ public partial class MeshOperations
     /// <c>Finally</c> — the subscription never outlives the call on any path: completion,
     /// fault, timeout, or caller unsubscribe (HTTP client abort).</para>
     ///
-    /// <para>Error contract: <c>"Not found: …"</c> when the path resolves to nothing,
-    /// <c>"Error: …"</c> for failures surfaced by the subscribe (an RLS denial faults the
-    /// remote stream with "Access denied" — see <c>HubSubscriptionSecurityTest</c>). A timeout
+    /// <para>Error contract: <c>"Not found: …"</c> when the path resolves to nothing AND when the
+    /// owner refuses the caller's read (an RLS denial faults the remote stream; answering it as
+    /// "Access denied" would disclose that a node exists at the path), <c>"Error: …"</c> for every
+    /// other failure surfaced by the subscribe. A timeout
     /// faults the observable with <see cref="TimeoutException"/> so transports can map it
     /// distinctly (REST maps it to a 504-style JSON error instead of the sentinel).</para>
     /// </summary>
@@ -654,6 +655,14 @@ public partial class MeshOperations
                 // else surfaces through the standard "Error: …" sentinel contract.
                 if (ex is TimeoutException)
                     return Observable.Throw<string>(ex);
+                // 🚨 A REFUSED render answers exactly what an absent path answers. The owner's
+                // refusal names the path ("Access denied: … on '{path}'"), and handing that on told
+                // a caller who may not read the node that one exists there.
+                if (IsAccessDenial(ex))
+                {
+                    logger.LogInformation("RenderArea DENIED for {Path} — answered as absent", resolvedPath);
+                    return Observable.Return($"Not found: {resolvedPath}");
+                }
                 logger.LogWarning(ex, "RenderArea failed for {Path}", resolvedPath);
                 return Observable.Return($"Error: {ex.Message}");
             });
@@ -2778,7 +2787,7 @@ public partial class MeshOperations
         return pathResolver.ResolvePath(resolvedPath).SelectMany(resolution =>
         {
             if (resolution == null)
-                return Observable.Return($"Error: no matching node for path '{resolvedPath}'");
+                return Observable.Return(NoMatchingNodeAnswer(resolvedPath));
             if (string.IsNullOrEmpty(resolution.Remainder))
                 return Observable.Return("Error: path must include '{collection}/{filePath}' after the node path (e.g. 'Systemorph/content/logo.png').");
 
@@ -2794,6 +2803,72 @@ public partial class MeshOperations
             var targetAddress = (Address)resolution.Prefix;
             var qualifiedCollectionName = $"{resolution.Prefix}/{collectionName}";
 
+            // 🚨 AN UPLOAD IS A WRITE, so it is authorized as one — Update on the node that owns the
+            // collection, the permission every content edit of that node requires. This pre-flight
+            // is the EARLY answer (it names the missing permission, and spares staging bytes for a
+            // caller who will be refused); the decision that admits the write is the owning hub's
+            // gate on the delivery that carries the bytes (SaveUpload, #6585). Asked for the caller
+            // captured at entry, fail-closed on every non-granted verdict.
+            return AuthorizeUpload(resolution.Prefix, resolvedPath, caller)
+                .SelectMany(refusal => refusal is not null
+                    ? Observable.Return(refusal)
+                    : SaveUpload(resolution, resolvedPath, collectionName, filePath, targetAddress, qualifiedCollectionName, bytes, caller));
+        })
+        .Catch((Exception ex) =>
+        {
+            logger.LogWarning(ex, "Upload failed for {Path}", path);
+            var message = ex is TimeoutException
+                ? $"the node for '{path}' did not respond to the content-collection lookup in time — " +
+                  "confirm the path resolves to a content-enabled node (one configured with AddContentCollections)."
+                : ex.Message;
+            return Observable.Return($"Error: {message}");
+        });
+    }
+
+    /// <summary>
+    /// The write pre-flight of <see cref="Upload"/>: <c>null</c> when <paramref name="caller"/> holds
+    /// Update on <paramref name="nodePath"/>, otherwise the refusal to answer. Asks the same question
+    /// as every other write pre-flight (<see cref="CheckUpdateOutcome"/> — the raw fold, re-decided
+    /// through the node's access rule on a definitive denial).
+    ///
+    /// <para>🚨 A caller who may not even READ the node gets the answer an absent path gets — naming
+    /// "access denied" there would tell them a node exists at that path. A reader who lacks Update
+    /// already knows the node exists, so they are told which permission is missing.</para>
+    /// </summary>
+    private IObservable<string?> AuthorizeUpload(string nodePath, string resolvedPath, AccessContext caller) =>
+        CheckUpdateOutcome(nodePath, "Upload", caller)
+            .SelectMany(outcome =>
+            {
+                if (outcome.IsGranted)
+                    return Observable.Return<string?>(null);
+                if (outcome.IsUndetermined)
+                    return Observable.Return<string?>(
+                        $"Error: uploading to {nodePath}: the permission check did not complete "
+                        + $"({outcome.UndeterminedReason}). Nothing was written; retry.");
+                return hub.CheckPermissionOutcome(nodePath, UserIdOf(caller), MeshWeaver.Mesh.Security.Permission.Read)
+                    .Take(1)
+                    .Timeout(TimeSpan.FromSeconds(10))
+                    .Catch((Exception _) => Observable.Return(MeshWeaver.Mesh.Security.PermissionCheckOutcome.Denied))
+                    .Select(read => read.IsGranted
+                        ? (string?)$"Error: Access denied: user '{UserIdOf(caller)}' lacks Update permission on "
+                            + $"'{nodePath}'. Nothing was written."
+                        : NoMatchingNodeAnswer(resolvedPath));
+            });
+
+    /// <summary>The answer <see cref="Upload"/> and <see cref="ContentList"/> give for a path that
+    /// resolves to no node — and, identically, for one the caller may not read.</summary>
+    private static string NoMatchingNodeAnswer(string resolvedPath)
+        => $"Error: no matching node for path '{resolvedPath}'";
+
+    /// <summary>
+    /// The write half of <see cref="Upload"/>: looks the collection up on the owning node hub and
+    /// posts the bytes to THAT hub, which decides Update for the caller and writes them. Reached only
+    /// after <see cref="AuthorizeUpload"/> granted, but not admitted by it (#6585).
+    /// </summary>
+    private IObservable<string> SaveUpload(
+        AddressResolution resolution, string resolvedPath, string collectionName, string filePath,
+        Address targetAddress, string qualifiedCollectionName, byte[] bytes, AccessContext caller)
+    {
             // Ask the owning node hub for its collection config — exact same mechanism
             // the static GET endpoint uses (see BlazorHostingExtensions.ResolveStatic).
             // 🚨 .Timeout is mandatory: HandleCollectionConfigRequest is registered ONLY by
@@ -2839,48 +2914,57 @@ public partial class MeshOperations
                     if (contentService == null)
                         return Observable.Return("Error: content service not configured on the hub.");
 
+                    // Registered here only so the post-upload observers can read the file under the
+                    // qualified name — this hub never WRITES through it.
                     contentService.AddConfiguration(collectionConfig);
-                    // Pure composition — the save leaf runs on the collection's own IIoPool.
-                    return contentService.GetCollection(qualifiedCollectionName)
-                        .SelectMany(collection =>
+                    // 🚨 THE WRITE IS DECIDED WHERE IT IS COMMITTED (#6585). The bytes go to the
+                    // OWNING node's hub as the caller, and that hub's inbound gate evaluates Update
+                    // for the caller on the delivery that carries them — the gate every node write
+                    // passes. AuthorizeUpload above is an early answer only: a grant revoked after
+                    // it is refused here, and no path can store bytes without passing the owner.
+                    return hub.SaveContentFile(resolution.Prefix)
+                        .To(collectionName, filePath)
+                        .WithAccessContext(caller)
+                        .Post(bytes)
+                        .Catch((DeliveryFailureException refused) =>
+                            refused.Failure?.ErrorType == ErrorType.Unauthorized
+                                ? OwnerRefusal(resolution.Prefix, resolvedPath, caller)
+                                    .Select(message => ImportContentResponse.Fail(message))
+                                : Observable.Throw<ImportContentResponse>(refused))
+                        .Select(answer =>
                         {
-                            if (collection == null)
-                                return Observable.Return($"Error: failed to initialize collection '{qualifiedCollectionName}'.");
+                            if (!answer.Success)
+                                return answer.Error!.StartsWith("Error:", StringComparison.Ordinal)
+                                    ? answer.Error
+                                    : $"Error: {answer.Error}";
 
-                            var dir = Path.GetDirectoryName(filePath)?.Replace('\\', '/') ?? "";
-                            var fileName = Path.GetFileName(filePath);
-                            var ms = new MemoryStream(bytes);
-                            return collection.SaveFile(dir, fileName, ms)
-                                .Finally(ms.Dispose)
-                                .Select(_ =>
-                                {
-                                    // Post-upload seam: notify registered observers (e.g. the content-indexing
-                                    // pipeline) AFTER the save succeeds. Fire-and-forget — each observer starts its
-                                    // own off-band work (an Activity), so the upload response returns immediately
-                                    // and indexing never runs inline on this continuation. No-op when no
-                                    // observer is registered; ContentCollections itself takes no indexing/AI/pg dep.
-                                    hub.RaiseContentUploaded(qualifiedCollectionName, filePath);
+                            // Post-upload seam: notify registered observers (e.g. the content-indexing
+                            // pipeline) AFTER the save succeeds. Fire-and-forget — each observer starts its
+                            // own off-band work (an Activity), so the upload response returns immediately
+                            // and indexing never runs inline on this continuation. No-op when no
+                            // observer is registered; ContentCollections itself takes no indexing/AI/pg dep.
+                            hub.RaiseContentUploaded(qualifiedCollectionName, filePath);
 
-                                    return ToolAnswerJson.Serialize(new
-                                    {
-                                        status = "Uploaded",
-                                        path = $"{resolution.Prefix}/{collectionName}/{filePath}",
-                                        bytes = bytes.Length,
-                                    }, hub.JsonSerializerOptions);
-                                });
+                            return ToolAnswerJson.Serialize(new
+                            {
+                                status = "Uploaded",
+                                path = $"{resolution.Prefix}/{collectionName}/{filePath}",
+                                bytes = bytes.Length,
+                            }, hub.JsonSerializerOptions);
                         });
                 });
-        })
-        .Catch((Exception ex) =>
-        {
-            logger.LogWarning(ex, "Upload failed for {Path}", path);
-            var message = ex is TimeoutException
-                ? $"the node for '{path}' did not respond to the content-collection lookup in time — " +
-                  "confirm the path resolves to a content-enabled node (one configured with AddContentCollections)."
-                : ex.Message;
-            return Observable.Return($"Error: {message}");
-        });
     }
+
+    /// <summary>
+    /// The answer for a write the OWNING hub's gate refused (#6585) — the caller's grant was revoked
+    /// after <see cref="AuthorizeUpload"/> admitted it, or it never held one. Re-asked for the caller
+    /// now, so it reads exactly as the pre-flight's refusal would (a non-reader gets the absent-path
+    /// answer); should the re-ask grant (the grant came back), the refusal still stands, named plainly.
+    /// </summary>
+    private IObservable<string> OwnerRefusal(string nodePath, string resolvedPath, AccessContext caller)
+        => AuthorizeUpload(nodePath, resolvedPath, caller)
+            .Select(refusal => refusal
+                ?? $"Error: Access denied: the write to '{nodePath}' was refused by the node. Nothing was written.");
 
     /// <summary>
     /// Lists a content collection directory — the read half of the file browser. Path shape is
@@ -2908,7 +2992,7 @@ public partial class MeshOperations
         return pathResolver.ResolvePath(resolvedPath).SelectMany(resolution =>
         {
             if (resolution == null)
-                return Observable.Return($"Error: no matching node for path '{resolvedPath}'");
+                return Observable.Return(NoMatchingNodeAnswer(resolvedPath));
             if (string.IsNullOrEmpty(resolution.Remainder))
                 return Observable.Return("Error: path must include '{collection}[/{dir}]' after the node path (e.g. 'Systemorph/content').");
 
@@ -2961,8 +3045,14 @@ public partial class MeshOperations
                         {
                             if (collection == null)
                                 return Observable.Return($"Error: failed to initialize collection '{qualifiedCollectionName}'.");
+                            // 🚨 The staging folder is framework state, never content (#6585): an
+                            // oversized upload's bytes sit there BEFORE the owner has decided Update
+                            // for them. It is never listed, and listing it answers like an absent folder.
+                            if (ContentStaging.IsStagingPath(dir))
+                                return Observable.Return($"Error: Folder not found: {dir}");
 
                             return collection.GetCollectionItems(dir)
+                                .Where(item => !ContentStaging.IsStagingPath(item.Path?.TrimStart('/')))
                                 .Select(item => item switch
                                 {
                                     FolderItem f => (object)new { kind = "folder", name = f.Name, path = f.Path, itemCount = f.ItemCount },
@@ -2982,6 +3072,13 @@ public partial class MeshOperations
         })
         .Catch((Exception ex) =>
         {
+            // 🚨 A REFUSED lookup answers exactly what an absent path answers: "access denied"
+            // naming the path would tell a caller who may not read it that a node exists there.
+            if (IsAccessDenial(ex))
+            {
+                logger.LogInformation("ContentList DENIED for {Path} — answered as absent", resolvedPath);
+                return Observable.Return(NoMatchingNodeAnswer(resolvedPath));
+            }
             logger.LogWarning(ex, "ContentList failed for {Path}", path);
             var message = ex is TimeoutException
                 ? "the node did not respond to the content-collection lookup in time — confirm the path resolves to a content-enabled node."
@@ -3184,10 +3281,20 @@ public partial class MeshOperations
             // the stream never emitted, the read hung out its whole 5 s budget, and the schema
             // then reported no configuration for a type that has one. A ContentAs further down
             // could never have rescued that: nothing reached it.
-            .Where(n => n.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions)
-                        is { CompilationStatus: CompilationStatus.Ok } d
-                        && !string.IsNullOrEmpty(d.LatestAssemblyCollection)
-                        && !string.IsNullOrEmpty(d.LatestAssemblyPath))
+            //
+            // 🚨 A SETTLED record decides at once — Error included (#6635). The wait exists for a
+            // compile still in flight (Pending / Compiling / Unknown), which may yet publish a
+            // build. A record at Error has finished: its compile failed and nothing more is coming
+            // on this stream, so waiting for Ok burned the whole 5 s on every MCP write to an
+            // instance of that type (measured: two writes landing at exactly +5.008 s). And a failed
+            // compile leaves the LAST GOOD BUILD named on the record (LatestAssemblyPath /
+            // LatestAssemblyMvid) — the build every activation of the type keeps binding until a
+            // newer one exists (Doc/Architecture/StaleStateUntilRecycle) — so the schema is read
+            // from that build, the same bytes the type's instances are running. Error with no build
+            // named answers "no configuration" immediately.
+            .Where(n => n.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions) is { } d
+                        && (d.CompilationStatus == CompilationStatus.Error
+                            || (d.CompilationStatus == CompilationStatus.Ok && NamesABuild(d))))
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(5))
             .SelectMany(node =>
@@ -3196,7 +3303,7 @@ public partial class MeshOperations
                 // earlier emission of the same stream in principle, and ContentAs is the only
                 // reading of Content this method makes.
                 var def = node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions);
-                if (def is null)
+                if (def is null || !NamesABuild(def))
                     return Observable.Return<NodeCompilationResult?>(null);
                 // 🚨 ADOPT-TIME IDENTITY GATE (#3472). One of the six load paths that gated on
                 // CompilationStatus == Ok alone. Ok is a claim SCOPED to CompiledFrameworkVersion,
@@ -3218,10 +3325,17 @@ public partial class MeshOperations
                 var store = string.Equals(def.LatestAssemblyCollection, FrameworkAssemblyStore.CollectionName, StringComparison.Ordinal)
                     ? (IAssemblyStore)FrameworkAssemblyStore.Instance
                     : hub.ServiceProvider.GetService<IAssemblyStore>() ?? NullAssemblyStore.Instance;
-                return store.TryGetBuildPath(node.Path, version, def.LatestAssemblyPath, def.LatestAssemblyMvid)
+                // 🚨 Both leaves are blocking file I/O — the store probes its directory when
+                // SUBSCRIBED, and the load reads and reflection-scans the assembly when CALLED — so
+                // both run on the file-system pool, never on this stream's signalling thread, which
+                // can be a hub's scheduler (the DynamicContentTypeRegistrar shape).
+                var pool = hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem)
+                           ?? IoPool.Unbounded;
+                return pool.InvokeObservable(_ => store.TryGetBuildPath(node.Path, version, def.LatestAssemblyPath, def.LatestAssemblyMvid).Take(1))
                     .SelectMany(localPath => string.IsNullOrEmpty(localPath)
                         ? Observable.Return<NodeCompilationResult?>(null)
-                        : compilationService.GetConfigurationsFromExistingAssembly(localPath!, nodeType).Take(1));
+                        : pool.InvokeBlocking(_ => compilationService.GetConfigurationsFromExistingAssembly(localPath!, nodeType))
+                            .SelectMany(load => load.Take(1)));
             })
             .Select(result =>
             {
@@ -3232,6 +3346,9 @@ public partial class MeshOperations
             })
             .Catch<Func<MessageHubConfiguration, MessageHubConfiguration>?, Exception>(_ =>
                 Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(null));
+
+        static bool NamesABuild(NodeTypeDefinition d)
+            => !string.IsNullOrEmpty(d.LatestAssemblyCollection) && !string.IsNullOrEmpty(d.LatestAssemblyPath);
     }
 
     /// <summary>
@@ -4714,6 +4831,15 @@ public partial class MeshOperations
 
         return false;
     }
+
+    /// <summary>
+    /// True when <paramref name="error"/> is the mesh's decided "no" for the caller — the same typed
+    /// test as <see cref="IsWriteDenial"/>, read on the READ side: a caller-facing read that was
+    /// refused answers what an absent path answers, so naming the refusal would disclose that
+    /// something exists at the path.
+    /// </summary>
+    /// <param name="error">The fault the read terminated with.</param>
+    internal static bool IsAccessDenial(Exception error) => IsWriteDenial(error);
 
     /// <summary>
     /// The <c>DisposeRequest.Reason</c> an operator recycle carries — the framework's own sentence

@@ -29,7 +29,7 @@ namespace Memex.Portal.Shared.Test;
 /// same split, must still read (the positive control — without it a denial proves nothing).</para>
 ///
 /// <para><b>Probed here:</b> autocomplete, search, render-area, the content listing, upload's
-/// collection lookup and recycle's Update pre-flight. <c>get</c> has its own class
+/// Update pre-flight and collection lookup, and recycle's Update pre-flight. <c>get</c> has its own class
 /// (<c>UngrantedGetIsNotFoundTest</c>). Patch's pre-flight is the same <c>CheckUpdateOutcome</c>
 /// recycle's test drives. <c>run_tests</c> and <c>visit</c> are NOT probed: the first renders the
 /// Tests area inside an activity that outlives the call, the second copies only a node's name into
@@ -247,6 +247,12 @@ public class CallerFacingReadsDecideForTheCallerTest(ITestOutputHelper output) :
         => BuiltAsSubscribedAsHub(userId, () =>
             new MeshOperations(SessionHub()).Upload(SecretPath + "/content/probe.txt", [1, 2, 3]));
 
+    /// <summary>
+    /// Upload is a WRITE (#6585): a caller who may not read the node gets the absent answer, a reader
+    /// is told Update is missing, and only an editor reaches the owner's collection lookup. Built as
+    /// the caller and subscribed as a hub, each answer must be the one decided for the CALLER — the
+    /// subscribing hub would have been served.
+    /// </summary>
     [Fact]
     public async Task Upload_ForAnUngrantedCaller_IsNotServedByTheOwner()
     {
@@ -255,17 +261,30 @@ public class CallerFacingReadsDecideForTheCallerTest(ITestOutputHelper output) :
 
         denied.Should().NotContain(ServedAsReader,
             "the owner hub must refuse the collection lookup of a caller holding no Read on the node");
-        denied.Should().Contain(ViewerUser, "the refusal is decided for the caller, never for the subscribing hub");
+        denied.Should().Contain("no matching node for path",
+            "a caller who may not read the node gets the answer an absent path gets — decided for the "
+            + "caller, never for the subscribing hub");
     }
 
     [Fact]
-    public async Task Upload_TheGrantHolder_IsServed_UnderTheSameSplit()
+    public async Task Upload_AReader_IsToldUpdateIsMissing_UnderTheSameSplit()
     {
-        var answer = await Upload(HolderUser);
-        Output.WriteLine($"holder: {answer}");
+        var denied = await Upload(HolderUser);
+        Output.WriteLine($"reader: {denied}");
+
+        denied.Should().NotContain(ServedAsReader, "a reader holds no Update, so nothing is looked up for a write");
+        denied.Should().Contain(HolderUser, "the refusal is decided for the caller, never for the subscribing hub")
+            .And.Contain("Update");
+    }
+
+    [Fact]
+    public async Task Upload_TheEditor_IsServed_UnderTheSameSplit()
+    {
+        var answer = await Upload(EditorUser);
+        Output.WriteLine($"editor: {answer}");
 
         answer.Should().Contain(ServedAsReader,
-            "the holder's grant covers the node — if this fails, the denial above proves nothing");
+            "the editor's grant covers the node — if this fails, the refusals above prove nothing");
     }
 
     private Task<string> Recycle(string userId)

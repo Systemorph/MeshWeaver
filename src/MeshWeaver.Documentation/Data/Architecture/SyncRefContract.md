@@ -530,7 +530,7 @@ answers it from `repository.txt`, a marker `publish-bake-bundles.sh` writes besi
 
 **That marker records the repository the baked CONTENT came from. It is not
 `$GITHUB_REPOSITORY`** — and the difference is not academic, because it is exactly the case the
-marker exists for. Core CD's `plugins-bake` job bakes **MeshWeaver.Plugins** content
+marker exists for. Core CD's `plugins-bake` job (removed by #6143) baked **MeshWeaver.Plugins** content
 (`content-repository: Systemorph/MeshWeaver.Plugins`) from a run whose `$GITHUB_REPOSITORY` is
 `Systemorph/MeshWeaver`. Stamping the lane's own name therefore filed the `plugins` seal under the
 platform — and `SealedSyncGate.BelongsTo` takes the marker branch whenever the marker is non-empty

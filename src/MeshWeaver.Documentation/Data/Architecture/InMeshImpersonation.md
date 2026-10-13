@@ -119,7 +119,7 @@ When the portal compiles in-mesh code, `InMeshImpersonationReferences.Find` repo
 
 | What is compiled | Load context the code runs in |
 |---|---|
-| A NodeType (`MeshNodeCompilationService`, before source generators, so platform-generated code is not attributed to the author) | `DynamicNode_{node}` |
+| A NodeType (`MeshNodeCompilationService`, after source generators: the authored trees plus every tree a NODE-SUPPLIED generator — one the node `#r`'d — emitted, since that output is the author's code; only the platform's built-in generators' output is left out) | `DynamicNode_{node}` |
 | A C# Code cell or script (`KernelExecutor`) | `kernel-script-session`, never trusted |
 | A NodeType configuration script (`ScriptCompilationService`) | `node-config-script:{path}`, never trusted |
 
@@ -127,6 +127,7 @@ When the portal compiles in-mesh code, `InMeshImpersonationReferences.Find` repo
 
 - **Every impersonation surface.**
 - **APIs that install an identity without going through a surface:** `IMessageDelivery.SetAccessContext`, `IMessageHub.DeliverMessage`, `MeshQueryRequest.AsSystem` and `ForViewer`, a **write** to `MeshQueryRequest.UserId`, a `MeshQueryRequest.FromQuery` / `FromQueries` call that **supplies its `userId` parameter** (the factories install the identity with no written member; `FromQuery(query)` alone installs none and is not reported), and a write to `AccessContext.IsHub`.
+- **APIs that send as another hub without `hub.Post` stamping the sender:** a `MessageDelivery` constructor called with arguments, a **write** to `MessageDelivery.Sender`, `IRoutingService.DeliverMessage` (and `OrleansRoutingService.DeliverMessage`), the grain entry points `IMessageHubGrain.DeliverMessage`, `IRoutingGrain.RouteMessage` and `IPodHubGrain.Deliver`, and the public `SynchronizationStream<T>.DeliverMessage`, which forwards a caller-built envelope to its hub. The constructor is found under a `using` alias too (file-local or global). See [The Sender Is the Posting Hub](../SenderIsThePostingHub).
 - **The System identity's names:** `WellKnownUsers.System` and `SystemContext`, `AccessService.SystemObjectId`, and the literal `"system-security"`.
 
 🚨 **The literal and the names are reported wherever they stand, a comparison included** (`ctx.ObjectId == "system-security"`). That is deliberate. The scan is syntactic: it cannot follow a value from a local into an identity (`var id = "system-security"; new AccessContext { ObjectId = id }`), so narrowing the report to "written to an identity-bearing member" would lose exactly that forgery. What `LogOnly` records is therefore an **inventory of references, not of forgeries**, and it is the trust list that separates the two at the flip. In-mesh code that only compares against the System id will be on that inventory. Whether it is then trusted or rewritten is part of sizing the list from the `LogOnly` data, and is one of the things the flip decision has to look at.
