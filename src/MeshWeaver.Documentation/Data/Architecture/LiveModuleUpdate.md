@@ -169,6 +169,16 @@ the live test fail (`Restarts` 1, expected 0).
 | Contributions | A registration of a type ANOTHER module declares (`ModuleServiceRoute.Contributed` — every AI provider registering MeshWeaver.AI's `LanguageModelCatalogSource` and `IChatClientFactory`) is never put in the root: a root forwarder would pin the declaring module, and a `DispatchProxy` cannot be built over a collectible interface at all ("A non-collectible assembly may not reference a collectible assembly"). It is served to the declaring module's container after that module's own registrations, and to the root's list. |
 | The swap | `ModuleContexts.PrepareServices` re-runs N+1's delegates against the SAME boot prefix and requires the same routes and shape — the root's forwarders were laid out at boot; a changed shape is refused by name and N keeps serving. |
 
+🚨 **A "copy of the root collection" copies the DESCRIPTORS, so a registry that registration code writes
+into must be copied too.** `AddHttpClient<T>()` records "client name → `T`" in the `HttpClientMappingRegistry`
+INSTANCE the collection holds and refuses a second type under the same name — and the name is derived
+from the type name alone. Shared by reference, generation N's `AddHttpClient<WebSearchPlugin>()` wrote into
+the ROOT's one registry (pinning N's collectible context), and N+1's `WebSearchPlugin` — the same name, a
+different `Type` from a new load context — was refused, failing the live swap of MeshWeaver.AI
+(MeshWeaver.Plugins#3518). `ModuleServices.Probe` now hands each probe its own copy of that registry, seeded
+with the root's entries, so a module colliding with a PLATFORM client is still refused exactly as at boot.
+`ALiveSwapReRegistersATypedHttpClientTest` pins the N→N+1 probe and that root-collision control.
+
 🚨 **A list is served as a list.** The first images of this slice collapsed every multi-registration
 service to its LAST element in two places — the module container's fallback answered a platform type with
 one `root.GetRequiredService(type)` stand-in, and the per-node forwarders were one per TYPE. Measured on
