@@ -186,6 +186,24 @@ twice over — its initial `stream.Take(1)` read had *neither* an error nor a co
 initial read NACKs `OwnerDisposing` with `the patch was NOT applied` (there the write provably never
 ran).
 
+## A tool's "landed" is the verdict, never a read-back (#6635)
+
+The MCP `patch` and `update` verbs (`MeshOperations`) answer `Patched:` / `Updated:` on the owner's
+commit verdict — what `IMeshService.UpdateNode` emits — and nothing else. That verdict is total: the
+owner acks only after its identity-gated commit echo and only when every key merged (a partial or
+total three-way refusal is a `Conflict` NACK), and every refusal, early or late, faults the call.
+The version printed beside the answer is read from the live mirror for display only and can never
+turn a landed write into a failure.
+
+Until #6635 the verbs confirmed instead by re-reading the caller's own fields from the LIVE node.
+That asks a different question — "does the node *still* hold my values?" — and a field another
+writer legitimately consumes answers it "no". Measured on the control instance: a patch carrying a
+review and `requestedAction: PostReview` committed at v279, the item's control plane cleared the
+intent at v281 63 ms later, and the tool answered *"did not land within the confirmation window …
+retry"* after 10 s — inviting a retry of a non-idempotent request that had already been accepted.
+`AConsumedIntentIsNotALostWriteTest` pins it with an owner-side watcher that clears the intent the
+moment it lands; on the read-back confirmation it is red on its first round with that exact message.
+
 ## Procedure
 
 1. **Read the `Code`, not the prose.** `OwnerUnreachable` and `Unknown` lead to different hubs.
