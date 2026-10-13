@@ -390,12 +390,12 @@ public class ANodeTypesSourcesWaitForItsBundleTest(ITestOutputHelper output)
 
     /// <summary>The type's definition as the STORE holds it — what <c>BundleKeyedHoldReading</c>
     /// reads — once it satisfies <paramref name="predicate"/>. The store emits no change, so this
-    /// re-reads it on a short cadence, bounded by <see cref="TestTimeouts.Convergence"/>.</summary>
+    /// re-reads it on a TIMER (never an argument-less re-subscribe, #2341), bounded by <see cref="TestTimeouts.Convergence"/>.</summary>
     private async Task<NodeTypeDefinition> StoredDefinitionWhen(
         Func<NodeTypeDefinition, bool> predicate, CancellationToken cancellationToken)
-        => await Observable.Defer(() => Mesh.ReadStoredNode(TypePath))
-            .Concat(Observable.Empty<MeshNode?>().Delay(TimeSpan.FromMilliseconds(50)))
-            .Repeat()
+        => await Observable.Timer(TimeSpan.Zero, TimeSpan.FromMilliseconds(50))
+            .Select(_ => Mesh.ReadStoredNode(TypePath))
+            .Concat()
             .Select(n => n?.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions))
             .Where(d => d is not null && predicate(d))
             .Select(d => d!)
