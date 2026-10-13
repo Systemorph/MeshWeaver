@@ -6360,7 +6360,13 @@ public static class MeshExtensions
                 .Catch((Exception ex) => Observable.Return(ValidateDeleteResponse.FromError(
                     $"the live-version check of '{path}' failed: {ex.Message}",
                     NodeDeletionRejectionReason.Unavailable)))
-                .Subscribe(answer => AnswerFromLiveOrParent(hub, parent, request, answer, logger));
+                // One-shot: the chain answers once and completes, so a terminal error arm is
+                // correct here — it reports a fault the Catch above did not turn into an answer.
+                .Subscribe(
+                    answer => AnswerFromLiveOrParent(hub, parent, request, answer, logger),
+                    ex => logger.LogWarning(ex,
+                        "[ValidateDelete] {Path}: the live-version check produced no answer — "
+                        + "the caller's leg bound reports it", path));
             return request.Processed();
         }
 
