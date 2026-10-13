@@ -2,6 +2,7 @@ using System.Reactive;
 ﻿using System.Collections.Immutable;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Reflection;
 using System.Text.Json;
 using System.Threading;
@@ -555,6 +556,11 @@ public static class MeshDataSourceExtensions
     /// first waits for this write to SETTLE, so a failure that lands after teardown began is still
     /// re-attempted. Not a retry loop: one re-attempt per later save or teardown, and a failure of
     /// that re-attempt surfaces as a dispose-action fault.</para>
+    /// <para>🚨 <b>ONE WRITE AT A TIME, IN ORDER.</b> Every own write — and the dispose flush — is
+    /// queued on <see cref="PendingOwnSave.Enqueue"/>, so a write starts only once the previous one
+    /// has terminated. Without it an older write still in flight (the file-system adapter's pool runs
+    /// writes concurrently, and its backend has no conditional write) could land after a newer write
+    /// or after the flush and roll the row back.</para>
     private static void WriteSampledNode(
         IStorageAdapter persistence, IMessageHub hub, MeshNode node, MeshNode sampled,
         PendingOwnSave? pending, ILogger? logger)
@@ -565,7 +571,7 @@ public static class MeshDataSourceExtensions
         // (see IStorageAdapter.Changes / InMemoryStorageAdapter.Write) — no
         // separate fan-out from the handler.
         var written = node;
-        var settled = persistence.Write(node, hub.JsonSerializerOptions)
+        var write = persistence.Write(node, hub.JsonSerializerOptions)
             .Do(
                 saved =>
                 {
@@ -608,14 +614,15 @@ public static class MeshDataSourceExtensions
                             ? "It stays pending: the next save or the hub's dispose flush re-attempts it."
                             : "A newer save of this node already superseded it.");
                 })
-            // The settle signal the dispose flush waits on: one Unit once the write TERMINATES, either
-            // way — the outcome itself was handled above, so nothing is swallowed here.
-            .Materialize()
-            .Where(n => n.Kind != NotificationKind.OnNext)
-            .Select(_ => Unit.Default)
-            .Replay(1);
-        pending?.TrackWrite(settled);
-        settled.Connect();
+            .Select(_ => Unit.Default);
+        // 🚨 ONE store write per node at a time, in order. The write is queued behind the previous
+        // one (PendingOwnSave.Enqueue): an older write still in flight can never land AFTER a newer
+        // one — or after the dispose flush, which joins the same queue — and roll the row back. The
+        // outcome was handled above; the queue only carries the settle, so nothing is swallowed.
+        if (pending is not null)
+            pending.Enqueue(() => write);
+        else
+            write.Subscribe(_ => { }, _ => { });
     }
 
     /// <summary>
@@ -939,7 +946,9 @@ public static class MeshDataSourceExtensions
         // Not volatile: written through Volatile/Interlocked, which a volatile field would refuse
         // to take by ref (CS0420).
         private MeshNode? requested;
-        private volatile IObservable<Unit> lastWrite = Observable.Return(Unit.Default);
+        // The settle of the most recently QUEUED store write (one Unit once it terminates, either
+        // way). Swapped with Interlocked.Exchange, so concurrent enqueuers still form one chain.
+        private IObservable<Unit> lastWrite = Observable.Return(Unit.Default);
 
         /// <summary>Latest own-node state that passed the sampler's gates (candidate for save).</summary>
         public void Track(MeshNode node) => latest = node;
@@ -961,15 +970,29 @@ public static class MeshDataSourceExtensions
         public bool MarkWriteFailed(MeshNode node)
             => ReferenceEquals(Interlocked.CompareExchange(ref requested, null, node), node);
 
-        /// <summary>Records the settle signal of the most recent store write (emits once it terminates).</summary>
-        /// <param name="settled">One <see cref="Unit"/> when the write has succeeded or failed.</param>
-        public void TrackWrite(IObservable<Unit> settled) => lastWrite = settled;
-
         /// <summary>
-        /// Emits once the most recent store write has terminated — the dispose flush reads
-        /// <see cref="TakeUnsaved"/> only after it, so a write failing AFTER teardown began is seen.
+        /// Queues one store write of this node behind every write queued before it: <paramref name="write"/>
+        /// is subscribed only once the previous write has TERMINATED (succeeded or failed), so this
+        /// node's writes reach the store one at a time and in order — an older write can never land
+        /// after a newer one, nor after the dispose flush, which is queued here too. Eager, like
+        /// <c>IoPoolExtensions.Run</c>: the chain feeds a <see cref="ReplaySubject{T}"/> that replays
+        /// the write's own outcome (its error included) to whoever subscribes, now or later. Not a
+        /// retry: a failed write settles the slot and the next one runs.
         /// </summary>
-        public IObservable<Unit> LastWriteSettled => lastWrite.Take(1);
+        /// <param name="write">The cold write; invoked when its turn comes.</param>
+        /// <returns>The write's outcome, replayed.</returns>
+        public IObservable<Unit> Enqueue(Func<IObservable<Unit>> write)
+        {
+            var outcome = new ReplaySubject<Unit>();
+            var settled = outcome
+                .Materialize()
+                .Where(n => n.Kind != NotificationKind.OnNext)
+                .Select(_ => Unit.Default)
+                .Take(1);
+            var previous = Interlocked.Exchange(ref lastWrite, settled);
+            previous.IgnoreElements().Concat(Observable.Defer(write)).Subscribe(outcome);
+            return outcome;
+        }
 
         /// <summary>The latest gated state whose save was never dispatched — or null when
         /// everything the sampler saw has a dispatched save. Reference identity is exact
@@ -1735,8 +1758,10 @@ public static class MeshDataSourceExtensions
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Graph.SaveMeshNodeHandler");
         var options = hub.JsonSerializerOptions;
-        return pending.LastWriteSettled.SelectMany(_ =>
-            FlushUnsaved(cache, pending, flushed, persistence, recentlyDeleted, options, logger));
+        // Queued behind every own write still in flight (PendingOwnSave.Enqueue), so the flush both
+        // decides after they settled AND can never be overtaken by one of them.
+        return Observable.Defer(() => pending.Enqueue(() =>
+            FlushUnsaved(cache, pending, flushed, persistence, recentlyDeleted, options, logger)));
     }
 
     private static IObservable<System.Reactive.Unit> FlushUnsaved(

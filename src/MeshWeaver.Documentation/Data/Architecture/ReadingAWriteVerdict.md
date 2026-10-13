@@ -147,6 +147,15 @@ dispose flush's attempt surfaces as a `[DISPOSE-ACTION] … faulted` warning on 
 is recycled, and the fresh activation must serve the change from the durable row — with a healthy
 store as the negative control.
 
+**One write at a time, in order.** A re-attempt follows a failed write quickly, so an OLDER write still
+in flight could otherwise land after the newer one — or after the dispose flush — and roll the row
+back: the file-system adapter's pool runs writes concurrently and its backend has no conditional
+write to refuse the stale one. Every own write and the dispose flush are therefore queued on
+`PendingOwnSave.Enqueue`, which starts a write only once the previous one has terminated (either way)
+and replays the write's own outcome to its caller. The queue is a chain of eagerly fed
+`ReplaySubject`s — the `IoPoolExtensions.Run` shape — so no connection handle is left unowned, and the
+flush joins it simply by being the last entry. Pinned by `OwnWritesAreSerializedTest` (same file).
+
 ## The ack watcher's completion arm (the gap closed by #3033)
 
 `postSub` used to subscribe with **`onNext` and `onError` only**. If the filtered stream *completed

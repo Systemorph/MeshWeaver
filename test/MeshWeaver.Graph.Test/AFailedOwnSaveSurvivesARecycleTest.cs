@@ -225,3 +225,45 @@ public class AFailedOwnSaveSurvivesARecycleTest(ITestOutputHelper output) : Mono
                 cancellationToken: TestContext.Current.CancellationToken);
     }
 }
+
+/// <summary>
+/// 🚨 <b>A NODE'S OWN WRITES REACH THE STORE ONE AT A TIME, IN ORDER.</b> The failed-save re-attempt
+/// above makes a newer write (or the dispose flush) follow a failed one quickly; if the OLDER write is
+/// still in flight on a store whose pool runs writes concurrently and that has no conditional write,
+/// it could land after the newer write or the flush and roll the row back. Every own write and the
+/// flush are therefore queued on <c>PendingOwnSave.Enqueue</c>: a write starts only once the previous
+/// one has terminated, either way. The writes here are hand-driven subjects, so the order is
+/// observed exactly — no store, no timing.
+/// </summary>
+public class OwnWritesAreSerializedTest
+{
+    [Fact]
+    public void AWriteStillInFlight_HoldsBackEveryLaterWriteAndTheFlush()
+    {
+        var pending = new MeshDataSourceExtensions.PendingOwnSave();
+        var v2 = new Subject<Unit>();
+        var v3 = new Subject<Unit>();
+        var flush = new Subject<Unit>();
+        var started = System.Collections.Immutable.ImmutableList<string>.Empty;
+        Exception? flushFault = null;
+
+        pending.Enqueue(() => { started = started.Add("v2"); return v2; });
+        pending.Enqueue(() => { started = started.Add("v3"); return v3; });
+        pending.Enqueue(() => { started = started.Add("flush"); return flush; })
+            .Subscribe(_ => { }, ex => flushFault = ex);
+
+        started.Should().Equal(["v2"], "v3 and the flush wait while the older v2 write is still in flight");
+
+        v2.OnError(new InvalidOperationException("v2 failed in the store"));
+        started.Should().Equal(["v2", "v3"], "a FAILED write settles its slot too, so the next write runs");
+
+        v3.OnNext(Unit.Default);
+        started.Should().Equal(["v2", "v3"], "a write's value is not its termination");
+        v3.OnCompleted();
+        started.Should().Equal(["v2", "v3", "flush"], "the flush runs only after every earlier write terminated");
+
+        flush.OnError(new InvalidOperationException("flush failed"));
+        flushFault.Should().BeOfType<InvalidOperationException>(
+            "the queued write's own outcome is replayed to its caller — a failed flush surfaces as a dispose fault");
+    }
+}
