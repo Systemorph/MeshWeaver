@@ -71,7 +71,7 @@ public class ControlPlaneRunsWhenTheRequestArrivesByCreateTest(ITestOutputHelper
             .AddMeshDataSource(s => s.WithContentType<ControlPlaneContent>())
             .WithInitialization(hub =>
             {
-                // 🚨 Address.Path, never ToString(): a hosted address renders as `path~host`, and
+                // 🚨 Address.Path, never ToString(): a hosted address renders as `host~path`, and
                 // Address's own docs say to use Path "when you need the node path for persistence".
                 // ToString() here would build a node path that does not exist, so the watcher would
                 // silently never see the request — and the test would then be measuring the wrong

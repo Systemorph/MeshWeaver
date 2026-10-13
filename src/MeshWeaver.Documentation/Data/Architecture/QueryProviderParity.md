@@ -189,6 +189,26 @@ every case, positives beside their negations; core runs it through `QueryEvaluat
 suite also asserts on its executor's **actual** answers that every positive/negated pair partitions
 the node set, so an executor that answers a negation with "everything" or "nothing" cannot pass.
 
+## `*` is the only wildcard — on every executor
+
+The query language has one wildcard, `*` (`QueryWildcard`). The in-memory glob has always read
+every other character literally. The SQL generators did not: they translated `*` to `%` and bound
+the result to `ILIKE`, so a `%` or `_` the **user** typed became a LIKE metacharacter too, and so
+did the escape character `\`. `code:50%*` matched `50xoff`, `code:a_*` matched `axb`, and
+`code:c\d*` matched `cd` and missed `c\d`. Silent over- or under-matching, on Postgres and
+Snowflake only. Cosmos never had the problem: it matches with `STARTSWITH`/`ENDSWITH`/`CONTAINS` or
+an escaped regex, none of which has a second wildcard.
+
+The rule both SQL generators now implement: **escape `\`, `%` and `_` in the user's value, then
+translate only `*` to `%`**, in the `Like` arm and in the negated-wildcard `NotEqual` arm alike.
+Postgres's default `LIKE` escape is the backslash. Snowflake has none, so its escaped patterns
+declare `ESCAPE '\'`.
+
+The `content.code` cases in `NegationCorpus` pin it. Each value carrying `%`, `_` or `\` sits beside
+a decoy that matches only when the character is read as a metacharacter, in both the positive and
+the negated form. Both executors run them. The Postgres suite seeds them into a real database, and
+the Snowflake and Cosmos generator tests assert the bound pattern.
+
 ## What is still divergent
 
 The fallback closes the case where a selector is unknown to **both** providers. It does not close
