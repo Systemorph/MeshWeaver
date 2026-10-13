@@ -125,7 +125,8 @@ public sealed class AppDirectoryQueryProvider(IServiceProvider services) : IMesh
 
     /// <summary>
     /// The synthetic rows: one <see cref="AppNodeType.NodeType"/> node per visible app, its group
-    /// from the viewer's arrangement, else the root's category. Pure.
+    /// from the viewer's arrangement, else the root's category, and <see cref="App.Hidden"/> when
+    /// the viewer hid it (the row is still emitted — the query decides whether it is shown). Pure.
     /// </summary>
     public static ImmutableList<MeshNode> Rows(
         string owner, IEnumerable<AppDirectoryEntry> entries, LauncherArrangement? arrangement,
@@ -151,6 +152,9 @@ public sealed class AppDirectoryQueryProvider(IServiceProvider services) : IMesh
                     Order = placed?.Order ?? 0,
                     Source = AppSources.Directory,
                     LabelKey = entry.LabelKey,
+                    // The viewer's own "hide this tile" — the row stays (the Hidden scope lists
+                    // it); only the launcher's main scope filters it out.
+                    Hidden = placed?.Hidden ?? false,
                 },
             };
         }).ToImmutableList();
