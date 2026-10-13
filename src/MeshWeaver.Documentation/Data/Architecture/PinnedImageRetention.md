@@ -762,6 +762,57 @@ That read-back is what makes the 2026-09-08 apply run above *evidence*. Before i
 written a lock at all; had it still been believing exit codes, `Protected 18 manifest(s)` would have
 been indistinguishable from 18 manifests the purge could still delete.
 
+### 🚨 The lock job must fit its cap — and it did not while every call was serial
+
+The purge re-enable is gated on this lane being green after an **apply** run, so a lane that is cut
+at its job cap holds the purge disabled exactly as a red one does. From 2026-10-11 every scheduled
+apply run was **cancelled at the 30-minute cap** (runs `38101969700`, `38192337581`,
+`38332288957`), while the report-only push runs succeeded with zero writes. Measured on the
+2026-10-10/11 runs:
+
+| Phase | Volume | Serial cost |
+|---|---|---|
+| fleet scan (GitHub) | 38 repositories, each a workflow listing, a recursive tree and one read per file | minutes |
+| inventory | 21 ACR repositories, 11,522 manifests, one `list-metadata` each | minutes |
+| index closure | ~108 image indexes in the wanted set, one `az acr manifest show` each | most of the scan |
+| apply | 297 manifests + 113 tags to lock, each a write **and** its own read-back | ~12.5 s per manifest |
+
+Every `az` invocation is a whole process — interpreter start plus an AAD → ACR token exchange,
+about 6 s on a hosted runner — and moves one item. The report-only scan alone took **15 minutes**;
+the apply run then wrote 72 manifests before the cap cut it. And because stdout was a pipe that
+Python block-buffers, a cancelled run's log carried **no counts and no timings at all**.
+
+**The fix is not a larger cap** — 30 is this lane's honest bound and 45 the fleet's
+([Reading CI Signals](../ReadingCiSignals)), and a run that does not fit is doing serial work that
+should not be serial. None of those calls depends on another, so:
+
+- **A bounded pool.** `pmap` runs the fleet scan, the manifest listings, the tag resolutions, the
+  index expansions (level by level), the tag listings and the lock writes on a thread pool bounded
+  by `MW_ACR_LOCK_WORKERS` (default 8; a value that is not a positive integer is RED). Results are
+  consumed **in input order on the calling thread**, so the plan is built deterministically and
+  nothing mutates it concurrently. An exception inside a pooled call propagates; it is never an
+  absent result.
+- **A batched read-back, not a dropped one.** After every write has returned, **one fresh listing
+  per affected repository** reads the same `deleteEnabled` attribute. It can only **confirm**: an
+  item the listing reports `false` is locked; an item it reports `true` for, omits, or could not
+  list at all is read back **on its own**, and that per-item answer is the verdict — exactly the
+  three outcomes of the table above. The listing saves calls; it can never turn an unconfirmed lock
+  into a confirmed one.
+- **The first write goes alone.** A credential that may not lock refuses every write the same way,
+  so one write probes it and a refusal stays ONE line naming the role to grant, instead of a pool's
+  worth of identical errors.
+- **Progress is flushed.** stdout is line-buffered and each phase prints a stamped line
+  (`[  312.4s] index expansions: 54/108`), so a run that is cut still says how far it got and where
+  the time went.
+
+The `--self-test` arms pin it, each **falsified** by reverting the behaviour it guards: the batched
+read-back confirms without a per-item read (ARM 37) — and falls through to one when the listing is
+unreadable (37b) or omits the item (37c); a write that does not take is still RED with nothing
+counted through the new path (37d, the negative control for the batching); a refused credential is
+asked once (37e); the pool really has more than one call in flight with 4 workers and exactly one
+with 1 — the negative control that proves the gauge can tell — and the plan, the writes and the
+verdict are identical either way (ARM 38); and a progress line is flushed (ARM 39).
+
 ### Two questions about the lock job, settled by measurement rather than reasoning
 
 🚨 **"Should the scan read each repo's DEFAULT branch rather than every branch?" — it already does,
