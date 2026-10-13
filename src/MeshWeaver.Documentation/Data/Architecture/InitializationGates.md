@@ -447,6 +447,36 @@ public static class MeshNodeExtensions
 
 ---
 
+## 🚨 A write that waits for the store keeps its place
+
+A cross-hub MeshNode write (`PatchDataRequest`, i.e. any `stream.Update` from a mirror) merges on
+the owner's primary store, in that store's turn (`DataExtensions.ApplyMeshNodePatchInTurn`). If the
+turn finds the store still empty — the cold-activation window — the write waits for the load and is
+then run again.
+
+It used to be run again by posting a fresh merge turn to the **back** of the store's queue. Every
+write queued while it waited then ran first, against the loaded store, and the delayed write
+committed on top of them. Measured with write 1 meeting an empty store and writes 2–5 queued behind
+the load: the store committed `w2 w3 w4 w5 w1`, every write was acknowledged as a success, and the
+value that stayed was `w1` (#6594).
+
+So the waiting write takes the head of a lane (`ColdStoreWriteLane`, one per primary store), and
+every later MeshNode write on that store queues behind it — in the order its merge turn ran — until
+the lane releases them. When the load lands, the head runs; each write releases the next only once it
+has its answer, so they commit in the order they arrived. If the store never loads within the bound,
+the head is answered `OwnerNotReady`, and so is every write behind it: they meet the same unloaded
+store.
+
+The lane orders per store, which includes the per-sender order the access-control pipeline keeps
+([A sender's gated deliveries are acted on in arrival order](../AccessControl)). It cannot deadlock:
+nothing a queued write waits for depends on another write's reply.
+
+Pinned by `ColdStoreWritesKeepTheirOrderTest` (MeshWeaver.Data.Test). The store's turn is parked by
+the test behind write 1, writes 2..n are queued behind it, and the parked turn then commits the load.
+The control runs the same writes against a store that is already loaded.
+
+---
+
 ## Related
 
 - [Retiring an Activation](/Doc/Architecture/RetiringAnActivation) — the terminal counterpart to opening a
