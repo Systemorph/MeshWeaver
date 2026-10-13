@@ -95,7 +95,13 @@ public static class CodeQueryResolver
         var (_, query) = ParseName(rawQuery);
         var expanded = query.Replace("$self", selfPath).Trim();
 
-        var isAt = expanded.StartsWith("@@") || expanded.StartsWith("@");
+        // 🚨 A BARE PATH is a path reference, exactly like its `@` spelling (MeshWeaver#5508). An
+        // entry such as `$self/Source/Country` carries no field qualifier, so handed to the query
+        // engine verbatim it is FREE TEXT: no `path:`/`namespace:` anchor, so the partitioned store
+        // serves it as a UNION over every partition schema (and with an embedding provider, as a
+        // vector search that can pull unrelated Code nodes into the compile). An entry that is one
+        // token, contains a `/` and names no `field:` can only mean the node at that path.
+        var isAt = expanded.StartsWith("@@") || expanded.StartsWith("@") || IsBarePath(expanded);
         if (isAt)
         {
             var stripped = expanded.TrimStart('@').TrimStart();
@@ -280,6 +286,18 @@ public static class CodeQueryResolver
                 yield return final;
         }
     }
+
+    /// <summary>
+    /// Whether an expanded entry is a bare node path: one token, at least one <c>/</c>, and no
+    /// <c>field:</c> qualifier. Such an entry has no meaning as a query, only as a path.
+    /// </summary>
+    /// <param name="expanded">The entry after <c>name=</c> and <c>$self</c> expansion.</param>
+    /// <returns><c>true</c> when the entry is a bare path.</returns>
+    private static bool IsBarePath(string expanded) =>
+        expanded.Length > 0
+        && expanded.Contains('/')
+        && !expanded.Contains(':')
+        && expanded.IndexOfAny([' ', '\t', '\n', '\r']) < 0;
 
     private static string RebaseRelativeNamespace(string query, string selfPath)
     {
