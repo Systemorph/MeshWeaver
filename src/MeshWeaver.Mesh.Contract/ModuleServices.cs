@@ -139,8 +139,12 @@ public sealed class ModuleServices : IDisposable
         IReadOnlyList<ServiceDescriptor> prefix)
     {
         var probe = new ServiceCollection();
-        foreach (var descriptor in prefix)
-            ((ICollection<ServiceDescriptor>)probe).Add(descriptor);
+        // What the probe holds at each prefix position: the root's own descriptor, except a
+        // registration-time registry, which the module writes into and so gets a copy of its own
+        // (IsolateRegistrationTimeRegistry).
+        var held = new ServiceDescriptor[prefix.Count];
+        for (var i = 0; i < prefix.Count; i++)
+            ((ICollection<ServiceDescriptor>)probe).Add(held[i] = IsolateRegistrationTimeRegistry(prefix[i]));
         IServiceCollection result = probe;
         foreach (var configure in configurations)
             result = configure(result) ?? result;
@@ -150,7 +154,7 @@ public sealed class ModuleServices : IDisposable
             blockers.Add("a root-service delegate returned a different collection than it was given");
         var intact = probe.Count >= prefix.Count;
         for (var i = 0; intact && i < prefix.Count; i++)
-            intact = ReferenceEquals(probe[i], prefix[i]);
+            intact = ReferenceEquals(probe[i], held[i]);
         if (!intact)
             blockers.Add("a root-service delegate removed or replaced a registration it did not add");
 
@@ -168,6 +172,54 @@ public sealed class ModuleServices : IDisposable
         {
             LoadContext = moduleContext.IsCollectible ? moduleContext : null,
         };
+    }
+
+    /// <summary>The full name of <c>Microsoft.Extensions.Http</c>'s registration-time client registry
+    /// (internal to that package, so it is recognised by name).</summary>
+    internal const string HttpClientMappingRegistryTypeName = "Microsoft.Extensions.DependencyInjection.HttpClientMappingRegistry";
+
+    /// <summary>
+    /// 🚨 A prefix registration whose INSTANCE is a registry that registration code WRITES INTO
+    /// (MeshWeaver.Plugins#3518). <c>AddHttpClient&lt;T&gt;()</c> records "client name → T" in the
+    /// <c>HttpClientMappingRegistry</c> instance registered in the collection, and refuses a second
+    /// type under the same name. The probe copies the root's descriptors BY REFERENCE, so without this
+    /// every generation's <c>AddHttpClient&lt;WebSearchPlugin&gt;()</c> wrote into the ROOT's one
+    /// registry: generation N's type stayed there (pinning its collectible context for the life of the
+    /// process), and generation N+1's — the same name, a different <see cref="Type"/> from a different
+    /// load context — was refused, failing the live swap. The probe therefore gets its own copy of the
+    /// registry, seeded with what the root holds (so a module that collides with a PLATFORM client is
+    /// refused exactly as at boot), and what the module writes stays with its probe.
+    ///
+    /// <para>Matched by name because the type is internal to <c>Microsoft.Extensions.Http</c>; its
+    /// name and shape are pinned by <c>ALiveSwapReRegistersATypedHttpClientTest</c>: a package version
+    /// that renames it fails that test, and one that reshapes it fails here by name, rather than
+    /// silently sharing the root's instance again.</para>
+    /// </summary>
+    private static ServiceDescriptor IsolateRegistrationTimeRegistry(ServiceDescriptor descriptor)
+    {
+        if (descriptor.IsKeyedService
+            || descriptor.ImplementationInstance is not { } registry
+            || descriptor.ServiceType.FullName != HttpClientMappingRegistryTypeName
+            || registry.GetType() != descriptor.ServiceType)
+            return descriptor;
+        const BindingFlags Members = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+        var type = registry.GetType();
+        var copy = Activator.CreateInstance(type, nonPublic: true)
+                   ?? throw new InvalidOperationException($"{type.FullName} could not be instantiated to isolate a module's HttpClient registrations.");
+        foreach (var name in new[] { "NamedClientRegistrations", "KeyedLifetimeMap" })
+        {
+            if (type.GetProperty(name, Members)?.GetValue(registry) is not System.Collections.IDictionary from
+                || type.GetProperty(name, Members)?.GetValue(copy) is not System.Collections.IDictionary to)
+                throw new InvalidOperationException(
+                    $"{type.FullName} no longer exposes the dictionary {name}: a module's HttpClient registrations cannot be isolated from the root's (MeshWeaver.Plugins#3518).");
+            foreach (System.Collections.DictionaryEntry entry in from)
+                to[entry.Key] = entry.Value;
+        }
+        var defaultLifetime = type.GetProperty("DefaultKeyedLifetime", Members)
+            ?? throw new InvalidOperationException(
+                $"{type.FullName} no longer exposes DefaultKeyedLifetime: a module's HttpClient registrations cannot be isolated from the root's (MeshWeaver.Plugins#3518).");
+        defaultLifetime.SetValue(copy, defaultLifetime.GetValue(registry));
+        return new ServiceDescriptor(descriptor.ServiceType, copy);
     }
 
     private static string Route(ServiceDescriptor descriptor, AssemblyLoadContext module, out string? blocker)
