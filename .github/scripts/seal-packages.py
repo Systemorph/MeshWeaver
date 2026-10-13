@@ -85,10 +85,18 @@ def _parse(text: str | None):
     return (int(m.group(1)), int(m.group(2) or 0), int(m.group(3) or 0)), pre
 
 
+def _pre_key(pre: str) -> tuple:
+    # NuGetVersionComparer.ComparePreRelease, identifier by identifier: both numeric compare as
+    # NUMBERS (alpha.10 > alpha.2), a numeric identifier ranks below an alphanumeric one (SemVer
+    # §11.4.3), text compares ordinally, and fewer identifiers rank lower when the rest are equal —
+    # which is tuple order once each identifier is a (rank, value) pair.
+    return tuple((0, int(part), "") if part.isdigit() else (1, 0, part) for part in pre.split("."))
+
+
 def _key(parsed) -> tuple:
     (major, minor, patch), pre = parsed
     # NuGet order: a release sorts above its own prereleases.
-    return (major, minor, patch, 1 if pre is None else 0, pre or "")
+    return (major, minor, patch, 1 if pre is None else 0, _pre_key(pre) if pre else ())
 
 
 def satisfies(range_text: str | None, version: str) -> bool | None:
@@ -114,7 +122,7 @@ def satisfies(range_text: str | None, version: str) -> bool | None:
             ceiling = (major + 1, 0, 0) if major > 0 else (0, minor + 1, 0) if minor > 0 else (0, 0, patch + 1)
         else:
             ceiling = (major, minor + 1, 0)
-        return _key(floor) <= _key(have) < (*ceiling, 1, "")
+        return _key(floor) <= _key(have) < (*ceiling, 1, ())
     pinned = _parse(constraint[1:] if constraint.startswith("=") else constraint)
     return None if pinned is None else _key(have) == _key(pinned)
 
@@ -242,11 +250,42 @@ def cmd_withhold(a: argparse.Namespace) -> int:
 
 
 # ─── listing ─────────────────────────────────────────────────────────────────────────────────────
+def _prior_listing(path: Path, withheld: list[str]) -> dict | None:
+    """The sealed publication's per-package listing — None ONLY when it is absent (a legacy seal).
+
+    🚨 A listing that EXISTS and cannot be read, parsed, or does not have the listing's shape is not
+    a legacy one: folded to None, every carried package would be described from the publication
+    commit — the wrong version and requires for the floor verdict. Refused when a package waits
+    (the only case that reads it); nothing is written."""
+    if not path.exists():
+        return None
+    fault = None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as ex:
+        value, fault = None, f"{type(ex).__name__}: {ex}"
+    if fault is None:
+        packages = value.get("packages") if isinstance(value, dict) else None
+        if not isinstance(packages, list):
+            fault = "it carries no 'packages' list"
+        elif any(not isinstance(e, dict) or not e.get("package") for e in packages):
+            fault = "an entry has no 'package'"
+    if fault is None:
+        return value
+    if withheld:
+        raise SystemExit(
+            f"✗ seal-packages: the sealed per-package listing ({LISTING}) exists but could not be read ({fault}). "
+            f"{len(withheld)} package(s) wait ({' '.join(withheld)}) and are carried at the build that listing names; "
+            "reading it as a legacy publication would describe them from the publication commit instead. "
+            "Nothing is written, and the existing publication stays sealed and intact.")
+    return None
+
+
 def build_listing(bake: Path, repo: Path, commit: str, withheld: list[str], state: Path | None) -> dict:
     previous: dict[str, dict] = {}
     previous_commit = None
     if state is not None:
-        prior = _json(_read(state / STATE_PACKAGES))
+        prior = _prior_listing(state / STATE_PACKAGES, withheld)
         for entry in (prior or {}).get("packages") or []:
             if isinstance(entry, dict) and entry.get("package"):
                 previous[str(entry["package"])] = entry
@@ -353,6 +392,16 @@ def self_test() -> int:
     expect("a floor below is missed", satisfies("^1.23.0", "1.21.1") is False)
     expect("a prerelease of the ceiling stays under a caret (NuGet order)", satisfies("^1.21.0", "2.0.0-rc1") is True)
     expect("NEGATIVE CONTROL: an unreadable range is None, never met", satisfies("1.x", "1.2.0") is None)
+    # Prerelease identifiers compare as NuGetVersionComparer does — the parity cases.
+    expect("numeric prerelease identifiers compare as numbers (alpha.10 meets >=alpha.2)",
+           satisfies(">=1.0.0-alpha.2", "1.0.0-alpha.10") is True)
+    expect("…and the reverse is missed (alpha.2 does not meet >=alpha.10)",
+           satisfies(">=1.0.0-alpha.10", "1.0.0-alpha.2") is False)
+    expect("ci.3758 is above ci.900 (the comparer's own case)", satisfies(">3.0.0-ci.900", "3.0.0-ci.3758") is True)
+    expect("a numeric identifier ranks below an alphanumeric one", satisfies(">=1.0.0-alpha.beta", "1.0.0-alpha.1") is False)
+    expect("fewer identifiers rank lower (rc3 < rc3.ci.1)", satisfies(">1.0.0-rc3", "1.0.0-rc3.ci.1") is True)
+    expect("a release outranks its prerelease", satisfies(">1.0.0-rc.1", "1.0.0") is True)
+    expect("text identifiers compare ordinally", satisfies(">=1.0.0-beta", "1.0.0-alpha") is False)
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -486,6 +535,21 @@ def self_test() -> int:
         legacy = {e["package"]: e for e in build_listing(bake, repo, new, ["P60"], state)["packages"]}
         expect("a carried package takes source-commit.txt and that commit's committed version",
                legacy["P60"]["sourceCommit"] == old and legacy["P60"]["version"] == "1.0.0" and legacy["P60"]["carried"])
+
+        print("a per-package listing that EXISTS and cannot be read is refused, never read as legacy:")
+        for label, text in (("malformed JSON", "{not json"), ("no 'packages' list", '{"schema": "x"}'),
+                            ("an entry with no 'package'", '{"packages": [{"bundle": "P60.zip"}]}')):
+            (state / STATE_PACKAGES).write_text(text)
+            try:
+                build_listing(bake, repo, new, ["P60"], state)
+                refused = False
+            except SystemExit as e:
+                refused = "could not be read" in str(e)
+            expect(f"{label}: refused while a package waits", refused)
+        (state / STATE_PACKAGES).write_text("{not json")
+        expect("NEGATIVE CONTROL: with nothing waiting the unreadable prior listing is not read, nothing refused",
+               len(build_listing(bake, repo, new, [], state)["packages"]) == len(names))
+        (state / STATE_PACKAGES).unlink()
 
         print("a waiting package that was never sealed stays OUT:")
         bake_all(names)

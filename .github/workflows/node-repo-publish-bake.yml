@@ -2066,8 +2066,14 @@ jobs:
           python3 mw-platform-gate/.github/scripts/seal-packages.py withhold
           --bake "$BAKE_DIR" --withhold "$WITHHOLD_PACKAGES"
           --state "${{ runner.temp }}/bake-scope" --github-output "$GITHUB_OUTPUT"
+      # Both carries are BOUND to the publication bake-scope.sh read (its `_complete` stamp,
+      # published-publication.txt): each re-resolves the pointer, and without the binding a seal
+      # that lands in between would let either carry — or each of the two, over different
+      # publications — take bytes the listing and the per-package entries do not describe.
       - name: Carry forward the bundles this bake did not rebuild (or must not seal fresh)
         if: steps.scope.outputs.scope == 'narrowed' || steps.withhold.outputs.carry == 'true'
+        env:
+          EXPECT_PUBLICATION_FILE: ${{ runner.temp }}/bake-scope/published-publication.txt
         run: >
           mw-platform/.github/scripts/carry-forward-bundles.sh
           "$BAKE_DIR"
@@ -2079,6 +2085,7 @@ jobs:
         if: steps.withhold.outputs.carry-modules == 'true'
         env:
           CARRY_SUBDIR: modules
+          EXPECT_PUBLICATION_FILE: ${{ runner.temp }}/bake-scope/published-publication.txt
         run: >
           mw-platform/.github/scripts/carry-forward-bundles.sh
           "$BAKE_DIR/modules"

@@ -80,7 +80,7 @@ if [ "${1:-}" = "--self-test" ]; then
 #!/usr/bin/env bash
 group="$2"          # file | directory
 verb=""
-for a in "$@"; do case "$a" in exists|download) verb="$a"; break;; esac; done
+for a in "$@"; do case "$a" in exists|download|show) verb="$a"; break;; esac; done
 account=""; share=""; path=""; dest=""; name=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -97,7 +97,14 @@ dir="$MOCK_AZ_ROOT/$account/$share/$name"
 case "$group/$verb" in
   directory/exists) { [ -d "$dir" ] && echo true; } || echo false;;
   file/exists)      { [ -f "$file" ] && echo true; } || echo false;;
-  file/download)    [ -f "$file" ] || exit 1; mkdir -p "$(dirname "$dest")"; cp "$file" "$dest";;
+  file/download)    [ -f "$file" ] || exit 1
+                    # A file that EXISTS and cannot be downloaded (a transient fault, a permission).
+                    case "$path" in *"${MOCK_AZ_FAIL_DOWNLOAD:-//none//}") exit 1;; esac
+                    mkdir -p "$(dirname "$dest")"; cp "$file" "$dest";;
+  file/show)        # The one query bake-scope.sh makes: the sentinel's `publication` stamp,
+                    # held in a sidecar `<file>.publication`; '-' when the seal predates the stamp.
+                    [ -f "$file" ] || exit 1
+                    if [ -f "$file.publication" ]; then cat "$file.publication"; else echo "-"; fi;;
   *) echo "stub-az: unmodelled '$group $verb' — teach the stub rather than letting the script fall back" >&2; exit 64;;
 esac
 AZ
@@ -336,12 +343,52 @@ AZ
     FAILED=$((FAILED + 1))
   fi
 
+  # ── ABSENT ONLY WHEN CONFIRMED. A per-package listing or module index that EXISTS and cannot
+  # ── be downloaded is not an absent one: read as absent, a carried package's bytes would be
+  # ── attributed to the publication commit, and a waiting package's module package dropped.
+  echo "an optional file that exists but cannot be read is UNREADABLE, never absent:"
+  with_withheld() {  # <target> <event> — run with Store withheld
+    ( unset GITHUB_STEP_SUMMARY GITHUB_ENV GITHUB_OUTPUT; export MOCK_AZ_ROOT="$ST_TMP/remote"
+      WITHHOLD_PACKAGES="Store" BAKE_PUBLISH_TARGETS="$1" IDENTITY=ID1 SOURCE=plugins HEAD_SHA="$NEXT_SHA" \
+      REPO_DIR="$REPO" EVENT_NAME="$2" STATE_DIR="$ST_TMP/state" bash "$ME" 2>&1 )
+  }
+  rm -rf "$ST_TMP/state"; listing_with carry/share "$BASE_SHA"
+  OUT=$(MOCK_AZ_FAIL_DOWNLOAD=sealed-packages.json with_withheld carry/share repository_dispatch)
+  case "$(cat "$ST_TMP/state/publication-state" 2>/dev/null)" in
+    unreadable*) printf '  OK   %s\n' "a per-package listing that exists but cannot be downloaded marks the publication unreadable" ;;
+    *) printf '  FAIL %s\n' "an undownloadable per-package listing recorded '$(cat "$ST_TMP/state/publication-state" 2>&1)'"; FAILED=$((FAILED + 1)) ;;
+  esac
+  rm -rf "$ST_TMP/state"
+  OUT=$(MOCK_AZ_FAIL_DOWNLOAD=sealed-packages.json run_case push carry/share "$NEXT_SHA")
+  expect "…and the same fault on the narrowing read is a full bake, never a narrowing from the wrong range" full "$OUT"
+  mkdir -p "$ST_TMP/remote/carry/share/prebuilt-bundles/ID1/plugins/modules"
+  printf 'store.module.nupkg\n' > "$ST_TMP/remote/carry/share/prebuilt-bundles/ID1/plugins/modules/_index"
+  rm -rf "$ST_TMP/state"
+  OUT=$(MOCK_AZ_FAIL_DOWNLOAD=modules/_index with_withheld carry/share repository_dispatch)
+  case "$(cat "$ST_TMP/state/publication-state" 2>/dev/null)" in
+    unreadable*) printf '  OK   %s\n' "a module index that exists but cannot be downloaded marks the publication unreadable" ;;
+    *) printf '  FAIL %s\n' "an undownloadable module index recorded '$(cat "$ST_TMP/state/publication-state" 2>&1)'"; FAILED=$((FAILED + 1)) ;;
+  esac
+  # The control, one variable apart: the same publication with the download working is sealed, the
+  # module index and the stamp the carry is bound to are recorded.
+  printf 'Systemorph-MeshWeaver.Plugins-9-1\n' > "$ST_TMP/remote/carry/share/prebuilt-bundles/ID1/plugins/_complete.publication"
+  rm -rf "$ST_TMP/state"
+  OUT=$(with_withheld carry/share repository_dispatch)
+  if [ "$(cat "$ST_TMP/state/publication-state" 2>/dev/null)" = "sealed" ] \
+     && [ "$(cat "$ST_TMP/state/published-modules.txt" 2>/dev/null)" = "store.module.nupkg" ] \
+     && [ "$(cat "$ST_TMP/state/published-publication.txt" 2>/dev/null)" = "Systemorph-MeshWeaver.Plugins-9-1" ]; then
+    printf '  OK   %s\n' "NEGATIVE CONTROL: readable, it is sealed — module index and the publication stamp recorded"
+  else
+    printf '  FAIL %s\n' "readable control: state '$(cat "$ST_TMP/state/publication-state" 2>&1)', stamp '$(cat "$ST_TMP/state/published-publication.txt" 2>&1)'"
+    FAILED=$((FAILED + 1))
+  fi
+
   if [ "$FAILED" -gt 0 ]; then
     echo "::error title=bake-scope self-test failed::$FAILED case(s) — this script decides what is NOT rebuilt; a fallback that stops falling back is a silent under-build."
     exit 1
   fi
   echo ""
-  echo "bake-scope self-test: 12 full-bake fallbacks, 2 verified nothing-to-do verdicts, 4 pointer-resolution assertions, 5 narrowed assertions, 8 per-package-seal assertions — all green."
+  echo "bake-scope self-test: 12 full-bake fallbacks, 2 verified nothing-to-do verdicts, 4 pointer-resolution assertions, 5 narrowed assertions, 12 per-package-seal assertions — all green."
   exit 0
 fi
 
@@ -449,16 +496,54 @@ emit() {
 #               publication either shrinks it or seals a guess.
 #
 # Read only when something is withheld, so every other caller's decision is byte-identical to before.
-read_sealed_files() { # <account> <share> <dest> <workdir> — the OPTIONAL files beside the sentinel
-  az storage file download --account-name "$1" --share-name "$2" \
-    --path "$3/sealed-packages.json" --dest "$4/sealed-packages.json" \
-    --auth-mode login --backup-intent --only-show-errors > /dev/null 2>&1 || rm -f "$4/sealed-packages.json"
-  az storage file download --account-name "$1" --share-name "$2" \
-    --path "$3/modules/_index" --dest "$4/modules-index" \
-    --auth-mode login --backup-intent --only-show-errors > /dev/null 2>&1 || rm -f "$4/modules-index"
+# 🚨 ABSENT ONLY WHEN ABSENCE IS CONFIRMED. An optional file that EXISTS and cannot be downloaded
+# is not an absent one: a per-package listing read as absent attributes a carried package's bytes
+# to the publication commit (and narrows from the wrong range-base), and a module index read as
+# absent drops a waiting package's sealed module package from the next seal. So each optional file
+# is probed first; `false` is the only answer that means absent. Anything else sets
+# SEALED_FILES_FAULT and returns 1 — the caller marks the publication unreadable, or bakes full.
+SEALED_FILES_FAULT=""
+read_optional_file() { # <account> <share> <remote-path> <local-path>
+  local exists
+  rm -f "$4"
+  exists=$(az storage file exists --account-name "$1" --share-name "$2" \
+    --path "$3" --auth-mode login --backup-intent --query exists -o tsv \
+    --only-show-errors 2>/dev/null || echo "unknown")
+  case "$exists" in
+    false) return 0 ;;
+    true)
+      az storage file download --account-name "$1" --share-name "$2" \
+        --path "$3" --dest "$4" --auth-mode login --backup-intent --only-show-errors > /dev/null 2>&1 && return 0
+      rm -f "$4"
+      SEALED_FILES_FAULT="$3 exists but could not be downloaded"; return 1 ;;
+    *) SEALED_FILES_FAULT="az could not say whether $3 exists (answered '$exists')"; return 1 ;;
+  esac
 }
-record_sealed_state() { # <workdir> — the four artefacts seal-packages.py reads
+# The `publication` stamp publish-bake-bundles.sh writes on `_complete` — which publication this
+# reading IS. carry-forward-bundles.sh is bound to it (EXPECT_PUBLICATION_FILE), so a carry that
+# re-resolves the pointer after it advanced cannot take another publication's bytes under this
+# reading's listing. Empty for a seal that predates the stamp (the carry then proves what it can).
+SEAL_PUBLICATION=""
+read_seal_stamp() { # <account> <share> <dest>
+  local props
+  if ! props=$(az storage file show --account-name "$1" --share-name "$2" \
+       --path "$3/$SENTINEL" --auth-mode login --backup-intent \
+       --query "[[metadata.publication || '-']]" -o tsv --only-show-errors 2>/dev/null); then
+    SEALED_FILES_FAULT="the publication stamp of $3/$SENTINEL could not be read"; return 1
+  fi
+  SEAL_PUBLICATION=$(printf '%s' "$props" | awk 'NR == 1 { print $1 }')
+  [ "$SEAL_PUBLICATION" = "-" ] && SEAL_PUBLICATION=""
+  return 0
+}
+read_sealed_files() { # <account> <share> <dest> <workdir> — the OPTIONAL files beside the sentinel
+  SEALED_FILES_FAULT=""
+  read_optional_file "$1" "$2" "$3/sealed-packages.json" "$4/sealed-packages.json" || return 1
+  read_optional_file "$1" "$2" "$3/modules/_index" "$4/modules-index" || return 1
+  read_seal_stamp "$1" "$2" "$3" || return 1
+}
+record_sealed_state() { # <workdir> — the five artefacts seal-packages.py and the carry read
   cp "$1/$SENTINEL" "$STATE_DIR/published-bundles.txt"
+  printf '%s\n' "$SEAL_PUBLICATION" > "$STATE_DIR/published-publication.txt"
   tr -d '[:space:]' < "$1/$SOURCE_MARKER" > "$STATE_DIR/published-commit.txt"
   if [ -f "$1/modules-index" ]; then cp "$1/modules-index" "$STATE_DIR/published-modules.txt"; else rm -f "$STATE_DIR/published-modules.txt"; fi
   if [ -f "$1/sealed-packages.json" ]; then cp "$1/sealed-packages.json" "$STATE_DIR/published-packages.json"; else rm -f "$STATE_DIR/published-packages.json"; fi
@@ -493,7 +578,10 @@ read_publication_for_carry() {
     echo "unreadable the sealed publication under $target/$dest exists but its $SENTINEL or $SOURCE_MARKER could not be downloaded" > "$STATE_DIR/publication-state"
     return 0
   fi
-  read_sealed_files "$account" "$share" "$dest" "$work"
+  if ! read_sealed_files "$account" "$share" "$dest" "$work"; then
+    echo "unreadable the sealed publication under $target/$dest: $SEALED_FILES_FAULT" > "$STATE_DIR/publication-state"
+    return 0
+  fi
   record_sealed_state "$work"
   if [ -n "${GITHUB_ENV:-}" ]; then echo "BAKE_CARRY_TARGET=${target}" >> "$GITHUB_ENV"; fi
   echo "withheld packages: their sealed builds are carried from $target/$dest (sealed at $(cat "$STATE_DIR/published-commit.txt"))"
@@ -582,7 +670,8 @@ for target in $BAKE_PUBLISH_TARGETS; do
   [ -n "$listing" ] || full "$account/$share: the $SENTINEL under $dest lists no bundles — baking every module."
   # The per-package listing (MeshWeaver.Plugins#3507), when the publication carries one: it names
   # the commit EACH package's bytes were baked from, and step 5b narrows from the oldest of them.
-  read_sealed_files "$account" "$share" "$dest" "$work"
+  read_sealed_files "$account" "$share" "$dest" "$work" \
+    || full "$account/$share: the sealed publication under $dest could not be read completely ($SEALED_FILES_FAULT) — which build each package carries is unknown, so the bake cannot be narrowed."
   packages=""
   if [ -f "$work/sealed-packages.json" ]; then packages=$(cat "$work/sealed-packages.json"); fi
 
