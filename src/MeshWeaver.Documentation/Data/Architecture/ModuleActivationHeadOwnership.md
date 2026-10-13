@@ -249,6 +249,16 @@ nor fallback — retiring it would flip the head with nothing having landed
 newest uninstall change nothing and go; the tombstone itself stays while dropping it would change
 the answer (for instance while `<Name>.json` still holds a stale projection).
 
+### A write that fails is the replica's fault, never a conflict (#6640)
+
+When the registry's shelf landing cannot write `activation.d/<Name>.json` (or any of its files) — an
+`IOException` or `UnauthorizedAccessException`, alone or wrapped — the publish answers **500** with
+*"an infrastructure fault on the replica that answered, not a conflict with this upload"* and the
+underlying error, path included. Only a refusal of the upload itself (the app-closure same-identity
+trap-door, a malformed name) is a **409**. Before this, `Access to the path
+'/data/modules/activation.d/MeshWeaver.Markdown.Export.json' is denied.` came back as a 409 and read as
+a version clash (`PluginBundleEndpoints.LandingFailure`, `PublishStorageFaultIsNotAConflictTest`).
+
 ### Measured
 
 Two `ModuleLandingService` instances — two replicas, each with its own cap-1 pool — over one landing
