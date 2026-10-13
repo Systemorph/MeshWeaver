@@ -5,7 +5,7 @@
     python3 .github/scripts/check-git-path-listings.py --self-test   # prove the scan and the trap are real
 
 THE TRAP. With git's default `core.quotePath`, a plain `git diff --name-only` (and `ls-files`,
-`ls-tree --name-only`, `merge-tree --name-only`, `status --porcelain`) C-QUOTES every path that holds
+`ls-tree` with or without `--name-only`, `merge-tree --name-only`, `status --porcelain`) C-QUOTES every path that holds
 a byte outside printable ASCII, a double quote, a backslash or a control character:
 `samples/Northwind/Product/Côte_de_Blaye.json` is printed as
 `"samples/Northwind/Product/C\\303\\264te_de_Blaye.json"`. A script that reads that line verbatim
@@ -22,7 +22,7 @@ THE RULE. A listing is read with `-z` and split on NUL. `-z` output is never quo
 nothing to decode and nothing to guess.
 
 WHAT THIS SCANS. Every `.github/scripts/*.py` and `scripts/*.py`, by AST: a list, tuple or call whose literal string elements
-name a path-listing git command (`--name-only`, `--name-status`, `ls-files`, `--porcelain`) must also
+name a path-listing git command (`--name-only`, `--name-status`, `ls-files`, `ls-tree`, `--porcelain`) must also
 carry the literal `"-z"`. Code inside a function whose name contains `self_test` is exempt — its
 listings run over fixture repositories whose paths the test itself wrote in ASCII. A file that does
 not parse is a FAILURE, never a skip.
@@ -40,7 +40,7 @@ REPO = Path(__file__).resolve().parent.parent.parent
 SCRIPT_DIRS = (".github/scripts", "scripts")
 
 # A git argument that makes the command print PATHS, one per line, C-quoted unless `-z` is given.
-LISTING_MARKERS = frozenset({"--name-only", "--name-status", "ls-files", "--porcelain"})
+LISTING_MARKERS = frozenset({"--name-only", "--name-status", "ls-files", "ls-tree", "--porcelain"})
 
 
 def _literal_strings(nodes) -> list[str]:
@@ -116,6 +116,13 @@ def self_test() -> int:
               [p for p in nul.split("\0") if p] == [accented], repr(nul))
         ls = subprocess.run([*g, "ls-files", "-z"], capture_output=True, text=True, check=True).stdout
         check("ls-files -z reads the real path too", [p for p in ls.split("\0") if p] == [accented], repr(ls))
+        tree_plain = subprocess.run([*g, "ls-tree", "-r", "HEAD"], capture_output=True, text=True, check=True).stdout
+        tree_nul = subprocess.run([*g, "ls-tree", "-r", "-z", "HEAD"], capture_output=True, text=True, check=True).stdout
+        check("NEGATIVE CONTROL: a plain ls-tree -r line carries the accented path C-quoted after its tab",
+              [ln.partition("\t")[2] for ln in tree_plain.splitlines()] != [accented] and "\\303\\264" in tree_plain,
+              repr(tree_plain))
+        check("ls-tree -r -z split on NUL carries the real path after its tab",
+              [e.partition("\t")[2] for e in tree_nul.split("\0") if e] == [accented], repr(tree_nul))
         st = subprocess.run([*g, "status", "--porcelain", "-z"], capture_output=True, text=True, check=True).stdout
         check("status --porcelain -z carries the real path after its two status columns",
               [p[3:] for p in st.split("\0") if p] == [accented], repr(st))
@@ -132,12 +139,14 @@ def c(root):
                       "--exclude-standard"])
 def d(root):
     return git(root, ["status", "--porcelain", "--", "*/manifest.lock"])
+def e(base):
+    return _run(["git", "ls-tree", "-r", base]).splitlines()
 '''
     got = violations(bad, "fixture.py")
-    check("NEGATIVE CONTROL: a list, a call and a multi-line listing without -z are each reported",
-          [v.split(":")[1] for v in got] == ["4", "6", "8", "11"], "\n".join(got))
+    check("NEGATIVE CONTROL: a list, a call, a multi-line listing and an ls-tree without -z are each reported",
+          [v.split(":")[1] for v in got] == ["4", "6", "8", "11", "13"], "\n".join(got))
     good = bad.replace('"--name-only"', '"-z", "--name-only"').replace('"ls-files"', '"ls-files", "-z"') \
-              .replace('"--porcelain"', '"--porcelain", "-z"')
+              .replace('"--porcelain"', '"--porcelain", "-z"').replace('"ls-tree"', '"ls-tree", "-z"')
     check("the same calls with -z pass", violations(good, "fixture.py") == [], "\n".join(violations(good, "fixture.py")))
     exempt = 'def self_test():\n    git(root, ["diff", "--name-only"])\n    def inner():\n        g("ls-files")\n'
     check("a self-test's fixture listings are exempt, nested helpers included",
