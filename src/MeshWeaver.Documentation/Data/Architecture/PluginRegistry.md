@@ -65,6 +65,13 @@ with no admin step). Registration then *seeds* those entries into the grant node
 the single authority, so an admin can still revoke or extend per instance — and private/paid
 sources are never listed there. With no defaults configured, registering grants exactly nothing.
 
+The seed is **declared on the registry's deployment record** — `defaultGrants` on
+`Hosting/Deployment` (`DeploymentContent.DefaultGrants`, e.g. `"defaultGrants": ["Plugins/*"]`) —
+and every renderer delivers it from there: the Helm values' `pluginCatalog.defaultGrants`, the
+operator's boot catalog file and the Aspire portal keys, all as `PluginCatalog:DefaultGrants:N`.
+Before the field existed the seed lived only in a hand-edited Helm overlay, so a re-render from the
+record dropped it and the deploy-drift sentinel reported it as never delivered (Memex#116).
+
 **First-startup auto-registration** removes the remaining hand-off. A platform admin mints a
 *registration key* (`mwr_…` — Admin app `/Admin` ▸ Instance grants ▸ Registration keys;
 reusable, revocable, optionally expiring) and puts it in the deployment scaffold. A new install

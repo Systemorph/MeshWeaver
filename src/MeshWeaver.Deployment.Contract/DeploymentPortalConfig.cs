@@ -536,6 +536,32 @@ public static class DeploymentPortalConfig
     }
 
     /// <summary>
+    /// The registration-seed grants a record declares (<see cref="DeploymentContent.DefaultGrants"/>),
+    /// trimmed, blanks dropped, duplicates (case-insensitive) kept once, in declared order — the ONE
+    /// normalisation every renderer uses, so the Helm values, the boot file and the Aspire keys of a
+    /// record cannot disagree. Empty for none. Pure.
+    /// </summary>
+    public static ImmutableList<string> DefaultGrantPatterns(IEnumerable<string>? grants)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        return (grants ?? Enumerable.Empty<string>())
+            .Where(g => !string.IsNullOrWhiteSpace(g))
+            .Select(g => g.Trim())
+            .Where(seen.Add)
+            .ToImmutableList();
+    }
+
+    /// <summary>
+    /// The flat <c>PluginCatalog:DefaultGrants:N=pattern</c> entries for the declared grants
+    /// (<see cref="DefaultGrantPatterns"/>). Empty for none — nothing renders, so the portal's
+    /// default (no seed) stands. Pure.
+    /// </summary>
+    public static ImmutableList<string> DefaultGrantEntries(IEnumerable<string>? grants) =>
+        DefaultGrantPatterns(grants)
+            .Select((g, i) => $"{CatalogSection}:DefaultGrants:{i}={g}")
+            .ToImmutableList();
+
+    /// <summary>
     /// The FULL flat configuration a new instance is born with: the catalog wiring plus the
     /// module policy — one deterministic list, so "what will this instance boot with" is
     /// answerable from the record alone.
@@ -545,6 +571,10 @@ public static class DeploymentPortalConfig
         var entries = ConfigurationEntries(record?.PluginRepos, record?.PreInstall);
         if (record is null)
             return entries;
+
+        // The registration seed a REGISTRY hands every new instance (Memex#116) — declared on the
+        // record, so the boot file carries it exactly as the Helm values and the Aspire keys do.
+        entries = entries.AddRange(DefaultGrantEntries(record.DefaultGrants));
 
         // 🚨 ModuleSlots, NOT ModuleEntries: the same slots PortalConfig emits. This route used to
         // render the contiguous list alone and drop every explicit RequiredModuleSlots entry, so
@@ -829,7 +859,7 @@ public static class DeploymentPortalConfig
         // rather than the portal ConfigMap, so it is emitted here only for a renderer with no second
         // file — the Aspire adapter.
         if (options.IncludeBootEntries)
-            foreach (var entry in ConfigurationEntries(d.PluginRepos, d.PreInstall))
+            foreach (var entry in ConfigurationEntries(d.PluginRepos, d.PreInstall).AddRange(DefaultGrantEntries(d.DefaultGrants)))
             {
                 var eq = entry.IndexOf('=');
                 Set(entry[..eq].Replace(":", "__"), entry[(eq + 1)..]);

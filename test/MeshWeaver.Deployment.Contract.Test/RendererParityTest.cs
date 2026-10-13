@@ -162,6 +162,7 @@ public class RendererParityTest
             .WithApprovalStepUp(true, "c1", "tenant")
             .WithPluginRepo("plugins", "https://github.com/Systemorph/MeshWeaver.Plugins", gitRef: "main")
             .PreInstall("MeshWeaver.Plugins/Hosting")
+            .DefaultGrants("Plugins/*")
             .WithRequiredModule("MeshWeaver.Hosting.Postgres").WithRequiredModulesAuthoritative(true)
             .WithReplicas(2).WithOrleansClustering("AdoNet").WithHttpPort(8080)
             .WithResources("500m", "2Gi", "2", "8Gi")

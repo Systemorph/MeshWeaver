@@ -210,6 +210,22 @@ public record DeploymentContent
     public ImmutableList<string> PreInstall { get; init; } = ImmutableList<string>.Empty;
 
     /// <summary>
+    /// The grants a plugin REGISTRY seeds into every new instance registration — package patterns
+    /// (<c>Plugins/*</c>, <c>Education/Edu</c>), the portal's <c>PluginCatalog:DefaultGrants:N</c>.
+    /// Read only by a registry (<see cref="IsPluginRegistry"/>): a consumer registers AT a registry
+    /// and never mints grants itself. Empty renders nothing, so the chart's default (no seed) stands
+    /// and a newly registered instance is granted only what its registration key or an admin adds.
+    ///
+    /// <para>Rendered on every route from this one declaration (Memex#116): the Helm values'
+    /// <c>pluginCatalog.defaultGrants</c>, and <see cref="DeploymentPortalConfig.BootConfigurationEntries"/>
+    /// plus the Aspire route's portal keys through <see cref="DeploymentPortalConfig.DefaultGrantEntries"/>.
+    /// Before it existed the seed lived only in a hand-edited overlay, and a re-render from the record
+    /// silently dropped it.</para>
+    /// </summary>
+    [Description("Grants a plugin registry seeds into every new instance registration (e.g. Plugins/*)")]
+    public ImmutableList<string> DefaultGrants { get; init; } = ImmutableList<string>.Empty;
+
+    /// <summary>
     /// Key Vault secret NAME holding the MAIN database connection string. Blank → the convention
     /// <c>{KeyVaultSecretPrefix}db-connection</c> (<see cref="DeploymentPortalConfig.DatabaseSecretName"/>).
     /// A NAME, never a value — the value lives in the vault, written by the provision's
