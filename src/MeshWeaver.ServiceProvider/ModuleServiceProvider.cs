@@ -1,8 +1,10 @@
 #nullable enable
 using System.Collections.Immutable;
+using System.Reflection;
 using Autofac;
 using Autofac.Builder;
 using Autofac.Core;
+using Autofac.Core.Lifetime;
 using Autofac.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -40,7 +42,9 @@ public static class ModuleServiceProvider
         IServiceProvider root,
         Func<Type, bool> isModuleType,
         IEnumerable<ServiceDescriptor> rootOpenGenerics)
-        => Create(services, root, isModuleType, rootOpenGenerics, _ => []);
+        => CreateForCallers(services, root, isModuleType, rootOpenGenerics, NoRegistrationsElsewhere);
+
+    private static IReadOnlyList<Func<ILifetimeScope?, object>> NoRegistrationsElsewhere(Type type) => [];
 
     /// <summary>
     /// As <see cref="Create(IServiceCollection, IServiceProvider, Func{Type, bool}, IEnumerable{ServiceDescriptor})"/>,
@@ -61,17 +65,108 @@ public static class ModuleServiceProvider
         IEnumerable<ServiceDescriptor> rootOpenGenerics,
         Func<Type, IReadOnlyList<Func<object>>> registrationsElsewhere)
     {
+        ArgumentNullException.ThrowIfNull(registrationsElsewhere);
+        return CreateForCallers(services, root, isModuleType, rootOpenGenerics,
+            type => registrationsElsewhere(type).Select(resolve => (Func<ILifetimeScope?, object>)(_ => resolve())).ToArray());
+    }
+
+    /// <summary>
+    /// As <see cref="Create(IServiceCollection, IServiceProvider, Func{Type, bool}, IEnumerable{ServiceDescriptor}, Func{Type, IReadOnlyList{Func{object}}})"/>,
+    /// with resolvers that are told the CALLER a module type is resolved for — the root-side scope (a
+    /// Blazor circuit, a request, a hub scope) the asking module scope serves, or null for none — so a
+    /// scoped registration in ANOTHER module's container is built in that module's scope owned by the
+    /// same caller (MeshWeaver#6584, <see cref="ResolveAt(IServiceProvider, Type, int, ILifetimeScope?)"/>).
+    /// </summary>
+    /// <param name="services">The module's own registrations.</param>
+    /// <param name="root">The mesh's root provider.</param>
+    /// <param name="isModuleType">Whether a type names the module (its own type or a generic over one).</param>
+    /// <param name="rootOpenGenerics">The root's open-generic registrations.</param>
+    /// <param name="registrationsElsewhere">A module type's registrations in other module containers, in order,
+    /// each resolving for a caller.</param>
+    public static IServiceProvider CreateForCallers(
+        IServiceCollection services,
+        IServiceProvider root,
+        Func<Type, bool> isModuleType,
+        IEnumerable<ServiceDescriptor> rootOpenGenerics,
+        Func<Type, IReadOnlyList<Func<ILifetimeScope?, object>>> registrationsElsewhere)
+    {
         var builder = new ContainerBuilder();
-        builder.Populate(services);
+        builder.PopulateMeshWeaver(services);
+        var callers = new ModuleCallerScopes();
+        builder.RegisterInstance(callers).AsSelf().ExternallyOwned();
         if (root.GetService<ILifetimeScope>() is { } rootScope)
-            // One root child scope per module scope, disposed with it — where every root registration
-            // a module scope asks for is resolved (see RootResolutionScope).
-            builder.Register(_ => new RootResolutionScope(rootScope.BeginLifetimeScope()))
+            // Where every root registration a module scope asks for is resolved (see RootResolutionScope):
+            // in a module scope a CALLER owns (MeshWeaver#6584), that caller's own scope — its circuit's
+            // NavigationManager and IJSRuntime; in any other module scope, one root child scope of its
+            // own, disposed with it.
+            builder.Register(context => CallerOfModuleScope(context.Resolve<ILifetimeScope>()) is { } caller
+                    ? new RootResolutionScope(caller, owned: false)
+                    : new RootResolutionScope(rootScope.BeginLifetimeScope(), owned: true))
                 .AsSelf()
                 .InstancePerLifetimeScope();
         builder.RegisterSource(new ModuleFallbackSource(root, isModuleType, rootOpenGenerics, registrationsElsewhere));
-        return new AutofacServiceProvider(builder.Build());
+        var container = builder.Build();
+        callers.Attach(container);
+        // The callers' module scopes end FIRST, before the generation's singletons they may use.
+        container.CurrentScopeEnding += (_, _) => callers.Dispose();
+        return new AutofacServiceProvider(container);
     }
+
+    /// <summary>
+    /// The ROOT-side scope a resolution on the mesh's root container is made for — a Blazor circuit's,
+    /// a request's, a hub's — or null when it is made in the root container itself (a singleton, or a
+    /// resolve off the root provider). What a root forwarder or a root stand-in for a module type passes
+    /// as the caller (MeshWeaver#6584).
+    /// </summary>
+    /// <param name="scope">The scope the resolution is made in.</param>
+    public static ILifetimeScope? CallerOfRootScope(ILifetimeScope? scope) =>
+        scope is null || (scope is ISharingLifetimeScope sharing && ReferenceEquals(sharing.RootLifetimeScope, sharing))
+            ? null
+            : scope;
+
+    /// <summary>As <see cref="CallerOfRootScope(ILifetimeScope?)"/>, for a root-side provider.</summary>
+    /// <param name="provider">The provider the resolution is made from.</param>
+    public static ILifetimeScope? CallerOfRootScope(IServiceProvider? provider) =>
+        CallerOfRootScope(provider?.GetService<ILifetimeScope>());
+
+    /// <summary>
+    /// The caller a MODULE container's scope serves: the root-side scope that owns it (or owns a scope it
+    /// was begun from) — or null for the module container's own root and every scope begun from it.
+    /// </summary>
+    /// <param name="scope">A scope of a module container.</param>
+    public static ILifetimeScope? CallerOfModuleScope(ILifetimeScope? scope)
+    {
+        for (var current = scope as ISharingLifetimeScope; current is not null; current = current.ParentLifetimeScope)
+            if (current.Tag is CallerTag tag)
+                return tag.Caller;
+        return null;
+    }
+
+    /// <summary>
+    /// The module scope <paramref name="caller"/> owns in <paramref name="moduleContainer"/> — created on
+    /// first use, disposed with the caller (or with the generation, whichever ends first) — or
+    /// <paramref name="moduleContainer"/> itself when there is no caller.
+    ///
+    /// <para>🚨 <b>Why</b> (MeshWeaver#6584). A module's SCOPED registration resolved from the module
+    /// container's own root is ONE instance per generation, shared by every circuit, and its root
+    /// dependencies come from a root child scope no circuit initialised: Radzen's <c>ThemeService</c> was
+    /// one instance for every user, and <c>DialogService</c> subscribed to a <c>NavigationManager</c> that
+    /// throws <c>'RemoteNavigationManager' has not been initialized</c>. In the caller's own module scope
+    /// it is that caller's instance, built against that caller's <c>NavigationManager</c> and
+    /// <c>IJSRuntime</c>.</para>
+    /// </summary>
+    /// <param name="moduleContainer">A provider <see cref="CreateForCallers"/> built.</param>
+    /// <param name="caller">The root-side scope resolving, or null.</param>
+    public static IServiceProvider InCallerScope(IServiceProvider moduleContainer, ILifetimeScope? caller)
+    {
+        ArgumentNullException.ThrowIfNull(moduleContainer);
+        if (caller is null || moduleContainer.GetService<ILifetimeScope>() is not { } scope)
+            return moduleContainer;
+        return InCallerScope(scope, caller).Resolve<IServiceProvider>();
+    }
+
+    private static ILifetimeScope InCallerScope(ILifetimeScope moduleScope, ILifetimeScope caller) =>
+        moduleScope.ResolveOptional<ModuleCallerScopes>() is { } callers ? callers.For(caller) : moduleScope;
 
     /// <summary>
     /// 🚨 <b>Built before published</b> (MeshWeaver#6542, MeshWeaver#6556): builds every
@@ -168,6 +263,56 @@ public static class ModuleServiceProvider
     }
 
     /// <summary>
+    /// As <see cref="StandIns(Type, IReadOnlyList{Func{object}}, bool)"/>, each resolver told the caller
+    /// <paramref name="callerOf"/> reads off the scope the stand-in is resolved in (MeshWeaver#6584).
+    /// </summary>
+    /// <param name="type">The service type the stand-ins expose.</param>
+    /// <param name="resolvers">One resolver per registration, in order.</param>
+    /// <param name="explicitRegistrationsExist">Whether the container registers the type itself.</param>
+    /// <param name="callerOf">The caller a resolving scope serves — <see cref="CallerOfRootScope(ILifetimeScope?)"/>
+    /// on the root, <see cref="CallerOfModuleScope"/> in a module container.</param>
+    public static IEnumerable<IComponentRegistration> StandIns(
+        Type type, IReadOnlyList<Func<ILifetimeScope?, object>> resolvers, bool explicitRegistrationsExist,
+        Func<ILifetimeScope?, ILifetimeScope?> callerOf)
+    {
+        ArgumentNullException.ThrowIfNull(callerOf);
+        var standIns = resolvers
+            .Select(resolve => RegistrationBuilder
+                .ForDelegate(type, (context, _) => resolve(callerOf(context.Resolve<ILifetimeScope>())))
+                .ExternallyOwned()
+                .InstancePerDependency()
+                .CreateRegistration())
+            .ToArray();
+        return explicitRegistrationsExist ? standIns : standIns.Reverse();
+    }
+
+    /// <summary>
+    /// As <see cref="ResolveAt(IServiceProvider, Type, int)"/>, for <paramref name="caller"/>: a registration
+    /// that is not a singleton is resolved in the module scope the caller owns
+    /// (<see cref="InCallerScope(IServiceProvider, ILifetimeScope?)"/>) — that caller's instance, built
+    /// against that caller's scope — and a singleton in the module container, the generation's one
+    /// instance, as before.
+    /// </summary>
+    /// <param name="provider">The provider holding the registrations — a module container.</param>
+    /// <param name="serviceType">The (closed) service type.</param>
+    /// <param name="position">Zero-based position among that type's registrations.</param>
+    /// <param name="caller">The root-side scope resolving, or null.</param>
+    public static object ResolveAt(IServiceProvider provider, Type serviceType, int position, ILifetimeScope? caller)
+    {
+        if (caller is null || provider.GetService<ILifetimeScope>() is not { } scope)
+            return ResolveAt(provider, serviceType, position);
+        var service = new TypedService(serviceType);
+        var registration = scope.ComponentRegistry.ServiceRegistrationsFor(service)
+            .OrderBy(r => r.GetRegistrationOrder())
+            .ElementAtOrDefault(position);
+        if (registration.Registration is null)
+            throw new InvalidOperationException(
+                $"{serviceType} has no registration at position {position} in this module container.");
+        var resolveIn = ScopedDependencyWalk.IsSingleton(registration.Registration) ? scope : InCallerScope(scope, caller);
+        return resolveIn.ResolveComponent(new ResolveRequest(service, registration, []));
+    }
+
+    /// <summary>
     /// Resolves the <paramref name="position"/>-th registration of <paramref name="serviceType"/> in
     /// <paramref name="provider"/>, counted in registration order — exactly the element
     /// <c>GetServices(serviceType)</c> yields at that position, and nothing else.
@@ -199,19 +344,205 @@ public static class ModuleServiceProvider
 }
 
 /// <summary>
-/// A root child scope owned by one module scope — the module container's own root scope or a scope
-/// begun from it — and disposed with it. Every root registration that module scope asks for is
-/// resolved here, so the root's lifetimes keep their meaning across the container boundary: a
-/// singleton is the root's one instance, while a scoped service is never built — and shared, under
-/// the root container's lock — in the root itself (MeshWeaver#6432).
+/// Where one module scope resolves every root registration it asks for, so the root's lifetimes keep
+/// their meaning across the container boundary: a singleton is the root's one instance, while a scoped
+/// service is never built — and shared, under the root container's lock — in the root itself
+/// (MeshWeaver#6432). For a module scope a CALLER owns (MeshWeaver#6584) that is the caller's own scope —
+/// a circuit's <c>NavigationManager</c> is that circuit's — and is not disposed here; for any other
+/// module scope it is a root child scope of its own, disposed with it.
 /// </summary>
-internal sealed class RootResolutionScope(ILifetimeScope scope) : IDisposable
+internal sealed class RootResolutionScope(ILifetimeScope scope, bool owned) : IDisposable
 {
-    /// <summary>The root child scope.</summary>
+    /// <summary>The scope root registrations are resolved in.</summary>
     public ILifetimeScope Scope { get; } = scope;
 
     /// <inheritdoc />
-    public void Dispose() => Scope.Dispose();
+    public void Dispose()
+    {
+        if (owned)
+            Scope.Dispose();
+    }
+}
+
+/// <summary>The tag of a module scope a caller owns — names the caller.</summary>
+internal sealed class CallerTag(ILifetimeScope caller)
+{
+    /// <summary>The root-side scope that owns the module scope.</summary>
+    public ILifetimeScope Caller { get; } = caller;
+
+    /// <inheritdoc />
+    public override string ToString() => $"module scope owned by {Caller.Tag}";
+}
+
+/// <summary>
+/// The module scopes CALLERS own in one module container (MeshWeaver#6584,
+/// <see cref="ModuleServiceProvider.InCallerScope(IServiceProvider, ILifetimeScope?)"/>): one per caller,
+/// begun on first use, disposed when the caller ends — it is handed to the caller's own disposer — or when
+/// the generation ends, whichever is first. Held per container, never static.
+/// </summary>
+internal sealed class ModuleCallerScopes : IDisposable
+{
+    private readonly object gate = new();
+    private ILifetimeScope? container;
+    private ImmutableDictionary<ILifetimeScope, CallerOwnedModuleScope> scopes =
+        ImmutableDictionary.Create<ILifetimeScope, CallerOwnedModuleScope>(ReferenceEqualityComparer.Instance);
+    private bool disposed;
+
+    /// <summary>Binds the container the scopes are begun from — once it is built.</summary>
+    public void Attach(ILifetimeScope moduleContainer) => container = moduleContainer;
+
+    /// <summary>The module scope <paramref name="caller"/> owns, begun on first use.</summary>
+    public ILifetimeScope For(ILifetimeScope caller)
+    {
+        CallerOwnedModuleScope created;
+        ILifetimeScope begun;
+        lock (gate)
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            if (scopes.TryGetValue(caller, out var existing) && existing.Scope is { } live)
+                return live;
+            begun = (container ?? throw new InvalidOperationException("The module container is not built yet."))
+                .BeginLifetimeScope(new CallerTag(caller));
+            // ONE lock for the caller and every module scope it owns, before anything can resolve in it.
+            CallerSharedInstanceLock.Share(caller, begun);
+            created = new CallerOwnedModuleScope(this, caller, begun);
+            scopes = scopes.SetItem(caller, created);
+        }
+        try
+        {
+            // Owned by the caller: it ends when the caller ends, disposed the way the caller is (a Blazor
+            // circuit's scope is disposed asynchronously).
+            caller.Disposer.AddInstanceForAsyncDisposal(created);
+        }
+        catch (ObjectDisposedException)
+        {
+            created.Dispose();
+            throw;
+        }
+        return begun;
+    }
+
+    /// <summary>Drops <paramref name="owned"/> once it has ended.</summary>
+    public void Forget(ILifetimeScope caller, CallerOwnedModuleScope owned)
+    {
+        lock (gate)
+        {
+            if (scopes.TryGetValue(caller, out var held) && ReferenceEquals(held, owned))
+                scopes = scopes.Remove(caller);
+        }
+    }
+
+    /// <summary>Ends every caller's module scope — the generation is ending.</summary>
+    public void Dispose()
+    {
+        ImmutableDictionary<ILifetimeScope, CallerOwnedModuleScope> ending;
+        lock (gate)
+        {
+            if (disposed)
+                return;
+            disposed = true;
+            ending = scopes;
+            scopes = scopes.Clear();
+            container = null;
+        }
+        foreach (var owned in ending.Values)
+            owned.Dispose();
+    }
+}
+
+/// <summary>
+/// 🚨 <b>One lock owner per caller</b> (MeshWeaver#6584). Autofac builds every shared instance of a scope
+/// under that scope's one shared-instance lock, held for the whole build. A module scope a caller owns is
+/// a scope of the MODULE container, so it had a lock of its own — and the two are taken in both orders: a
+/// caller-scoped ROOT service whose construction reaches a module's scoped service holds the caller's lock
+/// and waits for the module scope's, while that module service's construction, taking a caller-scoped
+/// root service not built yet (its root resolutions are made in the caller's own scope), holds the module
+/// scope's lock and waits for the caller's. Two first builds overlapping in those orders deadlocked.
+///
+/// <para>So a caller-owned module scope — and every scope begun from it — takes its CALLER's lock as its
+/// own: one monitor for the caller and everything it owns, re-entered (never waited for) by the thread
+/// already holding it, so no order between them exists to invert. Every road into the module scope is
+/// covered, including a module service that keeps its <see cref="IServiceProvider"/> and resolves later.
+/// <c>CallerAndModuleScopedServicesBuildInOneLockTest</c> forces the overlap; its negative control begins
+/// the same scope without the shared lock and deadlocks.</para>
+///
+/// <para>Autofac exposes no way to hand a scope its lock, so the scope's lock field is set before the
+/// scope is handed to anyone. Autofac is pinned (<c>Directory.Packages.props</c>); a version whose
+/// <c>LifetimeScope</c> no longer carries that field fails here, loudly, at the first caller — never a
+/// silent return of the deadlock — and <c>CallerAndModuleScopedServicesBuildInOneLockTest</c> fails with it.</para>
+/// </summary>
+internal static class CallerSharedInstanceLock
+{
+    private static readonly FieldInfo? SyncRoot =
+        typeof(LifetimeScope).GetField("_synchRoot", BindingFlags.Instance | BindingFlags.NonPublic);
+
+    /// <summary>Makes <paramref name="owned"/> — and every scope later begun from it — build its shared
+    /// instances under <paramref name="caller"/>'s lock.</summary>
+    /// <param name="caller">The root-side scope that owns <paramref name="owned"/>.</param>
+    /// <param name="owned">A module scope just begun for <paramref name="caller"/>, not yet handed out.</param>
+    public static void Share(ILifetimeScope caller, ILifetimeScope owned)
+    {
+        var callerLock = LockOf(caller);
+        Adopt(owned, callerLock);
+    }
+
+    private static void Adopt(ILifetimeScope scope, object callerLock)
+    {
+        SyncRoot!.SetValue(AsLifetimeScope(scope), callerLock);
+        scope.ChildLifetimeScopeBeginning += (_, args) => Adopt(args.LifetimeScope, callerLock);
+    }
+
+    private static object LockOf(ILifetimeScope scope) =>
+        SyncRoot?.GetValue(AsLifetimeScope(scope))
+        ?? throw new InvalidOperationException(
+            "Autofac's LifetimeScope no longer carries the shared-instance lock field '_synchRoot': a module "
+            + "scope a caller owns cannot share its caller's lock, and the two would deadlock (MeshWeaver#6584). "
+            + "Re-establish the shared lock for this Autofac version before upgrading.");
+
+    private static LifetimeScope AsLifetimeScope(ILifetimeScope scope) =>
+        scope as LifetimeScope
+        ?? throw new InvalidOperationException(
+            $"A caller scope must be an Autofac LifetimeScope to share its lock; got {scope.GetType()} (MeshWeaver#6584).");
+}
+
+/// <summary>
+/// One caller's module scope, as the caller's disposer holds it. Disposing it ends the scope and lets
+/// go of it, so a caller that outlives the generation (a long-lived hub scope across a live swap) holds
+/// nothing of that generation — the module's collectible context stays collectible.
+/// </summary>
+internal sealed class CallerOwnedModuleScope : IDisposable, IAsyncDisposable
+{
+    private ModuleCallerScopes? owner;
+    private ILifetimeScope? caller;
+    private ILifetimeScope? scope;
+
+    public CallerOwnedModuleScope(ModuleCallerScopes owner, ILifetimeScope caller, ILifetimeScope scope)
+    {
+        this.owner = owner;
+        this.caller = caller;
+        this.scope = scope;
+    }
+
+    /// <summary>The module scope, or null once it ended.</summary>
+    public ILifetimeScope? Scope => Volatile.Read(ref scope);
+
+    /// <inheritdoc />
+    public void Dispose() => Release()?.Dispose();
+
+    /// <inheritdoc />
+    public ValueTask DisposeAsync() => Release()?.DisposeAsync() ?? ValueTask.CompletedTask;
+
+    private ILifetimeScope? Release()
+    {
+        var ending = Interlocked.Exchange(ref scope, null);
+        if (ending is null)
+            return null;
+        var from = Interlocked.Exchange(ref owner, null);
+        var of = Interlocked.Exchange(ref caller, null);
+        if (from is not null && of is not null)
+            from.Forget(of, this);
+        return ending;
+    }
 }
 
 /// <summary>
@@ -222,7 +553,7 @@ internal sealed class ModuleFallbackSource(
     IServiceProvider root,
     Func<Type, bool> isModuleType,
     IEnumerable<ServiceDescriptor> rootOpenGenerics,
-    Func<Type, IReadOnlyList<Func<object>>> registrationsElsewhere) : IRegistrationSource
+    Func<Type, IReadOnlyList<Func<ILifetimeScope?, object>>> registrationsElsewhere) : IRegistrationSource
 {
     private readonly IReadOnlyDictionary<Type, ServiceDescriptor> openGenerics = rootOpenGenerics
         .Where(d => d.ServiceType.IsGenericTypeDefinition && d.ImplementationType is not null && !d.IsKeyedService)
@@ -250,7 +581,10 @@ internal sealed class ModuleFallbackSource(
         var elsewhere = registrationsElsewhere(type);
         if (elsewhere.Count > 0)
         {
-            foreach (var standIn in ModuleServiceProvider.StandIns(type, elsewhere, ownRegistrations))
+            // Resolved for the caller this module scope serves (MeshWeaver#6584): another module's
+            // scoped registration is that caller's instance, in that module's scope the caller owns.
+            foreach (var standIn in ModuleServiceProvider.StandIns(type, elsewhere, ownRegistrations,
+                         ModuleServiceProvider.CallerOfModuleScope))
                 yield return standIn;
             yield break;
         }

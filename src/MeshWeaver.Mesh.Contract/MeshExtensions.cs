@@ -134,6 +134,9 @@ public static class MeshExtensions
         // the document's own hub, and the part / annotation content is read by every hub that lists a
         // document — all of them need the short discriminators, or a receiving hub sees an untyped
         // JsonElement and the request handler never matches.
+        // The approval decision the personal inbox sends to an approval's own hub (Approve all).
+        config.TypeRegistry.WithType(typeof(DecideApprovalRequest), nameof(DecideApprovalRequest));
+        config.TypeRegistry.WithType(typeof(DecideApprovalResponse), nameof(DecideApprovalResponse));
         config.TypeRegistry.WithType(typeof(AppendDocumentTextRequest), nameof(AppendDocumentTextRequest));
         config.TypeRegistry.WithType(typeof(AppendDocumentTextResponse), nameof(AppendDocumentTextResponse));
         config.TypeRegistry.WithType(typeof(DocumentLogTarget), nameof(DocumentLogTarget));
@@ -753,7 +756,8 @@ public static class MeshExtensions
         // identity, and the subscriber matches the end on its StreamId alone
         // (JsonSynchronizationStream's StreamEndedEvent registration), so the sender does not change
         // what it does.
-        hub.StreamSubscribingHub().Post(new StreamEndedEvent(streamId), o => o.WithTarget(subscriber));
+        hub.StreamSubscribingHub().Post(new StreamEndedEvent(streamId) { Activation = ShutdownNack.ActivationToken(hub) },
+            o => o.WithTarget(subscriber));
     }
 
     /// <summary>

@@ -103,7 +103,11 @@ public class QueryEvaluator
         return condition.Operator switch
         {
             QueryOperator.Equal => CompareEqual(actualValue, condition.Value),
-            QueryOperator.NotEqual => !CompareEqual(actualValue, condition.Value),
+            // A `*` in a NotEqual value is a negated wildcard (`-field:val*`, #6581): the
+            // complement of the glob, never a literal compare against the pattern.
+            QueryOperator.NotEqual => QueryWildcard.ContainsWildcard(condition.Value)
+                ? QueryWildcard.IsNotLikeMatch(actualValue?.ToString(), condition.Value)
+                : !CompareEqual(actualValue, condition.Value),
             QueryOperator.GreaterThan => CompareNumeric(actualValue, condition.Value) > 0,
             QueryOperator.LessThan => CompareNumeric(actualValue, condition.Value) < 0,
             QueryOperator.GreaterOrEqual => CompareNumeric(actualValue, condition.Value) >= 0,

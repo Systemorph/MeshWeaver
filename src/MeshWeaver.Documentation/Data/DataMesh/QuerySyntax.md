@@ -83,7 +83,12 @@ status:Active
 
 ```
 -status:Archived
+-content.apiKey:enc*   # every node whose apiKey does NOT start with 'enc'
 ```
+
+A negation is the **complement within the same scope**: `-field:value` returns exactly the nodes
+`field:value` does not, wildcards included. A node that does not have the field at all is part of
+the complement — it does not match `field:value`, so `-field:value` keeps it.
 
 ### Wildcard Patterns
 
@@ -94,6 +99,11 @@ name:*claims*     # Contains 'claims'
 name:Acme*        # Starts with 'Acme'
 name:*Corp        # Ends with 'Corp'
 ```
+
+**`*` is the only wildcard.** Every other character in a value is literal, on every backend —
+including SQL's `%`, `_` and `\`. `code:50%*` matches `50%off` and not `50xoff`; `code:a_*`
+matches `a_b` and not `axb`. The SQL backends escape those characters before they translate `*`
+into their own wildcard ([Query Provider Parity](/Doc/Architecture/QueryProviderParity)).
 
 ### Comparison Operators
 

@@ -72,8 +72,8 @@ public static class StandardReducers
         var value = pointer.Evaluate(current.Value) ?? default;
 
         // Decode the pointer segments for comparison - segments may be JSON-encoded (e.g., "\"toolbar\"")
-        var collection = pointer.SegmentCount > 0 ? pointer.GetSegment(0).ToString() : null;
-        var idSegment = pointer.SegmentCount > 1 ? pointer.GetSegment(1).ToString() : null;
+        var collection = pointer.SegmentCount > 0 ? pointer.GetSegment(0).Decode() : null;
+        var idSegment = pointer.SegmentCount > 1 ? pointer.GetSegment(1).Decode() : null;
         // Decode JSON-encoded id (e.g., "\"toolbar\"" -> "toolbar")
         var id = idSegment != null ? JsonSerializer.Deserialize<object>(idSegment) : null;
 
@@ -283,13 +283,13 @@ public static class StandardReducers
         var updates = new List<EntityUpdate>();
         foreach (var g in
                  patch!.Operations
-                     .GroupBy(p => p.Path.GetSegment(0).ToString()))
+                     .GroupBy(p => p.Path.GetSegment(0).Decode()))
         {
             var allChanges = g.ToArray();
             if (allChanges.Length == 1 && allChanges[0].Path.SegmentCount == 1)
             {
                 var change = allChanges[0];
-                var collection = change.Path.GetSegment(0).ToString();
+                var collection = change.Path.GetSegment(0).Decode();
                 switch (change.Op)
                 {
                     case OperationType.Add:
@@ -313,7 +313,11 @@ public static class StandardReducers
 
             foreach (var eg in allChanges.GroupBy(p => new
             {
-                Id = p.Path.GetSegment(1).ToString(),
+                // 🚨 DECODED (#6629): GetSegment hands back the RFC 6901-escaped text, so an id
+                // containing '/' or '~' arrives as "a~1b"/"a~0b". Deserializing that names a
+                // DIFFERENT entity, and JsonPointer.Create below escapes it a second time
+                // ("a~01b"), so the patched value was never found and the owner kept its old one.
+                Id = p.Path.GetSegment(1).Decode(),
                 Op = p.Op switch
                 {
                     OperationType.Add => OperationType.Add,
@@ -322,7 +326,7 @@ public static class StandardReducers
                 }
             }))
             {
-                var collection = allChanges.First().Path.GetSegment(0).ToString();
+                var collection = allChanges.First().Path.GetSegment(0).Decode();
                 var id = JsonSerializer.Deserialize<object>(eg.Key.Id, hub.JsonSerializerOptions)!;
                 var currentCollection = currentStore.GetCollection(collection);
                 if (currentCollection == null)
