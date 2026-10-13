@@ -297,6 +297,22 @@ public static class DataExtensions
                 return Observable.Return(request.Failed($"Error deserializing RawJson: {ex}"));
             }
         }
+
+        // A COALESCED recycle announcement (#5532): one StreamEndedEvent naming every stream this
+        // subscriber held on a recycled owner (Workspace.CoalesceRecycleEnds). Split it HERE, before
+        // anything is forwarded, into the one end per stream each sync/{id} sub-hub has always
+        // received, each routed through this same method, so each gets the same sub-hub search, the
+        // same registration grace and the same drop diagnostic as a single end. Only a subscriber
+        // that declared SubscribeRequest.AcceptsCoalescedStreamEnd is sent one, and that declaration
+        // is made by this assembly (JsonSynchronizationStream.MintSubscribeRequest).
+        if (message is StreamEndedEvent { AlsoEndedStreamIds: { Count: > 0 } more } coalesced)
+        {
+            _ = RouteStreamMessage(hub, request.WithMessage(coalesced with { AlsoEndedStreamIds = null }));
+            foreach (var streamId in more)
+                _ = RouteStreamMessage(hub, request.WithMessage(new StreamEndedEvent(streamId) { Activation = coalesced.Activation }));
+            return Observable.Return(request.Forwarded());
+        }
+
         if (message is not StreamMessage streamMessage)
             return Observable.Return(request);
 

@@ -242,6 +242,66 @@ public class DeferredDeliveryNackedOnDisposeTest : HubTestBase
             + "claim of stranded work has no victim");
     }
 
+    /// <summary>A request type with several producers, only some of which re-ask: the shape of
+    /// <c>GetDataRequest</c>. It is NOT marked, so the claim has to come from the producer.</summary>
+    private record SharedRead : IRequest<GatedResponse>;
+
+    private static readonly Address DeclaringProducerAddress = new("declaring-producer", "1");
+
+    /// <summary>
+    /// #5718, the shape left after the type-level marker: a partition hub recycled by a live module
+    /// update while a <c>GetDataRequest</c> from one of its NodeType hubs was parked behind
+    /// <c>[DataContextInit,MeshNodeInit]</c>. That request came from the node point read, which
+    /// re-issues on a <c>ShuttingDown</c> answer, but the TYPE cannot be marked: the
+    /// content-collection reads send the same type and do not re-ask. The producer that does
+    /// declares it on its own request (<see cref="PostOptions.ReaskingOnShutdown"/>), and the
+    /// discard is then teardown-normal. The NACK is unchanged, so its re-ask still runs.
+    ///
+    /// <para>Control: <see cref="DeferredRequest_IsNacked_WhenHubIsDisposedBeforeItsGateOpens"/>,
+    /// the same teardown over an undeclared request, still reports at Error.</para>
+    /// </summary>
+    [Fact]
+    public async Task ARequestWhoseProducerDeclaresTheReask_IsTeardownNormal_NotAnError()
+    {
+        var host = GetHost();
+
+        var gated = host.GetHostedHub(
+            DeclaringProducerAddress,
+            c => c.WithTypes(typeof(SharedRead), typeof(GatedResponse))
+                .WithInitializationGate("declaring-producer-gate-never-opens", _ => false)
+                .WithHandler<SharedRead>((h, d) =>
+                {
+                    h.Post(new GatedResponse(), o => o.ResponseFor(d));
+                    return d.Processed();
+                }));
+        gated.Should().NotBeNull();
+
+        var response = host
+            .Observe<GatedResponse>(new SharedRead(),
+                o => o.WithTarget(DeclaringProducerAddress).ReaskingOnShutdown())
+            .FirstAsync()
+            .Await(TestContext.Current.CancellationToken);
+
+        await WaitForDeferredBacklog(host);
+
+        ((MessageHub)gated!).NoteDirectDisposalBy(
+            "RecycleCascade from a live module update", "a landed module generation is pending activation");
+        gated.Dispose();
+
+        var failure = await Assert.ThrowsAsync<DeliveryFailureException>(() => response);
+        failure.Failure!.ErrorType.Should().Be(ErrorType.ShuttingDown,
+            "the producer's re-ask runs on this transient answer, so it must still be sent");
+
+        log.At(LogLevel.Debug).Should().Contain(
+            m => m.Contains("declaring-producer-gate-never-opens", StringComparison.Ordinal)
+                 && m.Contains("RecycleCascade from a live module update", StringComparison.Ordinal),
+            "the discard is still REPORTED, with its gate and its teardown");
+        log.At(LogLevel.Error).Should().NotContain(
+            m => m.Contains("declaring-producer-gate-never-opens", StringComparison.Ordinal),
+            "the producer declared that it re-asks the next activation on this answer, so the "
+            + "Error's claim of stranded work has no victim (#5718)");
+    }
+
     /// <summary>A fire-and-forget announcement, the shape of <c>StreamEndedEvent</c>.</summary>
     [CanBeIgnored]
     private record IgnorableNotice;

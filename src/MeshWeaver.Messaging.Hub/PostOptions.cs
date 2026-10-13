@@ -47,6 +47,29 @@ public record PostOptions(Address Sender)
     /// <returns>A new <see cref="PostOptions"/> declaring that the sender understands progress.</returns>
     public PostOptions AcceptingProgress() => WithProperty(AcceptsProgress, "true");
 
+    /// <summary>
+    /// Well-known property key a PRODUCER stamps on a request it re-asks on a transient
+    /// <c>ShuttingDown</c> answer: it observes the reply and, on the refusal an activation gives
+    /// while it goes down, sends the request again to the address's next activation.
+    ///
+    /// <para>The per-delivery form of <c>[ReaskedOnShutdown]</c>. That attribute is a claim about
+    /// EVERY producer of a type, so it cannot be put on a type with several producers of which only
+    /// some re-ask: <c>GetDataRequest</c> is sent by the node point read, which re-asks, and by the
+    /// content-collection reads and the MCP <c>get</c>, which do not (MeshWeaver#5718). This key is
+    /// the claim of ONE producer about ONE request. It is read in one place, the discard report of
+    /// a hub disposed while the delivery was parked behind its initialization gates
+    /// (<c>MessageService</c>, event 7301): a delivery that carries it is teardown-normal (Debug),
+    /// not an Error, exactly as a marked type is.</para>
+    /// </summary>
+    public const string ReasksOnShutdown = nameof(ReasksOnShutdown);
+
+    /// <summary>
+    /// Returns a copy of these options stamped <see cref="ReasksOnShutdown"/>. Stamp it only from a
+    /// producer that really asks the next activation on a <c>ShuttingDown</c> answer.
+    /// </summary>
+    /// <returns>A new <see cref="PostOptions"/> declaring that this sender re-asks on shutdown.</returns>
+    public PostOptions ReaskingOnShutdown() => WithProperty(ReasksOnShutdown, "true");
+
     internal Address Target { get; init; } = null!;
 
     /// <summary>

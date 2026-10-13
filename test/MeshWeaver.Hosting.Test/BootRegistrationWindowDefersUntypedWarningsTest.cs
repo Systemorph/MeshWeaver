@@ -231,6 +231,90 @@ public class BootRegistrationWindowDefersUntypedWarningsTest
         Assert.Equal("MeshNodeStreamCache.GetStream", d.Seam);
     }
 
+    /// <summary>A registered content type with a <c>required</c> member — content that omits it cannot bind.</summary>
+    public record BootWindowRequiredBodyContent
+    {
+        /// <summary>The member a partial write omits.</summary>
+        public required string Body { get; init; }
+    }
+
+    private const string RequiredBodyNodeType = "Probe/BootWindowRequiredBody";
+
+    private static MeshNode UnbindableNode(string id = "APageWithoutABody") =>
+        new(id, "Ops/Status")
+        {
+            NodeType = RequiredBodyNodeType,
+            Content = JsonSerializer.Deserialize<JsonElement>(
+                $$"""{"$type":"{{nameof(BootWindowRequiredBodyContent)}}","label":"no body"}"""),
+        };
+
+    /// <summary>
+    /// 🚨 #6674 gap 1 — the scenario #6639 reported, after a roll. The type IS registered while the
+    /// window is open, and the stored JSON does not bind to it. Re-asking the registry at settle time
+    /// finds the type, so on main the entry was dropped as "resolved" and no path-bearing line was
+    /// ever written. The deferred record carries "did not bind" apart from "no registration", and
+    /// the settle reports it. Negative control: without the carried cause the settle returns empty.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Seams))]
+    public void DuringTheWindow_AKnownTypeWhoseJsonDoesNotBind_IsReportedWhenTheWindowSettles(string seam)
+    {
+        var logger = new RecordingLogger();
+        var degradations = new ContentDegradationRegistry();
+        var registry = new MeshContentTypeRegistry();
+        registry.Register(typeof(BootWindowRequiredBodyContent), RequiredBodyNodeType);
+        degradations.DeferWarningsUntilRegistrationSettles();
+
+        Read(seam, UnbindableNode(), logger, registry, degradations);
+        Assert.Empty(logger.Records.Where(ReachesTheTraceSink));
+
+        var d = Assert.Single(degradations.SettleDeferredWarnings(registry));
+        Assert.Equal(RequiredBodyNodeType, d.NodeType);
+        Assert.Equal("Ops/Status/APageWithoutABody", d.LastPath);
+        Assert.Equal(nameof(BootWindowRequiredBodyContent), d.UnboundContentType);
+        Assert.Contains("is registered, but the stored JSON does not bind", d.Cause);
+        Assert.Empty(degradations.SettleDeferredWarnings(registry));
+    }
+
+    /// <summary>
+    /// #6674 gap 1, end to end through the hosted service: the settled line for a bind failure names
+    /// the path and the bind cause — never the registration text — and its marker carries the same
+    /// cause, so the line and the attached exception agree.
+    /// </summary>
+    [Fact]
+    public void TheHostedService_ReportsAKnownTypeWhoseJsonDoesNotBind_AsABindFailure()
+    {
+        var degradations = new ContentDegradationRegistry();
+        var registry = new MeshContentTypeRegistry();
+        registry.Register(typeof(BootWindowRequiredBodyContent), RequiredBodyNodeType);
+        var lifetime = new StartableLifetime();
+        var serviceLogger = new RecordingLogger<DynamicContentTypeRegistrationHostedService>();
+        using var services = new ServiceCollection()
+            .AddSingleton(degradations)
+            .AddSingleton<IMeshContentTypeRegistry>(registry)
+            .AddSingleton<IConfiguration>(new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    [DynamicContentTypeRegistrationHostedService.EnabledConfigKey] = "false",
+                })
+                .Build())
+            .BuildServiceProvider();
+
+        using var service = new DynamicContentTypeRegistrationHostedService(services, lifetime, serviceLogger);
+        Assert.True(service.StartAsync(TestContext.Current.CancellationToken).IsCompletedSuccessfully);
+        Read("GetQuery", UnbindableNode(), new RecordingLogger(), registry, degradations);
+
+        lifetime.Start();
+
+        var record = Assert.Single(serviceLogger.Records.Where(ReachesTheTraceSink));
+        Assert.Contains("Ops/Status/APageWithoutABody", record.Message);
+        Assert.Contains("is registered, but the stored JSON does not bind", record.Message);
+        Assert.DoesNotContain("TypeRegistry lacks", record.Message);
+        var marker = Assert.IsType<MeshNodeContentDegradedException>(record.Exception);
+        Assert.Contains("is registered, but the stored JSON does not bind", marker.ToString());
+        Assert.DoesNotContain("resolved to no registered", marker.ToString());
+    }
+
     /// <summary>The registration pass reaches the types readers are waiting on first.</summary>
     [Fact]
     public void ThePass_RegistersTheTypesAReadDegradedFirst_ThenThePathOrder()

@@ -343,6 +343,20 @@ The same registry closes the two neighbouring gaps of that class, again on both 
 `AWithdrawnModuleLeavesNoForwarderBehindTest` (Autofac) and `AWithdrawnModuleOnAPlainMsDiHostTest`
 (plain MS DI, no hook called by the test) pin both, with published twins as negative controls.
 
+**A withdrawn module's security rule leaves the rule set.** A module that registers an
+`INodeTypeAccessRule` (a platform interface) is forwarded to the root as a `ModuleServiceProxy`, and that
+registration stays in the root's `IEnumerable<INodeTypeAccessRule>` after the module is withdrawn.
+`NodeTypeAccessRuleSet` read each rule's `NodeType` while it built the security rules, and the dead proxy
+threw `Module … holds no service scope in this mesh`. Every write's `RlsNodeValidator` takes that set, so
+one withdrawn module made every node write fail, and with it every package install. The set now holds
+only members for which `ModuleServiceProxy.Serves` is true: an ordinary instance, or a proxy whose module
+the registry still holds. A lookup also skips a rule whose module is retired later. A type whose rule left
+falls back to the caller's standard permission check, which is closed by default. Any other consumer that
+builds an index over a platform interface a module can register should apply the same predicate.
+`AWithdrawnModulesAccessRuleLeavesTheSecurityRulesTest` pins this: the rule set builds, and a node write
+succeeds. On the base, both failed with the exception above. Its published twin is the negative control:
+there the rule governs its type.
+
 **Why.** Autofac holds a scope's shared-instance lock for the whole build of a shared instance, and
 that one lock covers every shared instance of the scope; an instance that exists is answered without
 the lock. The root reaches a module's services from inside its own builds — `ModuleOwnedRootSource`'s
