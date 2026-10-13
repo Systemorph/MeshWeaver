@@ -2183,6 +2183,13 @@ jobs:
     steps:
     - uses: actions/checkout@v7
       with: { fetch-depth: 1 }
+    # 🔀 Judge with the checker, allowlist and declarations of the SAME tree the evidence came
+    # from: the head merged onto the main the build compiled (build's main-sha) — policy
+    # suites-test-fresh-merge, Doc/Architecture/FreshMergeUnderTest. A no-op off pull requests.
+    - name: Merge the head onto the main the build compiled
+      uses: ./.github/actions/fresh-merge
+      with:
+        main-sha: ${{ needs.build.outputs.main-sha }}
     # The gate resolves licences from the RESTORED graph — direct and transitive — because a
     # copyleft dependency that arrives transitively binds us exactly as hard as a declared one.
     # No `continue-on-error`: a missing artifact fails the download, and an artifact without a
