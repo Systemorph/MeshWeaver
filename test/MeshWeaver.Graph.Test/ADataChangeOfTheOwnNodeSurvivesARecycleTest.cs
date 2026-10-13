@@ -45,7 +45,7 @@ public class ADataChangeOfTheOwnNodeSurvivesARecycleTest(ITestOutputHelper outpu
         => Observable.Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
             .SelectMany(_ => Store.Read(path, Mesh.JsonSerializerOptions).Take(1))
             .Where(n => TextOf(n) == text)
-            .Should().Within(30.Seconds()).Emit(because, cancellationToken: TestContext.Current.CancellationToken);
+            .Should().Within(TestTimeouts.Convergence).Emit(because, cancellationToken: TestContext.Current.CancellationToken);
 
     /// <summary>
     /// Creates a page, sends a <see cref="DataChangeRequest"/> to the node's own address carrying
