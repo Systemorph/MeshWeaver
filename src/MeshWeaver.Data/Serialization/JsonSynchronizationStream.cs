@@ -2117,8 +2117,11 @@ public static class JsonSynchronizationStream
         ITypeRegistry? typeRegistry = null)
         => patch.Operations.Select(p =>
             {
-                var id = p.Path.SegmentCount == 0 ? null : p.Path.GetSegment(1).ToString();
-                var rawCollection = p.Path.GetSegment(0).ToString();
+                // 🚨 DECODED segments (#6629): GetSegment is the RFC 6901-escaped text, and
+                // JsonPointer.Create escapes again — an id containing '/' or '~' evaluated to
+                // nothing and decoded to the wrong id.
+                var id = p.Path.SegmentCount < 2 ? null : p.Path.GetSegment(1).Decode();
+                var rawCollection = p.Path.GetSegment(0).Decode();
 
                 // Normalize collection name using TypeRegistry to ensure consistency
                 // This fixes the bug where JsonPatch paths contain full type names 
@@ -2130,7 +2133,7 @@ public static class JsonSynchronizationStream
                 var pointer = id == null ? JsonPointer.Create(collection) : JsonPointer.Create(collection, id);
                 return new EntityUpdate(
                         collection,
-                        DecodePointerSegment(id, options)!,
+                        id == null ? null! : JsonSerializer.Deserialize<object>(id, options)!,
                         pointer.Evaluate(updated)!
                     )
                 { OldValue = pointer.Evaluate(current) };
@@ -2494,11 +2497,11 @@ public static class JsonSynchronizationStream
         JsonSerializerOptions options)
         => patch.Operations.Select(p =>
         {
-            var id = p.Path.GetSegment(0);
+            // DECODED (#6629): CreatePointerFromSegments escapes, so it must be handed the real id.
+            var id = p.Path.SegmentCount == 0 ? string.Empty : p.Path.GetSegment(0).Decode();
 
-
-            JsonPointer? pointer = id == string.Empty ? null : CreatePointerFromSegments(id.ToString());
-            var idSegment = id == string.Empty ? null : JsonSerializer.Deserialize<object>(id.ToString(), options)!;
+            JsonPointer? pointer = id == string.Empty ? null : CreatePointerFromSegments(id);
+            var idSegment = id == string.Empty ? null : JsonSerializer.Deserialize<object>(id, options)!;
             return new EntityUpdate(
                 reference.Name,
                 idSegment,
