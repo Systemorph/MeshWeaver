@@ -1005,8 +1005,20 @@ both causes it cannot tell apart:
 
 🚨 **It changes no verdict, and must not.** The decision is already taken when this runs; the
 store-side grant is EVIDENCE, never an authorisation. Reading it as one would be a second,
-unreviewed permission path that bypasses roles, denies, policies and group expansion entirely — the
-probe reads PATHS, not content, and cannot know what the grant it found actually confers.
+unreviewed permission path that bypasses roles, denies, policies and group expansion entirely.
+
+**A grant at that path is not yet a disagreement — its roles decide (#6637).** The note used to
+fire on the path match alone, and so it fired on a create refused for a principal whose grant was a
+readable `AccessAssignment` with roles Viewer + Commenter: neither carries Create, the denial was
+settled and correct, and the note told the caller the opposite and invited a retry that could never
+succeed. `RlsNodeValidator` now passes the refused permission, and the probe reads that ONE grant
+(still only on a denial path). A typed `AccessAssignment` whose granted roles all resolve and none
+carries the permission yields a plain, localized note naming the roles held
+(`access.denial.rolesLackPermission`). The disagreement note stays for every case the evidence still
+supports: the roles DO carry the permission, the node is not a readable `AccessAssignment` (untyped
+content), a role does not resolve, or the refused permission is unknown. `_Policy` caps and
+inheritance are not re-derived here — the note says what the grant holds, not the fold's verdict.
+Pinned in `DenialTheStoreDisagreesWithSaysSoTest`.
 
 **What this does NOT do is fix the race**, and the residue is stated rather than implied. Two
 in-memory controls stay green on `main`: the full delete→recreate→child-create shape
