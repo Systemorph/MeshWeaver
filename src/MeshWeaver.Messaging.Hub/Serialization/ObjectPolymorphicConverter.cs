@@ -158,7 +158,8 @@ public class ObjectPolymorphicConverter(
                     // (a throw faults the node read → wedged grain); preserve the raw JSON
                     // so the node stays readable/repairable. Logged loud, not swallowed.
                     logger?.LogWarning(ex,
-                        "Content for '{TypeName}' could not be deserialized; preserving raw JSON",
+                        "Content for '{TypeName}' could not be deserialized; preserving raw JSON (a converter cannot see "
+                + "the node it is nested in — the read seam that holds the node logs its path)",
                         typeName);
                     return cleanedElement.Clone();
                 }
@@ -258,7 +259,8 @@ public class ObjectPolymorphicConverter(
             // Same contract as the general path: a registered type whose stored JSON no longer fits
             // is preserved as raw JSON (a throw faults the node read → wedged grain), logged loud.
             logger?.LogWarning(ex,
-                "Content for '{TypeName}' could not be deserialized; preserving raw JSON",
+                "Content for '{TypeName}' could not be deserialized; preserving raw JSON (a converter cannot see "
+                + "the node it is nested in — the read seam that holds the node logs its path)",
                 typeName);
             reader = start;
             using var doc = JsonDocument.ParseValue(ref reader);
