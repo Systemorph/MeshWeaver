@@ -101,20 +101,23 @@ internal static class NodeUpdatePipeline
                     // framework-owned fields to the live values so only REAL field differences
                     // count, then return the LIVE instance — the stream's reference-equality
                     // no-op gate completes the write without touching anything.
-                    // 🚨 CREATION METADATA IS CARRIED FROM THE LIVE NODE WHEN THE CALLER OMITS IT.
-                    // CreatedDate / CreatedBy are set once, at creation, and an update that does not
-                    // name them has not decided them: deserialising the omitted keys yields default /
-                    // null, and writing that wholesale RESET both — in RAM and on every backend that
-                    // persists the column on update (the MCP `update` tool, which sends what the agent
-                    // passes, did exactly this). A caller that names a value — an importer preserving
-                    // source metadata, a repair — keeps it. Applied BEFORE the no-op gate, so an
-                    // update that differs from the live node only by omitting them is a no-op.
+                    // 🚨 CREATION METADATA IS THE LIVE NODE'S — AN UPDATE NEVER CHANGES IT.
+                    // CreatedDate / CreatedBy are set once, at creation: Postgres holds
+                    // created_date / created_by IMMUTABLE (INSERT only, never in the ON CONFLICT
+                    // SET), and CreatedDate is the create rollback's lineage token. So whatever the
+                    // caller's node carries — default / null from an omitted key (the MCP `update`
+                    // tool, which sends what the agent passes, reset both this way), or a value it
+                    // names — the live values win. Writing a caller's value would make the live node
+                    // advertise a creation stamp the durable row never stores, reverting on reload.
+                    // A live node that has none yet (a projection-hydrated instance) takes the
+                    // caller's. Applied BEFORE the no-op gate, so an update that differs from the
+                    // live node only in creation metadata is a no-op.
                     var candidate = node with
                     {
                         Version = live.Version,
                         LastModified = live.LastModified,
-                        CreatedDate = node.CreatedDate == default ? live.CreatedDate : node.CreatedDate,
-                        CreatedBy = string.IsNullOrEmpty(node.CreatedBy) ? live.CreatedBy : node.CreatedBy,
+                        CreatedDate = live.CreatedDate != default ? live.CreatedDate : node.CreatedDate,
+                        CreatedBy = !string.IsNullOrEmpty(live.CreatedBy) ? live.CreatedBy : node.CreatedBy,
                     };
                     if (MeshNode.SerializedEquals(live, candidate, hub.JsonSerializerOptions))
                         return live;

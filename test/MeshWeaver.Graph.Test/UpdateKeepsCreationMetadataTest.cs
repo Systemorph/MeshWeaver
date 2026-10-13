@@ -13,14 +13,14 @@ using Xunit;
 namespace MeshWeaver.Graph.Test;
 
 /// <summary>
-/// 🚨 <b>A FULL-ENTITY UPDATE THAT OMITS <c>createdDate</c> / <c>createdBy</c> KEEPS THEM.</b>
+/// 🚨 <b>A FULL-ENTITY UPDATE NEVER CHANGES <c>createdDate</c> / <c>createdBy</c>.</b>
 ///
 /// <para>The MCP <c>update</c> tool deserialises the node an agent sends and hands it to
 /// <see cref="IMeshService.UpdateNode"/>. An agent that leaves out the creation metadata — it is
 /// framework-owned, so it usually does — produced a node with <c>CreatedDate = default</c> and
 /// <c>CreatedBy = null</c>, and the update pipeline wrote that wholesale: the node's creation
-/// time and creator were reset. The pipeline now carries both from the live node when the caller
-/// omits them, and keeps a value the caller names.</para>
+/// time and creator were reset. The pipeline now carries both from the live node whatever the
+/// caller sends — omitted or named — because Postgres holds both columns immutable.</para>
 /// </summary>
 public class UpdateKeepsCreationMetadataTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -72,20 +72,25 @@ public class UpdateKeepsCreationMetadataTest(ITestOutputHelper output) : Monolit
     }
 
     /// <summary>
-    /// Negative control: the carry-over applies only to OMITTED values — a caller that names a
-    /// creation timestamp (an importer preserving source metadata) still writes it.
+    /// A caller that NAMES different creation metadata does not change it either: Postgres holds
+    /// <c>created_date</c> / <c>created_by</c> immutable, so accepting the named value would make the
+    /// live node advertise a stamp the durable row never stores — on every backend the update keeps
+    /// the live values.
     /// </summary>
     [Fact(Timeout = 180000)]
-    public async Task UpdateNamingCreationMetadata_WritesTheNamedValue()
+    public async Task UpdateNamingCreationMetadata_KeepsTheLiveValues()
     {
         var created = await CreatePage(NewId());
         var named = MeshNode.StorageStable(created.CreatedDate.AddDays(-30));
 
-        await MeshService.UpdateNode(Page(created.Id, "# imported") with { CreatedDate = named }).Take(1)
+        await MeshService.UpdateNode(Page(created.Id, "# imported")
+                with { CreatedDate = named, CreatedBy = "someone-else" }).Take(1)
             .Should().Within(60.Seconds()).Emit("the update lands",
                 cancellationToken: TestContext.Current.CancellationToken);
 
-        await WaitFor(created.Path, n => n.CreatedDate == named,
-            "a creation timestamp the caller names is written as given");
+        var after = await WaitFor(created.Path, n => TextOf(n, Mesh.JsonSerializerOptions) == "# imported",
+            "the edited content is live");
+        after.CreatedDate.Should().Be(created.CreatedDate, "an update never rewrites the creation date");
+        after.CreatedBy.Should().Be(created.CreatedBy, "an update never rewrites the creator");
     }
 }
