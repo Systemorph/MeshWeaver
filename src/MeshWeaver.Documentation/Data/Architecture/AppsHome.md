@@ -171,11 +171,34 @@ and its writers switch together.
 | Built-ins | `AppDirectory.BuiltIns` | **Settings** (`{viewer}/Settings`) and **Inbox** (`{viewer}/Inbox`) for everyone, **Administration** (`Admin`) for a global admin. Labels are catalog keys (`common.settings`, `inbox.title`, `adminApp.title`) — except the person app's tile once the viewer's own node is read (`PersonTile`, live, never blocking the list): it carries the viewer's **name** and **picture** (the user node's `Name`/`Icon`, else the settings icon) and the description `launcher.personSettingsDescription` in their language, so it reads as *their* settings rather than a generic "Settings". |
 | `AppDirectoryCache` | `MeshWeaver.Graph/Apps` | Per viewer, the `Replay(1)` of the live stream. Shared by concurrent subscribers; when the last leaves, kept warm for **5 minutes, sliding** (a returning subscriber resets the clock), then disposed. A faulted computation is evicted at once, never replayed. Its own scheduler; no `IMemoryCache`. |
 | `AppDirectoryQueryProvider` | `MeshWeaver.Graph/Apps` | Answers the RESERVED virtual namespace `{user}/_Apps` (`path:{user}/_Apps scope:children nodeType:InstalledApp`) with synthetic rows of the same shape as the `_App` records — content `App` (`Plugin` = app id, `OpenPath` = entry point, `Group`, `Order`), `MainNode` = entry point, name, icon and description from the root. The full query predicate applies (`IMeshNodeQueryMatcher`, the in-memory evaluator), and both query surfaces stay live — a revoked app leaves the snapshot surface too. Only the owner is answered and only the owner's own request may seed; the System synced-query channel is side-effect free. Nothing is stored under `_Apps`. |
-| `LauncherArrangement` | `{user}/_Settings/Launcher` | The viewer's placements, `entries: { appId: { group, order, customGroup } }`. Group comes from here, else the root's `Category`. Seeded ONCE from the viewer's `_App` records the first time the directory renders for them — the rows wait for it, one seed in flight per viewer, never repeated after success, retried after a failure, create-if-absent, as the viewer — then written only when the viewer rearranges. A rearrangement over unreadable content fails loudly rather than starting fresh. |
+| `LauncherArrangement` | `{user}/_Settings/Launcher` | The viewer's placements, `entries: { appId: { group, order, customGroup, hidden } }` (`hidden` absent = visible, so every arrangement written before the flag existed shows every tile). Group comes from here, else the root's `Category`. Seeded ONCE from the viewer's `_App` records the first time the directory renders for them — the rows wait for it, one seed in flight per viewer, never repeated after success, retried after a failure, create-if-absent, as the viewer — then written only when the viewer rearranges. A rearrangement over unreadable content fails loudly rather than starting fresh. |
 
 **Rearranging a directory tile** writes the arrangement node, never the virtual row:
 `LauncherArrangementPaths.Place(cache, rowPath, group, order, options)`. The launcher view routes a
-drop on a `{user}/_Apps/…` row there.
+drop on a `{user}/_Apps/…` row there. A move keeps the tile's `hidden` flag.
+
+### Hiding a tile (2026-10-13)
+
+**A viewer can hide an app tile they have access to, and show it again.** The tile's right-click
+menu offers **Hide from launcher**; the launcher's filter row then lists the tile under **Hidden**
+(a third scope of the Apps band, directory mode only), whose menu offers **Show on launcher**.
+
+| Piece | What it does |
+|---|---|
+| `LauncherEntry.Hidden` | The per-viewer flag, in the same arrangement node (`{user}/_Settings/Launcher`, `entries.{appId}.hidden`). Hiding KEEPS the entry's `group`/`order`, so showing the tile again puts it back where it was; an app never placed gets an entry that carries only the flag (its category still applies). |
+| `LauncherArrangementPaths.SetHidden(cache, rowPath, hidden, options)` | The one write, beside `Place`: a merge patch on the arrangement node touching only that entry, never the virtual row. Errors when the path is not a `{user}/_Apps/…` row. |
+| `App.Hidden` on the rows | `AppDirectoryQueryProvider.Rows` stamps the flag onto each synthetic row; the row is still emitted, the QUERY decides where it shows. |
+| The band's queries | The apps scope is `path:{user}/_Apps scope:children nodeType:InstalledApp -content.hidden:true sort:Name-asc`; the **Hidden** scope (`home.hiddenApps`) is the same with `content.hidden:true`, not sortable. Both are evaluated in memory by the directory provider, where an absent flag is visible. |
+
+🚨 **Hiding is a launcher preference and nothing else.** It touches no grant, no entitlement and no
+install: the app stays installed and readable (the directory — which IS the access check — still
+lists it), it still opens from search, a link or the Store, and nothing is uninstalled. The legacy
+`Home:AppSource = Records` band has no Hidden scope and its menu offers no Hide.
+
+To set it for a viewer without the GUI, write the flag onto their arrangement — e.g. for the app
+rooted at `Parties`: `{user}/_Settings/Launcher` → `entries.Parties.hidden = true` (the entry key is
+the app id: the app root's path, or a built-in's id). Pinned by `AppDirectoryPureTest` (the pure
+arrangement and query split) and `AppDirectoryTest.HidingATile_…` (end to end, access untouched).
 
 The seeders (`SeedDefaultAppsLogonAction`, `SeedInboxAppLogonAction`) still run; the directory does
 not depend on them. Pinned by `AppDirectoryTest` / `AppDirectoryPureTest` (MeshWeaver.Graph.Test).

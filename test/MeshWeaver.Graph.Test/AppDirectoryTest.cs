@@ -468,12 +468,104 @@ public class AppDirectoryPureTest
         => HomeAppSource.IsDirectory(configured).Should().BeTrue();
 
     [Fact]
-    public void DirectorySource_ReadsTheVirtualNamespace()
+    public void DirectorySource_ReadsTheVirtualNamespace_WithoutTheHiddenApps()
     {
         var band = UserActivityLayoutAreas.BuildAppsBand("alice", null, fromDirectory: true);
-        band.HiddenQuery.Should().Be("path:alice/_Apps scope:children nodeType:InstalledApp sort:Name-asc");
+        band.HiddenQuery.Should().Be("path:alice/_Apps scope:children nodeType:InstalledApp -content.hidden:true sort:Name-asc");
         band.ScopeTabs![0].Query.Should().Be((string?)band.HiddenQuery);
         band.ScopeTabs[0].Sortable.Should().BeTrue("drag and drop stays on: the view routes it to the arrangement");
+    }
+
+    /// <summary>The directory band offers a third scope — the apps the viewer hid — so a hidden
+    /// tile is always reachable to be shown again; the Records band has no such scope.</summary>
+    [Fact]
+    public void DirectorySource_OffersTheHiddenScope_RecordsDoesNot()
+    {
+        var band = UserActivityLayoutAreas.BuildAppsBand("alice", null, fromDirectory: true);
+        band.ScopeTabs.Should().HaveCount(3, "apps, spaces, hidden");
+        var hidden = band.ScopeTabs![2];
+        hidden.Label.Should().Be("Hidden");
+        hidden.Query.Should().Be("path:alice/_Apps scope:children nodeType:InstalledApp content.hidden:true sort:Name-asc");
+        hidden.Sortable.Should().BeFalse("a hidden tile has no place on the grid to drag to");
+        hidden.NavigateToMainNode.Should().BeTrue("a hidden app still opens");
+
+        UserActivityLayoutAreas.BuildAppsBand("alice", null, fromDirectory: false)
+            .ScopeTabs.Should().HaveCount(2, "the legacy records band is unchanged");
+        UserActivityLayoutAreas.BuildAppsBand("alice", "de", fromDirectory: true)
+            .ScopeTabs![2].Label.Should().Be("Ausgeblendet");
+    }
+
+    // ── Hide ─────────────────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void AnArrangementWithoutTheFlag_HidesNothing()
+    {
+        var arrangement = JsonSerializer.Deserialize<LauncherArrangement>(
+            """{"entries":{"Crm":{"group":"Mine","order":2,"customGroup":true}}}""", Options)!;
+        arrangement.For("Crm")!.Hidden.Should().BeFalse("an arrangement written before the flag existed shows every tile");
+        arrangement.IsHidden("Crm").Should().BeFalse();
+        arrangement.IsHidden("NeverPlaced").Should().BeFalse();
+    }
+
+    [Fact]
+    public void Hiding_KeepsThePlacement_AndShowingPutsTheTileBack()
+    {
+        var placed = new LauncherArrangement().Place("Crm", "Mine", 4);
+        var hidden = placed.SetHidden("Crm", true);
+        hidden.IsHidden("Crm").Should().BeTrue();
+        hidden.For("Crm").Should().Be(new LauncherEntry { Group = "Mine", Order = 4, CustomGroup = true, Hidden = true });
+
+        var shown = hidden.SetHidden("Crm", false);
+        shown.For("Crm").Should().Be(placed.For("Crm"), "showing again restores exactly the placement it had");
+    }
+
+    [Fact]
+    public void HidingAnUnplacedApp_CarriesOnlyTheFlag()
+    {
+        var hidden = new LauncherArrangement().SetHidden("chess", true);
+        hidden.IsHidden("Chess").Should().BeTrue("app ids are case-insensitive, like every placement");
+        hidden.For("Chess").Should().Be(new LauncherEntry { Hidden = true },
+            "no group (the category still applies), no order, no custom-group claim");
+    }
+
+    [Fact]
+    public void MovingAHiddenTile_KeepsItHidden()
+    {
+        var moved = new LauncherArrangement().SetHidden("Crm", true).Place("Crm", "Elsewhere", 1);
+        moved.For("Crm").Should().Be(new LauncherEntry { Group = "Elsewhere", Order = 1, CustomGroup = true, Hidden = true });
+    }
+
+    [Fact]
+    public void Rows_CarryTheHiddenFlag_AndTheQueriesSplitOnIt()
+    {
+        var entries = ImmutableList.Create(
+            new AppDirectoryEntry("Crm", "CRM", "c.svg", null, "Business", "Crm"),
+            new AppDirectoryEntry("Chess", "Chess", "k.svg", null, "Games", "Chess"));
+        var rows = AppDirectoryQueryProvider.Rows("alice", entries,
+            new LauncherArrangement().Place("Crm", "Mine", 2).SetHidden("Crm", true), Options);
+        var crm = rows[0].ContentAs<App>(Options)!;
+        crm.Hidden.Should().BeTrue();
+        crm.Group.Should().Be("Mine", "a hidden tile keeps its place for when it is shown again");
+        rows[1].ContentAs<App>(Options)!.Hidden.Should().BeFalse();
+        AppDirectoryQueryProvider.Rows("alice", entries, null, Options)
+            .Should().OnlyContain(r => !r.ContentAs<App>(Options)!.Hidden, "no arrangement hides nothing");
+
+        // The two band queries, evaluated by the predicate the provider applies.
+        var parser = new QueryParser();
+        var evaluator = new MeshWeaver.Hosting.Persistence.Query.QueryEvaluator();
+        var shown = parser.Parse(UserActivityLayoutAreas.AppsQuery("alice", fromDirectory: true));
+        var hiddenOnly = parser.Parse(UserActivityLayoutAreas.HiddenAppsQuery("alice"));
+        rows.Where(r => evaluator.Matches(r, shown)).Select(r => r.Id).Should().Equal("Chess");
+        rows.Where(r => evaluator.Matches(r, hiddenOnly)).Select(r => r.Id).Should().Equal("Crm");
+    }
+
+    [Fact]
+    public void SetHidden_RefusesAPathThatIsNoDirectoryRow()
+    {
+        Exception? error = null;
+        using var _ = LauncherArrangementPaths.SetHidden(null!, "alice/_App/Crm", true, Options)
+            .Subscribe(_ => { }, e => error = e);
+        error.Should().BeOfType<ArgumentException>().Which.Message.Should().Contain("not an app directory row");
     }
 
     [Fact]
@@ -679,6 +771,66 @@ public class AppDirectoryTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         var foreign = await access.RunAs(intruder, () => mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(query)))
             .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
         foreign.Items.Should().BeEmpty("a viewer's directory is served to that viewer only");
+    }
+
+    /// <summary>
+    /// Hide and show again, end to end: the flag is written onto the OWNER's arrangement node, the
+    /// apps scope drops the tile and the Hidden scope lists it, the placement survives, and the
+    /// viewer's ACCESS is untouched throughout — the directory (which is the access check) still
+    /// lists the app while it is hidden.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task HidingATile_MovesItToTheHiddenScope_AndShowingBringsItBack_WithoutTouchingAccess()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string hider = "dir-hider";
+        var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var cache = Mesh.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+        var options = Mesh.JsonSerializerOptions;
+        await CreateUserAsync(hider, ct);
+        await access.RunAsSystem(() => mesh.CreateNode(AssignmentNodeFactory.UserRole(hider, "Viewer", "DirApp")))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        var owner = new AccessContext { ObjectId = hider, Name = hider };
+        IObservable<List<MeshNode>> Rows(string query) =>
+            Live(access.RunAs(owner, () => mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(query))));
+        var shownQuery = UserActivityLayoutAreas.AppsQuery(hider, fromDirectory: true);
+        var hiddenQuery = UserActivityLayoutAreas.HiddenAppsQuery(hider);
+        var row = $"{hider}/_Apps/DirApp";
+
+        // Visible, and seeded (the rows wait for the arrangement node).
+        await Rows(shownQuery).Where(items => items.Any(r => r.Path == row))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        await access.RunAs(owner, () => LauncherArrangementPaths.Place(cache, row, "Mine", 3, options))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+
+        // Hide.
+        await access.RunAs(owner, () => LauncherArrangementPaths.SetHidden(cache, row, true, options))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        await Rows(shownQuery).Where(items => items.Count > 0 && items.All(r => r.Path != row))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        var hiddenRows = await Rows(hiddenQuery).Where(items => items.Any(r => r.Path == row))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        hiddenRows.Select(r => r.Path).Should().Equal(row);
+        var arrangement = await Mesh.GetWorkspace().GetMeshNodeStream(LauncherArrangementPaths.PathFor(hider))
+            .Select(n => n?.ContentAs<LauncherArrangement>(options))
+            .Where(a => a?.IsHidden("DirApp") == true)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        arrangement!.For("DirApp")!.Group.Should().Be("Mine", "hiding keeps the placement");
+
+        // Access is untouched: the directory (the access check itself) still lists the app.
+        (await Directory.Compute(hider).Where(l => l.Any(e => e.Id == "DirApp"))
+                .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct))
+            .Should().Contain(e => e.Id == "DirApp");
+
+        // Show again: back in the apps scope, in its old group, gone from the Hidden scope.
+        await access.RunAs(owner, () => LauncherArrangementPaths.SetHidden(cache, row, false, options))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        var back = await Rows(shownQuery).Where(items => items.Any(r => r.Path == row))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        back.Single(r => r.Path == row).ContentAs<App>(options)!.Group.Should().Be("Mine");
+        await Rows(hiddenQuery).Where(items => items.All(r => r.Path != row))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
     }
 
     /// <summary>
