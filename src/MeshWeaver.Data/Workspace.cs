@@ -217,7 +217,8 @@ public class Workspace : IWorkspace
             {
                 try
                 {
-                    carrier.Post(new StreamEndedEvent(streamId), o => o.WithTarget(subscriber));
+                    carrier.Post(new StreamEndedEvent(streamId) { Activation = ShutdownNack.ActivationToken(Hub) },
+                        o => o.WithTarget(subscriber));
                 }
                 catch (Exception ex)
                 {

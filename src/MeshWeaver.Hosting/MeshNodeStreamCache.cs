@@ -2001,6 +2001,10 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         for (var e = error; e != null; e = e.InnerException)
         {
             if (e is TimeoutException) return true;
+            // A mirror that gave up re-asking a recycling owner (#6602): the node exists, its
+            // address kept refusing as ShuttingDown. Same verdict as the "is shutting down" text
+            // below, carried by type; the faulted entry is evicted and the next read re-probes.
+            if (e is MeshWeaver.Data.Serialization.SyncStreamOwnerRefusedException) return true;
             // OrleansMessageRejectionException lives in Orleans.Core, which this project does
             // not (and must not) reference — match by type name so the classifier stays free
             // of the Orleans dependency while still catching the raw grain-reject that reaches
@@ -3030,14 +3034,44 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                         new MeshNodeContentDegradedException(
                             "MeshNodeStreamCache.GetStream", node.Path, node.NodeType, TruncateRaw(je)),
                         "MeshNodeStreamCache.GetStream: Content for {Path} stayed an untyped JsonElement after "
-                        + "deserialization (TypeRegistry lacks the $type discriminator) — downstream "
+                        + "deserialization ({Cause}) — downstream "
                         + "'Content is X'/'as X' consumers will fail (renders empty, reactive waits time out). "
                         + "Raw: {RawJson}",
-                        node.Path, TruncateRaw(je));
+                        node.Path, DegradationCause(node.NodeType, degraded, contentTypeRegistry), TruncateRaw(je));
             }
             return node with { Content = deserialized };
         }
         return node;
+    }
+
+    /// <summary>
+    /// WHY a node's content stayed untyped, in the words of the warning that names its PATH. Two
+    /// causes reach the same seam and need opposite repairs: a <c>$type</c> nothing in this process
+    /// can resolve (a missing registration — register the type on the reading hub), and a type this
+    /// process DOES know whose stored JSON no longer binds to it (a missing <c>required</c> member,
+    /// a value contradicting its declared type — the DATA, or the contract, is what to fix).
+    ///
+    /// <para>🚨 Systemorph/MeshWeaver#6639: the second cause used to be reported as the first. The
+    /// serializer's own warning (<c>ObjectPolymorphicConverter</c>: "Content for '…' could not be
+    /// deserialized") names the type and the member but CANNOT name the node — a converter has no
+    /// view of the record it is nested in — and this line, the one that names the node, blamed a
+    /// registration that was not missing, and unbindable <c>MarkdownContent</c> rows were
+    /// reported as a type problem nobody could act on.</para>
+    /// </summary>
+    private static string DegradationCause(
+        string? nodeType, JsonElement degraded,
+        MeshWeaver.Mesh.Services.IMeshContentTypeRegistry? contentTypeRegistry)
+    {
+        if (contentTypeRegistry is not null)
+        {
+            var discriminator = Discriminator(degraded);
+            if ((!string.IsNullOrEmpty(nodeType) && contentTypeRegistry.TryResolveByNodeType(nodeType, out var known))
+                || (discriminator is not null && contentTypeRegistry.TryResolveByDiscriminator(discriminator, out known)))
+                return $"its content type '{known.Name}' is registered, but the stored JSON does not bind to it — "
+                       + "a member it requires is missing or a value contradicts its declared type; the "
+                       + "serializer's 'could not be deserialized' warning names the member";
+        }
+        return "TypeRegistry lacks the $type discriminator";
     }
 
     /// <summary>The stored <c>$type</c> of a degraded element, or <c>null</c> when it carries
@@ -3842,9 +3876,9 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                     new MeshNodeContentDegradedException(
                         "MeshNodeStreamCache.GetQuery", node.Path, node.NodeType, rawText),
                     "MeshNodeStreamCache.GetQuery: Content for {Path} stayed an untyped JsonElement after "
-                    + "deserialization (TypeRegistry lacks the $type discriminator) — downstream "
+                    + "deserialization ({Cause}) — downstream "
                     + "'Content is X'/'as X' consumers will fail (renders empty). Raw: {RawJson}",
-                    node.Path, rawText);
+                    node.Path, DegradationCause(node.NodeType, degraded, contentTypeRegistry), rawText);
                 return node;
             }
             return node with { Content = deserialized };

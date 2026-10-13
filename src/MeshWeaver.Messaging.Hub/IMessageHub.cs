@@ -38,7 +38,9 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
     /// </summary>
     /// <typeparam name="TMessage">The message payload type.</typeparam>
     /// <param name="message">The message payload to send.</param>
-    /// <param name="options">Optional configuration of the delivery (target, sender, response-correlation, message id).</param>
+    /// <param name="options">Optional configuration of the delivery (target, response-correlation, message id). The
+    /// sender is NOT configurable: the posting hub stamps its own address, and a <see cref="PostOptions.Sender"/>
+    /// written here is replaced (Doc/Architecture/SenderIsThePostingHub).</param>
     /// <returns>The created delivery wrapping <paramref name="message"/>, or <c>null</c> if it was not posted.</returns>
     IMessageDelivery<TMessage>? Post<TMessage>(TMessage message, Func<PostOptions, PostOptions>? options = null);
     /// <summary>

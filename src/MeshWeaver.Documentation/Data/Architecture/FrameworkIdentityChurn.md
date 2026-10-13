@@ -283,6 +283,17 @@ fetch is where that becomes RED, by name. The rationale is sound — a Plugins-s
 whole fleet to an old platform — and it means no resolution change reaches this case: the publication
 the gate wants **does not exist for any recent identity**, which is stage ④'s condition, options 1–4.
 
+> **Since MeshWeaver#6615 the resolver no longer reads any Plugins seal.** The job it read —
+> core CD's `Plugins: bake + seal the publication for this identity` — left core CD in #6143; the
+> `plugins` publication is now sealed by MeshWeaver.Plugins' own lane, per framework identity, and a
+> satellite's token cannot read that private repository's runs. Reading a job that was always
+> `absent` passed over every sealed set whose CD run was still in flight and made `--wait-for-seal`
+> wait for nothing, so the "still running" exception above is gone and `plugins-sealed` /
+> `plugins-run` / `plugins-set` / `plugins-sealed-at` are no longer written. The mechanism stated here
+> is unchanged and now the only one: the lane's upstream fetch reads the publication by identity and
+> is RED by name when there is none. The paragraph and the log below are kept as the record of
+> 2026-09.
+
 **What made it look open, and it is the instrument's own sentence.** Both lanes print, in the
 "Upstreams not ready" step summary and in the `::error` beside it, *"the `schedule` poll … re-resolves
 a **moving tag**"*. That wording dates from 2026-09-08 (`c6161c0a96`), predates the resolver, and is
@@ -440,6 +451,10 @@ Both shapes were observed on the same fleet inside ten minutes — one satellite
 `meshweaver-content`. **Not established:** which of the shared lanes carry the `plugins-sealed` check
 today. Read the failing lane's own log rather than assuming, because that is what decides whether
 waiting or re-running is the remedy.
+
+> Since MeshWeaver#6615 no lane reports `plugins-sealed` (the resolver has no source for it), so the
+> question above has one answer: every lane learns whether the publication exists at its upstream
+> fetch, by identity.
 
 **2. Is the lag over?** The portal's public `/health` carries a `publication-seal` entry that states,
 for the identity it is serving, every source sealed under it. Read it before re-running — if the

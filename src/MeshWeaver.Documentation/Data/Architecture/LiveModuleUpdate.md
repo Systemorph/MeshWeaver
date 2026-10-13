@@ -169,6 +169,16 @@ the live test fail (`Restarts` 1, expected 0).
 | Contributions | A registration of a type ANOTHER module declares (`ModuleServiceRoute.Contributed` — every AI provider registering MeshWeaver.AI's `LanguageModelCatalogSource` and `IChatClientFactory`) is never put in the root: a root forwarder would pin the declaring module, and a `DispatchProxy` cannot be built over a collectible interface at all ("A non-collectible assembly may not reference a collectible assembly"). It is served to the declaring module's container after that module's own registrations, and to the root's list. |
 | The swap | `ModuleContexts.PrepareServices` re-runs N+1's delegates against the SAME boot prefix and requires the same routes and shape — the root's forwarders were laid out at boot; a changed shape is refused by name and N keeps serving. |
 
+🚨 **A "copy of the root collection" copies the DESCRIPTORS, so a registry that registration code writes
+into must be copied too.** `AddHttpClient<T>()` records "client name → `T`" in the `HttpClientMappingRegistry`
+INSTANCE the collection holds and refuses a second type under the same name — and the name is derived
+from the type name alone. Shared by reference, generation N's `AddHttpClient<WebSearchPlugin>()` wrote into
+the ROOT's one registry (pinning N's collectible context), and N+1's `WebSearchPlugin` — the same name, a
+different `Type` from a new load context — was refused, failing the live swap of MeshWeaver.AI
+(MeshWeaver.Plugins#3518). `ModuleServices.Probe` now hands each probe its own copy of that registry, seeded
+with the root's entries, so a module colliding with a PLATFORM client is still refused exactly as at boot.
+`ALiveSwapReRegistersATypedHttpClientTest` pins the N→N+1 probe and that root-collision control.
+
 🚨 **A list is served as a list.** The first images of this slice collapsed every multi-registration
 service to its LAST element in two places — the module container's fallback answered a platform type with
 one `root.GetRequiredService(type)` stand-in, and the per-node forwarders were one per TYPE. Measured on
@@ -223,6 +233,65 @@ is built only when a built one takes it. A delegate-activated singleton names no
 built. `AModuleWithCircuitBoundServicesLoadsAtBootTest` and
 `ModuleRootServicesSwapTest.AnUpdateWithCircuitBoundServices_SwapsLive` carry the Radzen shape, against
 a root-scoped stand-in that throws exactly as `RemoteNavigationManager` does.
+
+### A module's scoped service is the caller's (MeshWeaver#6584)
+
+Not building a scoped registration at boot only moved its construction to its first resolve — and
+every resolve of a module service used to land in the module container's OWN root: one instance per
+generation, shared by every circuit, built against a root child scope no circuit initialised. Radzen's
+`ThemeService` was one instance for every user (one user's theme was the next user's), and
+`DialogService` threw `'RemoteNavigationManager' has not been initialized` on its first real resolve.
+
+So a resolve now carries its **caller** — the root-side scope it is made in (a Blazor circuit's, a
+request's, a hub's; null for the root container itself, i.e. a singleton or a resolve off the root
+provider) — down every road the root reaches a module by: `ModuleOwnedRootSource`'s stand-ins, the
+`Current` forwarder, a `Proxy` over a scoped or transient registration (one proxy per caller scope,
+forwarding for it; a singleton keeps its one stable proxy), and a module type asked from ANOTHER
+module's container (`ModuleFallbackSource`, which passes on the caller its own scope serves). A
+registration that is not a singleton is then resolved in a module scope **owned by that caller**
+(`ModuleServiceProvider.InCallerScope`, `ModuleCallerScopes`): begun on first use, tagged with the
+caller, and handed to the caller's own disposer, so it ends when the caller ends — asynchronously, as a
+circuit's scope is disposed. Its `RootResolutionScope` is the caller's own scope, so every root
+registration it takes (`NavigationManager`, `IJSRuntime`) is that caller's instance. A singleton is
+still the generation's one instance, built before published as above.
+
+**Which ends first.** A caller can outlive a generation (a hub scope across a live swap): the
+generation's container, as it ends, ends every caller's module scope FIRST — before its own singletons
+— and lets go of it, so the caller's disposer holds nothing of the retired generation; the caller's own
+end afterwards finds nothing to do (`ACallersModuleScopeEndsWithTheGenerationTest`).
+`AModulesScopedServicesAreTheCallersTest` measures two circuits through both the module-declared and
+the platform-class road; its negative control resolves the same registration with no caller and gets
+the uninitialised-state throw.
+
+**A forwarder owns nothing it returns (MeshWeaver#6588).** Every root forwarder of a module's
+platform-typed service — `Current`, and `Proxy` at every lifetime — is a `NotOwnedServiceDescriptor`,
+which every container MeshWeaver builds registers **externally owned** (`PopulateMeshWeaver`). An
+ordinary factory registration is owned by the scope that resolves it, so the forwarder used to hand
+ownership of a module's instance to whoever asked: the first circuit to end disposed a module
+SINGLETON under every other user, and disposed a module SCOPED instance a second time after the module
+scope that circuit owned had already disposed it; a `Proxy` over an `IDisposable` interface forwarded
+the same disposal. Ownership stays where the instance was built — the generation's container for a
+singleton, the caller-owned module scope for a scoped one. The forwarder is registered at its own
+position in the collection while `Populate` walks it, so the default registration of a service and the
+order of an `IEnumerable` of it are unchanged (`ANotOwnedForwarderKeepsItsPositionTest`).
+`AModuleForwarderOwnsNothingItReturnsTest` measures one circuit ending on the test mesh, on an
+`IHostApplicationBuilder` host and on a legacy `IHostBuilder` host: the singleton serves the other
+circuit undisposed, each scoped instance (class and proxy route) is disposed exactly once.
+
+**One lock owner per caller.** Autofac builds a scope's shared instances under that scope's one
+shared-instance lock. A caller-owned module scope is a scope of the MODULE container, and its root
+resolutions are made in the caller's own scope, so the two locks were taken in both orders: a
+caller-scoped ROOT service whose construction resolves a module's scoped service (caller, then module
+scope), and that module service's construction taking a caller-scoped root service not built yet
+(module scope, then caller) — two first builds overlapping in those orders deadlocked. So a
+caller-owned module scope, and every scope begun from it, takes its CALLER's lock as its own
+(`CallerSharedInstanceLock`): one monitor for the caller and everything it owns, re-entered by the
+thread that already holds it, so there is no order to invert — whichever road reaches the module scope,
+including a module service that keeps its `IServiceProvider` and resolves later. Autofac offers no API
+to hand a scope its lock, so the lock field is set before the scope is handed out; Autofac is pinned, and
+a version without that field fails loudly at the first caller rather than silently bringing the
+deadlock back. `CallerAndModuleScopedServicesBuildInOneLockTest` forces the overlap; its negative
+control gives the same module scope its own lock back and deadlocks.
 
 **Open: a withdrawn module's `InstalledModuleAssembly` (MeshWeaver#6557).** A module withdrawn at boot
 keeps the transient `InstalledModuleAssembly` registration it was given while the mesh was configured,
