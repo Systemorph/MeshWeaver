@@ -369,7 +369,7 @@ public sealed class ModuleServices : IDisposable
     /// waits on this container's.
     ///
     /// <para>NOT built: a SCOPED registration, and a singleton whose constructor graph reaches one
-    /// (<see cref="ModuleServiceProvider.BuildRootReachableSingletons"/>) — their instances belong to a
+    /// (<c>ModuleServiceProvider.BuildRootReachableSingletons</c>) — their instances belong to a
     /// circuit or a request, and the one a boot would build runs against scoped state nobody initialised
     /// (Radzen's <c>DialogService</c> and its <c>NavigationManager</c>, MeshWeaver#6556); a module's
     /// PRIVATE registration unless a built one takes it; and a module's HOSTED services, which are left
@@ -384,8 +384,50 @@ public sealed class ModuleServices : IDisposable
                 or ModuleServiceRoute.ModuleOwned or ModuleServiceRoute.Contributed)
             .Select(RootReachesItAs)
             .ToImmutableHashSet();
-        ModuleServiceProvider.BuildRootReachableSingletons(Scope(root), root, reachable.Contains);
+        var contexts = root.GetService<ModuleContexts>();
+        var name = ModuleName;
+        var stage = Stage;
+        ModuleServiceProvider.BuildRootReachableSingletons(Scope(root), root, reachable.Contains,
+            type => contexts is null ? [] : RegistriesElsewhereSeenFrom(contexts, name, type, stage));
     }
+
+    /// <summary>
+    /// The module containers OTHER than <paramref name="requester"/>'s that register module-declared
+    /// <paramref name="type"/> (unkeyed), and the service each holds it under — the same registrations, in
+    /// the same order, <see cref="ElsewhereSeenFrom"/> resolves: the declaring module's own (under the
+    /// type), then the contributions other modules made of it (under their index key). What the boot-time
+    /// scoped-dependency walk reads, so a singleton over another module's SCOPED type is never built at
+    /// boot (<c>ModuleServiceProvider.BuildRootReachableSingletons</c>).
+    /// </summary>
+    internal static IEnumerable<(Autofac.Core.IComponentRegistry Registry, Autofac.Core.Service Service)> RegistriesElsewhereSeenFrom(
+        ModuleContexts contexts, string? requester, Type type, ModuleSwapStage? stage)
+    {
+        if (type.IsGenericTypeDefinition)
+            yield break;
+        var generations = contexts.GenerationsSeenFrom(stage)
+            .Where(g => g.Services is not null)
+            .OrderBy(g => g.Name, StringComparer.Ordinal)
+            .ToArray();
+        var owner = generations.FirstOrDefault(g => IsOwned(type, g.Context));
+        if (owner is null)
+            yield break;
+        if (owner.Name != requester && RegistryOf(contexts, owner.Name, stage) is { } ownerRegistry)
+            yield return (ownerRegistry, new Autofac.Core.TypedService(type));
+        foreach (var contributor in generations.Where(g => g.Name != requester && g.Name != owner.Name))
+        {
+            var contributions = contributor.Services!.Registrations
+                .Where(r => r.Route == ModuleServiceRoute.Contributed && r.Descriptor.ServiceType == type
+                            && !r.Descriptor.IsKeyedService)
+                .ToArray();
+            if (contributions.Length == 0 || RegistryOf(contexts, contributor.Name, stage) is not { } registry)
+                continue;
+            foreach (var registration in contributions)
+                yield return (registry, new Autofac.Core.KeyedService(registration.Key, type));
+        }
+    }
+
+    private static Autofac.Core.IComponentRegistry? RegistryOf(ModuleContexts contexts, string module, ModuleSwapStage? stage) =>
+        contexts.ModuleScopeSeenFrom(module, stage)?.GetService<Autofac.ILifetimeScope>()?.ComponentRegistry;
 
     // The Autofac service a registration is held under in the module container (see Scope): a keyed
     // registration under its own key, an unkeyed forwarded or contributed one under its index key, an
