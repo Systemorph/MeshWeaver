@@ -71,6 +71,10 @@ public static class QuerySortKey
             => Convert.ToDecimal(value, CultureInfo.InvariantCulture),
         // Binary floating point keys on the SHORTEST round-trip text the serializer persists
         // (0.1f is stored as 0.1, not 0.10000000149…), read back exactly as a decimal.
+        // 128-bit integers: exact while decimal holds them, double beyond (still numeric, never text).
+        Int128 i => i >= (Int128)decimal.MinValue && i <= (Int128)decimal.MaxValue ? (decimal)i : (double)i,
+        UInt128 u => u <= (UInt128)decimal.MaxValue ? (decimal)u : (double)u,
+        Half h => FromRoundTripText(h.ToString(CultureInfo.InvariantCulture), (double)h),
         float f => FromRoundTripText(f.ToString(CultureInfo.InvariantCulture), f),
         double d => FromRoundTripText(d.ToString(CultureInfo.InvariantCulture), d),
         _ => Convert.ToString(value, CultureInfo.InvariantCulture),

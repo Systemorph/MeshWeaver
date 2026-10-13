@@ -271,6 +271,16 @@ public class ContentFieldSortTest
         OnHold,
     }
 
+    /// <summary>128-bit integers and Half are numbers too — 9 &lt; 10, never "10" &lt; "9".</summary>
+    [Fact]
+    public void WideAndHalfNumerics_CompareNumerically()
+    {
+        var comparer = QuerySortKey.Comparer(descending: false);
+        comparer.Compare(QuerySortKey.Normalize((Int128)9), QuerySortKey.Normalize((Int128)10)).Should().BeNegative();
+        comparer.Compare(QuerySortKey.Normalize((UInt128)9), QuerySortKey.Normalize(UInt128.MaxValue)).Should().BeNegative();
+        comparer.Compare(QuerySortKey.Normalize((Half)9), QuerySortKey.Normalize((Half)10)).Should().BeNegative();
+    }
+
     /// <summary>A null or absent key is last whichever way the sort runs.</summary>
     [Fact]
     public void NullsAndAbsentKeys_SortLast_InBothDirections()
