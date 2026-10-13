@@ -226,8 +226,11 @@ boot-built one threw `'RemoteNavigationManager' has not been initialized`. So a 
 left to its first resolve, and so is a singleton whose constructor graph reaches a scoped registration
 — read STRUCTURALLY off the registrations (`ScopedDependencyWalk`: every public constructor's
 parameters of a reflection-activated registration, through transients and the module's own
-singletons, into the root's registrations for every type that names no collectible assembly; a root
-singleton ends the walk). Neither is a path the lock order needs: a root singleton that takes a scoped
+singletons, into the root's registrations for every type that names no collectible assembly, and —
+for a type a module DECLARES — into the other module containers that register it, the same
+registrations `ModuleFallbackSource` resolves it from; a root singleton ends the walk). Without that
+last leg a singleton taking another module's scoped type looked like it took nothing, was built at boot
+with no caller, and withdrew its module (`ASingletonOverAnotherModulesScopedTypeIsNotBuiltAtBootTest`). Neither is a path the lock order needs: a root singleton that takes a scoped
 service is a captive dependency, not a way the root reaches a module. A module's PRIVATE registration
 is built only when a built one takes it. A delegate-activated singleton names no dependencies and is
 built. `AModuleWithCircuitBoundServicesLoadsAtBootTest` and

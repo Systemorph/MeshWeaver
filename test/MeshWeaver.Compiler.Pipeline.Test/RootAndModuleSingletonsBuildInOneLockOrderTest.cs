@@ -17,7 +17,7 @@ namespace MeshWeaver.Graph.Test;
 /// the #6432 shape across the container boundary, reproduced while reading that incident's dump.</para>
 ///
 /// <para>The fix is <b>built before published</b>: every shared instance of a module container is
-/// built (<see cref="ModuleServiceProvider.BuildRootReachableSingletons"/>) before the container can be reached
+/// built (<see cref="ModuleServiceProvider.BuildRootReachableSingletons(IServiceProvider, IServiceProvider, Func{Autofac.Core.Service, bool})"/>) before the container can be reached
 /// from the root, so the root only ever reads a module's built instances — answered without any lock.</para>
 ///
 /// <para>The containers are real and nothing is mocked: a root built as the mesh builds it, and a
