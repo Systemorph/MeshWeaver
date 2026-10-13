@@ -176,6 +176,14 @@ public static class InboxLayoutArea
                     .WithReactiveClickAction(ctx => Delete(ctx, acts, owner, rows)), "Delete")
                 .WithView(Controls.Button(host.Localize("inbox.undo")).WithAppearance(Appearance.Neutral)
                     .WithReactiveClickAction(ctx => Undo(ctx, acts)), "Undo")
+                // Decide every ticked approval request — the approval's own type decides and
+                // authorizes, as the clicker (InboxApprovals). Other ticked rows are left alone.
+                .WithView(Controls.Button(host.Localize("inbox.approve")).WithAppearance(Appearance.Neutral)
+                    .WithIconStart(FluentIcons.Checkmark())
+                    .WithReactiveClickAction(ctx => Decide(ctx, acts, owner, rows, ApprovalDecisions.Approve)), "Approve")
+                .WithView(Controls.Button(host.Localize("inbox.reject")).WithAppearance(Appearance.Neutral)
+                    .WithIconStart(FluentIcons.Dismiss())
+                    .WithReactiveClickAction(ctx => Decide(ctx, acts, owner, rows, ApprovalDecisions.Reject)), "Reject")
                 .WithView(toggles, "Sources")
                 .WithView(settings, "Settings"), "Commands")
             // Says which sources could not be read — an unreadable source must never look like an
@@ -466,6 +474,49 @@ public static class InboxLayoutArea
     }
 
     /// <summary>
+    /// Approve all / Reject all: every ticked row that is an approval request (the Approvals source),
+    /// re-checked against the owner's own feed exactly as Delete is, decided one at a time as the
+    /// clicker. Not undoable — a decision is the approval's own record — so nothing enters the Undo
+    /// batch; a row that is not an approval request is not touched, and the outcome line names every
+    /// request that was not decided, with the reason its type gave.
+    /// </summary>
+    private static IObservable<Unit> Decide(UiActionContext ctx, InboxActs acts, string owner,
+        IObservable<ImmutableList<InboxRow>> rows, string decision)
+    {
+        var host = ctx.Host;
+        var hub = host.Hub;
+        var access = hub.ServiceProvider.GetService<AccessService>();
+        var caller = access?.Context;
+        var handlers = hub.ServiceProvider.GetServices<IInboxItemHandler>().ToImmutableArray();
+        var noAnswer = host.Localize("inbox.approval.noAnswer");
+        var approve = decision == ApprovalDecisions.Approve;
+        return acts.Exclusive(host.Localize("inbox.busy"), ctx.SelectedRowKeys(InboxRows.SelectionId)
+            .Zip(rows.Take(1), (keys, current) => InboxRows.Targets(current, keys, owner)
+                .Where(row => string.Equals(row.SourceId, InboxQueries.ApprovalsSource, StringComparison.Ordinal))
+                .ToImmutableList())
+            .SelectMany(targets => targets.Count == 0
+                ? Observable.Throw<Unit>(new InvalidOperationException(host.Localize("inbox.nothingToDecide")))
+                : Act(ctx, access, caller, DecideBatch(targets).Select(row => new InboxUndoItem(row.Path, row.NodeType)).ToImmutableList(),
+                        handlers, (_, path) => InboxApprovals.Decide(hub, path, decision, noAnswer),
+                        approve ? "inbox.progress.approving" : "inbox.progress.rejecting", _ => { })
+                    .Do(outcomes =>
+                    {
+                        host.UpdateData(InboxRows.SelectionId, new DataGridSelectionState());
+                        var summary = Summary(host, approve ? "inbox.summary.approved" : "inbox.summary.rejected", outcomes);
+                        // The rest of a selection larger than one step-up covers is left untouched — said.
+                        if (targets.Count > outcomes.Count)
+                            summary += " " + host.Localize("inbox.decide.capped", targets.Count - outcomes.Count, StepUpPaths.MaxTargets);
+                        ctx.ReportSummary(summary);
+                        // 🚨 ONE step-up for the batch: every decision held for the approver's
+                        // confirmation is confirmed together, then the approver comes back here.
+                        // A FULL page load — the step-up endpoint is an MVC route the circuit never reaches.
+                        if (StepUpOf(outcomes) is { Count: > 0 } held)
+                            ctx.NavigateTo(StepUpPaths.StartUrl(held, "/" + owner.TrimStart('/') + "/" + AreaName), forceLoad: true);
+                    })
+                    .Select(_ => Unit.Default)));
+    }
+
+    /// <summary>
     /// Undo: brings back what the last Delete put away, through the same handlers. The batch is the
     /// HOST's own record of what this page deleted — never client data — so Undo can only restore
     /// what Delete put away.
@@ -564,6 +615,21 @@ public static class InboxLayoutArea
         write.Take(1).Do(landed).Subscribe(outcome);
         return outcome;
     }
+
+    /// <summary>
+    /// The approval requests ONE click decides: the first <see cref="StepUpPaths.MaxTargets"/> in page
+    /// order. Every held decision of the click goes into one step-up, and the step-up endpoint refuses
+    /// a larger batch — deciding more would hold decisions the approver could never confirm.
+    /// </summary>
+    internal static ImmutableList<T> DecideBatch<T>(IReadOnlyCollection<T> targets)
+        => [.. targets.Take(StepUpPaths.MaxTargets)];
+
+    /// <summary>
+    /// The step-up targets a batch still waits for — each held decision once, in batch order. Empty
+    /// when nothing was held, so the inbox only leaves for a step-up when there is one to give.
+    /// </summary>
+    internal static ImmutableList<StepUpTarget> StepUpOf(IEnumerable<InboxItemOutcome> outcomes)
+        => [.. outcomes.Select(o => o.StepUp).OfType<StepUpTarget>().DistinctBy(t => t.Key)];
 
     /// <summary>The outcome line: how many, and every item that was not done with its reason.</summary>
     internal static string Summary(LayoutAreaHost host, string key, IReadOnlyCollection<InboxItemOutcome> outcomes)

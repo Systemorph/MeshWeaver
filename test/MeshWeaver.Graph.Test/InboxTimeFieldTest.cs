@@ -53,9 +53,9 @@ public class InboxTimeFieldTest(ITestOutputHelper output) : MonolithMeshTestBase
     public void TheBuiltInReadableSources_AreTimedByArrival_OnThePagesOwnSections()
     {
         var sections = InboxLayoutArea.Sections(InboxQueries.BuiltIn, "alice");
-        sections.Where(s => s.Source == "Notifications").Should().OnlyContain(s => s.TimeField == "createdAt");
+        sections.Where(s => s.Source is "Notifications" or InboxQueries.ApprovalsSource).Should().OnlyContain(s => s.TimeField == "createdAt");
         sections.Where(s => s.Source == "Mail").Should().OnlyContain(s => s.TimeField == "receivedAt");
-        sections.Where(s => s.Source is "Notifications" or "Mail").Should().HaveCount(4, "an unread and a read leg each");
+        sections.Where(s => s.Source is "Notifications" or "Mail" or InboxQueries.ApprovalsSource).Should().HaveCount(6, "an unread and a read leg each");
         sections.Where(s => s.TimeField != null).Should().OnlyContain(s =>
             InboxQueries.Bounded(s.Query, s.TimeField) == $"{s.Query} limit:{InboxQueries.LegLimit}",
             "a timed built-in leg is already projected for its time");

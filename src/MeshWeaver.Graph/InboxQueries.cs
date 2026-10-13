@@ -179,6 +179,9 @@ public static class InboxQueries
         // stamped `true` and read matches it — a positive match on `false` would select nothing.
         Notifications(unread: true),
         Notifications(unread: false),
+        // Approval requests — their own source, shown by default (the notification feed is not).
+        Approvals(unread: true),
+        Approvals(unread: false),
         // The viewer's own stored mail, inbound and not archived. Both defaults (Inbound, New) are
         // omitted from stored JSON, so the legs negate the stamped values they exclude: unread is
         // "not Read", read is "Read".
@@ -226,11 +229,60 @@ public static class InboxQueries
         // Timed by when it ARRIVED: reading a notification flips isRead, and that write must not
         // move it ahead of newer ones.
         TimeField = "createdAt",
+        // Every notification that is NOT an approval request: those are the Approvals source.
         Query = $"namespace:{ViewerToken}/{NotificationService.SatelliteSegment} "
                 + $"nodeType:{NotificationNodeType.NodeType} -content.dismissed:true "
+                + $"content.notificationType:{string.Join("|", StampedNotificationTypes)} "
                 + (unread ? "-content.isRead:true " : "content.isRead:true ")
                 + $"sort:CreatedAt-desc {TimedRowProjection}",
     };
+
+    /// <summary>
+    /// The approval requests addressed to the viewer — the "approval required" notifications every
+    /// approval flow sends its approver (document approvals, instance actions, …), not put away.
+    /// Shown by default: they need the viewer. 🚨 <see cref="NotificationType.ApprovalRequired"/> is
+    /// the enum DEFAULT and is omitted from stored JSON, so the leg NEGATES every stamped type
+    /// (<see cref="StampedNotificationTypes"/>) rather than matching it.
+    /// </summary>
+    private static InboxQueryLeg Approvals(bool unread) => new()
+    {
+        Source = ApprovalsSource,
+        SourceLabelKey = "inbox.source.Approvals",
+        SourceIcon = ApprovalsIcon,
+        Unread = unread,
+        Band = InboxBand.NeedsYou,
+        Order = unread ? 5 : 6,
+        // Timed by when the request ARRIVED, like every notification: reading it must not reorder.
+        TimeField = "createdAt",
+        Query = $"namespace:{ViewerToken}/{NotificationService.SatelliteSegment} "
+                + $"nodeType:{NotificationNodeType.NodeType} -content.dismissed:true "
+                + string.Concat(StampedNotificationTypes.Select(t => $"-content.notificationType:{t} "))
+                + (unread ? "-content.isRead:true " : "content.isRead:true ")
+                + $"sort:CreatedAt-desc {TimedRowProjection}",
+    };
+
+    /// <summary>The source id of the approval requests.</summary>
+    public const string ApprovalsSource = "Approvals";
+
+    private const string ApprovalsIcon = "✅";
+
+    /// <summary>
+    /// Every <see cref="NotificationType"/> other than the default
+    /// <see cref="NotificationType.ApprovalRequired"/> — the values that ARE stamped in stored JSON.
+    /// 🚨 A type appended to the enum must be added here, or it would be listed as an approval;
+    /// <c>InboxSelectAndDeleteTest.EveryStampedNotificationType_IsClassified</c> fails until it is.
+    /// </summary>
+    // A computed property, not an initialized one: BuiltIn (declared above) reads it while the type
+    // initializes, before a later static initializer would have run.
+    internal static ImmutableArray<string> StampedNotificationTypes =>
+    [
+        nameof(NotificationType.ApprovalGiven),
+        nameof(NotificationType.ApprovalRejected),
+        nameof(NotificationType.General),
+        nameof(NotificationType.AccessGranted),
+        nameof(NotificationType.ChatReady),
+        nameof(NotificationType.System),
+    ];
 
     private static InboxQueryLeg Mail(bool unread) => new()
     {

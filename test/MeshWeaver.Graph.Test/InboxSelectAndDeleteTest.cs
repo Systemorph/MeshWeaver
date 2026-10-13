@@ -53,7 +53,7 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
             await CreateAsync(new MeshNode(id, ns)
             {
                 NodeType = NotificationNodeType.NodeType, Name = id, MainNode = owner, State = MeshNodeState.Active,
-                Content = new Notification { Id = id, Title = id, Recipient = owner },
+                Content = new Notification { NotificationType = NotificationType.General, Id = id, Title = id, Recipient = owner },
             }, ct);
         TestUsers.DevLogin(Mesh, new AccessContext { ObjectId = owner, Name = owner, Email = $"{owner}@meshweaver.io" });
 
@@ -83,7 +83,7 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
         await CreateAsync(new MeshNode("away", ns)
         {
             NodeType = NotificationNodeType.NodeType, Name = "away", MainNode = owner, State = MeshNodeState.Active,
-            Content = new Notification { Id = "away", Title = "away", Recipient = owner, Dismissed = true },
+            Content = new Notification { NotificationType = NotificationType.General, Id = "away", Title = "away", Recipient = owner, Dismissed = true },
         }, ct);
         stream.UpdatePointer(new JsonArray(JsonValue.Create($"{ns}/bin"), JsonValue.Create($"{ns}/bin2"), JsonValue.Create($"{ns}/away")),
             pointer, new JsonPointerReference("keys"));
@@ -118,7 +118,7 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
         await CreateAsync(new MeshNode("alpha", bell)
         {
             NodeType = NotificationNodeType.NodeType, Name = "Alpha invoice", MainNode = owner, State = MeshNodeState.Active,
-            Content = new Notification { Id = "alpha", Title = "Alpha invoice", Recipient = owner },
+            Content = new Notification { NotificationType = NotificationType.General, Id = "alpha", Title = "Alpha invoice", Recipient = owner },
         }, ct);
         await CreateAsync(Mail("zulu", mail, owner, new Email { Id = "zulu", From = "a.buyer@acme.example", Subject = "Zulu workshop" }), ct);
         TestUsers.DevLogin(Mesh, new AccessContext { ObjectId = owner, Name = owner, Email = $"{owner}@meshweaver.io" });
@@ -232,7 +232,7 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
             Name = "Please look at this",
             MainNode = owner,
             State = MeshNodeState.Active,
-            Content = new Notification { Id = "n1", Title = "Please look at this", Recipient = owner },
+            Content = new Notification { NotificationType = NotificationType.General, Id = "n1", Title = "Please look at this", Recipient = owner },
         }, ct);
         var leg = Legs(owner, "Notifications");
         var handler = Handler(NotificationNodeType.NodeType);
@@ -300,7 +300,7 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
             await CreateAsync(new MeshNode(id, ns)
             {
                 NodeType = NotificationNodeType.NodeType, Name = id, MainNode = owner, State = MeshNodeState.Active,
-                Content = new Notification { Id = id, Title = id, Recipient = owner, Dismissed = dismissed },
+                Content = new Notification { NotificationType = NotificationType.General, Id = id, Title = id, Recipient = owner, Dismissed = dismissed },
             }, ct);
         var handler = Handler(NotificationNodeType.NodeType);
 
@@ -328,7 +328,7 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
         await CreateAsync(new MeshNode("n", ns)
         {
             NodeType = NotificationNodeType.NodeType, Name = "n", MainNode = owner, State = MeshNodeState.Active,
-            Content = new Notification { Id = "n", Title = "n", Recipient = owner },
+            Content = new Notification { NotificationType = NotificationType.General, Id = "n", Title = "n", Recipient = owner },
         }, ct);
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var handler = Handler(NotificationNodeType.NodeType);

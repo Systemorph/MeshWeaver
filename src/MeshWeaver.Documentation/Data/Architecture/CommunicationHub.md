@@ -419,7 +419,29 @@ missing falls back to `LastModified`. 🚨 The leg's own `sort:` still chooses w
 keeps: sort on the field only when every node carries it — a descending sort puts a missing value
 FIRST on Postgres, so older nodes without it would crowd newer ones out.
 
-The command row's two buttons act on every ticked row; **Backspace or Delete presses Delete**
+**Approvals are their own source (✅), shown by default.** An approval request is the "approval
+required" notification its flow sends the approver — a document approval, an instance action, a
+governed-activity signature — so the Approvals leg reads the viewer's own `_Notification` partition
+and the notification feed no longer carries them. 🚨 `NotificationType.ApprovalRequired` is the enum
+DEFAULT and is omitted from stored JSON, so the leg NEGATES every stamped type
+(`InboxQueries.StampedNotificationTypes`, pinned against the enum by a test).
+
+**Approve / Reject act on every ticked approval request.** The inbox sends the node the request
+points at (its `TargetNodePath`) a `DecideApprovalRequest` **as the approver** — the decision is
+authored by them and authorized by the node's own type, exactly as its own Approve button is — and
+files the request away once the type answers `Done`. The inbox knows no approval kind: each type
+handles the request on its own hub and answers a refusal with its reason. A decision is not
+undoable from the inbox; it is the approval's own record.
+
+**One step-up for the whole batch.** Where the instance requires a step-up confirmation, a type
+records the decision and answers `StepUpRequired` with the binding its own control plane consumes
+(`DecideApprovalResponse.StepUpBinding`). The item stays in the inbox, and its outcome carries the
+target (`InboxItemOutcome.StepUp`). When the batch ends, the inbox sends the approver to ONE step-up
+covering every held decision (`StepUpPaths.StartUrl` with all targets — the endpoint already stamps
+a receipt per target), then back to the inbox. Each type's control plane consumes its own receipt
+and ratifies, and the request leaves the inbox once its type files it away.
+
+The command row's Delete and Undo act on every ticked row; **Backspace or Delete presses Delete**
 (`ButtonControl.WithShortcut`) — never while typing in the search box.
 
 | Button | Does | Never does |
@@ -765,6 +787,9 @@ twice.
 
 ## 11. What is NOT established here
 
+- **Which approval types answer `DecideApprovalRequest`.** The contract and the inbox side ship in
+  core; each approval type handles it in its own package (document approvals and instance actions
+  first). A type that does not answer leaves its requests listed and reports "no answer".
 - **"Done" is judged on the writer's mirror, not on the owner's verdict.** A handler counts an item
   as put away when its update lambda changed the content it was handed and the written result is in
   the asked-for state. If the same item was put away in ANOTHER session a moment earlier and this
