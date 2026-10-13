@@ -3297,10 +3297,20 @@ public partial class MeshOperations
             // the stream never emitted, the read hung out its whole 5 s budget, and the schema
             // then reported no configuration for a type that has one. A ContentAs further down
             // could never have rescued that: nothing reached it.
-            .Where(n => n.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions)
-                        is { CompilationStatus: CompilationStatus.Ok } d
-                        && !string.IsNullOrEmpty(d.LatestAssemblyCollection)
-                        && !string.IsNullOrEmpty(d.LatestAssemblyPath))
+            //
+            // 🚨 A SETTLED record decides at once — Error included (#6635). The wait exists for a
+            // compile still in flight (Pending / Compiling / Unknown), which may yet publish a
+            // build. A record at Error has finished: its compile failed and nothing more is coming
+            // on this stream, so waiting for Ok burned the whole 5 s on every MCP write to an
+            // instance of that type (measured: two writes landing at exactly +5.008 s). And a failed
+            // compile leaves the LAST GOOD BUILD named on the record (LatestAssemblyPath /
+            // LatestAssemblyMvid) — the build every activation of the type keeps binding until a
+            // newer one exists (Doc/Architecture/StaleStateUntilRecycle) — so the schema is read
+            // from that build, the same bytes the type's instances are running. Error with no build
+            // named answers "no configuration" immediately.
+            .Where(n => n.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions) is { } d
+                        && (d.CompilationStatus == CompilationStatus.Error
+                            || (d.CompilationStatus == CompilationStatus.Ok && NamesABuild(d))))
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(5))
             .SelectMany(node =>
@@ -3309,7 +3319,7 @@ public partial class MeshOperations
                 // earlier emission of the same stream in principle, and ContentAs is the only
                 // reading of Content this method makes.
                 var def = node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions);
-                if (def is null)
+                if (def is null || !NamesABuild(def))
                     return Observable.Return<NodeCompilationResult?>(null);
                 // 🚨 ADOPT-TIME IDENTITY GATE (#3472). One of the six load paths that gated on
                 // CompilationStatus == Ok alone. Ok is a claim SCOPED to CompiledFrameworkVersion,
@@ -3345,6 +3355,9 @@ public partial class MeshOperations
             })
             .Catch<Func<MessageHubConfiguration, MessageHubConfiguration>?, Exception>(_ =>
                 Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(null));
+
+        static bool NamesABuild(NodeTypeDefinition d)
+            => !string.IsNullOrEmpty(d.LatestAssemblyCollection) && !string.IsNullOrEmpty(d.LatestAssemblyPath);
     }
 
     /// <summary>
