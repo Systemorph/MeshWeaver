@@ -39,8 +39,10 @@ public static class InboxApprovals
                 ? Observable.Return(new InboxItemOutcome(notificationPath, false, noAnswer))
                 : Send(hub, target, decision, caller, noAnswer)
                     .SelectMany(outcome => outcome.Done
-                        // Decided: the request leaves the inbox (soft — the notification stays).
-                        ? Dismiss(hub, access, caller, notificationPath).Select(_ => new InboxItemOutcome(notificationPath, true))
+                        // Decided: the request leaves the inbox (soft — the notification stays). The
+                        // filing's OWN outcome is the row's: a request that could not be filed away is
+                        // still in the inbox, and the row says so rather than reporting success.
+                        ? Dismiss(hub, access, caller, notificationPath)
                         : Observable.Return(outcome with { Path = notificationPath })))
             .Catch((Exception ex) =>
             {
@@ -65,7 +67,6 @@ public static class InboxApprovals
             .Select(reply => reply.Message switch
             {
                 { Done: true } => new InboxItemOutcome(target, true),
-                { StepUpRequired: true } answer => new InboxItemOutcome(target, false, answer.Reason),
                 var answer => new InboxItemOutcome(target, false, answer.Reason),
             })
             .DefaultIfEmpty(new InboxItemOutcome(target, false, noAnswer))
