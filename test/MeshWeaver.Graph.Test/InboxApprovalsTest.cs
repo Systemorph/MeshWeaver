@@ -22,6 +22,8 @@ public class InboxApprovalsTest(ITestOutputHelper output) : MonolithMeshTestBase
 {
     private const string ApprovalType = "TestApproval";
     private const string Refused = "already decided";
+    private const string Held = "recorded, awaits confirmation";
+    private const string HeldBinding = "binding-of-the-held-decision";
 
     private readonly ConcurrentQueue<(string Path, string Decision, string? Author)> decided = new();
 
@@ -32,6 +34,12 @@ public class InboxApprovalsTest(ITestOutputHelper output) : MonolithMeshTestBase
             HubConfiguration = config => config.WithHandler<DecideApprovalRequest>((hub, request) =>
             {
                 var path = hub.Address.Path;
+                if (path.EndsWith("/held", StringComparison.Ordinal))
+                {
+                    hub.Post(new DecideApprovalResponse(false, Held) { StepUpRequired = true, StepUpBinding = HeldBinding },
+                        o => o.ResponseFor(request));
+                    return request.Processed();
+                }
                 if (path.EndsWith("/stale", StringComparison.Ordinal))
                 {
                     hub.Post(new DecideApprovalResponse(false, Refused), o => o.ResponseFor(request));
@@ -105,6 +113,36 @@ public class InboxApprovalsTest(ITestOutputHelper output) : MonolithMeshTestBase
         (await Decide(stale).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct))
             .Should().Be(new InboxItemOutcome(stale, false, Refused), "the target's own reason is reported");
         (await Content<Notification>(stale, _ => true, ct)).Dismissed.Should().BeFalse("an undecided request stays");
+    }
+
+    /// <summary>
+    /// A decision the target HOLDS for the approver's step-up comes back with its binding, stays in
+    /// the inbox, and is collected — each held decision once — into the batch's ONE step-up.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task AHeldDecision_CarriesItsStepUp_AndTheBatchStepsUpOnce()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string owner = "inbox-approvals-held";
+        await CreateUserAsync(owner, ct);
+        await CreateAsync(new MeshNode("held", "TestApprovals") { NodeType = ApprovalType, Name = "held" }, ct);
+        var request = await Notify(owner, "held", NotificationType.ApprovalRequired, "TestApprovals/held", ct);
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+
+        IObservable<InboxItemOutcome> outcome;
+        using (access.SwitchAccessContext(new AccessContext { ObjectId = owner, Name = owner }))
+            outcome = InboxApprovals.Decide(Mesh, request, ApprovalDecisions.Approve, "no answer");
+        var held = await outcome.FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+
+        held.Done.Should().BeFalse("a held decision is not decided yet");
+        held.Reason.Should().Be(Held);
+        held.StepUp.Should().Be(new StepUpTarget { ActionPath = "TestApprovals/held", Binding = HeldBinding });
+        (await Content<Notification>(request, _ => true, ct)).Dismissed.Should().BeFalse("it stays until the step-up confirms it");
+
+        var other = new StepUpTarget { ActionPath = "TestApprovals/other", Binding = "b2" };
+        InboxLayoutArea.StepUpOf([held, held, new InboxItemOutcome("x", true), new InboxItemOutcome("y", false) { StepUp = other }])
+            .Should().Equal([held.StepUp!, other], "each held decision once, in batch order; nothing for a decided or refused item");
+        InboxLayoutArea.StepUpOf([new InboxItemOutcome("x", true)]).Should().BeEmpty("no step-up when nothing is held");
     }
 
     private static string[] Legs(string owner, string source)

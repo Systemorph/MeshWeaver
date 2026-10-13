@@ -1,5 +1,6 @@
 using System.Reactive.Linq;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -67,6 +68,13 @@ public static class InboxApprovals
             .Select(reply => reply.Message switch
             {
                 { Done: true } => new InboxItemOutcome(target, true),
+                // Recorded, held for the approver's confirmation: the binding comes back so the
+                // inbox can confirm the whole batch in ONE step-up.
+                { StepUpRequired: true, StepUpBinding: { Length: > 0 } binding } answer =>
+                    new InboxItemOutcome(target, false, answer.Reason)
+                    {
+                        StepUp = new StepUpTarget { ActionPath = target, Binding = binding },
+                    },
                 var answer => new InboxItemOutcome(target, false, answer.Reason),
             })
             .DefaultIfEmpty(new InboxItemOutcome(target, false, noAnswer))

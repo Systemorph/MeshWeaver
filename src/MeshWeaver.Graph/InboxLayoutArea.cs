@@ -500,6 +500,11 @@ public static class InboxLayoutArea
                     {
                         host.UpdateData(InboxRows.SelectionId, new DataGridSelectionState());
                         ctx.ReportSummary(Summary(host, approve ? "inbox.summary.approved" : "inbox.summary.rejected", outcomes));
+                        // 🚨 ONE step-up for the batch: every decision held for the approver's
+                        // confirmation is confirmed together, then the approver comes back here.
+                        // A FULL page load — the step-up endpoint is an MVC route the circuit never reaches.
+                        if (StepUpOf(outcomes) is { Count: > 0 } held)
+                            ctx.NavigateTo(StepUpPaths.StartUrl(held, "/" + owner.TrimStart('/') + "/" + AreaName), forceLoad: true);
                     })
                     .Select(_ => Unit.Default)));
     }
@@ -603,6 +608,13 @@ public static class InboxLayoutArea
         write.Take(1).Do(landed).Subscribe(outcome);
         return outcome;
     }
+
+    /// <summary>
+    /// The step-up targets a batch still waits for — each held decision once, in batch order. Empty
+    /// when nothing was held, so the inbox only leaves for a step-up when there is one to give.
+    /// </summary>
+    internal static ImmutableList<StepUpTarget> StepUpOf(IEnumerable<InboxItemOutcome> outcomes)
+        => [.. outcomes.Select(o => o.StepUp).OfType<StepUpTarget>().DistinctBy(t => t.Key)];
 
     /// <summary>The outcome line: how many, and every item that was not done with its reason.</summary>
     internal static string Summary(LayoutAreaHost host, string key, IReadOnlyCollection<InboxItemOutcome> outcomes)
