@@ -535,7 +535,9 @@ public class QueryEvaluator
     }
 
     /// <summary>
-    /// Orders results by a property.
+    /// Orders results by a property — TYPED and with nulls last in both directions; the contract is
+    /// <see cref="QuerySortKey"/>'s. Stable, so a caller that pre-orders by path keeps path as the
+    /// tiebreak.
     /// </summary>
     /// <param name="results">The results to order</param>
     /// <param name="orderBy">The ordering clause (null means no ordering)</param>
@@ -545,89 +547,63 @@ public class QueryEvaluator
         if (orderBy == null)
             return results;
 
-        return orderBy.Descending
-            ? results.OrderByDescending(x => GetComparableValue(GetPropertyValue(x!, orderBy.Property)), SelectorValueComparer.Instance)
-            : results.OrderBy(x => GetComparableValue(GetPropertyValue(x!, orderBy.Property)), SelectorValueComparer.Instance);
+        return results.OrderBy(x => GetSortKey(x!, orderBy.Property), QuerySortKey.Comparer(orderBy.Descending));
     }
 
     /// <summary>
-    /// Orders sort keys TOTALLY — <c>Comparer&lt;object&gt;.Default</c> is not, and a sort key
-    /// read out of a node's content is not type-uniform.
-    ///
-    /// <para>🚨 <b>Why this is required rather than defensive.</b> <c>sort:</c> resolves through
-    /// <see cref="GetPropertyValue"/>, so the content fallback widened it from "node fields and
-    /// explicitly dotted <c>content.X</c>" to "any selector". JSON has no schema: the same key is
-    /// a string on one node and a number on another, and <c>Comparer&lt;object&gt;.Default</c>
-    /// answers that pair with <c>InvalidOperationException: Failed to compare two elements in the
-    /// array</c> — so a widened selector would turn a merely differently-ordered query into a
-    /// FAILED one, on the merge path (<c>MeshQuery.ClipMergedInitial</c>) that every backend runs.
-    /// The same latent hole already swallowed <c>int</c> against <c>long</c>. Postgres has no
-    /// equivalent hazard: <c>n.content-&gt;&gt;'X'</c> is always TEXT.</para>
-    ///
-    /// <para><b>Uniform keys keep their existing order exactly</b> — same type and
-    /// <see cref="IComparable"/> is dispatched first and untouched, so strings still sort as
-    /// strings and ticks still sort chronologically. Only pairs the default comparer REFUSED are
-    /// newly decided: mixed numerics numerically, and anything else by its invariant string form.</para>
+    /// The canonical sort key (<see cref="QuerySortKey.Normalize"/>) of <paramref name="obj"/> under a
+    /// <c>sort:</c> selector — a node field, a <c>content.a.b</c> path, a bare content field, or one of
+    /// the allow-listed functions Postgres also accepts (<c>length(x)</c>, <c>lower(x)</c>,
+    /// <c>upper(x)</c>; <c>sort:length(path)-desc</c> is the routing layer's deepest-prefix pick).
     /// </summary>
-    private sealed class SelectorValueComparer : IComparer<object?>
+    /// <param name="obj">The row — usually a <see cref="MeshNode"/>.</param>
+    /// <param name="selector">The selector as the query spelled it.</param>
+    /// <returns>A <see cref="double"/>, a <see cref="string"/>, or <see langword="null"/>.</returns>
+    public object? GetSortKey(object obj, string selector)
     {
-        public static readonly SelectorValueComparer Instance = new();
-
-        public int Compare(object? x, object? y)
+        var open = selector.IndexOf('(');
+        if (open > 0 && selector.EndsWith(')'))
         {
-            if (ReferenceEquals(x, y))
-                return 0;
-            // Nulls first, matching the default comparer's placement of an absent key.
-            if (x is null)
-                return -1;
-            if (y is null)
-                return 1;
-
-            // Uniform keys: the pre-existing behaviour, unchanged.
-            if (x.GetType() == y.GetType() && x is IComparable sameType)
-                return sameType.CompareTo(y);
-
-            // Mixed numerics (int vs long, long vs double): compare as numbers, not as text.
-            if (IsNumeric(x) && IsNumeric(y))
-                return Convert.ToDouble(x, CultureInfo.InvariantCulture)
-                    .CompareTo(Convert.ToDouble(y, CultureInfo.InvariantCulture));
-
-            // Genuinely different kinds — a string against a number. Ordinal on the invariant
-            // form: deterministic, and never resolved from the ambient culture.
-            return string.CompareOrdinal(
-                Convert.ToString(x, CultureInfo.InvariantCulture),
-                Convert.ToString(y, CultureInfo.InvariantCulture));
+            var function = selector[..open].Trim();
+            var inner = QuerySortKey.Normalize(ResolveSortSelector(obj, selector[(open + 1)..^1].Trim()));
+            var text = inner switch
+            {
+                null => null,
+                string s => s,
+                double d => d.ToString(CultureInfo.InvariantCulture),
+                _ => inner.ToString(),
+            };
+            if (function.Equals("length", StringComparison.OrdinalIgnoreCase))
+                return text is null ? null : (double)text.Length;
+            if (function.Equals("lower", StringComparison.OrdinalIgnoreCase))
+                return text?.ToLowerInvariant();
+            if (function.Equals("upper", StringComparison.OrdinalIgnoreCase))
+                return text?.ToUpperInvariant();
         }
 
-        private static bool IsNumeric(object value) =>
-            value is int or long or double or decimal or float or short or byte or uint or ulong;
+        return QuerySortKey.Normalize(ResolveSortSelector(obj, selector));
     }
 
     /// <summary>
-    /// Converts a property value to a comparable form for sorting.
+    /// Resolves a sort selector, accepting the snake_case COLUMN spellings Postgres maps
+    /// (<c>last_modified</c>, <c>display_order</c>, <c>node_type</c>, …) for the node field they name,
+    /// so one <c>sort:</c> means one thing on every backend.
     /// </summary>
-    private static object? GetComparableValue(object? value)
+    private object? ResolveSortSelector(object obj, string selector)
     {
-        if (value == null)
-            return null;
-
-        // Handle DateTimeOffset specially for proper sorting
-        if (value is DateTimeOffset dto)
-            return dto.UtcTicks;
-
-        if (value is DateTime dt)
-            return dt.Ticks;
-
-        // For strings, return as-is for case-insensitive comparison
-        if (value is string)
-            return value;
-
-        // For numbers, return as-is
-        if (value is int or long or double or decimal or float)
-            return value;
-
-        // Default: convert to string
-        return value.ToString();
+        var property = selector.ToLowerInvariant() switch
+        {
+            "last_modified" => "lastModified",
+            "display_order" => "order",
+            "node_type" => "nodeType",
+            "main_node" => "mainNode",
+            "desired_id" => "desiredId",
+            "created_by" => "createdBy",
+            "created_date" => "createdDate",
+            "last_modified_by" => "lastModifiedBy",
+            _ => selector,
+        };
+        return GetPropertyValue(obj, property);
     }
 
     /// <summary>

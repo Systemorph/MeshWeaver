@@ -240,9 +240,13 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                 var effectiveOrderBy = parsedQuery.EffectiveOrderBy;
                 if (effectiveOrderBy != null)
                 {
-                    sorted = (effectiveOrderBy.Descending
-                        ? matchedNodes.OrderByDescending(n => GetSortableValue(n, effectiveOrderBy.Property))
-                        : matchedNodes.OrderBy(n => GetSortableValue(n, effectiveOrderBy.Property)))
+                    // The SAME key and comparer as the merge layer (QuerySortKey): typed, nulls
+                    // last, any selector — a content field included. This used to be a fixed map of
+                    // node fields with `_ => node.Name`, so `sort:content.x` clipped the load cap by
+                    // NAME and the merge could only re-order the wrong subset.
+                    sorted = matchedNodes
+                        .OrderBy(n => _evaluator.GetSortKey(n, effectiveOrderBy.Property),
+                            QuerySortKey.Comparer(effectiveOrderBy.Descending))
                         .ThenBy(PathTiebreak, StringComparer.Ordinal);
                 }
                 else if (!string.IsNullOrEmpty(parsedQuery.TextSearch))
@@ -1140,27 +1144,6 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
     /// </summary>
     private static string PathTiebreak(object item)
         => item is MeshNode node ? node.Path ?? "" : "";
-
-    /// <summary>
-    /// Gets a sortable value from a node for the given property name.
-    /// Maps common property names to MeshNode fields.
-    /// </summary>
-    private static object? GetSortableValue(object item, string property)
-    {
-        if (item is not MeshNode node) return null;
-        return property.ToLowerInvariant() switch
-        {
-            "lastmodified" or "last_modified" => node.LastModified,
-            "name" => node.Name,
-            "order" or "display_order" => node.Order,
-            "path" => node.Path,
-            "nodetype" or "node_type" => node.NodeType,
-            "category" => node.Category,
-            "state" => node.State,
-            "version" => node.Version,
-            _ => node.Name
-        };
-    }
 
     /// <summary>
     /// Validates a node read operation using INodeValidator instances from DI.
