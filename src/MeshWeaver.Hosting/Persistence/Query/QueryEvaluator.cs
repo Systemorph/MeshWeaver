@@ -318,7 +318,9 @@ public class QueryEvaluator
         return element.ValueKind switch
         {
             JsonValueKind.String => element.GetString(),
-            JsonValueKind.Number => element.TryGetInt64(out var l) ? l : element.GetDouble(),
+            // (object) on each arm: a bare `? l : GetDouble()` types the conditional as DOUBLE and
+            // silently widened every integer, so 2^53 + 1 read back as 2^53.
+            JsonValueKind.Number => element.TryGetInt64(out var l) ? (object)l : element.GetDouble(),
             JsonValueKind.True => true,
             JsonValueKind.False => false,
             JsonValueKind.Null => null,
@@ -558,7 +560,7 @@ public class QueryEvaluator
     /// </summary>
     /// <param name="obj">The row — usually a <see cref="MeshNode"/>.</param>
     /// <param name="selector">The selector as the query spelled it.</param>
-    /// <returns>A <see cref="double"/>, a <see cref="string"/>, or <see langword="null"/>.</returns>
+    /// <returns>A number, a <see cref="string"/>, or <see langword="null"/>.</returns>
     public object? GetSortKey(object obj, string selector)
     {
         var open = selector.IndexOf('(');
@@ -570,8 +572,7 @@ public class QueryEvaluator
             {
                 null => null,
                 string s => s,
-                double d => d.ToString(CultureInfo.InvariantCulture),
-                _ => inner.ToString(),
+                _ => Convert.ToString(inner, CultureInfo.InvariantCulture),
             };
             if (function.Equals("length", StringComparison.OrdinalIgnoreCase))
                 return text is null ? null : (double)text.Length;
@@ -582,6 +583,30 @@ public class QueryEvaluator
         }
 
         return QuerySortKey.Normalize(ResolveSortSelector(obj, selector));
+    }
+
+    /// <summary>
+    /// Whether a <c>sort:</c> selector reads the node's CONTENT rather than one of its own fields —
+    /// in which case a <c>select:</c> projection that omits <c>content</c> must still carry it, or the
+    /// merge layer's authoritative re-sort finds every key null and falls back to path order.
+    /// </summary>
+    /// <param name="selector">The sort selector, possibly a function call such as <c>lower(x)</c>.</param>
+    /// <returns>True when the selector resolves into <see cref="MeshNode.Content"/>.</returns>
+    public static bool SortReadsContent(string? selector)
+    {
+        if (string.IsNullOrEmpty(selector))
+            return false;
+        var open = selector.IndexOf('(');
+        if (open > 0 && selector.EndsWith(')'))
+            selector = selector[(open + 1)..^1].Trim();
+        var root = selector.Split('.')[0];
+        if (root.Equals(ContentProperty, StringComparison.OrdinalIgnoreCase))
+            return true;
+        var property = root.Equals("display_order", StringComparison.OrdinalIgnoreCase)
+            ? "order"
+            : root.Replace("_", "", StringComparison.Ordinal);
+        return typeof(MeshNode).GetProperty(property,
+            BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase) is null;
     }
 
     /// <summary>

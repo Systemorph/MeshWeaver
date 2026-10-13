@@ -123,6 +123,38 @@ public class ContentFieldSortTest
             .Should().Equal("hundred", "ninety", "ten", "nine");
     }
 
+    /// <summary>Integers beyond 2^53 stay distinct — the key is exact, not an IEEE double.</summary>
+    [Fact]
+    public void LargeIntegers_KeepExactOrder()
+    {
+        var nodes = new[]
+        {
+            Node("big+1", Json("""{"seq":9007199254740993}""")),
+            Node("big", Json("""{"seq":9007199254740992}""")),
+        };
+
+        new QueryEvaluator().OrderResults(nodes, new OrderByClause("content.seq")).Select(n => n.Id)
+            .Should().Equal("big", "big+1");
+    }
+
+    /// <summary>
+    /// One instant is one key whether typed or written as an offset string: 10:00+02:00 is 08:00Z,
+    /// so it sorts before a typed 09:00Z.
+    /// </summary>
+    [Fact]
+    public void DateTimeWithOffset_TypedAndJson_CompareAsInstants()
+    {
+        var nodes = new[]
+        {
+            Node("typed-0900Z", new Dictionary<string, object?> { ["at"] = new DateTimeOffset(2026, 10, 13, 9, 0, 0, TimeSpan.Zero) }),
+            Node("json-1000+02", Json("""{"at":"2026-10-13T10:00:00+02:00"}""")),
+            Node("json-0830Z", Json("""{"at":"2026-10-13T08:30:00Z"}""")),
+        };
+
+        new QueryEvaluator().OrderResults(nodes, new OrderByClause("content.at")).Select(n => n.Id)
+            .Should().Equal("json-1000+02", "json-0830Z", "typed-0900Z");
+    }
+
     /// <summary>A null or absent key is last whichever way the sort runs.</summary>
     [Fact]
     public void NullsAndAbsentKeys_SortLast_InBothDirections()
@@ -202,6 +234,31 @@ public class ContentFieldSortTest
                 Limit = 2,
             }, ct))
             .Should().Equal(["d", "c"], "9 before 10 — numeric, not text, and not by name");
+    }
+
+    /// <summary>
+    /// A <c>select:</c> that omits content must not blank the content a content SORT reads: the
+    /// merge re-sorts after the provider returns, and with every key null the page would be chosen
+    /// by path.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task InMemoryProvider_ProjectionWithoutContent_StillSortsByContent()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var store = new InMemoryStorageAdapter();
+        await store.Write(new MeshNode("Book") { Name = "Book", NodeType = "Group", State = MeshNodeState.Active }, Options).Await(ct);
+        foreach (var (id, premium) in new[] { ("a", 100), ("b", 50), ("c", 10), ("d", 9) })
+            await store.Write(Node(id, Json($$"""{"premium":{{premium}}}""")), Options).Await(ct);
+
+        var query = (IMeshQueryCore)new MeshQuery(
+            [new StorageAdapterMeshQueryProvider(persistence: store)], hub: null!);
+
+        (await Ids(query, new MeshQueryRequest
+            {
+                Query = "path:Book nodeType:Submission scope:descendants select:path,name sort:content.premium",
+                Limit = 2,
+            }, ct))
+            .Should().Equal(["d", "c"], "9 and 10 — the projection must not turn this into path order (a, b)");
     }
 
     /// <summary>A provider that answers every query with the same canned rows, in the given order.</summary>

@@ -337,6 +337,11 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         foreach (var field in select)
             if (field.Equals("content", StringComparison.OrdinalIgnoreCase))
                 return node;
+        // A content sort keeps the content: MeshQuery.ClipMergedInitial re-sorts on it after this
+        // provider returns, and with Content blanked every key ties and path order replaces the
+        // requested one. Postgres keeps it in the projection for the same reason.
+        if (QueryEvaluator.SortReadsContent(parsedQuery.EffectiveOrderBy?.Property))
+            return node;
         return meshNode with { Content = null };
     }
 
