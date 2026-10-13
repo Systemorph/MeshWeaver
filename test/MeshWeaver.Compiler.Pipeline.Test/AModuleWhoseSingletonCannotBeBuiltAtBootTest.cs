@@ -84,11 +84,18 @@ public abstract class ModuleSingletonsBuiltAtBootTestBase(ITestOutputHelper outp
     /// the reference assembly it ships, as MeshWeaver.Testing registers its xunit closure (MeshWeaver#6557).</summary>
     protected virtual bool ShipsReferences => false;
 
+    /// <summary>Whether the module registers an <see cref="MeshWeaver.Mesh.Services.INodeTypeAccessRule"/> —
+    /// a security rule, which the root forwards as a platform interface.</summary>
+    protected virtual bool RegistersAccessRule => false;
+
+    /// <summary>The node type the module's access rule governs.</summary>
+    public const string GuardedNodeType = "BootBuiltGuarded";
+
     /// <inheritdoc />
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder) =>
         base.ConfigureMesh(builder)
             .ConfigureServices(services => services.AddScoped<CircuitBoundState>())
-            .InstallAssemblies(WriteModule(root, Broken, CircuitBound, ShipsReferences));
+            .InstallAssemblies(WriteModule(root, Broken, CircuitBound, ShipsReferences, RegistersAccessRule));
 
     /// <summary>The mesh's module registry.</summary>
     protected ModuleContexts Contexts => Mesh.ServiceProvider.GetRequiredService<ModuleContexts>();
@@ -111,11 +118,18 @@ public abstract class ModuleSingletonsBuiltAtBootTestBase(ITestOutputHelper outp
     /// <see cref="ShipsReferences"/> — one no image-bound module of the test mesh installs.</summary>
     public const string ShippedReferenceName = "System.Private.Xml";
 
-    private static string Source(bool broken, bool circuitBound, bool shipsReferences) => $$"""
+    private static string Source(bool broken, bool circuitBound, bool shipsReferences, bool accessRule) => $$"""
         using Microsoft.Extensions.DependencyInjection;
         [assembly: MeshWeaver.Test.BootBuilt.Module]
         namespace MeshWeaver.Test.BootBuilt;
         public sealed class Probe : MeshWeaver.Graph.Test.IBootBuiltProbe { public string Answer() => "boot-built"; }
+        public sealed class GuardRule : MeshWeaver.Mesh.Services.INodeTypeAccessRule
+        {
+            public string NodeType => "{{GuardedNodeType}}";
+            public System.Collections.Generic.IReadOnlyCollection<MeshWeaver.Mesh.Security.NodeOperation> SupportedOperations { get; } = [];
+            public System.IObservable<bool> HasAccess(MeshWeaver.Mesh.Services.NodeValidationContext context, string? userId) =>
+                System.Reactive.Linq.Observable.Return(true);
+        }
         public sealed class Fragile
         {
             public Fragile() { {{(broken ? "throw new System.InvalidOperationException(\"cannot be built by design\");" : "")}} }
@@ -145,6 +159,7 @@ public abstract class ModuleSingletonsBuiltAtBootTestBase(ITestOutputHelper outp
                         {{(broken ? ContributedInstalledModule : "")}}
                         {{(circuitBound ? CircuitBoundRegistrations : "")}}
                         {{(shipsReferences ? ShippedReferenceRegistration : "")}}
+                        {{(accessRule ? AccessRuleRegistration : "")}}
                         return services;
                     })];
         }
@@ -170,10 +185,15 @@ public abstract class ModuleSingletonsBuiltAtBootTestBase(ITestOutputHelper outp
         services.AddSingleton(new MeshWeaver.Mesh.InstalledModuleAssembly(typeof(System.Xml.XmlDocument).Assembly));
         """;
 
+    // A security rule the module contributes — forwarded to the root as a platform interface.
+    private const string AccessRuleRegistration =
+        "services.AddSingleton<MeshWeaver.Mesh.Services.INodeTypeAccessRule, GuardRule>();";
+
     /// <summary>Compiles the test module under <paramref name="directoryRoot"/> and returns its entry DLL —
     /// for hosts this base does not build (MeshWeaver#6557's plain MS DI host).</summary>
-    internal static string WriteModule(string directoryRoot, bool broken, bool circuitBound, bool shipsReferences = false) =>
-        Write(directoryRoot, Source(broken, circuitBound, shipsReferences));
+    internal static string WriteModule(string directoryRoot, bool broken, bool circuitBound, bool shipsReferences = false,
+        bool accessRule = false) =>
+        Write(directoryRoot, Source(broken, circuitBound, shipsReferences, accessRule));
 
     private static string Write(string directoryRoot, string source)
     {
