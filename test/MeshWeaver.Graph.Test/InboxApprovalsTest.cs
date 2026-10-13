@@ -36,7 +36,8 @@ public class InboxApprovalsTest(ITestOutputHelper output) : MonolithMeshTestBase
                 var path = hub.Address.Path;
                 if (path.EndsWith("/held", StringComparison.Ordinal))
                 {
-                    hub.Post(new DecideApprovalResponse(false, Held) { StepUpRequired = true, StepUpBinding = HeldBinding },
+                    // Done = true on purpose: a held decision is held whatever Done says.
+                    hub.Post(new DecideApprovalResponse(true, Held) { StepUpRequired = true, StepUpBinding = HeldBinding },
                         o => o.ResponseFor(request));
                     return request.Processed();
                 }

@@ -67,14 +67,16 @@ public static class InboxApprovals
             .Timeout(AnswerWithin)
             .Select(reply => reply.Message switch
             {
-                { Done: true } => new InboxItemOutcome(target, true),
-                // Recorded, held for the approver's confirmation: the binding comes back so the
-                // inbox can confirm the whole batch in ONE step-up.
+                // 🚨 HELD before decided: a decision that still needs the approver's step-up is only
+                // recorded, whatever Done says — it is never filed away, and its binding comes back so
+                // the inbox can confirm the whole batch in ONE step-up (core Doc/Architecture/ApprovalStepUp).
                 { StepUpRequired: true, StepUpBinding: { Length: > 0 } binding } answer =>
                     new InboxItemOutcome(target, false, answer.Reason)
                     {
                         StepUp = new StepUpTarget { ActionPath = target, Binding = binding },
                     },
+                { StepUpRequired: true } answer => new InboxItemOutcome(target, false, answer.Reason),
+                { Done: true } => new InboxItemOutcome(target, true),
                 var answer => new InboxItemOutcome(target, false, answer.Reason),
             })
             .DefaultIfEmpty(new InboxItemOutcome(target, false, noAnswer))
