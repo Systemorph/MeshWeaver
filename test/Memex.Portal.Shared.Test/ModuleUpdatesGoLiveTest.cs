@@ -155,6 +155,8 @@ public sealed class ModuleUpdatesGoLiveTest : MonolithMeshTestBase
         second.Should().NotContain("went LIVE", "a pass that swapped nothing must not claim a swap");
         second.Should().Contain("nothing landed is pending activation in this process",
             "the marker still names a pending generation, so the verdict must say what the reader found");
+        second.Should().Contain("no module activation pending",
+            "the reader's own diagnosis (ModuleActivationReport.Describe) must travel into the verdict");
         updater.Restarts.Should().Be(0, "nothing pending here — a restart would load nothing new");
     }
 

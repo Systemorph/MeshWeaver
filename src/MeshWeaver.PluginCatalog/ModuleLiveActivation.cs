@@ -52,6 +52,10 @@ public sealed record ModuleLiveActivationResult(
         var parts = new List<string>();
         if (!WentLive.IsEmpty)
             parts.Add("went live without a restart: " + string.Join(", ", WentLive.Select(o => o.Module)));
+        var upToDate = Outcomes.Where(o => o.Kind == ModuleSwapKind.UpToDate).ToImmutableList();
+        if (!upToDate.IsEmpty)
+            parts.Add("already serving the landed generation, so nothing was swapped in: "
+                + string.Join(", ", upToDate.Select(o => o.Module)));
         if (!StillPending.IsEmpty)
             parts.Add("still needs a restart: " + string.Join("; ", StillPending.Select(o => $"{o.Module} ({o.Kind}: {o.Reason})")));
         return parts.Count == 0

@@ -432,11 +432,20 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
             .SelectMany(result => result.NeedsRestart
                 ? Restart(platform, honourFloor: true,
                     reason: $"a landed module generation did not go live in the running process — {result.Describe()}")
-                : Observable.Return(result.NothingWasPending
-                    // #6620: nothing was swapped — never report a pass that changed nothing as "went LIVE".
-                    ? SelfUpdateVerdict.NothingToActivate(platform, result.Describe())
-                    : SelfUpdateVerdict.ActivatedLive(platform, result.Describe())));
+                : Observable.Return(LiveVerdict(platform, result)));
     }
+
+    /// <summary>
+    /// The verdict of a live-activation pass that needs no restart, decided from what WENT LIVE (#6620):
+    /// a pass that swapped nothing in — nothing pending here, or every pending module already serving
+    /// the landed generation (<see cref="MeshWeaver.Graph.Configuration.ModuleSwapKind.UpToDate"/>, which a second, overlapping check
+    /// finds once the first has swapped it in) — is <see cref="SelfUpdateVerdict.NothingToActivate"/>,
+    /// never "went LIVE".
+    /// </summary>
+    internal static SelfUpdateVerdict LiveVerdict(SelfUpdateVerdict platform, ModuleLiveActivationResult result) =>
+        result.WentLive.IsEmpty
+            ? SelfUpdateVerdict.NothingToActivate(platform, result.Describe())
+            : SelfUpdateVerdict.ActivatedLive(platform, result.Describe());
 
     /// <summary>Why this install cannot patch, as the qualifier after <c>canPatch=False</c> (#4097):
     /// the plan-tier sentence when the patcher's package was refused by the instance's plan, else
