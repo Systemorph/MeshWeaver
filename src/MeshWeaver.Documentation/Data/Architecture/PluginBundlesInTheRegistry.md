@@ -243,8 +243,7 @@ before and never instead:
 | lane | source | call |
 |---|---|---|
 | `main-cd.yml` → `publish-bake` (the platform's own content, one leg per architecture) | `meshweaver-content` | `--tag-run <run id> --release <version> --skip-if-published` — the release identity lands at `plugins/releases:<version>` on every run, exactly as the share's `_releases/<version>` marker does |
-| `main-cd.yml` → `plugins-bake` (through the reusable lane) | `plugins` | as below |
-| `node-repo-publish-bake.yml` (every satellite, and core's `plugins-bake`) | the caller's `bake-source` | `--tag-run <run id> --skip-if-published`, registry and account from the `bundle-registry` / `bundle-registry-publisher` inputs (defaults `cr.meshweaver.cloud` / `publisher`) |
+| `node-repo-publish-bake.yml` (every satellite, MeshWeaver.Plugins included — the ONLY writer of `plugins` since #6143 removed core CD's `plugins-bake`) | the caller's `bake-source` | `--tag-run <run id> --skip-if-published`, registry and account from the `bundle-registry` / `bundle-registry-publisher` inputs (defaults `cr.meshweaver.cloud` / `publisher`) |
 
 The directory pushed is the one `publish-bake-bundles.sh` **materialises itself**
 (`BAKE_PUBLICATION_DIR`): every file of its verified upload plan, byte-checked against the

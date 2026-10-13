@@ -2,17 +2,37 @@
 Name: CD Reconciles the Plugins Seal
 Category: Architecture
 Description: >-
-  A platform set seals on its trio alone, so it can seal without the `plugins` publication every
-  satellite then asks for under its framework identity — and nothing re-attempted that. Why the fix
-  repairs the state instead of forbidding it (six of nine measured cases were Plugins' own red, and
-  refusing to seal would have frozen the portal image for each), and how the reconciler decides, by
-  name, which identity is missing a publication.
+  RETIRED with core CD's Plugins legs (#6143): core CD no longer bakes or seals the `plugins`
+  publication, so there is nothing for its reconciler to re-attempt. The only writer is now
+  MeshWeaver.Plugins' own lane. Kept as the record of why a platform set seals on its trio alone,
+  of the reconciler that once finished a set missing its publication, and of what the satellites'
+  resolver still says about a Plugins seal.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/><path d="M12 8v4l3 2"/></svg>
 ---
 
 # CD reconciles the Plugins seal
 
-A core CD run publishes two different things for one commit, and until MeshWeaver#4539 only one of
+> 🚨 **Retired — this page is history, not the current design.** Core commit `08d37d38ac` (#6143,
+> policy `platform-module-deploy-separate`, see [Platform and Module Deploy](../PlatformAndModuleDeploy))
+> removed the `plugins-modules`, `plugins-bake` and `report-plugins-seal` jobs from `main-cd.yml`,
+> together with `gate`'s seal probe (`plugins_seal_due`) and the `cd-plugins-seal` ledger.
+>
+> **Today:**
+>
+> * Core CD's `publish-bake` publishes **`meshweaver-content` only** — the platform's own content.
+> * The **only writer of the `plugins` publication is MeshWeaver.Plugins**, through its own CI calling
+>   `node-repo-publish-bake.yml`. Core CD merely *reads* that sealed publication (`published-modules`)
+>   as compatibility evidence, and a publication absent for the run's identity is red there, never
+>   rebuilt.
+> * A missing `plugins` publication is therefore the Plugins lane's to publish, not core CD's to
+>   re-attempt. Sealing it **per package** rather than per commit is in flight (core #6609,
+>   [MeshWeaver.Plugins#3507](https://github.com/Systemorph/MeshWeaver.Plugins/issues/3507)) and not
+>   yet landed.
+>
+> The rest of the page records the mechanism as it ran from #4539 to #6143, and why the platform seal
+> is the trio alone — that part still holds.
+
+A core CD run published two different things for one commit, and until MeshWeaver#4539 only one of
 them could heal.
 
 * **The platform set** — the images, plus the platform's own content bake. It is *sealed* when the
@@ -89,9 +109,9 @@ the measurement above.
 So the platform seal is unchanged, and the reconciler learned to finish a set that is missing its
 publication.
 
-## How the reconciler decides
+## How the reconciler decided (retired by #6143)
 
-The decision lives in `gate`, which owns every other publish decision in `main-cd.yml`, and it runs
+The decision lived in `gate`, which owns every other publish decision in `main-cd.yml`, and it runs
 only on the `bake_only` path — the reconcile tick that finds a complete image set.
 
 1. **`bake_version`** recovers the promoted set's release version off `memex-portal-ai:<short-sha>`'s
@@ -188,6 +208,13 @@ is red THERE, and recorded on the `cd-plugins-seal` issue, and never on the plat
 [Continuous Delivery Contract → The ladder](../ContinuousDeliveryContract)).
 
 ## The resolver waits for a seal that is still running — and has no opt-out
+
+> **Since #6143 this wait is inert.** `resolve-platform.py` still names the core job
+> `Plugins: bake + seal the publication for this identity` (`PLUGINS_SEAL_JOB`), but no core CD run
+> carries that job any more, so `_group` reads it as `absent` and nothing is ever held back for it.
+> Likewise the resolver's `plugins-run` / `plugins-sealed-at` outputs can only name a core run from
+> before #6143, not the publication MeshWeaver.Plugins seals today. The evaluation below is kept as
+> written for that era; the `plugins` publication a consumer fetches is now Plugins' own.
 
 The other side of the same seam is in `resolve-platform.py`. A set whose platform trio is sealed but
 whose own `Plugins: bake + seal …` job is **still running** is passed over (or waited for, on a

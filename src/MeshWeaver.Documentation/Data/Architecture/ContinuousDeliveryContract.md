@@ -655,10 +655,10 @@ unusable**, and the two checks that sound like they say otherwise are green in e
 - **`Promote: tag the full set (all-or-nothing)`** green means the three platform images
   (`memex-portal-ai`, `memex-migration`, `mw-plugin-test`) carry the tag.
 - **`Verify every image shipped`** green means they are pullable.
-- **Neither says anything about the plugin modules.** The binding job is
-  **`Plugins: bake + seal the publication for this identity`**, which seals the module set *for that
-  platform identity*. It runs after the promote — see "After the promote" below — and, as recorded
-  there, the reconciler does not heal it.
+- **Neither says anything about the plugin modules.** The binding fact is whether the `plugins`
+  publication is sealed *for that platform identity*. Until #6143 that was core CD's own job
+  **`Plugins: bake + seal the publication for this identity`** (the measurements below are from that
+  era); since #6143 core CD bakes and seals no module, and MeshWeaver.Plugins' own lane (`node-repo-publish-bake.yml`) is the only writer of the `plugins` publication, so read that lane's run, or ask `check-release-availability.sh <version> plugins`.
 
 Measured on two consecutive runs, 2026-09-03 — `33746020109` (`ci.7669`) and `33749847612`
 (`ci.7674`), both seals FATALing on the one-producer guard (#3175):
@@ -866,10 +866,11 @@ platform roll's critical path, and a platform roll is never on a plugin roll's.
   already complete — a new build number over identical bytes.
 * **`alert-on-failure`** keys on a DIRECT need failing (`always() && contains(needs.*.result,
   'failure')`), never on `failure()`, which is true when any ANCESTOR failed — and the compatibility
-  legs have `plugins-modules` as an ancestor. A satellite-compat leg that RAN and broke is still a
+  legs have `published-modules` (until #6143, `plugins-modules`) as an ancestor. A satellite-compat leg that RAN and broke is still a
   direct need, so a measured break is still filed on `ci-failure`.
-* **`report-plugins-seal`** (`Plugins seal + satellite compatibility for this set (reported — never
-  gates the platform)`) judges the Plugins seal this run attempted: RED when a DUE seal did not reach
+* **`report-plugins-seal`** — *removed by #6143 together with `plugins-modules`, `plugins-bake` and
+  the seal probe; since #6143 core CD bakes and seals no module, and MeshWeaver.Plugins' own lane (`node-repo-publish-bake.yml`) is the only writer of the `plugins` publication. Recorded as it ran:* (`Plugins seal + satellite compatibility for this set (reported — never
+  gates the platform)`) judged the Plugins seal the run attempted: RED when a DUE seal did not reach
   `success`, and it writes the durable artefact — a comment on the open `cd-plugins-seal` issue under
   a `cd-seal-leg-failed:` marker that the reconcile's attempt ledger does not count. The re-seal
   itself is the reconcile's seal probe (`gate.plugins_seal_due`, see
@@ -966,14 +967,15 @@ here: it gates no later job.
 
 **`satellite-compat` (2026-09-12) — every core build MEASURES every satellite, none of them blocks
 it.** The fleet assumes the platform is backwards compatible within a major, so the satellites
-(SocialMedia, Crm, Reinsurance, Education, Manufacturing; Plugins is built inside this run) rebuild
+(SocialMedia, Crm, Reinsurance, Education, Manufacturing; Plugins was built inside this run until #6143) rebuild
 once a day rather than on every platform build — which took away the only per-build evidence that a
 core merge did not break them. This job is the counterweight: after `promote`, one leg per satellite
 in parallel runs the same reusable compile gate the satellites run on their own pull requests
 (`node-repo-compile-check.yml`, pointed at the satellite's `main` through the read-only fleet-reader
 App, recording the sha it resolved in the leg's verdict) against the tester **this run** promoted — pulled from its GHCR mirror at the digest
-`satellite-compat-image` asserts equal to ACR's — plus the module bundles **this run** packed, the
-same bytes `plugins-bake` seals — **and a second time against the set the fleet is on**, the
+`satellite-compat-image` asserts equal to ACR's — plus the module bundles of the sealed `plugins`
+publication `published-modules` reads for this identity (until #6143, the bundles this run packed
+and its own `plugins-bake` sealed) — **and a second time against the set the fleet is on**, the
 control that makes the red attributable (maintainer pushback, 2026-09-12: *"why fail
 compatibility?"* — one compile cannot say which side moved). `gate` records `mw-plugin-test:main`'s
 digest and `3.0.0-ci.<run>` tag before `promote` moves the pointer; `satellite-compat-image` verifies
@@ -995,14 +997,14 @@ surface) — attributing a Plugins move to the satellite, or hiding a core break
 "we already have this run's bundles, why download the old ones" optimisation would break exactly
 that attribution. Measured on that lane, a compile costs ~2 min on an unbilled `ubuntu-latest`
 runner, two per leg. The semantics are *red but not blocking*, and both halves are the point: it
-does not gate `promote`, `notify-platform-update` or `plugins-bake` (the set is published and every
+does not gate `promote` or `notify-platform-update` (the set is published and every
 instance gates itself; a satellite's compile must never hold a veto over the platform's delivery —
 `PlatformNeverDependsOnPluginsGuard` pins the direction), yet a failing leg fails the job, so the run
 is red. **A red satellite leg turns the run RED while delivery has completed; the run's colour then
 says compatibility, not shipping** — which is why the verdict's summary and the alert open with
 `🚨 DELIVERY COMPLETED — this run is red because this core build BROKE N satellite(s): … (previous
 image compiled, new image does not). Nothing failed to ship.` `alert-on-failure` files it on the `ci-failure` issue naming the satellite, the set and the
-first failing types (from each leg's `verdict-artifact`), and `report-plugins-seal` renders every leg
+first failing types (from each leg's `verdict-artifact`), and the run's compatibility report renders every leg
 under **Compatibility** — and goes red itself if the gate was *skipped* on a publishing run, because
 a skipped measurement painted grey is the one outcome worse than a red one. `fail-fast: false`, no
 `continue-on-error`, no `if:` on a credential: `preflight` asserts `FLEET_READER_APP_ID` /
@@ -1093,7 +1095,8 @@ cannot wake its publisher or a non-dependent); each node repository passes
 `webhook-url` / `webhook-secret` to the lane when it moves its pin (the lane is RED, naming them,
 until it does — a sealed publication the control instance was not told about is silent drift). Once Plugins receives
 the platform event and publishes its own bundles on it, core CD's `plugins-bake` job is a SECOND
-producer of the same publication and is removed — a follow-up, not part of this change.
+producer of the same publication and is removed — LANDED as #6143: MeshWeaver.Plugins' own lane is
+now the only writer of `plugins`.
 
 **Fallback.** Each repository's `schedule` poll (`Resolve the bake target` in its ci.yml) still reads the
 registry and bakes for the identity it finds, so a lost dispatch costs one delayed wave.

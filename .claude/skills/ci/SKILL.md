@@ -197,9 +197,13 @@ Policy `platform-backwards-compatibility`. In core `main-cd.yml` the platform se
 which needs NO `plugins-*` / `satellite-compat*` job, directly or transitively; the `handoff` step's
 `DELIVERY_LEGS` carry platform legs only; `alert-on-failure` keys on a DIRECT need failing
 (`contains(needs.*.result, 'failure')`) — never `failure()`, which is true when any ANCESTOR failed.
-The Plugins re-seal is `report-plugins-seal`: red on a due seal that did not succeed, recorded on the
-`cd-plugins-seal` issue, re-attempted by the reconcile's seal probe — never failing, holding or
-re-publishing the platform. `PlatformDeliveryNeverWaitsOnPluginsGuard` holds all of it with negative
+Core CD bakes and seals NO module: its `publish-bake` publishes `meshweaver-content` only, and the
+`plugins-modules` / `plugins-bake` / `report-plugins-seal` legs, the `cd-plugins-seal` ledger and the
+gate's seal probe were removed by #6143 (policy `platform-module-deploy-separate`). The ONLY writer of
+the `plugins` publication is MeshWeaver.Plugins' own lane (`node-repo-publish-bake.yml`); core CD's
+`published-modules` merely READS it as compatibility evidence, never failing, holding or
+re-publishing the platform. Per-package sealing of that publication is in flight
+(MeshWeaver.Plugins#3507), not landed. `PlatformDeliveryNeverWaitsOnPluginsGuard` holds all of it with negative
 controls. Adding a job: if it is Plugins-side, it must not become a need of a platform job.
 
 ## 🚨 Deploy-shaped gates: the migration declaration and the probe invariants
