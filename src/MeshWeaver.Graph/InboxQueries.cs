@@ -201,9 +201,9 @@ public static class InboxQueries
             SourceIcon = ActivitiesIcon,
             Band = InboxBand.Running,
             Order = 10,
-            // Background runs are mostly not news (maintainer, 2026-10-13: "a super random list"):
-            // off by default, and only the runs that still need someone — those still going and
-            // those that FAILED. A run that finished well is never listed; its own page keeps it.
+            // Policy inbox-activities-need-someone: off by default, and only the runs that still
+            // need someone — those still going and those that FAILED. A run that finished well is
+            // never listed; its own page keeps it.
             ShownByDefault = false,
             // Running itself is the omitted default, so the finished-well states are negated.
             Query = $"namespace:{ViewerToken}/_Activity nodeType:Activity "

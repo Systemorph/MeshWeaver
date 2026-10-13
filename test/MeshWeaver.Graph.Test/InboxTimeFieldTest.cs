@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Fixture;
@@ -97,6 +98,37 @@ public class InboxTimeFieldTest(ITestOutputHelper output) : MonolithMeshTestBase
         InboxRows.Apply(rows, new InboxFilter { Search = "after:2026-10-01" }).Select(r => r.Title).Should().Equal(["oct2", "oct1"],
             "the day itself and later, newest first");
         InboxRows.Apply(rows, new InboxFilter()).Should().HaveCount(3, "negative control: no bound, nothing narrowed");
+    }
+
+    /// <summary>
+    /// The side menu's categories: a category shows every row filed under it — even a source switched
+    /// off by default — and All (none) leaves the switches in charge. Counts are read before any of it.
+    /// </summary>
+    [Fact]
+    public void ACategory_ShowsItsRows_EvenFromASourceSwitchedOff()
+    {
+        MeshNode At(string id, int day) => new(id, "alice/_X") { Name = id, LastModified = Earlier.AddDays(day) };
+        var chat = new InboxSection(InboxBand.NeedsYou, "WhatsApp", 30, "q1") { Category = "Conversations" };
+        var teams = new InboxSection(InboxBand.NeedsYou, "Teams", 32, "q2") { Category = "Conversations", Unread = true };
+        var activities = new InboxSection(InboxBand.Running, "Activities", 10, "q3");
+        var rows = new[]
+        {
+            InboxRows.Of(At("w", 1), chat, null, null), InboxRows.Of(At("t", 2), teams, null, null),
+            InboxRows.Of(At("a", 3), activities, null, null),
+        };
+        var switchedOff = new InboxFilter { Sources = ImmutableDictionary<string, bool>.Empty.Add(InboxRows.SourceKey("Activities"), false) };
+
+        InboxRows.Apply(rows, switchedOff, "Conversations").Select(r => r.Title).Should().Equal(["t", "w"],
+            "two sources filed under one category, newest first");
+        InboxRows.Apply(rows, switchedOff, "Activities").Select(r => r.Title).Should().Equal(["a"],
+            "a source switched off is reached by its category");
+        InboxRows.Apply(rows, switchedOff, category: null).Select(r => r.Title).Should().Equal(["t", "w"],
+            "negative control: with All, the switches apply");
+        rows[2].Category.Should().Be("Activities", "a leg with no category is filed under its source");
+
+        var counts = InboxRows.CategoryCounts(rows);
+        counts["Conversations"].Should().Be((2, 1), "two rows, one unread");
+        counts["Activities"].Should().Be((1, 0));
     }
 
     /// <summary>A timed leg keeps <c>content</c> in its projection; an untimed one does not.</summary>

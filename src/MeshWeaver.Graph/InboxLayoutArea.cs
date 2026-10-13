@@ -75,6 +75,9 @@ public static class InboxLayoutArea
     /// </summary>
     public const string HiddenId = "inboxHidden";
 
+    /// <summary>The data id of the side menu's per-category counts.</summary>
+    public const string CategoryCountsId = "inboxCategoryCounts";
+
     /// <summary>How long the page waits after the last keystroke before it asks the query engine.</summary>
     internal static readonly TimeSpan SearchQuiet = TimeSpan.FromMilliseconds(300);
 
@@ -114,6 +117,7 @@ public static class InboxLayoutArea
             host.UpdateData(UnreadId, string.Empty);
             host.UpdateData(CappedId, string.Empty);
             host.UpdateData(HiddenId, string.Empty);
+            host.UpdateData(CategoryCountsId, ImmutableDictionary<string, CategoryCount>.Empty);
         }
         host.SeedRowSelection(InboxRows.SelectionId);
         // One per page, created on the render turn; the buttons share it.
@@ -149,16 +153,24 @@ public static class InboxLayoutArea
                 }, "Show" + key);
         }
 
-        // Settings out of the way: the order and the labelled source switches sit behind one icon.
+        // Settings out of the way: the labelled source switches sit behind one icon. There is no
+        // order to choose — the list is always newest first (InboxRows.Apply).
         var settings = Controls.MenuItem(host.Localize("inbox.settings"), FluentIcons.Settings()).WithIconOnly()
-            .WithView(Controls.Select(new JsonPointerReference("order"),
-                InboxOrder.All.Select(order => (Option)new Option<string>(order, host.Localize("inbox.order." + order))).ToArray()) with
-            {
-                DataContext = filterContext, Label = host.Localize("inbox.order"),
-            }, "Order")
             .WithView(switches, "Sources");
 
-        return Observable.Return<UiControl?>(Controls.Stack.WithWidth("100%").WithVerticalGap(8)
+        // The side menu: All, then one entry per category, in the page's band order — a mail
+        // client's folders. Re-rendered from the counts the rows publish; a click picks the category.
+        var categories = sections.GroupBy(s => s.Category, StringComparer.Ordinal)
+            .Select(c => (Key: c.Key, Label: Label(key => host.Localize(key), c.First().CategoryLabelKey, c.Key),
+                Icon: c.Select(s => s.SourceIcon).FirstOrDefault(i => i.Length > 0) ?? string.Empty))
+            .ToImmutableList();
+        var menu = host.GetDataStream<InboxFilter>(InboxRows.FilterId).Select(f => f?.Category ?? string.Empty)
+            .DistinctUntilChanged(StringComparer.Ordinal)
+            .CombineLatest(host.GetDataStream<ImmutableDictionary<string, CategoryCount>>(CategoryCountsId),
+                (picked, counts) => (Picked: picked, Counts: counts ?? ImmutableDictionary<string, CategoryCount>.Empty))
+            .Select(state => (UiControl?)SideMenu(host, categories, state.Picked, state.Counts));
+
+        var main = Controls.Stack.WithWidth("100%").WithVerticalGap(8)
             .WithView(Controls.H2(host.Localize("inbox.title")).WithStyle("margin: 0;"), "Title")
             // One command row, as a mail client has it: search, the acts, the source toggles, settings.
             .WithView(Controls.Stack.WithOrientation(Orientation.Horizontal).WithStyle("gap: 8px; flex-wrap: wrap; align-items: end;")
@@ -195,7 +207,44 @@ public static class InboxLayoutArea
             // Says how many items needing the viewer the switches hide — "nothing here" must never
             // be a switch's doing.
             .WithView(Controls.Label(new JsonPointerReference(LayoutAreaReference.GetDataPointer(HiddenId))), "Hidden")
-            .WithView(Grid(host, rows), "Grid"));
+            .WithView(Grid(host, rows), "Grid");
+        return Observable.Return<UiControl?>(Controls.Stack.WithOrientation(Orientation.Horizontal)
+            .WithWidth("100%").WithStyle("gap: 16px; align-items: flex-start;")
+            .WithView(menu, "Categories")
+            .WithView(main.WithStyle("flex: 1; min-width: 0;"), "Main"));
+    }
+
+    /// <summary>A side-menu entry's count: how many rows its category holds, and how many are unread.</summary>
+    public sealed record CategoryCount(int Total, int Unread);
+
+    /// <summary>
+    /// The side menu — All, then each category with its symbol and count (unread when it has any,
+    /// else all) — the picked one emphasized. A click sets <see cref="InboxFilter.Category"/>; the rows follow.
+    /// </summary>
+    internal static UiControl SideMenu(LayoutAreaHost host,
+        ImmutableList<(string Key, string Label, string Icon)> categories, string picked,
+        ImmutableDictionary<string, CategoryCount> counts)
+    {
+        UiControl Entry(string key, string label, string icon, int? count)
+        {
+            var text = (icon.Length > 0 ? $"{icon} {label}" : label) + (count is > 0 ? $"  {count}" : string.Empty);
+            return Controls.Button(text)
+                .WithAppearance(string.Equals(key, picked, StringComparison.Ordinal) ? Appearance.Accent : Appearance.Stealth)
+                .WithStyle("width: 100%; justify-content: flex-start;")
+                // The category lives in the page's filter (bound both ways, like the search): the
+                // click reads it as it stands and writes it back with the category picked.
+                .WithClickAction(ctx => ctx.Host.GetDataStream<InboxFilter>(InboxRows.FilterId).Take(1)
+                    .Subscribe(current => ctx.Host.UpdateData(InboxRows.FilterId, (current ?? new InboxFilter()) with { Category = key })));
+        }
+        var all = counts.Values.Aggregate((Total: 0, Unread: 0), (sum, c) => (sum.Total + c.Total, sum.Unread + c.Unread));
+        var menu = Controls.Stack.WithVerticalGap(2).WithStyle("width: 200px; flex: none;")
+            .WithView(Entry(string.Empty, host.Localize("inbox.category.all"), "📥", all.Unread > 0 ? all.Unread : all.Total), "All");
+        foreach (var (key, label, icon) in categories)
+        {
+            var count = counts.TryGetValue(key, out var c) ? (c.Unread > 0 ? c.Unread : c.Total) : 0;
+            menu = menu.WithView(Entry(key, label, icon, count), "Category" + key);
+        }
+        return menu;
     }
 
     /// <summary>
@@ -269,7 +318,9 @@ public static class InboxLayoutArea
                     ? host.Localize("inbox.capped")
                     : string.Empty);
             })
-            .Select(legs => InboxRows.Merge(legs.Select(leg => leg.Rows)));
+            .Select(legs => InboxRows.Merge(legs.Select(leg => leg.Rows)))
+            .Do(merged => host.UpdateData(CategoryCountsId, InboxRows.CategoryCounts(merged)
+                .ToImmutableDictionary(c => c.Key, c => new CategoryCount(c.Value.Total, c.Value.Unread), StringComparer.Ordinal)));
 
         // The date bounds (before:/after:) are applied to the rows by InboxRows.Apply; only the
         // remaining text goes to the sources.
@@ -283,7 +334,7 @@ public static class InboxLayoutArea
             .Switch()
             .CombineLatest(filter, (rows, asked) =>
             {
-                var shown = InboxRows.Apply(rows, asked, culture);
+                var shown = InboxRows.Apply(rows, asked, asked.Category);
                 var hidden = InboxRows.HiddenObligations(rows, asked, needsYou);
                 host.UpdateData(HiddenId, hidden == 0 ? string.Empty : host.Localize("inbox.hidden", hidden));
                 return shown;
@@ -665,6 +716,8 @@ public static class InboxLayoutArea
                     SourceLabelKey = leg.SourceLabelKey, BandLabelKey = leg.BandLabelKey,
                     Unread = leg.Unread, ShownByDefault = leg.ShownByDefault, SourceIcon = leg.SourceIcon ?? string.Empty,
                     TimeField = string.IsNullOrWhiteSpace(leg.TimeField) ? null : leg.TimeField,
+                    Category = string.IsNullOrWhiteSpace(leg.Category) ? leg.Source : leg.Category,
+                    CategoryLabelKey = string.IsNullOrWhiteSpace(leg.CategoryLabelKey) ? leg.SourceLabelKey : leg.CategoryLabelKey,
                 })
         ];
 

@@ -326,13 +326,13 @@ strings, anchored the same way. The bands differ only in what their legs select:
 | band | selects | glyph |
 |---|---|---|
 | **Needs you** | open obligations addressed to the viewer | `☐` |
-| **Running** | activities in flight (`ActivityStatus.Running`) **and threads executing** | `⏳` |
-| **Last 24 hours** | terminal activities inside a window | `✅` / `❌` |
+| **Running** | activities still going (`ActivityStatus.Running`) or FAILED, **and threads executing** | `⏳` / `❌` |
+| **Last 24 hours** | *(designed; core feeds no leg into it today)* | `✅` |
 
-🚨 **As built (maintainer, 2026-10-13: "a super random list"):** core's own Activities source lists
-only what still needs someone — runs still going and runs that FAILED — and is OFF by default. A run
-that finished well (succeeded, warned, cancelled) is not listed at all; its own page keeps it. The
-"Last 24 hours" band above is the design; core feeds no leg into it today.
+🚨 **As built (policy `inbox-activities-need-someone`):** core's own Activities source lists only
+the runs that still need someone — still going, or failed — and is OFF by default. A run that
+finished well (succeeded, warned, cancelled) is not listed at all; its own page keeps it. A failed
+run therefore stays in Running until it is dealt with on its page, rather than moving on.
 
 **Running is its own band because it is neither.** It is not owed by the viewer — pushing it into
 *Needs you* invents an obligation nobody has — and it is not finished, so it cannot carry a tick. It
@@ -340,8 +340,7 @@ is also the band that answers the question people actually open the inbox with w
 slow: *is it still going?*
 
 🚨 **Running is a live band, so it needs no poller.** The rows come from the same node streams
-everything else binds to; an activity that finishes moves itself to the third band on the next
-emission. A timer that re-reads "is it done yet?" is the band's failure mode, not its
+everything else binds to; an activity that finishes well leaves the band on the next emission. A timer that re-reads "is it done yet?" is the band's failure mode, not its
 implementation.
 
 This is also the only place a tick legitimately appears — the third band is *by definition* things
@@ -446,8 +445,17 @@ covering every held decision (`StepUpPaths.StartUrl` with all targets — the en
 a receipt per target), then back to the inbox. Each type's control plane consumes its own receipt
 and ratifies, and the request leaves the inbox once its type files it away.
 
-**Put away everything before a day.** The order is newest first by default (`InboxOrder.Newest`,
-policy `inbox-newest-first`). The search box also takes date bounds, `before:2026-10-01` (strictly
+**Categories (policy `inbox-categories-by-kind`).** A side menu lists All, then each category
+with its symbol and count (unread when it has any, else all): Approvals, Mail, Conversations,
+Notifications, Activities. A source names its category (`InboxQueryLeg.Category` and
+`CategoryLabelKey`; WhatsApp, Teams, iMessage and portal chats share **Conversations**), else its
+source is its category. The picked category lives in the page's filter (`InboxFilter.Category`):
+it shows every item filed under it, even from a source switched off by default, and All leaves the
+source switches in charge. The counts are read before any filter applies
+(`InboxRows.CategoryCounts`).
+
+**Put away everything before a day.** The order is ALWAYS newest first (policy
+`inbox-newest-first`; `InboxFilter.Order` is no longer read and the settings menu offers no order). The search box also takes date bounds, `before:2026-10-01` (strictly
 before that day) and `after:2026-10-01` (that day or later), in UTC: they narrow the rows by their
 time (`InboxRows.SplitDates`), and only the remaining text goes to the sources. A bound that is not
 a date stays text and is searched for as written. Tick all, then press Delete, to put away

@@ -124,7 +124,7 @@ public class InboxAppTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
 
     /// <summary>
     /// Core's own legs feed two bands: what needs you, and what is still going. A run that FINISHED
-    /// WELL is not listed at all (maintainer, 2026-10-13: "a super random list") — its page keeps it.
+    /// WELL is not listed at all (policy <c>inbox-activities-need-someone</c>) — its page keeps it.
     /// </summary>
     [Fact]
     public void ThePage_ShowsWhatNeedsYou_AndWhatIsStillGoing()
