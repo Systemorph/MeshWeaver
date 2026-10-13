@@ -191,6 +191,17 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
             $"Module {module} holds no service scope in this mesh."))
         .Resolve(Root, index, caller);
 
+    /// <summary>
+    /// The instance behind registration <paramref name="index"/> of <paramref name="module"/>'s CURRENT
+    /// generation, or null when there is none — read off ONE snapshot of that generation
+    /// (MeshWeaver#6557). A live uninstall or a boot withdrawal can remove and dispose the generation
+    /// at any moment; a check of <see cref="Current"/> followed by <see cref="ResolveModuleService(string, int)"/>
+    /// reads it twice and faults when it went in between. Here the generation read once is the one
+    /// resolved, and its disposal — before or during the resolve — answers null: the member is absent.
+    /// </summary>
+    internal object? TryResolveCurrentModuleService(string module, int index) =>
+        Current(module)?.Services is { } services ? services.TryResolve(Root, index) : null;
+
     /// <summary>The scope of <paramref name="module"/>'s CURRENT generation.</summary>
     public IServiceProvider? ModuleScope(string module) =>
         Current(module)?.Services?.Scope(Root);

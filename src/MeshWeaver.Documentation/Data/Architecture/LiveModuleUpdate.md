@@ -133,7 +133,7 @@ N+1).
 | Piece | What it does |
 |---|---|
 | `ModuleContributions` (`MeshWeaver.Mesh.Contract`) | One generation's materialised contributions, and `LiveUpdateBlockers()` — the declared `[ModuleRestartRequired]` reason plus what the platform MEASURES it cannot re-apply in-process: root services through `WithGlobalServiceRegistry`, the mesh hub's configuration (`HubConfigurations`), address types, the builder hook, HTTP endpoints. Nodes and every-per-node-hub configuration ARE re-appliable. |
-| Re-appliable seams (`MeshBuilder`, `StaticMeshNodeListProvider`) | A module's nodes are served from its CURRENT generation in the seed tier, at the position its boot nodes held (same precedence as before). Its every-per-node-hub configuration goes through one indirection read when a hub is built. `InstalledModuleAssembly` for a module in its own context is TRANSIENT and answers the current generation, so the compile reference set (`MeshNodeCompilationService`, now keyed by the module MVIDs) and `InstalledModulesFingerprint` (now read live) follow a swap — and every build stamped with the old fingerprint reads as stale and rebuilds against N+1 on its next activation. 🚨 None of these registrations captures a module's boot `Assembly` strongly: one did, and it rooted generation N for the life of the process (`ModuleLiveSwapTest`'s collection assertion caught it). |
+| Re-appliable seams (`MeshBuilder`, `StaticMeshNodeListProvider`) | A module's nodes are served from its CURRENT generation in the seed tier, at the position its boot nodes held (same precedence as before). Its every-per-node-hub configuration goes through one indirection read when a hub is built. `InstalledModuleAssembly` for a module in its own context is answered from the `InstalledModules` registry at every read with the current generation (absent once withdrawn or retired), so the compile reference set (`MeshNodeCompilationService`, now keyed by the module MVIDs) and `InstalledModulesFingerprint` (now read live) follow a swap — and every build stamped with the old fingerprint reads as stale and rebuilds against N+1 on its next activation. 🚨 None of these registrations captures a module's boot `Assembly` strongly: one did, and it rooted generation N for the life of the process (`ModuleLiveSwapTest`'s collection assertion caught it). |
 | `ModuleLiveUpdater` (`MeshWeaver.Graph`) | The swap: load N+1 → refuse (N untouched) on any blocker of N, N+1 or a dependent, or a load / materialisation failure → load N+1 and re-load every dependent into ONE `ModuleSwapStage` (a staged context binds the STAGED N+1, so the dependents re-bind before anything is current) → only when all of them loaded, materialised and prepared, `CommitAll` makes the whole set current in one step; a failure before that unloads the staged set, which no request was ever routed to, and N never stopped serving (#6128 review: committing N+1 first published it to every reader of the generations while a dependent could still fail) → recycle this process's per-node hubs bound to the module's NodeTypes or nodes (every per-node hub when a generation configures every hub, or when an in-mesh build here is linked against a swapped module) → once those hubs are DEAD, retire the old generations. Serial (a subject and `Concat`, no gate), so a second update that arrives mid-swap is applied after it. Outcomes are an open vocabulary (`ModuleSwapKind`: `Live`, `UpToDate`, `RestartRequired`, `Failed`, `NotHeld`); `NeedsRestart` is the one question a caller asks. **`Swap(path)` is `internal`** (granted to `MeshWeaver.PluginCatalog` only): it runs the bytes at a path as platform-classified code, so a public method on a mesh singleton would let any code that resolves it name the bytes or roll a module back to an older directory. The only way in is `ModuleLiveActivation.ActivatePending`, which takes no path and swaps only the pinned copy of what the landing service landed. A generation's contributions are recorded **before** it is made current, so no reader ever sees a current generation whose contributions are null. |
 | `ModuleLiveActivation` (`MeshWeaver.PluginCatalog`) | For every module `PendingModuleActivations` reports landed-but-not-serving in THIS process, swap the PINNED copy of its landed generation in live. A module this process does not hold in its own context is `NotHeld`. A pass that cannot read the state keeps the restart. |
 | `SelfUpdateHostedService.ConsiderRestart` | 🚨 **Live first.** Where a pending activation used to mean a restart, the check now calls `ModuleLiveActivation`; only when something did not go live does it take — or hand to the control lane — the automatic restart, whose announcement now names the modules and reasons. The verdict `ActivatedLive` records a pass that needed no restart. A host without the plugin catalog keeps the old path. |
@@ -283,16 +283,28 @@ a version without that field fails loudly at the first caller rather than silent
 deadlock back. `CallerAndModuleScopedServicesBuildInOneLockTest` forces the overlap; its negative
 control gives the same module scope its own lock back and deadlocks.
 
-**Open: a withdrawn module's `InstalledModuleAssembly` (MeshWeaver#6557).** A module withdrawn at boot
-keeps the transient `InstalledModuleAssembly` registration it was given while the mesh was configured,
-and once its boot assembly is collected that registration throws "no longer held by this mesh's module
-registry" from inside every `GetServices<InstalledModuleAssembly>()`. That is how the Radzen
-withdrawal above refused the pod's readiness: the pre-warm sweep enumerates installed modules. With
-circuit-bound services no longer built at boot, Radzen is not withdrawn; a module whose root-reachable
-singleton genuinely throws still is, and still meets this. Moving the registration into an Autofac
-registration source was tried and rejected: hosts that build the collection with MS DI's own
-`BuildServiceProvider()` ignore sources and lost every held module's `InstalledModuleAssembly`
-(`ConfiguredModuleActivationTest`).
+**A withdrawn module is absent from the installed-module set (MeshWeaver#6557).** A container's
+registrations are fixed once it is built; the module set is not. Each held module used to get its own
+transient `InstalledModuleAssembly` registration, and a module withdrawn after the container was built
+kept it: once its boot assembly was collected, that registration threw "no longer held by this mesh's
+module registry" from inside every `GetServices<InstalledModuleAssembly>()`. That is how the Radzen
+withdrawal above refused the pod's readiness: the pre-warm sweep enumerates installed modules, so one
+broken module refused readiness for the whole pod. Now the set is ONE registry the mesh owns,
+`InstalledModules`: ONE ordered sequence of slots, in the order they were declared in the service
+collection — order is load-bearing (first-mount-wins static assets, the list-ordered compile
+reference surface), so a held module keeps the position it was installed at. A slot is a fixed
+`InstalledModuleAssembly` (an image-bound module, anything else that registers one) or a member that
+can GO — a held module by NAME, answered from `ModuleContexts` at each read, or an
+`InstalledModuleAssembly` a held module registers through its OWN services — and a member whose
+module the registry no longer holds is simply absent. The
+`IEnumerable<InstalledModuleAssembly>` every consumer resolves is an explicit factory registration over
+that registry, which MS DI and Autofac both answer ahead of the per-descriptor collection, so a host
+built with plain `BuildServiceProvider()` reads the same set as the Autofac host. (An Autofac
+registration source was tried first and rejected for that reason: MS DI ignores sources, and
+`ConfiguredModuleActivationTest` lost every held module.) The withdrawal itself is still reported as an
+`IncompatibleModule` (stderr, `/health`, the module-status surfaces).
+`AWithdrawnModuleIsAbsentFromTheSweepTest` covers both hosts and runs the probe and the warm-up sweep
+over a withdrawn module.
 
 **Why.** Autofac holds a scope's shared-instance lock for the whole build of a shared instance, and
 that one lock covers every shared instance of the scope; an instance that exists is answered without
