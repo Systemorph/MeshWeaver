@@ -177,7 +177,9 @@ earlier, while the portal still had the type compiled BEFORE them bound — answ
 `Patched: <path>` twice (once after a recycle), with the node still at version 7 and none of the keys
 on read-back. The typed deserialisation dropped the three keys, and the landed-write check
 (`ProjectTouched`) read a key the serializer does not write as "expect it absent", which the live node
-satisfied on its first emission.
+satisfied on its first emission. (That read-back check is gone since #6635 — the verbs now confirm
+on the owner's commit verdict, see [Reading a Write Verdict](../ReadingAWriteVerdict) — which makes
+refusing the dropped keys up front the only guard, not one of two.)
 
 The verbs hold the one thing the validator never sees — the caller's RAW keys — so they judge there
 (`MeshOperations.UnknownContentMembers`):
