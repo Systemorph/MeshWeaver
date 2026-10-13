@@ -3420,14 +3420,17 @@ public class MessageService : IMessageService
             // by an Orleans deactivation (DirectoryFailure: the directory owner's silo stopping)
             // while the gates were still closed. The line is teardown-normal, so it goes to Debug
             // with the same facts, exactly like the self-addressed case above.
-            else if (delivery.Message.GetType().HasAttribute<ReaskedOnShutdownAttribute>())
+            // The per-delivery form of the same claim (#5718): ONE producer of a type whose other
+            // producers do not re-ask declares it on its own request (PostOptions.ReaskingOnShutdown).
+            else if (delivery.Message.GetType().HasAttribute<ReaskedOnShutdownAttribute>()
+                     || delivery.Properties.ContainsKey(PostOptions.ReasksOnShutdown))
                 logger.LogDebug(DisposalDiscardedDeferredDelivery,
                     "[DISPOSE-DISCARD] Hub {Address} is disposing with {MessageType} (id={MessageId}, from {Sender}) "
                     + "still deferred; initialization gates closed at deferral: [{Gates}]. RunLevel={RunLevel}; "
                     + "teardown {Disposal}. The teardown ended this hub's bring-up, and the sender is answered "
-                    + "with a transient ShuttingDown NACK. {MessageType} is re-asked on that answer by every "
-                    + "producer ([ReaskedOnShutdown]), so the next activation serves it. Teardown-normal; "
-                    + "nothing is lost.",
+                    + "with a transient ShuttingDown NACK. Its producer re-asks on that answer ([ReaskedOnShutdown] "
+                    + "on {MessageType}, or ReasksOnShutdown declared on this request), so the next activation "
+                    + "serves it. Teardown-normal; nothing is lost.",
                     Address, delivery.Message.GetType().Name, delivery.Id, delivery.Sender,
                     gatesAtDeferral, hub.RunLevel, disposal, delivery.Message.GetType().Name);
             // 🚨 …AND IT NAMES THE REQUEST, not only its type (#5718). Whether this Error strands
