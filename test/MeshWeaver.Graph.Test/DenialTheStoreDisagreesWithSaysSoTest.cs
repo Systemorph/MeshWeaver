@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using MeshWeaver.Fixture;
 using MeshWeaver.Graph.Configuration;
@@ -40,6 +41,9 @@ public class DenialTheStoreDisagreesWithSaysSoTest(ITestOutputHelper output)
     private const string SpaceId = "disagreeprobe";
     private const string Ghost = "ghost-grantee";
     private const string Stranger = "stranger-nograntee";
+    private const string Viewer = "viewer-grantee";
+    private const string Misfiled = "misfiled-grantee";
+    private const string Revoked = "revoked-grantee";
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => Bootstrap.Bootstrap(builder)
@@ -121,6 +125,91 @@ public class DenialTheStoreDisagreesWithSaysSoTest(ITestOutputHelper output)
         Assert.Contains(Ghost, message, StringComparison.Ordinal);
         Assert.Contains($"{SpaceId}/_Access/{Ghost}_Access", message, StringComparison.Ordinal);
         Assert.Contains("MeshWeaver#4061", message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// 🚨 #6637 — a grant at the principal's path is not yet a disagreement: its ROLES decide.
+    ///
+    /// <para>Measured on a live portal: a create refused for a principal whose grant was a readable
+    /// AccessAssignment with roles Viewer + Commenter. Neither carries Create, so the denial was
+    /// settled and correct — and the note said the opposite ("not a settled decision … retrying
+    /// normally succeeds"), inviting a retry that could never succeed. The grant here is written the
+    /// ordinary way, typed and honoured by the fold; the refusal must name the roles held instead.</para>
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task AReadableGrantWhoseRolesLackThePermission_IsASettledDenial_NamingTheRoles()
+    {
+        await GivenTheSpaceExists(TestContext.Current.CancellationToken);
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        await meshService.CreateNode(new MeshNode($"{Viewer}_Access", $"{SpaceId}/_Access")
+        {
+            Name = $"{Viewer} Access",
+            NodeType = AccessAssignmentNodeType.NodeType,
+            MainNode = SpaceId,
+            State = MeshNodeState.Active,
+            Content = new AccessAssignment
+            {
+                AccessObject = Viewer,
+                Roles = [new RoleAssignment { Role = "Viewer" }, new RoleAssignment { Role = "Commenter" }],
+            },
+        }).Should().Within(TestTimeouts.CrossSilo).Emit(
+            "the Space's creator may grant a viewer", TestContext.Current.CancellationToken);
+
+        var message = await DenialMessageFor(Viewer, "viewer-page");
+
+        Assert.Contains("Create permission required", message, StringComparison.Ordinal);
+        Assert.DoesNotContain("MeshWeaver#4061", message, StringComparison.Ordinal);
+        Assert.DoesNotContain("not a settled decision", message, StringComparison.Ordinal);
+        Assert.Contains("Viewer", message, StringComparison.Ordinal);
+        Assert.Contains("Commenter", message, StringComparison.Ordinal);
+        Assert.Contains($"{SpaceId}/_Access/{Viewer}_Access", message, StringComparison.Ordinal);
+    }
+
+    private Task GrantAt(string principal, string accessObject, ImmutableList<RoleAssignment> roles)
+        => Mesh.ServiceProvider.GetRequiredService<IMeshService>().CreateNode(
+                new MeshNode($"{principal}_Access", $"{SpaceId}/_Access")
+                {
+                    Name = $"{principal} Access",
+                    NodeType = AccessAssignmentNodeType.NodeType,
+                    MainNode = SpaceId,
+                    State = MeshNodeState.Active,
+                    Content = new AccessAssignment { AccessObject = accessObject, Roles = roles },
+                })
+            .Should().Within(TestTimeouts.CrossSilo).Emit(
+                "the Space's creator may write a grant", TestContext.Current.CancellationToken);
+
+    /// <summary>
+    /// 🚨 #6637 review — the fold applies a grant only to the principal its AccessObject names. A row
+    /// at this principal's path that names someone else says nothing about this principal's roles,
+    /// so it must not produce a settled "you hold these roles" note.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task AGrantAtThePrincipalsPathNamingSomeoneElse_IsNotASettledDenial()
+    {
+        await GivenTheSpaceExists(TestContext.Current.CancellationToken);
+        await GrantAt(Misfiled, Stranger, [new RoleAssignment { Role = "Viewer" }]);
+
+        var message = await DenialMessageFor(Misfiled, "misfiled-page");
+
+        Assert.Contains("Create permission required", message, StringComparison.Ordinal);
+        Assert.Contains("MeshWeaver#4061", message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// 🚨 #6637 review — as the fold does, a role granted and denied in the same grant is not held.
+    /// Editor carries Create, but the fold removed it, so the denial is settled.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task ARoleGrantedAndDeniedInOneGrant_IsNotHeld_TheDenialIsSettled()
+    {
+        await GivenTheSpaceExists(TestContext.Current.CancellationToken);
+        await GrantAt(Revoked, Revoked,
+            [new RoleAssignment { Role = "Editor" }, new RoleAssignment { Role = "Editor", Denied = true }]);
+
+        var message = await DenialMessageFor(Revoked, "revoked-page");
+
+        Assert.Contains("Create permission required", message, StringComparison.Ordinal);
+        Assert.DoesNotContain("MeshWeaver#4061", message, StringComparison.Ordinal);
     }
 
     [Fact(Timeout = 180_000)]

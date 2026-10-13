@@ -52,6 +52,8 @@ public class SelfUpdateVerdictTest
     [InlineData(SelfUpdateOutcome.ActivatedLive, false)]
     // A restart hand-over that failed activates an already-landed module — nothing newer was waiting.
     [InlineData(SelfUpdateOutcome.RestartHandoverFailed, false)]
+    // A marker with nothing pending here (#6620) found no release either.
+    [InlineData(SelfUpdateOutcome.NothingToActivate, false)]
     public void FoundNewerRelease_IsTrueExactlyWhenAReleaseWasWaiting(
         SelfUpdateOutcome outcome, bool expected)
         => Assert.Equal(expected, new SelfUpdateVerdict(outcome, "…").FoundNewerRelease);
@@ -91,6 +93,8 @@ public class SelfUpdateVerdictTest
                 SelfUpdateVerdict.NoNewerRelease(7, "3.0.0"), "went live without a restart: MeshWeaver.Test.Widget"),
             SelfUpdateVerdict.RestartHandoverFailed(
                 SelfUpdateVerdict.NoNewerRelease(7, "3.0.0"), "3.0.0", "the control inbox was unreachable"),
+            SelfUpdateVerdict.NothingToActivate(
+                SelfUpdateVerdict.NoNewerRelease(7, "3.0.0"), "nothing landed is pending activation in this process"),
         ];
 
         Assert.Equal(
@@ -400,5 +404,29 @@ public class SelfUpdateVerdictTest
             SelfUpdateVerdict.Restarted(stranded, "3.1.0-ci.7841", null).UnresolvedInstalledTag);
         Assert.Equal("3.1.0-ci.7841",
             SelfUpdateVerdict.RestartUnavailable(stranded, "3.1.0-ci.7841", "detect-only").UnresolvedInstalledTag);
+    }
+
+    /// <summary>
+    /// #6620: a pass whose every outcome is <c>UpToDate</c> — a second, overlapping check finding the
+    /// generation the first one already swapped in — swapped nothing and must not read "went LIVE".
+    /// Negative control: a pass with one <c>Live</c> outcome is ActivatedLive.
+    /// </summary>
+    [Fact]
+    public void LiveVerdict_IsNothingToActivate_WhenEveryOutcomeIsUpToDate()
+    {
+        var platform = SelfUpdateVerdict.NoNewerRelease(7, "3.0.0");
+        var upToDate = new MeshWeaver.PluginCatalog.ModuleLiveActivationResult(
+            [new MeshWeaver.Graph.Configuration.ModuleSwapOutcome("MeshWeaver.Test.Widget",
+                MeshWeaver.Graph.Configuration.ModuleSwapKind.UpToDate, "already serving")]);
+        var live = new MeshWeaver.PluginCatalog.ModuleLiveActivationResult(
+            [new MeshWeaver.Graph.Configuration.ModuleSwapOutcome("MeshWeaver.Test.Widget",
+                MeshWeaver.Graph.Configuration.ModuleSwapKind.Live, "swapped")]);
+
+        var none = SelfUpdateHostedService.LiveVerdict(platform, upToDate);
+        Assert.Equal(SelfUpdateOutcome.NothingToActivate, none.Outcome);
+        Assert.DoesNotContain("went LIVE", none.Message);
+        Assert.Contains("already serving the landed generation", none.Message);
+
+        Assert.Equal(SelfUpdateOutcome.ActivatedLive, SelfUpdateHostedService.LiveVerdict(platform, live).Outcome);
     }
 }

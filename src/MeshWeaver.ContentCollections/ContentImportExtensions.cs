@@ -111,7 +111,108 @@ public static class ContentImportExtensions
     internal static MessageHubConfiguration AddContentImportHandler(this MessageHubConfiguration config)
         => config
             .WithHandler<ImportContentRequest>(HandleImportContent)
-            .WithHandler<SyncContentFilesRequest>(HandleSyncContentFiles);
+            .WithHandler<SyncContentFilesRequest>(HandleSyncContentFiles)
+            .WithHandler<SaveContentFileRequest>(HandleSaveContentFile);
+
+    /// <summary>Begin a fluent single-file write (an upload) into <paramref name="nodePath"/>'s content.</summary>
+    public static SaveContentFileBuilder SaveContentFile(this IMessageHub hub, string nodePath)
+        => new(hub, nodePath);
+
+    /// <summary>
+    /// Writes ONE file into this node's own content collection — the upload write.
+    ///
+    /// <para>🚨 <b>Reached only on a delivery the owner's gate admitted.</b>
+    /// <see cref="SaveContentFileRequest"/> carries <c>[RequiresPermission(Update)]</c>, so this
+    /// hub's access-control step decided Update for the delivery's identity, on this hub, before
+    /// this handler ran — a grant revoked before the delivery reached the owner refuses it here,
+    /// whatever the caller checked earlier (#6585). The collection, its editability and the path are
+    /// decided off THIS hub's own configuration, never off anything the caller sent.</para>
+    /// </summary>
+    private static IMessageDelivery HandleSaveContentFile(
+        IMessageHub hub, IMessageDelivery<SaveContentFileRequest> delivery)
+    {
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger(typeof(ContentImportExtensions).FullName!);
+        // The hub action block only subscribes + returns; the write runs on the collection's pool.
+        SaveOne(hub, hub.ServiceProvider.GetService<IContentService>(), delivery.Message, logger)
+            .Subscribe(
+                count => hub.Post(ImportContentResponse.Ok(count), o => o.ResponseFor(delivery)),
+                ex => hub.Post(FailureFor(delivery, ex), o => o.ResponseFor(delivery)));
+        return delivery.Processed();
+    }
+
+    /// <summary>
+    /// The write of <see cref="HandleSaveContentFile"/>: validates the request against this hub's
+    /// own collection configuration and streams the bytes (inline or staged) into the file.
+    /// </summary>
+    private static IObservable<int> SaveOne(
+        IMessageHub hub, IContentService? contentService, SaveContentFileRequest request, ILogger? logger)
+    {
+        if (contentService is null)
+            return Observable.Throw<int>(new InvalidOperationException(
+                "Content collections not configured on this node"));
+        var config = contentService.GetCollectionConfig(request.CollectionName);
+        if (config is null)
+            return Observable.Throw<int>(new InvalidOperationException(
+                $"collection '{request.CollectionName}' not found on this node"));
+        // 🚨 Only a collection THIS node owns is written here. GetCollectionConfig falls back to the
+        // hosting hub's content service, so a name this node does not declare can resolve to a
+        // collection registered on its host — a store rooted above this node, shared with every
+        // other node it hosts. The gate that admitted this delivery decided Update on THIS node,
+        // which is no authority over that store: writing into it would let an editor of one node
+        // plant or overwrite files of its host and of its siblings. So an inherited collection is
+        // refused here, by name, and nothing is written.
+        if (!OwnsCollection(hub, contentService, config))
+            return Observable.Throw<int>(new InvalidOperationException(
+                $"collection '{request.CollectionName}' is not declared by this node (it is inherited from "
+                + $"'{config.Address?.ToString() ?? "its host"}'); a write into it is not this node's to admit. "
+                + "Nothing was written."));
+        if (!config.IsEditable)
+            return Observable.Throw<int>(new InvalidOperationException(
+                $"collection '{request.CollectionName}' is read-only"));
+
+        var path = NormalizePath(request.FilePath ?? string.Empty);
+        var slash = path.LastIndexOf('/');
+        var (dir, name) = slash < 0 ? (string.Empty, path) : (path[..slash], path[(slash + 1)..]);
+        // 🚨 Never let a caller-supplied path escape the collection root, or plant bytes in the
+        // reserved staging folder — the same refusals the sync handler makes.
+        if (name.Length == 0 || !IsSafeCollectionPath(path))
+            return Observable.Throw<int>(new InvalidOperationException(
+                $"Unsafe content file path '{request.FilePath}' (empty, rooted, or contains '.'/'..')."));
+        if (ContentStaging.IsStagingPath(path))
+            return Observable.Throw<int>(new InvalidOperationException(
+                $"Content file path '{request.FilePath}' targets the reserved '{ContentStaging.Folder}' folder."));
+        if ((request.Content is null) == (request.Staged is null))
+            return Observable.Throw<int>(new InvalidOperationException(
+                "Exactly one of Content and Staged must carry the file's bytes."));
+        if (request.Staged is { } staged && !IsSafeStagingHandle(staged.Handle))
+            return Observable.Throw<int>(new InvalidOperationException(
+                $"Unsafe staged content handle '{staged.Handle}' (expected a hex content hash)."));
+
+        return contentService.GetCollection(request.CollectionName)
+            .Select(target => target ?? throw new InvalidOperationException(
+                $"collection '{request.CollectionName}' could not be opened on this node"))
+            .SelectMany(target => request.Content is { } bytes
+                // Fresh MemoryStream per subscribe (SaveFile disposes it), bytes are immutable.
+                ? target.SaveFile(dir, name, () => new MemoryStream(bytes, writable: false)).Select(_ => 1)
+                : WriteStaged(target, request.Staged! with { Path = path }, dir, name, logger));
+    }
+
+    /// <summary>
+    /// Whether <paramref name="config"/> is a collection <paramref name="hub"/> declares itself, as
+    /// opposed to one it inherits from its hosting hub — either through the host's content service
+    /// (<see cref="IContentService.GetCollectionConfig"/> falls back to it) or through the host's
+    /// service registrations, which a node hub's container sees as well.
+    ///
+    /// <para>A config that names its owner (<see cref="ContentCollectionConfig.Address"/>, stamped by
+    /// every per-hub registration) is this node's exactly when that owner is this node. One that names
+    /// none is this node's only when the host does not declare the same name — a name the host also
+    /// answers is the host's, and the safe reading of the ambiguity is "not this node's".</para>
+    /// </summary>
+    private static bool OwnsCollection(IMessageHub hub, IContentService contentService, ContentCollectionConfig config)
+        => config.Address is { } owner
+            ? string.Equals(owner.Path, hub.Address.Path, StringComparison.OrdinalIgnoreCase)
+            : contentService is ContentService own && !own.HostDeclares(config.Name);
 
     private static IMessageDelivery HandleSyncContentFiles(
         IMessageHub hub, IMessageDelivery<SyncContentFilesRequest> delivery)
@@ -1040,5 +1141,145 @@ public sealed class SyncContentFilesBuilder
         var baseDir = (_targetPath ?? string.Empty).Replace('\\', '/').Trim('/');
         var rel = (filePath ?? string.Empty).Replace('\\', '/').TrimStart('/');
         return baseDir.Length == 0 ? rel : $"{baseDir}/{rel}";
+    }
+}
+
+/// <summary>
+/// Fluent builder for <see cref="ContentImportExtensions.SaveContentFile"/> — write ONE file into a
+/// node's editable content collection on the OWNING node's hub, as the caller:
+/// <code>
+/// hub.SaveContentFile("Systemorph")
+///    .To("content", "images/logo.png")
+///    .WithAccessContext(caller)
+///    .Post(bytes);                                 // IObservable&lt;ImportContentResponse&gt;
+/// </code>
+///
+/// <para>🚨 The write is DECIDED where it is committed (#6585): the owning hub's inbound gate
+/// evaluates Update for the posted identity on the delivery that carries the bytes. A caller-side
+/// permission check is at most an early answer; it is never what admits the write.</para>
+///
+/// <para>A file whose packaged cost exceeds one delivery's budget travels out of band exactly as a
+/// content sync's does (<c>Doc/Architecture/OutOfBandContentTransfer</c>): its bytes go into the
+/// collection's reserved staging folder — framework state, never served as content and reclaimed
+/// when this post terminates — and the delivery carries the handle. The file itself is still written
+/// only by the owning hub, behind its gate.</para>
+/// </summary>
+public sealed class SaveContentFileBuilder
+{
+    private readonly IMessageHub _hub;
+    private readonly string _nodePath;
+    private string _collection = ContentCollectionsExtensions.DefaultCollectionName;
+    private string _filePath = "";
+    private AccessContext? _identity;
+
+    internal SaveContentFileBuilder(IMessageHub hub, string nodePath)
+    {
+        _hub = hub;
+        _nodePath = nodePath;
+    }
+
+    /// <inheritdoc cref="SyncContentFilesBuilder.WithAccessContext"/>
+    [ImpersonationSurface]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public SaveContentFileBuilder WithAccessContext(AccessContext identity)
+    {
+        ArgumentNullException.ThrowIfNull(identity);
+        // Declaring a platform principal here is an impersonation on behalf of the CALLER.
+        _hub.ServiceProvider.GetService<AccessService>()?.ImpersonationGuard
+            .Check(Assembly.GetCallingAssembly(), nameof(SaveContentFileBuilder) + "." + nameof(WithAccessContext), identity);
+        _identity = identity;
+        return this;
+    }
+
+    /// <summary>The node's content collection (default <c>"content"</c>) and the file's path within it.</summary>
+    public SaveContentFileBuilder To(string collection, string filePath)
+    {
+        _collection = collection;
+        _filePath = filePath;
+        return this;
+    }
+
+    /// <summary>Post the write of <paramref name="content"/> to the owning node's hub. Cold — subscribe to run.</summary>
+    public IObservable<ImportContentResponse> Post(byte[] content)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        // Same identity rule as every builder here: a declared identity wins outright; otherwise the
+        // ambient is captured EAGERLY, on the caller's thread (ContentImportExtensions.CaptureCallerContext).
+        var captured = _identity ?? ContentImportExtensions.CaptureCallerContext(_hub);
+        var address = new Address(_nodePath);
+        var file = new InlineContentFile(_filePath, content);
+
+        var pipeline = ContentDeliveryBudget.PackagedCost(file) <= ContentDeliveryBudget.BudgetBytes
+            ? Send(address, captured, new SaveContentFileRequest(_collection, _filePath) { Content = content })
+            // Defer: the staging pass does I/O and posts a config read, so it runs on Subscribe.
+            : Observable.Defer(() => StagedSend(address, captured, file));
+        return ContentImportExtensions.CarryPostIdentity(pipeline, _hub, _identity);
+    }
+
+    private IObservable<ImportContentResponse> Send(
+        Address address, AccessContext? captured, SaveContentFileRequest request)
+        // Off-router issuing, same reason as SyncContentFilesBuilder.PostPlanned.
+        => Observable.Defer(() => _hub.NodeOperationIssuingHub()
+            .Observe(request, o => ContentImportExtensions.ConfigurePost(o, address, captured))
+            .Select(d => d.Message)
+            .Take(1));
+
+    /// <summary>
+    /// Stages the bytes in the destination collection's staging folder, posts the handle, and reclaims
+    /// the blob once the post terminates (success or failure). When staging cannot run, the file
+    /// travels inline, as a sync's does.
+    /// </summary>
+    private IObservable<ImportContentResponse> StagedSend(
+        Address address, AccessContext? captured, InlineContentFile file)
+    {
+        var pool = _hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem)
+                   ?? IoPool.Unbounded;
+        var logger = _hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger(typeof(SaveContentFileBuilder).FullName!);
+        var inline = Send(address, captured,
+            new SaveContentFileRequest(_collection, _filePath) { Content = file.Content });
+        return OutOfBandContentTransfer.ResolveDestination(
+                _hub, address, _collection,
+                o => ContentImportExtensions.ConfigurePost(o, address, captured),
+                // 🚨 Staging writes on THIS hub, where no owner gate sees it — so a collection the
+                // node only inherits (the host's store, shared with its siblings) is refused before a
+                // byte lands there, with the same answer the owner's write gives.
+                declaredByNodeOnly: true)
+            .Select(destination => (Destination: destination, Refusal: (string?)null))
+            .Catch<(ContentCollection? Destination, string? Refusal), Exception>(ex =>
+            {
+                if (ex is CollectionNotDeclaredByNodeException notDeclared)
+                    return Observable.Return<(ContentCollection?, string?)>((null, notDeclared.Message));
+                logger?.LogWarning(ex,
+                    "Out-of-band transfer unavailable for {Node}/{Collection}/{Path}; the file travels inline",
+                    _nodePath, _collection, _filePath);
+                return Observable.Return<(ContentCollection?, string?)>((null, null));
+            })
+            .SelectMany(resolved => resolved.Refusal is { } refusal
+                ? Observable.Return(ImportContentResponse.Fail(refusal))
+                : resolved.Destination is not { } destination
+                ? inline
+                // Reclaim a dead producer's residue before adding to the folder, never after — the
+                // same order as SyncContentFilesBuilder.Stage, so the sweep cannot see this upload's
+                // own blob. Without it a staged upload abandoned before its post terminates (an HTTP
+                // cancellation, a crashed caller) would leave its blob for good on a collection that
+                // is only ever uploaded to.
+                : OutOfBandContentTransfer.SweepStale(destination, DateTime.UtcNow, logger)
+                    // A per-transfer nonce: the blob is this upload's alone, so another upload of
+                    // identical bytes reclaiming ITS blob can never delete this one mid-read.
+                    .SelectMany(_ => OutOfBandContentTransfer.Stage(
+                        destination, pool, file, Guid.NewGuid().ToString("N")))
+                    .SelectMany(staged =>
+                    {
+                        // Reclaimed IN the chain, ahead of the caller's answer — the same contract
+                        // as SyncContentFilesBuilder.Reclaiming: when this answers, staging is clean.
+                        var reclaim = Observable.Defer(() =>
+                            OutOfBandContentTransfer.Discard(destination, [staged.Handle], logger));
+                        return Send(address, captured,
+                                new SaveContentFileRequest(_collection, _filePath) { Staged = staged })
+                            .SelectMany(answer => reclaim.Select(_ => answer))
+                            .Catch<ImportContentResponse, Exception>(ex =>
+                                reclaim.SelectMany(_ => Observable.Throw<ImportContentResponse>(ex)));
+                    }));
     }
 }
