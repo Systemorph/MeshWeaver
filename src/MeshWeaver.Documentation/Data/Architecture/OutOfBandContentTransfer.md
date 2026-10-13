@@ -132,7 +132,7 @@ runs on the producer where no owner gate sees it.
   is reclaimed by an age sweep: before staging, the producer deletes `_staging/` entries older than
   `ContentStaging.StaleAfter` (24 h). The window is far wider than any sync, so the sweep can never
   race a live transfer, and the folder holds at most one run's assets in the normal case.
-- **The staging folder is never read as content.** A staged blob is bytes nobody has admitted yet (an oversized upload's, before its owner decides Update), so the content route (`ContentFileResolver.Resolve`) answers `_staging/…` as absent and the collection listing (`ContentList`) neither shows the folder nor lists inside it.
+- **The staging folder is never read as content.** A staged blob is bytes nobody has admitted yet (an oversized upload's, before its owner decides Update), so every user-facing read answers `_staging/…` as absent: the content route (`ContentFileResolver.Resolve`), the collection listing (`ContentList`), the hub's `IFileContentProvider` that `GetData` and the file tools read through (`ListCollectionItems` neither shows the folder nor lists inside it; `GetFileContent` answers a blob there as not found), and the collection-named layout area. Only the transfer itself (`ContentStaging`, `WriteStaged`) reads the folder, through the collection directly.
 - **The mirror never prunes the staging folder and never prunes a staged file.** `_staging/` is
   excluded from the prune enumeration outright — it is framework state, not content — and staged
   paths are part of `MirrorKeepPaths`, the full keep set the one authoritative prune pass is
