@@ -305,20 +305,29 @@ leaves the same window. So name the version you read, and let the owner check it
 ```csharp
 var request = new DeleteNodeRequest(path) { ExpectedVersion = node.Version };
 hub.Observe(request, o => o.WithTarget(hub.NodeOperationTarget()))
-    .Subscribe(d =>
-    {
-        if (d.Message.RejectionReason == NodeDeletionRejectionReason.Conflict)
+    .Subscribe(
+        d =>
         {
-            // It changed after we read it. Nothing was deleted: re-read and decide again.
-        }
-    });
+            if (d.Message.RejectionReason == NodeDeletionRejectionReason.Conflict)
+            {
+                // It changed after we read it. Nothing was deleted: re-read and decide again.
+            }
+        },
+        ex => logger.LogWarning(ex, "Delete of {Path} did not answer", path));
 ```
 
-- **Where it is checked.** The owner compares `ExpectedVersion` with the node's durable `Version`
-  inside the delete, after it has opened the subtree-deletion scope. From that point every in-process
-  write at or under the path is refused until the delete completes. A version that matches at the
-  check therefore still matches at the commit. A write that loses the race is refused (`NotFound`,
-  "Node being deleted") and does not vanish silently.
+- **Where it is checked: by the owning node hub, in its commit turn.** The delete first seals the
+  path against the owner's own writes and opens the subtree-deletion scope, then asks the owning hub
+  to compare `ExpectedVersion` with the node's **live** version. The owner answers on the same turn
+  every own write and every cross-hub patch commits on. So every write the owner has already
+  acknowledged is in the version it compares, and any later write is refused instead of being
+  acknowledged: an own write is refused in its turn (`SubtreeDeletionInFlightException`), and a
+  cross-hub patch is refused at its durable flush (`NotFound`, "Node being deleted"). The check and
+  the delete are one step: nothing acknowledged can land between them.
+- **Why the live version, not the stored one.** An own write is acknowledged from the owner's
+  in-memory commit, about one persistence-sampler interval before it is stored. A check against the
+  stored row matched the old version in that window, and the delete removed a change its writer had
+  been told was accepted (#6673).
 - **A mismatch** answers `Success = false` with `RejectionReason = Conflict`, the same
   optimistic-concurrency fact as `MeshNodeErrorCode.Conflict` on an update. Nothing is deleted.
 - **An absent node** still answers the idempotent success `AlreadyAbsent`
@@ -326,9 +335,14 @@ hub.Observe(request, o => o.WithTarget(hub.NodeOperationTarget()))
   whatever version the node last had.
 - **Root only.** For a recursive delete, only the node at `Path` is checked. The cascade's
   per-descendant requests never carry the value.
-- **The durable version.** An update's ack is issued after its durable flush, so the version you read
-  from an acked write is the one stored. A version you read from a live stream before its flush can
-  answer one spurious `Conflict`. Re-reading resolves it.
+- **Which version to name.** The version you read, from the node stream or from an acknowledged
+  write. It is compared with what the owner holds, so a version that is acknowledged but not yet
+  stored matches.
+- **No verdict is a refusal.** If the owner cannot be asked and the node is still stored, the delete
+  answers `Unavailable` and removes nothing. It never treats an unanswered check as a match.
+- **Not covered yet** (tracked on #6673): the seal is held in the deleting process. When the owning
+  activation runs on another silo, an own write there after the comparison is not sealed. The final
+  storage delete is also not yet a compare-and-delete.
 - **Omitted** (`null`, the default), the delete removes whatever version is there, exactly as before.
 
 ---

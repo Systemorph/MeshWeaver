@@ -41,7 +41,23 @@ namespace MeshWeaver.Mesh;
 /// part of the same delete.
 /// </param>
 [RequiresPermission(Permission.Delete)]
-public sealed record ValidateDeleteRequest(string Path, string? RootPath = null) : IRequest<ValidateDeleteResponse>;
+public sealed record ValidateDeleteRequest(string Path, string? RootPath = null) : IRequest<ValidateDeleteResponse>
+{
+    /// <summary>
+    /// When set, this request is the OWNER-TURN half of a version-guarded delete
+    /// (<see cref="DeleteNodeRequest.ExpectedVersion"/>, #6673), and it asks nothing else: the
+    /// owning hub compares this value with its node's LIVE version inside its own commit turn —
+    /// the turn every own write and every cross-hub patch commits on — and answers
+    /// <see cref="ValidateDeleteResponse.Ok"/> when they match,
+    /// <see cref="NodeDeletionRejectionReason.Conflict"/> (with
+    /// <see cref="ValidateDeleteResponse.ActualVersion"/>) when they do not, and
+    /// <see cref="NodeDeletionRejectionReason.NodeNotFound"/> when the node is gone. The validator
+    /// chain is NOT run: the delete already ran it at the root.
+    /// <para>The live version includes a write the owner has acknowledged but not yet stored, which
+    /// the durable row does not — that is the whole point of asking the owner.</para>
+    /// </summary>
+    public long? ExpectedVersion { get; init; }
+}
 
 /// <summary>
 /// Outcome of a <see cref="ValidateDeleteRequest"/>. Empty lists mean
@@ -70,6 +86,12 @@ public sealed record ValidateDeleteResponse
     /// </summary>
     public NodeDeletionRejectionReason Reason { get; init; } =
         NodeDeletionRejectionReason.ValidationFailed;
+
+    /// <summary>
+    /// The node's live version on the owner, when a version-guarded ask
+    /// (<see cref="ValidateDeleteRequest.ExpectedVersion"/>) found it different. Null otherwise.
+    /// </summary>
+    public long? ActualVersion { get; init; }
 
     /// <summary>True when there are no blocking errors.</summary>
     public bool IsValid => Errors.IsEmpty;

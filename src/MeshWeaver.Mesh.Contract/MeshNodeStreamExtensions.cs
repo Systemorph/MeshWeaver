@@ -1674,6 +1674,10 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                 throw new InvalidOperationException("No data source registered for MeshNode");
             var dsStream = dataSource.GetStreamForPartition(null)
                 ?? throw new InvalidOperationException("No stream for MeshNode partition");
+            // Resolved on the subscribing thread, while the hub is alive — never inside the commit
+            // turn (a DI touch from a turn that can run at teardown throws). See the #6673 gate below.
+            var versionGuard = _workspace.Hub.ServiceProvider
+                .GetService<MeshWeaver.Mesh.Services.RecentlyDeletedRegistry>();
 
             // 🚨 Single-emit guard shared by the post-write stream echo AND the no-op
             // short-circuit below. Without it a no-op write would either hang (echo never
@@ -1826,6 +1830,16 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                     }
                     else
                     {
+                        // 🚨 A VERSION-GUARDED DELETE OF THIS NODE IS IN FLIGHT (#6673) — refuse
+                        // the write IN THIS TURN. An own write is acknowledged from this commit,
+                        // before the persistence sampler stores it, so letting it commit here would
+                        // acknowledge a change the guarded delete — whose version comparison this
+                        // turn is serialised behind — is about to remove. Refused, the caller hears
+                        // "being deleted" and nothing was acknowledged. Checked AFTER the no-op gate
+                        // (an unchanged node acknowledges nothing) and never for an adoption (an
+                        // observation of state that is already durable).
+                        if (versionGuard?.IsVersionGuardedDeletionInFlight(current.Path) == true)
+                            throw new SubtreeDeletionInFlightException(current.Path, current.Path);
                         // 🚨 THE AUDIT STAMP applies to an OWN write exactly as to a cross-hub one
                         // (Plugins#2229, defect D). Without it an own-stream write — a thread hub's
                         // claim, rollback and commit, a NodeType's compile bookkeeping — minted a
