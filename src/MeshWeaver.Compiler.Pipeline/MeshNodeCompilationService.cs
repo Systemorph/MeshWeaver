@@ -2150,18 +2150,22 @@ internal class MeshNodeCompilationService(
             references,
             parsePath: cacheService.IsDiskCacheEnabled && _cacheOptions.EnableSourceDebugging ? sourcePath : "",
             ct);
-        // Option C (Doc/Architecture/InMeshImpersonation): the AUTHORED source's references to
-        // impersonation APIs, judged before generators run (their output is the platform's, not the
-        // author's) and before anything is emitted. LogOnly logs; Enforce refuses an untrusted
-        // NodeType here, which parks it at compilationStatus Error naming the reference.
+        var compilation = GeneratorPipeline.RunSourceGeneratorsWithNodeOutput(
+            authored, nugetAssemblyPaths, logger, ct, out var nodeGeneratedTrees);
+        // Option C (Doc/Architecture/InMeshImpersonation): references to impersonation APIs in the
+        // AUTHORED source AND in what a NODE-SUPPLIED generator (one the node #r'd) emitted — judged
+        // after generation, because such a generator's output is the author's code (#6619 review);
+        // only the platform's built-in generators' output is left out. Before anything is emitted.
+        // LogOnly logs; Enforce refuses an untrusted NodeType here, which parks it at
+        // compilationStatus Error naming the reference.
         // GetRequiredService, not GetService: every hub registers an AccessService
         // (MessageHubConfiguration.ConfigureServices), so a provider without one is a misbuilt host —
         // and a security check that an absent dependency switches off in silence is no check.
         if (hub.ServiceProvider.GetRequiredService<AccessService>().ImpersonationGuard is
             { Mode: not InMeshImpersonationMode.Off } guard)
             guard.CheckCompiled(InMeshImpersonationGuard.NodeTypeLoadContextPrefix + nodeName, node.Path,
-                InMeshImpersonationReferences.Find(authored, ct).Select(r => r.ToString()).ToList());
-        var compilation = GeneratorPipeline.RunSourceGenerators(authored, nugetAssemblyPaths, logger, ct);
+                InMeshImpersonationReferences.Find(compilation, authored.SyntaxTrees.Concat(nodeGeneratedTrees), ct)
+                    .Select(r => r.ToString()).ToList());
         OnEmitStarting?.Invoke(compilation);
 
         string? actualPath;
