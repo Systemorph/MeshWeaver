@@ -335,9 +335,9 @@ def case_plain(oras: str, work: Path, containers: Containers, reg_image: str) ->
     pub = make_publication(work, "one")
     env = dict(os.environ, ORAS=oras)
 
-    def push(pubdir: Path, identity: str, *extra: str) -> subprocess.CompletedProcess:
+    def push(pubdir: Path, identity: str, *extra: str, env_extra: dict | None = None) -> subprocess.CompletedProcess:
         return run(["bash", str(PUSH), "--registry", host, "--source", "Plugins", "--identity", identity,
-                    "--dir", str(pubdir), "--plain-http", *extra], env=env)
+                    "--dir", str(pubdir), "--plain-http", *extra], env=dict(env, **(env_extra or {})))
 
     r = push(pub, IDENTITY, "--tag-run", "4242", "--release", "3.1.0")
     expect(r.returncode == 0, f"publisher exits 0 (stderr: {r.stderr.strip()[:300]})")
@@ -423,6 +423,19 @@ def case_plain(oras: str, work: Path, containers: Containers, reg_image: str) ->
     r5 = push(two, IDENTITY, "--skip-if-published")
     expect(r5.returncode == 0 and "skipped=already-published" in r5.stdout and index_of(r5) == d4,
            "…a repeat of the new content is then skipped against the moved tag")
+    # A publication of the SAME content in an OLDER layout (pushed before modules rode with their
+    # bundles case-insensitively — its config carries no "layout") is republished, never skipped:
+    # its commit never moves, so a commit-only skip would keep it torn forever.
+    legacy = push(pub, "slegacy", env_extra={"MW_TEST_PUBLICATION_LAYOUT": "1"})
+    expect(legacy.returncode == 0 and index_of(legacy).startswith("sha256:"), "a publication of layout 1 is staged")
+    r8 = push(pub, "slegacy", "--skip-if-published")
+    expect(r8.returncode == 0 and "skipped=" not in r8.stdout and "layout '1'" in r8.stdout
+           and index_of(r8).startswith("sha256:") and index_of(r8) != index_of(legacy)
+           and resolve("plugins/plugins:slegacy") == index_of(r8),
+           f"--skip-if-published REPUBLISHES same-commit content published in an older layout (exit {r8.returncode})")
+    r9 = push(pub, "slegacy", "--skip-if-published")
+    expect(r9.returncode == 0 and "skipped=already-published" in r9.stdout and index_of(r9) == index_of(r8),
+           "…and once it is in the current layout, the same content is skipped again")
     nocommit = make_publication(work, "nocommit"); (nocommit / "source-commit.txt").write_text("unknown\n")
     r6 = push(nocommit, "snocommit", "--skip-if-published")
     expect(r6.returncode == 1 and "needs a recorded source commit" in r6.stdout and resolve("plugins/plugins:snocommit") == "",

@@ -53,6 +53,12 @@
 # index and sidecar config, an equal commit; anything else (a tag that is absent, an unreadable
 # index, a different commit) PUSHES, because pushing is idempotent and never leaves the registry
 # worse, while a wrong skip would freeze the tag on a publication this run was asked to replace.
+# The proof includes the publication LAYOUT: the sidecar config carries `"layout":<n>`
+# (PUBLICATION_LAYOUT below), and a published config whose layout differs — or that has none,
+# i.e. every publication pushed before modules were matched to their bundles case-insensitively —
+# is REPUBLISHED even at the same commit. An unchanged source would otherwise keep its torn
+# publication forever, since its commit never moves. Bump PUBLICATION_LAYOUT whenever what this
+# script pushes for the same content changes.
 #
 # Prints facts the caller can record (register-publication): `bundle-publication: index=<digest>
 # bundles=<n> …` and one `bundle-publication: bundle=<package> digest=<digest> module=<yes|no>` per
@@ -88,6 +94,12 @@ while [ $# -gt 0 ]; do
 done
 
 fail() { echo "::error::$1"; exit 1; }
+
+# The shape of what this script pushes for one publication (see --skip-if-published above).
+# 2: modules ride with their bundle case-insensitively; a module-only package travels as a sidecar.
+# Overridable ONLY by the behaviour harness, to stage a publication of an older layout.
+PUBLICATION_LAYOUT="${MW_TEST_PUBLICATION_LAYOUT:-2}"
+case "$PUBLICATION_LAYOUT" in ''|*[!0-9]*) fail "publication layout '$PUBLICATION_LAYOUT' is not a number" ;; esac
 
 [ -n "$REGISTRY" ] || fail "--registry <host> is required"
 [ -n "$SOURCE" ] || fail "--source <name> is required"
@@ -298,22 +310,27 @@ if [ "$SKIP_IF_PUBLISHED" -eq 1 ]; then
   if existing=$("$ORAS" resolve "${OFLAGS[@]}" "$PUB_REPO:$IDENTITY" 2>"$WORK/resolve.err"); then
     case "$existing" in sha256:*) ;; *) fail "resolve of $PUB_REPO:$IDENTITY answered '$existing', not a digest" ;; esac
     published_commit=""
+    published_layout=""
     if "$ORAS" manifest fetch "${OFLAGS[@]}" "$PUB_REPO@$existing" > "$WORK/existing-index.json" 2>"$WORK/fetch.err"; then
       existing_sidecar=$(tr -d '\n' < "$WORK/existing-index.json" \
         | sed -n 's/.*"digest":"\(sha256:[0-9a-f]\{64\}\)","size":[0-9]\{1,\},"artifactType":"application\/vnd\.meshweaver\.publication\.v1+json","annotations":{"io\.meshweaver\.role":"sidecars"}.*/\1/p')
       if [ -n "$existing_sidecar" ] \
           && "$ORAS" manifest fetch-config "${OFLAGS[@]}" "$PUB_REPO@$existing_sidecar" > "$WORK/existing-config.json" 2>"$WORK/fetch.err"; then
         published_commit=$(tr -d '\n' < "$WORK/existing-config.json" | sed -n 's/.*"sourceCommit":"\([^"]*\)".*/\1/p')
+        published_layout=$(tr -d '\n' < "$WORK/existing-config.json" | sed -n 's/.*"layout":\([0-9]\{1,\}\).*/\1/p')
       fi
     fi
-    if [ -n "$published_commit" ] && [ "$published_commit" = "$local_commit" ]; then
+    if [ -n "$published_commit" ] && [ "$published_commit" = "$local_commit" ] \
+        && [ "$published_layout" = "$PUBLICATION_LAYOUT" ]; then
       echo "::notice::$PUB_REPO:$IDENTITY already names a complete publication of THIS content ($existing, source $published_commit) — already published; skipping the push. The registry, like the shares, seals one publication per content × framework identity."
       publish_release_identity
       echo "bundle-publication: index=$existing bundles=${#BUNDLES[@]} tag=$IDENTITY registry=$REGISTRY source=$SOURCE repository=plugins/$SOURCE_LC skipped=already-published"
       record_outputs "$existing" "${#BUNDLES[@]}"
       exit 0
     fi
-    if [ -z "$published_commit" ]; then
+    if [ -n "$published_commit" ] && [ "$published_commit" = "$local_commit" ]; then
+      echo "$PUB_REPO:$IDENTITY names a publication of THIS content but of layout '${published_layout:-none}', not $PUBLICATION_LAYOUT — republishing it in the current layout (the tag moves last; the previous generation stays resident by digest)"
+    elif [ -z "$published_commit" ]; then
       echo "$PUB_REPO:$IDENTITY resolves to $existing but its source commit could not be read ($(tr '\n' ' ' < "$WORK/fetch.err")) — publishing, since a push is idempotent and a skip without proof is not"
     else
       echo "$PUB_REPO:$IDENTITY names a publication from source '$published_commit' but this one is from '$local_commit' — republishing (the tag moves last; the previous generation stays resident by digest)"
@@ -380,6 +397,7 @@ done
 {
   printf '{"schemaVersion":1,"identity":"%s","source":"%s"' "$(json_escape "$IDENTITY")" "$(json_escape "$SOURCE")"
   printf ',"sourceCommit":"%s"' "$(json_escape "$(read_fact source-commit.txt)")"
+  printf ',"layout":%s' "$PUBLICATION_LAYOUT"
   printf ',"repository":"%s"' "$(json_escape "$(read_fact repository.txt)")"
   printf ',"architecture":"%s"' "$(json_escape "$(read_fact architecture.txt)")"
   printf ',"release":"%s"' "$(json_escape "$RELEASE")"
