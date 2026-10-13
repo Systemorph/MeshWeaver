@@ -533,6 +533,12 @@ public static class StepUpPaths
     /// </summary>
     public const string StampProperty = "stepUpReceipts";
 
+    /// <summary>
+    /// The most targets ONE step-up covers — the step-up endpoint refuses a larger batch. A page that
+    /// decides in bulk decides at most this many per click, so it never leads into a refusal.
+    /// </summary>
+    public const int MaxTargets = 50;
+
     /// <summary>The portal route that starts a step-up (an MVC endpoint — navigate with a full page load).</summary>
     public const string StartRoute = "/auth/step-up";
 

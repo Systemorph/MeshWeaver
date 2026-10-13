@@ -369,7 +369,19 @@ public record StreamErrorEvent(string StreamId, string Message) : StreamMessage(
 /// </summary>
 [SystemMessage]
 [CanBeIgnored]
-public record StreamEndedEvent(string StreamId) : StreamMessage(StreamId);
+public record StreamEndedEvent(string StreamId) : StreamMessage(StreamId)
+{
+    /// <summary>
+    /// The announcing owner ACTIVATION's token (<c>ShutdownNack.ActivationToken</c>), or null when
+    /// the owner runs an image that does not stamp one.
+    ///
+    /// <para>🚨 Why it rides here (#6602). The subscriber's recycle re-arm budget counts DISTINCT
+    /// refusing activations. Without an identity every announcement read as a new activation, so
+    /// ONE owner teardown — its announcement plus the <c>ShuttingDown</c> NACK of the re-ask that
+    /// raced it — was charged twice, and two ordinary recycles in a roll spent the whole budget.</para>
+    /// </summary>
+    public string? Activation { get; init; }
+}
 
 /// <summary>
 /// Request to get data by reference (collection or entity), similar to SubscribeRequest but for one-time data retrieval

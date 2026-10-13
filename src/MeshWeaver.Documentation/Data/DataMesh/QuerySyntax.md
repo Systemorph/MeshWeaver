@@ -100,6 +100,11 @@ name:Acme*        # Starts with 'Acme'
 name:*Corp        # Ends with 'Corp'
 ```
 
+**`*` is the only wildcard.** Every other character in a value is literal, on every backend —
+including SQL's `%`, `_` and `\`. `code:50%*` matches `50%off` and not `50xoff`; `code:a_*`
+matches `a_b` and not `axb`. The SQL backends escape those characters before they translate `*`
+into their own wildcard ([Query Provider Parity](/Doc/Architecture/QueryProviderParity)).
+
 ### Comparison Operators
 
 ```
