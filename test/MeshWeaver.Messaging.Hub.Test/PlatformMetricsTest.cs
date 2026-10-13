@@ -117,6 +117,83 @@ public class PlatformMetricsTest(ITestOutputHelper output) : HubTestBase(output)
             "the instance id must never reach a tag");
     }
 
+    /// <summary>Collects one scrape as (value, kind, satellite).</summary>
+    private static List<(long Value, string Kind, string Satellite)> ScrapeSatellites()
+    {
+        var taken = new List<(long, string, string)>();
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (instrument, l) =>
+        {
+            if (instrument.Meter.Name == PlatformMetrics.MeterName)
+                l.EnableMeasurementEvents(instrument);
+        };
+        listener.SetMeasurementEventCallback<long>((_, value, tags, __) =>
+        {
+            string kind = "", satellite = "";
+            foreach (var tag in tags)
+            {
+                if (tag.Key == "kind") kind = tag.Value?.ToString() ?? "";
+                if (tag.Key == "satellite") satellite = tag.Value?.ToString() ?? "";
+            }
+            taken.Add((value, kind, satellite));
+        });
+        listener.Start();
+        listener.RecordObservableInstruments();
+        return taken;
+    }
+
+    /// <summary>
+    /// 🚨 #6632 — the OOM burst of 2026-10-04/05 was thousands of
+    /// <c>Admin/…/_DocumentPart/{index}</c> hubs, and the census folded them into <c>kind=Admin</c>.
+    /// The <c>satellite</c> tag names the LAST <c>_</c> segment — the shape — and never an id; a hub
+    /// with no satellite segment reads <c>none</c> (the negative control: the tag is not stamped on
+    /// everything).
+    /// </summary>
+    [HubFact]
+    public void TheSatelliteTag_NamesTheLastSatelliteSegment_NeverAnId()
+    {
+        var host = GetHost();
+        using var metrics = new PlatformMetrics(host);
+
+        host.GetHostedHub(new Address("victim", "doc-1", "_DocumentPart", "7"), c => c).Should().NotBeNull();
+        host.GetHostedHub(new Address("victim", "doc-2", "_DocumentPart", "8"), c => c).Should().NotBeNull();
+        host.GetHostedHub(new Address("victim", "plain-1"), c => c).Should().NotBeNull();
+
+        var victims = ScrapeSatellites().Where(t => t.Kind == "victim").ToArray();
+
+        victims.Where(t => t.Satellite == "_DocumentPart").Sum(t => t.Value).Should().BeGreaterThanOrEqualTo(2,
+            "both part hubs fold into ONE satellite value");
+        victims.Should().Contain(t => t.Satellite == PlatformMetrics.NoSatellite,
+            "a hub with no satellite segment reads 'none', not a satellite");
+        victims.Should().NotContain(t => t.Satellite.Contains("doc-", StringComparison.Ordinal)
+            || t.Satellite == "7" || t.Satellite == "8", "an id must never reach the tag");
+    }
+
+    /// <summary>
+    /// 🚨 The cardinality bound is the METER's, not the deployment's: nothing enforces that a
+    /// <c>_</c> segment is a declared satellite, so past <see cref="PlatformMetrics.MaxSatelliteValues"/>
+    /// distinct values the rest fold into <see cref="PlatformMetrics.OtherSatellite"/>.
+    /// </summary>
+    [HubFact]
+    public void SatelliteValues_AreBounded_TheRestFoldIntoOther()
+    {
+        var host = GetHost();
+        using var metrics = new PlatformMetrics(host);
+        var distinct = PlatformMetrics.MaxSatelliteValues + 3;
+        for (var i = 0; i < distinct; i++)
+            host.GetHostedHub(new Address("victim", $"bound-{i}", $"_Shape{i:00}"), c => c).Should().NotBeNull();
+
+        var satellites = ScrapeSatellites()
+            .Select(t => t.Satellite)
+            .Where(s => s != PlatformMetrics.NoSatellite)
+            .Distinct()
+            .ToArray();
+
+        satellites.Should().Contain(PlatformMetrics.OtherSatellite, "the values past the bound fold into one");
+        satellites.Length.Should().BeLessThanOrEqualTo(PlatformMetrics.MaxSatelliteValues + 1,
+            "at most the bound by name plus the one fold value");
+    }
+
     /// <summary>
     /// 🚨 <b>The invariant <c>KindOf</c> rests on, pinned where it is actually decidable.</b>
     ///

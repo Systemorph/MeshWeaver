@@ -369,6 +369,17 @@ floor level at about 3.3 GiB from hour 18) is the newest evidence that the popul
 replica that lives a day is the instrument; `HubCensusByOwner` (a `Code` node in the operator's own
 partition, the script behind the tables above) is the reading to repeat on it.
 
+### The standing census names the satellite shape (#6632)
+
+`meshweaver.hubs.live` (`PlatformMetrics`) is tagged `kind` (the address type), `satellite` and
+`runlevel`. `satellite` is the LAST address segment that starts with `_` — `_DocumentPart`,
+`_Activity`, `_Thread` — or `none`; never an id. The 2026-10-04/05 OOM burst was ~5,000
+`Admin/content/_Documents/…/_DocumentPart/{index}` hubs, which the `kind` tag alone folded into
+`kind=Admin`; with the second tag the next burst names its address shape while it happens. The bound
+is the meter's own: at most `MaxSatelliteValues` (32) satellite values are reported by name per scrape,
+the most populous first, and the rest fold into `_other` — nothing enforces that a `_` segment is a
+declared satellite, so cardinality is not left to the deployment.
+
 ## Related
 
 - [Stream Liveness and the Hub Reference](../StreamLivenessAndTheHubReference) — #3321 step 3, the
