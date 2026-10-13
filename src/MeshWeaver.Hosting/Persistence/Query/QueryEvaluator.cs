@@ -660,6 +660,7 @@ public class QueryEvaluator
             "created_by" => "createdBy",
             "created_date" => "createdDate",
             "last_modified_by" => "lastModifiedBy",
+            "sync_behavior" => "syncBehavior",
             _ => selector,
         };
         return GetPropertyValue(obj, property, rawJsonNumbers: true);

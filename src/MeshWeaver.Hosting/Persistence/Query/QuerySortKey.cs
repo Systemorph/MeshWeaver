@@ -137,12 +137,25 @@ public static class QuerySortKey
             return descending ? -c : c;
         }
 
-        /// <summary>Decimal against decimal exactly; a double on either side compares as double.</summary>
+        /// <summary>
+        /// Exact wherever both sides fit a decimal: a finite double inside decimal's range is lifted
+        /// to decimal (never the decimal rounded down to a double, which would make 2^53 + 1 equal
+        /// 2^53); only NaN, an infinity or a magnitude beyond decimal compares as double.
+        /// </summary>
         private static int CompareNumbers(object x, object y)
-            => x is decimal dx && y is decimal dy
-                ? dx.CompareTo(dy)
-                : Convert.ToDouble(x, CultureInfo.InvariantCulture)
-                    .CompareTo(Convert.ToDouble(y, CultureInfo.InvariantCulture));
+        {
+            if (AsDecimal(x) is { } dx && AsDecimal(y) is { } dy)
+                return dx.CompareTo(dy);
+            return Convert.ToDouble(x, CultureInfo.InvariantCulture)
+                .CompareTo(Convert.ToDouble(y, CultureInfo.InvariantCulture));
+        }
+
+        private static decimal? AsDecimal(object value) => value switch
+        {
+            decimal d => d,
+            double d when double.IsFinite(d) && Math.Abs(d) < 7.9e28 => (decimal)d,
+            _ => null,
+        };
 
         private static int CompareText(string x, string y)
         {

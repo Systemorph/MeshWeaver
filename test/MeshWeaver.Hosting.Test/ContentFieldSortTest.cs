@@ -39,6 +39,9 @@ public class ContentFieldSortTest
     /// <summary>A typed content record, standing in for a node type's compiled content class.</summary>
     private sealed record Submission(DateOnly? Inception, decimal? Premium, Terms? Terms = null);
 
+    /// <summary>A typed instant, for <c>content.at</c>.</summary>
+    private sealed record Stamp(DateTimeOffset At);
+
     /// <summary>Nested content, for <c>content.terms.renewal</c>.</summary>
     private sealed record Terms(DateTime Renewal);
 
@@ -153,13 +156,14 @@ public class ContentFieldSortTest
     {
         var nodes = new[]
         {
-            Node("typed-0900Z", new Dictionary<string, object?> { ["at"] = new DateTimeOffset(2026, 10, 13, 9, 0, 0, TimeSpan.Zero) }),
+            Node("typed-0900Z", new Stamp(new DateTimeOffset(2026, 10, 13, 9, 0, 0, TimeSpan.Zero))),
+            Node("typed-0945+02", new Stamp(new DateTimeOffset(2026, 10, 13, 9, 45, 0, TimeSpan.FromHours(2)))),
             Node("json-1000+02", Json("""{"at":"2026-10-13T10:00:00+02:00"}""")),
             Node("json-0830Z", Json("""{"at":"2026-10-13T08:30:00Z"}""")),
         };
 
         new QueryEvaluator().OrderResults(nodes, new OrderByClause("content.at")).Select(n => n.Id)
-            .Should().Equal("json-1000+02", "json-0830Z", "typed-0900Z");
+            .Should().Equal("typed-0945+02", "json-1000+02", "json-0830Z", "typed-0900Z");
     }
 
     /// <summary>
@@ -198,6 +202,22 @@ public class ContentFieldSortTest
         new QueryEvaluator().OrderResults(nodes, new OrderByClause("state")).Select(n => n.Id)
             .Should().Equal(expected);
     }
+
+    /// <summary>A double and an exact integer compare exactly — the decimal is never rounded to a double.</summary>
+    [Fact]
+    public void MixedDoubleAndExactInteger_CompareExactly()
+    {
+        var exact = new QueryEvaluator().GetSortKey(Node("exact", Json("""{"premium":9007199254740993}""")), "content.premium");
+        var asDouble = QuerySortKey.Normalize(9007199254740992d);
+
+        QuerySortKey.Comparer(descending: false).Compare(exact, asDouble).Should().BePositive();
+        QuerySortKey.Comparer(descending: false).Compare(asDouble, exact).Should().BeNegative();
+    }
+
+    /// <summary><c>sync_behavior</c> resolves to the node field, as its column does on Postgres.</summary>
+    [Fact]
+    public void SnakeCaseSyncBehavior_ResolvesTheNodeField()
+        => new QueryEvaluator().GetSortKey(Node("x", null), "sync_behavior").Should().NotBeNull();
 
     /// <summary>A null or absent key is last whichever way the sort runs.</summary>
     [Fact]
