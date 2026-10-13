@@ -202,8 +202,26 @@ public static class InboxRows
     /// <param name="sourceLabel">The source's display name; its id when omitted.</param>
     /// <param name="culture">The viewer's culture, resolved once on the render turn; invariant when omitted.</param>
     public static InboxRow Of(MeshNode node, InboxSection section, string? zone, string? blockedReason,
-        string? band = null, int rank = 0, string? sourceLabel = null, CultureInfo? culture = null,
-        JsonSerializerOptions? options = null)
+        string? band = null, int rank = 0, string? sourceLabel = null, CultureInfo? culture = null)
+        => Of(node, section, zone, blockedReason, band, rank, sourceLabel, culture, options: null);
+
+    /// <summary>
+    /// <see cref="Of(MeshNode, InboxSection, string?, string?, string?, int, string?, CultureInfo?)"/>
+    /// with the hub's serializer options, which a timed row's content conversion needs
+    /// (<see cref="TimeOf"/>). A separate overload — never an added optional parameter, which would
+    /// replace the released signature that compiled modules bind.
+    /// </summary>
+    /// <param name="node">The node the leg returned.</param>
+    /// <param name="section">The leg that returned it.</param>
+    /// <param name="zone">The viewer's time zone.</param>
+    /// <param name="blockedReason">Why the row cannot be selected, or null when it can.</param>
+    /// <param name="band">The band's title as the viewer reads it.</param>
+    /// <param name="rank">The band's rank.</param>
+    /// <param name="sourceLabel">The source's display name.</param>
+    /// <param name="culture">The viewer's culture.</param>
+    /// <param name="options">The hub's serializer options; Web defaults when null.</param>
+    public static InboxRow Of(MeshNode node, InboxSection section, string? zone, string? blockedReason,
+        string? band, int rank, string? sourceLabel, CultureInfo? culture, JsonSerializerOptions? options)
     {
         // ONE read of the row's time: a timed row's content is converted to find it, and that cost is
         // paid per row on every render.
