@@ -410,6 +410,93 @@ public class AppDirectoryPureTest
         a.Should().Be(appId);
     }
 
+    // ── Installed, and not a section of another app ──────────────────────────────────────────
+
+    private static InstallEvidence Evidence(string[] records, string[]? synced = null, string[]? uninstalled = null) =>
+        new(Set(records), Set(synced ?? []), Set(uninstalled ?? []));
+
+    // The directory reads every set case-insensitively (RecordIds / PartitionsOf / UninstalledPackages).
+    private static ImmutableHashSet<string> Set(string[] ids) => ids.ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+
+    [Fact]
+    public void ARoot_CarriesItsHostedIn()
+    {
+        AppDirectory.ReadRoot(Root("Signature", """{"app":true,"hostedIn":"{user}/Settings"}"""), Options)!
+            .HostedIn.Should().Be("{user}/Settings");
+        AppDirectory.ReadRoot(Root("Crm", """{"app":true}"""), Options)!.HostedIn.Should().BeNull();
+    }
+
+    [Theory]
+    // record present → installed, whatever else is said
+    [InlineData(true, false, false, true)]
+    [InlineData(true, true, true, true)]
+    // a git-provisioned package writes no record: its sync source is the evidence…
+    [InlineData(false, true, false, true)]
+    // …until an uninstall request names it (phase 1 removed the record, the data and sync stayed)
+    [InlineData(false, true, true, false)]
+    // uninstalled with its data retained, never git-provisioned: nothing says installed
+    [InlineData(false, false, false, false)]
+    [InlineData(false, false, true, false)]
+    public void Installed_IsTheRecord_OrAGitSyncNoUninstallNames(bool record, bool synced, bool uninstalled, bool expected)
+    {
+        var evidence = Evidence(record ? ["Crm"] : [], synced ? ["Crm"] : [], uninstalled ? ["Crm"] : []);
+        evidence.IsInstalled("Crm").Should().Be(expected);
+        evidence.IsInstalled("crm").Should().Be(expected, "package ids are case-insensitive, like paths");
+    }
+
+    [Fact]
+    public void AnUninstalledApp_IsNoTile_EvenWithItsRootAndAppFlagLeft()
+    {
+        var parties = AppDirectory.ReadRoot(Root("Parties", """{"app":true}"""), Options)!;
+        AppDirectory.IsTile(parties, Evidence(["Crm"])).Should().BeFalse(
+            "phase 1 of an uninstall removes the record and keeps the root — the tile must go with the record");
+        AppDirectory.IsTile(parties, Evidence(["Parties"])).Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("Developer/Home", false)]
+    [InlineData("Games/Home", false)]
+    [InlineData("AI/AiThreads", false)]
+    // a settings tab of the person app may still belong to an app (Signature)
+    [InlineData("{user}/Settings", true)]
+    [InlineData("{USER}/settings", true)]
+    public void AHostedPackage_IsNoTile_UnlessItsHostIsThePersonApp(string host, bool tile)
+    {
+        var root = AppDirectory.ReadRoot(Root("Pack", $$"""{"app":true,"hostedIn":"{{host}}"}"""), Options)!;
+        AppDirectory.IsTile(root, Evidence(["Pack"])).Should().Be(tile);
+    }
+
+    [Fact]
+    public void TheEvidence_IsReadOffTheRecordsSyncSourcesAndUninstallRequests()
+    {
+        AppDirectory.RecordIds([
+            new MeshNode("Crm", AppDirectory.InstallRecordsPartition) { NodeType = "Package" },
+            new MeshNode("_DefaultInstallLedger", "Elsewhere"),
+        ]).OrderBy(x => x, StringComparer.Ordinal).Should().Equal(["Crm"], "only a node IN the records partition is a record");
+
+        AppDirectory.PartitionsOf([
+            MeshNode.FromPath("Reinsurance/_GitSync"),
+            MeshNode.FromPath("Manufacturing/_GitSync/main"),
+        ]).OrderBy(x => x, StringComparer.Ordinal).Should().Equal("Manufacturing", "Reinsurance");
+
+        AppDirectory.UninstalledPackages([
+            new MeshNode("r1", "Admin/_PackageUninstall") { Content = JsonDocument.Parse("""{"package":"Parties"}""").RootElement },
+            new MeshNode("r2", "Admin/_PackageUninstall") { Content = new System.Text.Json.Nodes.JsonObject { ["Package"] = "DeepSign" } },
+            new MeshNode("r3", "Admin/_PackageUninstall") { Content = JsonDocument.Parse("""{"status":"Requested"}""").RootElement },
+        ], Options).OrderBy(x => x, StringComparer.Ordinal).Should().Equal(["DeepSign", "Parties"], "content is read in whatever shape it arrives");
+    }
+
+    [Fact]
+    public void TheEvidenceQueries_AreAnchoredOrDeclared_AndComplete()
+    {
+        var parser = new QueryParser();
+        AppDirectory.InstallRecordsQuery.Should().Contain("path:Plugins scope:children nodeType:Package");
+        AppDirectory.UninstallRequestsQuery.Should().Contain("namespace:Admin/_PackageUninstall");
+        parser.Parse(AppDirectory.SyncSourcesQuery).CrossPartition.Should().BeTrue("sync sources live in every partition");
+        foreach (var query in new[] { AppDirectory.InstallRecordsQuery, AppDirectory.SyncSourcesQuery, AppDirectory.UninstallRequestsQuery })
+            query.Should().Contain(MeshQueryRequest.CompleteQualifier, "an enumeration — a truncated page would drop an installed app");
+    }
+
     [Fact]
     public void TheRootsQuery_IsTheDeclaredPackageRootShape_WithAnExplicitLimit()
     {
@@ -514,24 +601,63 @@ public class AppDirectoryTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         public bool App { get; init; }
         /// <summary>Where the app opens.</summary>
         public string? EntryPoint { get; init; }
+        /// <summary>The host app the package is a section of, when it is one.</summary>
+        public string? HostedIn { get; init; }
     }
 
+    /// <summary>A package-uninstall request's content, as the platform writes it.</summary>
+    public sealed record TestUninstallRequest
+    {
+        /// <summary>The package the request uninstalls.</summary>
+        public string? Package { get; init; }
+    }
+
+    // The install record the platform's installer writes for an installed package.
+    private static MeshNode InstallRecord(string id) => new(id, AppDirectory.InstallRecordsPartition)
+    {
+        NodeType = "Package",
+        Name = id,
+        State = MeshNodeState.Active,
+    };
+
     // A package root as a mirror may index it: a Space whose typed content says app.
-    private static MeshNode AppRootNode(string id, bool app) => new(id)
+    private static MeshNode AppRootNode(string id, bool app, string? hostedIn = null) => new(id)
     {
         NodeType = "Space",
         Name = id,
         Category = "Business",
         State = MeshNodeState.Active,
-        Content = new TestPackageContent { App = app, EntryPoint = $"{id}/Home" },
+        Content = new TestPackageContent { App = app, EntryPoint = $"{id}/Home", HostedIn = hostedIn },
     };
 
     /// <inheritdoc />
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder)
-            .ConfigureHub(config => config.WithType<TestPackageContent>(nameof(TestPackageContent)))
+            .ConfigureHub(config => config
+                .WithType<TestPackageContent>(nameof(TestPackageContent))
+                .WithType<TestUninstallRequest>(nameof(TestUninstallRequest)))
             .AddMeshNodes(
             AppRootNode("DirApp", app: true),
+            InstallRecord("DirApp"),
+            InstallRecord("DirNotAnApp"),
+            InstallRecord("DirEntryOnly"),
+            // Uninstalled with its data retained (phase 1): root and app flag left, no record.
+            AppRootNode("DirUninstalled", app: true),
+            AssignmentNodeFactory.UserRole(Granted, "Viewer", "DirUninstalled"),
+            // A section of another app: installed and readable, still no tile.
+            AppRootNode("DirHosted", app: true, hostedIn: "Developer/Home"),
+            InstallRecord("DirHosted"),
+            AssignmentNodeFactory.UserRole(Granted, "Viewer", "DirHosted"),
+            // Provisioned by a git import (no record), then uninstalled: the sync source stays.
+            AppRootNode("DirRetired", app: true),
+            MeshNode.FromPath("DirRetired/_GitSync") with { NodeType = "GitHubSyncConfig", State = MeshNodeState.Active },
+            new MeshNode("20261013-DirRetired", "Admin/_PackageUninstall")
+            {
+                NodeType = "PackageUninstall",
+                State = MeshNodeState.Active,
+                Content = new TestUninstallRequest { Package = "DirRetired" },
+            },
+            AssignmentNodeFactory.UserRole(Granted, "Viewer", "DirRetired"),
             // A person with a display name: their Settings tile carries it.
             new MeshNode(Named) { NodeType = "User", Name = "Max Muster", State = MeshNodeState.Active },
             AppRootNode("DirNotAnApp", app: false),
@@ -565,6 +691,29 @@ public class AppDirectoryTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         var list = await Directory.Compute(viewer).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
         list.Select(e => e.Id).Should().Equal(expected);
         list.Should().NotContain(e => e.Id == "DirNotAnApp", "a package without app:true is no tile, whatever the grant");
+    }
+
+    /// <summary>
+    /// The installed filter on a real mesh: the granted viewer can READ the uninstalled, the hosted
+    /// and the git-provisioned-then-uninstalled packages, and gets no tile for any of them — the
+    /// tile follows the install evidence, not the leftover root.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task UninstalledAndHostedPackages_GetNoTile_ThoughTheViewerCanReadThem()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await Directory.Roots()
+            .Where(roots => new[] { "DirUninstalled", "DirHosted", "DirRetired" }.All(id => roots.Any(r => r.Path == id)))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        var installed = await Directory.Installed()
+            .Where(e => e.Records.Contains("DirHosted") && e.Synced.Contains("DirRetired") && e.Uninstalled.Contains("DirRetired"))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        installed.IsInstalled("DirUninstalled").Should().BeFalse();
+        installed.IsInstalled("DirRetired").Should().BeFalse();
+
+        var list = await Directory.Compute(Granted).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        list.Select(e => e.Id).Should().NotContain(["DirUninstalled", "DirHosted", "DirRetired"]);
+        list.Select(e => e.Id).Should().Contain("DirApp");
     }
 
     [Fact(Timeout = 60000)]
