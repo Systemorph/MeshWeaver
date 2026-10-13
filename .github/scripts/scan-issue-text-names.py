@@ -169,7 +169,26 @@ def committed_files(root: str, pathspecs: list[str], excludes: list[str]) -> lis
     the commit, never the working tree, so what is submitted is what the instance proves — minus the
     paths at or under an ``excludes`` prefix. Symbolic links and submodules are not files of the
     commit and are left out."""
-    listing = _git(root, "ls-tree", "-r", "-z", "--full-tree", "HEAD", "--", *pathspecs).decode("utf-8")
+    return [f for spec in pathspecs for f in _committed_files_one(root, spec, excludes)]
+
+
+def committed_files_each(root: str, pathspecs: list[str], excludes: list[str]) -> tuple[list[tuple[str, bytes]], list[str]]:
+    """(the deduplicated union of every pathspec's files, the pathspecs that select NOTHING after the
+    excludes). Each pathspec is checked on its own: a named tree that moved away must not hide behind
+    another that still holds files — that guard would check one tree and report both."""
+    seen: dict[str, bytes] = {}
+    empty = []
+    for spec in pathspecs:
+        files = _committed_files_one(root, spec, excludes)
+        if not files:
+            empty.append(spec)
+        for path, data in files:
+            seen.setdefault(path, data)
+    return sorted(seen.items()), empty
+
+
+def _committed_files_one(root: str, pathspec: str, excludes: list[str]) -> list[tuple[str, bytes]]:
+    listing = _git(root, "ls-tree", "-r", "-z", "--full-tree", "HEAD", "--", pathspec).decode("utf-8")
     out = []
     for entry in filter(None, listing.split("\0")):
         meta, path = entry.split("\t", 1)
@@ -182,6 +201,10 @@ def committed_files(root: str, pathspecs: list[str], excludes: list[str]) -> lis
     return out
 
 
+# Stands in for a path that itself names a client (a line-0 hit), in every position printed.
+WITHHELD_PATH = "<path withheld: it names a client>"
+
+
 def commit_verdict(answers: list[dict]) -> tuple[int, str, list[str]]:
     """(exit code, one line, ``file:line`` per hit) for the answered chunks of a COMMIT request. Only
     all-``Pass`` is green. A hit is printed as its position alone: never the term (even masked), its
@@ -191,8 +214,13 @@ def commit_verdict(answers: list[dict]) -> tuple[int, str, list[str]]:
         reason = next((a.get("reason") for a in answers if status_of(a) == "NotChecked"), None) or "no reason given"
         return 1, f"NOT CHECKED — the instance refused at least one chunk: {reason}", []
     if any(s == "Fail" for s in statuses):
-        where = sorted({f"{h.get('file')}:{h.get('line')}" for a in answers if status_of(a) == "Fail"
-                        for h in (a.get("hits") or [])})
+        hits = {(str(h.get("file")), str(h.get("line"))) for a in answers if status_of(a) == "Fail"
+                for h in (a.get("hits") or [])}
+        # 🚨 A line-0 hit means the PATH itself names a client: that path is never printed, at any
+        # position, or the check would publish the very name it found.
+        named = sorted({f for f, ln in hits if ln == "0"})
+        alias = {f: f"{WITHHELD_PATH}#{i + 1}" for i, f in enumerate(named)}
+        where = sorted(f"{alias.get(f, f)}:{ln}" for f, ln in hits)
         return 1, f"FAIL — {len(where)} position(s) in publicly-bound files name a client (names are not printed)", where
     if statuses and all(s == "Pass" for s in statuses):
         checked = sum(int(a.get("linesChecked") or 0) for a in answers)
@@ -484,9 +512,9 @@ def run_commit(repo: str, pathspecs: list[str], excludes: list[str], root: str =
         return 1
     try:
         sha = _git(root, "rev-parse", "HEAD").decode("ascii").strip()
-        files = committed_files(root, pathspecs, excludes)
-        if not files:
-            raise NotChecked(f"the pathspecs {pathspecs} select no file at HEAD — a guard whose subject moved checks nothing")
+        files, empty = committed_files_each(root, pathspecs, excludes)
+        if empty:
+            raise NotChecked(f"the pathspec(s) {empty} select no file at HEAD — a guard whose subject moved checks nothing")
         lines: list[dict] = []
         binary = 0
         for path, data in files:
@@ -503,6 +531,10 @@ def run_commit(repo: str, pathspecs: list[str], excludes: list[str], root: str =
     code, line, where = commit_verdict(answers)
     for pos in where:
         path, _, num = pos.rpartition(":")
+        if path.startswith(WITHHELD_PATH):
+            # No file= annotation: GitHub would print the path beside it.
+            print(f"::error::a client name appears in a file whose path itself names a client ({path}, line {num}; 0 = the path itself) — not printed")
+            continue
         print(f"::error file={path},line={max(int(num) if num.isdigit() else 0, 1)}::a client name appears here (line {num}; 0 = the path itself) — not printed")
     print(("::error::" if code else "  ") + f"committed-file name check {line}")
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -673,6 +705,14 @@ def self_test() -> int:
               files.get("docs/a.md") == b"one\n")
         check("NEGATIVE CONTROL: an exclude prefix is a path prefix, not a substring",
               "mesh/Home/c.md" in dict(committed_files(repo_dir, ["mesh"], ["mesh/Ho"])))
+        union, empty = committed_files_each(repo_dir, ["docs", "moved-away"], [])
+        check("🚨 commit files: a pathspec that selects nothing is named even when another still selects files",
+              empty == ["moved-away"] and sorted(dict(union)) == ["docs/a.md", "docs/sub/b.md"])
+        union, empty = committed_files_each(repo_dir, ["docs", "docs/sub"], [])
+        check("NEGATIVE CONTROL: overlapping pathspecs both select files and the union is deduplicated",
+              empty == [] and [p for p, _ in union] == ["docs/a.md", "docs/sub/b.md"])
+        check("commit files: a pathspec emptied by the excludes counts as selecting nothing",
+              committed_files_each(repo_dir, ["mesh/Deployments"], ["mesh/Deployments"])[1] == ["mesh/Deployments"])
 
     sha = "a" * 40
     parts = chunks(file_lines("docs/a.md", "one\n"))
@@ -689,6 +729,15 @@ def self_test() -> int:
     code, line, where = commit_verdict(submit_and_wait(mesh, "o/r", 47, "1", parts, sha=sha))
     check("🚨 commit: a Fail is RED and reports file:line only — no term, no kind",
           code == 1 and where == ["docs/a.md:1"] and "client#" not in line + "".join(where) and "name" not in "".join(where))
+    mode.update(answer="Fail", hits=[{"file": "docs/acme-x.md", "line": 0, "column": 1, "term": "client#1", "kind": "name"},
+                                    {"file": "docs/acme-x.md", "line": 3, "column": 1, "term": "client#1", "kind": "name"},
+                                    {"file": "docs/b.md", "line": 2, "column": 1, "term": "client#1", "kind": "name"}])
+    code, line, where = commit_verdict(submit_and_wait(mesh, "o/r", 50, "1", parts, sha=sha))
+    check("🚨 commit: a path that names a client (line-0 hit) is withheld at EVERY position, content hits included",
+          code == 1 and "acme" not in line + "".join(where)
+          and sorted(where) == sorted([f"{WITHHELD_PATH}#1:0", f"{WITHHELD_PATH}#1:3", "docs/b.md:2"]))
+    check("NEGATIVE CONTROL: a path with only content hits is still printed",
+          "docs/b.md:2" in where)
     mode.update(answer="NotChecked", hits=[])
     check("🚨 commit: NotChecked is RED", commit_verdict(submit_and_wait(mesh, "o/r", 48, "1", parts, sha=sha))[0] == 1)
     mode.update(answer="Filed")
