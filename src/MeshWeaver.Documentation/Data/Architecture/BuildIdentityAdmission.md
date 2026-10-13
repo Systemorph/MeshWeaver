@@ -159,7 +159,7 @@ populated, or on `CompilationStatus == Ok` alone:
 | `NodeTypeContractHandler` — published-release hydrate | `LatestReleasePath` + coordinates |
 | `MeshDataSource.HandleNodeTypeSchemaRequest` | coordinates |
 | `NodeTypeDataModelAreas.ResolveInstanceHubConfig` | coordinates |
-| `MeshOperations.ResolveHubConfigForSchema` | `CompilationStatus == Ok` |
+| `MeshOperations.ResolveHubConfigForSchema` | `CompilationStatus == Ok` (since #6635: a settled record — `Ok`, or `Error` still naming its last good build — plus coordinates; a record at `Error` no longer waits out the 5 s bound) |
 | `CellSurfaceAssemblyProvider` | `CompilationStatus == Ok` — and it takes a lifetime **lease** |
 
 🚨 **What stood between those and a foreign load was an eight-character substring inside one store

@@ -41,6 +41,60 @@ public sealed record SealedSource(
     /// <summary>The running platform build a <see cref="HeldForNewerPlatform"/> publication was
     /// compared against, or null.</summary>
     public string? RunningPlatformVersion { get; init; }
+
+    /// <summary>
+    /// 🚨 THE PUBLICATION SEALS PER PACKAGE (MeshWeaver.Plugins#3507): per bundle the seal lists,
+    /// the build it seals — the commit that bundle was baked from, its version, and whether it was
+    /// CARRIED from an earlier publication because its package waited (an unsettled lock or an
+    /// unstamped floor). <see cref="SourceCommit"/> stays the PUBLICATION's commit (the newest; what
+    /// never-seal-backwards and every ordering reads); a carried package's own commit is older.
+    ///
+    /// <para>Read from <see cref="SealedPublicationIndex.PackagesListingFileName"/>. A publication
+    /// sealed before that listing existed is the old single-commit reading, synthesised: every
+    /// listed bundle at <see cref="SourceCommit"/>, nothing carried, version unknown
+    /// (<see cref="PackagesListed"/> false). Empty when the source is not sealed.</para>
+    /// </summary>
+    public IReadOnlyList<SealedPackage> Packages { get; init; } = [];
+
+    /// <summary>True when <see cref="Packages"/> came from the publication's own per-package
+    /// listing; false when it was synthesised from the old single-commit listing.</summary>
+    public bool PackagesListed { get; init; }
+
+    /// <summary>The build this publication seals for <paramref name="package"/>, or null when it
+    /// seals none.</summary>
+    /// <param name="package">The package (the bundle's file stem).</param>
+    public SealedPackage? PackageOf(string package)
+        => Packages.FirstOrDefault(p => string.Equals(p.Package, package, StringComparison.Ordinal));
+
+    /// <summary>
+    /// The commit the sealed bytes of <paramref name="package"/> were baked from — its own entry's,
+    /// or <see cref="SourceCommit"/> for a publication without a per-package listing (where every
+    /// bundle was baked from that one commit). Null when the package is not sealed here.
+    /// </summary>
+    /// <param name="package">The package (the bundle's file stem).</param>
+    public string? CommitOf(string package)
+        => PackageOf(package) is { } sealedPackage ? sealedPackage.SourceCommit ?? SourceCommit : null;
+
+    /// <summary>The packages carried from an earlier publication — waiting at this one's commit.</summary>
+    public IReadOnlyList<SealedPackage> Carried => [.. Packages.Where(p => p.Carried)];
+}
+
+/// <summary>
+/// One package's sealed build inside a publication (MeshWeaver.Plugins#3507) — one entry of
+/// <see cref="SealedPublicationIndex.PackagesListingFileName"/>.
+/// </summary>
+/// <param name="Package">The package id (the bundle's file stem).</param>
+/// <param name="Bundle">The bundle file the seal lists for it.</param>
+/// <param name="SourceCommit">The producing repository's commit THIS package's bytes were baked
+/// from; null when unknown.</param>
+/// <param name="Version">The package version sealed (its <c>manifest.lock</c> version), or null when
+/// the publication did not record one.</param>
+/// <param name="Carried">True when the build was carried from an earlier publication because the
+/// package waited at the publication's commit.</param>
+public sealed record SealedPackage(string Package, string Bundle, string? SourceCommit, string? Version, bool Carried)
+{
+    /// <summary>The package's declared <c>requires</c> entries, as sealed.</summary>
+    public IReadOnlyList<string> Requires { get; init; } = [];
 }
 
 /// <summary>
@@ -112,6 +166,14 @@ public static class SealedPublicationIndex
 
     /// <summary>The producing repository as <c>owner/name</c>, one line.</summary>
     public const string RepositoryMarkerFileName = "repository.txt";
+
+    /// <summary>
+    /// The per-package listing (MeshWeaver.Plugins#3507, written by <c>seal-packages.py</c>): per
+    /// sealed bundle, the commit it was baked from, its version, its requires and whether it was
+    /// carried. Optional — absent on a publication sealed before it existed, which reads as the old
+    /// single-commit listing (<see cref="SealedSource.Packages"/>).
+    /// </summary>
+    public const string PackagesListingFileName = "sealed-packages.json";
 
     /// <summary>
     /// The directory under the published root holding one marker file per platform release,
@@ -506,13 +568,24 @@ public static class SealedPublicationIndex
             // belong to a newer publication, and treating it as older would let this instance
             // advance onto the forbidden rung. So it makes the reading UNREADABLE — the gate holds.
             var (producer, manifestFault) = ProducerOf(publication, listed, logger, io);
-            return manifestFault is null
-                ? (new SealedSource(source, repository, commit, true, null) { ProducerPlatformVersion = producer },
-                    publication, false)
-                : (new SealedSource(source, repository, commit, false,
+            if (manifestFault is not null)
+                return (new SealedSource(source, repository, commit, false,
                     $"a bundle manifest could not be read ({manifestFault}) — its producing platform build "
                     + "is unknown, so whether it may run on this platform cannot be established"),
                     publication, true);
+            // 🚨 A per-package listing that EXISTS and cannot be read is not an absent one: which
+            // build each package carries is then unknown, and reading the publication as the old
+            // single-commit listing would attribute a carried package's bytes to a commit they were
+            // not baked from. Unreadable, exactly as a faulted marker is.
+            var (packages, listedPerPackage, packagesFault) = PackagesOf(publication, listed, commit, io);
+            return packagesFault is null
+                ? (new SealedSource(source, repository, commit, true, null)
+                {
+                    ProducerPlatformVersion = producer, Packages = packages, PackagesListed = listedPerPackage,
+                }, publication, false)
+                : (new SealedSource(source, repository, commit, false,
+                    $"the per-package listing could not be read ({packagesFault}) — which build each "
+                    + "package of this publication seals is unknown"), publication, true);
         }
         catch (Exception ex)
         {
@@ -554,6 +627,73 @@ public static class SealedPublicationIndex
     }
 
     private static string? ReadMarker(string path) => ReadMarker(path, out _);
+
+    /// <summary>
+    /// The per-package reading of one sealed publication (MeshWeaver.Plugins#3507): the entries of
+    /// <see cref="PackagesListingFileName"/> for every bundle the seal lists, or — when the
+    /// publication carries no such listing — the old single-commit reading synthesised from the
+    /// seal (every listed bundle at <paramref name="commit"/>, nothing carried). A listing that
+    /// exists and cannot be read, or that omits a bundle the seal lists, is a FAULT. Pure over
+    /// <paramref name="io"/>; never throws.
+    /// </summary>
+    /// <param name="publication">The resolved publication directory.</param>
+    /// <param name="listed">The seal's own listing (the sentinel's lines).</param>
+    /// <param name="commit">The publication commit (<see cref="SourceCommitMarkerFileName"/>).</param>
+    /// <param name="io">The file operations to perform.</param>
+    internal static (IReadOnlyList<SealedPackage> Packages, bool Listed, string? Fault) PackagesOf(
+        string publication, IReadOnlyList<string> listed, string? commit, BundleShareIo io)
+    {
+        var bundles = listed.Where(n => n.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)).ToList();
+        string text;
+        try
+        {
+            text = io.ReadAllText(Path.Combine(publication, PackagesListingFileName));
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return ([.. bundles.Select(b => new SealedPackage(Path.GetFileNameWithoutExtension(b), b, commit, null, false))],
+                false, null);
+        }
+        catch (Exception ex)
+        {
+            return ([], false, $"{PackagesListingFileName}: {ex.GetType().Name}: {ex.Message}");
+        }
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(text);
+            if (!doc.RootElement.TryGetProperty("packages", out var entries)
+                || entries.ValueKind != System.Text.Json.JsonValueKind.Array)
+                return ([], false, $"{PackagesListingFileName} carries no 'packages' list");
+            var byBundle = new Dictionary<string, SealedPackage>(StringComparer.Ordinal);
+            foreach (var e in entries.EnumerateArray())
+            {
+                var package = Str(e, "package");
+                if (string.IsNullOrWhiteSpace(package))
+                    return ([], false, $"{PackagesListingFileName} has an entry with no 'package'");
+                var bundle = Str(e, "bundle") ?? $"{package}.zip";
+                var requires = e.TryGetProperty("requires", out var r) && r.ValueKind == System.Text.Json.JsonValueKind.Array
+                    ? r.EnumerateArray().Select(x => x.ToString()).ToList()
+                    : [];
+                var carried = e.TryGetProperty("carried", out var c) && c.ValueKind == System.Text.Json.JsonValueKind.True;
+                byBundle[bundle] = new SealedPackage(package, bundle, Str(e, "sourceCommit") ?? commit, Str(e, "version"), carried)
+                {
+                    Requires = requires,
+                };
+            }
+            var missing = bundles.FirstOrDefault(b => !byBundle.ContainsKey(b));
+            if (missing is not null)
+                return ([], false, $"{PackagesListingFileName} does not name '{missing}', which the seal lists");
+            return ([.. bundles.Select(b => byBundle[b])], true, null);
+        }
+        catch (System.Text.Json.JsonException ex)
+        {
+            return ([], false, $"{PackagesListingFileName}: {ex.Message}");
+        }
+
+        static string? Str(System.Text.Json.JsonElement e, string name)
+            => e.TryGetProperty(name, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.String
+               && v.GetString() is { Length: > 0 } s ? s : null;
+    }
 
     /// <summary>
     /// The newest producing platform build any listed bundle's manifest records
