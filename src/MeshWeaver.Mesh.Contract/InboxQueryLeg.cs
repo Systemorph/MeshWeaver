@@ -103,4 +103,16 @@ public record InboxQueryLeg
     /// name is empty) — a toggle is never blank.
     /// </summary>
     public string? SourceIcon { get; init; }
+
+    /// <summary>
+    /// The CONTENT property (camelCase, a stored UTC instant) the leg's rows are timed by — shown as
+    /// their "when" and used by the page's newest-first order — instead of the node's
+    /// <c>LastModified</c>. Left empty, the rows are timed by <c>LastModified</c>.
+    /// <para>🚨 Name one when a write that is NOT news touches the node: a read-state write (opening a
+    /// conversation clears its unread mark) refreshes <c>LastModified</c>, and timing by it would move
+    /// the item ahead of genuinely newer ones. The leg's query should sort on the same field
+    /// (<c>sort:content.{field}-desc</c>); the page keeps <c>content</c> in such a leg's projection,
+    /// and a row whose field is missing or unreadable falls back to <c>LastModified</c>.</para>
+    /// </summary>
+    public string? TimeField { get; init; }
 }

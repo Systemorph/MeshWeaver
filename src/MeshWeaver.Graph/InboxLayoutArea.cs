@@ -340,7 +340,9 @@ public static class InboxLayoutArea
     internal static IObservable<IEnumerable<MeshNode>> Nodes(IMessageHub hub, InboxSection section, string term, string owner)
         => hub.ServiceProvider.GetRequiredService<IMeshService>()
             .Query<MeshNode>(MeshQueryRequest.FromQuery(
-                term.Length == 0 ? InboxQueries.Bounded(section.Query) : $"{InboxQueries.Bounded(section.Query)} {SearchText(term)}",
+                term.Length == 0
+                    ? InboxQueries.Bounded(section.Query, section.TimeField)
+                    : $"{InboxQueries.Bounded(section.Query, section.TimeField)} {SearchText(term)}",
                 owner) with
             {
                 Limit = InboxQueries.EffectiveLimit(section.Query),
@@ -593,6 +595,7 @@ public static class InboxLayoutArea
                 {
                     SourceLabelKey = leg.SourceLabelKey, BandLabelKey = leg.BandLabelKey,
                     Unread = leg.Unread, ShownByDefault = leg.ShownByDefault, SourceIcon = leg.SourceIcon ?? string.Empty,
+                    TimeField = string.IsNullOrWhiteSpace(leg.TimeField) ? null : leg.TimeField,
                 })
         ];
 

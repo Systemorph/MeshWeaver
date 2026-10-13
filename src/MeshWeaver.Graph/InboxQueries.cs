@@ -58,16 +58,37 @@ public static class InboxQueries
     /// it is; otherwise the page's is appended, and the parser takes the LAST one it reads.
     /// </summary>
     /// <param name="query">A resolved leg query.</param>
-    public static string Bounded(string query)
+    public static string Bounded(string query) => Bounded(query, timeField: null);
+
+    /// <summary>
+    /// <see cref="Bounded(string)"/> for a leg timed by a content property
+    /// (<see cref="InboxQueryLeg.TimeField"/>): its projection keeps <c>content</c>, where the row
+    /// reads its time (<see cref="TimedRowProjection"/>).
+    /// </summary>
+    /// <param name="query">The leg's resolved query.</param>
+    /// <param name="timeField">The leg's time field, or null for <see cref="RowProjection"/>.</param>
+    public static string Bounded(string query, string? timeField)
     {
         var parsed = new QueryParser().Parse(query);
         var limit = EffectiveLimit(query);
+        var (projection, fields) = string.IsNullOrWhiteSpace(timeField)
+            ? (RowProjection, RowFields)
+            : (TimedRowProjection, TimedRowFields);
         var projected = parsed.Select is { } select && select.Order(StringComparer.Ordinal)
-            .SequenceEqual(RowFields.Order(StringComparer.Ordinal), StringComparer.Ordinal);
+            .SequenceEqual(fields.Order(StringComparer.Ordinal), StringComparer.Ordinal);
         return query
                + (parsed.Limit == limit ? string.Empty : $" limit:{limit.ToString(System.Globalization.CultureInfo.InvariantCulture)}")
-               + (projected ? string.Empty : " " + RowProjection);
+               + (projected ? string.Empty : " " + projection);
     }
+
+    /// <summary>
+    /// The projection of a leg timed by a content property: <see cref="RowProjection"/> plus
+    /// <c>content</c>, where the row reads its time.
+    /// </summary>
+    public const string TimedRowProjection = RowProjection + ",content";
+
+    /// <summary>The fields a timed row reads — <see cref="TimedRowProjection"/> as a list.</summary>
+    internal static ImmutableArray<string> TimedRowFields { get; } = [.. TimedRowProjection["select:".Length..].Split(',')];
 
     /// <summary>The fields a row reads — <see cref="RowProjection"/> as a list.</summary>
     internal static ImmutableArray<string> RowFields { get; } = [.. RowProjection["select:".Length..].Split(',')];

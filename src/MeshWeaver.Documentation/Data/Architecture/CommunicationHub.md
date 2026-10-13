@@ -410,6 +410,13 @@ reading content on the page: unread mail is "not `Read`", an unread notification
 `isRead`". An unread row carries `rowClass: inbox-unread` and the grid applies it per row
 (`DataGridControl.WithRowClassProperty`), so it renders bold.
 
+**Reading never reorders.** A row is timed by its node's `LastModified` unless its source names a
+content property instead (`InboxQueryLeg.TimeField`, e.g. a conversation's last reply). Name one
+whenever a write that is not news touches the node: clearing an unread mark refreshes
+`LastModified`, and timing by it would move the item ahead of genuinely newer ones. The leg sorts on
+the same field (`sort:content.{field}-desc`); the page keeps `content` in such a leg's projection
+(`InboxQueries.TimedRowProjection`), and a row whose field is missing falls back to `LastModified`.
+
 The command row's two buttons act on every ticked row; **Backspace or Delete presses Delete**
 (`ButtonControl.WithShortcut`) — never while typing in the search box.
 
