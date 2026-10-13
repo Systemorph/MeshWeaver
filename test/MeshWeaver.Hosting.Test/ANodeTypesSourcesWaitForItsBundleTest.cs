@@ -269,6 +269,18 @@ public class ANodeTypesSourcesWaitForItsBundleTest(ITestOutputHelper output)
         adopted.CurrentSourceFingerprint.Should().Be(adoptedFingerprint,
             "the premise: the type is adopted AND verified against the sources the mesh holds");
 
+        // 🚨 …and DURABLY so. The hold reads each type's definition from the STORE, not from the
+        // live owner (NodeTypeDefinitionReads, #6623), and the stored row trails the owner by one
+        // persistence-sampler window (~200 ms, measured: Compiled for two 100 ms reads after the live
+        // stream showed AdoptedVerified). A row trailing in provenance is the documented abstain
+        // direction — the type is not held — so an import fired inside that window would test the
+        // abstain, not the hold. The premise this test needs is the state the next activation would
+        // load, which is exactly what the import now reads.
+        var durable = await StoredDefinitionWhen(
+            d => d.BuildProvenance is BuildProvenance.AdoptedVerified, cancellationToken);
+        durable.CurrentSourceFingerprint.Should().Be(adoptedFingerprint,
+            "the persisted record is the one the hold decides on, and it must carry the same adoption");
+
         return adoptedFingerprint;
     }
 
@@ -375,6 +387,21 @@ public class ANodeTypesSourcesWaitForItsBundleTest(ITestOutputHelper output)
 
     private async Task<NodeTypeDefinition> Definition(CancellationToken cancellationToken)
         => await Definitions.FirstAsync().Timeout(TestTimeouts.Convergence).Await(cancellationToken);
+
+    /// <summary>The type's definition as the STORE holds it — what <c>BundleKeyedHoldReading</c>
+    /// reads — once it satisfies <paramref name="predicate"/>. The store emits no change, so this
+    /// re-reads it on a short cadence, bounded by <see cref="TestTimeouts.Convergence"/>.</summary>
+    private async Task<NodeTypeDefinition> StoredDefinitionWhen(
+        Func<NodeTypeDefinition, bool> predicate, CancellationToken cancellationToken)
+        => await Observable.Defer(() => Mesh.ReadStoredNode(TypePath))
+            .Concat(Observable.Empty<MeshNode?>().Delay(TimeSpan.FromMilliseconds(50)))
+            .Repeat()
+            .Select(n => n?.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions))
+            .Where(d => d is not null && predicate(d))
+            .Select(d => d!)
+            .FirstAsync()
+            .Timeout(TestTimeouts.Convergence)
+            .Await(cancellationToken);
 
     private async Task<string> FingerprintWhen(
         Func<NodeTypeDefinition, bool> predicate, CancellationToken cancellationToken)
