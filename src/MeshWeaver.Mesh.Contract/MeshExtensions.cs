@@ -3590,12 +3590,62 @@ public static class MeshExtensions
         return ex;
     }
 
+    /// <summary>
+    /// The <see cref="DeleteNodeRequest.ExpectedVersion"/> precondition (#6621), read against the
+    /// node's DURABLE row from inside the subtree-deletion scope. Emits once when the delete may
+    /// proceed (no precondition, or the stored version matches). Otherwise it calls
+    /// <paramref name="onChanged"/> with the stored version, or <paramref name="onAbsent"/> when the
+    /// node is already gone, and completes EMPTY, so the caller's pipeline posts that one verdict
+    /// and stops.
+    /// </summary>
+    private static IObservable<System.Reactive.Unit> ExpectedVersionHolds(
+        IStorageAdapter persistence,
+        System.Text.Json.JsonSerializerOptions options,
+        string path,
+        long? expectedVersion,
+        TimeSpan budget,
+        ILogger logger,
+        Action<long> onChanged,
+        Action onAbsent)
+    {
+        if (expectedVersion is not { } expected)
+            return Observable.Return(System.Reactive.Unit.Default);
+        return persistence.Read(path, options)
+            .DefaultIfEmpty(null!)
+            .Take(1)
+            .TimeoutAtStage(budget, () => DeleteStageTimeout(
+                DeleteStage.CheckExpectedVersion,
+                $"storage did not return the node at '{path}' for its expected-version check within "
+                + $"{budget.TotalSeconds:0}s"))
+            .SelectMany(current =>
+            {
+                if (current is null)
+                {
+                    logger.LogInformation(
+                        "[DeleteNode] already-absent path={Path} — gone before its expected-version check",
+                        path);
+                    onAbsent();
+                    return Observable.Empty<System.Reactive.Unit>();
+                }
+                if (current.Version != expected)
+                {
+                    logger.LogInformation(
+                        "[DeleteNode] version-conflict path={Path} expected={Expected} actual={Actual} — nothing deleted",
+                        path, expected, current.Version);
+                    onChanged(current.Version);
+                    return Observable.Empty<System.Reactive.Unit>();
+                }
+                return Observable.Return(System.Reactive.Unit.Default);
+            });
+    }
+
     /// <summary>Stage names — one per bounded stage of <see cref="HandleDeleteNodeRequest"/>.</summary>
     private static class DeleteStage
     {
         public const string ReadRoot = "read-root";
         public const string CheckPermission = "check-permission";
         public const string ValidateRoot = "validate-root";
+        public const string CheckExpectedVersion = "check-expected-version";
         public const string CollectPaths = "collect-paths";
         public const string PreValidateDescendants = "pre-validate-descendants";
         public const string Commit = "commit";
@@ -4046,10 +4096,34 @@ public static class MeshExtensions
                                 //    planning and commit (issue #839's mid-flight Release
                                 //    satellites). Cross-process writers are covered by the
                                 //    storage-verified drain loop in DeleteSubtreeUntilDrained.
+                                //    🚨 The ExpectedVersion precondition (#6621) is checked HERE,
+                                //    inside the scope and before the plan: from this point no
+                                //    in-process write can move the node, so a version that matches
+                                //    now still matches at the commit. Checked any earlier, a write
+                                //    landing during the permission / validator stages would slip
+                                //    between the check and the delete — the read-then-delete race
+                                //    the precondition exists to close.
                                 return Observable.Using(
                                     () => recentlyDeleted?.BeginSubtreeDeletion(path)
                                           ?? System.Reactive.Disposables.Disposable.Empty,
-                                    subtreeScope => CollectPathsForDelete(hub, path, capturedRequest.Recursive, budget, logger)
+                                    subtreeScope => ExpectedVersionHolds(
+                                        persistence, hub.JsonSerializerOptions, path,
+                                        capturedRequest.ExpectedVersion, budget, logger,
+                                        onChanged: actual =>
+                                        {
+                                            var msg = $"Did not delete '{path}': it changed since it was read "
+                                                + $"(expected version {capturedRequest.ExpectedVersion}, found {actual}). "
+                                                + "Nothing was deleted; re-read the node and decide again.";
+                                            PostFailed(msg, NodeDeletionRejectionReason.Conflict,
+                                                [new LogMessage(msg, LogLevel.Warning)
+                                                    .WithKey("activity.delete.versionConflict",
+                                                        ("path", path),
+                                                        ("expected", capturedRequest.ExpectedVersion!.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                                                        ("actual", actual.ToString(System.Globalization.CultureInfo.InvariantCulture)))],
+                                                ImmutableList.Create(path));
+                                        },
+                                        onAbsent: PostAlreadyAbsent)
+                                    .SelectMany(_ => CollectPathsForDelete(hub, path, capturedRequest.Recursive, budget, logger))
                                     .SelectMany(collected =>
                                     {
                                         if (!capturedRequest.Recursive && collected.HasUnlistedChildren)
@@ -5236,7 +5310,12 @@ public static class MeshExtensions
                                 // CascadeRootPath rides to the leaf's handler so per-leaf validators
                                 // exempt space-teardown invariants (last-admin) exactly like the
                                 // pre-flight ValidateDeleteRequest(p, rootPath) already does.
-                                baseRequest with { Path = path, Recursive = false, CascadeRootPath = rootPath },
+                                // ExpectedVersion is the ROOT's precondition (#6621) — never a leaf's.
+                                baseRequest with
+                                {
+                                    Path = path, Recursive = false, CascadeRootPath = rootPath,
+                                    ExpectedVersion = null,
+                                },
                                 o => callerAccessContext is null
                                     ? o.WithTarget(new Address(path))
                                     : o.WithTarget(new Address(path)).WithAccessContext(callerAccessContext))
