@@ -187,6 +187,19 @@ public static class SealedSyncReconcile
                 $"'{sealedSource.Source}' is sealed at {Short(commit)} and the source is at it; nothing was declined",
                 SteadyState: true);
 
+        // 🚨 THE PUBLICATION SEALS PER PACKAGE (MeshWeaver.Plugins#3507). A package that WAITED at the
+        // sealed commit is carried at its previously sealed build, so its types are declined on their
+        // fingerprint BY DESIGN — the source at this commit is newer than the bytes. Re-importing at
+        // the same commit cannot change that, and every seal arrival would re-import it again; the
+        // types compile from the synced source until the package is sealed fresh.
+        if (CarriedPackageOf(sealedSource, config) is { } carried)
+            return new Plan(Action.None, commit,
+                $"'{sealedSource.Source}' is sealed at {Short(commit)} but carries package '{carried.Package}' at an "
+                + $"older build ({(carried.SourceCommit is { Length: > 0 } c ? Short(c) : "an unknown commit")}) because "
+                + "it waits at that commit — its types compile from the synced source until it is sealed fresh; "
+                + "re-importing would change nothing",
+                SteadyState: true);
+
         return new Plan(Action.ReconcileAtSealedCommit, commit,
             $"'{sealedSource.Source}' is sealed at {Short(commit)} and the source claims that commit, "
             + $"yet {declinedHere.Count} type(s) baked from it were declined on their source fingerprint "
@@ -257,6 +270,17 @@ public static class SealedSyncReconcile
         && Math.Min(a.Length, b.Length) >= 7;
 
     private static string Short(string sha) => sha.Length > 8 ? sha[..8] : sha;
+
+    /// <summary>
+    /// The CARRIED package this sync source's folder belongs to (MeshWeaver.Plugins#3507), or null —
+    /// the package whose sealed build is older than the publication commit. The folder's first
+    /// segment is the package (one top-level folder per package, as every node repo lays them out).
+    /// </summary>
+    internal static SealedPackage? CarriedPackageOf(SealedSource sealedSource, GitHubSyncConfig config)
+    {
+        var folder = config.Subdirectory?.Trim().Trim('/').Split('/', 2)[0];
+        return string.IsNullOrEmpty(folder) ? null : sealedSource.PackageOf(folder) is { Carried: true } p ? p : null;
+    }
 }
 
 /// <summary>

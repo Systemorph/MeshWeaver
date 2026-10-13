@@ -141,9 +141,11 @@ public class CrossIdentityWalkCostIsBoundedTest : IDisposable
             "only the one source the live identity does not seal is read, and only at the newest "
             + "identity that supplies it — every other identity's copy is already answered");
         // Root listing + one listing per identity + the one source read in full:
-        // pointer (1) + seal (1) + a probe per bundle, then the reading: two markers + seal + a probe
-        // and a manifest per bundle.
-        var bound = 1 + Identities + (2 + BundlesPerSource) + (3 + 2 * BundlesPerSource);
+        // pointer (1) + seal (1) + a probe per bundle, then the reading: two markers + seal + the
+        // per-package listing (SealedPublicationIndex.PackagesListingFileName — one read per source
+        // read, absent here so it reads as the single-commit listing) + a probe and a manifest per
+        // bundle.
+        var bound = 1 + Identities + (2 + BundlesPerSource) + (4 + 2 * BundlesPerSource);
         share.Operations.Should().BeLessThanOrEqualTo(bound,
             $"a no-op walk costs O(identities) listings, not O(identities × sources × bundles) reads "
             + $"(priced at {RoundTrip.TotalSeconds:0} s a round-trip: {share.PricedAt(RoundTrip)})");

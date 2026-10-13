@@ -238,6 +238,56 @@ AZ
     bad "unstamped incumbent (rc=$RC): $(printf '%s' "$OUT" | tail -3)"
   fi
 
+  # A PER-PACKAGE SEAL carries a waiting package's MODULE package too (MeshWeaver.Plugins#3507):
+  # from the publication's modules/ directory, into the staged module set, verified the same way.
+  echo "per-package seal — a waiting package's module package (CARRY_SUBDIR=modules):"
+  setup Store.zip
+  mkdir -p "$REMOTE/modules" "$ST/bake/modules"
+  echo "sealed ai module" > "$REMOTE/modules/ai.module.nupkg"
+  printf '%s\t%s\n' "$(digest_of "$REMOTE/modules/ai.module.nupkg")" "Systemorph-MeshWeaver-1-1" > "$REMOTE/modules/ai.module.nupkg.meta"
+  echo "fresh maps module" > "$ST/bake/modules/maps.module.nupkg"
+  printf '%s\n' ai.module.nupkg > "$ST/listing"
+  OUT=$( ( unset GITHUB_STEP_SUMMARY; CARRY_SUBDIR=modules bash "$ME" "$ST/bake/modules" "$ST/listing" acct/share ID1 plugins 2>&1 ) ); RC=$?
+  if [ "$RC" -eq 0 ] && [ "$(cat "$ST/bake/modules/ai.module.nupkg")" = "sealed ai module" ] \
+     && [ "$(cat "$ST/bake/modules/maps.module.nupkg")" = "fresh maps module" ]; then
+    ok "the sealed module package is carried from modules/, beside this run's own"
+  else
+    bad "module carry (rc=$RC): $(printf '%s' "$OUT" | tail -3)"
+  fi
+  rm "$REMOTE/modules/ai.module.nupkg" "$ST/bake/modules/ai.module.nupkg"
+  OUT=$( ( unset GITHUB_STEP_SUMMARY; CARRY_SUBDIR=modules bash "$ME" "$ST/bake/modules" "$ST/listing" acct/share ID1 plugins 2>&1 ) ); RC=$?
+  [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -q "could not carry forward: ai.module.nupkg" \
+    && ok "a listed module package that cannot be fetched is FATAL — never a shrunk module set" \
+    || bad "unfetchable module package should be fatal (rc=$RC)"
+  OUT=$( ( CARRY_SUBDIR=../x bash "$ME" "$ST/bake/modules" "$ST/listing" acct/share ID1 plugins 2>&1 ) ); RC=$?
+  [ "$RC" -ne 0 ] && ok "a CARRY_SUBDIR other than 'modules' is refused" || bad "an arbitrary CARRY_SUBDIR should be fatal"
+
+  # BOUND TO THE READ (EXPECT_PUBLICATION_FILE): the pointer advanced between bake-scope.sh's read
+  # and this carry, so a carry self-consistent over the NEWER publication is still the wrong one.
+  echo "bound to the publication the listing came from (EXPECT_PUBLICATION_FILE):"
+  setup Store.zip Edu.zip
+  rebuilt Edu.zip
+  printf '%s\n' "Systemorph-MeshWeaver-1-1" > "$ST/expected"
+  OUT=$( ( unset GITHUB_STEP_SUMMARY; EXPECT_PUBLICATION_FILE="$ST/expected" bash "$ME" "$ST/bake" "$ST/listing" acct/share ID1 plugins 2>&1 ) ); RC=$?
+  [ "$RC" -eq 0 ] && ok "a carry from the publication the listing was read from is accepted" \
+    || bad "bound carry control (rc=$RC): $(printf '%s' "$OUT" | tail -3)"
+  setup Store.zip Edu.zip
+  rebuilt Edu.zip
+  printf '%s\n' "Systemorph-MeshWeaver-0-1" > "$ST/expected"
+  OUT=$( ( unset GITHUB_STEP_SUMMARY; EXPECT_PUBLICATION_FILE="$ST/expected" bash "$ME" "$ST/bake" "$ST/listing" acct/share ID1 plugins 2>&1 ) ); RC=$?
+  [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -q "not the publication the listing came from" \
+    && ok "a carry self-consistent over a DIFFERENT publication than the one read is refused" \
+    || bad "a moved publication should be fatal (rc=$RC): $(printf '%s' "$OUT" | tail -3)"
+  setup_unstamped Store.zip Edu.zip
+  rebuilt Edu.zip
+  printf '%s\n' "Systemorph-MeshWeaver-1-1" > "$ST/expected"
+  OUT=$( ( unset GITHUB_STEP_SUMMARY; EXPECT_PUBLICATION_FILE="$ST/expected" bash "$ME" "$ST/bake" "$ST/listing" acct/share ID1 plugins 2>&1 ) ); RC=$?
+  [ "$RC" -ne 0 ] && ok "an UNSTAMPED carry under a stamped read is refused (no evidence it is that publication)" \
+    || bad "unstamped under a bound read should be fatal (rc=$RC)"
+  OUT=$( ( unset GITHUB_STEP_SUMMARY; EXPECT_PUBLICATION_FILE="$ST/nope" bash "$ME" "$ST/bake" "$ST/listing" acct/share ID1 plugins 2>&1 ) ); RC=$?
+  [ "$RC" -ne 0 ] && ok "an EXPECT_PUBLICATION_FILE that does not exist is refused (fail closed)" \
+    || bad "a missing expectation file should be fatal"
+
   if [ "$FAILED" -gt 0 ]; then
     echo "::error title=carry-forward self-test failed::$FAILED case(s) — this is the only thing preventing a narrowed bake from shrinking the publication."
     exit 1
@@ -245,15 +295,31 @@ AZ
   echo ""
   # The denominator, computed rather than written down: a case list that silently stopped
   # executing would otherwise keep printing the number someone typed here.
-  if [ "$PASSED" -lt 11 ]; then
-    echo "::error title=carry-forward self-test ran too few cases::$PASSED case(s) executed, at least 11 expected — a harness that quietly tests less renders the same green tick as one that tests the lane."
+  if [ "$PASSED" -lt 19 ]; then
+    echo "::error title=carry-forward self-test ran too few cases::$PASSED case(s) executed, at least 19 expected — a harness that quietly tests less renders the same green tick as one that tests the lane."
     exit 1
   fi
   echo "carry-forward self-test: $PASSED case(s) — hydration, shrink refusals, and the one-publication postcondition — all green."
   exit 0
 fi
 
-USAGE="usage: carry-forward-bundles.sh <bake-dir> <published-listing> <target> <identity> <source>"
+USAGE="usage: [CARRY_SUBDIR=modules] [EXPECT_PUBLICATION_FILE=<file>] carry-forward-bundles.sh <bake-dir> <published-listing> <target> <identity> <source>"
+# EXPECT_PUBLICATION_FILE (optional): the file bake-scope.sh wrote with the `publication` stamp of
+# the `_complete` it took the listing from (`published-publication.txt`; empty when that seal
+# predates the stamp). When it names a publication, EVERY carried file must carry exactly that
+# stamp. Without it, "all carried files name ONE publication" holds per invocation only: the
+# pointer can advance between bake-scope.sh's read and this one, and two invocations (the bundle
+# carry and the module carry of a per-package seal) can each be self-consistent over DIFFERENT
+# publications, while seal-packages.py describes them with the listing bake-scope.sh read.
+# CARRY_SUBDIR (optional, only `modules`): carry from the publication's `modules/` directory into
+# <bake-dir> instead of from its top level — how a per-package seal (seal-packages.py,
+# MeshWeaver.Plugins#3507) carries a waiting package's MODULE package forward beside its bundle,
+# with the same digest + one-publication verification and the same refuse-never-shrink postcondition.
+CARRY_SUBDIR="${CARRY_SUBDIR:-}"
+case "$CARRY_SUBDIR" in
+  ""|modules) ;;
+  *) echo "::error::CARRY_SUBDIR='$CARRY_SUBDIR' — only the publication's own 'modules' directory can be carried from"; exit 1 ;;
+esac
 BAKE_DIR="${1:?$USAGE}"
 LISTING="${2:?$USAGE}"
 TARGET="${3:?$USAGE}"
@@ -262,6 +328,11 @@ SOURCE="${5:?$USAGE}"
 
 [ -d "$BAKE_DIR" ] || { echo "::error::bake dir '$BAKE_DIR' does not exist"; exit 1; }
 [ -s "$LISTING" ] || { echo "::error::published listing '$LISTING' is missing or empty — a narrowed bake cannot know what to carry forward, and publishing without it would shrink the publication."; exit 1; }
+EXPECTED_PUBLICATION=""
+if [ -n "${EXPECT_PUBLICATION_FILE:-}" ]; then
+  [ -f "$EXPECT_PUBLICATION_FILE" ] || { echo "::error::EXPECT_PUBLICATION_FILE '$EXPECT_PUBLICATION_FILE' does not exist — the publication this carry must take from is unknown, so the carry cannot be bound to it."; exit 1; }
+  EXPECTED_PUBLICATION=$(tr -d '[:space:]' < "$EXPECT_PUBLICATION_FILE")
+fi
 
 ACCOUNT="${TARGET%%/*}"
 REST="${TARGET#*/}"
@@ -332,7 +403,7 @@ SRC_PREFIX="${BASE:+$BASE/}prebuilt-bundles/$IDENTITY/$SOURCE"
 # than being handed the directory keeps this script correct when its caller is pinned to a workflow
 # copy that does not know about generations.
 resolve_publication_dir "$ACCOUNT" "$SHARE" "$SRC_PREFIX"
-SRC_DIR="$RESOLVED_DIR"
+SRC_DIR="$RESOLVED_DIR${CARRY_SUBDIR:+/$CARRY_SUBDIR}"
 
 # 🚨 THE CARRY-FORWARD IS AN N+1 READ OF A DIRECTORY THAT CAN BE REPLACED UNDERNEATH IT
 # (MeshWeaver#3461). The listing came from the sealed publication `bake-scope.sh` read; each
@@ -440,6 +511,15 @@ if [ "$pubcount" -gt 1 ]; then
   echo "::error title=Carry-forward failed — the publication was replaced while this read it::$carried bundle(s) were carried forward from $ACCOUNT/$SHARE/$SRC_DIR and they name $pubcount DIFFERENT publications:$publications. The sealed publication was replaced between the listing this run was given and the downloads it made, so the set about to be sealed would hold bundles from two bakes under one sentinel (MeshWeaver#3461) — one seal, one generation, self-consistent to every consumer and wrong. Re-run this workflow once the publisher has settled; nothing has been written."
   exit 1
 fi
+# BOUND TO THE PUBLICATION THE LISTING CAME FROM. A carry self-consistent over a NEWER publication
+# than the one bake-scope.sh read is still the wrong one: the listing, the commit and the
+# per-package entries the seal will carry describe the publication that was read, not this one.
+if [ -n "$EXPECTED_PUBLICATION" ] && [ "$carried" -gt 0 ]; then
+  if [ "$stamped" -ne "$carried" ] || [ "$(printf '%s' "$publications" | tr -d ' ')" != "$EXPECTED_PUBLICATION" ]; then
+    echo "::error title=Carry-forward failed — not the publication the listing came from::the listing was read from publication '$EXPECTED_PUBLICATION', but $carried carried file(s) from $ACCOUNT/$SHARE/$SRC_DIR name:${publications:- (none)} ($stamped of $carried stamped). The publication moved between the read and the carry, so what this run would seal is not what its listing describes. Re-run this workflow once the publisher has settled; nothing has been written."
+    exit 1
+  fi
+fi
 # 🚨 The denominator, printed on EVERY path — including the one that proves nothing. A publication
 # sealed before publish-bake-bundles.sh stamped its files carries no `publication` metadata at all,
 # and this check then has no evidence either way. It says so, loudly and with numbers, rather than
@@ -455,7 +535,14 @@ fi
 # what is published today. A narrowed bake may legitimately ADD bundles (a new module) — it may
 # never publish fewer than the sentinel it is about to replace.
 listed=$(grep -c '[^[:space:]]' "$LISTING" || true)
-present=$(find "$BAKE_DIR" -maxdepth 1 -name '*.zip' | wc -l | tr -d ' ')
+if [ -n "$CARRY_SUBDIR" ]; then
+  # A module carry lands next to this run's own module packages: count the LISTED names present,
+  # not every file of the directory, so the postcondition is about exactly what was asked for.
+  present=0
+  while IFS= read -r name; do [ -n "$name" ] && [ -f "$BAKE_DIR/$name" ] && present=$((present + 1)); done < "$LISTING"
+else
+  present=$(find "$BAKE_DIR" -maxdepth 1 -name '*.zip' | wc -l | tr -d ' ')
+fi
 if [ "$present" -lt "$listed" ]; then
   echo "::error::after carry-forward the bake dir holds $present bundle(s) but the publication lists $listed — refusing to publish a shorter set."
   exit 1

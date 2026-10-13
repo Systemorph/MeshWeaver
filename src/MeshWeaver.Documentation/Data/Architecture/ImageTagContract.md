@@ -38,7 +38,7 @@ same reason. So a release adds one more immutable pointer, applied symmetrically
 tag, and since `28fc2da4b` it writes no `latest` at all.
 
 > 📅 **2026-09-12 — and there is no tag that means "validated", by decision.** `<version>` is the
-> arming write; it precedes `publish-bake`, `plugins-bake` and `verify-images`, so a set is *sealed*
+> arming write; it precedes `publish-bake` and `verify-images` (and preceded `plugins-bake` until #6143), so a set is *sealed*
 > only by those jobs' conclusions and the `_releases/<version>` markers — which every reader
 > (`resolve-platform.py` in the node repos, `check-release-availability.sh` in CD and `release.yml`,
 > `ReleaseAvailabilityService` on an install) re-derives itself. "Passed the full run" is the next

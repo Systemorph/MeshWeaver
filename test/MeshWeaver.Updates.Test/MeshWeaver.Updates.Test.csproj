@@ -18,6 +18,8 @@
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
+    <!-- The MCP write verbs' schema probe binds the build a NodeType's record names (#6635). -->
+    <ProjectReference Include="..\..\src\MeshWeaver.Mesh.Operations\MeshWeaver.Mesh.Operations.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Messaging.Hub\MeshWeaver.Messaging.Hub.csproj" />
     <!-- Scenario 10 (a previous-epoch portal across a declared break) is the module boot decision. -->
     <ProjectReference Include="..\..\src\MeshWeaver.PluginCatalog\MeshWeaver.PluginCatalog.csproj" />

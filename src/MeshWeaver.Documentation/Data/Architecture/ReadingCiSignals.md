@@ -1473,8 +1473,10 @@ upstream 'plugins' answers 404 for the module set of identity s5ec352bb… :
 {"error":"no sealed publication for source 'plugins' under framework identity 's5ec352bb…'"}
 ```
 
-A `plugins` publication has **two producers**: core CD's `Plugins: bake + seal the publication for
-this identity` job, and MeshWeaver.Plugins' own `publish-bake` lane. The same 404 appears whichever
+A `plugins` publication had **two producers** when this was measured: core CD's `Plugins: bake +
+seal the publication for this identity` job, and MeshWeaver.Plugins' own `publish-bake` lane. Since
+#6143 core CD bakes no module, so only the second remains — skip step 2 below for any set cut after
+it. The same 404 appears whichever
 one failed. A red in Plugins' own lane is a Plugins defect, and
 [CI Content Bake](/Doc/Architecture/CiContentBake) treats it as a wait for the upstream. So read the
 producers before deciding where the fault is:
