@@ -313,7 +313,9 @@ public static class InboxRows
     public static ImmutableList<InboxRow> Apply(IEnumerable<InboxRow> rows, InboxFilter filter, CultureInfo? culture = null)
     {
         var text = StringComparer.Create(culture ?? CultureInfo.InvariantCulture, ignoreCase: true);
-        var shown = rows.Where(row => !filter.Sources.TryGetValue(SourceKey(row.SourceId), out var on) || on);
+        var (_, before, after) = SplitDates(filter.Search);
+        var shown = rows.Where(row => !filter.Sources.TryGetValue(SourceKey(row.SourceId), out var on) || on)
+            .Where(row => InRange(row.Stamp, before, after));
         var ordered = filter.Order switch
         {
             InboxOrder.Importance => shown.OrderBy(r => r.Rank).ThenByDescending(r => r.Stamp, StringComparer.Ordinal),
@@ -329,6 +331,44 @@ public static class InboxRows
             _ => shown.OrderByDescending(r => r.Stamp, StringComparer.Ordinal),
         };
         return ordered.ThenBy(r => r.Path, StringComparer.Ordinal).ToImmutableList();
+    }
+
+    /// <summary>
+    /// The date bounds a search carries — <c>before:2026-10-01</c> (strictly before that day) and
+    /// <c>after:2026-10-01</c> (that day or later), dates as <c>yyyy-MM-dd</c> in UTC — and the rest of
+    /// the text, which goes to the sources as before. A bound that is not a date stays in the text,
+    /// so a typo narrows nothing silently. With a bound, a viewer can list everything before a day,
+    /// tick all and put it away in one Delete. Pure.
+    /// </summary>
+    /// <param name="search">What the viewer typed.</param>
+    public static (string Text, DateTimeOffset? Before, DateTimeOffset? After) SplitDates(string? search)
+    {
+        DateTimeOffset? before = null, after = null;
+        var rest = new List<string>();
+        foreach (var token in (search ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (Bound(token, "before:") is { } b) before = b;
+            else if (Bound(token, "after:") is { } a) after = a;
+            else rest.Add(token);
+        }
+        return (string.Join(' ', rest), before, after);
+
+        static DateTimeOffset? Bound(string token, string prefix)
+            => token.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+               && DateTime.TryParseExact(token[prefix.Length..], "yyyy-MM-dd", CultureInfo.InvariantCulture,
+                   DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var day)
+                ? new DateTimeOffset(day, TimeSpan.Zero)
+                : null;
+    }
+
+    /// <summary>Whether a row's stamp lies in [<paramref name="after"/>, <paramref name="before"/>). Pure.</summary>
+    internal static bool InRange(string stamp, DateTimeOffset? before, DateTimeOffset? after)
+    {
+        if (before is null && after is null)
+            return true;
+        if (!DateTimeOffset.TryParse(stamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var at))
+            return false;
+        return (before is not { } b || at < b) && (after is not { } a || at >= a);
     }
 
     /// <summary>

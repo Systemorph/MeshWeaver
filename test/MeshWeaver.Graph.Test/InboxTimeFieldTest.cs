@@ -75,6 +75,30 @@ public class InboxTimeFieldTest(ITestOutputHelper output) : MonolithMeshTestBase
         public IntPtr Handle { get; init; } = new(1);
     }
 
+    /// <summary>
+    /// <c>before:</c> / <c>after:</c> in the search narrow the rows by their time — so everything
+    /// before a day can be listed, ticked and put away in one Delete — and the rest of the text still
+    /// goes to the sources. A bound that is not a date stays text.
+    /// </summary>
+    [Fact]
+    public void ADateBoundInTheSearch_NarrowsTheRowsByTheirTime()
+    {
+        InboxRows.SplitDates("invoice before:2026-10-01 after:2026-09-01").Should()
+            .Be(("invoice", (DateTimeOffset?)new DateTimeOffset(2026, 10, 1, 0, 0, 0, TimeSpan.Zero), (DateTimeOffset?)new DateTimeOffset(2026, 9, 1, 0, 0, 0, TimeSpan.Zero)));
+        InboxRows.SplitDates("before:yesterday").Should().Be(("before:yesterday", (DateTimeOffset?)null, (DateTimeOffset?)null),
+            "a bound that is not a date is searched for as text, never silently dropped");
+
+        MeshNode At(string id, DateTimeOffset when) => new(id, "alice/_X") { Name = id, LastModified = when };
+        var section = new InboxSection(InboxBand.NeedsYou, "Mail", 20, "q");
+        var rows = new[] { At("sept", Earlier.AddDays(-20)), At("oct1", new DateTimeOffset(2026, 10, 1, 0, 0, 0, TimeSpan.Zero)), At("oct2", Later) }
+            .Select(n => InboxRows.Of(n, section, null, null)).ToList();
+        InboxRows.Apply(rows, new InboxFilter { Search = "before:2026-10-01" }).Select(r => r.Title).Should().Equal(["sept"],
+            "strictly before the day");
+        InboxRows.Apply(rows, new InboxFilter { Search = "after:2026-10-01" }).Select(r => r.Title).Should().Equal(["oct2", "oct1"],
+            "the day itself and later, newest first");
+        InboxRows.Apply(rows, new InboxFilter()).Should().HaveCount(3, "negative control: no bound, nothing narrowed");
+    }
+
     /// <summary>A timed leg keeps <c>content</c> in its projection; an untimed one does not.</summary>
     [Fact]
     public void ATimedLeg_KeepsContentInItsProjection()

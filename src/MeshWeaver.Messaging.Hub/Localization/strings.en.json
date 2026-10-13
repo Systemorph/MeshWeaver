@@ -1932,7 +1932,7 @@
   "inbox.source.Conversations": "Conversations",
   "inbox.failed.generic": "could not be changed",
   "inbox.search": "Search",
-  "inbox.search.placeholder": "Search the inbox",
+  "inbox.search.placeholder": "Search — e.g. before:2026-10-01 to list everything older",
   "inbox.order": "Order",
   "inbox.settings": "Inbox settings",
   "inbox.order.Importance": "What needs you first",

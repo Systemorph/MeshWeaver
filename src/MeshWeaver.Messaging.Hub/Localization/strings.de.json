@@ -1932,7 +1932,7 @@
   "inbox.source.Conversations": "Unterhaltungen",
   "inbox.failed.generic": "konnte nicht geändert werden",
   "inbox.search": "Suche",
-  "inbox.search.placeholder": "Posteingang durchsuchen",
+  "inbox.search.placeholder": "Suchen — z. B. before:2026-10-01 für alles Ältere",
   "inbox.order": "Reihenfolge",
   "inbox.settings": "Posteingang-Einstellungen",
   "inbox.order.Importance": "Zuerst, was auf Sie wartet",

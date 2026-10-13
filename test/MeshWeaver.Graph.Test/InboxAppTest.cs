@@ -123,20 +123,24 @@ public class InboxAppTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
     }
 
     /// <summary>
-    /// All three bands render: Running and Recent are DIFFERENT queries (non-terminal vs stamped
-    /// terminal activity), so the per-page dedup no longer swallows Recent.
+    /// Core's own legs feed two bands: what needs you, and what is still going. A run that FINISHED
+    /// WELL is not listed at all (maintainer, 2026-10-13: "a super random list") — its page keeps it.
     /// </summary>
     [Fact]
-    public void ThePage_ShowsThreeDistinctBands()
-        => InboxLayoutArea.Sections(InboxQueries.BuiltIn, "alice").Select(s => s.Band).Distinct()
-            .Should().Equal(InboxBand.NeedsYou, InboxBand.Running, InboxBand.Recent);
+    public void ThePage_ShowsWhatNeedsYou_AndWhatIsStillGoing()
+    {
+        InboxLayoutArea.Sections(InboxQueries.BuiltIn, "alice").Select(s => s.Band).Distinct()
+            .Should().Equal(InboxBand.NeedsYou, InboxBand.Running);
+        InboxQueries.BuiltIn.Where(l => l.Source == "Activities").Should()
+            .OnlyContain(l => !l.ShownByDefault, "background runs are one switch away, never the default");
+    }
 
     /// <summary>
-    /// The two activity bands split a real partition: a running activity (its default status is
-    /// OMITTED from stored content) lands in Running only, a finished one in Recent only.
+    /// The Activities source on a real partition: a running activity (its default status is OMITTED
+    /// from stored content) and a FAILED one are listed; one that succeeded, warned or was cancelled is not.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task RunningAndRecent_SplitTheOwnersActivities()
+    public async Task Activities_ListWhatIsGoingAndWhatFailed_NeverWhatFinishedWell()
     {
         var ct = TestContext.Current.CancellationToken;
         const string owner = "inbox-bands";
@@ -151,7 +155,12 @@ public class InboxAppTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
             State = MeshNodeState.Active,
             Content = new ActivityLog(ActivityCategory.Import) { Id = id, HubPath = owner, Status = status },
         };
-        foreach (var node in new[] { Activity("still-running", ActivityStatus.Running), Activity("finished", ActivityStatus.Succeeded) })
+        foreach (var node in new[]
+                 {
+                     Activity("still-running", ActivityStatus.Running), Activity("failed", ActivityStatus.Failed),
+                     Activity("finished", ActivityStatus.Succeeded), Activity("warned", ActivityStatus.Warning),
+                     Activity("cancelled", ActivityStatus.Cancelled),
+                 })
             await access.RunAsSystem(() => mesh.CreateNode(node)).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
 
         var legs = InboxQueries.Resolve(InboxQueries.BuiltIn, owner);
@@ -164,8 +173,8 @@ public class InboxAppTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
                 .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
         }
 
-        (await Ids(InboxBand.Running)).Should().Equal("still-running");
-        (await Ids(InboxBand.Recent)).Should().Equal("finished");
+        (await Ids(InboxBand.Running)).Order(StringComparer.Ordinal).Should().Equal(["failed", "still-running"],
+            "what is going and what failed — never what finished well");
     }
 
     private static int Rank(string band)

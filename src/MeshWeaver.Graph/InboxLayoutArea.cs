@@ -271,7 +271,9 @@ public static class InboxLayoutArea
             })
             .Select(legs => InboxRows.Merge(legs.Select(leg => leg.Rows)));
 
-        return filter.Select(f => f.Search.Trim())
+        // The date bounds (before:/after:) are applied to the rows by InboxRows.Apply; only the
+        // remaining text goes to the sources.
+        return filter.Select(f => InboxRows.SplitDates(f.Search).Text.Trim())
             .DistinctUntilChanged(StringComparer.Ordinal)
             // The first read and a cleared box answer at once; a term waits for the typing to pause,
             // and Switch drops the read a newer keystroke superseded.

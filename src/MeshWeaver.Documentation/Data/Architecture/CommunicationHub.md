@@ -329,6 +329,11 @@ strings, anchored the same way. The bands differ only in what their legs select:
 | **Running** | activities in flight (`ActivityStatus.Running`) **and threads executing** | `⏳` |
 | **Last 24 hours** | terminal activities inside a window | `✅` / `❌` |
 
+🚨 **As built (maintainer, 2026-10-13: "a super random list"):** core's own Activities source lists
+only what still needs someone — runs still going and runs that FAILED — and is OFF by default. A run
+that finished well (succeeded, warned, cancelled) is not listed at all; its own page keeps it. The
+"Last 24 hours" band above is the design; core feeds no leg into it today.
+
 **Running is its own band because it is neither.** It is not owed by the viewer — pushing it into
 *Needs you* invents an obligation nobody has — and it is not finished, so it cannot carry a tick. It
 is also the band that answers the question people actually open the inbox with when something is
@@ -440,6 +445,14 @@ target (`InboxItemOutcome.StepUp`). When the batch ends, the inbox sends the app
 covering every held decision (`StepUpPaths.StartUrl` with all targets — the endpoint already stamps
 a receipt per target), then back to the inbox. Each type's control plane consumes its own receipt
 and ratifies, and the request leaves the inbox once its type files it away.
+
+**Put away everything before a day.** The order is newest first by default (`InboxOrder.Newest`,
+policy `inbox-newest-first`). The search box also takes date bounds, `before:2026-10-01` (strictly
+before that day) and `after:2026-10-01` (that day or later), in UTC: they narrow the rows by their
+time (`InboxRows.SplitDates`), and only the remaining text goes to the sources. A bound that is not
+a date stays text and is searched for as written. Tick all, then press Delete, to put away
+everything in the range. It reaches the rows the page has read, each source's newest
+`InboxQueries.LegLimit`; the "capped" notice says when a source has more.
 
 The command row's Delete and Undo act on every ticked row; **Backspace or Delete presses Delete**
 (`ButtonControl.WithShortcut`) — never while typing in the search box.

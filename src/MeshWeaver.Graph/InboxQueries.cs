@@ -166,6 +166,13 @@ public static class InboxQueries
         [nameof(ActivityStatus.Succeeded), nameof(ActivityStatus.Warning), nameof(ActivityStatus.Failed), nameof(ActivityStatus.Cancelled)];
 
     /// <summary>
+    /// The terminal activity states that need nobody — every terminal state but <c>Failed</c>. The
+    /// Activities source lists the rest: what is still going, and what failed.
+    /// </summary>
+    internal static readonly ImmutableArray<string> FinishedWellActivityStatuses =
+        [nameof(ActivityStatus.Succeeded), nameof(ActivityStatus.Warning), nameof(ActivityStatus.Cancelled)];
+
+    /// <summary>
     /// The legs core itself brings. Packages add their own; these are not a registry of what may exist.
     ///
     /// <para>Every one is anchored on <see cref="ViewerToken"/>, so each resolves to exactly one
@@ -194,21 +201,13 @@ public static class InboxQueries
             SourceIcon = ActivitiesIcon,
             Band = InboxBand.Running,
             Order = 10,
-            // Not terminal — every stamped terminal state negated (Running itself is omitted).
+            // Background runs are mostly not news (maintainer, 2026-10-13: "a super random list"):
+            // off by default, and only the runs that still need someone — those still going and
+            // those that FAILED. A run that finished well is never listed; its own page keeps it.
+            ShownByDefault = false,
+            // Running itself is the omitted default, so the finished-well states are negated.
             Query = $"namespace:{ViewerToken}/_Activity nodeType:Activity "
-                    + string.Join(" ", TerminalActivityStatuses.Select(s => $"-content.status:{s}"))
-                    + $" sort:LastModified-desc {RowProjection}",
-        },
-        new()
-        {
-            Source = "Activities",
-            SourceLabelKey = "inbox.source.Activities",
-            SourceIcon = ActivitiesIcon,
-            Band = InboxBand.Recent,
-            Order = 20,
-            // Terminal — any stamped terminal state.
-            Query = $"namespace:{ViewerToken}/_Activity nodeType:Activity "
-                    + $"content.status:{string.Join("|", TerminalActivityStatuses)}"
+                    + string.Join(" ", FinishedWellActivityStatuses.Select(s => $"-content.status:{s}"))
                     + $" sort:LastModified-desc {RowProjection}",
         },
     ];
