@@ -737,8 +737,7 @@ public static class PluginBundleEndpoints
                 {
                     logger?.LogWarning(exception,
                         "Module publish for {Plugin}: landing refused '{Module}'", plugin, accepted.Module);
-                    return Results.Json(new { error = exception.Message },
-                        statusCode: StatusCodes.Status409Conflict);
+                    return LandingFailure(exception);
                 }
 
                 // 🚨 #3996 — the upload is ACCEPTED but did not become the head. Deliberately a 200
@@ -1846,6 +1845,36 @@ public static class PluginBundleEndpoints
     /// <para>Only a MISSING file or directory is mapped: a permission fault, a torn read or anything
     /// else is a real defect and keeps surfacing as one.</para>
     /// </summary>
+    /// <summary>
+    /// The answer for a publish whose shelf landing FAULTED (#6640). A refusal of the upload itself
+    /// (the app-closure same-identity trap-door, a malformed name) is a 409 — the publisher must change
+    /// what it sends. A STORAGE fault (<see cref="IOException"/>, <see cref="UnauthorizedAccessException"/>
+    /// — e.g. access denied on <c>modules/activation.d/&lt;Name&gt;.json</c>) says nothing about the
+    /// upload: it is this replica failing to write, so it is a 500 that says so, never a 409 that
+    /// reads as a version clash and sends the reader after a conflict that does not exist.
+    /// </summary>
+    internal static IResult LandingFailure(Exception exception)
+    {
+        var storage = StorageFault(exception);
+        return storage is null
+            ? Results.Json(new { error = exception.Message }, statusCode: StatusCodes.Status409Conflict)
+            : Results.Json(new
+            {
+                error = "The registry could not write the module to its own storage — an infrastructure "
+                    + "fault on the replica that answered, not a conflict with this upload: " + storage.Message,
+            }, statusCode: StatusCodes.Status500InternalServerError);
+    }
+
+    /// <summary>The storage fault inside <paramref name="exception"/> (itself, or an inner/aggregated
+    /// one), or <c>null</c> when the landing refused the upload rather than failed to write it.</summary>
+    private static Exception? StorageFault(Exception exception) => exception switch
+    {
+        IOException or UnauthorizedAccessException => exception,
+        AggregateException aggregate => aggregate.InnerExceptions.Select(StorageFault).FirstOrDefault(e => e is not null),
+        { InnerException: { } inner } => StorageFault(inner),
+        _ => null,
+    };
+
     internal static IObservable<IResult> TransientWhenServedBytesMoved(
         this IObservable<IResult> answer, HttpContext http, string plugin, string version,
         ILogger? logger) =>
