@@ -64,7 +64,7 @@ public class CodeQueryResolverTest
             $"path:{SelfPath}/Source/Country nodeType:Code",
             $"namespace:{SelfPath}/Source/Country scope:subtree nodeType:Code");
         result.Should().OnlyContain(q => q.StartsWith("path:") || q.StartsWith("namespace:"),
-            "every expansion of a source entry must anchor, or the partitioned store fans it out");
+            "a bare-path entry must expand to anchored queries, or the partitioned store fans it out");
     }
 
     [Fact]
@@ -73,6 +73,30 @@ public class CodeQueryResolverTest
         // A token with a field qualifier, or several tokens, stays a query: only a lone path is a path.
         CodeQueryResolver.Expand("name:Country", SelfPath).ToList()
             .Should().Equal("name:Country nodeType:Code");
+    }
+
+    /// <summary>
+    /// Negative control for the bare-path rule: an explicitly QUOTED entry is free text the author
+    /// asked for (<c>QueryParser</c> reads it as one TextSearch term), so it must stay a
+    /// query, never be rewritten to <c>path:"…"</c>.
+    /// </summary>
+    [Fact]
+    public void Expand_QuotedTextWithASlash_IsStillAQuery()
+    {
+        CodeQueryResolver.Expand("\"Country/Name\"", SelfPath).ToList()
+            .Should().Equal("\"Country/Name\" nodeType:Code");
+    }
+
+    /// <summary>
+    /// Negative control for the bare-path rule: the query lexer splits on
+    /// <see cref="char.IsWhiteSpace(char)"/>, Unicode whitespace included, so an entry joined by a
+    /// non-breaking space is TWO terms and must stay a query.
+    /// </summary>
+    [Fact]
+    public void Expand_UnicodeWhitespaceSeparatedTerms_AreStillAQuery()
+    {
+        CodeQueryResolver.Expand("Shared/Utils Country", SelfPath).ToList()
+            .Should().Equal("Shared/Utils Country nodeType:Code");
     }
 
     [Fact]

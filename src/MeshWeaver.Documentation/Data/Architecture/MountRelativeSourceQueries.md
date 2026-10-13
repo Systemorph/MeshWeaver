@@ -22,12 +22,15 @@ than where it was authored:
 > resolver therefore emits the **mount-anchored** spelling alongside the authored one, and the node
 > is found from whichever mount it is served.
 
-> **A bare path is a path reference, never free text (MeshWeaver#5508).** An entry with one token, a
-> `/` and no `field:` qualifier (`$self/Source/Country`) is resolved exactly like `@$self/Source/Country`.
-> It used to be passed to the query engine verbatim, as free text with no anchor, so the partitioned
-> store served it as a `UNION` over every partition schema and logged `[FanOut] UNANCHORED … scope:Exact
-> ('<path> nodeType:Code')` on every compile of the type. Every expansion of a source entry is now
-> anchored by `path:` or `namespace:`. Pinned by `CodeQueryResolverTest.Expand_BarePath_IsAPathReference_NeverFreeText`.
+> **A bare path is a path reference, never free text (MeshWeaver#5508).** An entry the query lexer
+> reads as ONE unquoted bare term containing a `/` (`$self/Source/Country`) is resolved exactly like
+> `@$self/Source/Country`. It used to be passed to the query engine verbatim, as free text with no
+> anchor, so the partitioned store served it as a `UNION` over every partition schema and logged
+> `[FanOut] UNANCHORED … scope:Exact ('<path> nodeType:Code')` on every compile of the type. Every
+> expansion of a **bare-path** entry is now anchored by `path:` or `namespace:`; a qualified query
+> entry (`name:Country`), an explicitly quoted one (`"Country/Name"`) and one of several terms keep
+> their query meaning unchanged and are anchored only if the author anchored them. Pinned by
+> `CodeQueryResolverTest.Expand_BarePath_IsAPathReference_NeverFreeText` and its negative controls.
 
 ## The defect this closes
 
