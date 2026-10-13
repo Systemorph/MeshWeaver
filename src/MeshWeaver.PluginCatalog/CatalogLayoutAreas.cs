@@ -1301,7 +1301,10 @@ public static partial class CatalogLayoutAreas
                             newManifest.Files, changedContent, present, parsers,
                             // A NodeType row a closed type set withholds (#6627) is absent by
                             // design — restoring it would fetch a file the install never writes.
-                            record.WithheldFiles is { Count: > 0 } withheldFiles
+                            // Only on a CLOSED host: a set an earlier closed run recorded is owed
+                            // on an open one, and is exactly what this restore must fetch.
+                            hub.ServiceProvider.IsClosedTypeSet()
+                                && record.WithheldFiles is { Count: > 0 } withheldFiles
                                 ? (record.UnreadableFiles
                                         ?? ImmutableSortedSet<string>.Empty.WithComparer(StringComparer.Ordinal))
                                     .Union(withheldFiles)

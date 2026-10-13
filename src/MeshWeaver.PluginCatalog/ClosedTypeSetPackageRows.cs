@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Reactive.Linq;
 using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -30,8 +31,9 @@ namespace MeshWeaver.PluginCatalog;
 ///
 /// <para><b>Only the row is removed.</b> A NodeType's path prefixes its own <c>Source/</c> and, for
 /// a leaf-shaped type, its instances, so a recursive delete would take records with it. The row is
-/// deleted alone, straight from storage, and announced on the mesh change feed exactly as the
-/// installer's bulk writes are announced. A CLAIMED row (<see cref="SyncBehavior"/> other than
+/// deleted alone through the framework delete (<see cref="DeleteNodeRequest.KeepDescendants"/>), so
+/// the delete validators run, the change feed and stream cache hear it, and a live activation at
+/// the path is disposed — never a direct storage write. A CLAIMED row (<see cref="SyncBehavior"/> other than
 /// <see cref="SyncBehavior.Include"/>) is the user's, not the package's — it is named and kept,
 /// the same fence the installer's prune applies.</para>
 /// </summary>
@@ -111,8 +113,7 @@ internal static class ClosedTypeSetPackageRows
             return Observable.Return(new Outcome(known, null, ImmutableList<string>.Empty));
 
         var options = hub.JsonSerializerOptions;
-        var changeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
-        var access = hub.ServiceProvider.GetService<AccessService>();
+        var access = hub.ServiceProvider.GetRequiredService<AccessService>();
         return Observable.Defer(() => persistence.ReadMany(candidates, options))
             .ToList()
             .Select(rows => (IList<MeshNode>?)rows)
@@ -142,11 +143,8 @@ internal static class ClosedTypeSetPackageRows
                 if (toDelete.Length == 0)
                     return Observable.Return(new Outcome(withheld, read, ImmutableList<string>.Empty));
                 return toDelete
-                    .Select(row => access.RunAsSystem(() =>
-                            persistence.DeleteAndPublish(row.Path, changeFeed, MeshNode.NodeTypePath))
-                        .Take(1)
-                        .Select(_ => (string?)row.Path)
-                        .DefaultIfEmpty(row.Path)
+                    .Select(row => DeleteRowOnly(hub, access, row.Path, row.Version)
+                        .Select(removed => removed ? row.Path : null)
                         .Catch<string?, Exception>(ex =>
                         {
                             logger?.LogWarning(ex,
@@ -167,6 +165,38 @@ internal static class ClosedTypeSetPackageRows
                     });
             });
     }
+
+    /// <summary>
+    /// ONE framework delete of the row at <paramref name="path"/> and nothing under it
+    /// (<see cref="DeleteNodeRequest.KeepDescendants"/>), as System. It goes through the node
+    /// lifecycle — delete validators, the <c>Deleted</c> change event, the stream-cache
+    /// invalidation and the disposal of a live activation at the path — never a storage write.
+    /// True = removed, false = already gone; errors on a refusal. Cold.
+    ///
+    /// <para>🚨 <b>Version-guarded.</b> The row is classified (an unclaimed NodeType row) from the
+    /// batch read; <see cref="DeleteNodeRequest.ExpectedVersion"/> carries the version that read
+    /// saw, so a row CLAIMED (or otherwise rewritten) after the read answers <c>Conflict</c> and is
+    /// kept — the decision is never applied to a node it was not made about.</para>
+    /// </summary>
+    /// <param name="hub">The installing hub.</param>
+    /// <param name="access">The access service that supplies the System identity.</param>
+    /// <param name="path">The NodeType row to remove.</param>
+    /// <param name="readVersion">The version the classifying read saw.</param>
+    private static IObservable<bool> DeleteRowOnly(
+        IMessageHub hub, AccessService access, string path, long readVersion) =>
+        access.RunAsSystem(() => Observable.Defer(() => hub.GetMeshHub().NodeOperationIssuingHub()
+            .Observe(new DeleteNodeRequest(path)
+                {
+                    KeepDescendants = true,
+                    ExpectedVersion = readVersion,
+                    DeletedBy = WellKnownUsers.System,
+                },
+                o => o.WithTarget(hub.NodeOperationTarget()))
+            .Take(1)
+            .SelectMany(delivery => delivery.Message.Success
+                ? Observable.Return(!delivery.Message.AlreadyAbsent)
+                : Observable.Throw<bool>(new InvalidOperationException(
+                    $"{delivery.Message.RejectionReason}: {delivery.Message.Error ?? "the delete was refused"}")))));
 
     /// <summary>The node paths <paramref name="files"/> declare (non-node files dropped).</summary>
     /// <param name="files">Package-relative file paths.</param>

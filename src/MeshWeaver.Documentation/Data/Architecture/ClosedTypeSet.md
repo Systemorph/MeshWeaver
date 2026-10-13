@@ -79,14 +79,21 @@ container environment variable, next to the module that registers its types.
    (an instance typed by a withheld type is validated as in-package, as before), `Source/` nodes,
    access satellites, the install record — and the module assemblies installed beside it, which
    are not package rows at all. Only the row is removed, never its subtree: a type's path prefixes
-   its own `Source/` and, for a leaf-shaped type, its instances. The row is deleted straight from
-   storage and announced on the mesh change feed; a **claimed** row (`SyncBehavior` other than
-   `Include`) is the user's, so it is named at Warning and kept. The install record carries the
-   withheld files as `PackageManifest.WithheldFiles`, which the completeness sweep and the update
-   lane's restore widening subtract — otherwise every withheld row would read as an absent node and
-   be handed to the heal, which would reinstall the package to restore a row it never writes.
-   The boot repair pass runs the same removal over every install record before the sweep, so a
-   host whose packages never update converges too.
+   its own `Source/` and, for a leaf-shaped type, its instances. The row goes through the
+   **framework delete** — a `DeleteNodeRequest` with `KeepDescendants`, which removes the node at
+   the path alone: the delete validators run, the change feed and the stream cache hear it, and a
+   live activation at the path is disposed, so nothing keeps serving the removed row. Never a
+   direct storage write. The request carries the version the classifying read saw
+   (`ExpectedVersion`), so a row claimed after that read answers `Conflict` and is kept. A
+   **claimed** row (`SyncBehavior` other than `Include`) is the user's, so it is named at Warning
+   and kept. The install record carries the withheld files as `PackageManifest.WithheldFiles`
+   (every lane, content packages included), which the completeness sweep and — on a closed host —
+   the update lane's restore widening subtract; otherwise every withheld row would read as an
+   absent node and be handed to the heal, which would reinstall the package to restore a row it
+   never writes. The boot repair pass runs the same removal over every install record before the
+   sweep, so a host whose packages never update converges too. On an **open** host the same pass
+   CLEARS a withheld set an earlier closed run recorded: there the rows are owed again, and a
+   stale set would keep the sweep from ever restoring them.
 
    Why: a row on a closed mesh can only ever settle at the refusal below and read as `Error` in
    the pre-prod sweep (`nodeType:NodeType content.compilationStatus:Error partitions:all`). On the

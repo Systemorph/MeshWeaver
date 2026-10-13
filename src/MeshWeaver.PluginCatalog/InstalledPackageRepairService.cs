@@ -691,17 +691,33 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
     /// (<see cref="ClosedTypeSetPackageRows.Reconcile"/>), and the record's
     /// <see cref="PackageManifest.WithheldFiles"/> is stamped through the record's own stream when
     /// it changed. The install lanes do the same on every install and update; this pass is what
-    /// reaches a host whose packages never move. On an open mesh it reads and writes nothing.
+    /// reaches a host whose packages never move.
+    ///
+    /// <para>On an OPEN mesh nothing is withheld, so a record that still carries a withheld set —
+    /// written while this deployment ran a closed type set — is CLEARED here, before the sweep.
+    /// Left in place it would keep subtracting those NodeType files from what the package owes, and
+    /// a host whose package never updates could never restore the definitions it now serves. The
+    /// sweep reads the cleared answer even if the stamp fails: on an open mesh the rows ARE
+    /// owed.</para>
     /// </summary>
     /// <returns>The records as the completeness sweep must read them — with the stamped answer.</returns>
     private IObservable<IReadOnlyList<InstalledRecord>> WithholdNodeTypeRows(
         IReadOnlyList<InstalledRecord> records, ILogger? logger)
     {
-        if (records.Count == 0 || !hub.ServiceProvider.IsClosedTypeSet())
+        if (records.Count == 0)
             return Observable.Return(records);
+        if (!hub.ServiceProvider.IsClosedTypeSet())
+            return records
+                .Select(record => record.Manifest.WithheldFiles is null
+                    ? Observable.Return(record)
+                    : StampWithheld(record, null, logger)
+                        .Select(_ => record with { Manifest = record.Manifest with { WithheldFiles = null } }))
+                .ToObservable()
+                .Concat()
+                .ToList()
+                .Select(updated => (IReadOnlyList<InstalledRecord>)updated.ToArray());
         var parsers = new FileFormatParserRegistry(
             hub.JsonSerializerOptions, hub.ServiceProvider.GetServices<IFileFormatParser>());
-        var access = hub.ServiceProvider.GetService<AccessService>();
         return records
             .Select(record =>
             {
@@ -718,31 +734,46 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
                             true, previous, examined, withheldNow, files);
                         if ((previous ?? []).SetEquals(next ?? []) && (previous is null) == (next is null))
                             return Observable.Return(record);
-                        var recordPath = $"{PackageInstaller.InstalledPartition}/{record.PackageId}";
-                        return access.RunAsSystem(() => hub.GetWorkspace().GetMeshNodeStream(recordPath)
-                                .Update(current => current with
-                                {
-                                    Content = current.ContentAs<PackageManifest>(hub.JsonSerializerOptions)
-                                        is { } manifest
-                                        ? manifest with { WithheldFiles = next }
-                                        : current.Content,
-                                }))
-                            .Take(1)
-                            .Select(_ => record with { Manifest = record.Manifest with { WithheldFiles = next } })
-                            .Catch<InstalledRecord, Exception>(ex =>
-                            {
-                                logger?.LogWarning(ex,
-                                    "[PackageRepair] {Id}: recording the NodeType rows this closed type "
-                                    + "set withholds FAILED — the completeness sweep may count them as "
-                                    + "absent until the next boot", record.PackageId);
-                                return Observable.Return(record);
-                            });
+                        return StampWithheld(record, next, logger)
+                            .Select(stamped => stamped
+                                ? record with { Manifest = record.Manifest with { WithheldFiles = next } }
+                                : record);
                     });
             })
             .ToObservable()
             .Concat()
             .ToList()
             .Select(updated => (IReadOnlyList<InstalledRecord>)updated.ToArray());
+    }
+
+    /// <summary>
+    /// Writes <paramref name="next"/> as the install record's
+    /// <see cref="PackageManifest.WithheldFiles"/> through the record's own stream, as System.
+    /// Emits true once written, false when the write failed (named at Warning).
+    /// </summary>
+    private IObservable<bool> StampWithheld(
+        InstalledRecord record, ImmutableSortedSet<string>? next, ILogger? logger)
+    {
+        var access = hub.ServiceProvider.GetRequiredService<AccessService>();
+        var recordPath = $"{PackageInstaller.InstalledPartition}/{record.PackageId}";
+        return access.RunAsSystem(() => hub.GetWorkspace().GetMeshNodeStream(recordPath)
+                .Update(current => current with
+                {
+                    Content = current.ContentAs<PackageManifest>(hub.JsonSerializerOptions)
+                        is { } manifest
+                        ? manifest with { WithheldFiles = next }
+                        : current.Content,
+                }))
+            .Take(1)
+            .Select(_ => true)
+            .Catch<bool, Exception>(ex =>
+            {
+                logger?.LogWarning(ex,
+                    "[PackageRepair] {Id}: {What} the install record's withheld NodeType rows FAILED — "
+                    + "the stored record keeps its previous answer until the next boot",
+                    record.PackageId, next is null ? "clearing" : "recording");
+                return Observable.Return(false);
+            });
     }
 
     /// <summary>

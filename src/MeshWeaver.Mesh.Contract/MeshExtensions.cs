@@ -4108,8 +4108,15 @@ public static class MeshExtensions
                                 //    landing during the permission / validator stages would slip
                                 //    between the check and the delete — the read-then-delete race
                                 //    the precondition exists to close.
+                                //    A row-only delete (KeepDescendants) removes nothing under
+                                //    `path`, so it guards the ROW alone (BeginRowDeletion): a
+                                //    subtree scope would refuse writers the operation never
+                                //    touches, and the row guard still keeps the precondition
+                                //    below sound for the one node it deletes.
                                 return Observable.Using(
-                                    () => recentlyDeleted?.BeginSubtreeDeletion(path)
+                                    () => (capturedRequest.KeepDescendants
+                                              ? recentlyDeleted?.BeginRowDeletion(path)
+                                              : recentlyDeleted?.BeginSubtreeDeletion(path))
                                           ?? System.Reactive.Disposables.Disposable.Empty,
                                     subtreeScope => ExpectedVersionHolds(
                                         persistence, hub.JsonSerializerOptions, path,
@@ -4131,7 +4138,21 @@ public static class MeshExtensions
                                     .SelectMany(_ => CollectPathsForDelete(hub, path, capturedRequest.Recursive, budget, logger))
                                     .SelectMany(collected =>
                                     {
-                                        if (!capturedRequest.Recursive && collected.HasUnlistedChildren)
+                                        if (capturedRequest.Recursive && capturedRequest.KeepDescendants)
+                                        {
+                                            const string why = "a delete cannot both remove the subtree "
+                                                + "(Recursive) and keep it (KeepDescendants)";
+                                            var msg = $"Cannot delete '{path}': {why}";
+                                            logger.LogWarning("[DeleteNode] contradictory-request path={Path}", path);
+                                            PostFailed(msg, NodeDeletionRejectionReason.ValidationFailed,
+                                                [new LogMessage(msg, LogLevel.Error)
+                                                    .WithKey("activity.delete.validatorRejected",
+                                                        ("path", path), ("error", why))]);
+                                            return Observable.Empty<System.Reactive.Unit>();
+                                        }
+
+                                        if (!capturedRequest.Recursive && !capturedRequest.KeepDescendants
+                                            && collected.HasUnlistedChildren)
                                         {
                                             logger.LogDebug("[DeleteNode] has-children path={Path}", path);
                                             var msg = $"Node at '{path}' has children. Use recursive delete to remove it.";
@@ -5057,10 +5078,14 @@ public static class MeshExtensions
                         .Select(rootSurvives => (survivors, rootSurvives)))
                     .SelectMany(verified =>
                     {
-                        var survivorSet = verified.survivors
-                            .Where(p => !string.IsNullOrEmpty(p))
-                            .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase)
-                            .Remove(rootPath);
+                        // A row-only delete (KeepDescendants) owes the root and nothing else: what
+                        // lives under it is kept by request, so it is never a survivor to drain.
+                        var survivorSet = baseRequest.KeepDescendants
+                            ? ImmutableHashSet<string>.Empty.WithComparer(StringComparer.OrdinalIgnoreCase)
+                            : verified.survivors
+                                .Where(p => !string.IsNullOrEmpty(p))
+                                .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase)
+                                .Remove(rootPath);
                         if (survivorSet.IsEmpty && !verified.rootSurvives)
                             return Observable.Return((IReadOnlyList<string>)acc);
 

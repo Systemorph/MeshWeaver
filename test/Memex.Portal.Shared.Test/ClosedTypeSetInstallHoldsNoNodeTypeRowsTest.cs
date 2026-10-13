@@ -103,9 +103,8 @@ public class ClosedTypeSetInstallHoldsNoNodeTypeRowsTest(ITestOutputHelper outpu
                 Name = "Widget",
                 State = MeshNodeState.Active,
             }, Mesh.JsonSerializerOptions)
-            .Take(1)
-            .Timeout(30.Seconds())
-            .Await(ct);
+            .Should().Within(TestTimeouts.WriteConvergence)
+            .Emit("the left-behind row must be stored before the install can be asked to remove it", ct);
 
     internal static Task<InstallResult> Install(MeshWeaver.Messaging.IMessageHub mesh, ILogger logger, System.Threading.CancellationToken ct) =>
         PackageInstaller.Install(mesh, Candidate(), Files(), "HEAD", logger)
@@ -119,8 +118,8 @@ public class ClosedTypeSetInstallHoldsNoNodeTypeRowsTest(ITestOutputHelper outpu
             .Take(1)
             .DefaultIfEmpty(null)
             .Select(n => n is not null)
-            .Timeout(30.Seconds())
-            .Await(ct);
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit($"storage must answer whether '{path}' is stored", ct);
 
     internal static async Task<PackageManifest?> Record(MeshWeaver.Messaging.IMessageHub mesh, System.Threading.CancellationToken ct)
     {
@@ -128,8 +127,8 @@ public class ClosedTypeSetInstallHoldsNoNodeTypeRowsTest(ITestOutputHelper outpu
             .Read($"{PackageInstaller.InstalledPartition}/{Package}", mesh.JsonSerializerOptions)
             .Take(1)
             .DefaultIfEmpty(null)
-            .Timeout(30.Seconds())
-            .Await(ct);
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("storage must answer for the install record", ct);
         return node?.ContentAs<PackageManifest>(mesh.JsonSerializerOptions);
     }
 
@@ -163,6 +162,114 @@ public class ClosedTypeSetInstallHoldsNoNodeTypeRowsTest(ITestOutputHelper outpu
             Mesh.JsonSerializerOptions, Mesh.ServiceProvider.GetServices<IFileFormatParser>());
         InstallCompleteness.DeclaredNodePaths(record, parsers).Should().NotContain(TypePath)
             .And.Contain(InstancePath);
+    }
+
+    /// <summary>
+    /// The incremental lane: a delta that touches NO type file still removes a row an earlier
+    /// install left, because the reconcile reads every node the NEW manifest declares — not only
+    /// the changed ones. Narrowing the candidates back to the delta reddens this test.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task ADeltaTouchingNoTypeFile_StillRemovesTheRowLeftBehind()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await Install(Mesh, Logger(), ct);
+        // A row written before this host withheld them; the update below changes only the guide.
+        await SeedLeftRow(ct);
+        (await Stored(Mesh, TypePath, ct)).Should().BeTrue("the left-behind row is the subject");
+        // A record UNDER the type's path — what a leaf-shaped type's instance looks like. The row
+        // is removed alone (DeleteNodeRequest.KeepDescendants); this must survive it.
+        await Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>()
+            .Write(new MeshNode("Note", TypePath)
+            {
+                NodeType = "Markdown",
+                Name = "Note",
+                State = MeshNodeState.Active,
+            }, Mesh.JsonSerializerOptions)
+            .Should().Within(TestTimeouts.WriteConvergence)
+            .Emit("the record under the type's path must be stored before the update", ct);
+
+        var newManifest = new ModuleManifest
+        {
+            Module = Package,
+            ModuleVersion = "fedcba9876543210",
+            Version = "1.0.1",
+            Files = ImmutableSortedDictionary.CreateRange(StringComparer.Ordinal,
+            [
+                new KeyValuePair<string, string>($"{Package}/index.json", "aaa"),
+                new KeyValuePair<string, string>(TypeFile, "bbb"),
+                new KeyValuePair<string, string>($"{Package}/Item.json", "ccc"),
+                new KeyValuePair<string, string>($"{Package}/Guide.md", "eee"),
+            ]),
+        };
+        await PackageInstaller.InstallNodeRepoDelta(
+                Mesh, Candidate(), newManifest,
+                [new PackageFile($"{Package}/Guide.md", "# Guide, revised")],
+                Array.Empty<string>(), "HEAD", Logger())
+            .Should().Within(180.Seconds())
+            .Emit("the incremental update must complete before its effect can be read", ct);
+
+        (await Stored(Mesh, TypePath, ct)).Should().BeFalse(
+            "a delta that changed no type file must still remove the NodeType row a closed type set "
+            + "does not hold — the candidates are every node the new manifest declares");
+        (await Stored(Mesh, $"{TypePath}/Note", ct)).Should().BeTrue(
+            "only the row is removed — a record under the type's path is never taken with it");
+        (await Stored(Mesh, InstancePath, ct)).Should().BeTrue(
+            "the instance typed by the withheld type stays");
+        var record = await Record(Mesh, ct);
+        record!.WithheldFiles.Should().Equal([TypeFile],
+            "the incremental record still names the withheld row for the completeness sweep");
+    }
+
+    /// <summary>
+    /// The CONTENT-package lane records what it withheld, exactly as the node-repo lanes do —
+    /// without it the record's <c>WithheldFiles</c> stays null, the completeness sweep reads the
+    /// withheld row as ABSENT, and the package is handed to the heal on every pass.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task AContentPackage_RecordsTheRowItWithheld()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string pkg = "ClosedContent";
+        var candidate = new PackageManifest
+        {
+            Id = pkg,
+            Name = pkg,
+            Kind = PackageKind.Content,
+            TargetPartition = pkg,
+            SourceFolder = pkg,
+            Version = "1.0.0",
+            InstalledFiles = ImmutableSortedDictionary.CreateRange(StringComparer.Ordinal,
+            [
+                new KeyValuePair<string, string>($"{pkg}/Widget.json", "bbb"),
+                new KeyValuePair<string, string>($"{pkg}/Guide.md", "ddd"),
+            ]),
+        };
+        PackageFile[] files =
+        [
+            new($"{pkg}/Widget.json", $$"""
+                { "id": "Widget", "nodeType": "NodeType", "name": "Widget", "state": "Active", "content": { "configuration": "config => config" } }
+                """),
+            new($"{pkg}/Guide.md", "# Guide"),
+        ];
+
+        await PackageInstaller.Install(Mesh, candidate, files, "HEAD", Logger())
+            .Should().Within(180.Seconds())
+            .Emit("the content install must complete before its record can be read", ct);
+
+        (await Stored(Mesh, $"{pkg}/Widget", ct)).Should().BeFalse(
+            "a closed type set holds no NodeType row, in a content package either");
+        (await Stored(Mesh, $"{pkg}/Guide", ct)).Should().BeTrue("ordinary content still installs");
+        var node = await Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>()
+            .Read($"{PackageInstaller.InstalledPartition}/{pkg}", Mesh.JsonSerializerOptions)
+            .Take(1)
+            .DefaultIfEmpty(null)
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("storage must answer for the content package's install record", ct);
+        var record = node?.ContentAs<PackageManifest>(Mesh.JsonSerializerOptions);
+        record.Should().NotBeNull("the install record still installs");
+        record!.WithheldFiles.Should().Equal([$"{pkg}/Widget.json"],
+            "the content lane must record the withheld row, or the sweep counts it as owed");
     }
 
     [Fact(Timeout = 300_000)]
@@ -204,5 +311,47 @@ public class OpenTypeSetInstallControlTest(ITestOutputHelper output) : MonolithM
         var record = await ClosedTypeSetInstallHoldsNoNodeTypeRowsTest.Record(Mesh, ct);
         record.Should().NotBeNull();
         record!.WithheldFiles.Should().BeNull("nothing is withheld on an open mesh");
+    }
+
+    /// <summary>
+    /// A deployment that ran a CLOSED type set and is now OPEN: the record still carries the
+    /// withheld set from the closed run. The boot repair pass clears it — left in place it would keep
+    /// subtracting the NodeType files from what the package owes, and a host whose package never
+    /// updates could never restore the definitions it now serves.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task OnAnOpenMesh_TheBootRepairPass_ClearsAWithheldSetAClosedRunLeft()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await ClosedTypeSetInstallHoldsNoNodeTypeRowsTest.Install(
+            Mesh, Mesh.ServiceProvider.GetRequiredService<ILoggerFactory>()
+                .CreateLogger<OpenTypeSetInstallControlTest>(), ct);
+
+        // The record as a closed run left it.
+        var storage = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
+        var recordPath =
+            $"{PackageInstaller.InstalledPartition}/{ClosedTypeSetInstallHoldsNoNodeTypeRowsTest.Package}";
+        var stored = await storage.Read(recordPath, Mesh.JsonSerializerOptions)
+            .Take(1)
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("the install record must be readable before it can be aged", ct);
+        var aged = stored!.ContentAs<PackageManifest>(Mesh.JsonSerializerOptions)! with
+        {
+            WithheldFiles = ImmutableSortedSet.Create(StringComparer.Ordinal,
+                ClosedTypeSetInstallHoldsNoNodeTypeRowsTest.TypeFile),
+        };
+        await storage.Write(stored! with { Content = aged }, Mesh.JsonSerializerOptions)
+            .Should().Within(TestTimeouts.WriteConvergence)
+            .Emit("the aged record must be stored before the repair pass reads it", ct);
+        (await ClosedTypeSetInstallHoldsNoNodeTypeRowsTest.Record(Mesh, ct))!.WithheldFiles
+            .Should().NotBeNull("the aged withheld set is the subject — if it did not land, its "
+                + "absence afterwards would prove nothing");
+
+        await new InstalledPackageRepairService(Mesh).RunRepair()
+            .Should().Within(180.Seconds())
+            .Emit("the boot repair pass must complete", ct);
+
+        (await ClosedTypeSetInstallHoldsNoNodeTypeRowsTest.Record(Mesh, ct))!.WithheldFiles
+            .Should().BeNull("an open host withholds nothing, so a set a closed run recorded is cleared");
     }
 }

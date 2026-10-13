@@ -336,10 +336,17 @@ public static class PackageInstaller
                     // consumers; with nothing released locally, `alreadyReleased` is empty.
                     .SelectMany(_ => ReleaseDependentsOutsidePackage(
                         hub, written, Array.Empty<string>(), manifest.Id, logger))
+                    // The record carries what the reconcile learned (#6627), exactly as the
+                    // node-repo lanes do: without it a withheld row reads as ABSENT to the
+                    // completeness sweep and the package is handed to the heal on every pass.
                     .SelectMany(_ => ClosedTypeSetPackageRows.Reconcile(
-                        hub, manifest.Id, Array.Empty<string>(), contentSplit.WithheldPaths, logger))
-                    .SelectMany(_ => WriteInstalledRecord(
-                        hub, manifest, installedFromRef, nodes.Length, authorizingUserId: authorizingUserId))
+                        hub, manifest.Id,
+                        ClosedTypeSetPackageRows.NodePathsOf(manifest.InstalledFiles?.Keys, parsers),
+                        contentSplit.WithheldPaths, logger))
+                    .SelectMany(outcome => WriteInstalledRecord(
+                        hub, manifest, installedFromRef, nodes.Length, authorizingUserId: authorizingUserId,
+                        withheld: ClosedTypeSetPackageRows.RecordInputs(
+                            outcome, manifest.InstalledFiles?.Keys, parsers)))
                     .SelectMany(_ => WarmInstalledRoots(hub, manifest, nodes, logger))
                     // …then the package's committed binaries, into the warmed root's content
                     // collection — the half of "publish" that merging used to leave undone (#848).
