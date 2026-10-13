@@ -205,15 +205,20 @@ config.WithInitialization(hub => RegisterWhatAProbeReads(hub)); // probes run th
 - `hub.IsTransientNodeProbe()` is the one predicate it consults; reach for the seam, not the predicate.
 
 `ResidentInitializationSkipsProbesTest` pins all three: it runs on a resident hub, runs once when
-registered twice, and never runs on the registration probe — whose plain `WithInitialization`
+registered twice, and never runs on a probe — classified by the marker alone (an ordinary address),
+by the address alone (no marker), and on the real registration probe — whose plain `WithInitialization`
 registered beside it *does* run, the negative control that proves the probe built the configuration.
 
 ## Rules
 
 - **Mint every probe address from `TransientProbeAddresses`.** Never a string literal.
-- **Anything a hub arms for its lifetime is registered with `WithResidentInitialization`**, never a
-  plain `WithInitialization` with a hand-written probe check. Plain `WithInitialization` is for what a
-  probe needs to read (type registrations, data-context configuration).
+- **A SYNCHRONOUS initializer that arms something for the hub's lifetime is registered with
+  `WithResidentInitialization`**, never a plain `WithInitialization(Action<IMessageHub>)` with a
+  hand-written probe check. Plain synchronous `WithInitialization` is for what a probe needs to read
+  (type registrations, data-context configuration). The rule is about the synchronous overload, which
+  runs inside `Build` — the seam accepts only `Action<IMessageHub>`. Reactive lifecycle work that must
+  run after `Build` (the `WithInitialization(Func<IMessageHub, IObservable<Unit>>)` overload, e.g.
+  `BuildNodeType.StartClaimArbiter`) stays on that overload; never move it onto the build-time path.
 - **A new read seam that can be handed an arbitrary path must consult `IsProbeAddress`** before it
   gates, caches, routes, or opens a breaker on that path.
 - **A watcher of the hub's OWN node is not installed on a probe.** Put the guard at the shared seam

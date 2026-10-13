@@ -86,6 +86,71 @@ public class ResidentInitializationSkipsProbesTest(ITestOutputHelper output) : M
         }
     }
 
+    /// <summary>
+    /// The MARKER branch alone: an ordinary (non-probe) address carrying the
+    /// <see cref="TransientNodeProbe"/> marker. Removing the marker half of
+    /// <c>IsTransientNodeProbe</c> reddens this test and no other.
+    /// </summary>
+    [Fact]
+    public void ResidentInitialization_NeverRunsOnAMarkedHubAtAnOrdinaryAddress()
+    {
+        var address = new Address($"resident-init/{Guid.NewGuid():N}");
+        TransientProbeAddresses.IsProbeAddress(address.ToString()).Should().BeFalse(
+            "this case isolates the marker — the address must not classify the hub on its own");
+        Action<IMessageHub> resident = RecordResident;
+        Action<IMessageHub> plain = RecordPlain;
+
+        var result = Mesh.TryGetHostedHub(
+            address,
+            c => c.WithResidentInitialization(resident).WithInitialization(plain)
+                .AsTransientNodeProbe(startDataSources: false),
+            HostedHubCreation.Always);
+
+        try
+        {
+            result.Error.Should().BeNull("the marked hub must build for this test to mean anything");
+            plainRuns.Should().ContainSingle("negative control: the marked hub ran its plain initializers");
+            residentRuns.Should().BeEmpty(
+                "the TransientNodeProbe marker alone classifies the hub as a probe (#6641)");
+        }
+        finally
+        {
+            result.Hub?.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// The ADDRESS branch alone: a hub at an address minted from <see cref="TransientProbeAddresses"/>
+    /// with NO marker. Removing the address half of <c>IsTransientNodeProbe</c> reddens this test and
+    /// no other.
+    /// </summary>
+    [Fact]
+    public void ResidentInitialization_NeverRunsOnAnUnmarkedHubAtAProbeAddress()
+    {
+        var address = new Address($"{TransientProbeAddresses.ModelProbePrefix}{Guid.NewGuid():N}");
+        Action<IMessageHub> resident = RecordResident;
+        Action<IMessageHub> plain = RecordPlain;
+
+        var result = Mesh.TryGetHostedHub(
+            address,
+            c => c.WithResidentInitialization(resident).WithInitialization(plain),
+            HostedHubCreation.Always);
+
+        try
+        {
+            result.Error.Should().BeNull("the probe-address hub must build for this test to mean anything");
+            result.Hub!.Configuration.Get<TransientNodeProbe>().Should().BeNull(
+                "this case isolates the address — the hub must carry no marker");
+            plainRuns.Should().ContainSingle("negative control: the hub ran its plain initializers");
+            residentRuns.Should().BeEmpty(
+                "an address minted by TransientProbeAddresses alone classifies the hub as a probe (#6641)");
+        }
+        finally
+        {
+            result.Hub?.Dispose();
+        }
+    }
+
     [Fact]
     public void ResidentInitialization_NeverRunsOnTheRegistrationProbe()
     {
