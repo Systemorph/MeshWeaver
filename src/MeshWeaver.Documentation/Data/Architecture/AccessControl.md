@@ -1012,11 +1012,15 @@ fire on the path match alone, and so it fired on a create refused for a principa
 readable `AccessAssignment` with roles Viewer + Commenter: neither carries Create, the denial was
 settled and correct, and the note told the caller the opposite and invited a retry that could never
 succeed. `RlsNodeValidator` now passes the refused permission, and the probe reads that ONE grant
-(still only on a denial path). A typed `AccessAssignment` whose granted roles all resolve and none
-carries the permission yields a plain, localized note naming the roles held
-(`access.denial.rolesLackPermission`). The disagreement note stays for every case the evidence still
-supports: the roles DO carry the permission, the node is not a readable `AccessAssignment` (untyped
-content), a role does not resolve, or the refused permission is unknown. `_Policy` caps and
+(still only on a denial path). A typed `AccessAssignment` whose `AccessObject` names exactly that
+principal, whose held roles are all BUILT-IN, and whose held roles do not authorize the write yields
+a plain, localized note naming the roles held (`access.denial.rolesLackPermission`). "Held" and
+"authorize" mirror the fold and the write authorizer: a role granted and denied in the same grant is
+not held, and Sync authorizes Create/Update/Delete while Update or Sync authorizes Comment. The
+disagreement note stays for every case the evidence still supports: the held roles DO authorize the
+write, the grant names another principal, the node is not a readable `AccessAssignment` (untyped
+content), a held role is a custom role (its definition is read from a cached role stream and may lag
+the edit that gave it the permission), or the refused permission is unknown. `_Policy` caps and
 inheritance are not re-derived here — the note says what the grant holds, not the fold's verdict.
 Pinned in `DenialTheStoreDisagreesWithSaysSoTest`.
 

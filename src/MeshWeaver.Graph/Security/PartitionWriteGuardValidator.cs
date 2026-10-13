@@ -567,27 +567,51 @@ public sealed class PartitionWriteGuardValidator : INodeValidator, IOwnerEnforce
                 var assignment = string.Equals(node?.NodeType, AccessAssignmentNodeType.NodeType, StringComparison.Ordinal)
                     ? node!.ContentAs<AccessAssignment>(hub.JsonSerializerOptions)
                     : null;
-                if (assignment is null)
+                // The fold applies a grant only to the principal its AccessObject names; a row at
+                // this principal's path that names someone else says nothing about their roles.
+                if (assignment is null
+                    || !string.Equals(assignment.AccessObject, deniedUserId, StringComparison.Ordinal))
                     return Observable.Return<string?>(DisagreementNote(partition, deniedUserId, expected));
+                // As the fold does: a role that is also DENIED in the same grant is not held.
+                var denied = assignment.Roles
+                    .Where(r => r.Denied && !string.IsNullOrEmpty(r.Role))
+                    .Select(r => r.Role)
+                    .ToImmutableHashSet(StringComparer.Ordinal);
                 var held = assignment.Roles
-                    .Where(r => !r.Denied && !string.IsNullOrEmpty(r.Role))
+                    .Where(r => !r.Denied && !string.IsNullOrEmpty(r.Role) && !denied.Contains(r.Role))
                     .Select(r => r.Role)
                     .Distinct(StringComparer.Ordinal)
                     .ToImmutableList();
-                if (held.Count == 0)
-                    return Observable.Return<string?>(SettledNote(expected, deniedUserId, held, permission, partition, locale));
-                return held
-                    .Select(id => hub.GetRole(id).Take(1).DefaultIfEmpty(null)
-                        .Catch<Role?, Exception>(_ => Observable.Return<Role?>(null)))
-                    .Zip()
-                    .Select(roles =>
-                        roles.Any(r => r is null)
-                        || roles.Aggregate(Permission.None, (acc, r) => acc | r!.Permissions).HasFlag(permission)
-                            ? DisagreementNote(partition, deniedUserId, expected)
-                            : SettledNote(expected, deniedUserId, held, permission, partition, locale));
+                // Settled only on evidence that cannot be stale: the built-in roles' permissions are
+                // fixed. A custom role is read from a cached role stream and may lag the edit that
+                // gave it the permission, so it keeps the disagreement note.
+                if (held.Any(id => !BuiltInRolePermissions.ContainsKey(id)))
+                    return Observable.Return<string?>(DisagreementNote(partition, deniedUserId, expected));
+                var permissions = held.Aggregate(Permission.None, (acc, id) => acc | BuiltInRolePermissions[id]);
+                return Observable.Return<string?>(WouldAuthorize(permissions, permission)
+                    ? DisagreementNote(partition, deniedUserId, expected)
+                    : SettledNote(expected, deniedUserId, held, permission, partition, locale));
             })
             .Catch<string?, Exception>(_ => Observable.Return<string?>(DisagreementNote(partition, deniedUserId, expected)));
     }
+
+    /// <summary>The fixed permissions of the built-in roles — the only roles whose definition a
+    /// settled diagnosis may rely on (#6637).</summary>
+    private static readonly ImmutableDictionary<string, Permission> BuiltInRolePermissions =
+        new[] { Role.Admin, Role.Editor, Role.Viewer, Role.Commenter, Role.PlatformAdmin }
+            .ToImmutableDictionary(r => r.Id, r => r.Permissions, StringComparer.Ordinal);
+
+    /// <summary>
+    /// Whether <paramref name="held"/> authorizes a write that requires <paramref name="required"/>,
+    /// by the write authorizer's own predicate (<c>RlsNodeValidator.CheckPermission</c>): Comment is
+    /// granted by Comment, Update or Sync; Create, Update and Delete also by Sync.
+    /// </summary>
+    private static bool WouldAuthorize(Permission held, Permission required) => required switch
+    {
+        Permission.Comment => held.HasFlag(Permission.Comment) || held.HasFlag(Permission.Update) || held.HasFlag(Permission.Sync),
+        Permission.Create or Permission.Update or Permission.Delete => held.HasFlag(required) || held.HasFlag(Permission.Sync),
+        _ => held.HasFlag(required),
+    };
 
     /// <summary>
     /// The note for a refusal the principal's own readable grant does NOT contradict: its roles do
