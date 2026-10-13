@@ -28,6 +28,15 @@ public class ObjectPolymorphicConverter(
     // deduped past the cap — they log per occurrence, which is visible, not a memory-DoS) and very long
     // names are truncated before caching/logging.
     private const int MaxWarnedTypeNames = 1000;
+
+    // 🚨 #6674 — the promise in the parenthesis is CONDITIONAL. A converter cannot see what the value
+    // is nested in: when it is a mesh node's content, a read seam that holds the node (the stream
+    // cache's GetStream/GetQuery) writes the path-bearing line; for any other `object` payload — a
+    // message, a request member — nothing does, and this line is the whole record.
+    private const string UnbindableRegisteredTypeWarning =
+        "Content for '{TypeName}' could not be deserialized; preserving raw JSON (a converter cannot see "
+        + "what the value is nested in — if it is a mesh node's content, the read seam that holds the node "
+        + "logs its path; for any other object payload, such as a message, this line is the only record)";
     private const int MaxTypeNameLogLength = 256;
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> warnedUnregisteredRead = new();
     private int warnCapNoticed;
@@ -158,8 +167,7 @@ public class ObjectPolymorphicConverter(
                     // (a throw faults the node read → wedged grain); preserve the raw JSON
                     // so the node stays readable/repairable. Logged loud, not swallowed.
                     logger?.LogWarning(ex,
-                        "Content for '{TypeName}' could not be deserialized; preserving raw JSON (a converter cannot see "
-                + "the node it is nested in — the read seam that holds the node logs its path)",
+                        UnbindableRegisteredTypeWarning,
                         typeName);
                     return cleanedElement.Clone();
                 }
@@ -259,8 +267,7 @@ public class ObjectPolymorphicConverter(
             // Same contract as the general path: a registered type whose stored JSON no longer fits
             // is preserved as raw JSON (a throw faults the node read → wedged grain), logged loud.
             logger?.LogWarning(ex,
-                "Content for '{TypeName}' could not be deserialized; preserving raw JSON (a converter cannot see "
-                + "the node it is nested in — the read seam that holds the node logs its path)",
+                UnbindableRegisteredTypeWarning,
                 typeName);
             reader = start;
             using var doc = JsonDocument.ParseValue(ref reader);

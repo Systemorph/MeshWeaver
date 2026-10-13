@@ -122,7 +122,88 @@ public class MarkdownContentWithoutBodyTest
         Assert.Contains("TypeRegistry lacks the $type discriminator", record.Message);
     }
 
-    private sealed record Record(LogLevel Level, string Message);
+    /// <summary>
+    /// 🚨 #6674 gap 2 — ONE cause per record. Sinks append <c>exception.ToString()</c> after the
+    /// formatted line, so the attached <see cref="MeshNodeContentDegradedException"/> must name the
+    /// same cause the line does. On main the line said "registered, but does not bind" while the
+    /// marker said the discriminator "resolved to no registered CLR type".
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Seams))]
+    public void TheAttachedMarker_NamesTheSameCauseAsTheLine(string seam)
+    {
+        const string nodeType = "Probe/RequiredBody";
+        var registry = new MeshContentTypeRegistry();
+        registry.Register(typeof(RequiredBodyContent), nodeType);
+        var logger = new RecordingLogger();
+
+        Run(seam, NodeWith(nodeType, """{"$type":"RequiredBodyContent","label":"no body"}"""), logger, registry);
+
+        var record = Assert.Single(logger.Records.Where(r => r.Level >= LogLevel.Warning));
+        var marker = Assert.IsType<MeshNodeContentDegradedException>(record.Exception);
+        Assert.Contains("'RequiredBodyContent' is registered, but the stored JSON does not bind", marker.ToString());
+        Assert.DoesNotContain("resolved to no registered", marker.ToString());
+        Assert.Equal(marker.Cause, ContentDegradationCauses.DoesNotBind(nameof(RequiredBodyContent)));
+    }
+
+    /// <summary>#6674 gap 2, the other cause: the marker of an unresolvable <c>$type</c> names the
+    /// missing registration, as its line does.</summary>
+    [Theory]
+    [MemberData(nameof(Seams))]
+    public void TheAttachedMarker_OfAnUnresolvableType_NamesTheMissingRegistration(string seam)
+    {
+        var logger = new RecordingLogger();
+
+        Run(seam, NodeWith("Probe/Unknown", """{"$type":"NothingKnowsThis","label":"x"}"""),
+            logger, new MeshContentTypeRegistry());
+
+        var record = Assert.Single(logger.Records.Where(r => r.Level >= LogLevel.Warning));
+        var marker = Assert.IsType<MeshNodeContentDegradedException>(record.Exception);
+        Assert.Contains("TypeRegistry lacks the $type discriminator", marker.ToString());
+        Assert.DoesNotContain("does not bind", marker.ToString());
+    }
+
+    /// <summary>
+    /// 🚨 #6674 gap 3 — precedence. A PRESENT <c>$type</c> decides the classification; the NodeType
+    /// mapping is the fallback only when it is absent. Here the NodeType maps to a registered type,
+    /// but the stored <c>$type</c> names something nothing registers — a contradictory discriminator,
+    /// which is a registration problem, not a bind failure of the NodeType's type. On main the
+    /// NodeType mapping was consulted first and the line blamed <c>RequiredBodyContent</c>'s binding.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Seams))]
+    public void AContradictoryDiscriminator_DecidesTheCause_OverTheNodeTypeMapping(string seam)
+    {
+        const string nodeType = "Probe/RequiredBody";
+        var registry = new MeshContentTypeRegistry();
+        registry.Register(typeof(RequiredBodyContent), nodeType);
+        var logger = new RecordingLogger();
+
+        Run(seam, NodeWith(nodeType, """{"$type":"NothingKnowsThis","body":"present"}"""), logger, registry);
+
+        var record = Assert.Single(logger.Records.Where(r => r.Level >= LogLevel.Warning));
+        Assert.Contains("TypeRegistry lacks the $type discriminator", record.Message);
+        Assert.DoesNotContain("RequiredBodyContent", record.Message);
+    }
+
+    /// <summary>#6674 gap 3, the fallback: content with NO <c>$type</c> is classified by its
+    /// NodeType's registered type.</summary>
+    [Theory]
+    [MemberData(nameof(Seams))]
+    public void WithoutADiscriminator_TheNodeTypeMappingClassifiesTheCause(string seam)
+    {
+        const string nodeType = "Probe/RequiredBody";
+        var registry = new MeshContentTypeRegistry();
+        registry.Register(typeof(RequiredBodyContent), nodeType);
+        var logger = new RecordingLogger();
+
+        Run(seam, NodeWith(nodeType, """{"label":"no body"}"""), logger, registry);
+
+        var record = Assert.Single(logger.Records.Where(r => r.Level >= LogLevel.Warning));
+        Assert.Contains("'RequiredBodyContent' is registered, but the stored JSON does not bind", record.Message);
+    }
+
+    private sealed record Record(LogLevel Level, string Message, Exception? Exception);
 
     private sealed class RecordingLogger : ILogger
     {
@@ -136,7 +217,7 @@ public class MarkdownContentWithoutBodyTest
 
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
             Func<TState, Exception?, string> formatter)
-            => records.Add(new Record(logLevel, formatter(state, exception)));
+            => records.Add(new Record(logLevel, formatter(state, exception), exception));
 
         private sealed class NullScope : IDisposable
         {
