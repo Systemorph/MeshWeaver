@@ -205,9 +205,9 @@ public partial class QueryParser
         if (i < input.Length && input[i] == ':')
         {
             i++; // consume :
-            var (condition, length) = ParseFieldValue(field, input, i, isNegated);
+            var (condition, length, literal) = ParseFieldValue(field, input, i, isNegated);
             i += length;
-            return new Token(TokenType.Comparison, field, condition);
+            return new Token(TokenType.Comparison, field, condition, literal);
         }
         else
         {
@@ -225,12 +225,17 @@ public partial class QueryParser
     /// <summary>
     /// Parses the value part after field:.
     /// Handles comparison operators, lists, and wildcard patterns.
+    /// <para>🚨 A QUOTED value is LITERAL (#6634): no <c>|</c> alternation and no <c>*</c> wildcard
+    /// inside the quotes, so <c>namespace:"a|b"</c> and <c>namespace:"x*"</c> name exactly that
+    /// namespace. Alternation BETWEEN quoted values (<c>path:"a b"|"c"</c>) is unchanged — the bar
+    /// sits outside the quotes. The third element says the condition carries one such literal, so
+    /// the reserved-qualifier pass does not re-read a <c>*</c> in it as a glob.</para>
     /// </summary>
-    private (QueryCondition Condition, int Length) ParseFieldValue(string field, string input, int start, bool isNegated)
+    private (QueryCondition Condition, int Length, bool Literal) ParseFieldValue(string field, string input, int start, bool isNegated)
     {
         // Empty value: end of string or whitespace immediately after colon
         if (start >= input.Length || char.IsWhiteSpace(input[start]))
-            return (new QueryCondition(field, isNegated ? QueryOperator.NotEqual : QueryOperator.Equal, [""]), 0);
+            return (new QueryCondition(field, isNegated ? QueryOperator.NotEqual : QueryOperator.Equal, [""]), 0, false);
 
         var i = start;
         QueryOperator op;
@@ -263,7 +268,7 @@ public partial class QueryParser
             i++; // consume (
             var listValues = ParseListValues(input, ref i);
             op = isNegated ? QueryOperator.NotIn : QueryOperator.In;
-            return (new QueryCondition(field, op, listValues), i - start);
+            return (new QueryCondition(field, op, listValues), i - start, false);
         }
         else
         {
@@ -275,7 +280,7 @@ public partial class QueryParser
         // so SQL-function calls in sort selectors work — e.g. `sort:length(path)-desc`.
         // The `(A OR B OR C)` list form is detected above (immediately-after-colon),
         // so we never confuse a list with an embedded paren here.
-        var value = ParseSingleValue(input, ref i, stopAtParens: false);
+        var value = ParseSingleValue(input, ref i, stopAtParens: false, out var quoted);
 
         // Quoted `|` alternation — `field:"A B"|"C D"|E`. ParseSingleValue stops a
         // QUOTED value at its closing quote, so a trailing `|` here is the alternation
@@ -296,8 +301,19 @@ public partial class QueryParser
             if (altParts.Count > 1)
             {
                 op = isNegated ? QueryOperator.NotIn : QueryOperator.In;
-                return (new QueryCondition(field, op, altParts.ToArray()), i - start);
+                return (new QueryCondition(field, op, altParts.ToArray()), i - start, false);
             }
+        }
+
+        // 🚨 A quoted value is LITERAL (#6634) — skip the grep-style split and the wildcard switch
+        // below. Equal/In/NotIn compare literally on every executor; NotEqual does NOT when the
+        // value carries a `*` (it reads as the complement of the glob, #6581), so a negated literal
+        // with a star travels as a one-value NotIn — the same null-inclusive literal exclusion.
+        if (quoted && (op == QueryOperator.Equal || op == QueryOperator.NotEqual))
+        {
+            if (op == QueryOperator.NotEqual && QueryWildcard.ContainsWildcard(value))
+                return (new QueryCondition(field, QueryOperator.NotIn, [value]), i - start, true);
+            return (new QueryCondition(field, op, [value]), i - start, true);
         }
 
         // Grep-style `|` alternation — `field:A|B|C` is equivalent to
@@ -312,7 +328,7 @@ public partial class QueryParser
             if (parts.Length > 1)
             {
                 op = isNegated ? QueryOperator.NotIn : QueryOperator.In;
-                return (new QueryCondition(field, op, parts), i - start);
+                return (new QueryCondition(field, op, parts), i - start, false);
             }
         }
 
@@ -345,7 +361,7 @@ public partial class QueryParser
             };
         }
 
-        return (new QueryCondition(field, op, [value]), i - start);
+        return (new QueryCondition(field, op, [value]), i - start, false);
     }
 
     /// <summary>
@@ -395,7 +411,15 @@ public partial class QueryParser
     /// </para>
     /// </summary>
     private string ParseSingleValue(string input, ref int i, bool stopAtParens = true)
+        => ParseSingleValue(input, ref i, stopAtParens, out _);
+
+    /// <summary>
+    /// <see cref="ParseSingleValue(string, ref int, bool)"/>, also reporting whether the value was
+    /// QUOTED — a quoted value is literal (#6634).
+    /// </summary>
+    private string ParseSingleValue(string input, ref int i, bool stopAtParens, out bool quoted)
     {
+        quoted = false;
         // Skip whitespace
         while (i < input.Length && char.IsWhiteSpace(input[i]))
             i++;
@@ -414,6 +438,7 @@ public partial class QueryParser
             var value = input[start..i];
             if (i < input.Length)
                 i++; // consume closing quote
+            quoted = true;
             return value;
         }
 
@@ -552,6 +577,20 @@ public partial class QueryParser
 
                 if (field.Equals("namespace", StringComparison.OrdinalIgnoreCase))
                 {
+                    // A QUOTED namespace is literal (#6634): it is the namespace, never a set of
+                    // namespaces and never a pattern — even when it carries `|` or `*`.
+                    if (token.Literal)
+                    {
+                        if (token.Condition!.Operator is QueryOperator.NotEqual or QueryOperator.NotIn)
+                            filterTokens.Add(new Token(TokenType.Comparison, string.Empty,
+                                new QueryCondition("namespace", token.Condition.Operator, [value.Trim('/')]), true));
+                        else
+                        {
+                            path = value;
+                            namespaceUsed = true;
+                        }
+                        continue;
+                    }
                     // Alternation `namespace:A|B|C` (parsed to In/NotIn with >1 values) is an EXACT
                     // MEMBERSHIP constraint across the listed namespaces, not a single base namespace
                     // + scope walk. Deferred to post-loop resolution (a `namespace IN (...)` filter).
@@ -925,5 +964,6 @@ public partial class QueryParser
         RightParen
     }
 
-    private record Token(TokenType Type, string Value, QueryCondition? Condition = null);
+    /// <param name="Literal">The condition's value was QUOTED and is literal (#6634) — no wildcard, no alternation.</param>
+    private record Token(TokenType Type, string Value, QueryCondition? Condition = null, bool Literal = false);
 }
