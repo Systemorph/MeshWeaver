@@ -562,6 +562,27 @@ public static class DeploymentPortalConfig
             .ToImmutableList();
 
     /// <summary>
+    /// The single-registry URL a record declares (<see cref="DeploymentContent.RegistryUrl"/>),
+    /// trimmed and without a trailing slash — the same rule as <see cref="PluginRepoMount.NormalizedUrl"/>
+    /// and the ONE normalisation every renderer uses. Null for a blank or absent value. Pure.
+    /// </summary>
+    public static string? NormalizedRegistryUrl(string? url)
+    {
+        var u = (url ?? "").Trim().TrimEnd('/');
+        return u.Length == 0 ? null : u;
+    }
+
+    /// <summary>
+    /// The flat <c>PluginCatalog:RegistryUrl=url</c> entry for the declared registry URL
+    /// (<see cref="NormalizedRegistryUrl"/>). Empty for none — nothing renders, so the portal's
+    /// default (no single registry) stands. Pure.
+    /// </summary>
+    public static ImmutableList<string> RegistryUrlEntries(string? url) =>
+        NormalizedRegistryUrl(url) is { } u
+            ? ImmutableList.Create($"{CatalogSection}:RegistryUrl={u}")
+            : ImmutableList<string>.Empty;
+
+    /// <summary>
     /// The FULL flat configuration a new instance is born with: the catalog wiring plus the
     /// module policy — one deterministic list, so "what will this instance boot with" is
     /// answerable from the record alone.
@@ -575,6 +596,9 @@ public static class DeploymentPortalConfig
         // The registration seed a REGISTRY hands every new instance (Memex#116) — declared on the
         // record, so the boot file carries it exactly as the Helm values and the Aspire keys do.
         entries = entries.AddRange(DefaultGrantEntries(record.DefaultGrants));
+
+        // The single-registry URL (Memex#116) — likewise declared on the record, never only an overlay.
+        entries = entries.AddRange(RegistryUrlEntries(record.RegistryUrl));
 
         // 🚨 ModuleSlots, NOT ModuleEntries: the same slots PortalConfig emits. This route used to
         // render the contiguous list alone and drop every explicit RequiredModuleSlots entry, so
@@ -859,7 +883,9 @@ public static class DeploymentPortalConfig
         // rather than the portal ConfigMap, so it is emitted here only for a renderer with no second
         // file — the Aspire adapter.
         if (options.IncludeBootEntries)
-            foreach (var entry in ConfigurationEntries(d.PluginRepos, d.PreInstall).AddRange(DefaultGrantEntries(d.DefaultGrants)))
+            foreach (var entry in ConfigurationEntries(d.PluginRepos, d.PreInstall)
+                         .AddRange(DefaultGrantEntries(d.DefaultGrants))
+                         .AddRange(RegistryUrlEntries(d.RegistryUrl)))
             {
                 var eq = entry.IndexOf('=');
                 Set(entry[..eq].Replace(":", "__"), entry[(eq + 1)..]);

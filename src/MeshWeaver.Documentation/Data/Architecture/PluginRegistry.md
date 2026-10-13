@@ -507,6 +507,18 @@ rendered as one titled catalog section each. It lists each registry's packages v
 against this instance's install registry — the `Package` nodes under the `Plugins` partition — to
 render **Install / Update / Installed** per module.
 
+On a deployed instance the single URL is **declared on its deployment record** — `registryUrl` on
+`Hosting/Deployment` (`DeploymentContent.RegistryUrl`), trimmed and without a trailing slash — and
+every renderer delivers it from there: the Helm values' `pluginCatalog.registryUrl`, the operator's
+boot catalog file and the Aspire portal keys, all as `PluginCatalog:RegistryUrl`. The named list is
+the record's consumer `pluginRepos` mounts. A **registry may name itself** here, and that is
+deliberate, not leftover configuration: it makes the registry a consumer of its own `/api/plugins`,
+so the update reconciler, the Store's registry section, module refresh and the pin audit act on it
+exactly as on any other instance. The token half (`PluginCatalog:RegistryToken`) is a credential and
+comes from the vault only — never from the record. Before the field existed the URL lived only in a
+hand-edited Helm overlay, so a re-render from the record dropped it and the deploy-drift sentinel
+reported it as never delivered (Memex#116).
+
 ### Categories first, packages per category
 
 > 🚨 **The catalog must not load the full thing — only categories first.** (maintainer, 2026-09-03,

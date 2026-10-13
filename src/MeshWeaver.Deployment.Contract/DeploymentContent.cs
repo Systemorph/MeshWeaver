@@ -226,6 +226,24 @@ public record DeploymentContent
     public ImmutableList<string> DefaultGrants { get; init; } = ImmutableList<string>.Empty;
 
     /// <summary>
+    /// The single-registry catalog URL (<c>PluginCatalog:RegistryUrl</c>) — the registry whose
+    /// <c>/api/plugins</c> this instance consumes when it declares no named consumer mount
+    /// (<see cref="PluginRepos"/> without <see cref="PluginRepoMount.IsRegistrySource"/>).
+    /// A registry MAY name itself here, and that is not dead configuration: it makes the registry a
+    /// consumer of its own catalog (<c>PluginCatalogOptions.EffectiveRegistries</c> — the update
+    /// reconciler, the Store's registry section, module refresh and pin audit). Its token half is a
+    /// credential and comes from the vault only, never from the record.
+    ///
+    /// <para>Rendered on every route from this one declaration (Memex#116): the Helm values'
+    /// <c>pluginCatalog.registryUrl</c>, and <see cref="DeploymentPortalConfig.BootConfigurationEntries"/>
+    /// plus the Aspire route's portal keys through <see cref="DeploymentPortalConfig.RegistryUrlEntries"/>.
+    /// Blank renders nothing. Before it existed the URL lived only in a hand-edited overlay, and a
+    /// re-render from the record silently dropped it.</para>
+    /// </summary>
+    [Description("Single-registry catalog URL this instance consumes (PluginCatalog:RegistryUrl); a registry may name itself")]
+    public string? RegistryUrl { get; init; }
+
+    /// <summary>
     /// Key Vault secret NAME holding the MAIN database connection string. Blank → the convention
     /// <c>{KeyVaultSecretPrefix}db-connection</c> (<see cref="DeploymentPortalConfig.DatabaseSecretName"/>).
     /// A NAME, never a value — the value lives in the vault, written by the provision's
