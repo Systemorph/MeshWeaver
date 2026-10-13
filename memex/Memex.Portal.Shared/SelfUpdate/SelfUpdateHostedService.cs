@@ -432,7 +432,10 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
             .SelectMany(result => result.NeedsRestart
                 ? Restart(platform, honourFloor: true,
                     reason: $"a landed module generation did not go live in the running process — {result.Describe()}")
-                : Observable.Return(SelfUpdateVerdict.ActivatedLive(platform, result.Describe())));
+                : Observable.Return(result.NothingWasPending
+                    // #6620: nothing was swapped — never report a pass that changed nothing as "went LIVE".
+                    ? SelfUpdateVerdict.NothingToActivate(platform, result.Describe())
+                    : SelfUpdateVerdict.ActivatedLive(platform, result.Describe())));
     }
 
     /// <summary>Why this install cannot patch, as the qualifier after <c>canPatch=False</c> (#4097):

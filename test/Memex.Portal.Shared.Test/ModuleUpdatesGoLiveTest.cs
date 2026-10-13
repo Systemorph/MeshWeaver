@@ -132,6 +132,32 @@ public sealed class ModuleUpdatesGoLiveTest : MonolithMeshTestBase
         AssertNothingStuck();
     }
 
+    /// <summary>
+    /// #6620: a check that finds the landed generation marked for activation while NOTHING is pending
+    /// in this process swaps nothing — it must never report "went LIVE". Arranged by running a second
+    /// check after the live swap: the activation record still marks the generation, the per-process
+    /// reader finds nothing pending. Before the fix this second check read "went LIVE without a
+    /// restart (nothing landed is waiting to be activated here)" — the exact production sentence.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task ACheckWithNothingPendingHere_NeverReportsWentLive_AndSaysNothingWasSwapped()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await Seed(ct);
+        await Land(ModuleSource(2), "2", ct);
+        var updater = new RecordingUpdater();
+        (await RunOneCheck(updater, ct)).Should().Contain("went LIVE", "the arrangement: the first check swaps M@N+1 in");
+
+        var marker = (await Landing.GetActivation().Timeout(Budget).Await(ct)).PendingRestart;
+        var second = await RunOneCheck(updater, ct);
+
+        marker.Should().BeTrue("the arrangement: the record still marks the generation (cleared only by the next boot)");
+        second.Should().NotContain("went LIVE", "a pass that swapped nothing must not claim a swap");
+        second.Should().Contain("nothing landed is pending activation in this process",
+            "the marker still names a pending generation, so the verdict must say what the reader found");
+        updater.Restarts.Should().Be(0, "nothing pending here — a restart would load nothing new");
+    }
+
     // ═════════════════════════════════════════ the fallback: exactly one automatic restart
 
     [Fact(Timeout = 300_000)]
