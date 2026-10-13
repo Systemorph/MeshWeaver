@@ -77,7 +77,7 @@ public sealed record AppRoot(
 /// </summary>
 /// <param name="Records">The package ids with an install record (<c>Plugins/{id}</c>).</param>
 /// <param name="Synced">The partitions with a GitHub sync source (<c>{id}/_GitSync</c>).</param>
-/// <param name="Uninstalled">The packages an uninstall request names.</param>
+/// <param name="Uninstalled">The packages an uninstall request names whose phase 1 completed.</param>
 public sealed record InstallEvidence(
     ImmutableHashSet<string> Records, ImmutableHashSet<string> Synced, ImmutableHashSet<string> Uninstalled)
 {
@@ -87,7 +87,7 @@ public sealed record InstallEvidence(
     /// <summary>
     /// Whether the package <paramref name="id"/> is installed here: its install record exists — or,
     /// for a package provisioned by a git import (which writes no record), its sync source exists and
-    /// no uninstall request names it. A package uninstalled with its data retained has lost its
+    /// no uninstall request that got past phase 1 names it. A package uninstalled with its data retained has lost its
     /// record (and, if git-provisioned, is named by its uninstall request), so it is not. Pure.
     /// </summary>
     public bool IsInstalled(string id) =>
@@ -170,12 +170,24 @@ public sealed class AppDirectory
     public const string UninstallRequestsQueryId = "$app-uninstall-requests";
 
     /// <summary>
-    /// Every package-uninstall request (<c>Admin/_PackageUninstall/{id}</c>, content
-    /// <c>package</c>). Phase 1 removes the install record but keeps the data — the sync source
-    /// included — so a request naming a package with no record says it was uninstalled here.
+    /// Every package-uninstall request (<see cref="PackageUninstallRequest.Namespace"/>, content
+    /// <c>package</c> + <c>status</c>). Phase 1 removes the install record but keeps the data — the
+    /// sync source included — so a request that got PAST phase 1 (<see cref="UninstalledStatuses"/>)
+    /// naming a package with no record says it was uninstalled here.
     /// </summary>
     public static readonly string UninstallRequestsQuery = SecurityQueries.Enumeration(
-        "namespace:Admin/_PackageUninstall nodeType:PackageUninstall");
+        $"namespace:{PackageUninstallRequest.Namespace} nodeType:{PackageUninstallRequest.NodeType}");
+
+    /// <summary>
+    /// The request statuses that mean phase 1 completed — the package is uninstalled here, its data
+    /// retained or being dropped. The same set the executor's own re-install block reads
+    /// (<c>PackageUninstallExecutor.UninstalledHere</c>): a request still <c>Requested</c> or
+    /// <c>Uninstalling</c> has not removed anything yet, and a <c>Failed</c> one — phase 1 refuses a
+    /// package with no install record, a shared partition, user data — removed nothing at all.
+    /// </summary>
+    public static readonly ImmutableHashSet<string> UninstalledStatuses = ImmutableHashSet.Create(
+        StringComparer.Ordinal,
+        PackageUninstallStatus.AwaitingConfirmation, PackageUninstallStatus.TearingDown, PackageUninstallStatus.Done);
 
     /// <summary>The <c>hostedIn</c> value naming the person app (<c>/{user}/Settings</c>). A package
     /// hosted THERE contributes a settings tab and may still be an app of its own; any other host
@@ -279,11 +291,15 @@ public sealed class AppDirectory
             .Where(p => p.Length > 0)
             .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>The packages the uninstall requests name (content <c>package</c>, read in whatever
-    /// shape it arrives). Pure.</summary>
+    /// <summary>The packages the uninstall requests name whose phase 1 completed (content
+    /// <c>package</c> and <c>status</c> ∈ <see cref="UninstalledStatuses"/>, read in whatever shape
+    /// the content arrives). Pure.</summary>
     public static ImmutableHashSet<string> UninstalledPackages(IEnumerable<MeshNode> nodes, JsonSerializerOptions options) =>
         nodes
-            .Select(n => ElementOf(n, options) is { } c && Property(c, "package") is { ValueKind: JsonValueKind.String } p
+            .Select(n => ElementOf(n, options) is { } c
+                         && Property(c, "status") is { ValueKind: JsonValueKind.String } status
+                         && UninstalledStatuses.Contains(status.GetString() ?? "")
+                         && Property(c, "package") is { ValueKind: JsonValueKind.String } p
                 ? p.GetString()
                 : null)
             .OfType<string>()
