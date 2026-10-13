@@ -1561,8 +1561,10 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                 (hub as MessageHub)?.NoteDirectDisposalBy(
                     $"Orleans deactivating grain {grainId}",
                     FormatDeactivationReason(reason.ReasonCode.ToString(), reason.Description));
-                hub.CancelCurrentExecution();
-                hub.Dispose();
+                // Dispose FIRST, then abort the current turn — never the other way round (#6648):
+                // a cancel that lands while IsShuttingDown is still false reaches a mid-init hub's
+                // HandleInitialize as an unexplained cancellation and latches it FAILED at Error.
+                hub.DisposeAbortingCurrentTurn();
 
                 // 🚨 SUBSCRIBE — do not await. A grain turn is a single-threaded scheduler, so
                 // awaiting here parks it, and the disposal we are waiting for may itself need a
