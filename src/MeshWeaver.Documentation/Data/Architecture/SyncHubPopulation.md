@@ -369,17 +369,46 @@ floor level at about 3.3 GiB from hour 18) is the newest evidence that the popul
 replica that lives a day is the instrument; `HubCensusByOwner` (a `Code` node in the operator's own
 partition, the script behind the tables above) is the reading to repeat on it.
 
+### The standing census names the satellite shape (#6632)
+
+`meshweaver.hubs.live` (`PlatformMetrics`) is tagged `kind` (the address type), `satellite` and
+`runlevel`. `satellite` is the LAST address segment that starts with `_` — `_DocumentPart`,
+`_Activity`, `_Thread` — or `none`; never an id. The 2026-10-04/05 OOM burst was ~5,000
+`Admin/content/_Documents/…/_DocumentPart/{index}` hubs, which the `kind` tag alone folded into
+`kind=Admin`; with the second tag the next burst names its address shape while it happens. The bound
+is the meter's own, and it holds for the meter's LIFETIME: at most `MaxSatelliteValues` (32) satellite
+values are ever named. A value is admitted the first time it is among the most populous of a scrape
+while a slot is free and keeps its name afterwards; every value never admitted folds into `_other`.
+A per-scrape top-N would bound one scrape only — values rotating through the top would each leave a
+series behind in the metric store. Nothing enforces that a `_` segment is a declared satellite, so
+cardinality is not left to the deployment
+(`PlatformMetricsTest.SatelliteValues_StayBounded_AcrossScrapesThatRotateTheirValues`).
+
 ## 10. Which boot step builds each class of node hub (#6623)
 
 The rule: **a boot step that only needs a node's CONTENT reads it without activating that node's
 per-node hub.** `GetMeshNodeStream(path)` is the authoritative LIVE read, and it gets there by
 subscribing at the node's own address, which builds the hub. For a one-shot read of many nodes the
-store is just as authoritative: it holds exactly what the next activation would load. The one write
-it can miss is one a live owner has acknowledged but not yet flushed, which is at most one 200 ms
-persistence-sampler window. `StoredNodeReads.ReadStoredNode` / `ReadStoredNodes`
-(`MeshWeaver.Mesh.Contract`) is that read: storage first, the served static node second. It is the
-same order `ReadNodeAuthoritative` has always used for the partition bootstrap, and the access-rule
-gate's `ReadSubjectNode` now delegates to it.
+store answers with the DURABLE snapshot: exactly what the next activation would load.
+`StoredNodeReads.ReadStoredNode` / `ReadStoredNodes` (`MeshWeaver.Mesh.Contract`) is that read:
+storage first, the served static node second. It is the same order `ReadNodeAuthoritative` has
+always used for the partition bootstrap, and the access-rule gate's `ReadSubjectNode` now delegates
+to it.
+
+🚨 **The durable snapshot is not the live record.** Where an owner is live, the row trails it by
+one 200 ms persistence-sampler window plus the write, and with no bound after a store write that
+FAILED: `MeshDataSource.WriteSampledNode` logs a faulted sampled save and does not retry it, and
+`PendingOwnSave` counts the accepted request as saved, so the owner stays ahead of its row until its
+next change is written (and a recycle loses the acknowledged state — an owner-side durability
+defect, separate from this read). So a caller may use this read only where its decision is safe on
+a trailing row, and says why. The two GitSync sweeps are: `BundleKeyedHold.Decide` holds only where
+it REPRODUCES the definition's fingerprint from the current Code nodes, so a trailing fingerprint
+abstains, and a row trailing only in provenance either misses a hold (the documented `StaleAdopted`
+direction) or holds a type's sources in place (nothing written or deleted) until the row
+catches up or the shelf releases the hold; `SyncedPartitionDrift.Measure` either
+misses drift (abstain) or reports drift that is gone, whose action re-imports at the commit the
+source already claims and moves nothing backwards (`NodeTypeDefinitionReads` carries the full
+argument).
 
 The step → call → class mapping from reading the code. The census counts address shapes only, so
 each attribution below is an inference from code, not a per-address measurement:

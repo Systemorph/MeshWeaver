@@ -79,7 +79,11 @@ SocialMedia and Manufacturing consume the sealed `plugins` publication and never
 
 ### Why the seal still runs Store's tests, and must
 
-Core CD's `plugins-bake` job declares `upstream-sources: ''` — **Plugins is a root there, staged as
+> Since #6143 core CD has no `plugins-bake` job: the `plugins` publication is sealed only by
+> MeshWeaver.Plugins' own lane, against the platform set it resolves. The comparison below records
+> why the core-side seal existed while it did.
+
+Core CD's `plugins-bake` job declared `upstream-sources: ''` — **Plugins is a root there, staged as
 its own content, not seeded as an upstream.** Store/Licensing is therefore the *stage*, and the gate
 judges it exactly as it judges every other package in the repo being baked.
 

@@ -57,6 +57,12 @@ public class FileContentProvider : IFileContentProvider
                     return Observable.Return(
                         FileContentResult.Fail($"Content collection '{collectionName}' not found"));
 
+                // 🚨 The staging folder is framework state, never content (#6585): a staged blob is
+                // bytes the owner has not admitted yet, so it is answered exactly as an absent file.
+                if (ContentStaging.IsStagingPath(NormalizedPath(filePath)))
+                    return Observable.Return(
+                        FileContentResult.Fail($"File '{filePath}' not found in collection '{collectionName}'"));
+
                 var ext = Path.GetExtension(filePath).ToLowerInvariant();
                 var transformer = transformers.FirstOrDefault(t => t.SupportedExtensions.Contains(ext));
                 if (transformer != null)
@@ -91,6 +97,10 @@ public class FileContentProvider : IFileContentProvider
                 FileContentResult.Fail($"File '{filePath}' not found in collection '{collectionName}'")))
             .Catch((Exception ex) => Observable.Return(
                 FileContentResult.Fail($"Error accessing file '{filePath}' from collection '{collectionName}': {ex.Message}")));
+
+    // A collection-relative path as ContentStaging.IsStagingPath reads it: forward slashes, no
+    // leading slash (a FileSystem provider can answer '\' separators on Windows).
+    private static string NormalizedPath(string? path) => (path ?? "").Replace('\\', '/').TrimStart('/');
 
     /// <inheritdoc />
     public IObservable<FileOperationResult> SaveFileContent(
@@ -130,7 +140,12 @@ public class FileContentProvider : IFileContentProvider
         contentService.GetCollection(collectionName)
             .SelectMany(collection => collection == null
                 ? Observable.Return(CollectionListingResult.Fail($"Content collection '{collectionName}' not found"))
+                // 🚨 The staging folder lists like an absent one and is never listed itself (#6585).
+                : ContentStaging.IsStagingPath(NormalizedPath(path))
+                ? Observable.Return(CollectionListingResult.Fail(
+                    $"Error listing collection '{collectionName}' at path '{path}': not found"))
                 : collection.GetCollectionItems(path)
+                    .Where(item => !ContentStaging.IsStagingPath(NormalizedPath(item.Path)))
                     .Select(item => new CollectionItemInfo(
                         item.Path,
                         item.Name,

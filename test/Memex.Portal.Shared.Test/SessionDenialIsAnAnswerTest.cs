@@ -262,7 +262,7 @@ public class SessionDenialIsAnAnswerTest(ITestOutputHelper output) : MonolithMes
     /// assignment between the check and the write; a cross-silo fold; an identity lost across a
     /// scheduler hop). It is real and it is why the owner-side arm must stay, but it is not
     /// reproducible fast and deterministically in a single-silo mesh, so the PREDICATE is pinned
-    /// directly — the same reasoning <c>PatchLandedWriteCheckTest</c> records for <c>FieldsLandedIn</c>.
+    /// directly.
     /// </para>
     /// </summary>
     [Theory]

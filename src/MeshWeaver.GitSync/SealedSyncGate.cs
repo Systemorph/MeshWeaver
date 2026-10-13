@@ -351,7 +351,27 @@ public static class SealedSyncGate
         => $"'{s.Source}' "
            + (s.IsSealed
                ? $"sealed at {(s.SourceCommit is { Length: > 0 } c ? Short(c) : "an unknown commit")}"
+                 + CarriedClause(s)
                : $"not usable here ({s.Refusal ?? "not sealed"})");
+
+    /// <summary>
+    /// The per-package half of a sealed publication's description (MeshWeaver.Plugins#3507): which
+    /// packages it carries at an OLDER build because they waited at its commit. A synced NodeType of
+    /// a carried package does not find its fingerprint in that bundle and compiles from source until
+    /// the package is sealed fresh — the clause is what tells an operator why. Empty when nothing is
+    /// carried.
+    /// </summary>
+    internal static string CarriedClause(SealedSource s)
+    {
+        var carried = s.Carried;
+        if (carried.Count == 0)
+            return "";
+        var named = carried.Take(6).Select(p => $"{p.Package}"
+            + (p.Version is { Length: > 0 } v ? $" {v}" : "")
+            + (p.SourceCommit is { Length: > 0 } c ? $"@{Short(c)}" : ""));
+        return $" ({carried.Count} of {s.Packages.Count} package(s) carried at an older sealed build: "
+               + string.Join(", ", named) + (carried.Count > 6 ? ", …" : "") + ")";
+    }
 
     private static string Short(string sha) => sha.Length > 8 ? sha[..8] : sha;
 }

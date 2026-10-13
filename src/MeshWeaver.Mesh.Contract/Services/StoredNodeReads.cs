@@ -19,12 +19,15 @@ namespace MeshWeaver.Mesh.Services;
 /// rest of its idle window. The store holds exactly what the next activation of that node would load,
 /// so for a one-shot read it IS the node's state, and reading it builds nothing.</para>
 ///
-/// <para><b>What it is NOT.</b> It is not a live subscription (nothing re-emits), and it does not see
-/// a write a LIVE owner has applied and acknowledged but not yet flushed: the owner's persistence
-/// sampler writes on a 200 ms <c>Sample</c>, and a disposing owner flushes its last save first
-/// (<c>PendingOwnSave</c>). Use it where a sweep reads many nodes once and its decision tolerates
-/// that window — every caller says so where it calls it. A caller that must observe a node change,
-/// or that writes, uses <c>GetMeshNodeStream(path)</c>, and should.</para>
+/// <para><b>What it is NOT.</b> It is not a live subscription (nothing re-emits), and it is not the
+/// LIVE record: it does not see a write a live owner has applied and acknowledged but not yet
+/// persisted. Ordinarily that is one persistence-sampler window (the owner samples its saves at
+/// 200 ms, and a disposing owner flushes its last one first), but there is NO bound after a store
+/// write that failed: the owner logs the fault, does not retry, and stays ahead of its row until its
+/// next change is written. Use it where a sweep reads many nodes once and its decision is safe on a
+/// row that trails the live owner — every caller says why where it calls it. A caller that needs the
+/// live record, must observe a change, or writes, uses <c>GetMeshNodeStream(path)</c>, and
+/// should.</para>
 ///
 /// <para>A read FAULT propagates; it is never folded into "absent".</para>
 /// </summary>

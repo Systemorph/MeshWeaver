@@ -199,7 +199,7 @@ jobs:
                      "$RUNNER_TEMP/portal-manifests.json")
           fi
           if [ -z "$tags" ]; then
-            echo "::error::memex-portal-ai carries no image tagged $SHORT — main-cd has not promoted this commit. Wait for its run (or \`gh workflow run main-cd.yml --ref main\` when the commit is main's HEAD), confirm \`Plugins: bake + seal\` succeeded, then push the tag again."
+            echo "::error::memex-portal-ai carries no image tagged $SHORT — main-cd has not promoted this commit. Wait for its run (or \`gh workflow run main-cd.yml --ref main\` when the commit is main's HEAD), confirm \`Bake platform content in the shipped image + publish\` succeeded, then push the tag again."
             exit 1
           fi
           # The BUILD version the set was armed under, in either notation (policy

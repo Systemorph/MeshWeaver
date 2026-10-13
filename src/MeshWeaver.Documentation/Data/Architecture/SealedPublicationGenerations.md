@@ -230,7 +230,7 @@ Every row was read off the producing repository's own `ci.yml` (or `main-cd.yml`
 
 | producer | prefix (`bake-source`) | which `publish-bake-bundles.sh` it runs (`platform-ref`) | behind core `main` |
 |---|---|---|---|
-| core CD `plugins-bake` (`main-cd.yml`) | `plugins` | **this run's own core commit** (`needs.gate.outputs.sha`) | 0 — it IS the tip |
+| core CD `plugins-bake` (`main-cd.yml`; removed by #6143) | `plugins` | **this run's own core commit** (`needs.gate.outputs.sha`) | 0 — it IS the tip |
 | MeshWeaver.Plugins `ci.yml` | `plugins` | `aa40758329216d57dcefc2d8e8a52101efd5f225` | 231 commits |
 | MeshWeaver.Reinsurance | `reinsurance` | `1b5350d547473a5e2ca81e793e774cc962acfeb3` | 284 commits |
 | MeshWeaver.SocialMedia | `socialmedia` | `1b5350d5…` | 284 commits |
@@ -394,7 +394,7 @@ flat. Core CD needs no pin move; the satellites move theirs the way they always 
 
 Set `publication-layout: generation` on every producer of one prefix. The multi-producer prefix is
 `plugins` and nothing else: core CD's `plugins-bake` and MeshWeaver.Plugins' `publish-bake`. Every
-other prefix has exactly one producer.
+other prefix has exactly one producer — and since #6143 removed core's leg, so does `plugins`.
 
 #### What is landed, and the precondition that was measured before it was
 

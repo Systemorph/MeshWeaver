@@ -255,6 +255,24 @@ on:
         required: false
         type: boolean
         default: false
+      withhold-packages:
+        description: >-
+          THE PUBLICATION SEALS PER PACKAGE (MeshWeaver.Plugins#3507). Space-separated packages
+          this run must NOT seal fresh — the caller's per-package verdict (MeshWeaver.Plugins:
+          `settle-locks.outputs.withheld`, a package whose lock is unsettled or whose platform
+          floor is unstamped, and everything depending on it). Every other package this run baked
+          is sealed at this commit; each withheld package's previously SEALED build (its bundle
+          and its module package) is carried forward in its place — verified by digest and
+          publication stamp, exactly as a narrowed bake's carry — and one that was never sealed
+          stays out. The publication carries `sealed-packages.json`: per package, the build it
+          seals (bundle, commit, version, requires, carried). A seal that would leave a sealed
+          package's in-listing `requires` floor unmet is REFUSED before anything is written.
+          Empty (the default): nothing is withheld, every package is sealed at this commit — the
+          listing is still written. Requires narrow-by-affected (the carry reads the sealed
+          publication through the scope step).
+        required: false
+        type: string
+        default: ''
       bake-publish-targets:
         description: >-
           Whitespace-separated portal storage targets, <account>/<share>[/<base-path>]
@@ -718,6 +736,7 @@ jobs:
           STAGE_MODULES: ${{ inputs.stage-modules }}
           NARROW: ${{ inputs.narrow-by-affected }}
           PRE_BAKE: ${{ inputs.pre-bake-script }}
+          WITHHOLD_PACKAGES: ${{ inputs.withhold-packages }}
           REGISTRY_MODULES: ${{ inputs.registry-modules }}
           REGISTRY_URL_IN: ${{ inputs.registry-url }}
           REGISTRY_KEY: ${{ secrets.registry-key }}
@@ -778,6 +797,11 @@ jobs:
           fi
           if [ "${NARROW:-false}" = "true" ] && [ -n "${PRE_BAKE:-}" ]; then
             missing+=("narrow-by-affected and pre-bake-script are mutually exclusive — a hook that builds its own bake mount owns its composition, so the affected closure cannot also decide it. Drop one.")
+          fi
+          # A per-package seal carries each withheld package's sealed build from the publication the
+          # scope step reads (MeshWeaver.Plugins#3507); without that step there is nothing to carry from.
+          if [ -n "$(printf '%s' "${WITHHOLD_PACKAGES:-}" | tr -d '[:space:]')" ] && [ "${NARROW:-false}" != "true" ]; then
+            missing+=("withhold-packages is set but narrow-by-affected is not — the withheld packages' sealed builds are carried from the publication the scope step reads. Set narrow-by-affected: true.")
           fi
           # 🚨 The fleet registry (Doc/Architecture/PluginBundlesInTheRegistry): the sealed
           # publication is pushed there after the share seal, and every cr-consuming installation
@@ -942,7 +966,7 @@ jobs:
           print(f"platform-image-digest={rows['portal-image-digest']}")
           print(f"platform-set={rows['set']}")
           PY
-          echo "platform: resolved $(grep '^set=' "$ROWS" | cut -d= -f2-) (core $(grep '^sha=' "$ROWS" | cut -d= -f2- | cut -c1-9)); plugins publication: $(grep '^plugins-set=' "$ROWS" | cut -d= -f2-)"
+          echo "platform: resolved $(grep '^set=' "$ROWS" | cut -d= -f2-) (core $(grep '^sha=' "$ROWS" | cut -d= -f2- | cut -c1-9)); the plugins publication is read by identity at the upstream fetch"
       - name: Resolve the bake image
         id: image
         env:
@@ -1372,6 +1396,8 @@ jobs:
           REPO_DIR: ${{ github.workspace }}
           EVENT_NAME: ${{ github.event_name }}
           STATE_DIR: ${{ runner.temp }}/bake-scope
+          # Per-package seal: the sealed publication is read up front, whatever the scope.
+          WITHHOLD_PACKAGES: ${{ inputs.withhold-packages }}
         run: mw-platform-gate/.github/scripts/bake-scope.sh
       # Same staging the caller's gate does, for the same reason: cross-repo `requires` must
       # resolve for the package roots to bind.
@@ -2024,8 +2050,30 @@ jobs:
       # nor fetched is FATAL here — the alternative is publishing less than is published today,
       # which is the silent failure this whole lane exists to remove. Nothing has been written at
       # that point, so the existing publication stays sealed and intact.
-      - name: Carry forward the bundles this bake did not rebuild
-        if: steps.scope.outputs.scope == 'narrowed'
+      # ───────────── THE PUBLICATION SEALS PER PACKAGE (MeshWeaver.Plugins#3507) ─────────────
+      # A withheld package (its lock unsettled, its floor unstamped, or a dependency in that state)
+      # must never be sealed from THIS tree — and must not drop out of the publication either. So its
+      # fresh bundle and module package are deleted here, and the carry below fetches the build the
+      # sealed publication already holds for it, with the same verification a narrowed bake's carry
+      # has. One the publication never sealed stays out. An unreadable publication is RED, nothing
+      # written. Runs whenever the bake ran; with nothing withheld it says so and changes nothing.
+      - name: "Per-package seal: replace every withheld package's fresh bytes by its sealed build"
+        id: withhold
+        if: steps.scope.outputs.scope != 'none'
+        env:
+          WITHHOLD_PACKAGES: ${{ inputs.withhold-packages }}
+        run: >
+          python3 mw-platform-gate/.github/scripts/seal-packages.py withhold
+          --bake "$BAKE_DIR" --withhold "$WITHHOLD_PACKAGES"
+          --state "${{ runner.temp }}/bake-scope" --github-output "$GITHUB_OUTPUT"
+      # Both carries are BOUND to the publication bake-scope.sh read (its `_complete` stamp,
+      # published-publication.txt): each re-resolves the pointer, and without the binding a seal
+      # that lands in between would let either carry — or each of the two, over different
+      # publications — take bytes the listing and the per-package entries do not describe.
+      - name: Carry forward the bundles this bake did not rebuild (or must not seal fresh)
+        if: steps.scope.outputs.scope == 'narrowed' || steps.withhold.outputs.carry == 'true'
+        env:
+          EXPECT_PUBLICATION_FILE: ${{ runner.temp }}/bake-scope/published-publication.txt
         run: >
           mw-platform/.github/scripts/carry-forward-bundles.sh
           "$BAKE_DIR"
@@ -2033,6 +2081,31 @@ jobs:
           "$BAKE_CARRY_TARGET"
           "${{ steps.identity.outputs.identity }}"
           "${{ inputs.bake-source }}"
+      - name: "Per-package seal: carry each withheld package's sealed module package"
+        if: steps.withhold.outputs.carry-modules == 'true'
+        env:
+          CARRY_SUBDIR: modules
+          EXPECT_PUBLICATION_FILE: ${{ runner.temp }}/bake-scope/published-publication.txt
+        run: >
+          mw-platform/.github/scripts/carry-forward-bundles.sh
+          "$BAKE_DIR/modules"
+          "${{ runner.temp }}/bake-scope/carry-modules.txt"
+          "$BAKE_CARRY_TARGET"
+          "${{ steps.identity.outputs.identity }}"
+          "${{ inputs.bake-source }}"
+      # The per-package listing — and the refusal of a seal whose own dependency floors are unmet
+      # (the class of MeshWeaver#6192: a dependent sealed at a version requiring a dependency the
+      # same publication holds only at an older one, refused wholesale by every portal). A GATE: no
+      # `continue-on-error`, no input-shaped `if:` — it runs exactly when the bake ran.
+      - name: "Per-package seal: write the listing, refuse an unmet dependency floor"
+        if: steps.scope.outputs.scope != 'none'
+        env:
+          WITHHOLD_PACKAGES: ${{ inputs.withhold-packages }}
+          CONTENT_SHA: ${{ steps.content.outputs.sha }}
+        run: >
+          python3 mw-platform-gate/.github/scripts/seal-packages.py listing
+          --bake "$BAKE_DIR" --content "$GITHUB_WORKSPACE" --commit "$CONTENT_SHA"
+          --withhold "$WITHHOLD_PACKAGES" --state "${{ runner.temp }}/bake-scope"
       # 🚨 THE PYTHON THIS JOB USES MUST BUILD A VENV, and the three steps below PROVE it can
       # rather than assuming it. publish-bake-bundles.sh builds its own venv and installs its
       # PINNED Azure SDKs into it (the script owns that install on purpose — see its header: a

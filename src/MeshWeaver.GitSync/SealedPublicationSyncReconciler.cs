@@ -187,6 +187,19 @@ public static class SealedSyncReconcile
                 $"'{sealedSource.Source}' is sealed at {Short(commit)} and the source is at it; nothing was declined",
                 SteadyState: true);
 
+        // 🚨 THE PUBLICATION SEALS PER PACKAGE (MeshWeaver.Plugins#3507). A package that WAITED at the
+        // sealed commit is carried at its previously sealed build, so its types are declined on their
+        // fingerprint BY DESIGN — the source at this commit is newer than the bytes. Re-importing at
+        // the same commit cannot change that, and every seal arrival would re-import it again; the
+        // types compile from the synced source until the package is sealed fresh.
+        if (CarriedPackageOf(sealedSource, config) is { } carried)
+            return new Plan(Action.None, commit,
+                $"'{sealedSource.Source}' is sealed at {Short(commit)} but carries package '{carried.Package}' at an "
+                + $"older build ({(carried.SourceCommit is { Length: > 0 } c ? Short(c) : "an unknown commit")}) because "
+                + "it waits at that commit — its types compile from the synced source until it is sealed fresh; "
+                + "re-importing would change nothing",
+                SteadyState: true);
+
         return new Plan(Action.ReconcileAtSealedCommit, commit,
             $"'{sealedSource.Source}' is sealed at {Short(commit)} and the source claims that commit, "
             + $"yet {declinedHere.Count} type(s) baked from it were declined on their source fingerprint "
@@ -257,6 +270,17 @@ public static class SealedSyncReconcile
         && Math.Min(a.Length, b.Length) >= 7;
 
     private static string Short(string sha) => sha.Length > 8 ? sha[..8] : sha;
+
+    /// <summary>
+    /// The CARRIED package this sync source's folder belongs to (MeshWeaver.Plugins#3507), or null —
+    /// the package whose sealed build is older than the publication commit. The folder's first
+    /// segment is the package (one top-level folder per package, as every node repo lays them out).
+    /// </summary>
+    internal static SealedPackage? CarriedPackageOf(SealedSource sealedSource, GitHubSyncConfig config)
+    {
+        var folder = config.Subdirectory?.Trim().Trim('/').Split('/', 2)[0];
+        return string.IsNullOrEmpty(folder) ? null : sealedSource.PackageOf(folder) is { Carried: true } p ? p : null;
+    }
 }
 
 /// <summary>
@@ -519,12 +543,19 @@ internal sealed class SealedPublicationSyncReconciler(
     }
 
     /// <summary>
-    /// One partition's NodeType path → its LIVE definition.
+    /// One partition's NodeType path → its STORED definition.
     ///
-    /// <para>🚨 The listing answers EXISTENCE and each node's own stream answers CONTENT — the
-    /// same split <c>BundleKeyedHoldReading</c> makes, and for the same reason: a query answer can
-    /// be minutes old (CQRS), and this decides whether content moves. <c>.Complete()</c> because it
-    /// is an ENUMERATION that gates a decision, not a search.</para>
+    /// <para>🚨 The listing answers EXISTENCE and the STORE answers CONTENT — the same split
+    /// <c>BundleKeyedHoldReading</c> makes, and for the same reason: a query answer can be minutes
+    /// old (CQRS), and this decides whether content moves. <c>.Complete()</c> because it is an
+    /// ENUMERATION that gates a decision, not a search.</para>
+    ///
+    /// <para>🚨 The content is the DURABLE snapshot, not the live record (#6623): reading each type's
+    /// own stream activated a hub per type. The row trails a live owner by one persistence window,
+    /// and without bound after a store write that failed; <c>NodeTypeDefinitionReads</c> states what
+    /// a trailing fingerprint can do to <see cref="SyncedPartitionDrift.Measure"/> — miss drift
+    /// (abstain), or report drift that is gone, whose action re-imports at the commit the source
+    /// already claims and moves nothing backwards.</para>
     ///
     /// <para><b>The residual, stated where the assumption is made:</b> the listing is the read
     /// model's, so a NodeType it does not return is simply not compared. That is the abstain
@@ -561,8 +592,8 @@ internal sealed class SealedPublicationSyncReconciler(
                 if (paths.IsEmpty)
                     return Observable.Return(ImmutableDictionary<string, NodeTypeDefinition>.Empty);
                 // 🚨 The CONTENT comes from the STORE in one batched read that builds no per-node
-                // hub (#6623; NodeTypeDefinitionReads says why the store is authoritative here).
-                // Each type's own stream used to be read instead, which activated every NodeType
+                // hub (#6623). It is the durable snapshot and can trail a live owner;
+                // NodeTypeDefinitionReads says why Measure is safe on it. Each type's own stream used to be read instead, which activated every NodeType
                 // of every synced Space on every announcement and on the boot pass.
                 //
                 // 🚨 The read is still BOUNDED, and one that does not answer degrades to "no type

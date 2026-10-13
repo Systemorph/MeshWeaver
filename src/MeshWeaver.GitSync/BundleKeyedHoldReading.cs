@@ -166,9 +166,10 @@ internal static class BundleKeyedHoldReading
                     // 🚨 The DEFINITIONS never come from the listing above: this decides whether
                     // content moves, and a query answer can be minutes old (CQRS). The listing
                     // answers EXISTENCE, the STORE answers CONTENT — one batched read that builds
-                    // no per-node hub (#6623; NodeTypeDefinitionReads says why the store is
-                    // authoritative here). Reading each type's own stream activated every
-                    // NodeType of the Space for one read apiece.
+                    // no per-node hub (#6623). It is the DURABLE snapshot and can trail a live
+                    // owner; Decide's calibration step is what makes a hold safe on it
+                    // (NodeTypeDefinitionReads says how). Reading each type's own stream activated
+                    // every NodeType of the Space for one read apiece.
                     return NodeTypeDefinitionReads.ReadDefinitions(hub, typePaths, logger)
                         .SelectMany(live =>
                         {
