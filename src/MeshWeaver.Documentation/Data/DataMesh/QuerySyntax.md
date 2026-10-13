@@ -343,10 +343,16 @@ union by the same rule:
 Numbers rank before text when a field holds both. Nulls go last for `sort:x` *and* `sort:x-desc`
 so that a row without the field is never the first answer either way (Postgres's own default would
 put them first in a descending sort; the generator says `NULLS LAST` explicitly). The same rules
-apply to every `sort:` selector, node fields included. Date-times compare as text, so they are
-chronological when written in one ISO form, as the platform's serializer writes them; a hand-written
-`+02:00` offset next to `Z` values is not normalised on Postgres. The in-memory contract is
-`QuerySortKey`; the Postgres one is `PostgreSqlSqlGenerator.OrderByTerms` (MeshWeaver.Plugins).
+apply to every `sort:` selector, node fields included; an enum node field (`state`, `syncBehavior`)
+orders by its number, as its column does. Date-times are reduced to one fixed-width form before
+they compare — the serializer trims fractional seconds, so `…08:30:00Z` and `…08:30:00.1Z` sit in
+one field, and raw text would put the later one first. Postgres does the same rewrite with string
+functions only, for `Z`/`+00:00` and zoneless values, so a value that merely looks like a date
+cannot fail the query. The one residual: a non-UTC offset (`+02:00`) is compared as the instant in
+memory but as text on Postgres, so in a field that mixes offsets the pre-`limit:` window can
+differ. A sort function (`length`, `lower`, `upper`) runs on the value as written. The in-memory
+contract is `QuerySortKey`; the Postgres one is `PostgreSqlSqlGenerator.OrderByTerms`
+(MeshWeaver.Plugins).
 
 #### The default when you write no `sort:`
 

@@ -64,7 +64,11 @@ public static class QuerySortKey
         DateOnly d => d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
         TimeOnly t => t.ToString("HH:mm:ss.fffffff", CultureInfo.InvariantCulture),
         TimeSpan ts => ts.ToString("c", CultureInfo.InvariantCulture),
-        Enum e => EnumWireName(e),
+        // An enum value with no member name (undefined, or a flags combination the converter cannot
+        // name) is written by the converter as a JSON NUMBER — so it keys as one.
+        Enum e => EnumWireName(e) is var wire && (char.IsAsciiDigit(wire[0]) || wire[0] == '-')
+            ? Convert.ToDecimal(e, CultureInfo.InvariantCulture)
+            : wire,
         // Exact where the source is exact: every integral type and decimal fit a decimal without
         // loss (2^53 + 1 stays distinct from 2^53); only binary floating point stays double.
         sbyte or byte or short or ushort or int or uint or long or ulong or decimal

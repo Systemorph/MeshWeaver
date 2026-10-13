@@ -255,7 +255,10 @@ public class ContentFieldSortTest
     /// <summary>A content enum keys on its wire value (<c>[EnumMember]</c>), as JSON stores it.</summary>
     [Fact]
     public void ContentEnum_KeysOnItsWireValue()
-        => QuerySortKey.Normalize(Hold.OnHold).Should().Be("on-hold");
+    {
+        QuerySortKey.Normalize(Hold.OnHold).Should().Be("on-hold");
+        QuerySortKey.Normalize((Hold)2).Should().Be(2m, "an undefined member is written as a JSON number");
+    }
 
     /// <summary>
     /// A snake_case selector that is NOT a mapped column alias reads content, and is classified so —
