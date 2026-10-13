@@ -3228,10 +3228,17 @@ public partial class MeshOperations
                 var store = string.Equals(def.LatestAssemblyCollection, FrameworkAssemblyStore.CollectionName, StringComparison.Ordinal)
                     ? (IAssemblyStore)FrameworkAssemblyStore.Instance
                     : hub.ServiceProvider.GetService<IAssemblyStore>() ?? NullAssemblyStore.Instance;
-                return store.TryGetBuildPath(node.Path, version, def.LatestAssemblyPath, def.LatestAssemblyMvid)
+                // 🚨 Both leaves are blocking file I/O — the store probes its directory when
+                // SUBSCRIBED, and the load reads and reflection-scans the assembly when CALLED — so
+                // both run on the file-system pool, never on this stream's signalling thread, which
+                // can be a hub's scheduler (the DynamicContentTypeRegistrar shape).
+                var pool = hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem)
+                           ?? IoPool.Unbounded;
+                return pool.InvokeObservable(_ => store.TryGetBuildPath(node.Path, version, def.LatestAssemblyPath, def.LatestAssemblyMvid).Take(1))
                     .SelectMany(localPath => string.IsNullOrEmpty(localPath)
                         ? Observable.Return<NodeCompilationResult?>(null)
-                        : compilationService.GetConfigurationsFromExistingAssembly(localPath!, nodeType).Take(1));
+                        : pool.InvokeBlocking(_ => compilationService.GetConfigurationsFromExistingAssembly(localPath!, nodeType))
+                            .SelectMany(load => load.Take(1)));
             })
             .Select(result =>
             {
