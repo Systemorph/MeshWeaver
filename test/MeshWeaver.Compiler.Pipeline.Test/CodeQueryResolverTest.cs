@@ -49,6 +49,32 @@ public class CodeQueryResolverTest
         result[1].Should().Be("namespace:Shared/Utils scope:subtree nodeType:Code");
     }
 
+    /// <summary>
+    /// MeshWeaver#5508: a bare path entry (<c>$self/Source/Country</c>, no <c>@</c>, no field) was
+    /// handed to the query engine verbatim as FREE TEXT, which names no partition, so the store
+    /// served it as a UNION over every partition schema and logged <c>[FanOut] UNANCHORED</c> on
+    /// every compile. It means the node at that path, exactly as its <c>@</c> spelling does, and
+    /// every query it expands to must be anchored.
+    /// </summary>
+    [Fact]
+    public void Expand_BarePath_IsAPathReference_NeverFreeText()
+    {
+        var result = CodeQueryResolver.Expand("$self/Source/Country", SelfPath).ToList();
+        result.Should().Equal(
+            $"path:{SelfPath}/Source/Country nodeType:Code",
+            $"namespace:{SelfPath}/Source/Country scope:subtree nodeType:Code");
+        result.Should().OnlyContain(q => q.StartsWith("path:") || q.StartsWith("namespace:"),
+            "every expansion of a source entry must anchor, or the partitioned store fans it out");
+    }
+
+    [Fact]
+    public void Expand_FreeTextWithAField_IsStillAQuery()
+    {
+        // A token with a field qualifier, or several tokens, stays a query: only a lone path is a path.
+        CodeQueryResolver.Expand("name:Country", SelfPath).ToList()
+            .Should().Equal("name:Country nodeType:Code");
+    }
+
     [Fact]
     public void Expand_DoubleAtShorthand_AlsoYieldsBothForms()
     {
