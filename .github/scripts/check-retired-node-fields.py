@@ -64,12 +64,58 @@ def is_content_asset(relative: str) -> bool:
     return any(s.lower() == "content" for s in segments[:-1])
 
 
+def strip_jsonc(text: str) -> str:
+    """TEXT with `//` and `/* */` comments and trailing commas removed, outside string literals.
+
+    The importer reads node files with comments skipped and trailing commas allowed
+    (JsonFileParser: `CommentHandling` / `AllowTrailingCommas`), so a comment-bearing node is a node
+    to GitSync. Parsing only strict JSON here would skip exactly that node and pass over its retired
+    members — this reads the same dialect instead."""
+    out: list[str] = []
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if c == '"':
+            j = i + 1
+            while j < n and text[j] != '"':
+                j += 2 if text[j] == "\\" else 1
+            out.append(text[i:j + 1])
+            i = j + 1
+        elif text.startswith("//", i):
+            j = text.find("\n", i)
+            i = n if j < 0 else j
+        elif text.startswith("/*", i):
+            j = text.find("*/", i + 2)
+            i = n if j < 0 else j + 2
+        elif c == ",":
+            j = i + 1
+            while j < n and text[j] in " \t\r\n":
+                j += 1
+            if j < n and text[j] in "}]":
+                i += 1            # a trailing comma
+            else:
+                out.append(c)
+                i += 1
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
 def node_json(path: Path) -> dict | None:
-    """The parsed top-level object when PATH is a node file, else None."""
+    """The parsed top-level object when PATH is a node file, else None. Reads the importer's dialect
+    (comments, trailing commas); text that is not JSON even then is not a node to the importer either."""
     try:
-        doc = json.loads(path.read_text(encoding="utf-8-sig"))
-    except (OSError, UnicodeDecodeError, ValueError):
+        text = path.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeDecodeError):
         return None
+    try:
+        doc = json.loads(text)
+    except ValueError:
+        try:
+            doc = json.loads(strip_jsonc(strip_jsonc(text)))   # comments first, then a comma they hid
+        except ValueError:
+            return None
     if not isinstance(doc, dict):
         return None
     if not any(k == "$type" or k.lower() in ("id", "nodetype") for k in doc):
@@ -165,6 +211,11 @@ def self_test() -> int:
             failures.append(f"measured: the finding must name the file, the field and that it was retired: {got[0]}")
         case("casing", {"A.json": '{"id":"a","IsPersistent":true}'}, 1)
         case("two-in-one", {"B.json": '{"id":"b","isPersistent":true,"displayOrder":2}'}, 2)
+        # The importer's dialect: a comment-bearing or trailing-comma node is still a node.
+        case("jsonc-comments", {"J.json": '// header\n{"id":"j", /* c */ "isPersistent":true}'}, 1)
+        case("jsonc-trailing-comma", {"K.json": '{"id":"k","displayOrder":2,}'}, 1)
+        case("jsonc-comma-before-comment", {"M.json": '{"id":"m","isPersistent":true, // c\n}'}, 1)
+        case("jsonc-slashes-in-string", {"L.json": '{"id":"l","icon":"https://x/y", // c\n"isPersistent":true}'}, 1)
         case("root-mode-package", {"Pkg/C.json": '{"nodeType":"Markdown","isPersistent":true}'}, 1, root_mode=True)
 
         # MUST PASS — nested payloads, non-node JSON, assets, module sources, tooling scratch.

@@ -5,5 +5,6 @@
   "nodeType": "Northwind/ReportsCatalog",
   "category": "Reports",
   "description": "Data-driven analytical reports on Northwind sales, orders, products, clients, and employees",
-  "icon": "/api/content/Northwind/icons/reports.svg"
+  "icon": "/api/content/Northwind/icons/reports.svg",
+  "order": 2
 }
