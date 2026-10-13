@@ -120,22 +120,48 @@ public static class ModuleSourceUpdate
                 .Distinct(StringComparer.Ordinal)
                 .OrderBy(p => p, StringComparer.Ordinal)
                 .ToImmutableList())
-            .SelectMany(paths => paths.ToObservable()
-                // A path that names no space never reaches One: the parse is matched HERE, once,
-                // so One receives the parsed parts and has nothing left to assume.
-                .Select(path => SpaceOf(path) is { } parsed
-                    ? One(hub, access, path, parsed.Space, parsed.SourceId, activityBudget)
-                    : Observable.Empty<ModuleSourceUpdateRow>())
-                .Concat()
-                .ToList()
-                .Select(rows => rows.ToImmutableList()))
+            .SelectMany(paths => Sequence(hub, access, paths, activityBudget))
             .Catch((Exception ex) => Observable.Return(ImmutableList.Create(new ModuleSourceUpdateRow(
                 GitHubSyncService.ConfigNodeType, "", null, ModuleSourceUpdateOutcome.Failed,
                 $"the sync sources could not be listed ({ex.GetType().Name}: {ex.Message}) — NOTHING was synced, "
                 + "and this is not a statement that there is nothing to sync"))));
     }
 
-    private static IObservable<ModuleSourceUpdateRow> One(IMessageHub hub, AccessService access, string configPath,
+    /// <summary>
+    /// Runs the sources one after another. 🚨 An import that outlived its budget may still be running
+    /// (its cancellation is only REQUESTED), and several sources can target one Space — so once a row
+    /// reports an import still running, no later import is started: each later source reads
+    /// <see cref="ModuleSourceUpdateOutcome.Skipped"/>, naming the import it waits behind. The batch
+    /// ends there; the reboot itself goes on (#6625 review).
+    /// </summary>
+    private static IObservable<ImmutableList<ModuleSourceUpdateRow>> Sequence(
+        IMessageHub hub, AccessService access, ImmutableList<string> paths, TimeSpan activityBudget)
+    {
+        if (paths.IsEmpty)
+            return Observable.Return(ImmutableList<ModuleSourceUpdateRow>.Empty);
+        var path = paths[0];
+        var rest = paths.RemoveAt(0);
+        // A path that names no space never reaches One: the parse is matched HERE, once, so One
+        // receives the parsed parts and has nothing left to assume.
+        if (SpaceOf(path) is not { } parsed)
+            return Sequence(hub, access, rest, activityBudget);
+        return One(hub, access, path, parsed.Space, parsed.SourceId, activityBudget)
+            .SelectMany(result => result.StillRunning is { } activity
+                ? Observable.Return(rest
+                    .SelectMany(p => SpaceOf(p) is { } later
+                        ? [new ModuleSourceUpdateRow(p, later.Space, later.SourceId, ModuleSourceUpdateOutcome.Skipped,
+                            $"not started: the import of {path} (activity {activity}) outlived its budget and may "
+                            + "still be running, and a later import could write the same tree concurrently")]
+                        : Array.Empty<ModuleSourceUpdateRow>())
+                    .Prepend(result.Row)
+                    .ToImmutableList())
+                : Sequence(hub, access, rest, activityBudget).Select(rows => rows.Insert(0, result.Row)));
+    }
+
+    /// <summary>One source's row, and the activity of an import that outlived its budget (else null).</summary>
+    private sealed record OneResult(ModuleSourceUpdateRow Row, string? StillRunning);
+
+    private static IObservable<OneResult> One(IMessageHub hub, AccessService access, string configPath,
         string space, string? sourceId, TimeSpan activityBudget)
     {
         ModuleSourceUpdateRow Row(string outcome, string detail) => new(configPath, space, sourceId, outcome, detail);
@@ -146,7 +172,7 @@ public static class ModuleSourceUpdate
 
         return ReadConfig()
             .SelectMany(config => NotAModuleSource(config) is { } why
-                ? Observable.Return(Row(ModuleSourceUpdateOutcome.Skipped, why))
+                ? Observable.Return(new OneResult(Row(ModuleSourceUpdateOutcome.Skipped, why), null))
                 : Import(hub, access, space, sourceId, activityBudget)
                     .SelectMany(ended => ended.Finished
                         ? ReadConfig().Select(after =>
@@ -156,15 +182,15 @@ public static class ModuleSourceUpdate
                             var tail = log.Messages.LastOrDefault(m => m.LogLevel >= Microsoft.Extensions.Logging.LogLevel.Warning)?.Message;
                             var detail = $"{log.Status}: {after?.LastSyncOutcome ?? "no outcome recorded"} at {commit}; {DescribeModules(after)}"
                                          + (tail is null ? "" : $"; last notice: {tail}") + $" (activity {ended.Activity})";
-                            return log.Status.IsError()
+                            return new OneResult(log.Status.IsError()
                                 ? Row(ModuleSourceUpdateOutcome.Failed, detail)
-                                : Row(ModuleSourceUpdateOutcome.Updated, detail);
+                                : Row(ModuleSourceUpdateOutcome.Updated, detail), null);
                         })
-                        : Observable.Return(Row(ModuleSourceUpdateOutcome.Failed,
+                        : Observable.Return(new OneResult(Row(ModuleSourceUpdateOutcome.Failed,
                             $"the import did not finish within {Budget(activityBudget)} (activity {ended.Activity}) — "
-                            + "its cancellation was requested; its outcome is NOT established"))))
-            .Catch((Exception ex) => Observable.Return(Row(ModuleSourceUpdateOutcome.Failed,
-                $"the update could not run ({ex.GetType().Name}: {ex.Message})")));
+                            + "its cancellation was requested; its outcome is NOT established"), ended.Activity))))
+            .Catch((Exception ex) => Observable.Return(new OneResult(Row(ModuleSourceUpdateOutcome.Failed,
+                $"the update could not run ({ex.GetType().Name}: {ex.Message})"), null)));
     }
 
     /// <summary>How one import ended for the row: its terminal log, or <c>Finished = false</c> when the
@@ -190,8 +216,18 @@ public static class ModuleSourceUpdate
         Observable.Create<ImportEnd>(observer =>
         {
             var created = new AsyncSubject<string>();
+            var mesh = hub.ServiceProvider.GetRequiredService<IMeshService>();
             var watch = created
-                .SelectMany(activity => access.RunAsSystem(() => hub.GetMeshNodeStream(activity))
+                .SelectMany(activity => access.RunAsSystem(() =>
+                        // 🚨 Gated on an EXACT-PATH query before the point read, as ActivityRunner's
+                        // own cancel watch is: CreateNode proves the activity is PERSISTED, not that
+                        // it is ROUTABLE, and a point read that meets a routing NotFound terminates
+                        // with an error (#2229 item A) — which would fail this row at once and leave
+                        // the import running unbounded and uncancelled.
+                        mesh.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{activity} nodeType:Activity"))
+                            .Where(change => change.Items.Count > 0)
+                            .Take(1)
+                            .SelectMany(_ => hub.GetMeshNodeStream(activity)))
                     .Select(n => n.ContentAs<ActivityLog>(hub.JsonSerializerOptions))
                     .OfType<ActivityLog>()
                     .Where(log => log.Status.IsTerminal())
@@ -200,7 +236,11 @@ public static class ModuleSourceUpdate
                     .Timeout(activityBudget)
                     .Catch((TimeoutException _) =>
                     {
-                        hub.CancelActivity(activity);
+                        // The timeout fires on a scheduler thread, where no access context is
+                        // guaranteed; the cancellation is a control-plane write the reboot makes as
+                        // System, so System is established at the write itself.
+                        using (access.ImpersonateAsSystem())
+                            hub.CancelActivity(activity);
                         return Observable.Return(new ImportEnd(activity, false, null));
                     }))
                 .Subscribe(observer);

@@ -54,11 +54,9 @@ public class AHungImportCannotHoldTheRebootTest(ITestOutputHelper output) : Mono
     private GitHubSyncService Sync => Mesh.ServiceProvider.GetRequiredService<GitHubSyncService>();
     private GitHubCredentialService Credentials => Mesh.ServiceProvider.GetRequiredService<GitHubCredentialService>();
 
-    [Fact(Timeout = 240_000)]
-    public async Task AnImportThatNeverFinishes_EndsItsRowFailed_WithinTheBudget()
+    private async Task<string> GivenAHungModuleSource(string prefix, CancellationToken ct)
     {
-        var ct = TestContext.Current.CancellationToken;
-        var space = "Hung" + Guid.NewGuid().ToString("N")[..8];
+        var space = prefix + Guid.NewGuid().ToString("N")[..8];
         await NodeFactory.CreateNode(new MeshNode(space)
         {
             NodeType = "Space",
@@ -89,6 +87,15 @@ public class AHungImportCannotHoldTheRebootTest(ITestOutputHelper output) : Mono
             })
             .Timeout(TestTimeouts.Convergence).Await(ct);
 
+        return space;
+    }
+
+    [Fact(Timeout = 240_000)]
+    public async Task AnImportThatNeverFinishes_EndsItsRowFailed_WithinTheBudget()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var space = await GivenAHungModuleSource("Hung", ct);
+
         var fetched = repoClient.Fetches.FirstAsync().Replay();
         using var connection = fetched.Connect();
 
@@ -103,6 +110,41 @@ public class AHungImportCannotHoldTheRebootTest(ITestOutputHelper output) : Mono
         var row = rows.Single(r => r.Space == space);
         row.Outcome.Should().Be(ModuleSourceUpdateOutcome.Failed);
         row.Detail.Should().Contain("did not finish within 3 s").And.Contain("NOT established");
+
+        // The row's promise — "its cancellation was requested" — is checked on the activity node.
+        var activity = row.Detail[(row.Detail.IndexOf("(activity ", StringComparison.Ordinal) + "(activity ".Length)..];
+        activity = activity[..activity.IndexOf(')')];
+        await Mesh.GetWorkspace().GetMeshNodeStream(activity)
+            .Should().Within(TestTimeouts.Convergence)
+            .Match(n => n.ContentAs<ActivityLog>(Mesh.JsonSerializerOptions)?.RequestedStatus == ActivityStatus.Cancelled,
+                because: "the timed-out import's cancellation is requested on its activity", cancellationToken: ct);
+    }
+
+    /// <summary>
+    /// 🚨 #6625 review: an import that outlived its budget may still be running, and several sources
+    /// can target one Space — so no later import is started behind it. The later source reads Skipped,
+    /// naming the import it waits behind, and only ONE fetch ever starts (the control).
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task NoLaterImportStarts_BehindOneThatOutlivedItsBudget()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var first = await GivenAHungModuleSource("HungA", ct);
+        var second = await GivenAHungModuleSource("HungB", ct);
+        var fetchCount = 0;
+        using var counting = repoClient.Fetches.Subscribe(_ => Interlocked.Increment(ref fetchCount));
+
+        var rows = await ModuleSourceUpdate.UpdateAllWithin(Mesh, TimeSpan.FromSeconds(3))
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("the batch must end once one import outlives its budget", ct);
+
+        Output.WriteLine(string.Join(Environment.NewLine, rows.Select(r => $"{r.ConfigPath}: {r.Outcome} — {r.Detail}")));
+        var mine = rows.Where(r => r.Space == first || r.Space == second).ToArray();
+        mine.Should().HaveCount(2);
+        mine[0].Outcome.Should().Be(ModuleSourceUpdateOutcome.Failed);
+        mine[1].Outcome.Should().Be(ModuleSourceUpdateOutcome.Skipped);
+        mine[1].Detail.Should().Contain("not started");
+        Volatile.Read(ref fetchCount).Should().Be(1, "the second import must never have started");
     }
 
     /// <summary>The transport reduced to a fetch that never answers, recorded on subscribe.</summary>

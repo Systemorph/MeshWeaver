@@ -61,10 +61,14 @@ process drives a request.
    **from the moment its activity is created** (MeshWeaver#6625). `RunActivity` emits the activity
    path only when the run is terminal, and the budget used to be composed after that emission, so
    it bounded nothing: an import that never finished held the Sync step — and the request,
-   non-terminal, which suppresses every pod's self-reboot — indefinitely (measured: ~21 h on one
-   instance, `Preparing`/Sync on another). Now the row reads `Failed` — *"did not finish within …
-   its outcome is NOT established"* — the import's cancellation is requested through the Activity
-   Control Plane, and the reboot goes on to the next step. Why an import hangs is the import's own
+   non-terminal, which suppresses every pod's self-reboot — indefinitely. Observed: one instance
+   held in `Preparing` at the Sync step; another held a reboot request open for ~21 h, but its step
+   state could not be read, so the Sync stall is the mechanism that FITS it, not one measured
+   there. Now the row reads `Failed` — *"did not finish within … its outcome is NOT established"* —
+   the import's cancellation is requested through the Activity Control Plane (as System, at the
+   write), and the reboot goes on to the next step. Because that import may still be running, no
+   later source's import is started behind it in the same pass: those rows read `Skipped`, naming
+   the import they wait behind, since two sources can target one Space. Why an import hangs is the import's own
    defect and is not answered by this bound (`AHungImportCannotHoldTheRebootTest`).
 2. **Modules.** The executor lands the newest COMPATIBLE published version of every installed
    module through `ModuleReloadExecutor.ResolveAndLand`, which is the module reload's own
