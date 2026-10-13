@@ -2012,6 +2012,8 @@
   "hosting.triage.filedIssue": "Issue {0}",
   "hosting.triage.filedIssueLabel": "Gemeldet als",
   "hosting.triage.filedIssueFound": "über die Herkunftsmarke gefunden, nicht erneut gemeldet",
+  "hosting.repoHealth.budgetRefused.title": "GitHub-Actions-Budget verweigert Arbeit ({count} Repositories)",
+  "hosting.repoHealth.budgetRefused.body": "Die Repository-Gesundheitsprüfung um {at} UTC hat festgestellt, dass das Actions-Budget der Organisation Arbeit verweigert in: {repositories}. Erhöhe das Budget oder warte, bis der Abrechnungszeitraum zurückgesetzt wird. Dies ist die einzige Benachrichtigung zu dieser Verweigerung; die nächste kommt erst, wenn sie behoben ist und erneut auftritt.",
   "secret.inputLabel": "Neuer Wert",
   "secret.inputPlaceholder": "Wert hier einfügen",
   "secret.generate": "Generieren",
