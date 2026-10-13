@@ -474,6 +474,15 @@ public class AppDirectoryPureTest
             new MeshNode("_DefaultInstallLedger", "Elsewhere"),
         ]).OrderBy(x => x, StringComparer.Ordinal).Should().Equal(["Crm"], "only a node IN the records partition is a record");
 
+        // A record whose package installs into ANOTHER partition is keyed by that partition — the root's path.
+        AppDirectory.RecordIds([
+            new MeshNode("CrmPackage", AppDirectory.InstallRecordsPartition)
+            {
+                NodeType = "Package",
+                Content = JsonDocument.Parse("""{"id":"CrmPackage","targetPartition":"Crm"}""").RootElement,
+            },
+        ], Options).OrderBy(x => x, StringComparer.Ordinal).Should().Equal(["Crm"]);
+
         AppDirectory.PartitionsOf([
             MeshNode.FromPath("Reinsurance/_GitSync"),
             MeshNode.FromPath("Manufacturing/_GitSync/main"),
@@ -484,7 +493,9 @@ public class AppDirectoryPureTest
             new MeshNode("r2", "Admin/_PackageUninstall") { Content = new System.Text.Json.Nodes.JsonObject { ["Package"] = "DeepSign", ["Status"] = "Done" } },
             new MeshNode("r3", "Admin/_PackageUninstall") { Content = new PackageUninstallRequest { Package = "Crm", Status = PackageUninstallStatus.TearingDown } },
             new MeshNode("r4", "Admin/_PackageUninstall") { Content = JsonDocument.Parse("""{"status":"Done"}""").RootElement },
-        ], Options).OrderBy(x => x, StringComparer.Ordinal).Should().Equal(["Crm", "DeepSign", "Parties"], "content is read in whatever shape it arrives");
+            // the partitions a completed request recorded count too — roots are keyed by partition
+            new MeshNode("r5", "Admin/_PackageUninstall") { Content = JsonDocument.Parse("""{"package":"Pkg","status":"Done","partitions":[{"partition":"PkgSpace"}]}""").RootElement },
+        ], Options).OrderBy(x => x, StringComparer.Ordinal).Should().Equal(["Crm", "DeepSign", "Parties", "Pkg", "PkgSpace"], "content is read in whatever shape it arrives");
     }
 
     [Theory]

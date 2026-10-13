@@ -75,9 +75,9 @@ public sealed record AppRoot(
 /// What the instance says about which packages are installed — the inputs of
 /// <see cref="AppDirectory.IsTile"/>.
 /// </summary>
-/// <param name="Records">The package ids with an install record (<c>Plugins/{id}</c>).</param>
+/// <param name="Records">The partitions with an install record (<c>Plugins/{id}</c>, keyed by its target partition).</param>
 /// <param name="Synced">The partitions with a GitHub sync source (<c>{id}/_GitSync</c>).</param>
-/// <param name="Uninstalled">The packages an uninstall request names whose phase 1 completed.</param>
+/// <param name="Uninstalled">The packages and partitions an uninstall request names whose phase 1 completed.</param>
 public sealed record InstallEvidence(
     ImmutableHashSet<string> Records, ImmutableHashSet<string> Synced, ImmutableHashSet<string> Uninstalled)
 {
@@ -241,7 +241,7 @@ public sealed class AppDirectory
         var cache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
         var options = hub.JsonSerializerOptions;
         var records = cache.GetQuery(InstallRecordsQueryId, options, InstallRecordsQuery)
-            .Select(nodes => RecordIds(nodes));
+            .Select(nodes => RecordIds(nodes, options));
         var synced = cache.GetQuery(SyncSourcesQueryId, options, SyncSourcesQuery)
             .Select(nodes => PartitionsOf(nodes));
         var uninstalled = cache.GetQuery(UninstallRequestsQueryId, options, UninstallRequestsQuery)
@@ -276,12 +276,21 @@ public sealed class AppDirectory
         root.HostedIn is { Length: > 0 } host
         && !string.Equals(host.Trim(), PersonAppHost, StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>The package ids the install records name (<c>Plugins/{id}</c>). Pure.</summary>
-    public static ImmutableHashSet<string> RecordIds(IEnumerable<MeshNode> nodes) =>
+    /// <summary>
+    /// The partitions the install records say are installed — keyed like the app roots, by
+    /// PARTITION: a record's <c>targetPartition</c> when it declares one, else its id (the package
+    /// id, which is the partition by default — <c>PackageInstaller.TargetPartitionOf</c>). Content is
+    /// read in whatever shape it arrives. Pure.
+    /// </summary>
+    public static ImmutableHashSet<string> RecordIds(IEnumerable<MeshNode> nodes, JsonSerializerOptions? options = null) =>
         nodes
             .Where(n => string.Equals(n.Namespace, InstallRecordsPartition, StringComparison.OrdinalIgnoreCase)
                         && !string.IsNullOrWhiteSpace(n.Id))
-            .Select(n => n.Id)
+            .Select(n => options is not null && ElementOf(n, options) is { } c
+                         && Property(c, "targetPartition") is { ValueKind: JsonValueKind.String } t
+                         && t.GetString() is { } target && !string.IsNullOrWhiteSpace(target)
+                ? target.Trim().Trim('/')
+                : n.Id)
             .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>The partitions <paramref name="nodes"/> live in — their first path segment. Pure.</summary>
@@ -296,13 +305,11 @@ public sealed class AppDirectory
     /// the content arrives). Pure.</summary>
     public static ImmutableHashSet<string> UninstalledPackages(IEnumerable<MeshNode> nodes, JsonSerializerOptions options) =>
         nodes
-            .Select(n => ElementOf(n, options) is { } c
-                         && Property(c, "status") is { ValueKind: JsonValueKind.String } status
-                         && UninstalledStatuses.Contains(status.GetString() ?? "")
-                         && Property(c, "package") is { ValueKind: JsonValueKind.String } p
-                ? p.GetString()
-                : null)
-            .OfType<string>()
+            .SelectMany(n => ElementOf(n, options) is { } c
+                             && Property(c, "status") is { ValueKind: JsonValueKind.String } status
+                             && UninstalledStatuses.Contains(status.GetString() ?? "")
+                ? UninstalledNames(c)
+                : [])
             .Select(p => p.Trim())
             .Where(p => p.Length > 0)
             .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
@@ -508,6 +515,20 @@ public sealed class AppDirectory
         {
             HostedIn = string.IsNullOrWhiteSpace(hostedIn) ? null : hostedIn.Trim(),
         };
+    }
+
+    /// <summary>What one completed request says is gone: the package id and every partition it
+    /// recorded (<c>partitions[].partition</c>) — roots and sync sources are keyed by partition.</summary>
+    private static IEnumerable<string> UninstalledNames(JsonElement content)
+    {
+        if (Property(content, "package") is { ValueKind: JsonValueKind.String } p && p.GetString() is { } package)
+            yield return package;
+        if (Property(content, "partitions") is { ValueKind: JsonValueKind.Array } partitions)
+            foreach (var entry in partitions.EnumerateArray())
+                if (entry.ValueKind == JsonValueKind.Object
+                    && Property(entry, "partition") is { ValueKind: JsonValueKind.String } part
+                    && part.GetString() is { } name)
+                    yield return name;
     }
 
     /// <summary>The content as a JSON object, whatever shape it arrived in. Typed content is
