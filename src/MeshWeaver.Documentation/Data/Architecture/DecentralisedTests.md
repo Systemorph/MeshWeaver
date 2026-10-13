@@ -341,6 +341,12 @@ layout area over the ordinary client sync stream, and classifies the frames
 `N/M passed` is green iff `N == M`; **no verdict inside the timeout is RED** — *"a Tests area that
 reports nothing is a broken gate, never a silent pass."*
 
+A red verdict names **every failing case with its reason**, then the `N/M passed` summary. The streaming
+runner's verdict is a data grid, so the `❌` is one cell of a row whose sibling cells carry the class, the
+case and the output (the failing assertion or exception); the gate reports the whole row
+(`ActionLinkLiveTests · PublishResolveContinueRevoke · ❌ FAIL · 3.2s · Expected …`). It used to report
+the `❌` cell alone, and a failing streaming suite printed a bare `❌ FAIL` that named nothing.
+
 The suites it runs are hand-rolled. `Store/Catalog/Test/CatalogTestsArea.cs` is the canonical shape:
 
 ```csharp

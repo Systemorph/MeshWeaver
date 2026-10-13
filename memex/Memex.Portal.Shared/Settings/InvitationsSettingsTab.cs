@@ -139,6 +139,9 @@ public static class InvitationsSettingsTab
         LayoutAreaHost host, IObservable<IEnumerable<InvitationRow>> rows, Action<UiActionContext, InvitationRow> revoke)
         => rows
             .BindGrid(ListDataId, host.Localize("invitations.none"), message => host.Localize("invitations.listFailed", message))
+            // Each row is its own click: revoking one invitation never holds up — or is refused behind —
+            // revoking the next (Doc/GUI/ButtonPendingState → "Idempotence").
+            .WithRowKey("path")
             .WithColumn(new PropertyColumnControl<string> { Property = nameof(InvitationRow.Email).ToCamelCase() }
                 .WithTitle(host.Localize("invitations.column.email")))
             .WithColumn(new PropertyColumnControl<string> { Property = nameof(InvitationRow.Status).ToCamelCase() }

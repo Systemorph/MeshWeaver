@@ -266,6 +266,17 @@ None of those lines could name the read.
 Once every producer rides the answer out, mark the type `[ReaskedOnShutdown]` and the line moves to
 Debug by the rule above. Producers in other repositories and in mesh-compiled code count too.
 
+**Until then, a producer that rides the answer out says so on its own request.**
+`PostOptions.ReaskingOnShutdown()` stamps the delivery property `ReasksOnShutdown`. This is the
+per-delivery form of the attribute: one producer's claim about one request, never a claim about the
+type. `MessageService.Dispose` reads either form, and a discard of a delivery that carries the
+property is teardown-normal (Debug), the same as a marked type. The NACK is unchanged, and the
+producer's re-ask runs on it. `GetMeshNodeOutcome` stamps it on its point read. The other producers
+in the table do not, so their discards stay Errors. With that, the bring-up discard Errors that kept
+reopening #5718, partition roots recycled by a live module update while a NodeType hub's point read
+(`GetDataRequest { MeshNodeReference }`) was parked, move to Debug. Stamp it only from code that
+really re-asks: a stamped producer that takes the NACK as final would silence a real loss.
+
 ## Where this is pinned
 
 | Test | What it fails on |
@@ -278,6 +289,7 @@ Debug by the rule above. Producers in other repositories and in mesh-compiled co
 | `ASyncStreamThatGivesUpOnItsOwnerEndsTest` (`MeshWeaver.Data.Test`) | a give-up that leaves the stream alive on its last value, or one activation's NACK and announcement charged as two activations (#6602) |
 | `ADrainingSiloDoesNotSilenceItsSubscribersTest` (`MeshWeaver.Hosting.Orleans.Test`) | a grain on a stopping silo accepting a subscribe it can only answer into the void (#5256) |
 | `DeferredDeliveryNackedOnDisposeTest.ADiscardError_NamesTheRequest_SoItsProducerCanBeTold` (`MeshWeaver.Messaging.Hub.Test`) | a bring-up discard Error that names the request type but not its declared description (#5718), or that prints an undeclared payload |
+| `DeferredDeliveryNackedOnDisposeTest.ARequestWhoseProducerDeclaresTheReask_IsTeardownNormal_NotAnError` (`MeshWeaver.Messaging.Hub.Test`) | a delivery stamped `ReasksOnShutdown` still reported at Error when a teardown discards it, or no longer answered `ShuttingDown` (#5718) |
 
 ## See also
 
