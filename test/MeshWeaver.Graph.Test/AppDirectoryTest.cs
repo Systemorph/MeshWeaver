@@ -666,7 +666,10 @@ public class AppDirectoryTest(ITestOutputHelper output) : MonolithMeshTestBase(o
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder)
             .ConfigureHub(config => config
-                .WithType<TestPackageContent>(nameof(TestPackageContent)))
+                .WithType<TestPackageContent>(nameof(TestPackageContent))
+                // The uninstall request's content type, as the PluginCatalog registers it in production —
+                // without it the request nodes read as untyped content (the untyped-content CI gate).
+                .WithType<PackageUninstallRequest>(nameof(PackageUninstallRequest)))
             .AddMeshNodes(
             AppRootNode("DirApp", app: true),
             InstallRecord("DirApp"),
