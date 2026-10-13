@@ -722,7 +722,11 @@ public static class PersistenceExtensions
                 StaticNodeQueryProvider.BuildDefaultMatches(providers, config),
                 config,
                 sp.GetService<ILoggerFactory>(),
-                sp.GetService<ModuleContexts>());
+                sp.GetService<ModuleContexts>(),
+                // Declared nodes on a satellite path (a declared access grant) are row-filtered
+                // with the same validators the storage providers use — resolved lazily, see there.
+                sp.GetService<IEnumerable<Lazy<INodeValidator>>>(),
+                sp.GetService<AccessService>());
         });
 
         // AddMeshNodes seed flows through StaticMeshNodeListProvider, registered
@@ -790,7 +794,11 @@ public static class PersistenceExtensions
                 StaticNodeQueryProvider.BuildDefaultMatches(providers, config),
                 config,
                 sp.GetService<ILoggerFactory>(),
-                sp.GetService<ModuleContexts>());
+                sp.GetService<ModuleContexts>(),
+                // Declared nodes on a satellite path (a declared access grant) are row-filtered
+                // with the same validators the storage providers use — resolved lazily, see there.
+                sp.GetService<IEnumerable<Lazy<INodeValidator>>>(),
+                sp.GetService<AccessService>());
         });
         services.AddSingleton<IMeshQueryProvider>(sp => sp.GetRequiredService<StaticNodeQueryProvider>());
 

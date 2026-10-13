@@ -318,7 +318,7 @@ jobs:
         run: |
           set -euo pipefail
           "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/scripts/ci-failure-ledger.py" > "$RUNNER_TEMP/ci-failure-ledger.py" \
-            || { echo "::error::could not fetch ci-failure-ledger.py (Systemorph/MeshWeaver, under .github/scripts) at ${SCRIPTS_REF} — a scripts-ref older than the lane needs the older lane"; exit 1; }
+            || { echo "::error::could not fetch ci-failure-ledger.py (Systemorph/MeshWeaver, under .github/scripts) at ${SCRIPTS_REF} — the reader's line above names the cause; only when it says the path does not exist at that ref is this a scripts-ref older than the lane, which needs the older lane"; exit 1; }
           head -c 400 "$RUNNER_TEMP/ci-failure-ledger.py" | grep -q "ci-failure-ledger" || { echo "::error::the fetched ci-failure-ledger.py at ${SCRIPTS_REF} does not look like the ledger"; exit 1; }
 
       # 🚨 Self-test FIRST, and let it fail the job. An unproven ledger is no ledger: every rule

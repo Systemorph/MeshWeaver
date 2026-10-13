@@ -191,7 +191,11 @@ case from a stuck one and nothing naming the case. It now streams:
   `MeshOperations.RunTests(path)` holds ONE subscription for the whole run and writes it to an
   activity in the caller's own partition (category `TestRun`): a line per case as it runs and as it
   lands, with its output; `Succeeded` when every counted case passed, `Failed` otherwise, or when no
-  verdict arrived within the bound (the last line names the case still running). It answers at once
+  verdict arrived within the bound (the last line names the case still running). The bound covers
+  the WHOLE run, the version preflight included — one deadline taken when the run starts, so a
+  preflight still converging the mesh at the deadline ends the run `Failed` naming that phase, instead
+  of holding the activity at its title line past `timeoutSeconds` (MeshWeaver.Plugins#3513:
+  dispatched with 300 s, silent for 8 min 35 s while a convergence pass ran). It answers at once
   with `{status: "Dispatched", activityPath}`; poll `get @{activityPath}`, which starts nothing.
   `memex tests @<node>` is that loop in a terminal (`POST api/mesh/run-tests`, then the activity every
   two seconds), exiting `0` (passed), `1` (failed) or `4` (no terminal status within `--timeout`). The

@@ -3172,13 +3172,14 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ needs.gate.outputs.sha }}
-      # 🚨 The plugins are BUILT HERE, in the same run and against the same image as the platform's
-      # own content — maintainer decision 2026-08-26 ("run full plugin build in main memex build";
-      # "plugins should not have a lane in this sense"). One run, one framework identity, one
-      # sealed publish: a plugin bundle can no longer carry bytes from a framework that is not the
-      # one shipping (#1814's class), and its version is the version THIS run computed (#695's
-      # class — see the publish step). Same repo as portal-image's checkout; PlatformBakeLaneGuard
-      # asserts it is the only foreign repository in this file.
+      # 🚨 This job bakes and publishes the PLATFORM's own content (`meshweaver-content`) and
+      # nothing else. Core CD no longer builds, bakes or seals any MeshWeaver.Plugins content: the
+      # `plugins-modules` / `plugins-bake` / `report-plugins-seal` legs were removed by #6143
+      # (policy `platform-module-deploy-separate`, Doc/Architecture/PlatformAndModuleDeploy). The
+      # ONLY writer of the `plugins` publication is MeshWeaver.Plugins' own CI, through
+      # `node-repo-publish-bake.yml`; this run merely READS that sealed publication in
+      # `published-modules` below. Sealing it per package instead of per commit is in flight
+      # (Systemorph/MeshWeaver.Plugins#3507). The checkout is this repository at the gate's sha.
       - name: "Preflight: the publish targets must be provisioned"
         run: |
           set -euo pipefail

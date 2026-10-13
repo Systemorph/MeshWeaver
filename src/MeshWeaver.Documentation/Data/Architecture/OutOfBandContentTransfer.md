@@ -112,6 +112,15 @@ once. A sync that runs twice writes the same blob at the same key and the same f
 destination path — no duplication anywhere. A staged blob that is already present with the right
 length is not rewritten, so a retry after a partial run does not re-copy 100 MB over SMB.
 
+**A single-file upload is the one writer that does NOT share a blob.** `hub.SaveContentFile(node)`
+(behind `upload`) reclaims its blob the moment its own write answers, and two uploads of identical
+bytes are independent posts — so under a shared content-addressed key the first to answer would
+delete the blob while the second's owner is still probing or reading it. Its handle is therefore the
+content hash followed by a per-transfer nonce (still one hex segment): each upload stages, reads and
+reclaims a blob nobody else names. It also refuses, before staging, a collection whose config names
+another hub as its owner — the node only inherits it, the owner's write would refuse it, and staging
+runs on the producer where no owner gate sees it.
+
 ## Who owns the lifetime
 
 **The producer owns every blob it stages, from `Post()` to the last delivery's answer.**
@@ -123,6 +132,7 @@ length is not rewritten, so a retry after a partial run does not re-copy 100 MB 
   is reclaimed by an age sweep: before staging, the producer deletes `_staging/` entries older than
   `ContentStaging.StaleAfter` (24 h). The window is far wider than any sync, so the sweep can never
   race a live transfer, and the folder holds at most one run's assets in the normal case.
+- **The staging folder is never read as content.** A staged blob is bytes nobody has admitted yet (an oversized upload's, before its owner decides Update), so every user-facing read answers `_staging/…` as absent: the content route (`ContentFileResolver.Resolve`), the collection listing (`ContentList`), the hub's `IFileContentProvider` that `GetData` and the file tools read through (`ListCollectionItems` neither shows the folder nor lists inside it; `GetFileContent` answers a blob there as not found), and the collection-named layout area. Only the transfer itself (`ContentStaging`, `WriteStaged`) reads the folder, through the collection directly.
 - **The mirror never prunes the staging folder and never prunes a staged file.** `_staging/` is
   excluded from the prune enumeration outright — it is framework state, not content — and staged
   paths are part of `MirrorKeepPaths`, the full keep set the one authoritative prune pass is

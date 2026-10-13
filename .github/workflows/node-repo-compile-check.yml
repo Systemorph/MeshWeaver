@@ -556,7 +556,7 @@ jobs:
           set -euo pipefail
           [ -n "${PLATFORM_REF:-}" ] || { echo "::error::platform-ref is empty — the canonical compile-check.py has no ref to be fetched at"; exit 1; }
           "$RUNNER_TEMP/mw-core-file" "${PLATFORM_REF}" ".github/scripts/compile-check.py" > "$RUNNER_TEMP/compile-check.py" \
-            || { echo "::error::could not fetch .github/scripts/compile-check.py at ${PLATFORM_REF} from Systemorph/MeshWeaver — a pin older than the centralization needs the older lane, not a drifted local copy"; exit 1; }
+            || { echo "::error::could not fetch .github/scripts/compile-check.py at ${PLATFORM_REF} from Systemorph/MeshWeaver — the reader's line above names the cause; only when it says the path does not exist at that ref is this a pin older than the centralization needs the older lane, not a drifted local copy"; exit 1; }
           head -c 400 "$RUNNER_TEMP/compile-check.py" | grep -q "compile-check" || { echo "::error::the fetched compile-check.py at ${PLATFORM_REF} does not look like the checker"; exit 1; }
       - name: Compile-check every NodeType
         working-directory: repo

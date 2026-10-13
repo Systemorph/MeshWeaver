@@ -27,8 +27,8 @@ THE RULE
      `GITHUB_TOKEN` — every satellite's token can read core, it is public);
   2. the newest run whose PLATFORM is SEALED — `Promote: tag the full set`, `Verify every image
      shipped` and `Bake platform content in the shipped image + publish` all succeeded. That trio
-     is the whole seal: neither the run's overall conclusion (a satellite-compat leg, an alert job)
-     nor the run's OWN `Plugins: bake + seal …` job decides the choice. A run that is green but
+     is the whole seal: the run's overall conclusion (a satellite-compat leg, an alert job) does
+     not decide the choice. A run that is green but
      published nothing (the trio SKIPPED, e.g. core CD run 8197 / 8420) is not a release and is
      passed over, saying so. A run still sealing is waited for on a release trigger
      (`--wait-for-seal`), and otherwise passed over, saying so;
@@ -38,18 +38,20 @@ THE RULE
      The lane then takes the digests exactly as if the caller had pinned them. A set whose images
      are gone (retention purge,
      MeshWeaver#3438) is passed over, saying so, and the next-newest sealed set is taken;
-  4. the PLUGINS publication is found on its own: the newest core CD run whose `Plugins: bake +
-     seal …` job succeeded — which may be an OLDER run than the core set — and is reported beside
-     it (`plugins-run`, `plugins-run-url`, `plugins-set`, `plugins-sealed-at`; `plugins-sealed` is
-     the chosen run's own seal verdict). A Plugins commit is not in these outputs on purpose:
-     Systemorph/MeshWeaver.Plugins is PRIVATE, so a consumer's GITHUB_TOKEN cannot read it. ONE
-     bounded exception, measured: a set whose own Plugins seal is STILL RUNNING is passed over (or
-     waited for on a release trigger) — core cuts a set every ~20 minutes and its seal lands minutes
-     after promote; taking the set in that window made every consumer red on `upstream 'plugins'
-     has no SEALED publication … for identity <id>` (Manufacturing, 2026-09-10). A seal that FAILED,
-     was SKIPPED or CANCELLED is terminal and does not hold the set back — Plugins' own CI
-     republishes for that identity when Plugins is fixed, and the lane's upstream fetch says RED, by
-     name, if the registry holds no publication for it.
+  4. the PLUGINS publication is NOT this script's question (MeshWeaver#6615). Core CD stopped
+     baking and sealing it in #6143: MeshWeaver.Plugins' own `node-repo-publish-bake.yml` lane is
+     its only writer, it is sealed per FRAMEWORK IDENTITY (per epoch, not per core set) in the
+     fleet registry, and Systemorph/MeshWeaver.Plugins is PRIVATE, so a consumer's GITHUB_TOKEN
+     cannot read the runs that seal it. This script used to read core CD's `Plugins: bake + seal
+     the publication for this identity` job for it; after #6143 that job was `absent` on every run,
+     which silently passed over every trio-sealed set whose run was still in flight ("its Plugins
+     publication is still sealing"), made `--wait-for-seal` wait on a job that never appears, spent
+     up to 40 job-listing calls per resolution, and left `plugins-run` / `plugins-set` /
+     `plugins-sealed-at` able to name only a pre-#6143 run. The ground truth is the publication
+     itself, read BY IDENTITY: the lane's upstream fetch (compose-sealed-modules.sh) reads it and is
+     RED, by name, when the registry holds none for the identity this set resolves. No `plugins-*`
+     key is written any more, and `self_test` keeps a run that still carries the retired job
+     from deciding anything.
 
 Every skip is PRINTED with its reason, the chosen set is written to the job log and the step
 summary, and running out of candidates is a RED job naming what was looked for — never a silent
@@ -141,8 +143,7 @@ API-CALL BUDGET (the caller's GITHUB_TOKEN: 1,000 requests/hour per repository)
 ------------------------------------------------------------------------------
 One resolution: 1 (runs page) + at most 1 recent-run witness query (omitted when a ceiling already
 proves staleness) + 1 per run examined until the chosen set + 1 props read + 2 for the chosen run's
-promotion-record listing/archive, + at most PLUGINS_LOOKBACK (40) when the chosen run's own seal is
-not green — typically 7-15 calls. The
+promotion-record listing/archive — typically 5-10 calls. The
 lanes add one resolution in `plan` / `publish-bake` plus one freshness check per gate shard, and
 one `contents` read per job to fetch this script. The registry HEADs are not GitHub calls.
 
@@ -159,8 +160,7 @@ PLATFORM_BASELINE (optional JSON, see FRESHNESS). The registry credential suppor
 documented ghcr.io image overrides.
 Writes `sha`, `set`, `run-number`, `run-url`, `image-digest`, `portal-image-digest`,
 `tester-name`, `tester-image`, `portal-name`, `portal-image` (`name` is the repository alone,
-`image` is name@digest), `plugins-sealed`, `plugins-run`, `plugins-run-url`, `plugins-set`,
-`plugins-sealed-at`, `override`, `source` and `lag` to $GITHUB_OUTPUT, and a table to
+`image` is name@digest), `override`, `source` and `lag` to $GITHUB_OUTPUT, and a table to
 $GITHUB_STEP_SUMMARY when set. `lag` is always present and empty unless the optional main ceiling
 held this run back. With --migration-image, also writes `migration-name`, `migration-image-digest`
 and `migration-image` for that same sealed set.
@@ -205,7 +205,10 @@ REQUIRED_JOBS: tuple[tuple[str, str], ...] = (
     ("verify", "Verify every image shipped"),
     ("platform bake", "Bake platform content in the shipped image + publish"),
 )
-PLUGINS_SEAL_JOB = ("plugins seal", "Plugins: bake + seal the publication for this identity")
+# 🚨 NOT a seal job, and read by `self_test` ALONE: the core CD job that sealed the `plugins`
+# publication until #6143 removed it. Kept only as a FIXTURE, so the self-test can prove a run that
+# still carries it decides nothing (MeshWeaver#6615). `choose`/`verdict` never consult it.
+RETIRED_PLUGINS_SEAL_JOB = "Plugins: bake + seal the publication for this identity"
 
 SHA = re.compile(r"^[0-9a-f]{40}$")
 SET_NAME = re.compile(r"^(\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?)[.-]ci\.(\d+)$")
@@ -293,9 +296,6 @@ PLATFORM_VERSION = re.compile(
     r"<PlatformVersion\b[^>]*>\s*(\d+\.\d+\.\d+[^<\s]*)\s*</PlatformVersion>")
 MAX_RUN_PAGES = 3          # 300 runs ≈ several days of core CD at the observed cadence
 POLL_SECONDS = 30
-# How many runs OLDER than the chosen core set are read looking for a sealed Plugins publication
-# when the chosen run's own seal is not green — one `jobs` call each, so this bounds the budget.
-PLUGINS_LOOKBACK = 40
 
 # GitHub REST: path → JSON, text log, or bounded promotion-record ZIP. The ZIP comes from the
 # run's exact gate-selected source pair; the run head can be different from the image source.
@@ -1657,9 +1657,6 @@ class Verdict(NamedTuple):
     sealed: bool             # the platform trio (promote, verify, platform bake) all succeeded
     pending: bool            # a trio job has not finished yet (and none has failed)
     reasons: list[str]       # why the platform is not sealed, one line per trio job not `success`
-    plugins: str             # this run's OWN Plugins seal: success / failure / skipped / in progress / absent
-    plugins_pending: bool    # its own Plugins seal is still running (or not created yet, run in flight)
-    plugins_sealed_at: str   # ISO `completed_at` of the seal group when it succeeded, else ""
 
 
 def _group(jobs: list[dict], prefix: str) -> str:
@@ -1675,16 +1672,10 @@ def _group(jobs: list[dict], prefix: str) -> str:
     return "success"
 
 
-def _completed_at(jobs: list[dict], prefix: str) -> str:
-    stamps = [str(j.get("completed_at") or "") for j in jobs
-              if str(j.get("name", "")).startswith(prefix)]
-    return max(stamps) if stamps else ""
-
-
 def verdict(jobs: list[dict], run: dict) -> Verdict:
-    """The platform seal is the TRIO and nothing else (maintainer rule, 2026-09-12). The run's own
-    Plugins seal is reported beside it and holds the set back only while it is still running —
-    the bounded window in which the publication does not exist yet (see the module docstring)."""
+    """The platform seal is the TRIO and nothing else (maintainer rule, 2026-09-12). No other job of
+    the run is read — in particular not the retired core Plugins seal (MeshWeaver#6615): core CD
+    has not carried it since #6143, so reading it held every in-flight sealed set back forever."""
     in_flight = run.get("status") != "completed"
     reasons: list[str] = []
     pending = False
@@ -1697,11 +1688,7 @@ def verdict(jobs: list[dict], run: dict) -> Verdict:
         pending |= state == "in progress" or (state == "absent" and in_flight)
         terminal_failure |= state not in ("in progress", "absent")
         reasons.append(f"{label} (`{prefix}`) {state}")
-    plugins = _group(jobs, PLUGINS_SEAL_JOB[1])
-    plugins_pending = plugins == "in progress" or (plugins == "absent" and in_flight)
-    return Verdict(not reasons, pending and not terminal_failure, reasons, plugins,
-                   plugins_pending,
-                   _completed_at(jobs, PLUGINS_SEAL_JOB[1]) if plugins == "success" else "")
+    return Verdict(not reasons, pending and not terminal_failure, reasons)
 
 
 # ───────────────────────────────── the registry ───────────────────────────────────────────
@@ -1931,24 +1918,13 @@ def resolve_images(resolve: Resolve, tester: str, portal: str, version: str | No
 
 # ───────────────────────────────── the choice ─────────────────────────────────────────────
 
-class PluginsPublication(NamedTuple):
-    """The newest sealed Plugins publication the GitHub API can see: the newest core CD run whose
-    `Plugins: bake + seal …` job succeeded. It may be OLDER than the chosen core set."""
-    run_number: int
-    run_url: str
-    set_name: str
-    sealed_at: str
-
-
 class Chosen(NamedTuple):
     sha: str
     run_number: int
     run_url: str
     set_name: str
     digests: dict[str, str]
-    plugins: str                              # the chosen run's OWN Plugins seal verdict
     source: str
-    publication: PluginsPublication | None = None   # the newest sealed publication, found on its own
     # Why a NEWER sealed set was not taken, naming both set ids. Empty unless the optional main
     # ceiling (`--passed-on-main`) held this run back — so it answers "why did my core fix not
     # show up in my PR?" from the log alone, and is inert for every caller that does not use it.
@@ -1998,10 +1974,8 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
     newer_than_main: str | None = None     # the newest sealed set main has NOT passed, if any
     receipts: dict[tuple[int, int], PublicationSource] = {}   # one log read per bake job, at most
     chosen: Chosen | None = None
-    publication: PluginsPublication | None = None
-    lookback = 0
     for page in range(1, MAX_RUN_PAGES + 1):
-        if chosen is not None and (publication is not None or lookback >= PLUGINS_LOOKBACK):
+        if chosen is not None:
             break
         runs = cd_runs(fetch, page)
         # 🚨 PAGE 1 IS WHERE "NEWEST" IS DECIDED, so it is the page checked (#4433). A freeze names
@@ -2033,23 +2007,6 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
             number = int(run["run_number"])
             sha = str(run["head_sha"])
             label = f"main-cd #{number} (core {sha[:9]})"
-
-            # ── the core set is chosen: keep reading OLDER runs only for the Plugins publication ──
-            if chosen is not None:
-                if publication is not None or lookback >= PLUGINS_LOOKBACK:
-                    break
-                lookback += 1
-                jobs = run_jobs(fetch, int(run["id"]))
-                v = verdict(jobs, run)
-                if v.plugins == "success":
-                    version = platform_version(fetch, sha, log=log)
-                    publication = PluginsPublication(
-                        number, str(run.get("html_url", "")),
-                        compose_set_name(version, number) if version else f"ci.{number} (line unknown)",
-                        v.plugins_sealed_at)
-                    log(f"  plugins publication: {label} sealed it at {v.plugins_sealed_at or '?'}"
-                        f" ({publication.set_name}) — an older set than the platform chosen")
-                continue
 
             # 🚨 Only when the head sha IS the answer. Under `--verify-source` the set's real sha
             # is the bake receipt's, which is not known until the run's jobs have been read — so
@@ -2099,12 +2056,11 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
             jobs = run_jobs(fetch, int(run["id"]))
             v = verdict(jobs, run)
             # A run that is still sealing is worth waiting for on a release trigger: the dispatch
-            # arrives the moment `promote` finishes, minutes before the platform bake seals — and
-            # the Plugins seal for the same identity lands minutes after that.
-            while (v.pending or (v.sealed and v.plugins_pending)) \
-                    and run.get("status") != "completed" and now() < deadline:
+            # arrives the moment `promote` finishes, minutes before the platform bake seals. Only
+            # the TRIO is waited for — never a job core CD no longer has (MeshWeaver#6615).
+            while v.pending and run.get("status") != "completed" and now() < deadline:
                 remaining = int(deadline - now())
-                what = "; ".join(v.reasons) if v.reasons else "its Plugins publication is sealing"
+                what = "; ".join(v.reasons)
                 log(f"  {label} is still sealing ({what}) — waiting up to {remaining}s for it")
                 sleep(min(POLL_SECONDS, max(remaining, 1)))
                 fresh = fetch(f"/repos/{CORE_REPO}/actions/runs/{run['id']}")
@@ -2139,24 +2095,11 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
                 # escalation here is still right: the ProvenanceUnavailable arm below says
                 # "unverified" rather than claiming the set is something it could not read.
                 freeze_names_this_run = sha == freeze_value
-            # The Plugins publication is found on its own, over the same runs: the newest one whose
-            # seal succeeded — even where the platform trio did not (a red platform bake beside a
-            # green seal leaves a publication for that identity, and it is newer than the set
-            # chosen below). Recorded once; the props read is shared with the set name below.
             version: str | None | Ellipsis = ...  # type: ignore[valid-type]
-            if publication is None and v.plugins == "success":
-                version = platform_version(fetch, sha, log=log)
-                publication = PluginsPublication(
-                    number, str(run.get("html_url", "")),
-                    compose_set_name(version, number) if version else f"ci.{number} (line unknown)",
-                    v.plugins_sealed_at)
-                log(f"  plugins publication: {label} sealed it at {v.plugins_sealed_at or '?'}"
-                    f" ({publication.set_name})")
             if not v.sealed:
                 why = "; ".join(v.reasons)
                 if run.get("status") == "completed" and run.get("conclusion") != "success" \
-                        and all(_group(jobs, prefix) == "absent"
-                                for _, prefix in (*REQUIRED_JOBS, PLUGINS_SEAL_JOB)):
+                        and all(_group(jobs, prefix) == "absent" for _, prefix in REQUIRED_JOBS):
                     why = (f"the run itself was {run.get('conclusion')} before any seal job ran "
                            "(superseded by a newer commit, or a build leg failed)")
                 if v.pending:
@@ -2168,19 +2111,6 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
                         f"the freeze names {label}, which is not a sealed set ({why}). A freeze is "
                         "an instruction, not a preference: refusing to substitute another set.")
                 continue
-            # 🚨 The ONE bounded exception: platform sealed, its own Plugins seal still running.
-            # The publication for this identity does not exist yet (minutes); taking the set now
-            # is a certain red on the upstream fetch. A freeze is an instruction and goes through.
-            if v.plugins_pending and not freeze_names_this_run:
-                skipped.append(f"{label}: platform sealed, but its Plugins publication is still "
-                               f"sealing (`{PLUGINS_SEAL_JOB[1]}` {v.plugins}) — the newest set "
-                               "with a sealed publication is taken; the next run follows this one")
-                log(f"  skip {skipped[-1]}")
-                continue
-            if v.plugins_pending and freeze_names_this_run:
-                log(f"  ::warning title=Frozen set is still sealing its plugins::{label}: the freeze "
-                    "names a set whose Plugins publication is still sealing; taken as instructed — "
-                    "the upstream fetch says whether the registry holds it yet")
 
             if verify_source:
                 # The publication's OWN statement of what it published. A set that cannot make it
@@ -2304,24 +2234,16 @@ def choose(fetch: Fetch, resolve: Resolve | None, tester: str, portal: str,
                        "this lane and say so in the pull request body.")
                 log(f"  {lag}")
             chosen = Chosen(sha, number, str(run.get("html_url", "")), set_name, digests,
-                            v.plugins, source, lag=lag)
-            # The publication found on THIS run was initially named from props at `head_sha`;
-            # the selected set's verified name is the better name for that same publication.
-            if publication is not None and publication.run_number == number:
-                publication = publication._replace(set_name=set_name)
-            if publication is not None:
-                break
-            log(f"  {label}: its own Plugins seal is `{v.plugins}` — the platform is taken anyway "
-                f"(the trio is the seal); looking for the newest sealed Plugins publication in the "
-                f"{PLUGINS_LOOKBACK} runs before it")
-        if chosen is not None and (publication is not None or lookback >= PLUGINS_LOOKBACK):
+                            source, lag=lag)
             break
 
     if chosen is not None:
-        if publication is None:
-            log(f"  no sealed Plugins publication in the {lookback} run(s) before {chosen.set_name} — "
-                "the lane's upstream fetch decides, by identity, whether the registry holds one")
-        return chosen._replace(publication=publication)
+        # The `plugins` publication is not decided here (MeshWeaver#6615): it is sealed per
+        # framework identity by MeshWeaver.Plugins' own lane, and the lane's upstream fetch reads it.
+        log(f"  plugins publication: not resolved here — the lane's upstream fetch reads it from the "
+            f"registry by the framework identity {chosen.set_name} resolves, and is RED by name "
+            "when there is none")
+        return chosen
 
     looked_for = ", ".join(f"`{prefix}`" for _, prefix in REQUIRED_JOBS)
     if freeze_kind:
@@ -2397,7 +2319,9 @@ def refresh(baseline: dict[str, str], choose_fn: Callable[[], Chosen],
 
 def output_rows(chosen: Chosen, tester: str = "", portal: str = "",
                 migration: str | None = None) -> dict[str, str]:
-    pub = chosen.publication
+    # 🚨 No `plugins-*` key (MeshWeaver#6615): this script has no source for the `plugins`
+    # publication since core CD stopped sealing it (#6143), and a key that can only name a run from
+    # before then is a silently wrong answer, not a partial one.
     rows = {
         "sha": chosen.sha,
         "set": chosen.set_name,
@@ -2405,11 +2329,6 @@ def output_rows(chosen: Chosen, tester: str = "", portal: str = "",
         "run-url": chosen.run_url,
         "image-digest": chosen.digests.get("image-digest", ""),
         "portal-image-digest": chosen.digests.get("portal-image-digest", ""),
-        "plugins-sealed": chosen.plugins,
-        "plugins-run": str(pub.run_number) if pub else "",
-        "plugins-run-url": pub.run_url if pub else "",
-        "plugins-set": pub.set_name if pub else "",
-        "plugins-sealed-at": pub.sealed_at if pub else "",
         "override": "false",
         "source": chosen.source,
         # Always present, empty unless the optional main ceiling held this run back — a key that
@@ -2438,10 +2357,8 @@ def emit(rows: dict[str, str], title: str = "Platform for this run") -> None:
         with open(output, "a", encoding="utf-8") as handle:
             for key, value in rows.items():
                 handle.write(f"{key}={value}\n")
-    pub = (f"; plugins publication {rows['plugins-set']} (main-cd #{rows['plugins-run']})"
-           if rows.get("plugins-run") else "; no sealed plugins publication seen")
     print(f"::notice title={title}::{rows.get('set', '?')} — core {rows.get('sha', '?')[:9]} "
-          f"({rows.get('source', '')}){pub}")
+          f"({rows.get('source', '')})")
     if rows.get("lag"):
         print(f"::notice title=Platform lag (pull requests follow main)::{rows['lag']}")
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -2450,14 +2367,10 @@ def emit(rows: dict[str, str], title: str = "Platform for this run") -> None:
             handle.write("### Platform — resolved at run time, not pinned\n\n")
             handle.write("| | core set | plugins publication |\n|---|---|---|\n")
             handle.write(f"| set | `{rows.get('set', '')}` ([main-cd #{rows.get('run-number', '')}]"
-                         f"({rows.get('run-url', '')})) | "
-                         + (f"`{rows['plugins-set']}` ([main-cd #{rows['plugins-run']}]"
-                            f"({rows.get('plugins-run-url', '')})), sealed {rows.get('plugins-sealed-at', '?')}"
-                            if rows.get("plugins-run") else "none seen — the upstream fetch decides by identity")
-                         + " |\n")
+                         f"({rows.get('run-url', '')})) | not resolved here — the lane's upstream "
+                         "fetch reads it from the registry by framework identity, RED by name if absent |\n")
             handle.write(f"| core commit | [`{rows.get('sha', '')[:9]}`](https://github.com/{CORE_REPO}/"
-                         f"commit/{rows.get('sha', '')}) — every `{CORE_REPO}` checkout in this run | "
-                         f"own seal of the chosen run: {rows.get('plugins-sealed', '')} |\n")
+                         f"commit/{rows.get('sha', '')}) — every `{CORE_REPO}` checkout in this run | |\n")
             for key, label in (("tester-image", "tester image"), ("portal-image", "portal image"),
                                ("migration-image", "migration image")):
                 if rows.get(key):
@@ -2502,7 +2415,10 @@ def _run(number: int, sha: str, status: str = "completed", conclusion: str = "su
     return row
 
 
-def _jobs(promote="success", verify="success", bake="success", plugins="success") -> list[dict]:
+def _jobs(promote="success", verify="success", bake="success", plugins="absent") -> list[dict]:
+    """A core CD run's jobs. `plugins` adds the RETIRED core Plugins seal job (MeshWeaver#6615) in
+    that state — `absent` by default, as on every core run since #6143. It is kept so a case (and
+    a satellite's test of this canonical) can prove that job decides NOTHING."""
     def job(name: str, state: str) -> dict:
         if state == "in progress":
             return {"name": name, "status": "in_progress", "conclusion": None}
@@ -2513,8 +2429,8 @@ def _jobs(promote="success", verify="success", bake="success", plugins="success"
     rows = [job("Promote: tag the full set (all-or-nothing)", promote),
             job("Verify every image shipped", verify),
             job("Bake platform content in the shipped image + publish (linux-x64)", bake),
-            job("Plugins: bake + seal the publication for this identity / Bake + publish", plugins),
-            job("Plugins: bake + seal the publication for this identity / Register", plugins),
+            job(f"{RETIRED_PLUGINS_SEAL_JOB} / Bake + publish", plugins),
+            job(f"{RETIRED_PLUGINS_SEAL_JOB} / Register", plugins),
             {"name": "Assert the inputs exist", "status": "completed", "conclusion": "success"}]
     return [r for r in rows if r]
 
@@ -2635,7 +2551,7 @@ def self_test() -> int:
          lambda: choose(_fetch_for(two, {1000 + 8207: _jobs(), 1000 + 8203: _jobs()}),
                         _registry(full), tester, portal, log=logs.append),
          lambda c: c.sha == A and c.set_name == "3.0.0-ci.8207"
-         and c.digests == {"image-digest": D1, "portal-image-digest": D2} and c.plugins == "success")
+         and c.digests == {"image-digest": D1, "portal-image-digest": D2})
     # 2 — the newest run is green but published nothing (promote/bake SKIPPED): fall back, say so.
     case("newest green but unsealed → previous, said so", True,
          lambda: choose(_fetch_for(two, {1000 + 8207: _jobs("skipped", "skipped", "skipped", "skipped"),
@@ -2826,103 +2742,92 @@ def self_test() -> int:
          lambda: choose(_fetch_for(two, {1000 + 8207: _jobs(), 1000 + 8203: _jobs()}),
                         None, tester, portal, log=logs.append),
          lambda c: c.sha == A and c.digests == {})
-    # 13 — THE RULE (maintainer, 2026-09-12): the platform trio is the seal. A run whose OWN
-    # Plugins seal failed / was skipped / cancelled / never ran is still the newest platform; the
-    # Plugins publication is found on its own, in an older run, and reported beside it.
-    for seal in ("absent", "failure", "skipped", "cancelled"):
-        case(f"newest sealed, own plugins seal {seal} → chosen; publication from the previous run", True,
+    # 13 — THE RULE (maintainer, 2026-09-12): the platform trio is the seal, and NOTHING else of the
+    # run decides. Since #6143 core CD has no Plugins seal job at all; a run that still carries the
+    # retired one, in ANY state, is chosen exactly like one that does not (MeshWeaver#6615).
+    for seal in ("absent", "success", "failure", "skipped", "cancelled", "in progress"):
+        case(f"newest sealed, retired core plugins seal job {seal} → chosen, it decides nothing", True,
              lambda seal=seal: choose(
                  _fetch_for(two, {9207: _jobs(plugins=seal), 9203: _jobs()}),
                  _registry(full), tester, portal, log=logs.append),
-             lambda c: c.sha == A and c.plugins in ("absent", "failure", "skipped", "cancelled")
-             and c.publication is not None and c.publication.run_number == 8203
-             and c.publication.set_name == "3.0.0-ci.8203" and c.publication.sealed_at
-             and any("plugins publication" in line and "#8203" in line for line in logs))
-    # 14 — …but a seal STILL RUNNING is the bounded exception: the publication does not exist yet,
-    # so the set is passed over (no wait) and SAID.
-    case("newest sealed, own plugins seal in progress, no wait → previous, said so", True,
-         lambda: choose(_fetch_for([_run(8207, A, status="in_progress", conclusion=None), two[1]],
-                                   {9207: _jobs(plugins="in progress"), 9203: _jobs()}),
+             lambda c: c.sha == A and c.set_name == "3.0.0-ci.8207"
+             and not any("still sealing" in line for line in logs))
+    # 14 — 🚨 THE #6615 REGRESSION. The trio has sealed, the rest of the CD run is still in flight,
+    # and there is no Plugins seal job (as on every core run since #6143). The retired rule read
+    # that `absent` + in flight as "its Plugins publication is still sealing" and passed the
+    # NEWEST sealed set over until the whole run finished. It is taken.
+    in_flight = [_run(8207, A, status="in_progress", conclusion=None), two[1]]
+    in_flight_jobs = {9207: _jobs(), 9203: _jobs()}
+    # Fixture control: this IS the shape the retired rule held back — so the case below can fail.
+    total += 1
+    retired_group = _group(in_flight_jobs[9207], RETIRED_PLUGINS_SEAL_JOB)
+    if not (retired_group == "absent" and in_flight[0]["status"] != "completed"
+            and verdict(in_flight_jobs[9207], in_flight[0]).sealed):
+        failures.append("#6615 fixture: the in-flight case must be a trio-SEALED run in flight "
+                        f"WITHOUT the retired job (got {retired_group!r}) — otherwise it proves nothing")
+    case("#6615: trio sealed, run still in flight, no plugins seal job → the newest set is TAKEN", True,
+         lambda: choose(_fetch_for(in_flight, in_flight_jobs), _registry(full), tester, portal,
+                        log=logs.append),
+         lambda c: c.sha == A and not any("#8207" in line and "skip" in line for line in logs))
+    case("#6615: …and a retired seal job still RUNNING holds nothing back either", True,
+         lambda: choose(_fetch_for(in_flight, {9207: _jobs(plugins="in progress"), 9203: _jobs()}),
                         _registry(full), tester, portal, log=logs.append),
-         lambda c: c.sha == B and c.publication is not None and c.publication.run_number == 8203
-         and any("still sealing" in line and "#8207" in line for line in logs))
+         lambda c: c.sha == A)
+
     # 15 — the run's CONCLUSION no longer decides: a red satellite-compat leg or alert job with a
-    # green trio + seal is a released platform.
+    # green trio is a released platform.
     for status, conclusion in (("completed", "failure"), ("completed", "cancelled"),
                                ("completed", None), ("in_progress", None)):
-        case(f"trio + seal green, whole CD {status}/{conclusion} → chosen", True,
+        case(f"trio green, whole CD {status}/{conclusion} → chosen", True,
              lambda status=status, conclusion=conclusion: choose(
                  _fetch_for([_run(8207, A, status=status, conclusion=conclusion), two[1]],
                             {9207: _jobs(), 9203: _jobs()}),
                  _registry(full), tester, portal, log=logs.append),
-             lambda c: c.sha == A and c.publication is not None and c.publication.run_number == 8207)
-    # 16 — the Plugins publication can be NEWER than the core set: promote + seal green, platform
-    # bake red ⇒ the platform is the previous run, the publication is this one.
-    case("plugins publication newer than the core set", True,
-         lambda: choose(_fetch_for(two, {9207: _jobs(bake="failure"), 9203: _jobs()}),
-                        _registry(full), tester, portal, log=logs.append),
-         lambda c: c.sha == B and c.set_name == "3.0.0-ci.8203"
-         and c.publication is not None and c.publication.run_number == 8207
-         and c.publication.set_name == "3.0.0-ci.8207")
-    # 17 — no sealed publication anywhere: the platform is still chosen, and it is SAID that the
-    # upstream fetch decides by identity.
-    case("no sealed plugins publication anywhere → chosen, said so", True,
-         lambda: choose(_fetch_for(two, {9207: _jobs(plugins="failure"), 9203: _jobs(plugins="skipped")}),
-                        _registry(full), tester, portal, log=logs.append),
-         lambda c: c.sha == A and c.publication is None
-         and any("no sealed Plugins publication" in line for line in logs))
-    # 18 — a freeze on a run without its own seal goes through (an instruction), reporting it.
-    case("freeze on a run whose own plugins seal is absent → taken, reported", True,
-         lambda: choose(_fetch_for(two, {9207: _jobs(plugins="absent"), 9203: _jobs()}),
-                        _registry(full), tester, portal, freeze=A, log=logs.append),
-         lambda c: c.sha == A and c.plugins == "absent" and "frozen" in c.source)
-    case("freeze on a run whose plugins seal is still running → taken, warned", True,
-         lambda: choose(_fetch_for([_run(8207, A, status="in_progress", conclusion=None), two[1]],
-                                   {9207: _jobs(plugins="in progress"), 9203: _jobs()}),
-                        _registry(full), tester, portal, freeze=A, log=logs.append),
-         lambda c: c.sha == A and any("::warning" in line and "still sealing" in line for line in logs))
+             lambda c: c.sha == A)
 
-    # 19 — on a release trigger the seal that is still running is WAITED for, then taken.
-    ticks = {"polls": 0, "time": 0.0}
-    waiting_run = _run(8207, A, status="in_progress", conclusion=None)
-    waiting_base = _fetch_for([waiting_run, two[1]],
-                              {9207: _jobs(plugins="absent"), 9203: _jobs()})
-    def upstream_finishes(path: str) -> dict:
-        if path.endswith("/actions/runs/9207"):
-            ticks["polls"] += 1
-            done = ticks["polls"] >= 2
-            return {**waiting_run, "status": "completed" if done else "in_progress",
-                    "conclusion": "success" if done else None}
-        if "/runs/9207/jobs" in path and ticks["polls"] >= 2:
-            return {"total_count": len(_jobs()), "jobs": _jobs()}
-        return waiting_base(path)
-    case("plugins seal absent while the run is in flight, waited for → taken once sealed", True,
-         lambda: choose(upstream_finishes, _registry(full), tester, portal, wait_for_seal=90,
-                        sleep=lambda seconds: ticks.__setitem__("time", ticks["time"] + seconds),
-                        now=lambda: ticks["time"], log=logs.append),
-         lambda c: c.sha == A and ticks["polls"] == 2 and c.plugins == "success"
-         and c.publication is not None and c.publication.run_number == 8207)
-
-    # 20 — a TERMINAL seal never waits, even on a release trigger: the platform is taken.
+    # 16 — a release trigger (`--wait-for-seal`) waits for the TRIO only: a sealed trio in a run
+    # still in flight is taken at once. The retired rule waited here for a job that never appears.
     def unexpected_wait(seconds: float) -> None:
-        raise ResolutionError("waited after a required job already failed")
-    for seal in ("failure", "skipped", "cancelled"):
-        case(f"terminal plugins seal {seal} is taken without waiting", True,
-             lambda seal=seal: choose(
-                 _fetch_for([waiting_run, two[1]],
-                            {9207: _jobs(plugins=seal), 9203: _jobs()}),
-                 _registry(full), tester, portal, wait_for_seal=90,
-                 sleep=unexpected_wait, log=logs.append),
-             lambda c: c.sha == A and c.publication is not None and c.publication.run_number == 8203)
-    mixed_jobs = _jobs(plugins="in progress")
-    mixed_jobs.append({"name": PLUGINS_SEAL_JOB[1] + " / failed target",
-                       "status": "completed", "conclusion": "failure"})
-    case("a failed seal target outranks a pending one — terminal, taken without waiting", True,
-         lambda: choose(_fetch_for([waiting_run, two[1]],
-                                   {9207: mixed_jobs, 9203: _jobs()}),
-                        _registry(full), tester, portal, wait_for_seal=90,
-                        sleep=unexpected_wait, log=logs.append),
-         lambda c: c.sha == A and c.plugins == "failure")
+        raise ResolutionError("waited although the platform trio had already sealed")
+    case("#6615: release trigger, trio sealed, run in flight → taken WITHOUT waiting", True,
+         lambda: choose(_fetch_for(in_flight, in_flight_jobs), _registry(full), tester, portal,
+                        wait_for_seal=90, sleep=unexpected_wait, log=logs.append),
+         lambda c: c.sha == A)
+
+    # 17 — a freeze on a run carrying the retired job takes it with no plugins warning: there is
+    # nothing about a Plugins seal left for this script to warn about.
+    case("freeze on a run whose retired plugins seal job is running → taken, nothing warned", True,
+         lambda: choose(_fetch_for(in_flight, {9207: _jobs(plugins="in progress"), 9203: _jobs()}),
+                        _registry(full), tester, portal, freeze=A, log=logs.append),
+         lambda c: c.sha == A and "frozen" in c.source
+         and not any("::warning" in line and "plugins" in line.lower() for line in logs))
+
+    # 18 — the outputs carry NO `plugins-*` key (this script has no source for one), and the log
+    # names who does decide.
+    total += 1
+    logs.clear()
+    chosen_rows = output_rows(choose(_fetch_for(two, {9207: _jobs(plugins="success"), 9203: _jobs()}),
+                                     _registry(full), tester, portal, log=logs.append),
+                              tester, portal)
+    stale_keys = sorted(k for k in chosen_rows if k.startswith("plugins"))
+    if stale_keys or not any("upstream fetch" in line and "identity" in line for line in logs):
+        failures.append(f"#6615: outputs must carry no plugins-* key and the log must name the "
+                        f"upstream fetch as the decider — keys {stale_keys}, log {logs}")
+
+    # 19 — RED ON THE OLD KEY. The selection itself must never read the retired job again; this
+    # is the guard a re-introduction meets first (the C# NodeRepoLaneSelfResolveGuard holds the
+    # same line from outside).
+    total += 1
+    import inspect
+    for fn in (choose, verdict, output_rows, emit):
+        body = inspect.getsource(fn)
+        if "RETIRED_PLUGINS_SEAL_JOB" in body or RETIRED_PLUGINS_SEAL_JOB in body:
+            failures.append(f"#6615: `{fn.__name__}` reads the retired core Plugins seal job again")
+    # Negative control for that guard: it must SEE a reference when one is there.
+    total += 1
+    if "RETIRED_PLUGINS_SEAL_JOB" not in inspect.getsource(_jobs):
+        failures.append("#6615 control: the source guard cannot see the retired name even in the "
+                        "fixture that uses it — it would pass on anything")
     case("failed run before all seal jobs says why", True,
          lambda: choose(_fetch_for([_run(8207, A, conclusion="failure"), two[1]],
                                    {9207: [], 9203: _jobs()}),
@@ -2950,7 +2855,7 @@ def self_test() -> int:
                                log=logs.append)
     if not (overridden and rows["override"] == "true" and rows["set"] == "3.0.0-ci.8207"
             and rows["sha"] == A and rows["baseline-set"] == "3.0.0-ci.8203"
-            and rows["plugins-run"] == "8207" and any("::notice" in line for line in logs)):
+            and "plugins-run" not in rows and any("::notice" in line for line in logs)):
         failures.append(f"freshness: a newer sealed set must override the baseline — got {rows}")
     total += 1
     rows, overridden = refresh(baseline_same,
@@ -3916,7 +3821,7 @@ def self_test() -> int:
     # Each attempt consulted costs a jobs read AND an annotations read, and `run_attempt` has no
     # ceiling of its own. Twelve runs each re-run a dozen times is 288 extra calls on the CI
     # critical path — spent, by construction, during the incident that made someone re-run them.
-    # The module bounds every other walk it makes (MAIN_RUNS_EXAMINED, PLUGINS_LOOKBACK); this one
+    # The module bounds every other walk it makes (MAIN_RUNS_EXAMINED, MAX_RUN_PAGES); this one
     # is bounded too, and SAYS so when it stops, so a truncated search is never read as an answer.
     def _fetch_attempt_deep(attempts: int, earliest_named: str = "3.0.0-ci.8203") -> Fetch:
         """Every attempt but the FIRST lost its annotations; attempt 1 published a set."""
@@ -4472,27 +4377,24 @@ def self_test() -> int:
     # definition of the very option that was passed. The case above does not reach it: that run is
     # fully sealed, so nothing consults `freeze_names_this_run` before the attribution happens.
     #
-    # The one that does is the bounded `plugins_pending` exception. Fixture: #8207's platform trio
-    # is sealed, its Plugins seal is still running, its receipt names the frozen sha and its head
-    # (A) does not — and #8203 is a fully sealed re-bake of the SAME source at an older release.
-    # On the pre-fix code #8207 is "not the frozen run", so it is passed over as an ordinary
-    # candidate and #8203 is taken: a GREEN resolution at an OLDER set than the one the freeze
-    # named, with no warning. A freeze is an instruction for an incident, and this is the path most
-    # likely to be used during one and least likely to be noticed.
+    # The one that did was the bounded `plugins_pending` exception, retired with the core Plugins
+    # seal it read (MeshWeaver#6615). The fixture stays as the regression for both: #8207's trio is
+    # sealed, the retired seal job is still running, its receipt names the frozen sha and its head
+    # (A) does not — and #8203 is a fully sealed re-bake of the SAME source at an older release. The
+    # freeze must resolve to #8207, and nothing about a Plugins seal may be spoken any more.
     pending_plugins_jobs = {1000 + 8207: _jobs_with_bake_id(id_8207, plugins="in progress"),
                             1000 + 8203: _jobs_with_bake_id(id_8203)}
     frozen_pending = _fetch_with_logs(
         {id_8207: _receipt(), id_8203: _receipt(RECEIPT_SHA, "3.0.0-ci.8203")},
         jobs=pending_plugins_jobs)
-    case("a sha freeze the RECEIPT names is honoured even while its plugins seal is pending", True,
+    case("a sha freeze the RECEIPT names is honoured whatever the retired plugins seal job says", True,
          lambda: choose(frozen_pending, _registry(full), tester, portal, freeze=RECEIPT_SHA,
                         log=logs.append, verify_source=True),
          lambda c: c.sha == RECEIPT_SHA and c.set_name == "3.0.0-ci.8207")
     total += 1
-    if not any("Frozen set is still sealing its plugins" in line for line in logs):
-        failures.append("#4780: the frozen set was taken while its plugins seal was pending, but "
-                        "the `Frozen set is still sealing its plugins` warning was not spoken — a "
-                        "reader has to be told the upstream fetch may not find it yet")
+    if any("still sealing its plugins" in line for line in logs):
+        failures.append("#6615: a warning about the frozen set's Plugins seal was spoken — this "
+                        "script no longer reads any Plugins seal, so it has nothing to say about one")
 
     # 🚨 …AND A RECEIPT THAT EXISTS IS THE ANSWER, so `head_sha` is not a second chance (Copilot's
     # review of #4920). Accepting either resurrects #4242 from the other side: a run whose HEAD
@@ -4532,8 +4434,8 @@ def self_test() -> int:
             print(f"  - {failure}")
         return 1
     print(f"✓ resolve-platform self-test: {total} cases — the newest platform-sealed set is chosen "
-          "regardless of its own plugins seal or run conclusion, the plugins publication is found on "
-          "its own and reported beside it, a set still sealing its plugins is passed over (bounded), "
+          "regardless of its run conclusion, the retired core Plugins seal job decides nothing and "
+          "no plugins-* output is written (#6615), "
           "an unsealed or purged newer set is passed over and SAID, a sealing set is waited for on "
           "request, a freeze never substitutes, a re-run takes a newer set and keeps its baseline "
           "otherwise, the OPTIONAL main ceiling counts EVERY full main run and not `push` "

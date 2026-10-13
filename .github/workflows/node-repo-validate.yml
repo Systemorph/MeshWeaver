@@ -167,7 +167,7 @@ jobs:
           set -euo pipefail
           [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref / platform-ref are both empty — the closing-keyword gate has no ref to be fetched at"; exit 1; }
           "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" "scripts/check-closing-keywords.py" > "$RUNNER_TEMP/check-closing-keywords.py" \
-            || { echo "::error::could not fetch scripts/check-closing-keywords.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — a pin older than the gate needs the older lane"; exit 1; }
+            || { echo "::error::could not fetch scripts/check-closing-keywords.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — the reader's line above names the cause; only when it says the path does not exist at that ref is this a pin older than the gate needs the older lane"; exit 1; }
           grep -q "check-closing-keywords" "$RUNNER_TEMP/check-closing-keywords.py" || { echo "::error::the fetched check-closing-keywords.py at ${SCRIPTS_REF} does not contain the gate marker"; exit 1; }
       - name: "Cross-repository closing-keyword gate can fail (self-test)"
         if: ${{ github.event_name == 'pull_request' && !cancelled() && steps.ready.outputs.ok == 'true' }}
@@ -200,7 +200,7 @@ jobs:
           set -euo pipefail
           [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref / platform-ref are both empty — the content-CI path guard has no ref to be fetched at"; exit 1; }
           "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/scripts/check-content-ci-path.py" > "$RUNNER_TEMP/check-content-ci-path.py" \
-            || { echo "::error::could not fetch .github/scripts/check-content-ci-path.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — a pin older than the guard needs the older lane"; exit 1; }
+            || { echo "::error::could not fetch .github/scripts/check-content-ci-path.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — the reader's line above names the cause; only when it says the path does not exist at that ref is this a pin older than the guard needs the older lane"; exit 1; }
           head -c 400 "$RUNNER_TEMP/check-content-ci-path.py" | grep -q "check-content-ci-path" || { echo "::error::the fetched check-content-ci-path.py at ${SCRIPTS_REF} does not look like the guard"; exit 1; }
       - name: "The content-CI publish path is enforced — the gate can fail (self-test)"
         if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
@@ -229,7 +229,7 @@ jobs:
           set -euo pipefail
           [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref / platform-ref are both empty — the node-path collision guard has no ref to be fetched at"; exit 1; }
           "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/scripts/check-node-path-collisions.py" > "$RUNNER_TEMP/check-node-path-collisions.py" \
-            || { echo "::error::could not fetch .github/scripts/check-node-path-collisions.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — a pin older than the guard needs the older lane"; exit 1; }
+            || { echo "::error::could not fetch .github/scripts/check-node-path-collisions.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — the reader's line above names the cause; only when it says the path does not exist at that ref is this a pin older than the guard needs the older lane"; exit 1; }
           head -c 400 "$RUNNER_TEMP/check-node-path-collisions.py" | grep -q "check-node-path-collisions" || { echo "::error::the fetched check-node-path-collisions.py at ${SCRIPTS_REF} does not look like the guard"; exit 1; }
       - name: "Two files importing to one node path are caught — the gate can fail (self-test)"
         if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
@@ -288,7 +288,7 @@ jobs:
           set -euo pipefail
           [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref / platform-ref are both empty — the cover gate has no ref to be fetched at"; exit 1; }
           "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/scripts/check-covers.py" > "$RUNNER_TEMP/check-covers.py" \
-            || { echo "::error::could not fetch .github/scripts/check-covers.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — a pin older than the centralization needs the older lane, not a drifted local copy"; exit 1; }
+            || { echo "::error::could not fetch .github/scripts/check-covers.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — the reader's line above names the cause; only when it says the path does not exist at that ref is this a pin older than the centralization needs the older lane, not a drifted local copy"; exit 1; }
           head -c 400 "$RUNNER_TEMP/check-covers.py" | grep -q "check-covers" || { echo "::error::the fetched check-covers.py at ${SCRIPTS_REF} does not look like the cover gate"; exit 1; }
       - name: "No cover is a wall of text — the gate can fail (self-test)"
         if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
@@ -315,7 +315,7 @@ jobs:
           set -euo pipefail
           [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref / platform-ref are both empty — the data-bake ratchet has no ref to be fetched at"; exit 1; }
           "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/scripts/check-layout-area-data-bake.py" > "$RUNNER_TEMP/check-layout-area-data-bake.py" \
-            || { echo "::error::could not fetch .github/scripts/check-layout-area-data-bake.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — a pin older than the ratchet needs the older lane"; exit 1; }
+            || { echo "::error::could not fetch .github/scripts/check-layout-area-data-bake.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — the reader's line above names the cause; only when it says the path does not exist at that ref is this a pin older than the ratchet needs the older lane"; exit 1; }
           head -c 400 "$RUNNER_TEMP/check-layout-area-data-bake.py" | grep -q "check-layout-area-data-bake" || { echo "::error::the fetched check-layout-area-data-bake.py at ${SCRIPTS_REF} does not look like the ratchet"; exit 1; }
       - name: "A layout area that bakes data is caught — the ratchet can fail (self-test)"
         if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
@@ -371,19 +371,19 @@ jobs:
           set -euo pipefail
           [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref / platform-ref are both empty — the timeout guard has no ref to be fetched at"; exit 1; }
           "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/scripts/check-workflow-timeouts.py" > "$RUNNER_TEMP/check-workflow-timeouts.py" \
-            || { echo "::error::could not fetch .github/scripts/check-workflow-timeouts.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — a pin older than the guard needs the older lane"; exit 1; }
+            || { echo "::error::could not fetch .github/scripts/check-workflow-timeouts.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — the reader's line above names the cause; only when it says the path does not exist at that ref is this a pin older than the guard needs the older lane"; exit 1; }
           head -c 400 "$RUNNER_TEMP/check-workflow-timeouts.py" | grep -q "check-workflow-timeouts" || { echo "::error::the fetched check-workflow-timeouts.py at ${SCRIPTS_REF} does not look like the guard"; exit 1; }
           "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/scripts/check-abbreviated-shas.py" > "$RUNNER_TEMP/check-abbreviated-shas.py" \
-            || { echo "::error::could not fetch .github/scripts/check-abbreviated-shas.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — a pin older than the guard needs the older lane"; exit 1; }
+            || { echo "::error::could not fetch .github/scripts/check-abbreviated-shas.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — the reader's line above names the cause; only when it says the path does not exist at that ref is this a pin older than the guard needs the older lane"; exit 1; }
           head -c 400 "$RUNNER_TEMP/check-abbreviated-shas.py" | grep -q "check-abbreviated-shas" || { echo "::error::the fetched check-abbreviated-shas.py at ${SCRIPTS_REF} does not look like the guard"; exit 1; }
           "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/scripts/check-workflow-permission-pairing.py" > "$RUNNER_TEMP/check-workflow-permission-pairing.py" \
-            || { echo "::error::could not fetch .github/scripts/check-workflow-permission-pairing.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — a pin older than the guard needs the older lane"; exit 1; }
+            || { echo "::error::could not fetch .github/scripts/check-workflow-permission-pairing.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — the reader's line above names the cause; only when it says the path does not exist at that ref is this a pin older than the guard needs the older lane"; exit 1; }
           head -c 400 "$RUNNER_TEMP/check-workflow-permission-pairing.py" | grep -q "check-workflow-permission-pairing" || { echo "::error::the fetched check-workflow-permission-pairing.py at ${SCRIPTS_REF} does not look like the guard"; exit 1; }
           # MeshWeaver#3878: the module publication gate. Its caller-graph check used to run only INSIDE
           # the publication lane — on trunk, after the merge that broke it — so it is fetched here too
           # and run against this repository's callers on every pull request (step further down).
           "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/scripts/module-publication.py" > "$RUNNER_TEMP/module-publication.py" \
-            || { echo "::error::could not fetch .github/scripts/module-publication.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — a pin older than the guard needs the older lane"; exit 1; }
+            || { echo "::error::could not fetch .github/scripts/module-publication.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — the reader's line above names the cause; only when it says the path does not exist at that ref is this a pin older than the guard needs the older lane"; exit 1; }
           head -c 400 "$RUNNER_TEMP/module-publication.py" | grep -q "module-publication" || { echo "::error::the fetched module-publication.py at ${SCRIPTS_REF} does not look like the publication gate"; exit 1; }
           # 🚨 The pairing guard needs the LANE DEFINITIONS, not just the script: the defect is a
           # relation between this repo's caller and the lane it is about to call, and neither half
@@ -489,7 +489,7 @@ jobs:
           set -euo pipefail
           [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref / platform-ref are both empty — the resolver-copy guard has no ref to be fetched at"; exit 1; }
           "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/scripts/check-resolver-copy.py" > "$RUNNER_TEMP/check-resolver-copy.py" \
-            || { echo "::error::could not fetch .github/scripts/check-resolver-copy.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — a pin older than the guard needs the older lane"; exit 1; }
+            || { echo "::error::could not fetch .github/scripts/check-resolver-copy.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — the reader's line above names the cause; only when it says the path does not exist at that ref is this a pin older than the guard needs the older lane"; exit 1; }
           head -c 400 "$RUNNER_TEMP/check-resolver-copy.py" | grep -q "check-resolver-copy" || { echo "::error::the fetched check-resolver-copy.py at ${SCRIPTS_REF} does not look like the guard"; exit 1; }
           "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/scripts/resolve-platform.py" > "$RUNNER_TEMP/resolve-platform.canonical.py" \
             || { echo "::error::could not fetch .github/scripts/resolve-platform.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — the canonical the copy is compared against is unreadable, and a guard that cannot read its subject must not pass"; exit 1; }
@@ -522,7 +522,7 @@ jobs:
           set -euo pipefail
           [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref / platform-ref are both empty — the node-test launcher guard has no ref to be fetched at"; exit 1; }
           "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/scripts/check-node-test-launcher.py" > "$RUNNER_TEMP/check-node-test-launcher.py" \
-            || { echo "::error::could not fetch .github/scripts/check-node-test-launcher.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — a pin older than the guard needs the older lane"; exit 1; }
+            || { echo "::error::could not fetch .github/scripts/check-node-test-launcher.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — the reader's line above names the cause; only when it says the path does not exist at that ref is this a pin older than the guard needs the older lane"; exit 1; }
           head -c 400 "$RUNNER_TEMP/check-node-test-launcher.py" | grep -q "check-node-test-launcher" || { echo "::error::the fetched check-node-test-launcher.py at ${SCRIPTS_REF} does not look like the guard"; exit 1; }
       - name: "A re-vendored node-test harness is named — the gate can fail (self-test)"
         if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
@@ -580,7 +580,7 @@ jobs:
           set -euo pipefail
           [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref / platform-ref are both empty — the duplicate-key guard has no ref to be fetched at"; exit 1; }
           "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/scripts/check-workflow-yaml-keys.py" > "$RUNNER_TEMP/check-workflow-yaml-keys.py" \
-            || { echo "::error::could not fetch .github/scripts/check-workflow-yaml-keys.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — a pin older than the guard needs the older lane"; exit 1; }
+            || { echo "::error::could not fetch .github/scripts/check-workflow-yaml-keys.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — the reader's line above names the cause; only when it says the path does not exist at that ref is this a pin older than the guard needs the older lane"; exit 1; }
           head -c 400 "$RUNNER_TEMP/check-workflow-yaml-keys.py" | grep -q "check-workflow-yaml-keys" || { echo "::error::the fetched check-workflow-yaml-keys.py at ${SCRIPTS_REF} does not look like the guard"; exit 1; }
           # Do not lean on the timeout guard above having installed it — a reorder there would
           # break this step with an ImportError instead of a verdict.
@@ -617,7 +617,7 @@ jobs:
           set -euo pipefail
           [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref / platform-ref are both empty — the PR-secret guard has no ref to be fetched at"; exit 1; }
           "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/scripts/check-pr-secret-preflight.py" > "$RUNNER_TEMP/check-pr-secret-preflight.py" \
-            || { echo "::error::could not fetch .github/scripts/check-pr-secret-preflight.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — a pin older than the guard needs the older lane"; exit 1; }
+            || { echo "::error::could not fetch .github/scripts/check-pr-secret-preflight.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — the reader's line above names the cause; only when it says the path does not exist at that ref is this a pin older than the guard needs the older lane"; exit 1; }
           head -c 400 "$RUNNER_TEMP/check-pr-secret-preflight.py" | grep -q "check-pr-secret-preflight" || { echo "::error::the fetched check-pr-secret-preflight.py at ${SCRIPTS_REF} does not look like the guard"; exit 1; }
           # Do not lean on the timeout guard above having installed it — a reorder there would
           # break this step with an ImportError instead of a verdict.
@@ -651,7 +651,7 @@ jobs:
           [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref / platform-ref are both empty — the no-op parity guard has no ref to be fetched at"; exit 1; }
           for script in check-noop-scope-parity.py node-repo-scope.py; do
             "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/scripts/${script}" > "$RUNNER_TEMP/${script}" \
-              || { echo "::error::could not fetch .github/scripts/${script} at ${SCRIPTS_REF} from Systemorph/MeshWeaver — a pin older than the guard needs the older lane"; exit 1; }
+              || { echo "::error::could not fetch .github/scripts/${script} at ${SCRIPTS_REF} from Systemorph/MeshWeaver — the reader's line above names the cause; only when it says the path does not exist at that ref is this a pin older than the guard needs the older lane"; exit 1; }
             head -c 400 "$RUNNER_TEMP/${script}" | grep -q "${script%.py}" || { echo "::error::the fetched ${script} at ${SCRIPTS_REF} does not look like the guard"; exit 1; }
           done
       - name: "This repo's no-op set is comparable and agrees — the gate can fail (self-test)"
@@ -673,10 +673,10 @@ jobs:
           set -euo pipefail
           [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref / platform-ref are both empty — the canonical gen-manifests.py has no ref to be fetched at"; exit 1; }
           "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/scripts/gen-manifests.py" > "$RUNNER_TEMP/gen-manifests.py" \
-            || { echo "::error::could not fetch .github/scripts/gen-manifests.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — a pin older than the centralization needs the older lane, not a drifted local copy"; exit 1; }
+            || { echo "::error::could not fetch .github/scripts/gen-manifests.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — the reader's line above names the cause; only when it says the path does not exist at that ref is this a pin older than the centralization needs the older lane, not a drifted local copy"; exit 1; }
           head -c 400 "$RUNNER_TEMP/gen-manifests.py" | grep -q "manifest.lock" || { echo "::error::the fetched gen-manifests.py at ${SCRIPTS_REF} does not look like the manifest generator"; exit 1; }
           "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/scripts/check-package-enumeration.py" > "$RUNNER_TEMP/check-package-enumeration.py" \
-            || { echo "::error::could not fetch .github/scripts/check-package-enumeration.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — a pin older than the guard needs the older lane"; exit 1; }
+            || { echo "::error::could not fetch .github/scripts/check-package-enumeration.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — the reader's line above names the cause; only when it says the path does not exist at that ref is this a pin older than the guard needs the older lane"; exit 1; }
           head -c 400 "$RUNNER_TEMP/check-package-enumeration.py" | grep -q "check-package-enumeration" || { echo "::error::the fetched check-package-enumeration.py at ${SCRIPTS_REF} does not look like the guard"; exit 1; }
       - name: "The manifest checker can fail — --resolve, the trunk baseline and the config contract (self-test)"
         if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)

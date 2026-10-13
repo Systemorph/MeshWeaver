@@ -56,16 +56,48 @@ None of these go through a caller-written `Sender`.
 - The sanctioned carry: `ReleaseLeavesATearingDownHubTest` (a release from a tearing-down hosted hub
   arrives under the same sender as its live post) and the teardown reply tests still pass.
 
+## A hand-built envelope (#6619)
+
+`MessageDelivery<T>` has public constructors that take a sender, and `IMessageHub.DeliverMessage` /
+`IRoutingService.DeliverMessage` accept any delivery: the routing layer, the Orleans grains and the
+SignalR and gRPC ingresses need exactly that. Code that builds a delivery itself and hands it to
+one of those does not go through `hub.Post`, so its sender is not stamped.
+
+**For in-mesh code this is closed at compile time, at no cost per hop.** The
+[in-mesh impersonation guard](../InMeshImpersonation)'s compile-time check reports every way to
+mint such an envelope and every entry point that routes one without `hub.Post`:
+
+- a `MessageDelivery` constructor called with arguments (the sender-taking one, the one that takes
+  caller-written `PostOptions`, a target-typed `new(…)`, a derived type's `base(…)`);
+- a write to `MessageDelivery.Sender` (`d with { Sender = … }`, an initializer);
+- `IMessageHub.DeliverMessage`, `IRoutingService.DeliverMessage`, `OrleansRoutingService.DeliverMessage`
+  and the grain entry points `IMessageHubGrain.DeliverMessage`, `IRoutingGrain.RouteMessage`,
+  `IPodHubGrain.Deliver`.
+
+Under `LogOnly` these join the inventory; under `Enforce` the compile is refused unless the NodeType
+is trusted, so the forged sender never runs. Posting through the hub, reading `d.Sender`,
+`ForwardTo` and an empty envelope are not reported. Tests:
+`InMeshImpersonationReferencesTest.AForgedSenderEnvelope_IsFound` and its negative control
+`OrdinaryMessaging_IsNotReported`.
+
+**Why not a runtime caller check, or platform-only constructors.** A caller check on `DeliverMessage`
+runs on every hop; the calling-assembly classification measured about 0.3 µs per call. Narrowing the
+constructors and `Sender`'s `init` to the platform is free at run time, but it is not a boundary on
+its own: the JSON converter that every transport (Orleans deep copy, SignalR, gRPC) uses must set
+the sender, so any in-process code holding the hub's serializer options can deserialize an envelope
+with any sender, and reflection can call an internal constructor. It would also need the messaging
+assembly's internals opened to every routing assembly and test project, which changes overload
+resolution of the internal `IMessageHub.Observe(object, …)` there (see `MessageSizeGuard`). The
+compile-time check sees the sinks, so an envelope minted by any route still has nowhere to go.
+
 ## Not established
 
-- **A hand-built envelope.** `MessageDelivery<T>` has public constructors that take a sender, and
-  `IMessageHub.DeliverMessage` / `IRoutingService.DeliverMessage` accept any delivery — the routing
-  layer, the Orleans grains and the SignalR and gRPC ingresses need exactly that. In-process code
-  that builds a delivery itself and hands it to one of those does not go through `hub.Post`, so its
-  sender is not stamped. Closing that needs a caller check on those entry points (the
-  [in-mesh impersonation guard](../InMeshImpersonation)'s calling-assembly classification measured
-  about 0.3 µs per call, which is a per-hop cost on the routing path) or envelopes only the platform
-  can construct; neither is in place.
+- **Compiled modules.** A package assembly loaded into the process is not scanned (nor is an
+  adopted prebuilt bundle or a disk-cache hit, see [In-Mesh Impersonation](../InMeshImpersonation));
+  it can mint and route an envelope like any platform assembly. A grep of core and every satellite
+  checkout found envelope construction only in the wire ingresses, the routing layer and tests.
+- **Reflection by name** and **a sink this list does not name** (a module-defined API that accepts an
+  `IMessageDelivery` and routes it) are not found by a symbol scan.
 - **Holding another hub's object.** Code that obtains another hub's `IMessageHub` instance and posts
   through it posts AS that hub. The stamping answers "who posted", and that hub did.
 - Satellite repositories and mesh content were searched for code that writes a foreign sender into a
