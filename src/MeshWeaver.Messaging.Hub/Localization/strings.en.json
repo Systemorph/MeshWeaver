@@ -1519,6 +1519,7 @@
   "activity.delete.validatorRejected": "Cannot delete '{path}': {error}",
   "activity.delete.validationWarning": "'{path}': {warning}",
   "activity.delete.hasChildren": "Node at '{path}' has children. Use recursive delete to remove it.",
+  "activity.delete.versionConflict": "Did not delete '{path}': it changed since it was read (expected version {expected}, found {actual}). Nothing was deleted; re-read the node and decide again.",
   "activity.delete.blockedByDescendant": "Cannot delete '{path}': {error}",
   "activity.delete.cancelled": "Delete of '{path}' was cancelled before any node was removed.",
   "activity.delete.cancelledPartial": "Delete of '{path}' was cancelled after removing {count} node(s) — the subtree is left partially deleted.",
