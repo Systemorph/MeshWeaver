@@ -44,12 +44,14 @@ public sealed record PersonTile(string Name, string? Icon, string? Locale);
 /// <param name="Description">The root's description.</param>
 /// <param name="Category">The root's category.</param>
 /// <param name="EntryPoint">The content's <c>entryPoint</c>, when declared.</param>
-/// <param name="HostedIn">The content's <c>hostedIn</c> — the host app the package is a section of
-/// (<c>Doc/Architecture/InAppExtensions</c>), when declared.</param>
 public sealed record AppRoot(
-    string Path, string Name, string Icon, string? Description, string? Category, string? EntryPoint,
-    string? HostedIn = null)
+    string Path, string Name, string Icon, string? Description, string? Category, string? EntryPoint)
 {
+    /// <summary>The content's <c>hostedIn</c> — the host app the package is a section of
+    /// (<c>Doc/Architecture/InAppExtensions</c>), when declared. An init property rather than a
+    /// constructor parameter, so the record's constructor keeps its binary shape.</summary>
+    public string? HostedIn { get; init; }
+
     /// <summary>Where the tile opens: the entry point, else the root.</summary>
     public string OpenPath => string.IsNullOrWhiteSpace(EntryPoint) ? Path : EntryPoint!.Trim('/');
 
@@ -486,8 +488,10 @@ public sealed class AppDirectory
             string.IsNullOrWhiteSpace(node.Icon) ? UserActivityLayoutAreas.GenericAppIcon : node.Icon!,
             node.Description,
             node.Category,
-            string.IsNullOrWhiteSpace(entryPoint) ? null : entryPoint,
-            string.IsNullOrWhiteSpace(hostedIn) ? null : hostedIn.Trim());
+            string.IsNullOrWhiteSpace(entryPoint) ? null : entryPoint)
+        {
+            HostedIn = string.IsNullOrWhiteSpace(hostedIn) ? null : hostedIn.Trim(),
+        };
     }
 
     /// <summary>The content as a JSON object, whatever shape it arrived in. Typed content is
