@@ -305,13 +305,15 @@ leaves the same window. So name the version you read, and let the owner check it
 ```csharp
 var request = new DeleteNodeRequest(path) { ExpectedVersion = node.Version };
 hub.Observe(request, o => o.WithTarget(hub.NodeOperationTarget()))
-    .Subscribe(d =>
-    {
-        if (d.Message.RejectionReason == NodeDeletionRejectionReason.Conflict)
+    .Subscribe(
+        d =>
         {
-            // It changed after we read it. Nothing was deleted: re-read and decide again.
-        }
-    });
+            if (d.Message.RejectionReason == NodeDeletionRejectionReason.Conflict)
+            {
+                // It changed after we read it. Nothing was deleted: re-read and decide again.
+            }
+        },
+        ex => logger.LogWarning(ex, "Delete of {Path} could not be delivered", path));
 ```
 
 - **Where it is checked.** The owner compares `ExpectedVersion` with the node's durable `Version`
@@ -326,9 +328,13 @@ hub.Observe(request, o => o.WithTarget(hub.NodeOperationTarget()))
   whatever version the node last had.
 - **Root only.** For a recursive delete, only the node at `Path` is checked. The cascade's
   per-descendant requests never carry the value.
-- **The durable version.** An update's ack is issued after its durable flush, so the version you read
-  from an acked write is the one stored. A version you read from a live stream before its flush can
-  answer one spurious `Conflict`. Re-reading resolves it.
+- **The stored version, and its two gaps.** The check reads the version in the store. An update a
+  node's owner makes to its OWN node is acknowledged from the owner's in-memory stream and stored by
+  the persistence sampler shortly after, so for that short window the store still holds V while V+1
+  is acknowledged: a delete expecting V that lands then matches, and the pending V+1 is refused. The
+  subtree-deletion scope is also process-local, so a writer on another silo is not held off by it.
+  Inside those two windows the precondition does not hold. In the other direction, a version read
+  from a live stream before its flush can answer one spurious `Conflict`; re-reading resolves it.
 - **Omitted** (`null`, the default), the delete removes whatever version is there, exactly as before.
 
 ---

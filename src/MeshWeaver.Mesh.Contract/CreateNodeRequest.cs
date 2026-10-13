@@ -498,18 +498,27 @@ public record DeleteNodeRequest(string Path)
     /// <para>🚨 <b>Checked by the owning hub INSIDE the delete, not by the caller beforehand.</b>
     /// A read-then-delete on a shared node cannot be made safe from outside: another writer can add
     /// to the node after the caller's last read and before the delete lands, and the delete then
-    /// removes what that writer just wrote. The owner compares this value against the node's
-    /// durable version AFTER it has opened the subtree-deletion scope, from which point every
-    /// in-process write at or under the path is refused until the delete completes — so a match
-    /// cannot go stale before the commit, and a write that loses the race is told so
-    /// (<c>NotFound</c>, "Node being deleted") instead of being silently removed.</para>
+    /// removes what that writer just wrote. The delete compares this value against the node's
+    /// stored version AFTER it has opened the subtree-deletion scope, from which point every
+    /// in-process storage write at or under the path is refused until the delete completes — so a
+    /// match cannot go stale before the commit through such a write, and a write that loses the
+    /// race is told so (<c>NotFound</c>, "Node being deleted") instead of being silently removed.
+    /// The limits of that guarantee are in the next paragraph but one.</para>
     ///
     /// <para>A mismatch answers <see cref="NodeDeletionRejectionReason.Conflict"/> and removes
     /// nothing; re-read the node and decide again. A node that is already gone still answers the
     /// idempotent success <see cref="DeleteNodeResponse.AlreadyAbsent"/> — the postcondition holds
-    /// whatever version it last had. It is compared against the DURABLE version, which an ack
-    /// guarantees, so a caller that read a version from a live stream before its flush may see one
-    /// spurious <c>Conflict</c>; re-reading resolves it.</para>
+    /// whatever version it last had.</para>
+    ///
+    /// <para>🚨 <b>It is compared against the STORED version, and not every acknowledged write is
+    /// stored yet.</b> An update the owning hub makes to its OWN node is acknowledged from the
+    /// owner's in-memory stream and flushed by the persistence sampler shortly after, so for that
+    /// short window the store can still hold version V while V+1 is acknowledged. A delete expecting
+    /// V that lands in the window matches, and the pending flush of V+1 is then refused. The
+    /// subtree-deletion scope is also process-local, so a writer on another silo is not held off by
+    /// it. Within those two windows the precondition does NOT hold; outside them it does. In the
+    /// other direction, a version read from a live stream before its flush can answer one spurious
+    /// <c>Conflict</c>; re-reading resolves it.</para>
     ///
     /// <para><b>Root only.</b> For a <see cref="Recursive"/> delete the check applies to the node at
     /// <see cref="DeleteNodeRequest.Path"/>; descendants are not version-checked (the cascade's leaf
