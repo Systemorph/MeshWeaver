@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Diagnostics.Metrics;
 
 namespace MeshWeaver.Messaging;
@@ -41,6 +42,12 @@ public sealed class PlatformMetrics : IDisposable
 
     private readonly Meter meter;
 
+    // The satellite values this meter has ever named (#6632). Admission is for the meter's LIFETIME:
+    // a value named once keeps its series, and nothing past MaxSatelliteValues is ever admitted, so
+    // the union of series over every scrape is bounded, not just one scrape. Written only from the
+    // gauge callback; swapped atomically so a concurrent collection never sees a torn set.
+    private ImmutableHashSet<string> admittedSatellites = ImmutableHashSet.Create<string>(StringComparer.Ordinal);
+
     /// <summary>Creates the mesh's meter and arms its gauges.</summary>
     /// <param name="root">The hub whose tree is the population — the mesh's root.</param>
     public PlatformMetrics(IMessageHub root)
@@ -66,7 +73,7 @@ public sealed class PlatformMetrics : IDisposable
     /// issue is about. On a fault it reports nothing for this scrape and the next one tries
     /// again.</para>
     /// </summary>
-    private static IEnumerable<Measurement<long>> Observe(IMessageHub root)
+    private IEnumerable<Measurement<long>> Observe(IMessageHub root)
     {
         // 🚨 A dead ROOT is a torn-down mesh, and reporting one Dead hub for it is noise the
         // summary above already promises not to emit — nothing throws on a disposed hub, so
@@ -79,7 +86,7 @@ public sealed class PlatformMetrics : IDisposable
         Dictionary<(string Kind, string Satellite, string RunLevel), long> counts;
         try
         {
-            counts = Tally(root);
+            counts = Tally(root, ref admittedSatellites);
         }
         catch
         {
@@ -102,14 +109,18 @@ public sealed class PlatformMetrics : IDisposable
     public const string OtherSatellite = "_other";
 
     /// <summary>
-    /// How many distinct satellite values one scrape reports by name (#6632). Satellite segment names
-    /// are a small, module-declared set, but nothing ENFORCES that a segment starting with <c>_</c>
-    /// is one — so the bound is the meter's, not the deployment's: the most populous values are named
-    /// and the rest fold into <see cref="OtherSatellite"/>, never into a new series each.
+    /// How many distinct satellite values this meter ever reports by name (#6632). Satellite segment
+    /// names are a small, module-declared set, but nothing ENFORCES that a segment starting with
+    /// <c>_</c> is one — so the bound is the meter's, not the deployment's, and it holds for the
+    /// meter's LIFETIME: a value is admitted the first time it is among the most populous of a scrape
+    /// while a slot is free, keeps its name from then on, and every value never admitted folds into
+    /// <see cref="OtherSatellite"/>. A per-scrape top-N would bound one scrape only: values rotating
+    /// through the top would each leave a series behind in the metric store.
     /// </summary>
     public const int MaxSatelliteValues = 32;
 
-    internal static Dictionary<(string, string, string), long> Tally(IMessageHub root)
+    internal static Dictionary<(string, string, string), long> Tally(
+        IMessageHub root, ref ImmutableHashSet<string> admitted)
     {
         var raw = new Dictionary<(string, string, string), long>();
         var hubs = root is MessageHub messageHub
@@ -121,14 +132,19 @@ public sealed class PlatformMetrics : IDisposable
             raw[key] = raw.TryGetValue(key, out var existing) ? existing + 1 : 1;
         }
 
-        var named = raw
-            .GroupBy(e => e.Key.Item2)
-            .Where(g => g.Key != NoSatellite)
-            .OrderByDescending(g => g.Sum(e => e.Value))
-            .ThenBy(g => g.Key, StringComparer.Ordinal)
-            .Take(MaxSatelliteValues)
-            .Select(g => g.Key)
-            .ToHashSet(StringComparer.Ordinal);
+        var named = admitted;
+        if (named.Count < MaxSatelliteValues)
+        {
+            var candidates = raw
+                .GroupBy(e => e.Key.Item2)
+                .Where(g => g.Key != NoSatellite && !named.Contains(g.Key))
+                .OrderByDescending(g => g.Sum(e => e.Value))
+                .ThenBy(g => g.Key, StringComparer.Ordinal)
+                .Select(g => g.Key)
+                .Take(MaxSatelliteValues - named.Count);
+            named = named.Union(candidates);
+            admitted = named;
+        }
         var counts = new Dictionary<(string, string, string), long>();
         foreach (var ((kind, satellite, runLevel), count) in raw)
         {

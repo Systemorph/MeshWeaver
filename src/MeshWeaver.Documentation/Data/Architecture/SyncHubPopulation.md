@@ -376,9 +376,13 @@ partition, the script behind the tables above) is the reading to repeat on it.
 `_Activity`, `_Thread` — or `none`; never an id. The 2026-10-04/05 OOM burst was ~5,000
 `Admin/content/_Documents/…/_DocumentPart/{index}` hubs, which the `kind` tag alone folded into
 `kind=Admin`; with the second tag the next burst names its address shape while it happens. The bound
-is the meter's own: at most `MaxSatelliteValues` (32) satellite values are reported by name per scrape,
-the most populous first, and the rest fold into `_other` — nothing enforces that a `_` segment is a
-declared satellite, so cardinality is not left to the deployment.
+is the meter's own, and it holds for the meter's LIFETIME: at most `MaxSatelliteValues` (32) satellite
+values are ever named. A value is admitted the first time it is among the most populous of a scrape
+while a slot is free and keeps its name afterwards; every value never admitted folds into `_other`.
+A per-scrape top-N would bound one scrape only — values rotating through the top would each leave a
+series behind in the metric store. Nothing enforces that a `_` segment is a declared satellite, so
+cardinality is not left to the deployment
+(`PlatformMetricsTest.SatelliteValues_StayBounded_AcrossScrapesThatRotateTheirValues`).
 
 ## Related
 

@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 #pragma warning disable CS1591
 
 using System;
@@ -174,6 +175,36 @@ public class PlatformMetricsTest(ITestOutputHelper output) : HubTestBase(output)
     /// <c>_</c> segment is a declared satellite, so past <see cref="PlatformMetrics.MaxSatelliteValues"/>
     /// distinct values the rest fold into <see cref="PlatformMetrics.OtherSatellite"/>.
     /// </summary>
+    /// <summary>
+    /// 🚨 The bound holds across SCRAPES, not only within one (#6632 review): satellite values that
+    /// rotate through the most populous between scrapes must not each mint a series. The union of
+    /// every satellite value ever emitted stays within the bound plus the fold value.
+    /// </summary>
+    [HubFact]
+    public void SatelliteValues_StayBounded_AcrossScrapesThatRotateTheirValues()
+    {
+        var host = GetHost();
+        using var metrics = new PlatformMetrics(host);
+        var emitted = ImmutableHashSet.Create<string>(StringComparer.Ordinal);
+        const int rounds = 3;
+        for (var round = 0; round < rounds; round++)
+        {
+            // Each round brings MaxSatelliteValues NEW values, each more populous than every earlier
+            // one, so a per-scrape top-N would name a fresh set every round.
+            for (var i = 0; i < PlatformMetrics.MaxSatelliteValues; i++)
+                for (var copy = 0; copy <= round + 1; copy++)
+                    host.GetHostedHub(new Address("victim", $"rot-{round}-{i}-{copy}", $"_Rot{round}x{i:00}"), c => c)
+                        .Should().NotBeNull();
+            emitted = emitted.Union(ScrapeSatellites()
+                .Select(t => t.Satellite)
+                .Where(s => s != PlatformMetrics.NoSatellite));
+        }
+
+        emitted.Count.Should().BeLessThanOrEqualTo(PlatformMetrics.MaxSatelliteValues + 1,
+            "over the meter's lifetime at most the bound by name plus the one fold value");
+        emitted.Should().Contain(PlatformMetrics.OtherSatellite, "the values never admitted fold into one");
+    }
+
     [HubFact]
     public void SatelliteValues_AreBounded_TheRestFoldIntoOther()
     {
