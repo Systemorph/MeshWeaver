@@ -1501,7 +1501,10 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         return Acknowledge(delivery).Failed(
             ShutdownNack.RejectingNow(
                 grainId,
-                $"{ShutdownNack.FormatActivationTag(this)}, its host is stopping",
+                // The HUB's identity when there is one (#6602): the hub's own NACKs (MessageService,
+                // MessageHub) tag the hub instance, so tagging the grain here made ONE leaving
+                // activation read as two distinct ones to every subscriber's re-arm budget.
+                $"{ShutdownNack.FormatActivationTag((object?)_hub ?? this)}, its host is stopping",
                 $"cannot answer delivery {delivery.Id}"),
             ErrorType.ShuttingDown);
     }

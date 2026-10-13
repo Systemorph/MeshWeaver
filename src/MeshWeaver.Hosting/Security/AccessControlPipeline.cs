@@ -1,5 +1,6 @@
 ﻿using System.Collections.Concurrent;
 using System.Collections.Immutable;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reflection;
 using MeshWeaver.Data;
@@ -255,12 +256,15 @@ public static class AccessControlPipeline
             // creation. Instead, resolve lazily per-delivery via the closure
             // below — by then the hub's DI scope is fully built.
             ILogger? logger = null;
+            // One per hub, owned by this closure — the hub's lifetime is its lifetime (#6589).
+            var ordered = new SenderOrderedRelease(hub);
 
             return pipeline.AddPipeline((delivery, ct, next) =>
             {
                 var attr = GetAttribute(delivery.Message.GetType());
                 if (attr == null)
                     return next.Invoke(delivery, ct);
+                var senderKey = SenderOrderedRelease.KeyOf(delivery);
 
                 // 🚨 SWEEP (issue #974). Everything down to the reactive chain runs SYNCHRONOUSLY
                 // on the delivery thread, OUTSIDE the fold's classifier — and every line of it can
@@ -473,7 +477,22 @@ public static class AccessControlPipeline
                 }
 
                 if (rlsDisabled || pendingChecks.IsEmpty)
-                    return next.Invoke(delivery, ct);
+                {
+                    // Nothing to evaluate — runs on this turn, unless an earlier delivery from the
+                    // SAME sender is still waiting for its verdict: then it queues behind it, or it
+                    // would overtake it (#6589, see SenderOrderedRelease).
+                    if (!ordered.IsWaiting(senderKey))
+                        return next.Invoke(delivery, ct);
+                    ordered.Release<EvaluatedCheck?>(senderKey, Observable.Return<EvaluatedCheck?>(null),
+                        _ => next.Invoke(delivery, ct).Subscribe(
+                            _ => { },
+                            ex => logger?.LogError(ex,
+                                "AccessControlPipeline: downstream pipeline faulted for {MessageType} on {Hub}",
+                                delivery.Message.GetType().Name, hub.Address)),
+                        _ => { },
+                        logger);
+                    return Observable.Return(delivery.Forwarded());
+                }
 
                 // Sync-delivery shape (Doc/Architecture/AsynchronousCalls.md): the
                 // pipeline lambda returns delivery.Forwarded() immediately. The
@@ -487,7 +506,13 @@ public static class AccessControlPipeline
                 // which can hold stale "system-security" from hub-init's
                 // ImpersonateAsSystem scope. See ResolveIdentity's comment.
                 var effectiveUserId = userId ?? WellKnownUsers.Anonymous;
-                pendingChecks.ToObservable()
+                // 🚨 The verdict is evaluated NOW, concurrently with later deliveries — but it is
+                // ACTED ON (next invoked, or the refusal posted) in arrival order per sender
+                // (#6589). The decision completes off this turn (TakeDecisionOutsideGate hops to
+                // the pool), so acting on it the moment it arrived let a sender's later write run
+                // its handler before an earlier one: 20 patches posted in order to a node were
+                // applied 1,3,2,… and the last one posted did not stay. See SenderOrderedRelease.
+                ordered.Release(senderKey, pendingChecks.ToObservable()
                     // 🚨 CheckPermissionOutcome, NOT CheckPermission + a local .Catch(→false)
                     // — issue #974. The fold is the only party that knows whether it reached a
                     // verdict, so it is the only place that may decide "denied" vs. "could not
@@ -578,8 +603,7 @@ public static class AccessControlPipeline
                     // invariant is now the SHAPE of the stream rather than a mutable flag three
                     // callbacks have to remember to consult.
                     .Select(evaluated => (EvaluatedCheck?)evaluated)
-                    .DefaultIfEmpty()
-                    .Subscribe(
+                    .DefaultIfEmpty(),
                         refusal =>
                         {
                             if (refusal is null)
@@ -686,11 +710,163 @@ public static class AccessControlPipeline
                                     Message = message
                                 },
                                 o => o.ResponseFor(delivery));
-                        });
+                        },
+                        logger);
 
                 return Observable.Return(delivery.Forwarded());
             });
         });
+
+    /// <summary>
+    /// 🚨 <b>Per-sender FIFO for gated deliveries (#6589).</b> A <see cref="RequiresPermissionAttribute"/>
+    /// delivery is not handled on the turn that received it: the pipeline returns at once and the
+    /// handler runs when the permission verdict arrives, which is OFF the turn — the decision hops to
+    /// the pool (<c>TakeDecisionOutsideGate</c>, #899), and a cold permission cache answers later
+    /// still. Acted on as each verdict arrived, two writes from one sender raced to their handlers,
+    /// and the second could commit first: measured on a freshly activated node, 20 patches posted
+    /// in order were applied <c>1,3,2,4,…</c> and <c>…,16,15,19,17,18,20</c>, so "the last write
+    /// posted is the value that stays" failed under CI load.
+    ///
+    /// <para>The verdicts are still EVALUATED concurrently and as early as before — only the ACTING
+    /// on them (invoking <c>next</c>, or posting the refusal) is released in the order the deliveries
+    /// reached this hub, per sender: the ordering an actor guarantees between one sender and one
+    /// receiver. It is deliberately per SENDER, not per hub: a verdict that itself needs a reply from
+    /// this hub (the node-type rule reading the node, an access-cache refresh) arrives from another
+    /// sender, so it can never queue behind the delivery that waits for it. The hub's turn is not
+    /// held either way — the sync-delivery shape is unchanged.</para>
+    ///
+    /// <para>Each lane is created on demand and retires when it drains, so an idle hub keeps no
+    /// state per sender.</para>
+    /// </summary>
+    private sealed class SenderOrderedRelease
+    {
+        private readonly ConcurrentDictionary<string, Lane> lanes = new(StringComparer.Ordinal);
+        private readonly IMessageHub hub;
+        private CompositeDisposable? connections;
+
+        /// <summary>Creates the per-hub release whose in-flight verdict connections <paramref name="hub"/> owns.</summary>
+        public SenderOrderedRelease(IMessageHub hub) => this.hub = hub;
+
+        /// <summary>
+        /// The owner of every verdict connection: one <see cref="CompositeDisposable"/> registered with
+        /// the hub, so the hub's disposal releases a verdict that never terminates instead of leaving it
+        /// subscribed (and the delivery it captures retained) past the hub. Registered on first use —
+        /// on a delivery, when the hub is fully built — never at pipeline registration, which runs
+        /// inside the hub's own construction.
+        /// </summary>
+        private CompositeDisposable Connections()
+        {
+            var existing = Volatile.Read(ref connections);
+            if (existing is not null)
+                return existing;
+            var created = new CompositeDisposable();
+            var winner = Interlocked.CompareExchange(ref connections, created, null);
+            if (winner is not null)
+                return winner;
+            hub.RegisterForDisposal(created);
+            return created;
+        }
+
+        /// <summary>The ordering key of a delivery: its sender.</summary>
+        public static string KeyOf(IMessageDelivery delivery) => delivery.Sender?.ToString() ?? string.Empty;
+
+        /// <summary>True while an earlier delivery from <paramref name="key"/> still waits for its release.</summary>
+        public bool IsWaiting(string key) => lanes.TryGetValue(key, out var lane) && lane.IsWaiting;
+
+        /// <summary>
+        /// Starts evaluating <paramref name="decision"/> now and acts on its single answer — through
+        /// <paramref name="onDecision"/>, or <paramref name="onFault"/> — only after every earlier
+        /// release for <paramref name="key"/> has been acted on.
+        /// </summary>
+        public void Release<T>(
+            string key, IObservable<T> decision, Action<T> onDecision, Action<Exception> onFault, ILogger? logger)
+        {
+            // Hot from here: the verdict is computed concurrently with everything queued ahead.
+            var verdict = decision.Take(1).Replay(1);
+            verdict.ConnectOwnedBy(Connections());
+            var release = Observable.Create<System.Reactive.Unit>(observer => verdict.Subscribe(
+                value =>
+                {
+                    try { onDecision(value); }
+                    catch (Exception ex)
+                    {
+                        logger?.LogError(ex, "AccessControlPipeline: acting on a permission verdict threw");
+                    }
+                },
+                ex =>
+                {
+                    try { onFault(ex); }
+                    catch (Exception inner)
+                    {
+                        logger?.LogError(inner, "AccessControlPipeline: answering a failed permission check threw");
+                    }
+                    observer.OnCompleted();
+                },
+                observer.OnCompleted));
+
+            while (true)
+            {
+                var lane = lanes.GetOrAdd(key, _ => new Lane(this, key, logger));
+                if (lane.TryEnqueue(release))
+                    return;
+                // The lane drained and retired between GetOrAdd and the enqueue — take a fresh one.
+                lanes.TryRemove(new KeyValuePair<string, Lane>(key, lane));
+            }
+        }
+
+        /// <summary>
+        /// One sender's queue: a <see cref="System.Reactive.Subjects.Subject{T}"/> drained by
+        /// <c>Concat</c>, so a release starts only once the one ahead of it has completed (the
+        /// sanctioned serialization shape). Retires itself when the backlog drains.
+        /// </summary>
+        private sealed class Lane
+        {
+            private readonly SenderOrderedRelease owner;
+            private readonly string key;
+            private readonly System.Reactive.Subjects.Subject<IObservable<System.Reactive.Unit>> inbox = new();
+            private readonly Lock gate = new();
+            private int pending;
+            private bool completed;
+
+            public Lane(SenderOrderedRelease owner, string key, ILogger? logger)
+            {
+                this.owner = owner;
+                this.key = key;
+                inbox.Concat().Subscribe(
+                    _ => { },
+                    ex => logger?.LogError(ex, "AccessControlPipeline: ordered release lane for {Sender} faulted", key));
+            }
+
+            public bool IsWaiting
+            {
+                get { lock (gate) return !completed && pending > 0; }
+            }
+
+            public bool TryEnqueue(IObservable<System.Reactive.Unit> release)
+            {
+                lock (gate)
+                {
+                    if (completed)
+                        return false;
+                    pending++;
+                    inbox.OnNext(release.Finally(Done));
+                    return true;
+                }
+            }
+
+            private void Done()
+            {
+                lock (gate)
+                {
+                    if (completed || --pending > 0)
+                        return;
+                    completed = true;
+                    inbox.OnCompleted();
+                }
+                owner.lanes.TryRemove(new KeyValuePair<string, Lane>(key, this));
+            }
+        }
+    }
 
     /// <summary>
     /// Sync handler for <see cref="GetPermissionRequest"/>. The hub always

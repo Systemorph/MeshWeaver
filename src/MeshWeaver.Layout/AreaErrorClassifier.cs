@@ -34,6 +34,11 @@ public static class AreaErrorClassifier
             // the wording below matched — so the one verdict the producer had already classified was
             // re-read here as permanent.
             if (e is DeliveryFailureException { Failure.ErrorType: ErrorType.ShuttingDown }) return true;
+            // A sync stream that gave up re-asking a RECYCLING owner (#6602). Every refusal it counted
+            // was the ShuttingDown verdict above, so it is the same statement — "the address is
+            // coming back" — and a view re-subscribes on a new stream, bounded by RetryAreaWithBackoff.
+            // Before the give-up was a terminal, the view simply froze on its last value.
+            if (e is MeshWeaver.Data.Serialization.SyncStreamOwnerRefusedException) return true;
             var msg = e.Message ?? string.Empty;
             // 🚨 The two TRANSPORT timeouts, flattened to text by the routed NACK (issues #5599,
             // #5605, #5624). Across the grain boundary the TimeoutException OBJECT does not survive —
