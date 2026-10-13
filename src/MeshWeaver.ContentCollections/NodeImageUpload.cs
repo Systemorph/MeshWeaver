@@ -2,6 +2,8 @@ using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Linq;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -29,11 +31,17 @@ namespace MeshWeaver.ContentCollections;
 /// previous file is deleted only if its name has that generated shape — an icon the owner pointed
 /// at any other file of theirs is never touched.</para>
 ///
-/// <para><b>Order of effects and identity.</b> The bytes are saved first, then the node is updated
-/// through the one mutation API (<c>GetMeshNodeStream(path).Update</c>), which enforces the caller's
-/// <c>Update</c> permission. A failed save or a refused update deletes the file just written. The
-/// caller's <see cref="AccessContext"/> is captured when the method is CALLED and every write runs
-/// under it (<c>RunAs</c> for the subscription, <c>CarryAccessContext</c> for the continuations).</para>
+/// <para><b>Order of effects and identity.</b> The caller's <see cref="AccessContext"/> is captured
+/// when the method is CALLED. 🚨 <b>Authorization comes FIRST:</b> before a single byte is read or
+/// written, the caller must hold <c>Update</c> on the node (the raw fold, re-decided through the
+/// node type's access rule on a definitive denial — <see cref="NodeTypeAccessRuleGate.CheckFor"/>,
+/// the same two questions the owner's write gate asks). The save runs on the CALLING hub straight
+/// into the collection's storage, where no owner gate sees it, so a refusal that arrived only with
+/// the later node update would already have written the file. Only then are the bytes saved and the
+/// node updated through the one mutation API (<c>GetMeshNodeStream(path).Update</c>), which enforces
+/// <c>Update</c> once more at the owner. A failed save or a refused update deletes the file just
+/// written. Every step runs as the captured caller (<c>RunAs</c> for the subscription,
+/// <c>CarryAccessContext</c> for the continuations).</para>
 ///
 /// <para><b>Failures</b> are <see cref="NodeImageUploadException"/>s whose
 /// <see cref="NodeImageUploadException.Reason"/> (<see cref="NodeImageUploadFailure"/>) a GUI maps
@@ -138,7 +146,8 @@ public static class NodeImageUpload
         var logger = Logger(hub);
         var caller = CallerOf(hub);
 
-        return AsCaller(hub, caller, () => ResolveCollection(hub, nodePath, caller))
+        return AsCaller(hub, caller, () => Authorize(hub, nodePath, caller, logger))
+            .SelectMany(_ => AsCaller(hub, caller, () => ResolveCollection(hub, nodePath, caller)))
             .SelectMany(collection => AsCaller(hub, caller, () => collection
                     // The factory runs INSIDE the collection's pool leaf: the bounded read and the
                     // signature check happen there, synchronously, never on the caller's thread.
@@ -185,6 +194,30 @@ public static class NodeImageUpload
         => hub.ServiceProvider.GetService<AccessService>()
             .RunAs(caller, work)
             .CarryAccessContext(hub.ServiceProvider, caller);
+
+    /// <summary>
+    /// The write pre-flight: emits once when <paramref name="caller"/> holds <c>Update</c> on
+    /// <paramref name="nodePath"/>, otherwise errors with a <see cref="NodeImageUploadException"/> —
+    /// <see cref="NodeImageUploadFailure.NotPermitted"/> for a definitive refusal,
+    /// <see cref="NodeImageUploadFailure.PermissionUndetermined"/> when no verdict was reached
+    /// (fail-closed, and not reported as a refusal nobody established).
+    /// </summary>
+    private static IObservable<Unit> Authorize(
+        IMessageHub hub, string nodePath, AccessContext? caller, ILogger? logger)
+        => NodeTypeAccessRuleGate.CheckFor(hub, nodePath, caller, Permission.Update, logger)
+            .SelectMany(outcome =>
+            {
+                if (outcome.IsGranted)
+                    return Observable.Return(Unit.Default);
+                if (outcome.IsUndetermined)
+                    return Observable.Throw<Unit>(new NodeImageUploadException(
+                        NodeImageUploadFailure.PermissionUndetermined,
+                        $"The permission check for '{nodePath}' did not complete ({outcome.UndeterminedReason}); "
+                        + "nothing was written."));
+                return Observable.Throw<Unit>(new NodeImageUploadException(
+                    NodeImageUploadFailure.NotPermitted,
+                    $"Changing the picture of '{nodePath}' requires Update permission; nothing was written."));
+            });
 
     /// <summary>
     /// Reads the upload into memory, BOUNDED by <see cref="MaxBytes"/> (the length that counts is
@@ -333,6 +366,12 @@ public static class NodeImageUploadFailure
 
     /// <summary>The node has no editable default content collection to hold a picture.</summary>
     public const string NoCollection = "noCollection";
+
+    /// <summary>The caller does not hold <c>Update</c> on the node; nothing was written.</summary>
+    public const string NotPermitted = "notPermitted";
+
+    /// <summary>The permission check reached no verdict; nothing was written (retryable).</summary>
+    public const string PermissionUndetermined = "permissionUndetermined";
 }
 
 /// <summary>

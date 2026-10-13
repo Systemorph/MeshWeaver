@@ -66,6 +66,10 @@ different address. So "came from another address" is exactly "not the node's own
 any identity, role or impersonation having to be trusted. System is not exempt: platform code that
 runs elsewhere is still a client of the node.
 
+The sender is trustworthy because the posting hub stamps it: a sender the posting code wrote itself
+is replaced by the address of the hub that actually posts, so naming the node's own address does not
+make a client the owner ([The Sender Is the Posting Hub](../SenderIsThePostingHub), #6553).
+
 ## What it costs
 
 - **Per activation:** the node hub reads its type's declaration once, **while it initializes** —

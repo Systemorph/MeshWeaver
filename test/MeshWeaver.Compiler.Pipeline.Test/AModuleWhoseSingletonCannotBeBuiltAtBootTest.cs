@@ -33,6 +33,15 @@ public sealed class CircuitBoundState
         if (Volatile.Read(ref initialized) == 0)
             throw new InvalidOperationException("'CircuitBoundState' has not been initialized.");
     }
+
+    private int released;
+
+    /// <summary>How many consumers built over this state were disposed — what a circuit's end does to
+    /// the services it owns.</summary>
+    public int Released => Volatile.Read(ref released);
+
+    /// <summary>What a consumer's <c>Dispose</c> does — Radzen's <c>DialogService</c> unsubscribes.</summary>
+    public void Release() => Interlocked.Increment(ref released);
 }
 
 /// <summary>A platform CLASS a module registers SCOPED over circuit state — the route a Radzen service
@@ -40,7 +49,14 @@ public sealed class CircuitBoundState
 public sealed class CircuitPlatformService
 {
     /// <summary>Takes the circuit's state, as <c>DialogService</c> takes a <c>NavigationManager</c>.</summary>
-    public CircuitPlatformService(CircuitBoundState state) => state.Subscribe();
+    public CircuitPlatformService(CircuitBoundState state)
+    {
+        state.Subscribe();
+        State = state;
+    }
+
+    /// <summary>The circuit state it was built over.</summary>
+    public CircuitBoundState State { get; }
 }
 
 /// <summary>
@@ -93,9 +109,11 @@ public abstract class ModuleSingletonsBuiltAtBootTestBase(ITestOutputHelper outp
         {
             public Fragile() { {{(broken ? "throw new System.InvalidOperationException(\"cannot be built by design\");" : "")}} }
         }
-        public sealed class CircuitDialog
+        public sealed class CircuitDialog : System.IDisposable
         {
-            public CircuitDialog(MeshWeaver.Graph.Test.CircuitBoundState state) => state.Subscribe();
+            public CircuitDialog(MeshWeaver.Graph.Test.CircuitBoundState state) { state.Subscribe(); State = state; }
+            public MeshWeaver.Graph.Test.CircuitBoundState State { get; }
+            public void Dispose() => State.Release();
         }
         public sealed class CircuitBoundSingleton
         {
@@ -222,5 +240,100 @@ public sealed class AModuleWithCircuitBoundServicesLoadsAtBootTest(ITestOutputHe
         Contexts.Current(Module).Should().NotBeNull();
         Installed.Should().ContainSingle("a published module is an installed module");
         Mesh.ServiceProvider.GetRequiredService<IBootBuiltProbe>().Answer().Should().Be("boot-built");
+    }
+}
+
+/// <summary>
+/// MeshWeaver#6584 — <b>a module's scoped service is the CALLER's.</b> Asked from inside a scope — a
+/// Blazor circuit's, a request's, a hub's — a module's scoped registration is built in a module scope
+/// that caller owns, against the caller's own scoped state (Blazor's <c>NavigationManager</c> and
+/// <c>IJSRuntime</c>, here <see cref="CircuitBoundState"/>), and ends with the caller. Before, it was one
+/// instance per module generation, shared by every circuit and built against a root child scope no
+/// circuit had initialised — Radzen's <c>ThemeService</c> for every user at once, and a
+/// <c>DialogService</c> that threw on its first real resolve. Both roads the root reaches a module by are
+/// measured: a type the module declares (<see cref="ModuleOwnedRootSource"/>) and a platform class it
+/// registers (the <c>Current</c> forwarder).
+/// </summary>
+public sealed class AModulesScopedServicesAreTheCallersTest(ITestOutputHelper output)
+    : ModuleSingletonsBuiltAtBootTestBase(output)
+{
+    /// <inheritdoc />
+    protected override bool Broken => false;
+
+    /// <inheritdoc />
+    protected override bool CircuitBound => true;
+
+    private Type ModuleDialog =>
+        (Contexts.Current(Module) ?? throw new Xunit.Sdk.XunitException($"{Module} is not held by the module registry"))
+        .Assembly.GetType("MeshWeaver.Test.BootBuilt.CircuitDialog")
+        ?? throw new Xunit.Sdk.XunitException("CircuitDialog is not in the held module");
+
+    private static CircuitBoundState StateOf(object service) =>
+        (CircuitBoundState)service.GetType().GetProperty("State")!.GetValue(service)!;
+
+    // A circuit: a scope of the root, whose state the circuit initialises when it starts.
+    private AsyncServiceScope Circuit(bool initialise = true)
+    {
+        var circuit = Mesh.ServiceProvider.CreateAsyncScope();
+        if (initialise)
+            circuit.ServiceProvider.GetRequiredService<CircuitBoundState>().Initialize();
+        return circuit;
+    }
+
+    [Fact]
+    public async Task TwoCircuits_EachResolveTheirOwnInstance_BuiltOverTheirOwnCircuit()
+    {
+        await using var first = Circuit();
+        await using var second = Circuit();
+        foreach (var type in new[] { ModuleDialog, typeof(CircuitPlatformService) })
+        {
+            var fromFirst = first.ServiceProvider.GetRequiredService(type);
+            var fromSecond = second.ServiceProvider.GetRequiredService(type);
+
+            fromFirst.Should().BeSameAs(first.ServiceProvider.GetRequiredService(type),
+                $"{type.Name} is scoped: within one circuit it is that circuit's one instance");
+            fromFirst.Should().NotBeSameAs(fromSecond,
+                $"two circuits are two scopes — one {type.Name} shared between them is one user's state served to another");
+            StateOf(fromFirst).Should().BeSameAs(first.ServiceProvider.GetRequiredService<CircuitBoundState>(),
+                $"{type.Name} is built against ITS circuit's state — the NavigationManager that circuit initialised");
+            StateOf(fromSecond).Should().BeSameAs(second.ServiceProvider.GetRequiredService<CircuitBoundState>());
+        }
+    }
+
+    [Fact]
+    public async Task EndingACircuit_EndsItsModuleScope_AndNoOtherCircuits()
+    {
+        var ending = Circuit();
+        await using var staying = Circuit();
+        var endingState = ending.ServiceProvider.GetRequiredService<CircuitBoundState>();
+        var stayingState = staying.ServiceProvider.GetRequiredService<CircuitBoundState>();
+        ending.ServiceProvider.GetRequiredService(ModuleDialog);
+        staying.ServiceProvider.GetRequiredService(ModuleDialog);
+
+        await ending.DisposeAsync();
+
+        endingState.Released.Should().Be(1,
+            "the module scope the circuit owned ends with the circuit — a Blazor circuit's scope is disposed asynchronously");
+        stayingState.Released.Should().Be(0, "another circuit's module scope is its own");
+        staying.ServiceProvider.GetRequiredService(ModuleDialog).Should().NotBeNull("the other circuit keeps being served");
+    }
+
+    /// <summary>
+    /// The negative control: asked with NO caller — off the root provider itself, which is where every
+    /// resolve of a module service used to land — the same registration is built against state no circuit
+    /// initialised, and throws exactly as Radzen's <c>DialogService</c> did. So the test above tells a
+    /// caller-bound build from a lucky one.
+    /// </summary>
+    [Fact]
+    public void WithNoCaller_TheSameRegistration_IsBuiltOverStateNoCircuitInitialised()
+    {
+        var refused = Record.Exception(() => Mesh.ServiceProvider.GetRequiredService(ModuleDialog));
+        refused.Should().NotBeNull("resolved in the module's own root, its circuit state comes from no circuit");
+        refused!.ToString().Should().Contain("has not been initialized");
+
+        using var uninitialised = Mesh.ServiceProvider.CreateScope();
+        Record.Exception(() => uninitialised.ServiceProvider.GetRequiredService(ModuleDialog))!.ToString()
+            .Should().Contain("has not been initialized",
+                "a circuit that has not initialised its own state is not rescued by another's");
     }
 }

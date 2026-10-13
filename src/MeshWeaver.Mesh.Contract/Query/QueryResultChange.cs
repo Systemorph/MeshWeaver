@@ -86,6 +86,33 @@ public record QueryResultChange<T>
     public IReadOnlyList<string>? Partitions { get; init; }
 
     /// <summary>
+    /// The partitions in <see cref="Partitions"/> that the caller can read only IN PART: the
+    /// caller's own grants do not cover the partition's root (or a deeper Read deny cuts into
+    /// them), so row-level security dropped every row under an ungranted sub-path and those rows
+    /// were NOT counted.
+    ///
+    /// <para>🚨 <see cref="Partitions"/> names the partitions a read was RUN against. Membership
+    /// there says the partition was queried. It does not say every row in it was visible. A
+    /// partition-level membership test admits a schema as soon as the caller holds ANY grant
+    /// inside it, and the per-row fold then hides the rest. Measured on a live mesh (MeshWeaver
+    /// #6564): a pre-deploy sweep for <c>content.compilationStatus:Error</c> answered 0 with the
+    /// partition listed in its coverage, while a NodeType under a sub-path the caller held no
+    /// grant on sat at <c>Error</c>. A count read against <see cref="Partitions"/> alone is a
+    /// floor wherever this list is non-empty.</para>
+    ///
+    /// <para>The verdict uses ONLY the caller's own grants (the same subjects and the same
+    /// longest-prefix fold the row filter uses), so it discloses nothing: it says "your grants
+    /// do not reach the whole of X", never what lies outside them.</para>
+    ///
+    /// <para><see langword="null"/> means the provider did NOT assess it (a system read, which
+    /// no row filter narrows, an in-memory store, or an older image) and must be surfaced as
+    /// unknown. An empty list means "assessed: every partition read is covered". The aggregator
+    /// unions the reporting providers' lists, because a partition one provider read only in part is
+    /// not made whole by another one. Meaningful on the Initial; live deltas leave it null.</para>
+    /// </summary>
+    public IReadOnlyList<string>? PartiallyReadPartitions { get; init; }
+
+    /// <summary>
     /// The providers that COMPLETED WITHOUT emitting an <see cref="QueryChangeType.Initial"/> and
     /// were counted as EMPTY so the merged query could proceed — never <see langword="null"/>-safe
     /// to ignore, and never the same statement as an empty <see cref="Items"/>.
