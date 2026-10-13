@@ -58,16 +58,37 @@ public static class InboxQueries
     /// it is; otherwise the page's is appended, and the parser takes the LAST one it reads.
     /// </summary>
     /// <param name="query">A resolved leg query.</param>
-    public static string Bounded(string query)
+    public static string Bounded(string query) => Bounded(query, timeField: null);
+
+    /// <summary>
+    /// <see cref="Bounded(string)"/> for a leg timed by a content property
+    /// (<see cref="InboxQueryLeg.TimeField"/>): its projection keeps <c>content</c>, where the row
+    /// reads its time (<see cref="TimedRowProjection"/>).
+    /// </summary>
+    /// <param name="query">The leg's resolved query.</param>
+    /// <param name="timeField">The leg's time field, or null for <see cref="RowProjection"/>.</param>
+    public static string Bounded(string query, string? timeField)
     {
         var parsed = new QueryParser().Parse(query);
         var limit = EffectiveLimit(query);
+        var (projection, fields) = string.IsNullOrWhiteSpace(timeField)
+            ? (RowProjection, RowFields)
+            : (TimedRowProjection, TimedRowFields);
         var projected = parsed.Select is { } select && select.Order(StringComparer.Ordinal)
-            .SequenceEqual(RowFields.Order(StringComparer.Ordinal), StringComparer.Ordinal);
+            .SequenceEqual(fields.Order(StringComparer.Ordinal), StringComparer.Ordinal);
         return query
                + (parsed.Limit == limit ? string.Empty : $" limit:{limit.ToString(System.Globalization.CultureInfo.InvariantCulture)}")
-               + (projected ? string.Empty : " " + RowProjection);
+               + (projected ? string.Empty : " " + projection);
     }
+
+    /// <summary>
+    /// The projection of a leg timed by a content property: <see cref="RowProjection"/> plus
+    /// <c>content</c>, where the row reads its time.
+    /// </summary>
+    public const string TimedRowProjection = RowProjection + ",content";
+
+    /// <summary>The fields a timed row reads — <see cref="TimedRowProjection"/> as a list.</summary>
+    internal static ImmutableArray<string> TimedRowFields { get; } = [.. TimedRowProjection["select:".Length..].Split(',')];
 
     /// <summary>The fields a row reads — <see cref="RowProjection"/> as a list.</summary>
     internal static ImmutableArray<string> RowFields { get; } = [.. RowProjection["select:".Length..].Split(',')];
@@ -205,12 +226,15 @@ public static class InboxQueries
         Unread = unread,
         Band = InboxBand.NeedsYou,
         Order = unread ? 10 : 11,
+        // Timed by when it ARRIVED: reading a notification flips isRead, and that write must not
+        // move it ahead of newer ones.
+        TimeField = "createdAt",
         // Every notification that is NOT an approval request: those are the Approvals source.
         Query = $"namespace:{ViewerToken}/{NotificationService.SatelliteSegment} "
                 + $"nodeType:{NotificationNodeType.NodeType} -content.dismissed:true "
                 + $"content.notificationType:{string.Join("|", StampedNotificationTypes)} "
                 + (unread ? "-content.isRead:true " : "content.isRead:true ")
-                + $"sort:CreatedAt-desc {RowProjection}",
+                + $"sort:CreatedAt-desc {TimedRowProjection}",
     };
 
     /// <summary>
@@ -228,11 +252,13 @@ public static class InboxQueries
         Unread = unread,
         Band = InboxBand.NeedsYou,
         Order = unread ? 5 : 6,
+        // Timed by when the request ARRIVED, like every notification: reading it must not reorder.
+        TimeField = "createdAt",
         Query = $"namespace:{ViewerToken}/{NotificationService.SatelliteSegment} "
                 + $"nodeType:{NotificationNodeType.NodeType} -content.dismissed:true "
                 + string.Concat(StampedNotificationTypes.Select(t => $"-content.notificationType:{t} "))
                 + (unread ? "-content.isRead:true " : "content.isRead:true ")
-                + $"sort:CreatedAt-desc {RowProjection}",
+                + $"sort:CreatedAt-desc {TimedRowProjection}",
     };
 
     /// <summary>The source id of the approval requests.</summary>
@@ -266,11 +292,14 @@ public static class InboxQueries
         Unread = unread,
         Band = InboxBand.NeedsYou,
         Order = unread ? 20 : 21,
+        // Timed by when it was RECEIVED: marking a mail read is a write, and it must not move the
+        // mail ahead of newer ones. The bound still keeps the newest-touched (LastModified).
+        TimeField = "receivedAt",
         Query = $"namespace:{ViewerToken}/{EmailNodeType.UserEmailSegment} "
                 + $"nodeType:{EmailNodeType.NodeType} -content.status:{nameof(EmailStatus.Archived)} "
                 + $"-content.direction:{nameof(EmailDirection.Outbound)} "
                 + (unread ? $"-content.status:{nameof(EmailStatus.Read)} " : $"content.status:{nameof(EmailStatus.Read)} ")
-                + $"sort:LastModified-desc {RowProjection}",
+                + $"sort:LastModified-desc {TimedRowProjection}",
     };
 
     /// <summary>
