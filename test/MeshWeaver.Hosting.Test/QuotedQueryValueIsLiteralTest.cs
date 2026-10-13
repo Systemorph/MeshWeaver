@@ -59,6 +59,17 @@ public class QuotedQueryValueIsLiteralTest
         Evaluator.Matches(new MeshNode("z", "acme/Docs/report-2026") { Name = "z" }, parsed).Should().BeTrue("a namespace a `*` glob would match is kept");
     }
 
+    [Theory]
+    [InlineData("namespace:>\"acme/x*\" partitions:all", QueryOperator.GreaterThan)]
+    [InlineData("namespace:<=\"acme/x*\" partitions:all", QueryOperator.LessOrEqual)]
+    public void AQuotedOrderedNamespaceKeepsItsOperatorAndItsStar(string query, QueryOperator op)
+    {
+        var condition = Parser.Parse(query).Filter.Should().BeOfType<QueryComparison>().Subject.Condition;
+        condition.Selector.Should().Be("namespace");
+        condition.Operator.Should().Be(op, "a quoted ordered operand is literal: the operator survives, no Like");
+        condition.Values.Should().Equal("acme/x*");
+    }
+
     [Fact]
     public void AQuotedPathIsThatPath()
     {

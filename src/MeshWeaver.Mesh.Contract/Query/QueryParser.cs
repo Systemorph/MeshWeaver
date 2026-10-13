@@ -361,7 +361,9 @@ public partial class QueryParser
             };
         }
 
-        return (new QueryCondition(field, op, [value]), i - start, false);
+        // A quoted ORDERED operand (`namespace:>"x*"`) is literal too (#6634): the reserved-qualifier
+        // pass must not re-read its `*` as a glob and drop the operator.
+        return (new QueryCondition(field, op, [value]), i - start, quoted);
     }
 
     /// <summary>
@@ -581,14 +583,17 @@ public partial class QueryParser
                     // namespaces and never a pattern — even when it carries `|` or `*`.
                     if (token.Literal)
                     {
-                        if (token.Condition!.Operator is QueryOperator.NotEqual or QueryOperator.NotIn)
-                            filterTokens.Add(new Token(TokenType.Comparison, string.Empty,
-                                new QueryCondition("namespace", token.Condition.Operator, [value.Trim('/')]), true));
-                        else
+                        // Only a positive equality anchors the query; every other operator — a
+                        // negation or an ordered comparison (`namespace:>"x*"`) — stays a FILTER
+                        // with its operator, so nothing is dropped.
+                        if (token.Condition!.Operator is QueryOperator.Equal)
                         {
                             path = value;
                             namespaceUsed = true;
                         }
+                        else
+                            filterTokens.Add(new Token(TokenType.Comparison, string.Empty,
+                                new QueryCondition("namespace", token.Condition.Operator, [value.Trim('/')]), true));
                         continue;
                     }
                     // Alternation `namespace:A|B|C` (parsed to In/NotIn with >1 values) is an EXACT
