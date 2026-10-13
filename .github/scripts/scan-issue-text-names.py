@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""scan-issue-text-names.py — client names in issue and pull-request TEXT, checked against the CRM, findings filed.
+"""scan-issue-text-names.py — client names in issue and pull-request TEXT (and in named committed files), checked against the CRM.
 
 (The name on this first line is load-bearing, like every central guard script here: a lane that
 fetches this file checks its first 400 bytes name it.)
 
 WHY (MeshWeaver.Plugins#2845, policy `issue-text-name-scan`)
 -----------------------------------------------------------
-The client-name check covers committed files. A public repository publishes more than its tree:
-issue titles and bodies, issue comments, pull-request titles and descriptions, review comments and
-review bodies. GitHub keeps their edit history, and agents and bots write much of that text. This
-scanner covers that text. Four rules, all decided by the maintainer:
+A public repository publishes more than its tree: issue titles and bodies, issue comments,
+pull-request titles and descriptions, review comments and review bodies. GitHub keeps their edit
+history, and agents and bots write much of that text. This scanner covers that text. Four rules,
+all decided by the maintainer:
 
   * DETERMINISTIC. It reads text over REST, splits it into lines and submits them. No model runs
     anywhere, here or in the check.
@@ -31,12 +31,25 @@ FAIL CLOSED. No URL or token, an unreachable or refusing endpoint, a timeout, a 
 answer, or a VERDICT where `Filed` was due (an instance whose Governance package predates #2845) all
 FAIL the run (exit 1). The script prints counts only, never a line's text.
 
+COMMITTED FILES (`--commit-files`, policy `committed-text-names-from-crm`)
+-------------------------------------------------------------------------
+The same caller checks NAMED files of the commit a CI run is on — e.g. a private repository's
+publicly-bound tree (Systemorph/Memex: mesh/Home, mesh/Provider, Memex.Website, README, AGENTS,
+docs/). It reads each file from `HEAD` (never the working tree), submits every non-blank line plus
+one path entry (line 0) per file as `Governance/NameCheck` requests with `source: commit`, the full
+`sha` and `runId`. The instance proves every line is in that commit before it reads the CRM, and
+answers a VERDICT (`Pass`/`Fail`, hits masked as `client#n`). The term list never leaves the
+instance; this script prints `file:line` per hit and nothing else — never the line, the term or its
+kind. Any answer but an all-`Pass` is red, and so is a pathspec that selects no file (a guard whose
+subject moved checks nothing).
+
 USAGE
 -----
   scan-issue-text-names.py --repo Systemorph/MeshWeaver --since-hours 26
+  scan-issue-text-names.py --repo Systemorph/Memex --commit-files mesh/Home docs README.md --exclude mesh/Deployments
   scan-issue-text-names.py --self-test
-Environment: NAME_CHECK_URL, NAME_CHECK_TOKEN (secrets); GITHUB_TOKEN (read issues/pulls);
-GITHUB_RUN_ID and GITHUB_RUN_ATTEMPT (set by Actions).
+Environment: NAME_CHECK_URL, NAME_CHECK_TOKEN (secrets); GITHUB_TOKEN (read issues/pulls — issue-text
+mode only); GITHUB_RUN_ID and GITHUB_RUN_ATTEMPT (set by Actions).
 """
 from __future__ import annotations
 
@@ -45,6 +58,7 @@ import datetime
 import json
 import os
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -56,6 +70,7 @@ NAMESPACE = "Governance/NameChecks"
 NODE_TYPE = "Governance/NameCheck"
 CONTENT_TYPE = "NameCheckContent"
 SOURCE = "issue-text"
+SOURCE_COMMIT = "commit"
 PROTOCOL_VERSION = "2025-06-18"
 CHUNK_LINES = 2000                 # the watcher's cap is 5,000 lines per node
 CHUNK_CHARS = 1_000_000
@@ -106,9 +121,111 @@ def chunks(lines: list[dict], size: int = CHUNK_LINES, chars: int = CHUNK_CHARS)
     return out
 
 
-def node_id(repo: str, run_id: int, attempt: str, index: int) -> str:
+def node_id(repo: str, run_id: int, attempt: str, index: int, prefix: str = "issue-text") -> str:
     slug = re.sub(r"[^A-Za-z0-9]+", "-", repo.split("/")[-1]).strip("-") or "repo"
-    return f"issue-text-{slug}-{run_id}-{re.sub(r'[^0-9]+', '', attempt) or '1'}-{index}"
+    return f"{prefix}-{slug}-{run_id}-{re.sub(r'[^0-9]+', '', attempt) or '1'}-{index}"
+
+
+# ── committed files (pure parts + git) ───────────────────────────────────────────────────────
+
+def file_lines(path: str, text: str | None) -> list[dict]:
+    """One path entry (line 0, text = the path — a path can name a client too) and, unless the file
+    is binary (``text`` None), one entry per non-blank line, numbered over the file, trimmed. A
+    trimmed line is a substring of the file, which is what the instance proves. Pure."""
+    out = [{"file": path, "line": 0, "text": path}]
+    if text is None:
+        return out
+    for i, raw in enumerate(text.split("\n"), start=1):
+        line = raw.rstrip("\r").strip()
+        if not line:
+            continue
+        if len(line) > MAX_LINE_CHARS:
+            raise NotChecked(f"{path}:{i} is longer than {MAX_LINE_CHARS} characters — refused, never cut")
+        out.append({"file": path, "line": i, "text": line})
+    return out
+
+
+def decode_file(path: str, data: bytes) -> str | None:
+    """The file's text as the instance reads it back (a UTF-8 BOM dropped), or None for a binary file
+    (a NUL in its first 8 KiB). A text file that is not UTF-8 is NotChecked: its lines could not be
+    proven, and skipping it would pass it unread. Pure."""
+    if b"\0" in data[:8192]:
+        return None
+    try:
+        return data.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise NotChecked(f"{path} is neither binary nor UTF-8 — refused, never skipped") from exc
+
+
+def _git(root: str, *args: str) -> bytes:
+    try:
+        return subprocess.check_output(["git", *args], cwd=root, stderr=subprocess.PIPE)
+    except (subprocess.CalledProcessError, OSError) as exc:
+        raise NotChecked(f"git {args[0]} failed ({type(exc).__name__})") from exc
+
+
+def committed_files(root: str, pathspecs: list[str], excludes: list[str]) -> list[tuple[str, bytes]]:
+    """(path, bytes) of every regular file under ``pathspecs`` in the commit at ``HEAD`` — read from
+    the commit, never the working tree, so what is submitted is what the instance proves — minus the
+    paths at or under an ``excludes`` prefix. Symbolic links and submodules are not files of the
+    commit and are left out."""
+    return [f for spec in pathspecs for f in _committed_files_one(root, spec, excludes)]
+
+
+def committed_files_each(root: str, pathspecs: list[str], excludes: list[str]) -> tuple[list[tuple[str, bytes]], list[str]]:
+    """(the deduplicated union of every pathspec's files, the pathspecs that select NOTHING after the
+    excludes). Each pathspec is checked on its own: a named tree that moved away must not hide behind
+    another that still holds files — that guard would check one tree and report both."""
+    seen: dict[str, bytes] = {}
+    empty = []
+    for spec in pathspecs:
+        files = _committed_files_one(root, spec, excludes)
+        if not files:
+            empty.append(spec)
+        for path, data in files:
+            seen.setdefault(path, data)
+    return sorted(seen.items()), empty
+
+
+def _committed_files_one(root: str, pathspec: str, excludes: list[str]) -> list[tuple[str, bytes]]:
+    listing = _git(root, "ls-tree", "-r", "-z", "--full-tree", "HEAD", "--", pathspec).decode("utf-8")
+    out = []
+    for entry in filter(None, listing.split("\0")):
+        meta, path = entry.split("\t", 1)
+        mode, kind, _obj = meta.split(" ")
+        if kind != "blob" or mode not in ("100644", "100755"):
+            continue
+        if any(path == e.rstrip("/") or path.startswith(e.rstrip("/") + "/") for e in excludes):
+            continue
+        out.append((path, _git(root, "cat-file", "blob", f"HEAD:{path}")))
+    return out
+
+
+# Stands in for a path that itself names a client (a line-0 hit), in every position printed.
+WITHHELD_PATH = "<path withheld: it names a client>"
+
+
+def commit_verdict(answers: list[dict]) -> tuple[int, str, list[str]]:
+    """(exit code, one line, ``file:line`` per hit) for the answered chunks of a COMMIT request. Only
+    all-``Pass`` is green. A hit is printed as its position alone: never the term (even masked), its
+    kind or the line. Pure."""
+    statuses = [status_of(a) for a in answers]
+    if any(s == "NotChecked" for s in statuses):
+        reason = next((a.get("reason") for a in answers if status_of(a) == "NotChecked"), None) or "no reason given"
+        return 1, f"NOT CHECKED — the instance refused at least one chunk: {reason}", []
+    if any(s == "Fail" for s in statuses):
+        hits = {(str(h.get("file")), str(h.get("line"))) for a in answers if status_of(a) == "Fail"
+                for h in (a.get("hits") or [])}
+        # 🚨 A line-0 hit means the PATH itself names a client: that path is never printed, at any
+        # position, or the check would publish the very name it found.
+        named = sorted({f for f, ln in hits if ln == "0"})
+        alias = {f: f"{WITHHELD_PATH}#{i + 1}" for i, f in enumerate(named)}
+        where = sorted(f"{alias.get(f, f)}:{ln}" for f, ln in hits)
+        return 1, f"FAIL — {len(where)} position(s) in publicly-bound files name a client (names are not printed)", where
+    if statuses and all(s == "Pass" for s in statuses):
+        checked = sum(int(a.get("linesChecked") or 0) for a in answers)
+        return 0, f"checked — {checked} line(s) in {len(answers)} request(s), no client name", []
+    return 1, f"NOT CHECKED — unexpected answer(s) to a commit request: {sorted(set(statuses))}", []
 
 
 def status_of(content: dict) -> str:
@@ -310,13 +427,21 @@ def refusal_reason(text: str) -> str:
             "if it is an access refusal, " + GRANT_REMEDY)
 
 
-def submit_and_wait(mesh: Mesh, repo: str, run_id: int, attempt: str, parts: list[list[dict]]) -> list[dict]:
+def request_content(repo: str, run_id: int, part: list[dict], sha: str | None = None) -> dict:
+    """The request's content: issue text by default; with ``sha``, lines of that commit. Pure."""
+    if sha is None:
+        return {"$type": CONTENT_TYPE, "repo": repo, "source": SOURCE, "runId": run_id, "lines": part}
+    return {"$type": CONTENT_TYPE, "repo": repo, "source": SOURCE_COMMIT, "sha": sha, "runId": run_id, "lines": part}
+
+
+def submit_and_wait(mesh: Mesh, repo: str, run_id: int, attempt: str, parts: list[list[dict]],
+                    sha: str | None = None) -> list[dict]:
     ids = []
+    what, prefix = ("issue text", "issue-text") if sha is None else ("committed files", "commit")
     for i, part in enumerate(parts):
-        nid = node_id(repo, run_id, attempt, i)
-        node = {"id": nid, "namespace": NAMESPACE, "name": f"{repo} issue text ({i + 1}/{len(parts)})",
-                "nodeType": NODE_TYPE,
-                "content": {"$type": CONTENT_TYPE, "repo": repo, "source": SOURCE, "runId": run_id, "lines": part}}
+        nid = node_id(repo, run_id, attempt, i, prefix)
+        node = {"id": nid, "namespace": NAMESPACE, "name": f"{repo} {what} ({i + 1}/{len(parts)})",
+                "nodeType": NODE_TYPE, "content": request_content(repo, run_id, part, sha)}
         text = mesh.call("create", {"node": json.dumps(node)}).strip()
         if not text.startswith("Created"):
             raise NotChecked("the check request was not created — " + refusal_reason(text))
@@ -373,13 +498,61 @@ def run(repo: str, since_hours: float) -> int:
     return code
 
 
+def run_commit(repo: str, pathspecs: list[str], excludes: list[str], root: str = ".") -> int:
+    """Check the named files of the commit at ``HEAD`` against the CRM. Red unless every chunk is
+    ``Pass``; prints ``file:line`` per hit and nothing else about it."""
+    url, token = os.environ.get("NAME_CHECK_URL", ""), os.environ.get("NAME_CHECK_TOKEN", "")
+    run_id = os.environ.get("GITHUB_RUN_ID", "")
+    missing = [n for n, v in (("NAME_CHECK_URL", url), ("NAME_CHECK_TOKEN", token)) if not v]
+    if missing:
+        print(f"::error::committed-file name check NOT CHECKED — missing {', '.join(missing)}")
+        return 1
+    if not run_id.isdigit() or int(run_id) <= 0:
+        print("::error::committed-file name check NOT CHECKED — GITHUB_RUN_ID is not set; the instance proves a live run of this repository")
+        return 1
+    try:
+        sha = _git(root, "rev-parse", "HEAD").decode("ascii").strip()
+        files, empty = committed_files_each(root, pathspecs, excludes)
+        if empty:
+            raise NotChecked(f"the pathspec(s) {empty} select no file at HEAD — a guard whose subject moved checks nothing")
+        lines: list[dict] = []
+        binary = 0
+        for path, data in files:
+            text = decode_file(path, data)
+            binary += text is None
+            lines += file_lines(path, text)
+        print(f"committed-file name check: {repo}@{sha[:12]} — {len(lines)} line(s) from {len(files)} file(s) "
+              f"({binary} binary: path only)")
+        answers = submit_and_wait(Mesh(url, token), repo, int(run_id), os.environ.get("GITHUB_RUN_ATTEMPT", "1"),
+                                  chunks(lines), sha=sha)
+    except NotChecked as exc:
+        print(f"::error::committed-file name check NOT CHECKED — {exc}")
+        return 1
+    code, line, where = commit_verdict(answers)
+    for pos in where:
+        path, _, num = pos.rpartition(":")
+        if path.startswith(WITHHELD_PATH):
+            # No file= annotation: GitHub would print the path beside it.
+            print(f"::error::a client name appears in a file whose path itself names a client ({path}, line {num}; 0 = the path itself) — not printed")
+            continue
+        print(f"::error file={path},line={max(int(num) if num.isdigit() else 0, 1)}::a client name appears here (line {num}; 0 = the path itself) — not printed")
+    print(("::error::" if code else "  ") + f"committed-file name check {line}")
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a", encoding="utf-8") as f:
+            f.write(f"### Committed-file name check — {repo}\n\n{'❌' if code else '✅'} {line}\n")
+            f.writelines(f"- `{pos}`\n" for pos in where)
+    return code
+
+
 # ── self-test ────────────────────────────────────────────────────────────────────────────────
 
 def self_test() -> int:
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
     store: dict[str, dict] = {}
-    mode = {"answer": "Filed"}
+    created: list[dict] = []
+    mode: dict = {"answer": "Filed"}
 
     class H(BaseHTTPRequestHandler):
         def log_message(self, *_): pass
@@ -408,7 +581,9 @@ def self_test() -> int:
                 path = args["path"].lstrip("@")
                 c = store[path]
                 if c.get("lines"):
+                    created.append(c)
                     c = {**c, "status": mode["answer"], "linesChecked": len(c["lines"]), "lines": [],
+                         "hits": mode.get("hits", []),
                          "reason": "provenance not established" if mode["answer"] == "NotChecked" else None}
                     store[path] = c
                 text = json.dumps({"path": path, "content": c})
@@ -491,6 +666,86 @@ def self_test() -> int:
           "does not classify" in refusal_reason("Error: creating node: Access denied: Create permission required for node 'Other/x'")
           and "does not classify" in refusal_reason("Error: creating node: line rejected: " + denied))
     check("🚨 refusal: the instance's text is never echoed", "SECRETWORD" not in refusal_reason("Error: SECRETWORD rejected"))
+
+    # ── committed files ──
+    got = file_lines("docs/a.md", "# Title\r\n\r\n  body line  \n")
+    check("commit lines: a path entry (line 0) first, then non-blank lines numbered over the file, trimmed",
+          got == [{"file": "docs/a.md", "line": 0, "text": "docs/a.md"},
+                  {"file": "docs/a.md", "line": 1, "text": "# Title"},
+                  {"file": "docs/a.md", "line": 3, "text": "body line"}])
+    check("commit lines: a binary file is submitted by its path only", file_lines("x.png", None) == [{"file": "x.png", "line": 0, "text": "x.png"}])
+    check("decode: a UTF-8 BOM is dropped, so line 1 is a substring of what the instance reads",
+          decode_file("a", b"\xef\xbb\xbfhi\n") == "hi\n")
+    check("decode: a NUL in the first 8 KiB is binary", decode_file("a", b"PNG\0\1") is None)
+    try:
+        decode_file("a", b"\xff\xfe bad")
+        check("🚨 decode: non-UTF-8 text is NotChecked, never skipped", False)
+    except NotChecked:
+        check("🚨 decode: non-UTF-8 text is NotChecked, never skipped", True)
+
+    import tempfile
+    with tempfile.TemporaryDirectory() as repo_dir:
+        def g(*a):
+            subprocess.check_output(["git", *a], cwd=repo_dir, stderr=subprocess.STDOUT)
+        g("init", "-q")
+        for rel, body in (("docs/a.md", b"one\n"), ("docs/sub/b.md", b"two\n"), ("mesh/Home/c.md", b"three\n"),
+                          ("mesh/Deployments/d.json", b"{}\n"), ("other/e.md", b"four\n")):
+            p = os.path.join(repo_dir, rel)
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "wb") as f:
+                f.write(body)
+        g("add", "-A")
+        g("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "t")
+        with open(os.path.join(repo_dir, "docs/a.md"), "wb") as f:
+            f.write(b"uncommitted edit\n")
+        files = dict(committed_files(repo_dir, ["docs", "mesh"], ["mesh/Deployments"]))
+        check("commit files: the named pathspecs, recursively, minus the excluded prefix",
+              sorted(files) == ["docs/a.md", "docs/sub/b.md", "mesh/Home/c.md"])
+        check("🚨 commit files: read from HEAD, never the working tree (what the instance proves)",
+              files.get("docs/a.md") == b"one\n")
+        check("NEGATIVE CONTROL: an exclude prefix is a path prefix, not a substring",
+              "mesh/Home/c.md" in dict(committed_files(repo_dir, ["mesh"], ["mesh/Ho"])))
+        union, empty = committed_files_each(repo_dir, ["docs", "moved-away"], [])
+        check("🚨 commit files: a pathspec that selects nothing is named even when another still selects files",
+              empty == ["moved-away"] and sorted(dict(union)) == ["docs/a.md", "docs/sub/b.md"])
+        union, empty = committed_files_each(repo_dir, ["docs", "docs/sub"], [])
+        check("NEGATIVE CONTROL: overlapping pathspecs both select files and the union is deduplicated",
+              empty == [] and [p for p, _ in union] == ["docs/a.md", "docs/sub/b.md"])
+        check("commit files: a pathspec emptied by the excludes counts as selecting nothing",
+              committed_files_each(repo_dir, ["mesh/Deployments"], ["mesh/Deployments"])[1] == ["mesh/Deployments"])
+
+    sha = "a" * 40
+    parts = chunks(file_lines("docs/a.md", "one\n"))
+    content = request_content("o/r", 46, parts[0], sha)
+    check("commit request: source 'commit', the full sha and the run id",
+          content["source"] == "commit" and content["sha"] == sha and content["runId"] == 46)
+    mode.update(answer="Pass", hits=[])
+    created.clear()
+    check("🚨 commit: an all-Pass answer is green",
+          commit_verdict(submit_and_wait(mesh, "o/r", 46, "1", parts, sha=sha))[0] == 0)
+    check("commit: the node submitted carries source 'commit' and an id of its own run key",
+          created and created[-1].get("source") == "commit" and created[-1].get("sha") == sha)
+    mode.update(answer="Fail", hits=[{"file": "docs/a.md", "line": 1, "column": 1, "term": "client#1", "kind": "name"}])
+    code, line, where = commit_verdict(submit_and_wait(mesh, "o/r", 47, "1", parts, sha=sha))
+    check("🚨 commit: a Fail is RED and reports file:line only — no term, no kind",
+          code == 1 and where == ["docs/a.md:1"] and "client#" not in line + "".join(where) and "name" not in "".join(where))
+    mode.update(answer="Fail", hits=[{"file": "docs/acme-x.md", "line": 0, "column": 1, "term": "client#1", "kind": "name"},
+                                    {"file": "docs/acme-x.md", "line": 3, "column": 1, "term": "client#1", "kind": "name"},
+                                    {"file": "docs/b.md", "line": 2, "column": 1, "term": "client#1", "kind": "name"}])
+    code, line, where = commit_verdict(submit_and_wait(mesh, "o/r", 50, "1", parts, sha=sha))
+    check("🚨 commit: a path that names a client (line-0 hit) is withheld at EVERY position, content hits included",
+          code == 1 and "acme" not in line + "".join(where)
+          and sorted(where) == sorted([f"{WITHHELD_PATH}#1:0", f"{WITHHELD_PATH}#1:3", "docs/b.md:2"]))
+    check("NEGATIVE CONTROL: a path with only content hits is still printed",
+          "docs/b.md:2" in where)
+    mode.update(answer="NotChecked", hits=[])
+    check("🚨 commit: NotChecked is RED", commit_verdict(submit_and_wait(mesh, "o/r", 48, "1", parts, sha=sha))[0] == 1)
+    mode.update(answer="Filed")
+    check("NEGATIVE CONTROL: commit: a Filed answer is not a green — only Pass is",
+          commit_verdict(submit_and_wait(mesh, "o/r", 49, "1", parts, sha=sha))[0] == 1)
+    check("commit and issue-text node ids never collide",
+          node_id("o/r", 1, "1", 0, "commit") != node_id("o/r", 1, "1", 0))
+
     saved = {k: os.environ.pop(k, None) for k in ("NAME_CHECK_URL", "NAME_CHECK_TOKEN")}
     try:
         # The fail-closed path prints a real ::error:: annotation; swallow it here so a GREEN self-test
@@ -498,7 +753,9 @@ def self_test() -> int:
         import contextlib, io
         with contextlib.redirect_stdout(io.StringIO()):
             rc = run("o/r", 1)
+            rc_commit = run_commit("o/r", ["docs"], [])
         check("🚨 no URL/token FAILS closed", rc == 1)
+        check("🚨 commit mode: no URL/token FAILS closed", rc_commit == 1)
     finally:
         for k, v in saved.items():
             if v is not None:
@@ -516,12 +773,21 @@ def main(argv=None) -> int:
     ap.add_argument("--repo", help="owner/name — the repository this run belongs to (the instance proves it)")
     ap.add_argument("--since-hours", type=float, default=26.0,
                     help="scan items updated in this many hours (default 26: a daily schedule with overlap)")
+    ap.add_argument("--commit-files", nargs="+", metavar="PATHSPEC",
+                    help="check these files of the commit at HEAD (source: commit) instead of issue text")
+    ap.add_argument("--exclude", action="append", default=[], metavar="PREFIX",
+                    help="with --commit-files: leave out paths at or under this prefix (repeatable)")
+    ap.add_argument("--root", default=".", help="with --commit-files: the repository checkout (default: cwd)")
     ap.add_argument("--self-test", action="store_true")
     args = ap.parse_args(argv)
     if args.self_test:
         return self_test()
     if not args.repo:
         ap.error("--repo is required")
+    if args.commit_files:
+        return run_commit(args.repo, args.commit_files, args.exclude, args.root)
+    if args.exclude:
+        ap.error("--exclude needs --commit-files")
     if args.since_hours <= 0:
         ap.error("--since-hours must be positive")
     return run(args.repo, args.since_hours)
