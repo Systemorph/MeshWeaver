@@ -369,6 +369,42 @@ floor level at about 3.3 GiB from hour 18) is the newest evidence that the popul
 replica that lives a day is the instrument; `HubCensusByOwner` (a `Code` node in the operator's own
 partition, the script behind the tables above) is the reading to repeat on it.
 
+## 10. Which boot step builds each class of node hub (#6623)
+
+The rule: **a boot step that only needs a node's CONTENT reads it without activating that node's
+per-node hub.** `GetMeshNodeStream(path)` is the authoritative LIVE read, and it gets there by
+subscribing at the node's own address, which builds the hub. For a one-shot read of many nodes the
+store is just as authoritative: it holds exactly what the next activation would load. The one write
+it can miss is one a live owner has acknowledged but not yet flushed, which is at most one 200 ms
+persistence-sampler window. `StoredNodeReads.ReadStoredNode` / `ReadStoredNodes`
+(`MeshWeaver.Mesh.Contract`) is that read: storage first, the served static node second. It is the
+same order `ReadNodeAuthoritative` has always used for the partition bootstrap, and the access-rule
+gate's `ReadSubjectNode` now delegates to it.
+
+The step → call → class mapping from reading the code. The census counts address shapes only, so
+each attribution below is an inference from code, not a per-address measurement:
+
+| class (census bucket) | boot step | the call that builds the hub | needs the hub? | status |
+|---|---|---|---|---|
+| two-segment `{Space}/{Type}` (403) | GitSync import of every synced Space: `BundleKeyedHoldReading.Judge`; the seal-arrival pass: `SealedPublicationSyncReconciler.LiveDefinitions` | `GetMeshNodeStream(typePath).Take(1)` for **every** NodeType the listing names | no, content only | **rerouted** to `NodeTypeDefinitionReads.ReadDefinitions` (one batched store read) |
+| two-segment (part) | any live instance hub's enrichment: `NodeTypeEnrichmentHelpers` watches `GetMeshNodeStream(nodeType)` | a live subscription | yes, it watches for a new build (stale-build recycle) | left; bounded by the number of live instance hubs |
+| two-segment (part) | the bake sweep `DynamicTypePreWarmer.WarmDynamicTypes` | none when every type is baked (`AlreadyBaked` is never activated; the enumeration is a query) | – | already non-activating |
+| partition roots (128) | `PackageInstaller.WarmInstalledRoots` | `GetMeshNodeStream(root)`, deliberately | yes, the activation runs the gating pass that writes the cover grants | left |
+| partition roots | `StaticRepoImporter.Run`: `EnsureRoot` / `ReadClaimedRoots` | `GetMeshNodeStream(partition)` | the same run then upserts the root, which activates it anyway | left (no gain) |
+| `_Activity` (66) | `StaticRepoImporter`: lock / attempt / manifest writes; `ReadNodeManifest` / `ReadContentManifest` | `CreateOrUpdateNodeRequest`, `GetMeshNode` | the writes do; the manifest reads follow the previous import's own write and need the owner's unflushed state | left |
+| `_GitSync` (43) | `GitHubSyncService` stamping `LastSync…` on the config | `GetMeshNodeStream(config).Update` | yes, it writes | left |
+| `Admin/Build/…` (82) | `BuildProtocolDriver`: chunk claims, chunk `_Activity` create/finish | `UpdateBuildAsHolder`, `CreateNode`, `FinishActivity` | yes, they write | left |
+| `_Policy` (115), `_Entitlements` (115) | not attributed in core: the installer's policy reads already go through `IStorageAdapter.Read`; `_Entitlements` is written by the Store plugin | – | – | **open**, to attribute in MeshWeaver.Plugins |
+
+**Pinned by** `NodeTypeSweepActivatesNoHubTest` (MeshWeaver.Documentation.Test). It creates twelve
+NodeTypes, runs the sweep's read and watches `HostedHubsCollection.HubAdded`: no hub is built.
+The negative control runs the replaced `GetMeshNodeStream` read over the same types with the same
+instrument and sees twelve, one per type.
+
+**Not established:** that the 403 two-segment hubs on `8f2g5` were built by these two sweeps rather
+than by enrichment watches or by plugin-side code. A per-address census on the first replica of the
+next generation answers that. The same goes for whether boot-activated hubs retire once idle (§9).
+
 ## Related
 
 - [Stream Liveness and the Hub Reference](../StreamLivenessAndTheHubReference) — #3321 step 3, the

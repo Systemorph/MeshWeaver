@@ -560,33 +560,27 @@ internal sealed class SealedPublicationSyncReconciler(
                     .ToImmutableArray();
                 if (paths.IsEmpty)
                     return Observable.Return(ImmutableDictionary<string, NodeTypeDefinition>.Empty);
-                // 🚨 EVERY per-node read is BOUNDED, and a read that does not answer degrades to
-                // "this type has no definition" rather than hanging (review on #4649). These zips
-                // run inside PublicationSealArrivalService's single serialized pump, whose
-                // `Concat()` means one pending reconcile blocks every later seal announcement —
-                // and an outer `Catch` cannot rescue a stream that is merely still waiting. A
-                // point read of a path the (eventually consistent) listing named can also find
-                // nothing there and terminate on a routing NotFound, which is the storm-breaker
-                // shape AGENTS.md names. Both degrade the same way: fewer types compared, a
-                // smaller denominator, and `Measure` abstains rather than inventing drift.
-                return Observable
-                    .Zip(paths.Select(path => hub.GetWorkspace().GetMeshNodeStream(path)
-                        .Take(1)
-                        .Select(node => (Path: path,
-                            Definition: node?.ContentAs<NodeTypeDefinition>(
-                                hub.JsonSerializerOptions, logger)))
-                        .Timeout(ReadBudget)
-                        .Catch((Exception exception) =>
-                        {
-                            logger?.LogDebug(exception,
-                                "[SealedSync] {Path}: its definition could not be read in time — "
-                                + "not compared", path);
-                            return Observable.Return((Path: path, Definition: (NodeTypeDefinition?)null));
-                        })))
-                    .Take(1)
-                    .Select(pairs => pairs
-                        .Where(p => p.Definition is not null)
-                        .ToImmutableDictionary(p => p.Path, p => p.Definition!, StringComparer.Ordinal));
+                // 🚨 The CONTENT comes from the STORE in one batched read that builds no per-node
+                // hub (#6623; NodeTypeDefinitionReads says why the store is authoritative here).
+                // Each type's own stream used to be read instead, which activated every NodeType
+                // of every synced Space on every announcement and on the boot pass.
+                //
+                // 🚨 The read is still BOUNDED, and one that does not answer degrades to "no type
+                // compared" rather than hanging (review on #4649): this runs inside
+                // PublicationSealArrivalService's single serialized pump, whose `Concat()` means one
+                // pending reconcile blocks every later seal announcement. A path the (eventually
+                // consistent) listing named that the store no longer holds is simply absent. Both
+                // degrade the same way: a smaller denominator, and `Measure` abstains rather than
+                // inventing drift.
+                return NodeTypeDefinitionReads.ReadDefinitions(hub, paths, logger)
+                    .Timeout(ReadBudget)
+                    .Catch((Exception exception) =>
+                    {
+                        logger?.LogDebug(exception,
+                            "[SealedSync] {Space}: the NodeType definitions could not be read in time — "
+                            + "not compared", space);
+                        return Observable.Return(ImmutableDictionary<string, NodeTypeDefinition>.Empty);
+                    });
             });
     }
 
