@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Diagnostics.Metrics;
 
 namespace MeshWeaver.Messaging;
@@ -41,6 +42,12 @@ public sealed class PlatformMetrics : IDisposable
 
     private readonly Meter meter;
 
+    // The satellite values this meter has ever named (#6632). Admission is for the meter's LIFETIME:
+    // a value named once keeps its series, and nothing past MaxSatelliteValues is ever admitted, so
+    // the union of series over every scrape is bounded, not just one scrape. Written only from the
+    // gauge callback; swapped atomically so a concurrent collection never sees a torn set.
+    private ImmutableHashSet<string> admittedSatellites = ImmutableHashSet.Create<string>(StringComparer.Ordinal);
+
     /// <summary>Creates the mesh's meter and arms its gauges.</summary>
     /// <param name="root">The hub whose tree is the population — the mesh's root.</param>
     public PlatformMetrics(IMessageHub root)
@@ -52,8 +59,9 @@ public sealed class PlatformMetrics : IDisposable
             () => Observe(root),
             unit: "{hub}",
             description:
-                "Hubs alive in this mesh, by address kind and run level. Computed by walking the "
-                + "live tree at collection time, so it cannot drift from the population it reports.");
+                "Hubs alive in this mesh, by address kind, satellite segment and run level. Computed "
+                + "by walking the live tree at collection time, so it cannot drift from the population "
+                + "it reports.");
     }
 
     /// <summary>
@@ -65,7 +73,7 @@ public sealed class PlatformMetrics : IDisposable
     /// issue is about. On a fault it reports nothing for this scrape and the next one tries
     /// again.</para>
     /// </summary>
-    private static IEnumerable<Measurement<long>> Observe(IMessageHub root)
+    private IEnumerable<Measurement<long>> Observe(IMessageHub root)
     {
         // 🚨 A dead ROOT is a torn-down mesh, and reporting one Dead hub for it is noise the
         // summary above already promises not to emit — nothing throws on a disposed hub, so
@@ -75,10 +83,10 @@ public sealed class PlatformMetrics : IDisposable
         if (root.RunLevel == MessageHubRunLevel.Dead)
             yield break;
 
-        Dictionary<(string Kind, string RunLevel), long> counts;
+        Dictionary<(string Kind, string Satellite, string RunLevel), long> counts;
         try
         {
-            counts = Tally(root);
+            counts = Tally(root, ref admittedSatellites);
         }
         catch
         {
@@ -87,24 +95,81 @@ public sealed class PlatformMetrics : IDisposable
             yield break;
         }
 
-        foreach (var ((kind, runLevel), count) in counts)
+        foreach (var ((kind, satellite, runLevel), count) in counts)
             yield return new Measurement<long>(count,
                 new KeyValuePair<string, object?>("kind", kind),
+                new KeyValuePair<string, object?>("satellite", satellite),
                 new KeyValuePair<string, object?>("runlevel", runLevel));
     }
 
-    private static Dictionary<(string, string), long> Tally(IMessageHub root)
+    /// <summary>The <c>satellite</c> tag of a hub whose address has no satellite segment.</summary>
+    public const string NoSatellite = "none";
+
+    /// <summary>The <c>satellite</c> tag every value past <see cref="MaxSatelliteValues"/> folds into.</summary>
+    public const string OtherSatellite = "_other";
+
+    /// <summary>
+    /// How many distinct satellite values this meter ever reports by name (#6632). Satellite segment
+    /// names are a small, module-declared set, but nothing ENFORCES that a segment starting with
+    /// <c>_</c> is one — so the bound is the meter's, not the deployment's, and it holds for the
+    /// meter's LIFETIME: a value is admitted the first time it is among the most populous of a scrape
+    /// while a slot is free, keeps its name from then on, and every value never admitted folds into
+    /// <see cref="OtherSatellite"/>. A per-scrape top-N would bound one scrape only: values rotating
+    /// through the top would each leave a series behind in the metric store.
+    /// </summary>
+    public const int MaxSatelliteValues = 32;
+
+    internal static Dictionary<(string, string, string), long> Tally(
+        IMessageHub root, ref ImmutableHashSet<string> admitted)
     {
-        var counts = new Dictionary<(string, string), long>();
+        var raw = new Dictionary<(string, string, string), long>();
         var hubs = root is MessageHub messageHub
             ? messageHub.LiveHubTree()
             : [root];
         foreach (var hub in hubs)
         {
-            var key = (KindOf(hub.Address), hub.RunLevel.ToString());
-            counts[key] = counts.TryGetValue(key, out var existing) ? existing + 1 : 1;
+            var key = (KindOf(hub.Address), SatelliteOf(hub.Address), hub.RunLevel.ToString());
+            raw[key] = raw.TryGetValue(key, out var existing) ? existing + 1 : 1;
+        }
+
+        var named = admitted;
+        if (named.Count < MaxSatelliteValues)
+        {
+            var candidates = raw
+                .GroupBy(e => e.Key.Item2)
+                .Where(g => g.Key != NoSatellite && !named.Contains(g.Key))
+                .OrderByDescending(g => g.Sum(e => e.Value))
+                .ThenBy(g => g.Key, StringComparer.Ordinal)
+                .Select(g => g.Key)
+                .Take(MaxSatelliteValues - named.Count);
+            named = named.Union(candidates);
+            admitted = named;
+        }
+        var counts = new Dictionary<(string, string, string), long>();
+        foreach (var ((kind, satellite, runLevel), count) in raw)
+        {
+            var key = (kind, satellite == NoSatellite || named.Contains(satellite) ? satellite : OtherSatellite, runLevel);
+            counts[key] = counts.TryGetValue(key, out var existing) ? existing + count : count;
         }
         return counts;
+    }
+
+    /// <summary>
+    /// 🚨 The address's SATELLITE shape (#6632): its LAST segment that starts with <c>_</c>
+    /// (<c>_DocumentPart</c>, <c>_Activity</c>, <c>_Thread</c>, …), or <see cref="NoSatellite"/>.
+    /// The kind alone folded 5,000 <c>Admin/content/_Documents/…/_DocumentPart/{index}</c> hubs into
+    /// <c>kind=Admin</c> during the 2026-10-04/05 OOM burst, so nothing named the address shape that
+    /// drove it. The segment NAME, never the ids around it: a satellite name is a type-like word, the
+    /// ids are unbounded — and <see cref="MaxSatelliteValues"/> bounds the names too.
+    /// </summary>
+    internal static string SatelliteOf(Address? address)
+    {
+        if (address?.Segments is not { Length: > 1 } segments)
+            return NoSatellite;
+        for (var i = segments.Length - 1; i >= 1; i--)
+            if (segments[i] is { Length: > 1 } segment && segment[0] == '_')
+                return segment;
+        return NoSatellite;
     }
 
     /// <summary>

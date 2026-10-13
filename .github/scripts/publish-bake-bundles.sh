@@ -334,6 +334,26 @@ else
   echo "::warning::$BAKE_DIR carries no $SURFACE_FILE — the bake was taken with a platform image that predates MeshWeaver#3651, so the release gate cannot link a landed module against this identity and reports every such module as 'could not be determined' (reported, not a hold). Move the bake image forward to publish the surface."
 fi
 
+# ══════════════════════ THE PER-PACKAGE LISTING (MeshWeaver.Plugins#3507) ══════════════════════
+# `sealed-packages.json`, written into the bake directory by seal-packages.py: per package, the
+# build this publication seals — bundle, the commit it was baked from, version, requires, and
+# whether it was CARRIED from an earlier publication because the package waits. A marker like the
+# others: written before the sentinel, verified by the postcondition, compared byte-for-byte by the
+# convergence verdict (two bakes of one commit with one withheld set write identical listings).
+# OPTIONAL: a lane at a ref that predates it writes none, and every reader then takes the old
+# single-commit reading — `source-commit.txt` for every bundle `_complete` lists.
+PACKAGES_FILE="sealed-packages.json"
+PACKAGES_LOCAL="$BAKE_DIR/$PACKAGES_FILE"
+if [ -s "$PACKAGES_LOCAL" ]; then
+  HAS_PACKAGES=true
+  if ! python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert isinstance(d.get("packages"), list) and d["packages"]' "$PACKAGES_LOCAL" 2>/dev/null; then
+    echo "::error::$PACKAGES_LOCAL is not a per-package listing (a JSON object with a non-empty 'packages' list) — refusing to seal a listing every reader would have to reject."
+    exit 1
+  fi
+else
+  HAS_PACKAGES=false
+fi
+
 # ══════════════════════ THE TWO-WRITER POSTCONDITION (MeshWeaver#3461) ══════════════════════
 #
 # 🚨 `<identity>/plugins` HAS SEVERAL WRITERS. Core CD's `plugins-bake` job publishes `bake-source:
@@ -629,6 +649,7 @@ done
 manifest_add "$MODULES_DIR_NAME/$MODULES_INDEX" "$MODULES_INDEX_LOCAL"
 manifest_add "$SOURCE_MARKER" "$SOURCE_MARKER_LOCAL"
 if [ "$HAS_SURFACE" = "true" ]; then manifest_add "$SURFACE_FILE" "$SURFACE_LOCAL"; fi
+if [ "$HAS_PACKAGES" = "true" ]; then manifest_add "$PACKAGES_FILE" "$PACKAGES_LOCAL"; fi
 manifest_add "$REPO_MARKER" "$REPO_MARKER_LOCAL"
 manifest_add "$ARCH_MARKER" "$ARCH_MARKER_LOCAL"
 # The denominator every verification prints and every refusal quotes. A publication with nothing
@@ -641,6 +662,7 @@ if [ "${MANIFEST_COUNT:-0}" -lt 1 ]; then
 fi
 MARKER_COUNT=4
 if [ "$HAS_SURFACE" = "true" ]; then MARKER_COUNT=5; fi
+if [ "$HAS_PACKAGES" = "true" ]; then MARKER_COUNT=$((MARKER_COUNT + 1)); fi
 # The NON-PAYLOAD half of the manifest: the markers, the module index and the platform surface —
 # everything that describes WHAT was baked rather than the compiled bytes. Two bakes of the same
 # content produce byte-identical files here and DIFFERENT bundle zips (the compile is not
@@ -654,6 +676,10 @@ $MODULES_DIR_NAME/$MODULES_INDEX"
 if [ "$HAS_SURFACE" = "true" ]; then
   MARKER_RELS="$MARKER_RELS
 $SURFACE_FILE"
+fi
+if [ "$HAS_PACKAGES" = "true" ]; then
+  MARKER_RELS="$MARKER_RELS
+$PACKAGES_FILE"
 fi
 is_marker() { # <path-under-dest>
   case "
@@ -688,6 +714,7 @@ for m in ${MODULES[@]+"${MODULES[@]}"}; do plan_add "$MODULES_DIR_NAME/$(basenam
 plan_add "$MODULES_DIR_NAME/$MODULES_INDEX" "$MODULES_INDEX_LOCAL"
 plan_add "$SOURCE_MARKER" "$SOURCE_MARKER_LOCAL"
 if [ "$HAS_SURFACE" = "true" ]; then plan_add "$SURFACE_FILE" "$SURFACE_LOCAL"; fi
+if [ "$HAS_PACKAGES" = "true" ]; then plan_add "$PACKAGES_FILE" "$PACKAGES_LOCAL"; fi
 plan_add "$REPO_MARKER" "$REPO_MARKER_LOCAL"
 plan_add "$ARCH_MARKER" "$ARCH_MARKER_LOCAL"
 PLAN_COUNT=$(grep -c '[^[:space:]]' "$PLAN" || true)
@@ -1295,6 +1322,7 @@ dispose_flat_copy() { # <account> <share> <dest> — ONLY after pointer_is_live 
     --match "$MODULES_DIR_NAME/$MODULES_INDEX" \
     --match "$SOURCE_MARKER" \
     --match "$SURFACE_FILE" \
+    --match "$PACKAGES_FILE" \
     --match "$REPO_MARKER" \
     --match "$ARCH_MARKER" \
     --workers "$PUBLISH_BAKE_UPLOAD_WORKERS" < /dev/null

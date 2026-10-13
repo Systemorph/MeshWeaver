@@ -30,6 +30,7 @@ public partial record MeshBuilder
     {
         this.ServiceConfig = ServiceConfig;
         this.Address = Address;
+        InstalledModuleSet = new InstalledModules(ModuleContexts);
         // 🚨 "No one must ever publish from main hub": the router names its spokesman up front,
         // so infrastructure that would otherwise post through the router (Workspace's recycle
         // announcement) has a sanctioned non-router carrier — the same nodeops execution hub
@@ -42,14 +43,40 @@ public partial record MeshBuilder
         // purpose: the container then owns it and disposes it with the mesh, which retires every
         // generation it still holds (Doc/Architecture/LiveModuleUpdate).
         var modules = ModuleContexts;
+        var installedModules = InstalledModuleSet;
         ConfigureServices(services =>
         {
-            services.TryAddSingleton(sp => modules.Attach(
-                sp.GetService<CollectibleContextUnloads>(),
-                sp.GetService<ILoggerFactory>()?.CreateLogger<ModuleContexts>(),
-                sp));
+            // Its first resolve also runs the boot publication when nothing claimed it yet
+            // (MeshWeaver#6557): the hook every host kind calls, so a host built with plain MS DI
+            // withdraws a module whose shared instances cannot be built just as the Autofac root does
+            // (which claims it earlier, outside any lock — ModulesBuiltBeforePublished).
+            services.TryAddSingleton(sp =>
+            {
+                installedModules.Attach(sp);
+                return modules.Attach(
+                    sp.GetService<CollectibleContextUnloads>(),
+                    sp.GetService<ILoggerFactory>()?.CreateLogger<ModuleContexts>(),
+                    sp).PublishOnce();
+            });
             // The layout client re-reads held modules' views from their current generations.
             services.TryAddSingleton<MeshWeaver.Layout.Client.IViewContributionSource>(sp => sp.GetRequiredService<ModuleContexts>());
+            // 🚨 The installed-module set is ONE registry the mesh owns (MeshWeaver#6557), and the
+            // enumerable every consumer resolves IS that registry — an explicit IEnumerable<T>
+            // registration, which MS DI and Autofac alike answer ahead of the per-descriptor collection.
+            // A held module withdrawn after the container was built is then absent, never a
+            // registration that can only throw.
+            if (!services.Any(d => d.ImplementationInstance is InstalledModules))
+            {
+                installedModules.Declare(services);
+                services.AddSingleton(installedModules);
+                services.AddTransient<IEnumerable<InstalledModuleAssembly>>(sp =>
+                    sp.GetRequiredService<InstalledModules>().Current(sp));
+                // The modules this replica carries and does not run — the same registry, so a module
+                // withdrawn at boot is listed on every container kind (an Autofac registration source
+                // served it before, which a plain MS DI host ignores).
+                services.AddTransient<IEnumerable<IncompatibleModule>>(sp =>
+                    sp.GetRequiredService<InstalledModules>().Incompatible(sp));
+            }
             return services;
         });
         RegisterModuleOwnedServiceForwarders();
@@ -71,7 +98,7 @@ public partial record MeshBuilder
             // Built before published (MeshWeaver#6542): every held module's shared instances are built
             // once the root container exists and before the provider is handed out.
             if (!services.Any(d => d.ImplementationInstance is ModulesBuiltBeforePublished))
-                services.AddSingleton<MeshWeaver.ServiceProvider.IRootContainerBuilt>(new ModulesBuiltBeforePublished());
+                services.AddSingleton<MeshWeaver.ServiceProvider.IRootContainerBuilt>(new ModulesBuiltBeforePublished(modules));
             return services;
         });
     }
@@ -82,6 +109,10 @@ public partial record MeshBuilder
     /// singleton.
     /// </summary>
     public ModuleContexts ModuleContexts { get; } = new();
+
+    /// <summary>The mesh's installed-module registry (MeshWeaver#6557) — what every
+    /// <see cref="InstalledModuleAssembly"/> enumeration reads.</summary>
+    private InstalledModules InstalledModuleSet { get; }
 
     private List<MeshNode> MeshNodes { get; } = new();
 
@@ -772,12 +803,12 @@ public partial record MeshBuilder
     }
 
     /// <summary>
-    /// Registers each installed module as an <see cref="InstalledModuleAssembly"/>. A module in its
-    /// own load context answers with its CURRENT generation every time it is asked — TRANSIENT on
-    /// purpose: the compile reference set, the installed-module fingerprint and a script session's
-    /// references must follow a live swap (policy <c>module-live-update-default</c>), and a singleton
-    /// would pin the boot generation for the life of the process. An image-bound module never changes
-    /// and stays a singleton.
+    /// Records each installed module in the mesh's <see cref="InstalledModules"/> registry. A module in
+    /// its own load context is recorded by NAME and answered with its CURRENT generation at every read:
+    /// the compile reference set, the installed-module fingerprint and a script session's references
+    /// must follow a live swap (policy <c>module-live-update-default</c>), and one the registry no
+    /// longer holds — withdrawn at boot, or retired — is absent rather than a registration that throws
+    /// (MeshWeaver#6557). An image-bound module never changes and is declared as a singleton.
     /// </summary>
     private void RegisterInstalledModuleAssemblies(Assembly[] assemblies)
     {
@@ -785,20 +816,16 @@ public partial record MeshBuilder
         {
             var name = assembly.GetName().Name ?? "";
             if (ModuleContexts.Current(name) is { } held && ReferenceEquals(held.Assembly, assembly))
-                RegisterCurrentGeneration(ModuleContexts, name, new WeakReference<Assembly>(assembly));
+            {
+                // Declared HERE, in install order — the set is ordered (first-mount-wins static
+                // assets, the list-ordered compile reference surface), never "image-bound, then held".
+                var slot = InstalledModuleSet.AddHeld(name);
+                ConfigureServices(services => { services.Add(slot); return services; });
+            }
             else
                 RegisterImageBound(new InstalledModuleAssembly(assembly));
         }
     }
-
-    // Captures the registry, the name and a WEAK reference to the boot generation — never the
-    // Assembly itself, which would root generation N for as long as the container lives.
-    private void RegisterCurrentGeneration(ModuleContexts contexts, string name, WeakReference<Assembly> boot) =>
-        ConfigureServices(services => services.AddTransient(_ => new InstalledModuleAssembly(
-            contexts.Resolve(name)
-            ?? (boot.TryGetTarget(out var original)
-                ? original
-                : throw new InvalidOperationException($"Module {name} is no longer held by this mesh's module registry.")))));
 
     private void RegisterImageBound(InstalledModuleAssembly module) =>
         ConfigureServices(services => services.AddSingleton(module));

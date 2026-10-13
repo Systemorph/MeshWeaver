@@ -668,6 +668,9 @@ internal sealed class ModuleFallbackSource(
                 .Select(rootRegistration => RegistrationBuilder
                     .ForDelegate(type, (context, _) => context.Resolve<RootResolutionScope>().Scope
                         .ResolveComponent(new ResolveRequest(service, rootRegistration, [])))
+                    // Names the root registration it resolves, so the scoped-dependency walk follows
+                    // exactly what this module's fallback reaches (ScopedDependencyWalk).
+                    .WithMetadata(ScopedDependencyWalk.StandsInFor, rootRegistration.Registration)
                     .ExternallyOwned()
                     .InstancePerDependency()
                     .CreateRegistration())
@@ -749,27 +752,45 @@ internal sealed class ScopedDependencyWalk(
         return verdict;
     }
 
+    /// <summary>The metadata key under which a module container's stand-in for a ROOT registration
+    /// (<see cref="ModuleFallbackSource"/>) names the root registration it resolves.</summary>
+    internal const string StandsInFor = "MeshWeaver.ModuleFallback.StandsInFor";
+
+    // 🚨 What a MODULE container answers for `type`, exactly as it resolves it: the module's own
+    // registrations; for a type a module DECLARES, the registrations in the other module containers
+    // that hold it (ModuleFallbackSource adds a stand-in for each, after the module's own — read THEIR
+    // lifetimes, or another module's SCOPED type looks like no dependency at all); and a root
+    // registration only where the module's fallback stands in for it. The fallback consults the root
+    // only when the module registers no `T` of its own, so a module that overrides a root-SCOPED `T`
+    // with its own singleton never reaches the root's `T` — and that unreachable registration must not
+    // mark a root-reachable singleton as scoped (it would then be left to its first resolve, and the
+    // #6542 lock inversion with it). registry = the module container asked; null = the root.
     private IEnumerable<(IComponentRegistration Registration, IComponentRegistry? Registry)> RegistrationsOf(
         Type type, IComponentRegistry? registry)
     {
         var service = new TypedService(type);
         if (registry is not null)
-            foreach (var own in registry.ServiceRegistrationsFor(service))
-                yield return (own.Registration, registry);
-        if (NamesACollectibleAssembly(type))
         {
-            // A type a module declares is resolved from the module containers that register it
-            // (ModuleFallbackSource → the registrations elsewhere) — read THEIR lifetimes, or another
-            // module's SCOPED type looks like no dependency at all.
-            if (registry is not null && elsewhere is not null)
+            var any = false;
+            foreach (var own in registry.ServiceRegistrationsFor(service))
+            {
+                any = true;
+                yield return own.Registration.Metadata.TryGetValue(StandsInFor, out var stood)
+                             && stood is IComponentRegistration inRoot
+                    ? (inRoot, null)
+                    : (own.Registration, registry);
+            }
+            if (NamesACollectibleAssembly(type) && elsewhere is not null)
                 foreach (var (other, held) in elsewhere(type))
                     if (!ReferenceEquals(other, registry))
                         foreach (var there in other.ServiceRegistrationsFor(held))
                             yield return (there.Registration, other);
+            if (any)
+                yield break;
         }
         // Never ASK the root about a type that names a collectible assembly: asking caches the type in
         // the root's registry, which pins its context (ModuleFallbackSource refuses the same).
-        else if (root is not null)
+        if (root is not null && !NamesACollectibleAssembly(type))
             foreach (var inRoot in root.ServiceRegistrationsFor(service))
                 yield return (inRoot.Registration, null);
     }

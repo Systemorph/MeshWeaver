@@ -604,6 +604,26 @@ public sealed class ModuleServices : IDisposable
             descriptor.ServiceType, descriptor.IsKeyedService ? descriptor.ServiceKey : registration.Key);
     }
 
+    /// <summary>
+    /// As <see cref="Resolve(IServiceProvider, int)"/>, or null when this generation's scope is disposed — before the resolve
+    /// or while it runs (a live uninstall, a boot withdrawal). Only the disposal of THIS generation
+    /// answers null; any other fault, and an <see cref="ObjectDisposedException"/> raised while this
+    /// generation is still live, propagates.
+    /// </summary>
+    internal object? TryResolve(IServiceProvider root, int index)
+    {
+        if (Volatile.Read(ref disposed) != 0)
+            return null;
+        try
+        {
+            return Resolve(root, index);
+        }
+        catch (ObjectDisposedException) when (Volatile.Read(ref disposed) != 0)
+        {
+            return null;
+        }
+    }
+
     /// <summary>Starts hosted registration <paramref name="index"/> from this generation and records
     /// it, so a swap can stop it. A failure is reported and costs the module's feature, never the
     /// host (#2449). Task-shaped because <see cref="IHostedService"/> is — no <c>await</c>.</summary>

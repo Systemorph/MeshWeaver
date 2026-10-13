@@ -230,6 +230,13 @@ public static class ContentFileResolver
                     if (string.IsNullOrEmpty(filePath))
                         return ContentFileResolutionResult.NotFound("File path is required");
 
+                    // 🚨 The staging folder is framework state, never content (#6585): an oversized
+                    // upload's bytes sit there BEFORE the owner has decided Update for them, so serving
+                    // them would hand a node's readers bytes nobody admitted. Answered as absent.
+                    if (ContentStaging.IsStagingPath(filePath.TrimStart('/')))
+                        return ContentFileResolutionResult.NotFound(
+                            $"No content collection at '{resolution.Prefix}' serves '{resolution.Remainder}'");
+
                     return ContentFileResolutionResult.Found(new ContentFileResolution(
                         sourceConfig,
                         $"{resolution.Prefix}/{sourceConfig.Name}",

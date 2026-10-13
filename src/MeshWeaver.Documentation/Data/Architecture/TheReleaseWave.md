@@ -138,7 +138,7 @@ whole `repository_dispatch` share of the fleet's bill (≈15,000 minutes a day) 
 | Education | 18 | **42** — Education#320 is unmerged; `ci.yml:28` still lists the type | 41 |
 | Reinsurance | **0** | 0 | 41 |
 
-The emitter is the one this page names: core CD's own `plugins-bake` calls the reusable lane with
+The emitter is the one this page names (as measured — #6143 later removed core CD's `plugins-bake`, so this per-build emitter no longer exists): core CD's own `plugins-bake` called the reusable lane with
 `webhook-url`, so its `register-publication` posts a `plugins` `bundle-publication` **on every core
 build** — a fresh framework identity each time, so `IsRepeat` never fires — and `DependentsOf(plugins)`
 is every satellite that declares `plugins`. Twenty of twenty core register jobs succeeded in the
