@@ -385,22 +385,26 @@ public sealed class ModuleServices : IDisposable
             .Select(RootReachesItAs)
             .ToImmutableHashSet();
         var contexts = root.GetService<ModuleContexts>();
-        var name = ModuleName;
         var stage = Stage;
         ModuleServiceProvider.BuildRootReachableSingletons(Scope(root), root, reachable.Contains,
-            type => contexts is null ? [] : RegistriesElsewhereSeenFrom(contexts, name, type, stage));
+            type => contexts is null ? [] : RegistriesSeenFrom(contexts, type, stage));
     }
 
     /// <summary>
-    /// The module containers OTHER than <paramref name="requester"/>'s that register module-declared
-    /// <paramref name="type"/> (unkeyed), and the service each holds it under — the same registrations, in
-    /// the same order, <see cref="ElsewhereSeenFrom"/> resolves: the declaring module's own (under the
-    /// type), then the contributions other modules made of it (under their index key). What the boot-time
-    /// scoped-dependency walk reads, so a singleton over another module's SCOPED type is never built at
-    /// boot (<c>ModuleServiceProvider.BuildRootReachableSingletons</c>).
+    /// EVERY module container that registers module-declared <paramref name="type"/> (unkeyed), and the
+    /// service each holds it under — the registrations <see cref="ElsewhereSeenFrom"/> resolves, in the
+    /// same order: the declaring module's own (under the type), then the contributions modules made of it
+    /// (under their index key). What the boot-time scoped-dependency walk reads, so a singleton over
+    /// another module's SCOPED type is never built at boot (<c>ModuleServiceProvider.BuildRootReachableSingletons</c>).
+    ///
+    /// <para>🚨 No module is excluded HERE. Which container is "elsewhere" changes as the walk recurses:
+    /// once it enters module B's singleton, B's fallback resolves module A's contributions, so a walk that
+    /// started in A must see A's registrations from inside B (A singleton → B singleton → A's scoped
+    /// contribution). The walk excludes only the container it is currently in, by reference
+    /// (<c>ScopedDependencyWalk.RegistrationsOf</c>).</para>
     /// </summary>
-    internal static IEnumerable<(Autofac.Core.IComponentRegistry Registry, Autofac.Core.Service Service)> RegistriesElsewhereSeenFrom(
-        ModuleContexts contexts, string? requester, Type type, ModuleSwapStage? stage)
+    internal static IEnumerable<(Autofac.Core.IComponentRegistry Registry, Autofac.Core.Service Service)> RegistriesSeenFrom(
+        ModuleContexts contexts, Type type, ModuleSwapStage? stage)
     {
         if (type.IsGenericTypeDefinition)
             yield break;
@@ -411,9 +415,9 @@ public sealed class ModuleServices : IDisposable
         var owner = generations.FirstOrDefault(g => IsOwned(type, g.Context));
         if (owner is null)
             yield break;
-        if (owner.Name != requester && RegistryOf(contexts, owner.Name, stage) is { } ownerRegistry)
+        if (RegistryOf(contexts, owner.Name, stage) is { } ownerRegistry)
             yield return (ownerRegistry, new Autofac.Core.TypedService(type));
-        foreach (var contributor in generations.Where(g => g.Name != requester && g.Name != owner.Name))
+        foreach (var contributor in generations.Where(g => g.Name != owner.Name))
         {
             var contributions = contributor.Services!.Registrations
                 .Where(r => r.Route == ModuleServiceRoute.Contributed && r.Descriptor.ServiceType == type

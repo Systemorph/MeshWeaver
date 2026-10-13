@@ -230,9 +230,10 @@ public static class ModuleServiceProvider
     /// built, not yet reachable from the root.</param>
     /// <param name="root">The mesh's root provider — whose registrations the module's fallback resolves.</param>
     /// <param name="rootReachable">The services the root reaches the module by.</param>
-    /// <param name="registrationsElsewhere">For a type a module declares, each other module container
-    /// that registers it and the service it is held under there — what <c>ModuleFallbackSource</c>
-    /// resolves it from.</param>
+    /// <param name="registrationsElsewhere">For a type a module declares, EVERY module container that
+    /// registers it and the service it is held under there — what <c>ModuleFallbackSource</c> resolves it
+    /// from. The walk skips the container it is currently in, so this must not pre-exclude the module the
+    /// walk started in: a nested walk (A → B → A) reaches A's registrations from inside B.</param>
     public static void BuildRootReachableSingletons(
         IServiceProvider moduleContainer, IServiceProvider root, Func<Service, bool> rootReachable,
         Func<Type, IEnumerable<(IComponentRegistry Registry, Service Service)>> registrationsElsewhere)
