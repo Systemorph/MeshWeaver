@@ -2295,6 +2295,19 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/compile-check.py --self-test
 
+    # 🚨 A plain `git diff --name-only` C-QUOTES a non-ASCII path (`"…C\303\264te…"`), and a script
+    # that reads it verbatim holds a path that names no file — a refused selection
+    # (MeshWeaver.Plugins#3566), a module never selected, a `.cs` silently dropped from a scan. Every
+    # listing a script parses is read with `-z`; this ratchet keeps it so, over .github/scripts and
+    # scripts. Self-test first: it proves the quoting on real git output.
+    - name: "The git path-listing ratchet can fail (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/check-git-path-listings.py --self-test
+
+    - name: "Every git path listing a script parses is read NUL-delimited (-z)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/check-git-path-listings.py
+
     # 🚨 THE LOCAL LOOP, RUN WHERE ITS INPUT CHANGES (#4785). `run-node-tests.py` is the command
     # AGENTS.md tells an author to run before pushing, and it IMPORTS compile-check.py above. When
     # #4711 replaced the compile model and removed `usings_union`, the harness died with an
