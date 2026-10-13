@@ -165,12 +165,7 @@ public static class InboxQueries
     internal static readonly ImmutableArray<string> TerminalActivityStatuses =
         [nameof(ActivityStatus.Succeeded), nameof(ActivityStatus.Warning), nameof(ActivityStatus.Failed), nameof(ActivityStatus.Cancelled)];
 
-    /// <summary>
-    /// The terminal activity states that need nobody — every terminal state but <c>Failed</c>. The
-    /// Activities source lists the rest: what is still going, and what failed.
-    /// </summary>
-    internal static readonly ImmutableArray<string> FinishedWellActivityStatuses =
-        [nameof(ActivityStatus.Succeeded), nameof(ActivityStatus.Warning), nameof(ActivityStatus.Cancelled)];
+
 
     /// <summary>
     /// The legs core itself brings. Packages add their own; these are not a registry of what may exist.
@@ -194,6 +189,9 @@ public static class InboxQueries
         // "not Read", read is "Read".
         Mail(unread: true),
         Mail(unread: false),
+        // Policy inbox-activities-need-someone: only the runs MARKED for the inbox
+        // (ActivityLog.ShowInInbox — background runs never are). Still going: Running. FAILED: it
+        // needs you, and is dealt with on its own page. A run that finished well is never listed.
         new()
         {
             Source = "Activities",
@@ -201,13 +199,20 @@ public static class InboxQueries
             SourceIcon = ActivitiesIcon,
             Band = InboxBand.Running,
             Order = 10,
-            // Policy inbox-activities-need-someone: only the runs MARKED for the inbox
-            // (ActivityLog.ShowInInbox — background runs never are) and still needing someone —
-            // going, or FAILED. A run that finished well is never listed; its own page keeps it.
-            // Marked runs are few, so the source is shown — it no longer carries the noise.
-            // Running itself is the omitted default, so the finished-well states are negated.
+            // Running itself is the omitted default, so every stamped terminal state is negated.
             Query = $"namespace:{ViewerToken}/_Activity nodeType:Activity content.showInInbox:true "
-                    + string.Join(" ", FinishedWellActivityStatuses.Select(s => $"-content.status:{s}"))
+                    + string.Join(" ", TerminalActivityStatuses.Select(s => $"-content.status:{s}"))
+                    + $" sort:LastModified-desc {RowProjection}",
+        },
+        new()
+        {
+            Source = "Activities",
+            SourceLabelKey = "inbox.source.Activities",
+            SourceIcon = ActivitiesIcon,
+            Band = InboxBand.NeedsYou,
+            Order = 50,
+            Query = $"namespace:{ViewerToken}/_Activity nodeType:Activity content.showInInbox:true "
+                    + $"content.status:{nameof(ActivityStatus.Failed)}"
                     + $" sort:LastModified-desc {RowProjection}",
         },
     ];

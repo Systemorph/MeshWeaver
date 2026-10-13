@@ -4,6 +4,7 @@ using System.Text.Json;
 using MeshWeaver.Fixture;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
+using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -129,6 +130,14 @@ public class InboxTimeFieldTest(ITestOutputHelper output) : MonolithMeshTestBase
         var counts = InboxRows.CategoryCounts(rows);
         counts["Conversations"].Should().Be((2, 1), "two rows, one unread");
         counts["Activities"].Should().Be((1, 0));
+
+        // The side menu's options: All first, then each category — its unread count when it has
+        // unread rows, else all its rows.
+        var options = InboxLayoutArea.CategoryOptions("All",
+            [("Conversations", "Conversations", "💬"), ("Activities", "Activities", "⚙️")], counts);
+        options.Select(o => ((Option<string>)o).Item).Should().Equal([string.Empty, "Conversations", "Activities"]);
+        options.Select(o => o.Text).Should().Equal(["📥 All  1", "💬 Conversations  1", "⚙️ Activities  1"],
+            "All and Conversations show their one unread row; Activities, with none unread, its one row");
     }
 
     /// <summary>A timed leg keeps <c>content</c> in its projection; an untimed one does not.</summary>

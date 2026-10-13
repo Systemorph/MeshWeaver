@@ -326,15 +326,15 @@ strings, anchored the same way. The bands differ only in what their legs select:
 | band | selects | glyph |
 |---|---|---|
 | **Needs you** | open obligations addressed to the viewer | `☐` |
-| **Running** | activities still going (`ActivityStatus.Running`) or FAILED, **and threads executing** | `⏳` / `❌` |
+| **Running** | marked activities still going (`ActivityStatus.Running`) **and threads executing**; a marked activity that FAILED is in *Needs you* | `⏳` |
 | **Last 24 hours** | *(designed; core feeds no leg into it today)* | `✅` |
 
 🚨 **As built (policy `inbox-activities-need-someone`):** core's own Activities source lists only
 the runs MARKED for the inbox (`ActivityLog.ShowInInbox`, set by the code that starts a run a person
-asked for and waits on, or one that will need their decision) that still need someone — still
-going, or failed. Background runs (scripts, Tests-area runs, indexing) are never marked, so they
-never appear. A run that finished well is not listed; its own page keeps it. A failed marked run
-stays in Running until it is dealt with on its page.
+asked for and waits on, or one that will need their decision) that still need someone: a run still
+going is in *Running*; a run that FAILED is finished, so it is in *Needs you*, dealt with on its own
+page. Background runs (scripts, Tests-area runs, indexing) are never marked, so they never appear.
+A run that finished well is not listed; its own page keeps it.
 
 **Running is its own band because it is neither.** It is not owed by the viewer — pushing it into
 *Needs you* invents an obligation nobody has — and it is not finished, so it cannot carry a tick. It
@@ -447,9 +447,11 @@ covering every held decision (`StepUpPaths.StartUrl` with all targets — the en
 a receipt per target), then back to the inbox. Each type's control plane consumes its own receipt
 and ratifies, and the request leaves the inbox once its type files it away.
 
-**Categories (policy `inbox-categories-by-kind`).** A side menu lists All, then each category
-with its symbol and count (unread when it has any, else all): Approvals, Mail, Conversations,
-Notifications, Activities. A source names its category (`InboxQueryLeg.Category` and
+**Categories (policy `inbox-categories-by-kind`).** A side menu — the platform's one-choice
+control (`RadioGroupControl`), its value bound to the filter's `category` and its options fed with
+the live counts (`InboxLayoutArea.CategoryOptions`) — lists All, then each category with its symbol
+and count (unread when it has any, else all): Approvals, Mail, Conversations, Notifications,
+Activities. A source names its category (`InboxQueryLeg.Category` and
 `CategoryLabelKey`; WhatsApp, Teams, iMessage and portal chats share **Conversations**), else its
 source is its category. The picked category lives in the page's filter (`InboxFilter.Category`):
 it shows every item filed under it, even from a source switched off by default, and All leaves the

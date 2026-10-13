@@ -170,15 +170,17 @@ public class InboxAppTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
         var legs = InboxQueries.Resolve(InboxQueries.BuiltIn, owner);
         async Task<string[]> Ids(string band)
         {
-            var query = legs.Single(l => l.Band == band).Query;
+            var query = legs.Single(l => l.Band == band && l.Source == "Activities").Query;
             return await mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
                 .Select(c => c.Items.Select(n => n.Id).ToArray())
                 .Where(ids => ids.Length > 0)
                 .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
         }
 
-        (await Ids(InboxBand.Running)).Order(StringComparer.Ordinal).Should().Equal(["failed", "still-running"],
-            "the MARKED runs that are going or failed — never one that finished well, never a background run");
+        (await Ids(InboxBand.Running)).Should().Equal(["still-running"],
+            "the MARKED run still going — never a background run, never a finished one");
+        (await Ids(InboxBand.NeedsYou)).Should().Equal(["failed"],
+            "a MARKED run that FAILED needs you — it is finished, so it is not shown as running");
     }
 
     private static int Rank(string band)
