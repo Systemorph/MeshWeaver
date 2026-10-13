@@ -647,8 +647,9 @@ Stated plainly, because a page that only lists what works is how the next sessio
   precondition on flipping — has landed too**: the portal's own `PrebuiltBundleStore` sweep now
   collects a generation no `_current` names, whose pointer resolved cleanly, whose own seal could be
   read, and that is older than the 30-day window, applying the identity rules' fail-closed discipline
-  one level down. What remains is each producer's pin reaching the writer, then flipping — `plugins`
-  in ONE change set, because it is the only prefix with two producers.
+  one level down. Every producer's pin has reached the writer and flipped, and since #6143 every
+  prefix has ONE producer — `plugins` is written by MeshWeaver.Plugins' own lane alone — so no
+  migration step remains here.
 
   🚨 That page also records what an **OCI registry** does and does not close, since the fleet is
   moving plugin bundles into one: content-addressed blobs make a mix unrepresentable, but a **tag**

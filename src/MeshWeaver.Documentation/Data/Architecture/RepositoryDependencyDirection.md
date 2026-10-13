@@ -34,9 +34,9 @@ incidental coupling that can be tidied away.
 |---|---|---|
 | `main-cd.yml:849` → `:974` | checks out Plugins @ `vars.MW_PLUGINS_REF \|\| main`, publishes `plugins-repo/src/Memex.Portal.Distributed` | a Plugins compile error turns core CD red; **no images publish for that core commit** |
 | `main-cd.yml:1020` → `:1080` | same, for `Memex.Database.Migration` | ditto — and a missing migration tag is the 6.5 h production outage of 2026-08-27 (#2555) |
-| `main-cd.yml:524` | `git ls-remote` the Plugins HEAD, to key the image set on the PAIR (#2622) | fails RED, deliberately: an unresolvable HEAD means the image identity cannot be established |
+| `main-cd.yml:524` | `git ls-remote` the Plugins HEAD, recorded as `plugins_sha` in the promotion record — provenance only; the `<core>-p<plugins>` pair tag that once keyed the image set (#2622) is retired (policy `platform-module-deploy-separate`) and a new set carries none | fails RED, deliberately: an unresolvable HEAD means the set's provenance cannot be recorded |
 | ~~`main-cd.yml:2094` (`plugins-modules`), `:2166` (`plugins-bake`)~~ — **removed by #6143**; `published-modules` now only READS the `plugins` publication MeshWeaver.Plugins seals | core's CD packed and baked the Plugins module bundles the portals adopt for this identity | a red leg means the sealed publication is missing for an identity the images already carry — **and it stalls the whole fleet**: memex still wakes every satellite for that identity, but each of their bakes seeds the Plugins publication and fails `upstream 'plugins' has no SEALED publication` until it exists |
-| `release.yml` | the `v*.*.*` tag lane checks out NO sibling: it promotes the set main-cd already built from the pair, so the Plugins commit a release carries is the one in that set's pair tag | — (a release can only name a set that exists) |
+| `release.yml` | the `v*.*.*` tag lane checks out NO sibling: it promotes the set main-cd already built from the pair, so the Plugins commit a release carries is the `plugins_sha` in that set's promotion record (a legacy pair tag, where one exists, is read for the log line only, never required — `release.yml`) | — (a release can only name a set that exists) |
 | `edge-images.yml:39` → `:92`, `:105` | the manual edge channel, same two projects | edge builds fail |
 
 🚨 **The blast radius is the FLEET, not this repo.** A broken plugins tree does not merely red a
@@ -55,9 +55,10 @@ merged last, and the same core commit can build differently on two runs. The var
 
 1. **Pin, do not follow.** Core records the plugins commit it builds against — a lockfile in core,
    or `MW_PLUGINS_REF` set to a sha rather than `main` — and a plugins release proposes a bump the
-   same way a package upgrade does. The image set already keys on the PAIR (`check-image-set.sh`
-   takes the plugins short-sha), so the identity machinery is in place; what is missing is that the
-   pair is *chosen* rather than *observed*.
+   same way a package upgrade does. The set already records the plugins commit it was built with
+   (`plugins_sha` in its promotion record — provenance, not a key; the pair tag is retired under
+   policy `platform-module-deploy-separate`), so what is missing is that the plugins commit is
+   *chosen* rather than *observed*.
 2. **Move the image build to the repo that owns the host.** Plugins already builds and tests these
    projects; the lane that publishes them could live there and consume core as a released artifact.
    This inverts nothing else and removes every edge in the table.

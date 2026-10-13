@@ -219,7 +219,9 @@ gh api "repos/Systemorph/MeshWeaver/actions/runs?branch=main&per_page=3" \
   --jq '.workflow_runs[] | "\(.name) \(.head_sha[0:9]) \(.status) \(.conclusion)"'
 # 2. Merge the PR. main-cd.yml then fires automatically on the green test run:
 #    builds multi-arch portal-ai + migration + mw-plugin-test, promotes <version>;<sha>;main to ACR,
-#    bakes + seals the platform content and the Plugins modules, and notifies the control instance.
+#    bakes + seals the platform content ONLY, and notifies the control instance. The Plugins
+#    modules are packed, baked and sealed by MeshWeaver.Plugins on its own lane (#6143); core's
+#    `published-modules` job only reads that publication.
 # 3. Every OTHER install whose Admin/UpdatePolicy is Continuous + a pattern admitting the tag
 #    (3.*) self-updates from ACR on the next publication EVENT (no action). Stable installs
 #    (the default) wait for the clean release.
