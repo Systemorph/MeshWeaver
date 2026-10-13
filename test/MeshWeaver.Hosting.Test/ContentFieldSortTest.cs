@@ -239,6 +239,19 @@ public class ContentFieldSortTest
             .Compare(QuerySortKey.Normalize(double.Epsilon), QuerySortKey.Normalize(0))
             .Should().BePositive();
 
+    /// <summary><c>length</c> counts characters as Postgres does — an emoji is one, not two.</summary>
+    [Fact]
+    public void SortFunction_Length_CountsCharactersNotUtf16Units()
+        => new QueryEvaluator().GetSortKey(Node("e", Json("""{"tag":"😀"}""")), "length(content.tag)")
+            .Should().Be(1m);
+
+    /// <summary>A float keys on the value it is stored as (0.1), not on its binary widening.</summary>
+    [Fact]
+    public void Float_KeysOnItsPersistedValue()
+        => QuerySortKey.Comparer(descending: false)
+            .Compare(QuerySortKey.Normalize(0.1f), new QueryEvaluator().GetSortKey(Node("j", Json("""{"x":0.1000000001}""")), "content.x"))
+            .Should().BeNegative();
+
     /// <summary>A null or absent key is last whichever way the sort runs.</summary>
     [Fact]
     public void NullsAndAbsentKeys_SortLast_InBothDirections()

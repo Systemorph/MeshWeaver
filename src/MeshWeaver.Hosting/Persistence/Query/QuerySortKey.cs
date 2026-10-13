@@ -69,8 +69,10 @@ public static class QuerySortKey
         // loss (2^53 + 1 stays distinct from 2^53); only binary floating point stays double.
         sbyte or byte or short or ushort or int or uint or long or ulong or decimal
             => Convert.ToDecimal(value, CultureInfo.InvariantCulture),
-        float f => (double)f,
-        double d => d,
+        // Binary floating point keys on the SHORTEST round-trip text the serializer persists
+        // (0.1f is stored as 0.1, not 0.10000000149…), read back exactly as a decimal.
+        float f => FromRoundTripText(f.ToString(CultureInfo.InvariantCulture), f),
+        double d => FromRoundTripText(d.ToString(CultureInfo.InvariantCulture), d),
         _ => Convert.ToString(value, CultureInfo.InvariantCulture),
     };
 
@@ -110,6 +112,17 @@ public static class QuerySortKey
                 .ToString(UtcInstantFormat, CultureInfo.InvariantCulture)
             : parsed.ToString("yyyy-MM-dd'T'HH:mm:ss.fffffff", CultureInfo.InvariantCulture);
     }
+
+    /// <summary>
+    /// The decimal a float/double's persisted text denotes; the double itself when there is none
+    /// (NaN, an infinity, a magnitude beyond decimal, or a nonzero value decimal would round to 0).
+    /// </summary>
+    private static object FromRoundTripText(string text, double value)
+        => double.IsFinite(value)
+           && decimal.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var exact)
+           && (exact != 0 || value == 0)
+            ? exact
+            : value;
 
     /// <summary>The comparer for canonical keys in the given direction — nulls last either way.</summary>
     /// <param name="descending">Whether the sort runs descending.</param>

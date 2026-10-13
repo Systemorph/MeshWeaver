@@ -585,7 +585,8 @@ public class QueryEvaluator
             // RESULT is normalised: length("…08:30:00Z") is 20 there, not the 28 of the canonical form.
             var text = AsWrittenText(ResolveSortSelector(obj, argument), SortReadsContent(argument));
             if (function.Equals("length", StringComparison.OrdinalIgnoreCase))
-                return text is null ? null : (decimal)text.Length;
+                // Postgres counts CHARACTERS (code points), not UTF-16 units: "😀" is 1, not 2.
+                return text is null ? null : (decimal)text.EnumerateRunes().Count();
             if (function.Equals("lower", StringComparison.OrdinalIgnoreCase))
                 return QuerySortKey.Normalize(text?.ToLowerInvariant());
             if (function.Equals("upper", StringComparison.OrdinalIgnoreCase))
