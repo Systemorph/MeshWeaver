@@ -42,8 +42,10 @@ public class UpdateOfAnAbsentNodeIsClassifiedNotFoundTest(ITestOutputHelper outp
         // whose closest existing ancestor is `parent` — the shape the router sees for a patch that
         // a delete overtook.
         var patch = new PatchDataRequest(new MeshNodeReference(), new RawJson("{\"name\":\"late\"}"));
+        // Issued from the client RequestHub, the way a production writer reaches the router — never
+        // from the mesh hub, which would put the router on both ends of the delivery (#2423).
         // The response is the fault: success maps to null so a stray ack fails the type check below.
-        var error = await Mesh.Observe<PatchDataResponse>(patch, o => o.WithTarget(new Address(absentPath)))
+        var error = await RequestHub.Observe<PatchDataResponse>(patch, o => o.WithTarget(new Address(absentPath)))
             .Take(1)
             .Select(_ => (Exception?)null)
             .Catch((Exception ex) => Observable.Return<Exception?>(ex))
