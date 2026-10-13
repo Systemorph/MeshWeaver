@@ -13,7 +13,16 @@ namespace MeshWeaver.Mesh;
 /// handler has nothing safe to say: the inbox then reports a generic failure, and the handler has
 /// logged the cause.
 /// </param>
-public sealed record InboxItemOutcome(string Path, bool Done, string? Reason = null);
+public sealed record InboxItemOutcome(string Path, bool Done, string? Reason = null)
+{
+    /// <summary>
+    /// The step-up this item still waits for, when its decision is recorded but held until the
+    /// approver confirms it (core <c>Doc/Architecture/ApprovalStepUp</c>). The inbox collects the
+    /// targets of a whole batch into ONE step-up. An init property, never a constructor parameter,
+    /// so modules built against the earlier constructor keep binding.
+    /// </summary>
+    public MeshWeaver.Mesh.Security.StepUpTarget? StepUp { get; init; }
+}
 
 /// <summary>
 /// What the inbox may DO to the items of one node type — the action half of the potluck whose query
