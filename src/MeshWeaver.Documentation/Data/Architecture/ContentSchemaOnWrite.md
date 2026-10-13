@@ -117,17 +117,18 @@ with a `required` member fail, across every writer in the fleet, which is the sc
 this guard was explicitly scoped away from. Narrowing it later is a decision about which writers may
 send partial content — not a bug fix — and it needs the producer side enumerated first.
 
-**Where the cost was paid down: a member whose absence has a meaning is not `required`.**
-`MarkdownContent.Content` was declared `required`, so a `Markdown` row stored without a body — a page
-written with only tags or a thumbnail, or exactly the partial write this guard admits — failed the
-whole bind on every read and reached its viewer as raw JSON: an empty page, no error, and its tags and
-abstract lost to the typed reader too
-([#6639](https://github.com/Systemorph/MeshWeaver/issues/6639)). An absent body means an EMPTY body,
-just as an empty `.md` file does, so the member now defaults to `""` and such rows type correctly with
-no repair. Reserve `required` for a member no reader can do without — every one you declare turns a
-partial write into a row that reads as untyped.
+**Why `MarkdownContent.Content` stays `required` although such rows exist.** Measured rows carry
+`$type: MarkdownContent` and no `content`
+([#6639](https://github.com/Systemorph/MeshWeaver/issues/6639)). Relaxing the member to default to
+`""` was tried and refused. The `required` member is what makes a body stored under ANOTHER key
+(`{"markdown": …}`, `{"text": …}`) fail to bind instead of binding into a `MarkdownContent` with an
+empty body. Raw, such content reads as **Unreadable** and names its members
+(`MarkdownOverviewLayoutArea.ReadMarkdownContent`, #4600). Typed and empty, it would put the "No
+content yet" placeholder over a document that is still there. `NodeUpdateContentTypeChangeTest`
+depends on the same throw (#5736). So such a row is a DATA defect. The page already shows it as
+Unreadable, and the repair is to rewrite the body under `content`.
 
-When content of a KNOWN type still fails to bind, the read seam that holds the node
+When content of a KNOWN type fails to bind, the read seam that holds the node
 (`MeshNodeStreamCache`, both the `GetStream` and `GetQuery` paths) names the node's path and says that
 the type is registered but the stored JSON does not bind to it. The serializer's own
 `could not be deserialized` warning names the type and the failing member but cannot name the node: a

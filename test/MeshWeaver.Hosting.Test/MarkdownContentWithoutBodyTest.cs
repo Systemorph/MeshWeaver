@@ -11,14 +11,16 @@ using Xunit;
 namespace MeshWeaver.Hosting.Test;
 
 /// <summary>
-/// Systemorph/MeshWeaver#6639. A <c>Markdown</c> row whose stored content carries no
-/// <c>content</c> member — a page written with only tags or a thumbnail, or a partial write the
-/// content-schema guard admits by design — must read as a TYPED <see cref="MarkdownContent"/> with
-/// an empty body, not degrade to raw JSON. And when content of a KNOWN type does fail to bind, the
-/// warning that names the node's PATH must say so, rather than blaming a registration that is not
-/// missing.
+/// Systemorph/MeshWeaver#6639. A <c>Markdown</c> row whose stored content names
+/// <c>$type: MarkdownContent</c> but carries no <c>content</c> member does not bind — and that is
+/// deliberate: <c>MarkdownContent.Content</c> is <c>required</c> precisely so that content carrying
+/// its body under another key (<c>{"markdown": …}</c>, <c>{"text": …}</c>) THROWS instead of
+/// binding into an empty page (#4600, #5736). What was wrong is the diagnosis: the warning that
+/// names the node's PATH said "TypeRegistry lacks the $type discriminator" for a type the process
+/// knows, sending the reader to fix a registration that is not missing, while the serializer's own
+/// warning — which does name the cause — cannot name the node.
 ///
-/// <para>Both arms drive the production read seams (<c>MeshNodeStreamCache.ConvertContentJsonElementToTyped</c>
+/// <para>All arms drive the production read seams (<c>MeshNodeStreamCache.ConvertContentJsonElementToTyped</c>
 /// and <c>DeserializeContent</c>) with a real <see cref="MeshContentTypeRegistry"/> — no mocking.</para>
 /// </summary>
 public class MarkdownContentWithoutBodyTest
@@ -47,28 +49,28 @@ public class MarkdownContentWithoutBodyTest
         };
 
     /// <summary>
-    /// The contract half. Negative control: with <c>MarkdownContent.Content</c> declared
-    /// <c>required</c> (main before this change) the bind throws "missing required properties
-    /// including: 'content'", the registry's recovery answers null, and the node leaves the seam as
-    /// a raw <see cref="JsonElement"/> — the tags it carries invisible to every typed reader.
+    /// The measured shape: <c>$type: MarkdownContent</c>, body under a key the record does not
+    /// declare. It stays raw (the contract), and the path-bearing warning says the TYPE IS KNOWN
+    /// and the bytes do not bind. Negative control: on main both seams printed the registration
+    /// text for this node.
     /// </summary>
     [Theory]
     [MemberData(nameof(Seams))]
-    public void MarkdownContentWithoutABody_ReadsTyped_WithAnEmptyBody(string seam)
+    public void MarkdownContentWithoutABody_IsReportedAsABindFailure_WithItsPath(string seam)
     {
         var registry = new MeshContentTypeRegistry();
         registry.Register(typeof(MarkdownContent), MarkdownNodeType);
         var logger = new RecordingLogger();
 
         var read = Run(seam,
-            NodeWith(MarkdownNodeType, """{"$type":"MarkdownContent","tags":["kept"],"abstract":"a summary"}"""),
+            NodeWith(MarkdownNodeType, """{"$type":"MarkdownContent","text":"the body, under the wrong key"}"""),
             logger, registry);
 
-        var typed = Assert.IsType<MarkdownContent>(read.Content);
-        Assert.Equal(string.Empty, typed.Content);
-        Assert.Equal(["kept"], typed.Tags);
-        Assert.Equal("a summary", typed.Abstract);
-        Assert.Empty(logger.Records.Where(r => r.Level >= LogLevel.Warning));
+        Assert.IsType<JsonElement>(read.Content);
+        var record = Assert.Single(logger.Records.Where(r => r.Level >= LogLevel.Warning));
+        Assert.Contains("Space/APageWithoutABody", record.Message);
+        Assert.Contains("'MarkdownContent' is registered, but the stored JSON does not bind", record.Message);
+        Assert.DoesNotContain("TypeRegistry lacks", record.Message);
     }
 
     /// <summary>A record with a genuinely <c>required</c> member — content that omits it cannot bind.</summary>
@@ -79,7 +81,7 @@ public class MarkdownContentWithoutBodyTest
     }
 
     /// <summary>
-    /// The log half. The type IS registered, so the path-bearing warning must name the bind
+    /// The same for any registered type with a <c>required</c> member. The type IS registered, so the path-bearing warning must name the bind
     /// failure, not "TypeRegistry lacks the $type discriminator" — which sends the reader to fix a
     /// registration that is not missing. Negative control: on main both seams printed the
     /// registration text for this node.
