@@ -348,6 +348,7 @@ suite references the loading, compilation, adoption and disposal projects direct
 | 2 | prebuilt bundle N → N+1 at the SAME store key | `BundleUpdateTest.ABundleAdoptedAtTheSameKey_IsBound_AfterTheDispose` — **red on main before the fix** |
 | 3 | a same-key byte change moves the path; the old bytes stay in place | `BundleUpdateTest.ASameKeyByteChange_MovesThePath_AndLeavesTheOldBytesInPlace` — **red before the fix** |
 | 4 | N+1 fails to compile: N keeps serving, the record says why | `NodeTypeUpdateTest.AFailedNewBuild_KeepsTheOldOneServing_AndSaysWhy` |
+| 4b | …and the MCP write verbs' schema probe validates against N at once, instead of waiting 5 s for an `Ok` that cannot come and then validating nothing (#6635) | `SchemaProbeOnAFailedBuildTest.AFailedNewBuild_StillValidatesAgainstTheLastGoodBuild_WithoutWaitingForOk` — **red before the fix** (5012 ms, `Created:`) |
 | 5 | N+1 unpublished, or built for another framework identity | `NodeTypeUpdateTest.AnUnpublishedNewBuild_IsNamed_AndTheOldOneKeepsServing`, `ForeignIdentityUpdateTest` |
 | 6 | N reads N+1-shaped content, N+1 reads N-shaped content | `ShapeCompatibilityTest.EachBuild_ReadsTheOtherBuildsShape` |
 | 7 | two builds serve side by side on a two-silo cluster | `MixedReplicaUpdateTest` |
