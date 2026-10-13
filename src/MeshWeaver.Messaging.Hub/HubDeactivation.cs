@@ -24,7 +24,8 @@ namespace MeshWeaver.Messaging;
 public static class HubDeactivation
 {
     /// <summary>
-    /// Begins <paramref name="hub"/>'s teardown and then aborts whatever turn it is running.
+    /// Begins <paramref name="hub"/>'s teardown and then aborts whatever turn it is running — the
+    /// abort also when starting the teardown throws (the exception still propagates).
     /// Returns as soon as the teardown has STARTED; join <see cref="IMessageHub.DisposalCompleted"/>
     /// to observe its end.
     /// </summary>
@@ -32,7 +33,16 @@ public static class HubDeactivation
     public static void DisposeAbortingCurrentTurn(this IMessageHub hub)
     {
         ArgumentNullException.ThrowIfNull(hub);
-        hub.Dispose();
-        hub.CancelCurrentExecution();
+        // The abort runs even when the teardown faults while starting: a host that catches the
+        // throw and finishes deactivating (MessageHubGrain.OnDeactivateAsync does) must not leave
+        // the hub's turn running after its activation is gone.
+        try
+        {
+            hub.Dispose();
+        }
+        finally
+        {
+            hub.CancelCurrentExecution();
+        }
     }
 }
