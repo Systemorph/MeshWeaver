@@ -57,7 +57,15 @@ process drives a request.
    the running platform, or a dependency the loaded build does not meet, is declined by name
    (`ModuleSyncDecision`). A source counts as a module source when its config has recorded a
    module-bearing tree. Content-only spaces are not re-imported, and the step lists them as
-   skipped, with the reason.
+   skipped, with the reason. 🚨 Each import is bounded by `ModuleSourceUpdate.ActivityBudget`
+   **from the moment its activity is created** (MeshWeaver#6625). `RunActivity` emits the activity
+   path only when the run is terminal, and the budget used to be composed after that emission, so
+   it bounded nothing: an import that never finished held the Sync step — and the request,
+   non-terminal, which suppresses every pod's self-reboot — indefinitely (measured: ~21 h on one
+   instance, `Preparing`/Sync on another). Now the row reads `Failed` — *"did not finish within …
+   its outcome is NOT established"* — the import's cancellation is requested through the Activity
+   Control Plane, and the reboot goes on to the next step. Why an import hangs is the import's own
+   defect and is not answered by this bound (`AHungImportCannotHoldTheRebootTest`).
 2. **Modules.** The executor lands the newest COMPATIBLE published version of every installed
    module through `ModuleReloadExecutor.ResolveAndLand`, which is the module reload's own
    resolve-and-land and is not forked. Compatibility means the declared floor is at or below the
