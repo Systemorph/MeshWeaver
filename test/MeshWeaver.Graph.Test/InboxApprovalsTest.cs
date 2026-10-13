@@ -146,6 +146,19 @@ public class InboxApprovalsTest(ITestOutputHelper output) : MonolithMeshTestBase
         InboxLayoutArea.StepUpOf([new InboxItemOutcome("x", true)]).Should().BeEmpty("no step-up when nothing is held");
     }
 
+    /// <summary>
+    /// One click decides at most what ONE step-up covers (the endpoint refuses more), in page order —
+    /// a full page of requests is never held beyond what the approver can confirm.
+    /// </summary>
+    [Fact]
+    public void OneClick_DecidesAtMostWhatOneStepUpCovers()
+    {
+        var page = Enumerable.Range(0, InboxQueries.LegLimit + 20).ToArray();
+        InboxLayoutArea.DecideBatch(page).Should().Equal(page.Take(StepUpPaths.MaxTargets), "the first ones, in page order");
+        InboxLayoutArea.DecideBatch(page[..3]).Should().Equal(page[..3], "a small selection is decided whole");
+        StepUpPaths.MaxTargets.Should().BeLessThan(InboxQueries.LegLimit, "otherwise the cap would never bite and this test proves nothing");
+    }
+
     private static string[] Legs(string owner, string source)
         => [.. InboxQueries.Resolve(InboxQueries.BuiltIn, owner).Where(l => l.Source == source).Select(l => l.Query)];
 

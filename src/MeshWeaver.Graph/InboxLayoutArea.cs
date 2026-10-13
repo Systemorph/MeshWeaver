@@ -493,13 +493,17 @@ public static class InboxLayoutArea
                 .ToImmutableList())
             .SelectMany(targets => targets.Count == 0
                 ? Observable.Throw<Unit>(new InvalidOperationException(host.Localize("inbox.nothingToDecide")))
-                : Act(ctx, access, caller, targets.Select(row => new InboxUndoItem(row.Path, row.NodeType)).ToImmutableList(),
+                : Act(ctx, access, caller, DecideBatch(targets).Select(row => new InboxUndoItem(row.Path, row.NodeType)).ToImmutableList(),
                         handlers, (_, path) => InboxApprovals.Decide(hub, path, decision, noAnswer),
                         approve ? "inbox.progress.approving" : "inbox.progress.rejecting", _ => { })
                     .Do(outcomes =>
                     {
                         host.UpdateData(InboxRows.SelectionId, new DataGridSelectionState());
-                        ctx.ReportSummary(Summary(host, approve ? "inbox.summary.approved" : "inbox.summary.rejected", outcomes));
+                        var summary = Summary(host, approve ? "inbox.summary.approved" : "inbox.summary.rejected", outcomes);
+                        // The rest of a selection larger than one step-up covers is left untouched — said.
+                        if (targets.Count > outcomes.Count)
+                            summary += " " + host.Localize("inbox.decide.capped", targets.Count - outcomes.Count, StepUpPaths.MaxTargets);
+                        ctx.ReportSummary(summary);
                         // 🚨 ONE step-up for the batch: every decision held for the approver's
                         // confirmation is confirmed together, then the approver comes back here.
                         // A FULL page load — the step-up endpoint is an MVC route the circuit never reaches.
@@ -608,6 +612,14 @@ public static class InboxLayoutArea
         write.Take(1).Do(landed).Subscribe(outcome);
         return outcome;
     }
+
+    /// <summary>
+    /// The approval requests ONE click decides: the first <see cref="StepUpPaths.MaxTargets"/> in page
+    /// order. Every held decision of the click goes into one step-up, and the step-up endpoint refuses
+    /// a larger batch — deciding more would hold decisions the approver could never confirm.
+    /// </summary>
+    internal static ImmutableList<T> DecideBatch<T>(IReadOnlyCollection<T> targets)
+        => [.. targets.Take(StepUpPaths.MaxTargets)];
 
     /// <summary>
     /// The step-up targets a batch still waits for — each held decision once, in batch order. Empty

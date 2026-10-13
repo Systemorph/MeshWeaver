@@ -1943,6 +1943,7 @@
   "inbox.approve": "Genehmigen",
   "inbox.reject": "Ablehnen",
   "inbox.nothingToDecide": "Wählen Sie die zu entscheidenden Genehmigungsanfragen aus.",
+  "inbox.decide.capped": "{0} weitere wurden nicht entschieden: Ein Klick entscheidet höchstens {1}. Entscheiden Sie sie mit einem weiteren Klick.",
   "inbox.approval.noAnswer": "keine Antwort vom Eintrag",
   "inbox.progress.approving": "Genehmige {0} von {1}…",
   "inbox.progress.rejecting": "Lehne {0} von {1} ab…",
