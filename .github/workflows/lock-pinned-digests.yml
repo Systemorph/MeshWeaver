@@ -200,11 +200,17 @@ jobs:
     name: Every pinned manifest is locked
     needs: [preflight]
     runs-on: ubuntu-latest
-    # ~34 repositories × (a workflow listing, a recursive tree, a handful of file reads), plus one
-    # manifest listing per ACR repository (15, ~2,800 manifests on 2026-09-07), one tag listing per
-    # repository the fleet references, one HTTPS probe per installation (3, each capped at 25 s) and
-    # one `az` write per manifest or tag newly locked. Minutes, not tens of minutes; measured
-    # end-to-end well inside this.
+    # 38 repositories × (a workflow listing, a recursive tree, a handful of file reads), one
+    # manifest listing per ACR repository (21, 11,522 manifests on 2026-10-10), one `az acr manifest
+    # show` per image index in the wanted set (~108), one tag listing per repository the fleet
+    # references, one HTTPS probe per installation, and one `az` write per manifest or tag newly
+    # locked. Each `az` is a whole process (~6 s on a hosted runner), and run SERIALLY that did not
+    # fit: the scan alone took 15 minutes and the apply run was cancelled at this cap three nights
+    # running (Memex#219) with 72 of a 297-manifest + 113-tag backlog written. Every one of those
+    # calls is independent, so the script runs them on a bounded pool (`MW_ACR_LOCK_WORKERS`,
+    # default 8) and reads the locks back with ONE fresh listing per repository instead of one
+    # `az` per item. 🚨 Never raise this bound to make a run fit: 30 is the lane's honest cap and
+    # 45 the fleet's, and a run that does not fit is doing serial work that should not be serial.
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
