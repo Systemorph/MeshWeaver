@@ -2075,6 +2075,16 @@ The `AccessControlPipeline` is a delivery pipeline step registered by `AddRowLev
 
 Messages without `[RequiresPermission]` pass through unchecked. System messages (`PingRequest`, `InitializeHubRequest`, etc.) are not annotated and are always allowed.
 
+### 🚨 A sender's gated deliveries are acted on in arrival order
+
+The pipeline step returns at once and the handler runs when the verdict arrives — the turn is never held for a permission fold, which may itself need this hub to answer something. That verdict always arrives OFF the turn: the decision hops to the pool (`TakeDecisionOutsideGate`, #899), and a cold permission cache answers later still. Acting on each verdict the moment it arrived let two writes from one sender race to their handlers, and the second could commit first. Measured on a freshly activated node: 20 patches posted in order were applied `1,3,2,4,…`, and the last one posted did not stay (#6589).
+
+So the verdicts are still evaluated concurrently, but acting on them — invoking the handler, or posting the refusal — is released **in the order the deliveries reached the hub, per sender** (`AccessControlPipeline.SenderOrderedRelease`). That is the ordering an actor guarantees between one sender and one receiver. A delivery with nothing to evaluate, from a sender that still has a delivery waiting, queues behind it too, so it cannot overtake it.
+
+The scope is per sender, never per hub, on purpose: a verdict that needs a reply from this hub (the node type's rule reading the node, an access-cache refresh) arrives from another sender, so it can never queue behind the delivery that waits for it. A sender's ungated messages still run on the turn, as before.
+
+Pinned by `GatedWritesKeepTheSendersOrderTest`. The first write's verdict is held through the evaluator seam, and the second write from the same sender must not commit until the first does. The control: a write from another sender commits while the first sender's verdict is held.
+
 ---
 
 # Configuration

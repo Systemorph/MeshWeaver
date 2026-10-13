@@ -539,8 +539,8 @@ public static class ActivityControlPlaneExtensions
     /// a bare <see cref="HubDisposingException.IsHubDisposal"/> — a source node owned by
     /// another hub going down must still re-establish.</para>
     ///
-    /// <para>Matching is on <see cref="Address.Path"/>: a hosted address renders its hosting
-    /// parent as a <c>~host</c> suffix, and "the hub at this node path is disposing" is the
+    /// <para>Matching is on <see cref="Address.Path"/>: a hosted address renders with its hosting
+    /// chain (<c>host~path</c>), and "the hub at this node path is disposing" is the
     /// question being asked — the hosting chain does not change the answer.</para>
     /// </summary>
     /// <param name="ex">The fault to classify.</param>
