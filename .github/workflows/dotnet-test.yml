@@ -3094,6 +3094,13 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: bash .github/scripts/carry-forward-bundles.sh --self-test
 
+    # seal-packages.py decides, per package, what a publication SEALS fresh and what it carries, and
+    # refuses a seal whose own dependency floors are unmet (MeshWeaver.Plugins#3507, the #6192
+    # class). It runs only inside a node repo's publish lane, so this is its first execution.
+    - name: "Execute seal-packages.py against its own fixtures (the per-package seal)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/seal-packages.py --self-test
+
     # 🚨 …and its SIBLING had none either, which is worse: bake-scope.sh decides what does NOT get
     # rebuilt, and its self-test is one of the two proofs `SealedPublicationGenerations.md` leans on
     # for phase 2's reader half — measured 2026-09-13, nothing in .github/workflows/ ever ran it.

@@ -584,6 +584,21 @@ keeps the supersede model in the next section.
    sealing it would move every instance's sources back, since `SealedSyncGate` holds a repository's
    sources at the sealed commit. The bake is narrowed too (`narrow-by-affected`), so a merge re-bakes
    only what its diff affects.
+   **The seal is PER PACKAGE (`withhold-packages`, MeshWeaver.Plugins#3507).** A caller that
+   withholds packages from the module hand-over (rule 4) passes the same list to the bake: every
+   other package is sealed at this commit, and each withheld package's previously SEALED build — its
+   bundle and its module package — is carried forward in its place (`seal-packages.py withhold`,
+   then `carry-forward-bundles.sh`, digest- and stamp-verified; a package never sealed stays out).
+   The publication then carries `sealed-packages.json` beside `source-commit.txt`: per package, the
+   commit its bytes were baked from, its version, its `requires`, and whether it was carried. Before
+   anything is written, `seal-packages.py listing` refuses a seal in which a package's `requires` on
+   another package of the same listing is not met by the version the listing seals (the class of
+   MeshWeaver#6192). `source-commit.txt` stays the run's commit, so rule 5's never-seal-backwards is
+   unchanged; `bake-scope.sh` narrows from the OLDEST commit the listing names, so a carried package
+   is rebuilt the run it becomes publishable. Before this, a seal was one listing for one commit and
+   a caller could seal only a commit at which nothing waited — which, under steady merging, almost
+   never existed. Readers adopt the listing through `SealedSource.Packages` / `CommitOf(package)`
+   and read a publication without one as before: every bundle at `source-commit.txt`.
 6. **The platform release is the ONE full run.** `repository_dispatch` and the `schedule` poll
    rebuild and republish everything against the new platform — the compatibility check across the
    whole catalog. It is the only run that is superseded, and only by the next platform run: the
