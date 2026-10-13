@@ -110,9 +110,12 @@ public record InboxQueryLeg
     /// <c>LastModified</c>. Left empty, the rows are timed by <c>LastModified</c>.
     /// <para>🚨 Name one when a write that is NOT news touches the node: a read-state write (opening a
     /// conversation clears its unread mark) refreshes <c>LastModified</c>, and timing by it would move
-    /// the item ahead of genuinely newer ones. The leg's query should sort on the same field
-    /// (<c>sort:content.{field}-desc</c>); the page keeps <c>content</c> in such a leg's projection,
-    /// and a row whose field is missing or unreadable falls back to <c>LastModified</c>.</para>
+    /// the item ahead of genuinely newer ones. The page keeps <c>content</c> in such a leg's
+    /// projection, and a row whose field is missing or unreadable falls back to <c>LastModified</c>.</para>
+    /// <para>🚨 The leg's own <c>sort:</c> still decides WHICH rows its bound keeps. Sort on the field
+    /// only when every node carries it: a descending sort puts a missing value FIRST on Postgres
+    /// (nulls first), and nodes stored before the field existed would crowd newer ones out of the
+    /// bound. Otherwise keep <c>sort:LastModified-desc</c> — the rows are still SHOWN and ordered by the field.</para>
     /// </summary>
     public string? TimeField { get; init; }
 }

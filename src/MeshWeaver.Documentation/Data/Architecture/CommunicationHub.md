@@ -413,9 +413,11 @@ reading content on the page: unread mail is "not `Read`", an unread notification
 **Reading never reorders.** A row is timed by its node's `LastModified` unless its source names a
 content property instead (`InboxQueryLeg.TimeField`, e.g. a conversation's last reply). Name one
 whenever a write that is not news touches the node: clearing an unread mark refreshes
-`LastModified`, and timing by it would move the item ahead of genuinely newer ones. The leg sorts on
-the same field (`sort:content.{field}-desc`); the page keeps `content` in such a leg's projection
-(`InboxQueries.TimedRowProjection`), and a row whose field is missing falls back to `LastModified`.
+`LastModified`, and timing by it would move the item ahead of genuinely newer ones. The page keeps
+`content` in such a leg's projection (`InboxQueries.TimedRowProjection`), and a row whose field is
+missing falls back to `LastModified`. 🚨 The leg's own `sort:` still chooses which rows its bound
+keeps: sort on the field only when every node carries it — a descending sort puts a missing value
+FIRST on Postgres, so older nodes without it would crowd newer ones out.
 
 The command row's two buttons act on every ticked row; **Backspace or Delete presses Delete**
 (`ButtonControl.WithShortcut`) — never while typing in the search box.
