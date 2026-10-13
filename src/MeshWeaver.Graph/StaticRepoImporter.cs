@@ -1609,15 +1609,20 @@ public static class StaticRepoImporter
             // Root-first: ensure the Space partition root exists (standard import step) before the
             // children. Children depend only on the schema (provisioned above), but the root is what
             // makes the partition a routable + listable Space with a landing page.
+            //
+            // 🚨 #6628 — EnsureRoot's answer is KEPT: the root is in the manifest like every other
+            // source node, and the manifest may claim its token only when this write was acknowledged
+            // (a claimed root is left untouched, and an "already exists" applied nothing).
             .SelectMany(_ => EnsureRoot(hub, source, root, activityPath, logger))
-            .SelectMany(_ => existingSubtrees)
+            .SelectMany(rootWrites => existingSubtrees.Take(1)
+                .Select(items => (Items: items, RootWritten: rootWrites > 0)))
             .Take(1)
             // Authoritatively read each partition ROOT's claim (GetMeshNodeStream, NOT the lagged query
             // snapshot above): a just-set "sync: none" (ExcludeThisAndChildren) must be honoured even
             // before the eventually-consistent read-model catches up, or the next import silently
             // re-enables sync on the freshly-decoupled partition. CQRS: never decide on a single node's
             // content from the query. EnsureRoot already ensured the root exists, so this resolves promptly.
-            .SelectMany(existingItems => Observable.Zip(
+            .SelectMany(rooted => Observable.Zip(
                     ReadClaimedRoots(hub, partitions),
                     // Authoritative content-manifest read (owner round-trip, NOT the lagged `existing`
                     // query snapshot): the manifest a just-completed prior import wrote can be invisible
@@ -1632,7 +1637,8 @@ public static class StaticRepoImporter
                     // partition now that updates recompile what they change).
                     ReadNodeManifest(hub, source.Partition),
                     (claimedRoots, previousContentPaths, nodeManifest) =>
-                        (existingItems, claimedRoots, previousContentPaths, nodeManifest)))
+                        (existingItems: rooted.Items, rootWritten: rooted.RootWritten,
+                            claimedRoots, previousContentPaths, nodeManifest)))
             .SelectMany(snapshot =>
             {
                 var existing = snapshot.existingItems
@@ -1655,11 +1661,9 @@ public static class StaticRepoImporter
                 // 🚨 A drifted path is only a CANDIDATE here, never a claim. Re-evaluating it can still
                 // end without a write — the two-way policy preserves a server-newer node, or the upsert
                 // fails — and recording its new source token for content that never landed is the
-                // #1326 false claim again: the next pass would read "already at this content", skip the
-                // node, and leave it divergent for good. So the manifest may claim a drifted path only
-                // once it is in the WRITTEN set (see the WriteManifest call below); a preserved one keeps
-                // its prior token, which is exactly what makes the next pass evaluate it again.
-                var driftedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                // #1326 false claim again. The manifest claims ONLY the written set (#6628, see
+                // WriteManifest), so a preserved drifted node keeps its prior token, which is exactly
+                // what makes the next pass evaluate it again.
 
                 // The content-collection file paths the source owned at the LAST import (read
                 // authoritatively above from {partition}/_Activity/content-manifest). The inline content
@@ -1881,7 +1885,6 @@ public static class StaticRepoImporter
                                     "[StaticRepoImport] {Partition}: {Path} is outside the git-diff scope, "
                                     + "but its parsed source token differs from the prior import — re-evaluating.",
                                     source.Partition, path);
-                                driftedPaths.Add(path);
                             }
 
                             // Incremental skip: unchanged since the last import (same source token) AND the
@@ -2339,20 +2342,20 @@ public static class StaticRepoImporter
                         // committed the assets can see it on their own Space rather than having to
                         // read the partition's import bookkeeping.
                         var refusedContent = content.Refused;
-                        // The effective scope the manifest may claim: the git diff, plus only those
-                        // drifted out-of-diff paths whose re-evaluation actually LANDED. A preserved
-                        // (two-way server-newer) drifted node keeps its prior token; a failed one is
-                        // settled by WriteManifest's failures clause either way.
-                        IReadOnlySet<string>? evaluatedPaths = changedNodePaths is null
-                            ? null
-                            : changedNodePaths
-                                .Concat(driftedPaths.Where(p => count.Written.Contains(p, StringComparer.OrdinalIgnoreCase)))
-                                .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+                        // 🚨 #6628 — what the manifest may claim is what LANDED: every node write the
+                        // owner acknowledged, plus the root when EnsureRoot's write was acknowledged.
+                        // Not the git diff, not "the whole source because the run was unscoped" — a
+                        // full run used to claim every source path that did not FAIL, including the
+                        // ones it preserved, skipped as claimed, or never wrote at all, and the next
+                        // pass then skipped them for good.
+                        var landed = snapshot.rootWritten && !string.IsNullOrEmpty(root.Path)
+                            ? count.Written.Add(root.Path)
+                            : count.Written;
                         // Persist the per-node manifest LAST (after upserts + prune) so the NEXT import's
                         // diff sees exactly what's now in the partition. One write; survives prune (_Activity).
                         return WriteContentSyncLedgers(hub, source.Partition, content, logger)
-                            .SelectMany(_ => WriteManifest(hub, source.Partition, nodes.Append(root).ToArray(), manifest, evaluatedPaths,
-                            prunedPaths, count.Failures, count.Written, hub.JsonSerializerOptions, logger)).Select(_ =>
+                            .SelectMany(_ => WriteManifest(hub, source.Partition, nodes.Append(root).ToArray(), manifest,
+                            prunedPaths, count.Failures, landed, hub.JsonSerializerOptions, logger)).Select(_ =>
                         {
                             // 🚨 Terminal status reflects per-file outcomes: ANY failed upsert →
                             // Warning (the ⚠ lines above pinpoint which files), all-clear →
@@ -3565,156 +3568,28 @@ public static class StaticRepoImporter
 
     /// <summary>
     /// Writes the partition's per-node import manifest — an <c>_Activity</c> node whose
-    /// <see cref="ActivityLog.ReturnValue"/> is the <c>{path → source-token}</c> map for the CURRENT source
-    /// set, plus every path an earlier run recorded that no run has removed yet (see
-    /// <paramref name="prunedPaths"/>). Read back on the next import to upsert only the delta. Best-effort: a failed manifest write only
-    /// makes the next import non-incremental, never incorrect.
-    ///
-    /// <para>🚨 A SCOPED RUN MAY ONLY CLAIM WHAT IT EVALUATED (issue #1326). The map is built from the
-    /// SOURCE, but a run scoped by a git diff (<paramref name="evaluatedPaths"/>) skips existing nodes
-    /// outside that set unless their parsed source token differs from the previous manifest (a parser
-    /// or model-schema change can alter materialization without changing repository bytes). Recording
-    /// the source token for an unevaluated node tells the NEXT import "already at this content" about
-    /// content that was never written. The node then stays stale forever: each subsequent import
-    /// compares it to the manifest, finds a match, and skips it. Out-of-scope nodes therefore keep
-    /// their PREVIOUS token (or none at all), except for token-drift paths whose re-evaluation was
-    /// actually written.</para>
+    /// <see cref="ActivityLog.ReturnValue"/> is the <c>{path → source-token}</c> map computed by
+    /// <see cref="ComputeManifest"/>. Read back on the next import to upsert only the delta.
+    /// Best-effort: a failed manifest write only makes the next import non-incremental, never
+    /// incorrect.
     /// </summary>
-    /// <param name="previous">The manifest this run read at its start — the tokens that are still the
-    /// only evidence about nodes this run did not evaluate.</param>
-    /// <param name="evaluatedPaths">The effective git-diff scope, including out-of-diff nodes whose
-    /// parsed-source token differed from the previous manifest AND whose re-evaluation was written —
-    /// a drifted node the two-way policy preserved is NOT in it, so it keeps its prior token and the
-    /// next pass evaluates it again; <see langword="null"/> means the run
-    /// evaluated every source node and may claim the whole map.</param>
-    /// <param name="prunedPaths">The paths this run DELETED — successful deletes only. With the source's
-    /// own paths, the only two ways a previously-owned path leaves the manifest; every other entry of
-    /// <paramref name="previous"/> is carried forward (policy <c>prune-requires-provenance</c>).</param>
-    /// <param name="failures">🚨 The nodes this run could NOT write (issue #4459/#4456). A run may
-    /// only claim what it WROTE — the same rule as <paramref name="evaluatedPaths"/>, for the other
-    /// way a node can fail to land. A DETERMINISTIC refusal is recorded as a refusal
-    /// (<see cref="RefusedEntry"/>) so the next pass skips the write instead of re-deriving it; a
-    /// retryable one is dropped from the map entirely, which is what makes the next pass look again.</param>
-    /// <param name="writtenPaths">The paths that DID land. A source may carry duplicate entries for
-    /// one path, so a path can appear in both lists; what landed wins (see the failures clause).</param>
+    /// <param name="hub">The hub issuing the write.</param>
+    /// <param name="partition">The partition whose manifest this is.</param>
+    /// <param name="nodes">Every source node of this run, root included.</param>
+    /// <param name="previous">The manifest this run read at its start.</param>
+    /// <param name="prunedPaths">The paths this run DELETED (successful deletes only).</param>
+    /// <param name="failures">The nodes this run could NOT write.</param>
+    /// <param name="writtenPaths">The paths whose write the owner ACKNOWLEDGED.</param>
+    /// <param name="opts">Serializer options for the source tokens.</param>
+    /// <param name="logger">Optional logger.</param>
     private static IObservable<int> WriteManifest(
         IMessageHub hub, string partition, IReadOnlyList<MeshNode> nodes,
-        IReadOnlyDictionary<string, string> previous, IReadOnlySet<string>? evaluatedPaths,
+        IReadOnlyDictionary<string, string> previous,
         IReadOnlyCollection<string> prunedPaths, IReadOnlyCollection<FailedImport> failures,
         IReadOnlyCollection<string> writtenPaths,
         JsonSerializerOptions opts, ILogger? logger)
     {
-        var map = nodes
-            .Where(n => !string.IsNullOrEmpty(n.Path))
-            .GroupBy(n => n.Path, StringComparer.OrdinalIgnoreCase)
-            .ToImmutableDictionary(
-                g => g.Key,
-                g => PartitionSourceFingerprint.ComputeNodeToken(g.First(), opts),
-                StringComparer.OrdinalIgnoreCase);
-
-        // 🚨 OWNERSHIP OUTLIVES A RUN THAT DID NOT PRUNE (policy prune-requires-provenance). The
-        // manifest is the ONLY memory of what the source put in this partition — ComputePrunableNodes
-        // prunes nothing it does not list — so a path leaves it in exactly two ways: the source
-        // carries it again (it is in `map` above, under its new token), or THIS run deleted it
-        // (`prunedPaths`, which holds only deletes that succeeded). Every other previously-owned path
-        // is carried forward under the token the last run that carried it recorded.
-        //
-        // This used to carry only the NodeTypes held by THIS SAME run, so a run that did not re-hold
-        // a held type — a truncated listing (#3589), an UpsertOnly partition, a server edit kept from
-        // the prune, a prune whose delete failed, a candidate the run did not see — dropped it from
-        // the manifest, and from then on no import could ever prune it: the retirement leaked
-        // silently. Measured on memex.systemorph.com: Crm/Client was held on every Crm import from
-        // 09-25 to 10-03, was not even mentioned by the 10-06 07:05Z one, and is gone from the
-        // manifest while /health still lists it as retired by its repository.
-        if (previous.Count > 0)
-        {
-            var removed = prunedPaths.ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
-            var builder = map.ToBuilder();
-            foreach (var (path, token) in previous)
-            {
-                if (builder.ContainsKey(path) || removed.Contains(path))
-                    continue;
-                builder[path] = token;
-            }
-            map = builder.ToImmutable();
-        }
-
-        if (evaluatedPaths is not null)
-        {
-            var builder = map.ToBuilder();
-            foreach (var path in map.Keys)
-            {
-                // EnsureRoot evaluates the root on every import, independently of the child
-                // Git-diff scope. Keeping its old token would let a historical root skip win
-                // after a scoped root change (B -> A -> B).
-                if (string.Equals(path, partition, StringComparison.OrdinalIgnoreCase)
-                    || evaluatedPaths.Contains(path))
-                    continue;
-                // Not evaluated: report what we actually know, which is whatever the last run that
-                // DID look at this node recorded — nothing, if none ever did.
-                if (previous.TryGetValue(path, out var prior))
-                    builder[path] = prior;
-                else
-                    builder.Remove(path);
-            }
-            map = builder.ToImmutable();
-        }
-
-        // 🚨 #4459/#4456 — A RUN MAY ONLY CLAIM WHAT IT WROTE, and this is the LAST word because it
-        // is the only clause stating something this run MEASURED. Until now a node whose upsert the
-        // owner REFUSED was recorded under its plain source token, so the ledger asserted the
-        // partition held content that is provably not in it — the same false claim the
-        // content-addressed marker made about the whole partition, one layer down, and the claim
-        // that has to become honest before that whole-partition skip can be retired.
-        //
-        // 🚨 The token comes from the SOURCE node, never from `map`: the git-diff carve-out above
-        // may just have written the PREVIOUS run's token into this entry (a node absent from the DB
-        // is attempted even when it is outside the diff scope), and a refusal recorded against the
-        // wrong token would be re-opened on the next pass — or, worse, honoured for bytes nobody
-        // refused.
-        if (failures.Count > 0)
-        {
-            var written = writtenPaths.ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
-            var sourceTokens = nodes
-                .Where(n => !string.IsNullOrEmpty(n.Path))
-                .GroupBy(n => n.Path, StringComparer.OrdinalIgnoreCase)
-                .ToImmutableDictionary(
-                    g => g.Key,
-                    g => PartitionSourceFingerprint.ComputeNodeToken(g.First(), opts),
-                    StringComparer.OrdinalIgnoreCase);
-            var builder = map.ToBuilder();
-            foreach (var failure in failures)
-            {
-                if (!sourceTokens.TryGetValue(failure.NodePath, out var token))
-                    continue;
-                // 🚨 A path that ALSO landed is not a refused path (Copilot review). A source may
-                // carry two entries at one path — ImportWriteOrder deliberately preserves duplicates
-                // — so one attempt can fail while another succeeds. Recording a refusal for a node
-                // that IS in the mesh would make every later pass re-report a refusal that no longer
-                // describes anything, and `map`'s own token comes from `g.First()`, which need not be
-                // the entry that won. The written set is the authority on what landed.
-                if (written.Contains(failure.NodePath))
-                    continue;
-                if (failure.Deterministic)
-                    // These bytes break a rule, and they break it again at the same token. Recorded
-                    // so the next pass reports the refusal WITHOUT re-attempting the write (#3146's
-                    // storm) while still evaluating every other node (#4459's freeze).
-                    //
-                    // 🚨 WITH THE REASON (#4469). The refusal is what a later NodeType compile has
-                    // to be able to read to say "the mesh does not hold the file that defines this
-                    // symbol, because an import refused it for THIS". Recording the path alone would
-                    // leave that reader with the same half-answer the bare `Failed` count left the
-                    // operator: 'refused' cannot separate a byte Postgres will not store from a
-                    // validator rule from an RLS denial, and those have three different fixes.
-                    builder[failure.NodePath] = RefusedEntry(token, failure.Reason);
-                else
-                    // A store blip, an owner that did not answer. Unknown means retryable: leave no
-                    // entry at all, which is exactly the state that makes the next pass look again.
-                    builder.Remove(failure.NodePath);
-            }
-            map = builder.ToImmutable();
-        }
-
+        var map = ComputeManifest(nodes, previous, prunedPaths, failures, writtenPaths, opts);
         var node = new MeshNode(ManifestId, $"{partition}/_Activity")
         {
             Name = $"Import manifest ({partition})",
@@ -3735,6 +3610,102 @@ public static class StaticRepoImporter
                     "[StaticRepoImport] {Partition}: manifest write failed (next import non-incremental).", partition);
                 return Observable.Return(0);
             });
+    }
+
+    /// <summary>
+    /// The per-node import manifest one run leaves behind: <c>{path → source-token}</c>, where an
+    /// entry is a CLAIM that the mesh holds that token's content at that path — the next import
+    /// skips a present node whose entry matches its source token, without looking at it.
+    ///
+    /// <para>🚨 <b>A RUN CLAIMS ONLY WHAT LANDED (issue #6628).</b> Per path, exactly one of:</para>
+    /// <list type="bullet">
+    ///   <item><b>Written</b> (<paramref name="writtenPaths"/> — the owner acknowledged the write):
+    ///     the path's CURRENT source token. The only clause that records a new claim.</item>
+    ///   <item><b>Refused deterministically</b> and not also written: a
+    ///     <see cref="RefusedEntry"/> for the current token, so the next pass reports the refusal
+    ///     instead of re-deriving it (#4459/#4456).</item>
+    ///   <item><b>Failed retryably</b> and not also written: NO entry, which makes the next pass
+    ///     look again.</item>
+    ///   <item><b>Anything else</b> — skipped as unchanged, preserved by the two-way policy, skipped
+    ///     as claimed, a blocked create, outside a git-diff scope, or a previously-owned path the
+    ///     source no longer carries: the entry the PREVIOUS manifest had, or none. This run measured
+    ///     nothing new about that path, so it repeats what the last run that did measure recorded.
+    ///     <paramref name="prunedPaths"/> (successful deletes) are the only previous entries that
+    ///     leave (policy <c>prune-requires-provenance</c>).</item>
+    /// </list>
+    ///
+    /// <para>Until #6628 the map was built from the SOURCE and narrowed afterwards: a git-diff-scoped
+    /// run kept the previous token for out-of-scope paths (#1326) and failures were carved out
+    /// (#4459), but a FULL run claimed every source path that did not fail — including paths it
+    /// preserved, skipped as claimed, or whose write was answered "already exists" without being
+    /// applied. Each of those recorded the new token over the old content, and from then on every
+    /// non-force import skipped the node: on memex.systemorph.com two Code nodes stayed on a
+    /// day-old revision while their partitions reported "an earlier FULL import already recorded
+    /// this exact content". Building the map from what landed makes that claim impossible to
+    /// write, whichever way the write went missing; it also subsumes the #1326 scope carve-out,
+    /// since an out-of-scope path is not written.</para>
+    ///
+    /// <para>Honest entries are what make the incremental skip safe without a read-back: an entry is
+    /// only ever the token of a write the owner acknowledged, carried forward until a later
+    /// acknowledged write or a prune replaces it.</para>
+    /// </summary>
+    /// <param name="nodes">Every source node of this run, root included.</param>
+    /// <param name="previous">The manifest this run read at its start.</param>
+    /// <param name="prunedPaths">The paths this run DELETED (successful deletes only).</param>
+    /// <param name="failures">The nodes this run could NOT write, each with whether the refusal is a
+    /// verdict about the bytes.</param>
+    /// <param name="writtenPaths">The paths whose write the owner ACKNOWLEDGED. A source may carry
+    /// duplicate entries for one path, so a path can appear here and in
+    /// <paramref name="failures"/>; what landed wins.</param>
+    /// <param name="opts">Serializer options for the source tokens.</param>
+    /// <returns>The manifest to persist.</returns>
+    internal static ImmutableDictionary<string, string> ComputeManifest(
+        IReadOnlyList<MeshNode> nodes,
+        IReadOnlyDictionary<string, string> previous,
+        IReadOnlyCollection<string> prunedPaths,
+        IReadOnlyCollection<FailedImport> failures,
+        IReadOnlyCollection<string> writtenPaths,
+        JsonSerializerOptions opts)
+    {
+        // 🚨 The token comes from the SOURCE node, keyed by path (g.First() for a duplicated path,
+        // the same choice the skip in Run makes when it compares).
+        var sourceTokens = nodes
+            .Where(n => !string.IsNullOrEmpty(n.Path))
+            .GroupBy(n => n.Path, StringComparer.OrdinalIgnoreCase)
+            .ToImmutableDictionary(
+                g => g.Key,
+                g => PartitionSourceFingerprint.ComputeNodeToken(g.First(), opts),
+                StringComparer.OrdinalIgnoreCase);
+        var written = writtenPaths.ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+        var removed = prunedPaths.ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+
+        // 1. What this run did not measure: the previous entry, minus what it deleted.
+        var builder = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (path, token) in previous)
+            if (!removed.Contains(path))
+                builder[path] = token;
+
+        // 2. What this run did not write. A deterministic refusal is remembered as one (#4459); a
+        //    retryable failure leaves no entry, which is what makes the next pass look again.
+        foreach (var failure in failures)
+        {
+            if (written.Contains(failure.NodePath)
+                || !sourceTokens.TryGetValue(failure.NodePath, out var token))
+                continue;
+            if (failure.Deterministic)
+                // WITH THE REASON (#4469): a later NodeType compile reads it to say why the file
+                // defining a symbol is not in the mesh.
+                builder[failure.NodePath] = RefusedEntry(token, failure.Reason);
+            else
+                builder.Remove(failure.NodePath);
+        }
+
+        // 3. What this run WROTE — the only new claims, and the last word.
+        foreach (var path in written)
+            if (sourceTokens.TryGetValue(path, out var token))
+                builder[path] = token;
+
+        return builder.ToImmutable();
     }
 
     /// <summary>
@@ -3972,7 +3943,12 @@ public static class StaticRepoImporter
             Interlocked.Increment(ref tally.Requests);
             return Upsert(hub, node, allowUnresolvableNodeType);
         })
-            .Select(_ => new ImportItem(Imported: 1, Written: node.Path, Log: extraLog))
+            // 🚨 #6628 — only an ACKNOWLEDGED write is a written path. An "already exists" answer
+            // applied nothing, so it is a not-landed, retryable outcome (the manifest keeps no claim
+            // for it and the run is not Converged), never a write.
+            .Select(acknowledged => acknowledged > 0
+                ? new ImportItem(Imported: 1, Written: node.Path, Log: extraLog)
+                : NotApplied(partition, node.Path!, logger))
             .Catch<ImportItem, Exception>(ex =>
             {
                 logger?.LogWarning(ex,
@@ -3989,6 +3965,33 @@ public static class StaticRepoImporter
                         .WithKey("activity.import.itemFailed",
                             ("path", node.Path), ("error", ex.Message))));
             });
+
+    /// <summary>
+    /// The item for an upsert the owner answered WITHOUT applying it ("already exists", see
+    /// <see cref="AcknowledgedWrites"/>): a retryable failure, named on the activity like any other
+    /// node that did not land. Retryable, never deterministic — the same bytes are expected to land
+    /// on the next pass, which is exactly what leaving no manifest claim for the path makes happen.
+    /// </summary>
+    /// <param name="partition">The partition being imported, for the log line.</param>
+    /// <param name="path">The node path whose write was not applied.</param>
+    /// <param name="logger">Optional logger.</param>
+    private static ImportItem NotApplied(string partition, string path, ILogger? logger)
+    {
+        const string reason =
+            "the owner answered 'already exists' and acknowledged no write, so the mesh may still hold "
+            + "the previous content at this path";
+        logger?.LogWarning(
+            "[StaticRepoImport] {Partition}: upsert of {Path} was NOT applied ({Reason}) — not claimed "
+            + "in the import manifest, so the next pass writes it again.",
+            partition, path, reason);
+        return new ImportItem(
+            Failed: 1,
+            Failure: new FailedImport(path, reason, false),
+            Log: new LogMessage(
+                    $"⚠ Failed to import {path}: {reason}",
+                    Microsoft.Extensions.Logging.LogLevel.Warning)
+                .WithKey("activity.import.itemFailed", ("path", path), ("error", reason)));
+    }
 
     /// <summary>
     /// Writes a chunk of plain CREATES as ONE <see cref="CreateNodesRequest"/> — the bulk sibling of the
@@ -4107,18 +4110,35 @@ public static class StaticRepoImporter
                 }))
             .FirstAsync()
             .Select(d => d.Message)
-            // "Node already exists" is SUCCESS for an idempotent upsert: the node is present, which IS
-            // the goal. CreateOrUpdate emits it when its eventually-consistent exists-check lags a
-            // recent create and falls through to CreateNode — e.g. re-importing a partition whose
-            // root Space was left by a partial prior run (the prod Harness/Command "Upsert of
-            // 'Harness' failed: Node already exists" wedge). Treat it as done; a later consistent run
-            // updates changed content. Any OTHER error still faults.
-            .SelectMany(resp => resp.Success
-                    || (resp.Error?.Contains("already exists", StringComparison.OrdinalIgnoreCase) ?? false)
-                ? Observable.Return(1)
+            .SelectMany(resp => AcknowledgedWrites(resp) is { } written
+                ? Observable.Return(written)
                 : Observable.Throw<int>(new UpsertRefusedException(
                     $"Upsert of '{node.Path}' failed: {resp.Error}",
                     resp.RejectionReason ?? NodeUpsertRejectionReason.Unknown)));
+
+    /// <summary>
+    /// What one <see cref="CreateOrUpdateNodeResponse"/> lets the importer CLAIM: <c>1</c> when the
+    /// owner acknowledged the write (a node came back), <c>0</c> when it answered "already exists" —
+    /// the node is present, which is all a caller like <see cref="EnsureRoot"/> needs, but NOTHING was
+    /// applied, so the content at that path is whatever it was before — and <see langword="null"/>
+    /// for any other refusal (the caller faults).
+    ///
+    /// <para>🚨 Issue #6628. "Already exists" used to answer <c>1</c>, the same as a write, because the
+    /// upsert's callers only needed presence. The per-node import manifest needs more than presence:
+    /// it records "the mesh holds THIS source token at this path", and the next import SKIPS a node
+    /// whose token matches. A response that applied nothing, counted as written, put the new token
+    /// in the manifest over the old content — and from then on every non-force import declined to
+    /// look at that node again. Presence and acknowledgement are different facts; this keeps them
+    /// apart.</para>
+    /// </summary>
+    /// <param name="response">The owner's answer to the upsert.</param>
+    /// <returns><c>1</c> written, <c>0</c> present but not written, <see langword="null"/> refused.</returns>
+    internal static int? AcknowledgedWrites(CreateOrUpdateNodeResponse response) =>
+        response.Success
+            ? 1
+            : response.Error?.Contains("already exists", StringComparison.OrdinalIgnoreCase) == true
+                ? 0
+                : null;
 
     /// <summary>
     /// An upsert the owner REFUSED, carrying the structured
