@@ -3,7 +3,6 @@
   "namespace": "FutuRe/AmericasIns/TransactionMapping",
   "name": "AmericasIns: Specialty & Aviation → Specialty (50%)",
   "nodeType": "FutuRe/TransactionMapping",
-  "isPersistent": true,
   "content": {
     "$type": "TransactionMapping",
     "id": "AME-SPECIALTY_AVTN_US-SPEC",

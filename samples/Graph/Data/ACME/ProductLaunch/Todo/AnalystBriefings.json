@@ -6,7 +6,6 @@
   "category": "Tasks",
   "description": "Arrange briefings with key industry analysts",
   "icon": "/api/content/ACME/Project/Todo/icon.svg",
-  "isPersistent": true,
   "content": {
     "$type": "Todo",
     "title": "Schedule analyst briefings",

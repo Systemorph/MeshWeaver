@@ -311,6 +311,67 @@ public class RefusedSourceSaysItIsRefusedTest(ITestOutputHelper output) : Monoli
         imported.Should().NotBeNull();
     }
 
+    /// <summary>The measured shape of #6638: a node file exported before <c>isPersistent</c> left
+    /// <see cref="MeshNode"/>. The platform stays strict — the snapshot is refused — and the refusal
+    /// names the FILE and the FIELD on the exception and on the sync node, so the content fix is
+    /// readable without the logs.</summary>
+    private const string MorningBriefWithRetiredField = """
+        {"$type":"MeshNode","id":"MorningBrief","namespace":"Manufacturing","path":"Manufacturing/MorningBrief","mainNode":"Manufacturing/MorningBrief","name":"Morning Brief","nodeType":"Markdown","category":"Types","order":78,"isPersistent":true,"state":"Active"}
+        """;
+
+    [Fact(Timeout = 120_000)]
+    public async Task ARetiredMeshNodeField_RefusesTheSnapshot_NamingTheFileAndTheField()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var space = await ArmedSpace(ct, subdirectory: null);
+        repoClient.Files = [new RepoFile("Manufacturing/MorningBrief.json", MorningBriefWithRetiredField)];
+
+        var refusal = await Sync.ReimportAtCommit(space, HeadSha, UserId)
+            .Materialize()
+            .Where(n => n.Kind == System.Reactive.NotificationKind.OnError)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        var error = refusal.Exception ?? throw new InvalidOperationException("Expected a refused import.");
+        Output.WriteLine(error.Message);
+        error.Message.Should().Contain("Manufacturing/MorningBrief.json", "the refusal names the file");
+        error.Message.Should().Contain("'isPersistent'", "the refusal names the field");
+        error.Message.Should().Contain("not a member of MeshNode",
+            "the refusal says WHY the field is refused, so the reader knows the file is what changes");
+
+        var config = await Mesh.GetWorkspace().GetMeshNodeStream(GitHubSyncService.ConfigPath(space))
+            .Where(n => n?.ContentAs<GitHubSyncConfig>(Mesh.JsonSerializerOptions) is
+                { LastSyncOutcome: GitHubSyncService.RefusedOutcome })
+            .Select(n => n?.ContentAs<GitHubSyncConfig>(Mesh.JsonSerializerOptions)
+                ?? throw new InvalidOperationException("Expected a GitSync configuration."))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        config.LastSyncNote.Should().Contain("Manufacturing/MorningBrief.json");
+        config.LastSyncNote.Should().Contain("'isPersistent'");
+        config.LastSyncCommitSha.Should().NotBe(HeadSha);
+    }
+
+    /// <summary>The control for the test above: the SAME file with the retired field removed —
+    /// the migration #6638 applies to content — imports under the strict reader, including the
+    /// serializer-written <c>$type</c>, <c>path</c> and <c>mainNode</c> an exported file carries.</summary>
+    [Fact(Timeout = 120_000)]
+    public async Task TheSameFileWithoutTheRetiredField_Imports()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var space = await ArmedSpace(ct, subdirectory: null);
+        repoClient.Files =
+        [
+            new RepoFile("Manufacturing/MorningBrief.json",
+                MorningBriefWithRetiredField.Replace("\"isPersistent\":true,", "", StringComparison.Ordinal)),
+        ];
+
+        await Sync.ReimportAtCommit(space, HeadSha, UserId)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+
+        var config = await Mesh.GetWorkspace().GetMeshNodeStream(GitHubSyncService.ConfigPath(space))
+            .Where(n => n?.ContentAs<GitHubSyncConfig>(Mesh.JsonSerializerOptions) is
+                { LastSyncCommitSha: HeadSha })
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        config.Should().NotBeNull();
+    }
+
     private async Task<string> ArmedSpace(CancellationToken ct, string? subdirectory = MissingSubdirectory)
     {
         var space = "Refused" + Guid.NewGuid().ToString("N")[..8];

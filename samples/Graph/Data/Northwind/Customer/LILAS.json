@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "LILA-Supermercado - Barquisimeto, Venezuela",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "LILAS",

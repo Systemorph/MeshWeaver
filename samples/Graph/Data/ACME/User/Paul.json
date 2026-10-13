@@ -5,7 +5,6 @@
   "nodeType": "User",
   "description": "Risk Manager at Software",
   "icon": "/static/NodeTypeIcons/person.svg",
-  "isPersistent": true,
   "content": {
     "$type": "User",
     "email": "paul.martinez@acme.example.com",

@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "GROSELLA-Restaurante - Caracas, Venezuela",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "GROSR",

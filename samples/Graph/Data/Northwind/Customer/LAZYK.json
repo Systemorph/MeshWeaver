@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "Lazy K Kountry Store - Walla Walla, USA",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "LAZYK",

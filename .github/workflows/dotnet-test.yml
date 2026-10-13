@@ -2361,6 +2361,19 @@ jobs:
         python3 .github/scripts/check-node-path-collisions.py --tree src/MeshWeaver.Documentation/Data
         python3 .github/scripts/check-node-path-collisions.py --filesystem-layout --tree samples/Graph/Data
 
+    # A node file carrying a member MeshNode no longer has is a BUILD ERROR (#6638): GitSync's strict
+    # reader refuses the whole snapshot on one such file, and the platform stays strict, so the
+    # content is migrated, never the reader. The register is `.github/meshnode-fields.json`
+    # (MeshNodeFieldsRegisterTest keeps it equal to the type). Every node repo's validate lane
+    # fetches this guard and the register from here, so both are proven here; and core's own trees
+    # are held to it.
+    - name: "A node file carrying a retired MeshNode field is caught (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/check-retired-node-fields.py --self-test
+    - name: "No node file in core's trees carries a retired MeshNode field"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/check-retired-node-fields.py --tree src/MeshWeaver.Documentation/Data --tree samples/Graph/Data
+
     # The gate host every node-repo bake and gate RUNS AS since MeshWeaver#3022 — the portal's /app
     # with the tester CLI beside it (compose-gate-host.sh, fetched by the reusable lanes at their
     # platform-ref). Its rules are load-bearing (the portal's bytes win, the tester's deps.json and

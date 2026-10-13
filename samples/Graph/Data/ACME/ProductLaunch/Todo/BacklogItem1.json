@@ -6,7 +6,6 @@
   "category": "Tasks",
   "description": "Analyze competitor pricing strategies for similar workflow automation products",
   "icon": "/api/content/ACME/Project/Todo/icon.svg",
-  "isPersistent": true,
   "content": {
     "$type": "Todo",
     "title": "Research competitor pricing models",
