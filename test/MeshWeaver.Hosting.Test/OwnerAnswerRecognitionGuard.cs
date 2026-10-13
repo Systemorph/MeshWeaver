@@ -97,20 +97,23 @@ public class OwnerAnswerRecognitionGuard(ITestOutputHelper output)
     }
 
     /// <summary>
-    /// A HOSTED address renders as <c>path~host</c>, so the producer's banner and a caller holding
-    /// only the path disagree on the TEXT while meaning the same hub. Pinned separately because the
-    /// asymmetry is invisible from either side alone — the producer looks right, the caller looks
-    /// right, and the answer comes back "the routing layer refused you".
+    /// A HOSTED address renders with its host chain (<c>host~path</c>), so a banner that rendered
+    /// the whole address and a caller holding only the path would disagree on the TEXT while meaning
+    /// the same hub. Pinned separately because the asymmetry is invisible from either side alone —
+    /// the producer looks right, the caller looks right, and the answer comes back "the routing
+    /// layer refused you". The banner therefore names the PATH (#6604).
     /// </summary>
     [Fact]
     public void AHostedOwner_IsRecognised_WhicheverHalfTheCallerHolds()
     {
         var hosted = new Address("TestData", "silent-read") { Host = new Address("portal") };
+        hosted.ToString().Should().Contain("~",
+            "the premise: a hosted address renders its host chain, so this case is only "
+            + "meaningful while Address.ToString() does that");
         var refusal = ShutdownNack.RejectingNow(hosted, "RunLevel=Dead", "cannot process GetDataRequest");
         output.WriteLine(refusal);
-        refusal.Should().Contain("~",
-            "the premise: a hosted address renders its host chain, so this case is only "
-            + "meaningful while Address.ToString() still does that");
+        refusal.Should().Contain($"Hub {hosted.Path} is shutting down",
+            "the banner names the owner's identity, never where it is activated");
 
         ShutdownNack.IsAnsweredByOwner(refusal, hosted).Should().BeTrue(
             "the producer's own address must recognise its own refusal");
@@ -119,6 +122,26 @@ public class OwnerAnswerRecognitionGuard(ITestOutputHelper output)
             + "and a false negative here reads as 'the routing layer answered'");
         ShutdownNack.IsAnsweredByOwner(refusal, "TestData/other").Should().BeFalse(
             "matching on the path must not degrade into matching any hosted address");
+    }
+
+    /// <summary>
+    /// 🚨 A roll carries banners from BOTH releases. The previous one rendered a hosted subject as
+    /// <c>path~host</c> (the old <c>Address.ToString()</c>), and a NACK minted by an old pod is read
+    /// by a new one. That text must still be recognised as the owner's answer — and must still not
+    /// be mistaken for a different hub's (#6604).
+    /// </summary>
+    [Fact]
+    public void ABannerFromThePreviousRelease_IsStillRecognised()
+    {
+        var hosted = new Address("TestData", "silent-read") { Host = new Address("portal", "p1") };
+        var legacy = $"Hub {hosted.Path}~{hosted.Host!.Path} is shutting down (RunLevel=Dead) — "
+                     + $"cannot process GetDataRequest; {ShutdownNack.ReactivationPromise}. Rejecting now.";
+
+        ShutdownNack.IsAnsweredByOwner(legacy, hosted).Should().BeTrue(
+            "a previous-release banner names path~host, and its path is the part before the first '~'");
+        ShutdownNack.IsAnsweredByOwner(legacy, hosted.Path).Should().BeTrue();
+        ShutdownNack.IsAnsweredByOwner(legacy, new Address("portal", "p1")).Should().BeFalse(
+            "the HOST of a legacy banner is not the hub that refused");
     }
 
     public static TheoryData<string, string> ProducedOwnerAnswers()

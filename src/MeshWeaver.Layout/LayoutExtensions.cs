@@ -286,10 +286,10 @@ public static class LayoutExtensions
             return TerminalOf<T>(stream);
 
         var first = true;
-        var collection = referencePointer.GetSegment(0).ToString();
-        var idString = referencePointer.SegmentCount == 1 ? null : referencePointer.GetSegment(1).ToString();
-        // RFC 6901 unescape: ~1 -> / and ~0 -> ~ (order matters)
-        var unescapedIdString = idString?.Replace("~1", "/").Replace("~0", "~");
+        var collection = referencePointer.GetSegment(0).Decode();
+        // RFC 6901 unescape in ONE pass (JsonPointerSegment.Decode) — two Replace calls decode
+        // "~01" to "/" instead of "~1".
+        var unescapedIdString = referencePointer.SegmentCount == 1 ? null : referencePointer.GetSegment(1).Decode();
         // Deserialize the id as string directly to ensure consistent comparison
         var id =
             unescapedIdString == null ? null :

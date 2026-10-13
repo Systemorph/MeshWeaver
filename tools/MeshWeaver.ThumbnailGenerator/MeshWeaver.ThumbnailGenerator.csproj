@@ -13,7 +13,12 @@
   </PropertyGroup>
   <ItemGroup>
       <PackageReference Include="Microsoft.Playwright" />
-      <PackageReference Include="SixLabors.ImageSharp" />
+      <!-- Image scaling: SkiaSharp (MIT), the stack the portal already ships for share cards and
+           favicons. Replaced SixLabors.ImageSharp — every version up to 4.1.1 carries high-severity
+           advisories and the patched line is pay-to-use. The Linux natives let the tool (and its
+           test) run on a Linux runner; macOS and Windows natives come with SkiaSharp itself. -->
+      <PackageReference Include="SkiaSharp" />
+      <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" />
       <PackageReference Include="System.CommandLine" />
   </ItemGroup>
 </Project>

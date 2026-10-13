@@ -30,7 +30,21 @@ Faithful mesh reproduction (mirrors scratchpad/build-check.sh, proven against th
 Ratcheting allowlist (`scripts/compile-check.allow`): the tree carries KNOWN UWDeepfield async-port
 debt. An allowlisted type that still fails is reported as known-debt (no gate fail); one that now
 compiles clean FAILS the gate ("remove it — it compiles now") so debt only ever shrinks. A
-NON-allowlisted failure fails the gate — a real regression. Exit non-zero iff any gate-fail.
+NON-allowlisted failure fails the gate — a real regression.
+
+Exit codes (#6567) — a run that could not answer never shares a code with an answer:
+  0  GREEN — at least one NodeType was compiled and judged, no gate fail (or a `--modules` unit
+     whose packages declare no NodeType at all, which is SAID, never printed as GREEN);
+  1  RED — a real verdict: a new break, a fingerprint drift, a stale allow entry;
+  2  usage — an unknown/empty `--modules`, `--image` together with `--refs`, `--gen-allow` together
+     with `--modules`, a tree root (MW_REPO_ROOT) that is missing or unreadable (argparse's own code);
+  3  REFUSED — the framework checkout is behind its remote (local runs only);
+  4  REFUSED — the reference set is absent or short (no shared frameworks, no Rx, a missing
+     registry-served module assembly);
+  5  REFUSED — nothing was judged: a full run that found no NodeType, or a run whose every set
+     was UNVERIFIABLE. A gate that compiled nothing must not read as a gate that passed.
+Every refusal ends with ONE line, `✗ REFUSED (exit N): <reason>`, and the `✓ compile gate GREEN`
+line is printed only when the count of judged NodeTypes is above zero.
 
 Scope (`--modules A,B,C`): compile ONLY the NodeTypes of the named packages (top-level folders).
 The compile was always atomic — every type resolves its own declared source set and builds alone —
@@ -63,6 +77,41 @@ ROOT = Path(_os.environ["MW_REPO_ROOT"]).resolve() if _os.environ.get("MW_REPO_R
 ALLOW_FILE = (Path(_os.environ["MW_ALLOW_FILE"]).resolve() if _os.environ.get("MW_ALLOW_FILE")
               else (ROOT / "scripts" / "compile-check.allow" if _os.environ.get("MW_REPO_ROOT")
                     else SCRIPTS / "compile-check.allow"))
+
+# 🚨 EXIT CODES (#6567). Every refusal used to exit 1 — the code of a real compile break — and a
+# run that compiled NOTHING printed `✓ compile gate GREEN` and exited 0. Both let a run that could
+# not answer pass for one that did. See the module docstring for the table.
+EXIT_GREEN = 0
+EXIT_RED = 1
+EXIT_USAGE = 2
+EXIT_REFUSED_STALE = 3
+EXIT_REFUSED_REFS = 4
+EXIT_REFUSED_NOTHING_JUDGED = 5
+
+
+def refuse(code: int, reason: str) -> int:
+    """The ONE line every refusal ends with, and its distinct exit code. The detail, when there is
+    any, is printed before it; this line is what a log reader or a caller greps for."""
+    print(f"\n✗ REFUSED (exit {code}): {reason}", flush=True)
+    return code
+
+
+def judged_verdict(n_types: int, n_judged: int, gate_fail: bool, scoped: bool) -> tuple[int, str]:
+    """(exit code, kind) for a finished compile. Pure, so the self-test can drive every arm.
+
+    kind is one of "red", "green", "empty-unit", "nothing-judged". `n_judged` counts NodeTypes
+    whose set actually compiled to a verdict (ok or fail) — UNVERIFIABLE ones were not judged."""
+    if gate_fail:
+        return EXIT_RED, "red"
+    if n_judged > 0:
+        return EXIT_GREEN, "green"
+    # A --modules unit made only of packages that declare no NodeType (35 of 78 Plugins packages
+    # do: AI, Mail, Stripe, …) has nothing to compile, and its caller ran it because the package
+    # CHANGED — red there would block every such pull request for a fact about the package, not a
+    # fault. It is SAID, and the GREEN line is withheld.
+    if scoped and n_types == 0:
+        return EXIT_GREEN, "empty-unit"
+    return EXIT_REFUSED_NOTHING_JUDGED, "nothing-judged"
 
 # Directories that are NOT node repos.
 # "WhatsNew" is the satellite release-note lane (MeshWeaver#2539/#2608): a CHANGELOG, never a
@@ -458,12 +507,16 @@ def _refuse_if_sibling_stale(core: "Path | str") -> None:
         return                                   # not a git repo / no origin/main — CI's case
     n = r.stdout.strip()
     if n.isdigit() and int(n) > 0:
-        sys.exit(
+        print(
             f"\n\u2717 REFUSING TO RUN: the framework checkout is {n} commit(s) behind its remote.\n"
             f"    {core}\n\n"
             "  Every src/ project compiles against it, so this gate's verdict would be meaningless.\n"
             "  This exact staleness has produced BOTH a phantom failure and a false pass.\n\n"
-            f"  Fix:  git -C {core} pull --ff-only origin main\n")
+            f"  Fix:  git -C {core} pull --ff-only origin main", flush=True)
+        # Its own code, not 1 (#6567): "your NodeTypes are broken" and "this run could not answer"
+        # must never be the same exit status. Raised, so a script that imports discover_refs exits
+        # with the same code.
+        sys.exit(refuse(EXIT_REFUSED_STALE, f"framework checkout {core} is {n} commit(s) behind origin/main"))
 
 
 
@@ -1689,6 +1742,8 @@ def _self_test() -> int:
         if got.get("gate_fail") is not False or got.get("new_breaks") or got.get("scope") != ["Pkg"]:
             failures.append(f"  report: a clean gate must read gate_fail=false with no breaks, got {got!r}")
 
+    _self_test_exit_codes(failures)
+
     if failures:
         print("✗ compile-check self-test FAILED:")
         print("\n".join(failures))
@@ -1711,7 +1766,141 @@ def _self_test() -> int:
           "are refused, the ratchet judges the unit's allow entries only")
     print("✓ --report: the JSON verdict carries gate_fail in both colours, every new break with its "
           "first error, the known-debt list, the scope, and the content repository + sha it judged")
+    print(f"✓ exit codes (#6567): a stale framework checkout exits {EXIT_REFUSED_STALE}, a short or "
+          f"absent reference set {EXIT_REFUSED_REFS}, a full run that judged nothing "
+          f"{EXIT_REFUSED_NOTHING_JUDGED} — each with one `REFUSED` line and no GREEN line; a "
+          "NodeType-less --modules unit says NOTHING TO COMPILE; GREEN only over a judged count > 0")
     return 0
+
+
+def _self_test_exit_codes(failures: list) -> None:
+    """🚨 EVERY REFUSAL MUST EXIT WITH ITS OWN CODE, AND NOTHING-COMPILED MUST NOT READ GREEN (#6567).
+
+    Driven END TO END: this very script is run as a subprocess against fixture trees, so what is
+    asserted is the exit status and the log a CI step or an agent actually sees — not a helper's
+    return value that main() might fail to propagate. Before #6567 the three refusal arms exited 1
+    (the code of a real compile break) and the nothing-compiled arm printed `✓ compile gate GREEN`
+    and exited 0; each arm below was red against that script."""
+    import shutil
+    import tempfile
+
+    # The pure arm table first, including the controls: a judged run is GREEN, a fail is RED.
+    table = [
+        # (types, judged, gate_fail, scoped) -> (code, kind)
+        ((3, 3, False, False), (EXIT_GREEN, "green")),
+        ((3, 1, False, True), (EXIT_GREEN, "green")),
+        ((3, 3, True, False), (EXIT_RED, "red")),
+        ((0, 0, True, False), (EXIT_RED, "red")),      # an empty_declared hole is still RED
+        ((0, 0, False, False), (EXIT_REFUSED_NOTHING_JUDGED, "nothing-judged")),
+        ((2, 0, False, False), (EXIT_REFUSED_NOTHING_JUDGED, "nothing-judged")),  # all unverifiable
+        ((2, 0, False, True), (EXIT_REFUSED_NOTHING_JUDGED, "nothing-judged")),
+        ((0, 0, False, True), (EXIT_GREEN, "empty-unit")),
+    ]
+    for args_, want in table:
+        got = judged_verdict(*args_[:3], scoped=args_[3])
+        if got != want:
+            failures.append(f"  exit codes: judged_verdict{args_} = {got!r}, expected {want!r}")
+    codes = [EXIT_GREEN, EXIT_RED, EXIT_USAGE, EXIT_REFUSED_STALE, EXIT_REFUSED_REFS,
+             EXIT_REFUSED_NOTHING_JUDGED]
+    if len(set(codes)) != len(codes):
+        failures.append(f"  exit codes: not distinct: {codes}")
+
+    tmp = Path(tempfile.mkdtemp(prefix="cc-exit-selftest-"))
+    try:
+        def stub(d: Path, *names: str) -> Path:
+            d.mkdir(parents=True, exist_ok=True)
+            for n in names:
+                (d / n).write_bytes(b"MZ")
+            return d
+
+        modules = [f"{m}.dll" for m in MODULE_REFS_NOT_IN_IMAGE]
+        complete = stub(tmp / "refs-complete", "System.Private.CoreLib.dll", "System.Reactive.dll", *modules)
+        no_shared = stub(tmp / "refs-no-shared", "System.Reactive.dll", *modules)
+        no_modules = stub(tmp / "refs-no-modules", "System.Private.CoreLib.dll", "System.Reactive.dll")
+        empty_refs = (tmp / "refs-empty"); empty_refs.mkdir()
+        empty_repo = (tmp / "repo-empty"); empty_repo.mkdir()
+        # A repo whose one package declares no NodeType — 35 of 78 Plugins packages are this shape.
+        typeless = tmp / "repo-typeless"
+        (typeless / "Mail").mkdir(parents=True)
+        (typeless / "Mail" / "index.json").write_text('{"nodeType": "Store/Plugin"}', encoding="utf-8")
+
+        # A framework checkout one commit behind its origin/main, with an image-shaped refs dir in it.
+        core = tmp / "core"
+        stub(core / "src", "System.Private.CoreLib.dll", "System.Reactive.dll", *modules)
+        git_env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+                   "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t", "GIT_CONFIG_GLOBAL": os.devnull}
+        git_ok = True
+        for cmd in (["init", "-q"], ["commit", "-q", "--allow-empty", "-m", "a"],
+                    ["commit", "-q", "--allow-empty", "-m", "b"],
+                    ["update-ref", "refs/remotes/origin/main", "HEAD"], ["reset", "-q", "--hard", "HEAD~1"]):
+            if subprocess.run(["git", "-C", str(core), *cmd], env=git_env, capture_output=True).returncode != 0:
+                git_ok = False
+                break
+        if not git_ok:
+            failures.append("  exit codes: could not build the stale-checkout fixture (git) — the "
+                            "stale arm would go unexercised, which is exactly the trap this guards")
+
+        def run(repo: Path, *argv: str) -> tuple[int, str]:
+            env = {k: v for k, v in os.environ.items() if k not in ("CI", "GITHUB_ACTIONS")}
+            env.update(MW_REPO_ROOT=str(repo), MW_ALLOW_FILE=str(tmp / "none.allow"))
+            p = subprocess.run([sys.executable, str(Path(__file__).resolve()), *argv],
+                               env=env, capture_output=True, text=True, timeout=120)
+            return p.returncode, p.stdout + p.stderr
+
+        cases = [
+            # (label, repo, argv, expected code, text that must appear)
+            ("image refs without the shared frameworks", empty_repo, ["--refs", str(no_shared)],
+             EXIT_REFUSED_REFS, "System.Private.CoreLib.dll is missing"),
+            ("a reference set missing the registry-served modules", empty_repo, ["--refs", str(no_modules)],
+             EXIT_REFUSED_REFS, "registry-served module"),
+            ("no reference assemblies at all", empty_repo, ["--refs", str(empty_refs)],
+             EXIT_REFUSED_REFS, "no framework reference assemblies"),
+            ("a full run over a tree with zero NodeTypes", empty_repo, ["--refs", str(complete)],
+             EXIT_REFUSED_NOTHING_JUDGED, "nothing was judged"),
+            ("an unknown --modules id", typeless, ["--refs", str(complete), "--modules", "Nope"],
+             EXIT_USAGE, "Nope"),
+            # Both usage errors below are refused before the reference set is read: with an EMPTY
+            # refs dir they would otherwise exit 4, which names the wrong mistake.
+            ("--gen-allow with --modules, before any reference lookup", typeless,
+             ["--refs", str(empty_refs), "--gen-allow", "--modules", "Mail"],
+             EXIT_USAGE, "--gen-allow was combined with --modules"),
+            ("a tree root that does not exist", tmp / "no-such-root", ["--refs", str(complete)],
+             EXIT_USAGE, "not a readable directory"),
+        ]
+        if git_ok:
+            cases.append(("a framework checkout behind origin/main", empty_repo,
+                          ["--refs", str(core / "src")], EXIT_REFUSED_STALE, "behind origin/main"))
+        for label, repo, argv, want, text in cases:
+            code, out = run(repo, *argv)
+            if code != want:
+                failures.append(f"  exit codes: {label}: exit {code}, expected {want}\n{out[-800:]}")
+            if want != EXIT_GREEN and f"REFUSED (exit {want})" not in out:
+                failures.append(f"  exit codes: {label}: no one-line `REFUSED (exit {want})` reason")
+            if text not in out:
+                failures.append(f"  exit codes: {label}: expected {text!r} in the output")
+            if "compile gate GREEN" in out:
+                failures.append(f"  exit codes: {label}: printed the GREEN line without judging anything")
+
+        # --gen-allow over a run that judged nothing must refuse BEFORE writing: an empty rewrite
+        # would erase the ratchet and exit 0 (#6567 review). The sentinel proves the file survived.
+        sentinel = "Some/Type  fp=CS0103  # sentinel debt\n"
+        (tmp / "none.allow").write_text(sentinel, encoding="utf-8")
+        code, out = run(empty_repo, "--refs", str(complete), "--gen-allow")
+        if code != EXIT_REFUSED_NOTHING_JUDGED or f"REFUSED (exit {EXIT_REFUSED_NOTHING_JUDGED})" not in out:
+            failures.append(f"  exit codes: --gen-allow over a tree with zero NodeTypes: exit {code}, "
+                            f"expected {EXIT_REFUSED_NOTHING_JUDGED} with a REFUSED line\n{out[-800:]}")
+        if (tmp / "none.allow").read_text(encoding="utf-8") != sentinel:
+            failures.append("  exit codes: --gen-allow judged nothing and still REWROTE the allow-file")
+        (tmp / "none.allow").unlink()
+
+        # THE CONTROL ARM: a NodeType-less --modules unit is not a failure (its caller ran it because
+        # the package changed) — exit 0, said in words, and still never the GREEN line.
+        code, out = run(typeless, "--refs", str(complete), "--modules", "Mail")
+        if code != EXIT_GREEN or "NOTHING TO COMPILE" not in out or "compile gate GREEN" in out:
+            failures.append(f"  exit codes: a NodeType-less unit must exit 0 saying NOTHING TO COMPILE "
+                            f"and never GREEN; got exit {code}\n{out[-800:]}")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def main() -> int:
@@ -1771,13 +1960,29 @@ def main() -> int:
         print()
         return 0
 
+    # A usage error is refused before ANY work, so its exit code names the caller's mistake rather
+    # than whatever later step the doomed run happened to reach first (#6568 review: with no refs,
+    # `--gen-allow --modules X` used to exit 4 before this combination was ever checked).
+    if args.gen_allow and args.modules is not None:
+        # A regenerated allow-file describes the WHOLE tree; a scoped run has only seen part
+        # of it and would silently drop every other unit's debt from the ratchet.
+        print("error: --gen-allow needs a full run — it rewrites the allow-file for every "
+              "package, and a scoped run has not compiled the others. Drop --modules.")
+        return refuse(EXIT_USAGE, "--gen-allow was combined with --modules")
+
     # Resolve the scope BEFORE touching the reference set: a broken selection must be refused in
-    # milliseconds and by name, not after an image pull.
-    packages = known_packages(ROOT)
+    # milliseconds and by name, not after an image pull. A tree root that is missing or unreadable
+    # (a mis-set MW_REPO_ROOT) is a caller error too, and is refused like one rather than escaping
+    # as a traceback with the exit code of a real compile break (#6568 review).
+    try:
+        packages = known_packages(ROOT)
+    except OSError as e:
+        print(f"error: the tree root {ROOT} cannot be enumerated: {e}")
+        return refuse(EXIT_USAGE, f"the tree root (MW_REPO_ROOT) is not a readable directory: {ROOT}")
     selected, scope_error = parse_modules(args.modules, packages)
     if scope_error:
         print(f"error: {scope_error}")
-        return 1
+        return refuse(EXIT_USAGE, "the --modules selection is not a unit this tree has")
     if selected is None:
         print(f"scope: full — every NodeType in all {len(packages)} package(s)")
     else:
@@ -1787,7 +1992,7 @@ def main() -> int:
     if args.image:
         if args.refs:
             print("error: --image and --refs name two different reference sets — pass one")
-            return 1
+            return refuse(EXIT_USAGE, "--image and --refs were both given")
         import importlib.util
         spec = importlib.util.spec_from_file_location("fetch_refs", SCRIPTS / "fetch-refs.py")
         fetch_refs = importlib.util.module_from_spec(spec)
@@ -1803,14 +2008,14 @@ def main() -> int:
               "  python3 scripts/compile-check.py --image   # take them from the platform image "
               "(cached under ~/.cache/meshweaver/refs/, pulls once per pin)\n"
               "  …or pass --refs <dir>, or build a core checkout next to this repo.")
-        return 1
+        return refuse(EXIT_REFUSED_REFS, "no framework reference assemblies were found")
     # 🚨 …and a set that is PRESENT can still be short. Refuse before compiling anything: the
     # breaks a short set produces name the CONTENT, and cost an hour of "fixing" source that was
     # never broken (#1911, #4404).
     if (refusal := short_reference_set_refusal(
             refs, layout, ref_roots[0] if ref_roots else "the reference set")) is not None:
         print("\n" + refusal)
-        return 1
+        return refuse(EXIT_REFUSED_REFS, refusal.splitlines()[0].removeprefix("error: ").rstrip(" —"))
     # Supply the Microsoft.Extensions.AI assemblies (mesh-provided at runtime, not in src/*/bin) so
     # AI-using sets compile for real instead of being masked as UNVERIFIABLE. If they genuinely can't
     # be found, ai_available stays False and those sets fall back to UNVERIFIABLE (AI-only errors).
@@ -1840,7 +2045,8 @@ def main() -> int:
               + "  (CI needs none of this: it unpacks the same assemblies from the run's module\n"
                 "  bundles and asserts each one — .github/workflows/ci.yml, 'Compile-check every\n"
                 "  NodeType'.)")
-        return 1
+        return refuse(EXIT_REFUSED_REFS, "the reference set is missing registry-served module "
+                                         "assemblies: " + ", ".join(missing_modules))
     print(f"module refs: {len(MODULE_REFS_NOT_IN_IMAGE)} registry-served assembl(ies) present "
           + ", ".join(sorted(MODULE_REFS_NOT_IN_IMAGE)))
     ai_available = bool(ai_refs)
@@ -1948,12 +2154,15 @@ def main() -> int:
     failing = {n for n, (st, _) in result.items() if st == "fail"}
 
     if args.gen_allow:
-        if selected is not None:
-            # A regenerated allow-file describes the WHOLE tree; a scoped run has only seen part
-            # of it and would silently drop every other unit's debt from the ratchet.
-            print("error: --gen-allow needs a full run — it rewrites the allow-file for every "
-                  "package, and a scoped run has not compiled the others. Drop --modules.")
-            return 1
+        # (--gen-allow with --modules is refused before any work; see the top of main.)
+        # 🚨 A rewrite needs the same positive count as a verdict (#6567): a run that compiled
+        # nothing (0 NodeTypes found, or every one UNVERIFIABLE) would write an EMPTY allow-file and
+        # exit 0 — erasing the ratchet while reading like a successful re-baseline. Refuse first.
+        n_judged_gen = sum(1 for st, _ in result.values() if st in ("ok", "fail"))
+        if n_judged_gen == 0:
+            return refuse(EXIT_REFUSED_NOTHING_JUDGED,
+                          f"--gen-allow judged nothing (full tree): {len(types)} NodeType(s) found, "
+                          f"0 compiled — {ALLOW_FILE.name} was NOT rewritten")
         lines = [
             "# compile-check.allow — the compile-debt backlog (RATCHET: must only ever SHRINK).",
             "#",
@@ -2037,14 +2246,28 @@ def main() -> int:
         print(f"\n⚠ {len(ghosts)} allowlisted type(s) no longer exist (clean up allow): "
               + ", ".join(ghosts))
 
-    if not gate_fail:
-        unit = "full tree" if selected is None else f"unit {', '.join(selected)}"
-        print(f"\n✓ compile gate GREEN ({unit}): {len(clean)} clean, {len(known_debt)} known-debt "
-              f"(shrinking), no new breaks.")
-    if args.report:
+    # 🚨 The positive verdict needs a POSITIVE count (#6567): a NodeType whose set compiled to ok or
+    # fail. 0 judged printed `✓ compile gate GREEN … 0 clean` and exited 0 — a gate that compiled
+    # nothing reading exactly like a gate that passed.
+    n_judged = sum(1 for st, _ in result.values() if st in ("ok", "fail"))
+    code, kind = judged_verdict(len(types), n_judged, gate_fail, scoped=selected is not None)
+    unit = "full tree" if selected is None else f"unit {', '.join(selected)}"
+    if kind == "green":
+        print(f"\n✓ compile gate GREEN ({unit}): {n_judged} NodeType(s) compiled — {len(clean)} clean, "
+              f"{len(known_debt)} known-debt (shrinking), no new breaks.")
+    elif kind == "empty-unit":
+        print(f"\n○ compile gate: NOTHING TO COMPILE ({unit}) — the selected package(s) declare no "
+              "NodeType, so no verdict was needed. This is not a GREEN.")
+    if args.report and kind != "nothing-judged":
         write_report(Path(args.report), verdict, result, gate_fail=gate_fail, scope=selected, elapsed=elapsed)
         print(f"verdict written to {args.report}")
-    return 1 if gate_fail else 0
+    if kind == "nothing-judged":
+        # No report either: a caller relaying the verdict (compat-verdict.py) reads a missing report
+        # as "the gate died before judging anything" — which is exactly what happened.
+        return refuse(code, f"nothing was judged ({unit}): {len(types)} NodeType(s) in scope, "
+                            f"{len(unverifiable)} unverifiable, 0 compiled — check MW_REPO_ROOT / "
+                            "the working directory and the AI reference assemblies")
+    return code
 
 
 if __name__ == "__main__":

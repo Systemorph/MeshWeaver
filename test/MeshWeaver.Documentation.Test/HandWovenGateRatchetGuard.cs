@@ -86,7 +86,7 @@ public class HandWovenGateRatchetGuard
 
         ("tools/MeshWeaver.ThumbnailGenerator/ThumbnailGenerator.cs",
             "A STANDALONE Playwright CLI (OutputType Exe) whose csproj references Microsoft."
-            + "Playwright, SixLabors.ImageSharp and System.CommandLine and NOT ONE MeshWeaver "
+            + "Playwright, SkiaSharp and System.CommandLine and NOT ONE MeshWeaver "
             + "assembly. There is no hub, no grain turn and no IIoPool in that process, so the "
             + "defect this rule prevents — parking a turn-based scheduler — cannot occur: its "
             + "SemaphoreSlim bounds concurrent browser pages against an external server. Kept in "
