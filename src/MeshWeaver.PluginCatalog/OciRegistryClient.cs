@@ -224,7 +224,7 @@ public sealed class OciRegistryClient
             }, ct).ConfigureAwait(false);
 
         if (response.StatusCode == HttpStatusCode.NotFound)
-            throw new RegistryRefusedException(
+            throw new RegistryManifestUnknownException(
                 $"{registry} has no manifest {reference} in {repository} (MANIFEST_UNKNOWN) — the "
                 + "publication is unsealed, the reference is stale, or the repository is not served.");
         if (!response.IsSuccessStatusCode)

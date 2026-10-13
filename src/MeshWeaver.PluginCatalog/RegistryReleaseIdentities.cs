@@ -92,14 +92,35 @@ public sealed class RegistryReleaseIdentities
             return Observable.Return<ReleaseRecord?>(null);
         });
 
-    private IObservable<ReleaseRecord?> FromMount(
-        RegistryTokenResolver resolver, PluginRegistryReference mount, string version) =>
+    /// <summary>
+    /// The OCI client for the artifact host <paramref name="mount"/>'s bundle index DECLARES, holding
+    /// that mount's durable key — or null when the index declares none. The one rule every
+    /// registry-record reader follows (this type, <see cref="RegistryLivePublications"/>): the key is
+    /// presented to the host the mount itself names, never to a host the reader guessed.
+    /// </summary>
+    /// <remarks>Cold; emits once; a fault of the index read propagates to the caller.</remarks>
+    internal static IObservable<OciRegistryClient?> ArtifactHostOf(
+        IMessageHub hub, RegistryTokenResolver resolver, PluginRegistryReference mount, ILogger? logger) =>
         Observable.Defer(() => resolver.ResolveToken(mount).Take(1)
             .SelectMany(token => new PluginBundleClient(hub, mount.Url, token).FetchIndex())
-            .SelectMany(index =>
+            .Select(index =>
             {
                 var host = (index.ArtifactRegistry ?? "").Trim();
-                if (host.Length == 0)
+                // The DURABLE key, not the exchanged token: the artifact host decides a pull by
+                // forwarding the secret to the registry's key→token exchange, which refuses a token.
+                return host.Length == 0
+                    ? null
+                    : new OciRegistryClient(
+                        hub, host, resolver.ResolveDurableKey(mount),
+                        httpClientName: InstanceRegistrationClient.BundleHttpClientName, logger: logger);
+            }));
+
+    private IObservable<ReleaseRecord?> FromMount(
+        RegistryTokenResolver resolver, PluginRegistryReference mount, string version) =>
+        ArtifactHostOf(hub, resolver, mount, logger)
+            .SelectMany(oci =>
+            {
+                if (oci is null)
                 {
                     logger?.LogInformation(
                         "ReleaseIdentity: {Registry} declares no artifact registry, so it cannot name "
@@ -107,11 +128,7 @@ public sealed class RegistryReleaseIdentities
                     return Observable.Return<ReleaseRecord?>(null);
                 }
 
-                // The DURABLE key, not the exchanged token: the artifact host decides a pull by
-                // forwarding the secret to the registry's key→token exchange, which refuses a token.
-                var oci = new OciRegistryClient(
-                    hub, host, resolver.ResolveDurableKey(mount),
-                    httpClientName: InstanceRegistrationClient.BundleHttpClientName, logger: logger);
+                var host = oci.Registry;
                 return oci.GetManifest(ReleaseRepository, version).SelectMany(manifest =>
                 {
                     if (manifest.Config is not { } config
@@ -142,7 +159,7 @@ public sealed class RegistryReleaseIdentities
                                     host, ReleaseRepository, version);
                         });
                 });
-            }))
+            })
         // A registry with no record for this release answers 404 — the ordinary case for a release
         // published before the record existed, and never a reason to stop asking the next mount.
         .Catch((RegistryRefusedException ex) =>
