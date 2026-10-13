@@ -321,7 +321,7 @@ public class ActivityControlPlaneResubscribeTest
         ActivityControlPlaneExtensions.IsOwnHubDisposing(
             new AggregateException(new InvalidOperationException("unrelated"), bare), own)
             .Should().BeTrue();
-        // A hosted address renders as `path~host`; the question is about the node path.
+        // A hosted address renders with its host chain; the question is about the node path.
         ActivityControlPlaneExtensions.IsOwnHubDisposing(
             new HubDisposingException(own.WithHost(new Address("portal", "p1")), "/MeshNode"), own)
             .Should().BeTrue();

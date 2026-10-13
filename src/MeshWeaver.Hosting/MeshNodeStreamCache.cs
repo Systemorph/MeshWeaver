@@ -2001,6 +2001,10 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         for (var e = error; e != null; e = e.InnerException)
         {
             if (e is TimeoutException) return true;
+            // A mirror that gave up re-asking a recycling owner (#6602): the node exists, its
+            // address kept refusing as ShuttingDown. Same verdict as the "is shutting down" text
+            // below, carried by type; the faulted entry is evicted and the next read re-probes.
+            if (e is MeshWeaver.Data.Serialization.SyncStreamOwnerRefusedException) return true;
             // OrleansMessageRejectionException lives in Orleans.Core, which this project does
             // not (and must not) reference — match by type name so the classifier stays free
             // of the Orleans dependency while still catching the raw grain-reject that reaches

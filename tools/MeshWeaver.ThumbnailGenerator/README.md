@@ -36,5 +36,14 @@ meshweaver-thumbnails --area https://localhost:65260/@app/Documentation/Overview
 This tool requires Playwright browser binaries to be installed. After installing the tool, run:
 
 ```bash
-pwsh bin/Debug/net9.0/playwright.ps1 install
+pwsh bin/Debug/net10.0/playwright.ps1 install
 ```
+
+## How a thumbnail is made
+
+Playwright renders the area at twice the thumbnail size and screenshots it; `ThumbnailResizer`
+then fits the content into the `--width` x `--height` box (aspect ratio preserved) and scales the
+capture down to that size with a bicubic filter, writing a PNG. The scaling uses SkiaSharp (MIT),
+the same stack the portal ships for share cards and favicons. It replaced SixLabors.ImageSharp:
+every ImageSharp version up to 4.1.1 carries high-severity advisories, and the patched releases
+need a paid licence. `test/MeshWeaver.ThumbnailGenerator.Test` pins the output size and format.

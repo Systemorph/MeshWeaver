@@ -1,3 +1,4 @@
+using Autofac;
 using Autofac.Builder;
 using Autofac.Core;
 using MeshWeaver.ServiceProvider;
@@ -42,10 +43,13 @@ public sealed class ModuleOwnedRootSource(ModuleContexts contexts) : IRegistrati
                     .SingleInstance()
                     .CreateRegistration())
                 .ToArray();
-        var resolvers = ModuleServices.RegistrationsElsewhere(contexts, null, typed.ServiceType);
+        // Each resolved for the CALLER — the hub, circuit or request scope the stand-in is resolved in —
+        // so a module's scoped registration is that caller's instance (MeshWeaver#6584).
+        var resolvers = ModuleServices.RegistrationsElsewhereForCallers(contexts, null, typed.ServiceType);
         return resolvers.Count == 0
             ? []
-            : ModuleServiceProvider.StandIns(typed.ServiceType, resolvers, registrationAccessor(service).Any());
+            : ModuleServiceProvider.StandIns(typed.ServiceType, resolvers, registrationAccessor(service).Any(),
+                ModuleServiceProvider.CallerOfRootScope);
     }
 
     // A module's KEYED registration of a type it declares, asked for by its key — a module keeps the key
@@ -53,10 +57,10 @@ public sealed class ModuleOwnedRootSource(ModuleContexts contexts) : IRegistrati
     // module's (core #6128: keyed module services are forwarded under their own key, not refused).
     private IEnumerable<IComponentRegistration> KeyedStandIns(Type type, object key, bool explicitRegistrationsExist)
     {
-        var resolvers = ModuleServices.KeyedRegistrationsElsewhere(contexts, null, type, key);
+        var resolvers = ModuleServices.KeyedRegistrationsElsewhereForCallers(contexts, null, type, key);
         var standIns = resolvers
             .Select(resolve => RegistrationBuilder
-                .ForDelegate(type, (_, _) => resolve())
+                .ForDelegate(type, (context, _) => resolve(ModuleServiceProvider.CallerOfRootScope(context.Resolve<ILifetimeScope>())))
                 .Keyed(key, type)
                 .ExternallyOwned()
                 .InstancePerDependency()

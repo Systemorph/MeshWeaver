@@ -6,10 +6,12 @@ namespace MeshWeaver.Mesh;
 /// <para><b>The rule.</b> A <see cref="QueryOperator.Like"/> pattern travelling in a
 /// <see cref="ParsedQuery"/> is storage-NEUTRAL and spells its wildcard <c>*</c> — the same
 /// character the user typed. SQL's <c>%</c> is a dialect detail that comes into existence inside a
-/// SQL generator, at the moment the pattern is bound as a parameter
-/// (<c>PostgreSqlSqlGenerator</c> / <c>SnowflakeSqlGenerator</c> both do
-/// <c>condition.Value.Replace("*", "%")</c> already), and it never travels back up into the AST.
-/// Cosmos, which has no <c>%</c> at all, is the proof that the neutral form is the right one.</para>
+/// SQL generator, at the moment the pattern is bound as a parameter, and it never travels back up
+/// into the AST. The generators (<c>PostgreSqlSqlGenerator</c> / <c>SnowflakeSqlGenerator</c>) first
+/// LIKE-escape SQL's own metacharacters in the user's value — <c>%</c>, <c>_</c> and the escape
+/// character <c>\</c> — so those match LITERALLY, exactly as <see cref="IsMatch"/> reads them, and
+/// only then translate <c>*</c> to <c>%</c>. Cosmos, which has no <c>%</c> at all, is the proof
+/// that the neutral form is the right one.</para>
 ///
 /// <para><b>Why this type exists (issue #1235).</b> The vocabulary used to FORK. Every
 /// <c>Like</c> filter carried <c>*</c> — <c>name:*Laptop*</c>, <c>path:*</c>, the autocomplete
