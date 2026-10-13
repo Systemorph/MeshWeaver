@@ -78,6 +78,15 @@ abbreviated sha even with a same-named branch present, a missing path) and the b
 a stubbed `curl` (a normal reading, the 80 % warning, an unanswered request); its negative control
 proves both detectors fire on the old shapes.
 
+**A refused read is named as infrastructure, never as an old pin (#6633).** The reader exits `1`
+when the ref cannot be FETCHED (a network failure, GitHub refusing or throttling the read, or a ref
+that does not exist) and says `INFRASTRUCTURE — … not a fault in the caller's code or its pin`; it
+exits `3` only when the ref WAS fetched and the path is absent at it — the one case a lane may read
+as "a pin older than the file". The lanes' own `::error::` lines no longer guess: they point at the
+reader's line. Before this, a throttled read surfaced as *"a pin older than core #3761"* and PR
+owners chased a code fault that did not exist. `PlatformFileReaderGuard` asserts both codes and
+that the absent-path case never says infrastructure.
+
 **2. The stage-advance listener answers `pull_request_review` only.** The comment trigger was a
 pure duplicate (above); dropping it removes ~60 of ~100 runs an hour at ~10 calls each. The caller
 owns its triggers (`stage-advance.yml` in each satellite); the lane's header names the rule.

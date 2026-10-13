@@ -20,7 +20,15 @@
 # before any fetch — never resolved to a guess, and never to a same-named branch or tag.
 #
 # Exit status: 0 with the bytes on stdout; non-zero with a line on stderr naming the ref or path
-# that could not be read. A caller keeps its own `|| { echo "::error::…"; exit 1; }`.
+# that could not be read, and the two causes are DIFFERENT codes (#6633):
+#   1 — the ref could not be FETCHED: infrastructure (network, GitHub refusing or throttling the
+#       read) or a ref that does not exist. Never evidence about the caller's code or its pin.
+#   2 — refused by shape before any fetch (an abbreviated sha).
+#   3 — the ref was fetched and the PATH is absent at it: the one case a caller may read as "a pin
+#       older than the file".
+# A caller keeps its own `|| { echo "::error::…"; exit 1; }`, and its message must not guess a cause
+# the reader's line already names — a refused read once surfaced as "a pin older than core #3761"
+# and sent PR owners after a code fault that did not exist.
 #
 # `--budget` prints one line with the token's REST budget (GET /rate_limit, which GitHub does not
 # count against the budget) so a saturated window is visible in every job's log before it bites.
@@ -69,9 +77,9 @@ if [ ! -f "$root/.fetched" ]; then
   git init -q "$root"
   git -C "$root" remote add origin "${MW_CORE_GIT_URL:-https://github.com/Systemorph/MeshWeaver.git}"
   git -C "$root" -c advice.fetchShowForcedUpdates=false fetch -q --depth 1 --filter=blob:none --no-tags origin "$ref" \
-    || { echo "mw-core-file: could not fetch ref '$ref' of Systemorph/MeshWeaver over git (a branch, a tag or a FULL sha)" >&2; exit 1; }
+    || { echo "mw-core-file: INFRASTRUCTURE — ref '$ref' of Systemorph/MeshWeaver could not be fetched over git (git's own line above names why: a network failure, GitHub refusing or throttling the read, or a ref that does not exist — a branch, a tag or a FULL sha). This is not a fault in the caller's code or its pin." >&2; exit 1; }
   git -C "$root" update-ref refs/mw-core/at FETCH_HEAD
   : > "$root/.fetched"
 fi
 git -C "$root" show "refs/mw-core/at:$path" \
-  || { echo "mw-core-file: '$path' does not exist at '$ref' of Systemorph/MeshWeaver" >&2; exit 1; }
+  || { echo "mw-core-file: '$path' does not exist at '$ref' of Systemorph/MeshWeaver (the ref WAS fetched, so this is a pin older than the file, not infrastructure)" >&2; exit 3; }
