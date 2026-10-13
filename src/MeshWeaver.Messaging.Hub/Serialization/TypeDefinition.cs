@@ -123,19 +123,32 @@ public record TypeDefinition : ITypeDefinition
     /// </summary>
     /// <param name="instance">The instance to extract the key from.</param>
     /// <returns>The key value for the instance.</returns>
-    /// <exception cref="InvalidOperationException">Thrown when no key mapping is defined for the type.</exception>
+    /// <exception cref="InvalidOperationException">Thrown when no key mapping is defined for the type,
+    /// or when the instance carries no key value.</exception>
     public virtual object GetKey(object instance) =>
-        Key.Value.Function(instance)
+        GetKeyOrNull(instance)
         ?? throw new InvalidOperationException(
-            $"No key mapping is defined for type {CollectionName}. Please specify in the configuration of the data sources source.");
+            $"An instance of type {CollectionName} has no key value; every instance of a keyed collection needs one.");
+
+    /// <summary>
+    /// Returns the key identifying the given instance, or <c>null</c> when the instance carries no key value.
+    /// </summary>
+    /// <param name="instance">The instance to extract the key from.</param>
+    /// <returns>The key value, or <c>null</c> when the instance has none.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when no key mapping is defined for the type.</exception>
+    public virtual object? GetKeyOrNull(object instance) => KeyMapping.Function(instance);
 
     /// <summary>
     /// Returns the CLR type of the key produced by the type's configured key function.
     /// </summary>
     /// <returns>The key's CLR type.</returns>
     /// <exception cref="InvalidOperationException">Thrown when no key mapping is defined for the type.</exception>
-    public Type GetKeyType() =>
-        Key.Value.KeyType
+    public Type GetKeyType() => KeyMapping.KeyType;
+
+    // The key function resolves to null when the type has neither a [Key] property nor an
+    // Id / SystemName one. Name that here instead of dereferencing it into a NullReferenceException.
+    private KeyFunction KeyMapping =>
+        Key.Value
         ?? throw new InvalidOperationException(
             $"No key mapping is defined for type {CollectionName}. Please specify in the configuration of the data sources source.");
     internal Lazy<KeyFunction> Key { get; init; }
