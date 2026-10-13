@@ -117,6 +117,24 @@ with a `required` member fail, across every writer in the fleet, which is the sc
 this guard was explicitly scoped away from. Narrowing it later is a decision about which writers may
 send partial content — not a bug fix — and it needs the producer side enumerated first.
 
+**Where the cost was paid down: a member whose absence has a meaning is not `required`.**
+`MarkdownContent.Content` was declared `required`, so a `Markdown` row stored without a body — a page
+written with only tags or a thumbnail, or exactly the partial write this guard admits — failed the
+whole bind on every read and reached its viewer as raw JSON: an empty page, no error, and its tags and
+abstract lost to the typed reader too
+([#6639](https://github.com/Systemorph/MeshWeaver/issues/6639)). An absent body means an EMPTY body,
+just as an empty `.md` file does, so the member now defaults to `""` and such rows type correctly with
+no repair. Reserve `required` for a member no reader can do without — every one you declare turns a
+partial write into a row that reads as untyped.
+
+When content of a KNOWN type still fails to bind, the read seam that holds the node
+(`MeshNodeStreamCache`, both the `GetStream` and `GetQuery` paths) names the node's path and says that
+the type is registered but the stored JSON does not bind to it. The serializer's own
+`could not be deserialized` warning names the type and the failing member but cannot name the node: a
+JSON converter has no view of the record it is nested in. Read the two together. Before #6639 the
+path-bearing line blamed a missing registration for this case too, which sent the reader to fix the
+wrong thing.
+
 ## Where it deliberately says nothing
 
 Each of these answers Valid, and each is a decision rather than an omission:

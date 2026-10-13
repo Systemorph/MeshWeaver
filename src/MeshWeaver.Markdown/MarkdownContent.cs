@@ -12,9 +12,17 @@ namespace MeshWeaver.Markdown;
 public record MarkdownContent
 {
     /// <summary>
-    /// The raw markdown content (without YAML front matter).
+    /// The raw markdown content (without YAML front matter). Empty when the node has no body.
+    ///
+    /// <para>🚨 Not <c>required</c>, deliberately (Systemorph/MeshWeaver#6639). An absent body is a
+    /// legitimate state — a page created with only tags or a thumbnail, a partial write the
+    /// content-schema guard admits by design (Doc/Architecture/ContentSchemaOnWrite) — and it means
+    /// EMPTY, exactly as an empty <c>.md</c> file does. While the member was <c>required</c>, such
+    /// a row failed the whole bind, every reader received the raw JSON instead of a
+    /// <see cref="MarkdownContent"/>, and the page rendered nothing with no error; members the row
+    /// DID carry (tags, abstract, unknown members) were lost to the typed reader as well.</para>
     /// </summary>
-    public required string Content { get; init; }
+    public string Content { get; init; } = string.Empty;
 
     /// <summary>
     /// Pre-rendered HTML from the markdown content.
