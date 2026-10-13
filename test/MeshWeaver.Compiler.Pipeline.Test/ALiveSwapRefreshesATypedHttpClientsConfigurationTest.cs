@@ -70,6 +70,33 @@ public sealed class ALiveSwapRefreshesATypedHttpClientsConfigurationTest(ITestOu
             + "options cached from generation N would keep N's delegates serving");
     }
 
+    /// <summary>
+    /// <see cref="ModuleContexts.VersionChanged"/> announces that N+1 is live, synchronously; a subscriber that
+    /// resolves the named client inside that notification must already get N+1's configuration. Negative
+    /// control: with <c>EvictRootOptions</c> called after <c>Bump()</c> in <c>CommitAll</c>, the client
+    /// resolved in the notification still carries "v1".
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task AClientResolvedInsideTheVersionNotification_CarriesTheNewGenerationsConfiguration()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var factory = Mesh.ServiceProvider.GetRequiredService<IHttpClientFactory>();
+        Generation(factory.CreateClient(ClientName)).Should().Be("v1",
+            "the arrangement: generation N's configuration is applied, and its options are now cached");
+
+        string? seenInNotification = null;
+        using var subscription = Mesh.ServiceProvider.GetRequiredService<ModuleContexts>().VersionChanged
+            .Subscribe(_ => Volatile.Write(ref seenInNotification, Generation(factory.CreateClient(ClientName))));
+
+        var outcome = await Mesh.ServiceProvider.GetRequiredService<ModuleLiveUpdater>()
+            .Swap(Write("g2", ModuleSource(2)), "test: resolve inside VersionChanged").Timeout(Budget).Await(ct);
+
+        outcome.Kind.Should().Be(ModuleSwapKind.Live, outcome.Reason);
+        Volatile.Read(ref seenInNotification).Should().Be("v2",
+            "VersionChanged says N+1 is live — a client resolved while it is being announced must not be "
+            + "built from generation N's cached options");
+    }
+
     private static string? Generation(HttpClient client) =>
         client.DefaultRequestHeaders.TryGetValues("X-Generation", out var values) ? values.Single() : null;
 

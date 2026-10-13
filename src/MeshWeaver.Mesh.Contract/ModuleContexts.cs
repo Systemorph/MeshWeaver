@@ -517,9 +517,11 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
         var generations = stage.Seal();
         foreach (var generation in generations)
             current[generation.Name] = generation;
+        // Evict BEFORE announcing: VersionChanged's subscribers run synchronously inside Bump, and one
+        // that resolves a configured client there must already be served N+1's options, not N's cache.
+        EvictRootOptions(generations);
         Bump();
         stage.Release();
-        EvictRootOptions(generations);
     }
 
     /// <summary>
@@ -528,7 +530,9 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
     /// caches it — so without this, after a live swap the root kept serving the options generation N's
     /// delegates built (a module's typed HttpClient kept N's headers and base address), and the cached
     /// instance kept N's delegates, and with them N's collectible load context, reachable. Cleared AFTER
-    /// the generations are current, so the next read is built from the new one's.
+    /// the generations are current, so the next read is built from the new one's — and BEFORE
+    /// <see cref="VersionChanged"/> fires, so a subscriber that resolves during the notification already
+    /// sees N+1.
     ///
     /// <para>Not reached by this: <see cref="IOptions{TOptions}"/>.Value, which a singleton caches for the
     /// life of the container, and a consumer that copied an options instance into its own state.</para>
