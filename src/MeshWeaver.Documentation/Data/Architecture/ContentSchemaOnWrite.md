@@ -134,7 +134,10 @@ the type is registered but the stored JSON does not bind to it. The serializer's
 `could not be deserialized` warning names the type and the failing member but cannot name the node: a
 JSON converter has no view of the record it is nested in. Read the two together. Before #6639 the
 path-bearing line blamed a missing registration for this case too, which sent the reader to fix the
-wrong thing.
+wrong thing. Since #6674 the same cause also survives the boot registration window, the attached
+`MeshNodeContentDegradedException` names the same cause as the line, and a present `$type` decides
+the classification over the NodeType mapping. See
+[Dynamic Content Type Registration](../DynamicContentTypeRegistration), section "The boot registration window".
 
 ## Where it deliberately says nothing
 

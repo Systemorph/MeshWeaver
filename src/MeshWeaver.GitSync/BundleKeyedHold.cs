@@ -130,8 +130,11 @@ public static class BundleKeyedHold
     /// <param name="partition">The Space being imported.</param>
     /// <param name="incoming">The parsed nodes the import would write (the tree at the commit).</param>
     /// <param name="current">The partition's nodes as they are now.</param>
-    /// <param name="live">Live definitions by NodeType path — read authoritatively (the node's own
-    /// stream), never from a query snapshot, because a stale one would decide a hold.</param>
+    /// <param name="live">The NodeTypes' definitions by path — the DURABLE snapshot from the store
+    /// (<c>NodeTypeDefinitionReads</c>), never a query answer. It can trail a live owner (by one
+    /// persistence window, and without bound after a failed store write), which is why a hold is
+    /// taken only where step 2 REPRODUCES the definition's fingerprint from the current Code nodes; a
+    /// trailing fingerprint abstains there.</param>
     /// <param name="definitionOf">Reads a node's <see cref="NodeTypeDefinition"/> with the caller's
     /// serializer options — never a cast: a definition that arrived as untyped JSON reads as absent,
     /// and this gate must see the difference.</param>
