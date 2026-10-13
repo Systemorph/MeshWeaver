@@ -486,11 +486,13 @@ public class EaCredentialReadTest(ITestOutputHelper output) : MonolithMeshTestBa
                      nameof(IEaGraphAuth.GetConnection),
                      nameof(IEaGraphAuth.GetAccessToken),
                      nameof(IEaGraphAuth.ExchangeAndStore),
+                     nameof(IEaGraphAuth.GetMailboxes),
+                     nameof(IEaGraphAuth.RemoveMailbox),
                  })
+        // Every OVERLOAD — the per-mailbox ones (2026-10-13) are hub-facing exactly as the originals.
+        foreach (var method in typeof(IEaGraphAuth).GetMethods().Where(m => m.Name == name))
         {
-            var method = typeof(IEaGraphAuth).GetMethod(name);
-            method.Should().NotBeNull($"{name} is the hub-facing entry point");
-            method!.ReturnType.IsGenericType.Should().BeTrue();
+            method.ReturnType.IsGenericType.Should().BeTrue();
             method.ReturnType.GetGenericTypeDefinition().Should().Be(typeof(IObservable<>),
                 $"{name} is consumed from an agent round on a hub, where a Task can only be "
                 + "consumed by awaiting and awaiting parks the turn (#3433)");

@@ -1,6 +1,8 @@
 using MeshWeaver.AI;   // IProviderKeyProtector & co keep their ORIGINAL namespace in MeshWeaver.Mesh.Contract (#2398 forwarders)
 using MeshWeaver.Mesh.Security;
+using System.Collections.Immutable;
 using System.Reactive.Linq;
+using System.Text;
 using System.Text.Json;
 using MeshWeaver.Hosting.AspNetCore.Portal;     // PortalApplication
 using MeshWeaver.Data;                       // IWorkspace.GetMeshNodeStream
@@ -104,6 +106,16 @@ public sealed class EaGraphAuth(
         "offline_access";
 
     /// <summary>
+    /// The OpenID scopes asked for ON TOP of <see cref="Scopes"/> at consent and code exchange only,
+    /// so the token response carries an id token naming the address the person signed in as — the
+    /// mailbox's label when several are connected. 🚨 Deliberately NOT part of <see cref="Scopes"/>:
+    /// that string is what a stored grant is compared with, and widening it would read every grant
+    /// stored so far as "consented for an earlier scope set". The refresh redemption keeps asking
+    /// for <see cref="Scopes"/> alone, a subset of what was consented.
+    /// </summary>
+    internal const string IdentityScopes = "openid profile email";
+
+    /// <summary>
     /// How long a single credential-node read may take before the answer becomes
     /// <see cref="EaConnection.Undetermined"/>.
     ///
@@ -142,16 +154,36 @@ public sealed class EaGraphAuth(
     /// Microsoft prompts by itself when consent is actually missing.</para>
     /// </summary>
     public string BuildConsentUrl(string state, string redirectUri) =>
+        BuildConsentUrl(state, redirectUri, loginHint: null, selectAccount: false);
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// <c>prompt=select_account</c> is the ONE prompt sent, and only to add another mailbox: it shows
+    /// the account picker without forcing the consent dialog, which is what <c>prompt=consent</c> did
+    /// and why it was removed (#6082).
+    /// </remarks>
+    public string BuildConsentUrl(string state, string redirectUri, string? loginHint, bool selectAccount) =>
         $"{Authority}/authorize?client_id={Uri.EscapeDataString(ClientId ?? "")}" +
         "&response_type=code&response_mode=query" +
         $"&redirect_uri={Uri.EscapeDataString(redirectUri)}" +
-        $"&scope={Uri.EscapeDataString(Scopes)}" +
+        $"&scope={Uri.EscapeDataString(Scopes + " " + IdentityScopes)}" +
+        (selectAccount ? "&prompt=select_account" : "") +
+        (string.IsNullOrWhiteSpace(loginHint) ? "" : $"&login_hint={Uri.EscapeDataString(loginHint.Trim())}") +
         $"&state={Uri.EscapeDataString(state)}";
 
     /// <inheritdoc />
-    public IObservable<bool> ExchangeAndStore(string code, string redirectUri, string userObjectId)
+    public IObservable<bool> ExchangeAndStore(string code, string redirectUri, string userObjectId) =>
+        ExchangeAndStore(code, redirectUri, userObjectId, EaMailboxes.Primary);
+
+    /// <inheritdoc />
+    public IObservable<bool> ExchangeAndStore(string code, string redirectUri, string userObjectId, string? account)
     {
         if (!IsConfigured) return Observable.Return(false);
+        if (!EaMailboxes.IsValidRequest(account))
+        {
+            logger?.LogWarning("EaGraphAuth: refused a code exchange for a malformed account id");
+            return Observable.Return(false);
+        }
 
         return PostToken(new Dictionary<string, string>
             {
@@ -160,7 +192,7 @@ public sealed class EaGraphAuth(
                 ["grant_type"] = "authorization_code",
                 ["code"] = code,
                 ["redirect_uri"] = redirectUri,
-                ["scope"] = Scopes
+                ["scope"] = Scopes + " " + IdentityScopes
             })
             .SelectMany(answer =>
             {
@@ -170,11 +202,13 @@ public sealed class EaGraphAuth(
                     return Observable.Return(false);
                 }
                 string? refresh;
+                string? address;
                 try
                 {
                     // Synchronous parse of a value already in hand — the try covers this statement
                     // and nothing in the stream around it (/async Rule 1b).
                     refresh = RefreshTokenIn(answer.Body);
+                    address = SignedInAddress(answer.Body);
                 }
                 catch (JsonException ex)
                 {
@@ -186,16 +220,54 @@ public sealed class EaGraphAuth(
                     logger?.LogWarning("EaGraphAuth: no refresh_token in code exchange");
                     return Observable.Return(false);
                 }
-                return Store(userObjectId, refresh!).Select(_ => true);
+                return TargetAccount(userObjectId, account, address)
+                    .SelectMany(target => Store(userObjectId, target, refresh!, address))
+                    .Select(_ => true);
             });
     }
 
+    /// <summary>
+    /// Which mailbox a consent writes. The primary and an added id write themselves. A NEW consent
+    /// writes the mailbox already connected under the same address (a reconnect, never a duplicate),
+    /// else the primary when the person has none yet, else a fresh id — so no id is ever reused.
+    /// A list that cannot be read falls back to a fresh id: a duplicate the person can remove beats
+    /// a consent that was redeemed and then thrown away.
+    /// </summary>
+    private IObservable<string> TargetAccount(string userObjectId, string? account, string? address)
+    {
+        if (EaMailboxes.IsPrimary(account)) return Observable.Return(EaMailboxes.Primary);
+        if (EaMailboxes.IsAddedAccountId(account)) return Observable.Return(account!);
+        return GetMailboxes(userObjectId)
+            .Select(list => ChooseNewTarget(list, address))
+            .Catch((Exception ex) =>
+            {
+                logger?.LogWarning(ex, "EaGraphAuth: could not list {User}'s mailboxes while adding one; storing it as a new mailbox", userObjectId);
+                return Observable.Return(EaMailboxes.NewAccountId());
+            });
+    }
+
+    /// <summary>The pure half of <see cref="TargetAccount"/>, for a NEW consent.</summary>
+    internal static string ChooseNewTarget(IReadOnlyList<EaMailbox> existing, string? address)
+    {
+        if (!string.IsNullOrWhiteSpace(address)
+            && existing.FirstOrDefault(m => string.Equals(m.Address, address, StringComparison.OrdinalIgnoreCase)) is { } same)
+            return same.AccountId;
+        return existing.Any(m => m.IsPrimary) ? EaMailboxes.NewAccountId() : EaMailboxes.Primary;
+    }
+
     /// <inheritdoc />
-    public IObservable<EaGraphAccess> GetAccessToken(string userObjectId)
+    public IObservable<EaGraphAccess> GetAccessToken(string userObjectId) =>
+        GetAccessToken(userObjectId, EaMailboxes.Primary);
+
+    /// <inheritdoc />
+    public IObservable<EaGraphAccess> GetAccessToken(string userObjectId, string? account)
     {
         if (!IsConfigured) return Observable.Return(NotConfigured);
+        if (!EaMailboxes.IsPrimary(account) && !EaMailboxes.IsAddedAccountId(account))
+            return Observable.Return(EaGraphAccess.NotConnected($"'{account}' is not a mailbox account id"));
+        var accountId = EaMailboxes.IsPrimary(account) ? EaMailboxes.Primary : account!;
 
-        return Load(userObjectId)
+        return Load(PathFor(userObjectId, accountId))
             .SelectMany(read =>
             {
                 // A read that did not answer stays unanswered. It is NOT "no token": minting is
@@ -218,8 +290,8 @@ public sealed class EaGraphAuth(
                         ["scope"] = Scopes
                     })
                     .SelectMany(answer => answer.IsSuccess
-                        ? MintFrom(answer.Body, userObjectId)
-                        : Refused(userObjectId, read.Credential!, TokenRefusal.Of(answer.StatusCode, answer.Body)))
+                        ? MintFrom(answer.Body, userObjectId, accountId, read.Credential?.Address)
+                        : Refused(userObjectId, accountId, read.Credential!, TokenRefusal.Of(answer.StatusCode, answer.Body)))
                     // No HTTP answer at all — DNS, a reset, the pool's timeout — is a failure to
                     // find out, the same as a 503: Undetermined, never a fault out of the tool.
                     .Catch((Exception ex) =>
@@ -252,7 +324,7 @@ public sealed class EaGraphAuth(
     /// <see cref="EaConnection.Undetermined"/> (#3433): never the consent link for a grant that may
     /// be perfectly good.</para>
     /// </summary>
-    private IObservable<EaGraphAccess> Refused(string userObjectId, EaCredential credential, TokenRefusal refusal)
+    private IObservable<EaGraphAccess> Refused(string userObjectId, string accountId, EaCredential credential, TokenRefusal refusal)
     {
         logger?.LogWarning("EaGraphAuth: token endpoint refused the redemption for {User}: {Status} {Error}",
             userObjectId, refusal.StatusCode, refusal.Error ?? "(no OAuth error in the body)");
@@ -265,7 +337,7 @@ public sealed class EaGraphAuth(
         var verdict = EaGraphAccess.NotConnected(
             $"Microsoft refused the stored grant ({refusal.Summary}); it must be consented again — "
             + "a reconnect, never a first connection");
-        return Stamp(userObjectId, credential, refusal.Summary)
+        return Stamp(PathFor(userObjectId, accountId), credential, refusal.Summary)
             .Select(_ => verdict)
             // 🚨 A stamp that did NOT land answers Undetermined, not the verdict. Handing out the
             // consent link while the controller still reads the credential as Connected is the
@@ -285,7 +357,7 @@ public sealed class EaGraphAuth(
     /// mutation API — so every later read of it classifies NotConnected until a new consent
     /// rewrites the node. Cold.
     /// </summary>
-    private IObservable<MeshNode> Stamp(string userObjectId, EaCredential credential, string reason) =>
+    private IObservable<MeshNode> Stamp(string path, EaCredential credential, string reason) =>
         Observable.Defer(() =>
         {
             var scope = rootServices.CreateScope();
@@ -300,7 +372,7 @@ public sealed class EaGraphAuth(
             var access = hub.ServiceProvider.GetService<AccessService>();
             var refusedToken = credential.RefreshTokenEncrypted;
             var options = hub.JsonSerializerOptions;
-            return access.RunAsSystem(() => ws.GetMeshNodeStream(PathFor(userObjectId))
+            return access.RunAsSystem(() => ws.GetMeshNodeStream(path)
                     // The lambda runs on the OWNER over the node's CURRENT content: a re-consent or a
                     // rotation that landed while the refusal was in flight holds a different token,
                     // and stamping THAT would mark a live grant dead. Stamp only the grant that was
@@ -320,7 +392,118 @@ public sealed class EaGraphAuth(
     public IObservable<EaGraphAccess> GetConnection(string userObjectId) =>
         !IsConfigured
             ? Observable.Return(NotConfigured)
-            : Load(userObjectId).Select(read => read.Access);
+            : Load(PathFor(userObjectId)).Select(read => read.Access);
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// The primary record is read at its own path; the added ones are found by a query of the
+    /// children of that path (run as System — the records live outside the person's partition) and
+    /// each is then read through the same CLASSIFIED read as the primary, so a record whose read
+    /// does not answer is listed as Undetermined, never dropped. A primary that does not exist, or
+    /// was emptied by <see cref="RemoveMailbox"/>, is not listed. The query's merged Initial is
+    /// used, never the first frame of the progressive fan-in (seeded empty per provider).
+    /// </remarks>
+    public IObservable<ImmutableList<EaMailbox>> GetMailboxes(string userObjectId)
+    {
+        if (!IsConfigured) return Observable.Return(ImmutableList<EaMailbox>.Empty);
+        var primaryPath = PathFor(userObjectId);
+        var primary = Load(primaryPath)
+            // Only a COMPLETED read that found no grant leaves the primary out; an undetermined
+            // read is listed as such — dropping it would read as "not connected" (#3433).
+            .Select(read => read.Access.Connection == EaConnection.NotConnected
+                            && (read.Node is null || string.IsNullOrEmpty(read.Credential?.RefreshTokenEncrypted))
+                ? ImmutableList<EaMailbox>.Empty
+                : ImmutableList.Create(new EaMailbox(EaMailboxes.Primary, read.Credential?.Address, read.Access)));
+        var added = AddedAccountIds(primaryPath)
+            .SelectMany(ids => ids.IsEmpty
+                ? Observable.Return(ImmutableList<EaMailbox>.Empty)
+                : ids.Select(id => Load(PathFor(userObjectId, id))
+                        .Select(read => new EaMailbox(id, read.Credential?.Address, read.Access)))
+                    .Concat()
+                    .ToList()
+                    .Select(list => list.ToImmutableList()));
+        return primary.Zip(added, (p, a) => EaMailboxes.Ordered(p.AddRange(a)));
+    }
+
+    /// <summary>The added mailboxes' account ids: the well-formed ids among the primary path's children. Cold, single emission.</summary>
+    private IObservable<ImmutableList<string>> AddedAccountIds(string primaryPath) =>
+        Observable.Defer(() =>
+        {
+            var scope = rootServices.CreateScope();
+            var hub = HubFrom(scope.ServiceProvider);
+            if (hub is null)
+            {
+                scope.Dispose();
+                return Observable.Throw<ImmutableList<string>>(new InvalidOperationException(
+                    "EaGraphAuth: no message hub is available to list the mailboxes."));
+            }
+            var mesh = hub.ServiceProvider.GetRequiredService<IMeshService>();
+            var access = hub.ServiceProvider.GetService<AccessService>();
+            var request = MeshQueryRequest.FromQuery(
+                $"namespace:{primaryPath} nodeType:{EaCredentialNodeType.NodeType}");
+            return access.RunAsSystem(() => mesh.Query<MeshNode>(request))
+                .Where(change => change.ChangeType == QueryChangeType.Initial)
+                .Take(1)
+                .Select(change => change.Items
+                    .Where(n => n.Namespace == primaryPath && EaMailboxes.IsAddedAccountId(n.Id))
+                    .Select(n => n.Id)
+                    .Distinct(StringComparer.Ordinal)
+                    .ToImmutableList())
+                .Finally(scope.Dispose);
+        });
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// 🚨 The primary is EMPTIED, never deleted: <c>DeleteNode</c> removes descendants, and the added
+    /// mailboxes are the primary's children — deleting it would disconnect every mailbox. An emptied
+    /// primary reads as "no refresh token" (NotConnected) and is not listed. For the primary the
+    /// answer is <c>true</c> once its record holds no grant, <c>false</c> when there is no record.
+    /// </remarks>
+    public IObservable<bool> RemoveMailbox(string userObjectId, string account)
+    {
+        if (EaMailboxes.IsAddedAccountId(account))
+            return WithMesh((hub, mesh, access) =>
+                access.RunAsSystem(() => mesh.DeleteNode(PathFor(userObjectId, account))));
+        if (!EaMailboxes.IsPrimary(account))
+            return Observable.Return(false);
+        return WithMesh((hub, _, access) =>
+        {
+            var options = hub.JsonSerializerOptions;
+            return access.RunAsSystem(() => hub.GetWorkspace().GetMeshNodeStream(PathFor(userObjectId))
+                    .Update(node =>
+                    {
+                        var current = node.ContentAs<EaCredential>(options, logger);
+                        if (current is null || string.IsNullOrEmpty(current.RefreshTokenEncrypted))
+                            return node;
+                        return node with
+                        {
+                            Content = current with
+                            {
+                                RefreshTokenEncrypted = null, Address = null, RefusedAt = null, RefusalReason = null
+                            }
+                        };
+                    }))
+                .Select(_ => true)
+                // No primary record at all: nothing to remove, which is the postcondition.
+                .Catch((Exception ex) => IsNodeNotFound(ex) ? Observable.Return(false) : Observable.Throw<bool>(ex));
+        });
+    }
+
+    /// <summary>Runs <paramref name="body"/> against the portal hub's mesh services, disposing the scope after. Cold.</summary>
+    private IObservable<T> WithMesh<T>(Func<IMessageHub, IMeshService, AccessService?, IObservable<T>> body) =>
+        Observable.Defer(() =>
+        {
+            var scope = rootServices.CreateScope();
+            var hub = HubFrom(scope.ServiceProvider);
+            if (hub is null)
+            {
+                scope.Dispose();
+                return Observable.Throw<T>(new InvalidOperationException(
+                    "EaGraphAuth: no message hub is available."));
+            }
+            return body(hub, hub.ServiceProvider.GetRequiredService<IMeshService>(), hub.ServiceProvider.GetService<AccessService>())
+                .Finally(scope.Dispose);
+        });
 
     /// <summary>
     /// A deployment with no sign-in app credentials has no delegated flow at all. That is a static
@@ -336,7 +519,7 @@ public sealed class EaGraphAuth(
     /// beside it: a cold write nobody subscribes to silently does nothing, and a rotation that is
     /// dropped leaves the next round redeeming a token Entra may already have retired.
     /// </summary>
-    private IObservable<EaGraphAccess> MintFrom(string json, string userObjectId)
+    private IObservable<EaGraphAccess> MintFrom(string json, string userObjectId, string accountId, string? address)
     {
         string? access;
         string? rotated;
@@ -361,7 +544,9 @@ public sealed class EaGraphAuth(
 
         return string.IsNullOrEmpty(rotated)
             ? Observable.Return(answer)
-            : Store(userObjectId, rotated!).Select(_ => answer);
+            // The rotation keeps the address: it rewrites the whole record, and a dropped label
+            // would leave the mailbox unaddressable by the assistant's `mailbox` argument.
+            : Store(userObjectId, accountId, rotated!, address).Select(_ => answer);
     }
 
     /// <summary>The rotated refresh token in a token-endpoint response, or null when there is none.</summary>
@@ -369,6 +554,36 @@ public sealed class EaGraphAuth(
     {
         using var doc = JsonDocument.Parse(json);
         return doc.RootElement.TryGetProperty("refresh_token", out var r) ? r.GetString() : null;
+    }
+
+    /// <summary>
+    /// The address the person signed in as, read from the token response's <c>id_token</c>
+    /// (<c>preferred_username</c>, then <c>email</c>, then <c>upn</c>). Null when there is no id
+    /// token or it names none.
+    ///
+    /// <para>The id token is decoded, not validated: it came straight from the token endpoint over
+    /// TLS in exchange for our own code and client secret, and it is used only as a LABEL — the
+    /// grant's authority is the refresh token, which the token endpoint itself checks on every
+    /// redemption.</para>
+    /// </summary>
+    internal static string? SignedInAddress(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        if (!doc.RootElement.TryGetProperty("id_token", out var idt) || idt.GetString() is not { } jwt)
+            return null;
+        var parts = jwt.Split('.');
+        if (parts.Length < 2) return null;
+        var payload = parts[1].Replace('-', '+').Replace('_', '/');
+        payload = payload.PadRight(payload.Length + (4 - payload.Length % 4) % 4, '=');
+        byte[] bytes;
+        try { bytes = Convert.FromBase64String(payload); }
+        catch (FormatException) { return null; }
+        using var claims = JsonDocument.Parse(Encoding.UTF8.GetString(bytes));
+        foreach (var name in new[] { "preferred_username", "email", "upn" })
+            if (claims.RootElement.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String
+                && v.GetString() is { Length: > 0 } value && value.Contains('@'))
+                return value.Trim();
+        return null;
     }
 
     /// <summary>
@@ -416,6 +631,14 @@ public sealed class EaGraphAuth(
     internal static string PathFor(string userObjectId) =>
         $"Auth/{EaCredentialNodeType.UserSegment}/{userObjectId}";
 
+    /// <summary>
+    /// The path of one mailbox's record: the primary at <see cref="PathFor(string)"/>, unchanged, so
+    /// every grant stored before several mailboxes existed IS the primary without a migration; an
+    /// added mailbox as a child of it, <c>Auth/_EaCredential/{user}/ea-credential--{10 hex}</c>.
+    /// </summary>
+    internal static string PathFor(string userObjectId, string accountId) =>
+        EaMailboxes.IsPrimary(accountId) ? PathFor(userObjectId) : $"{PathFor(userObjectId)}/{accountId}";
+
     // Builds the credential node AT PathFor(userObjectId): Id = userObjectId, Namespace =
     // Auth/_EaCredential ⇒ Path = Auth/_EaCredential/{user}, and NodeType set so the node's hub
     // activates with the EaCredential data source (WithContentType&lt;EaCredential&gt;). Store
@@ -429,6 +652,16 @@ public sealed class EaGraphAuth(
             Name = "EA Credential",
         };
 
+    /// <summary>The node of one mailbox's record, AT <see cref="PathFor(string, string)"/>.</summary>
+    internal static MeshNode NewCredentialNode(string userObjectId, string accountId) =>
+        EaMailboxes.IsPrimary(accountId)
+            ? NewCredentialNode(userObjectId)
+            : new(accountId, PathFor(userObjectId))
+            {
+                NodeType = EaCredentialNodeType.NodeType,
+                Name = "EA Credential",
+            };
+
     /// <summary>
     /// Writes (or rewrites) the user's encrypted refresh token. Cold — subscribe or nothing happens.
     ///
@@ -440,11 +673,11 @@ public sealed class EaGraphAuth(
     /// mesh has one atomic verb for exactly this — <c>CreateOrUpdateNode</c>, where the OWNING hub
     /// decides by existence and serialises concurrent writers — and a token rotation is the textbook
     /// idempotent, concurrently-re-run write. The node's other fields are re-derived from
-    /// <see cref="NewCredentialNode"/> rather than carried over from a read, because they are
+    /// <see cref="NewCredentialNode(string, string)"/> rather than carried over from a read, because they are
     /// constants (path, NodeType, Name) and the read that supplied them was the unreliable part.
     /// </para>
     /// </summary>
-    private IObservable<MeshNode> Store(string userObjectId, string refreshToken) =>
+    private IObservable<MeshNode> Store(string userObjectId, string accountId, string refreshToken, string? address) =>
         Observable.Defer(() =>
         {
             var scope = rootServices.CreateScope();
@@ -460,11 +693,13 @@ public sealed class EaGraphAuth(
             var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
             var access = hub.ServiceProvider.GetService<AccessService>();
 
-            var node = NewCredentialNode(userObjectId) with
+            var node = NewCredentialNode(userObjectId, accountId) with
             {
                 Content = new EaCredential
                 {
                     UserObjectId = userObjectId,
+                    Account = EaMailboxes.IsPrimary(accountId) ? null : accountId,
+                    Address = address,
                     RefreshTokenEncrypted = protector.Protect(refreshToken),
                     Scopes = Scopes,
                     AcquiredAt = DateTimeOffset.UtcNow
@@ -484,7 +719,7 @@ public sealed class EaGraphAuth(
     /// <summary>What one credential read found: the node, its content, and the modelled answer.</summary>
     private readonly record struct CredentialRead(MeshNode? Node, EaCredential? Credential, EaGraphAccess Access);
 
-    private IObservable<CredentialRead> Load(string userObjectId) => Load(userObjectId, hub: null);
+    private IObservable<CredentialRead> Load(string path) => Load(path, hub: null);
 
     /// <summary>
     /// Reads the user's credential node and CLASSIFIES the outcome. Cold, single-emission, and it
@@ -502,7 +737,7 @@ public sealed class EaGraphAuth(
     /// <see cref="CredentialReadTimeout"/>, any other transport fault, content that will not
     /// deserialize — is <see cref="EaConnection.Undetermined"/>.</para>
     /// </summary>
-    private IObservable<CredentialRead> Load(string userObjectId, IMessageHub? hub) =>
+    private IObservable<CredentialRead> Load(string path, IMessageHub? hub) =>
         Observable.Defer(() =>
         {
             var owned = hub is null ? rootServices.CreateScope() : null;
@@ -516,7 +751,6 @@ public sealed class EaGraphAuth(
 
             var ws = resolved.GetWorkspace();
             var access = resolved.ServiceProvider.GetService<AccessService>();
-            var path = PathFor(userObjectId);
 
             // System because the credential node lives outside the acting user's partition and the
             // consent controller reads it PRE-token; RunAsSystem seals both ends of the scope
@@ -524,7 +758,7 @@ public sealed class EaGraphAuth(
             return access.RunAsSystem(() => ws.GetMeshNodeStream(path).Take(1))
                 .Timeout(CredentialReadTimeout)
                 .Select(node => Classify(node, resolved))
-                .Catch((Exception ex) => Observable.Return(Classify(ex, userObjectId)))
+                .Catch((Exception ex) => Observable.Return(Classify(ex, path)))
                 // A node stream that COMPLETES without emitting is the same information as a
                 // not-found: nothing was there to read. Never an empty completion to the caller —
                 // SelectMany over an empty source silently drops the whole chain.
@@ -590,15 +824,15 @@ public sealed class EaGraphAuth(
     /// — and it is logged at Warning naming the user, so an undetermined answer is always
     /// greppable rather than merely inferred.
     /// </summary>
-    private CredentialRead Classify(Exception ex, string userObjectId)
+    private CredentialRead Classify(Exception ex, string path)
     {
         if (IsNodeNotFound(ex))
             return new CredentialRead(null, null,
                 EaGraphAccess.NotConnected("the credential node does not exist"));
 
         logger?.LogWarning(ex,
-            "EaGraphAuth: the credential read for {User} did not complete — reporting the connection "
-            + "state as undetermined, NOT as 'not connected'", userObjectId);
+            "EaGraphAuth: the credential read at {Path} did not complete — reporting the connection "
+            + "state as undetermined, NOT as 'not connected'", path);
         return new CredentialRead(null, null, EaGraphAccess.Unknown(
             ex is TimeoutException
                 ? $"the credential read did not complete within {CredentialReadTimeout.TotalSeconds:0.##}s"
