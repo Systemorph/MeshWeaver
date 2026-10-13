@@ -40,6 +40,7 @@ public class DenialTheStoreDisagreesWithSaysSoTest(ITestOutputHelper output)
     private const string SpaceId = "disagreeprobe";
     private const string Ghost = "ghost-grantee";
     private const string Stranger = "stranger-nograntee";
+    private const string Viewer = "viewer-grantee";
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => Bootstrap.Bootstrap(builder)
@@ -121,6 +122,44 @@ public class DenialTheStoreDisagreesWithSaysSoTest(ITestOutputHelper output)
         Assert.Contains(Ghost, message, StringComparison.Ordinal);
         Assert.Contains($"{SpaceId}/_Access/{Ghost}_Access", message, StringComparison.Ordinal);
         Assert.Contains("MeshWeaver#4061", message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// 🚨 #6637 — a grant at the principal's path is not yet a disagreement: its ROLES decide.
+    ///
+    /// <para>Measured on a live portal: a create refused for a principal whose grant was a readable
+    /// AccessAssignment with roles Viewer + Commenter. Neither carries Create, so the denial was
+    /// settled and correct — and the note said the opposite ("not a settled decision … retrying
+    /// normally succeeds"), inviting a retry that could never succeed. The grant here is written the
+    /// ordinary way, typed and honoured by the fold; the refusal must name the roles held instead.</para>
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task AReadableGrantWhoseRolesLackThePermission_IsASettledDenial_NamingTheRoles()
+    {
+        await GivenTheSpaceExists(TestContext.Current.CancellationToken);
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        await meshService.CreateNode(new MeshNode($"{Viewer}_Access", $"{SpaceId}/_Access")
+        {
+            Name = $"{Viewer} Access",
+            NodeType = AccessAssignmentNodeType.NodeType,
+            MainNode = SpaceId,
+            State = MeshNodeState.Active,
+            Content = new AccessAssignment
+            {
+                AccessObject = Viewer,
+                Roles = [new RoleAssignment { Role = "Viewer" }, new RoleAssignment { Role = "Commenter" }],
+            },
+        }).Should().Within(TestTimeouts.CrossSilo).Emit(
+            "the Space's creator may grant a viewer", TestContext.Current.CancellationToken);
+
+        var message = await DenialMessageFor(Viewer, "viewer-page");
+
+        Assert.Contains("Create permission required", message, StringComparison.Ordinal);
+        Assert.DoesNotContain("MeshWeaver#4061", message, StringComparison.Ordinal);
+        Assert.DoesNotContain("not a settled decision", message, StringComparison.Ordinal);
+        Assert.Contains("Viewer", message, StringComparison.Ordinal);
+        Assert.Contains("Commenter", message, StringComparison.Ordinal);
+        Assert.Contains($"{SpaceId}/_Access/{Viewer}_Access", message, StringComparison.Ordinal);
     }
 
     [Fact(Timeout = 180_000)]
