@@ -17,7 +17,9 @@
 #      the same manifest is then copied by digest into the publication repository
 #      `plugins/<source>`, untagged, because an index may only reference manifests of its own
 #      repository;
-#   2. the sidecars — EVERY file of the publication that is not a bundle or a module — as one
+#      (the module is matched to its bundle CASE-INSENSITIVELY: the lanes write it lowercased);
+#   2. the sidecars — EVERY file of the publication that is not a bundle or a module riding with
+#      one (so a module whose package bakes no bundle travels here, under its own title) — as one
 #      image manifest in `plugins/<source>`, untagged, each file a layer titled with its
 #      publication-relative name (so `oras pull` writes it back under that name, byte for byte),
 #      with a config blob of media type application/vnd.meshweaver.publication.v1+json carrying
@@ -51,13 +53,19 @@
 # index and sidecar config, an equal commit; anything else (a tag that is absent, an unreadable
 # index, a different commit) PUSHES, because pushing is idempotent and never leaves the registry
 # worse, while a wrong skip would freeze the tag on a publication this run was asked to replace.
+# The proof includes the publication LAYOUT: the sidecar config carries `"layout":<n>`
+# (PUBLICATION_LAYOUT below), and a published config whose layout differs — or that has none,
+# i.e. every publication pushed before modules were matched to their bundles case-insensitively —
+# is REPUBLISHED even at the same commit. An unchanged source would otherwise keep its torn
+# publication forever, since its commit never moves. Bump PUBLICATION_LAYOUT whenever what this
+# script pushes for the same content changes.
 #
 # Prints facts the caller can record (register-publication): `bundle-publication: index=<digest>
 # bundles=<n> …` and one `bundle-publication: bundle=<package> digest=<digest> module=<yes|no>` per
 # bundle; also `index_digest` and `bundle_count` into $GITHUB_OUTPUT when set.
 #
-# Callers: main-cd.yml (`publish-bake`, the platform's own content, and `plugins-bake` through the
-# reusable lane) and node-repo-publish-bake.yml (every satellite), after the share seal succeeds,
+# Callers: main-cd.yml (`publish-bake`, the platform's own content) and node-repo-publish-bake.yml
+# (MeshWeaver.Plugins and every satellite), after the share seal succeeds,
 # on the directory publish-bake-bundles.sh materialises (BAKE_PUBLICATION_DIR). Behaviour tests:
 # .github/scripts/test-bundle-registry.py (chart-gate's `Bundle registry scripts (executed)`).
 set -euo pipefail
@@ -86,6 +94,12 @@ while [ $# -gt 0 ]; do
 done
 
 fail() { echo "::error::$1"; exit 1; }
+
+# The shape of what this script pushes for one publication (see --skip-if-published above).
+# 2: modules ride with their bundle case-insensitively; a module-only package travels as a sidecar.
+# Overridable ONLY by the behaviour harness, to stage a publication of an older layout.
+PUBLICATION_LAYOUT="${MW_TEST_PUBLICATION_LAYOUT:-2}"
+case "$PUBLICATION_LAYOUT" in ''|*[!0-9]*) fail "publication layout '$PUBLICATION_LAYOUT' is not a number" ;; esac
 
 [ -n "$REGISTRY" ] || fail "--registry <host> is required"
 [ -n "$SOURCE" ] || fail "--source <name> is required"
@@ -145,6 +159,35 @@ if [ -f "$DIR/$MODULES_INDEX" ]; then
   done < "$DIR/$MODULES_INDEX"
 fi
 
+# ---- which module rides with which bundle — matched CASE-INSENSITIVELY ------------------------
+# 🚨 The lanes write a module package under its LOWERCASED name (`modules/essentials.module.nupkg`)
+# while the bundle keeps the package's own case (`Essentials.zip`), so an exact-case lookup of
+# `$package.module.nupkg` attached NO module to ANY bundle: measured on MeshWeaver.Plugins run
+# 38215076376 (`plugins/plugins:c003e001`), 43 bundles all `module=no` beside 8 listed modules.
+# A module whose package bakes no bundle (a module-only package) has no manifest to ride in, and it
+# used to be skipped as a "module" AND as a sidecar, so it never reached the registry at all while
+# the `modules/_index` sidecar still listed it — a torn module set, the very shape the checks above
+# refuse locally. It now travels in the sidecar manifest under its publication-relative title, so
+# what `oras pull` writes back is the whole publication, byte for byte.
+MODULE_OF_BUNDLE=()   # parallel to BUNDLES: the module file attached to that bundle, or empty
+ATTACHED=()           # module file names attached to some bundle
+for zip in "${BUNDLES[@]}"; do
+  want=$(lower "${zip%.zip}.module.nupkg")
+  match=""
+  for m in ${MODULES[@]+"${MODULES[@]}"}; do
+    [ "$(lower "$m")" = "$want" ] || continue
+    [ -z "$match" ] || fail "$MODULES_INDEX lists both '$match' and '$m' for bundle '$zip' — two module packages differing only in case cannot both ride with it"
+    match="$m"
+  done
+  if [ -n "$match" ]; then
+    for a in ${ATTACHED[@]+"${ATTACHED[@]}"}; do
+      [ "$a" != "$match" ] || fail "module '$match' matches more than one bundle (bundle names differing only in case) — refusing to guess which it rides with"
+    done
+    ATTACHED+=("$match")
+  fi
+  MODULE_OF_BUNDLE+=("$match")
+done
+
 # Every OTHER file is a sidecar and travels as a titled layer. Names must survive a JSON string
 # and an OCI title unescaped, so the config blob can be composed without a JSON library.
 SIDECARS=()
@@ -152,7 +195,7 @@ while IFS= read -r rel; do
   rel="${rel#./}"
   skip=0
   for b in "${BUNDLES[@]}"; do [ "$rel" = "$b" ] && skip=1; done
-  for m in ${MODULES[@]+"${MODULES[@]}"}; do [ "$rel" = "$MODULES_DIR/$m" ] && skip=1; done
+  for m in ${ATTACHED[@]+"${ATTACHED[@]}"}; do [ "$rel" = "$MODULES_DIR/$m" ] && skip=1; done
   [ "$skip" -eq 1 ] && continue
   case "$rel" in
     *[!A-Za-z0-9._/@+-]*) fail "sidecar '$rel' carries a character outside [A-Za-z0-9._/@+-]; the config blob cannot carry it" ;;
@@ -267,22 +310,27 @@ if [ "$SKIP_IF_PUBLISHED" -eq 1 ]; then
   if existing=$("$ORAS" resolve "${OFLAGS[@]}" "$PUB_REPO:$IDENTITY" 2>"$WORK/resolve.err"); then
     case "$existing" in sha256:*) ;; *) fail "resolve of $PUB_REPO:$IDENTITY answered '$existing', not a digest" ;; esac
     published_commit=""
+    published_layout=""
     if "$ORAS" manifest fetch "${OFLAGS[@]}" "$PUB_REPO@$existing" > "$WORK/existing-index.json" 2>"$WORK/fetch.err"; then
       existing_sidecar=$(tr -d '\n' < "$WORK/existing-index.json" \
         | sed -n 's/.*"digest":"\(sha256:[0-9a-f]\{64\}\)","size":[0-9]\{1,\},"artifactType":"application\/vnd\.meshweaver\.publication\.v1+json","annotations":{"io\.meshweaver\.role":"sidecars"}.*/\1/p')
       if [ -n "$existing_sidecar" ] \
           && "$ORAS" manifest fetch-config "${OFLAGS[@]}" "$PUB_REPO@$existing_sidecar" > "$WORK/existing-config.json" 2>"$WORK/fetch.err"; then
         published_commit=$(tr -d '\n' < "$WORK/existing-config.json" | sed -n 's/.*"sourceCommit":"\([^"]*\)".*/\1/p')
+        published_layout=$(tr -d '\n' < "$WORK/existing-config.json" | sed -n 's/.*"layout":\([0-9]\{1,\}\).*/\1/p')
       fi
     fi
-    if [ -n "$published_commit" ] && [ "$published_commit" = "$local_commit" ]; then
+    if [ -n "$published_commit" ] && [ "$published_commit" = "$local_commit" ] \
+        && [ "$published_layout" = "$PUBLICATION_LAYOUT" ]; then
       echo "::notice::$PUB_REPO:$IDENTITY already names a complete publication of THIS content ($existing, source $published_commit) — already published; skipping the push. The registry, like the shares, seals one publication per content × framework identity."
       publish_release_identity
       echo "bundle-publication: index=$existing bundles=${#BUNDLES[@]} tag=$IDENTITY registry=$REGISTRY source=$SOURCE repository=plugins/$SOURCE_LC skipped=already-published"
       record_outputs "$existing" "${#BUNDLES[@]}"
       exit 0
     fi
-    if [ -z "$published_commit" ]; then
+    if [ -n "$published_commit" ] && [ "$published_commit" = "$local_commit" ]; then
+      echo "$PUB_REPO:$IDENTITY names a publication of THIS content but of layout '${published_layout:-none}', not $PUBLICATION_LAYOUT — republishing it in the current layout (the tag moves last; the previous generation stays resident by digest)"
+    elif [ -z "$published_commit" ]; then
       echo "$PUB_REPO:$IDENTITY resolves to $existing but its source commit could not be read ($(tr '\n' ' ' < "$WORK/fetch.err")) — publishing, since a push is idempotent and a skip without proof is not"
     else
       echo "$PUB_REPO:$IDENTITY names a publication from source '$published_commit' but this one is from '$local_commit' — republishing (the tag moves last; the previous generation stays resident by digest)"
@@ -300,15 +348,17 @@ fi
 # ---- 1. the bundles ----------------------------------------------------------------------------
 BUNDLE_FACTS=()
 INDEX_ENTRIES=()
-for zip in "${BUNDLES[@]}"; do
+for i in "${!BUNDLES[@]}"; do
+  zip="${BUNDLES[$i]}"
   package="${zip%.zip}"
   package_lc=$(lower "$package")
   valid_component "$package_lc" || fail "package '$package' is not a valid repository name component"
   repo="$REGISTRY/plugins/$SOURCE_LC/$package_lc"
   files=("$zip:application/vnd.meshweaver.bundle.v1.zip")
   has_module=no
-  if [ -f "$DIR/$MODULES_DIR/$package.module.nupkg" ]; then
-    files+=("$MODULES_DIR/$package.module.nupkg:application/vnd.meshweaver.module.v1.nupkg")
+  module="${MODULE_OF_BUNDLE[$i]}"
+  if [ -n "$module" ]; then
+    files+=("$MODULES_DIR/$module:application/vnd.meshweaver.module.v1.nupkg")
     has_module=yes
   fi
   digest=$(cd "$DIR" && "$ORAS" push "${OFLAGS[@]}" "$repo:$IDENTITY" \
@@ -338,6 +388,7 @@ for rel in "${SIDECARS[@]}"; do
   case "$rel" in
     *.json) mt="application/json" ;;
     *.txt|*/_index|_complete|*/_current|_current) mt="text/plain" ;;
+    "$MODULES_DIR"/*.module.nupkg) mt="application/vnd.meshweaver.module.v1.nupkg" ;;   # a module with no bundle to ride in
     *) mt="application/octet-stream" ;;
   esac
   SIDECAR_ARGS+=("$rel:$mt")
@@ -346,6 +397,7 @@ done
 {
   printf '{"schemaVersion":1,"identity":"%s","source":"%s"' "$(json_escape "$IDENTITY")" "$(json_escape "$SOURCE")"
   printf ',"sourceCommit":"%s"' "$(json_escape "$(read_fact source-commit.txt)")"
+  printf ',"layout":%s' "$PUBLICATION_LAYOUT"
   printf ',"repository":"%s"' "$(json_escape "$(read_fact repository.txt)")"
   printf ',"architecture":"%s"' "$(json_escape "$(read_fact architecture.txt)")"
   printf ',"release":"%s"' "$(json_escape "$RELEASE")"

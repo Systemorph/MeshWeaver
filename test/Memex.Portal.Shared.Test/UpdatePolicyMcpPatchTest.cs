@@ -3,6 +3,7 @@
 using System;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Threading;
 using System.Threading.Tasks;
 using Memex.Portal.Shared.SelfUpdate;
@@ -134,15 +135,16 @@ public class UpdatePolicyMcpPatchTest(ITestOutputHelper output) : MonolithMeshTe
 
     /// <summary>
     /// A companion invariant check for #2469: <c>Patch</c>'s success string must be an honest
-    /// signal — if it does not say "Error:", the caller's OWN field must actually have changed.
-    /// Runs the operator's patch against a heavy REAL-concurrency write storm on the exact same
-    /// leaf (<c>policy</c>, seeded away from its enum default so base values are actually carried
-    /// and a genuine Conflict can fire) — this fast in-memory mesh usually resolves the race
-    /// within <c>UpdateRemote</c>'s 2s response bound, so it does not reliably discriminate
-    /// old/new code by itself (see <c>PatchLandedWriteCheckTest</c> for the deterministic,
-    /// timing-independent pin of the actual defect — the version-only confirmation this fix
-    /// replaces), but it does prove the fix holds under real contention, not just the quiet,
-    /// uncontended case the other tests in this file cover.
+    /// signal — if it does not say "Error:", the caller's OWN field must actually have been
+    /// COMMITTED. Runs the operator's patch against a heavy REAL-concurrency write storm on the
+    /// exact same leaf (<c>policy</c>, seeded away from its enum default so base values are
+    /// actually carried and a genuine Conflict can fire).
+    /// <para>🚨 "Committed", not "still holds now" (#6635): a storm writer queued behind the
+    /// operator's patch legitimately overwrites <c>policy</c> right after it lands, so the live
+    /// value at the instant the tool answers is the wrong instrument — it is exactly the read-back
+    /// that reported landed writes as lost. The node's history as the mesh hub saw it is recorded
+    /// from BEFORE the patch, and a "Patched:" must be backed by a version that carried the
+    /// caller's value.</para>
     /// </summary>
     [Fact(Timeout = 90000)]
     public async Task Patch_SuccessString_IsHonest_UnderConcurrentContentionOnTheSameField()
@@ -175,28 +177,35 @@ public class UpdatePolicyMcpPatchTest(ITestOutputHelper output) : MonolithMeshTe
 
         await Task.Delay(50, TestContext.Current.CancellationToken); // let the storm get ahead
 
+        // Every policy value the mesh hub's view of the node carried, from before the patch on.
+        var history = new ReplaySubject<UpdatePolicyKind>();
+        using var historySub = Observable.Create<MeshNode>(observer =>
+            {
+                using (Access.ImpersonateAsSystem())
+                    return Mesh.GetWorkspace().GetMeshNodeStream(UpdatePolicyNodeType.NodePath)
+                        .Where(node => node is not null)
+                        .Subscribe(observer);
+            })
+            .Select(node => UpdatePolicyNodeType.Parse(node, Mesh.JsonSerializerOptions).Policy)
+            .Subscribe(history);
+
         var result = await new MeshOperations(Mesh)
             .Patch(UpdatePolicyNodeType.NodePath, """{"content":{"policy":"None"}}""")
             .FirstAsync().Timeout(Budget).Await(TestContext.Current.CancellationToken);
-
-        // Check the claim AT THE INSTANT it was made — before the storm is torn down and its
-        // remaining in-flight writes settle, which would let plenty of real time pass and give a
-        // premature "Patched:" every chance to become true after the fact instead of proving it
-        // was true when said.
-        var content = await ReadContentOnce();
-
-        await stormCts.CancelAsync();
-        await storm;
 
         Output.WriteLine($"Patch tool returned: {result}");
 
         if (!result.Contains("Error:", StringComparison.Ordinal))
         {
-            content.Policy.Should().Be(UpdatePolicyKind.None,
-                "the tool did not report an error, so the caller's OWN field must actually have "
-                + $"landed — instead the tool said '{result}' while policy was '{content.Policy}' "
-                + "at that instant");
+            await history.Where(policy => policy == UpdatePolicyKind.None).Take(1)
+                .Should().Within(Budget).Emit(
+                    "the tool did not report an error, so a committed version must have carried the "
+                    + $"caller's OWN value — the tool said '{result}'",
+                    cancellationToken: TestContext.Current.CancellationToken);
         }
+
+        await stormCts.CancelAsync();
+        await storm;
     }
 
     // ── helpers ──

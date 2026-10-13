@@ -117,6 +117,25 @@ with a `required` member fail, across every writer in the fleet, which is the sc
 this guard was explicitly scoped away from. Narrowing it later is a decision about which writers may
 send partial content — not a bug fix — and it needs the producer side enumerated first.
 
+**Why `MarkdownContent.Content` stays `required` although such rows exist.** Measured rows carry
+`$type: MarkdownContent` and no `content`
+([#6639](https://github.com/Systemorph/MeshWeaver/issues/6639)). Relaxing the member to default to
+`""` was tried and refused. The `required` member is what makes a body stored under ANOTHER key
+(`{"markdown": …}`, `{"text": …}`) fail to bind instead of binding into a `MarkdownContent` with an
+empty body. Raw, such content reads as **Unreadable** and names its members
+(`MarkdownOverviewLayoutArea.ReadMarkdownContent`, #4600). Typed and empty, it would put the "No
+content yet" placeholder over a document that is still there. `NodeUpdateContentTypeChangeTest`
+depends on the same throw (#5736). So such a row is a DATA defect. The page already shows it as
+Unreadable, and the repair is to rewrite the body under `content`.
+
+When content of a KNOWN type fails to bind, the read seam that holds the node
+(`MeshNodeStreamCache`, both the `GetStream` and `GetQuery` paths) names the node's path and says that
+the type is registered but the stored JSON does not bind to it. The serializer's own
+`could not be deserialized` warning names the type and the failing member but cannot name the node: a
+JSON converter has no view of the record it is nested in. Read the two together. Before #6639 the
+path-bearing line blamed a missing registration for this case too, which sent the reader to fix the
+wrong thing.
+
 ## Where it deliberately says nothing
 
 Each of these answers Valid, and each is a decision rather than an omission:
@@ -158,7 +177,9 @@ earlier, while the portal still had the type compiled BEFORE them bound — answ
 `Patched: <path>` twice (once after a recycle), with the node still at version 7 and none of the keys
 on read-back. The typed deserialisation dropped the three keys, and the landed-write check
 (`ProjectTouched`) read a key the serializer does not write as "expect it absent", which the live node
-satisfied on its first emission.
+satisfied on its first emission. (That read-back check is gone since #6635 — the verbs now confirm
+on the owner's commit verdict, see [Reading a Write Verdict](../ReadingAWriteVerdict) — which makes
+refusing the dropped keys up front the only guard, not one of two.)
 
 The verbs hold the one thing the validator never sees — the caller's RAW keys — so they judge there
 (`MeshOperations.UnknownContentMembers`):

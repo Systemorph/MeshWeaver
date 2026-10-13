@@ -54,7 +54,8 @@ public abstract class UpdateScenarioBase(ITestOutputHelper output) : MonolithMes
         }
         """;
 
-    private const string ProbeConfiguration =
+    /// <summary>The probe type's configuration: the one <c>Overview</c> area that names the build.</summary>
+    protected const string ProbeConfiguration =
         "config => config.AddDefaultLayoutAreas().AddLayout(layout => layout.WithView(\"Overview\", UpdateProbeAreas.Overview))";
 
     /// <summary>The definition the mesh hub currently sees for <paramref name="typePath"/>.</summary>
@@ -68,7 +69,8 @@ public abstract class UpdateScenarioBase(ITestOutputHelper output) : MonolithMes
 
     /// <summary>Creates the probe type with build <paramref name="marker"/> and waits until it is
     /// compiled; returns the type path and the published definition (build N).</summary>
-    protected async Task<(string TypePath, NodeTypeDefinition Build)> CreateType(string marker, string? code = null)
+    protected async Task<(string TypePath, NodeTypeDefinition Build)> CreateType(
+        string marker, string? code = null, string? configuration = null)
     {
         var id = $"UpdateProbe{Suffix}";
         var typePath = $"{TestPartition}/{id}";
@@ -79,7 +81,7 @@ public abstract class UpdateScenarioBase(ITestOutputHelper output) : MonolithMes
             Content = new NodeTypeDefinition
             {
                 Description = "Updates-suite probe: renders the marker of the build it is bound to.",
-                Configuration = ProbeConfiguration,
+                Configuration = configuration ?? ProbeConfiguration,
             },
         }).Should().Within(Step).Emit(cancellationToken: TestContext.Current.CancellationToken);
         await NodeFactory.CreateNode(new MeshNode("code", $"{typePath}/Source")

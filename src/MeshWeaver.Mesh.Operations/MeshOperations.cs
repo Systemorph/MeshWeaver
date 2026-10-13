@@ -582,9 +582,10 @@ public partial class MeshOperations
     /// <c>Finally</c> — the subscription never outlives the call on any path: completion,
     /// fault, timeout, or caller unsubscribe (HTTP client abort).</para>
     ///
-    /// <para>Error contract: <c>"Not found: …"</c> when the path resolves to nothing,
-    /// <c>"Error: …"</c> for failures surfaced by the subscribe (an RLS denial faults the
-    /// remote stream with "Access denied" — see <c>HubSubscriptionSecurityTest</c>). A timeout
+    /// <para>Error contract: <c>"Not found: …"</c> when the path resolves to nothing AND when the
+    /// owner refuses the caller's read (an RLS denial faults the remote stream; answering it as
+    /// "Access denied" would disclose that a node exists at the path), <c>"Error: …"</c> for every
+    /// other failure surfaced by the subscribe. A timeout
     /// faults the observable with <see cref="TimeoutException"/> so transports can map it
     /// distinctly (REST maps it to a 504-style JSON error instead of the sentinel).</para>
     /// </summary>
@@ -654,6 +655,14 @@ public partial class MeshOperations
                 // else surfaces through the standard "Error: …" sentinel contract.
                 if (ex is TimeoutException)
                     return Observable.Throw<string>(ex);
+                // 🚨 A REFUSED render answers exactly what an absent path answers. The owner's
+                // refusal names the path ("Access denied: … on '{path}'"), and handing that on told
+                // a caller who may not read the node that one exists there.
+                if (IsAccessDenial(ex))
+                {
+                    logger.LogInformation("RenderArea DENIED for {Path} — answered as absent", resolvedPath);
+                    return Observable.Return($"Not found: {resolvedPath}");
+                }
                 logger.LogWarning(ex, "RenderArea failed for {Path}", resolvedPath);
                 return Observable.Return($"Error: {ex.Message}");
             });
@@ -1173,118 +1182,45 @@ public partial class MeshOperations
             .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null));
 
     /// <summary>
-    /// Bounded wait for the CALLER'S OWN intended field values to be OBSERVABLE in the live
-    /// mirror — the Patch/Update analogue of <see cref="WaitForEditApplied"/>'s #1716 fix,
-    /// applied here for #2469. <see cref="WaitForReadYourWrites"/> alone is not a trustworthy
-    /// confirmation for Patch/Update: it only proves SOME version bump happened, and a concurrent
-    /// writer touching OTHER fields on the SAME node (e.g. <c>Admin/UpdatePolicy</c>'s self-update
-    /// poller ticking <c>checkedAt</c>/<c>latestAvailableTag</c> every few seconds) satisfies that
-    /// just as well as the caller's own write. A genuinely-refused write — a LATE
-    /// Conflict/AccessDenied NACK arriving after <c>UpdateRemote</c>'s optimistic emit, which is
-    /// only ever logged server-side (<c>LATE_NACK_TERMINAL</c>) and never propagated back to this
-    /// already-completed caller — could then still be reported as landed with a real version
-    /// delta shown. This checks the caller's OWN touched leaves specifically
-    /// (<see cref="FieldsLandedIn"/>), so it is neither fooled by, nor blind to, a concurrent
-    /// write elsewhere on the node. Also self-heals the legitimate no-op case (the caller's
-    /// values already match live): that is satisfied on the very first emission.
+    /// The CONFIRMATION of a landed Patch/Update: the owner's commit verdict, plus the version it
+    /// committed — never a read-back of the caller's own field values from the live node (#6635).
+    ///
+    /// <para><b>Why the verdict is the confirmation.</b> <c>IMeshService.UpdateNode</c> completes
+    /// only on the OWNER's verdict (#2661): it emits on the owner's ack — which the owner posts
+    /// after its identity-gated commit echo, and only when EVERY key of the patch merged (a partial
+    /// or total three-way refusal is a <c>Conflict</c> NACK, #2463 / #648) — and it FAULTS on every
+    /// refusal, early or late (denial, rejection, <c>LATE_NACK_TERMINAL</c>, a verdict timeout).
+    /// So by the time this runs the caller's write has provably landed; there is nothing left for a
+    /// read-back to prove, and #2469's premise — an optimistic emit after a 2 s bound, with a late
+    /// NACK only logged — no longer exists.</para>
+    ///
+    /// <para><b>Why a read-back of the caller's leaves was wrong.</b> It asked a different question:
+    /// "does the live node STILL hold my values?". Any writer that legitimately consumes a field the
+    /// caller wrote — a control plane clearing an intent such as <c>requestedAction</c> a few
+    /// milliseconds after it lands — answers that "no" for a write that landed, and the tool then
+    /// told the caller the write had NOT landed and to retry a non-idempotent request. Measured on
+    /// the control instance: a patch committed at v279 and was consumed at v281, 63 ms later, and the
+    /// tool answered "did not land within the confirmation window" after 10 s.</para>
+    ///
+    /// <para>What this still reads off the live mirror is the VERSION to report, and nothing it reads
+    /// can fail the write. The verdict's node carries the BASE version the write was diffed against
+    /// (the owner mints the new one on apply), so the first live node past that base is the one
+    /// reported — whatever fields a later writer has consumed since; a write that changed nothing
+    /// (the live node already equals the committed one) is reported as it stands. When the mirror
+    /// has not caught up within the read-your-writes bound, the verdict's node is reported without a
+    /// version delta.</para>
     /// </summary>
-    private IObservable<MeshNode?> WaitForPatchApplied(string path, JsonObject expectedFields) =>
+    /// <param name="path">The node the write targeted.</param>
+    /// <param name="committed">The node the owner's verdict carried.</param>
+    /// <returns>The node to report — the mirror's first post-write version, or <paramref name="committed"/>.</returns>
+    private IObservable<MeshNode> ConfirmCommitted(string path, MeshNode committed) =>
         hub.GetWorkspace().GetMeshNodeStream(path)
             .Where(n => n is not null
-                && JsonSerializer.SerializeToNode(n, hub.JsonSerializerOptions) is JsonObject live
-                && FieldsLandedIn(live, expectedFields))
+                && (n.Version > committed.Version
+                    || MeshNode.SerializedEquals(n, committed, hub.JsonSerializerOptions)))
             .Take(1)
-            .Select(n => (MeshNode?)n)
             .Timeout(TimeSpan.FromSeconds(5))
-            .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null));
-
-    /// <summary>
-    /// True when every leaf in <paramref name="expected"/> (an RFC 7396-shaped delta — a nested
-    /// object recurses, a scalar/array/null is compared by value) matches the corresponding leaf
-    /// in <paramref name="live"/>. A <c>null</c> expected value (RFC 7396 "remove") matches a
-    /// live key that is absent OR explicitly null. Fields the caller did not touch are never
-    /// inspected, so a concurrent writer's changes elsewhere on the node can neither fail this
-    /// check nor satisfy it.
-    /// <para>Internal (not private): <c>InternalsVisibleTo</c> lets
-    /// <c>PatchLandedWriteCheckTest</c> pin this against the OLD version-only confirmation
-    /// directly and deterministically — see that test for why an integration-level timing
-    /// reproduction of the #2469 race is impractical in a single-silo test mesh (the per-path
-    /// write queue that gives <c>stream.Update</c> its ordering guarantee also prevents a second
-    /// writer from ever landing ahead of a still-unconfirmed one).</para>
-    /// </summary>
-    internal static bool FieldsLandedIn(JsonObject live, JsonObject expected)
-    {
-        foreach (var (key, expectedVal) in expected)
-        {
-            live.TryGetPropertyValue(key, out var liveVal);
-            if (expectedVal is JsonObject expectedObj)
-            {
-                if (liveVal is not JsonObject liveObj || !FieldsLandedIn(liveObj, expectedObj))
-                    return false;
-            }
-            else if (!JsonNode.DeepEquals(liveVal, expectedVal))
-                return false;
-        }
-        return true;
-    }
-
-    /// <summary>
-    /// Projects the caller's touched key PATHS onto the serializer-NORMALIZED form of what is about
-    /// to be written, producing the expectation <see cref="FieldsLandedIn"/> can actually satisfy.
-    ///
-    /// <para>🚨 <b>Why the caller's raw JSON is the wrong expectation.</b> #2469 replaced a
-    /// version-only confirmation (which produced false POSITIVES — any concurrent writer's bump
-    /// satisfied it) with a comparison of the caller's submitted leaves against the live node. That
-    /// fixed the false positive and introduced a false NEGATIVE, because the caller's raw values and
-    /// the STORED values are not the same JSON: the owner persists what the serializer writes.
-    /// Anything the serializer normalizes away makes the comparison unsatisfiable forever, so a
-    /// write that landed is reported as <i>"did not land within the confirmation window"</i> — and
-    /// the message tells the caller to retry, which for a non-idempotent write is actively
-    /// harmful.</para>
-    ///
-    /// <para>Measured 2026-09-21 on a live approval: a patch carrying <c>"status": "Pending"</c> —
-    /// the enum's ZERO member, which the serializer omits — was reported as not landed on three
-    /// attempts. The third had also changed <c>purpose</c>, and that change was in the store at
-    /// version 4 while the caller was told the write had failed.</para>
-    ///
-    /// <para>The rule this restores: <b>the expectation is what we can actually STORE, not what the
-    /// caller typed.</b> Every key the caller named is still expected — one whose value the
-    /// serializer WRITES is compared in its stored form, and one the serializer OMITS is expected
-    /// to be absent (projected as an explicit null, which <see cref="FieldsLandedIn"/> satisfies
-    /// with a live key that is missing or null). So the comparison resolves to one unambiguous
-    /// state in both directions: a landed write confirms, and a REFUSED write that leaves the old
-    /// non-default value in place still fails. #2469's guarantee is untouched — only keys the
-    /// caller named are ever projected, so a concurrent writer's change elsewhere on the node can
-    /// still neither satisfy nor fail the check.</para>
-    /// </summary>
-    /// <param name="normalized">The node about to be written, serialized with the hub's options.</param>
-    /// <param name="delta">The caller's own submitted fields — the key paths, not the values.</param>
-    /// <returns>The caller's key paths carrying their stored values.</returns>
-    internal static JsonObject ProjectTouched(JsonObject normalized, JsonObject delta)
-    {
-        var projected = new JsonObject();
-        foreach (var (key, deltaVal) in delta)
-        {
-            if (!normalized.TryGetPropertyValue(key, out var storedVal))
-            {
-                // 🚨 ABSENT IS AN EXPECTATION, NOT A REASON TO STOP ASKING. The serializer will
-                // not write this key, so the landed node must not carry it either — project it as
-                // an explicit null, which FieldsLandedIn already reads as "absent OR null" (RFC
-                // 7396 remove). DROPPING it instead is a false POSITIVE, which is the failure
-                // #2469 exists to prevent and strictly worse than the false negative this method
-                // fixes: a patch touching only a serializer-omitted field would project
-                // {"content":{}}, and an empty expectation is satisfied by the FIRST emission
-                // whatever the live node holds — so a REFUSED write reports "Patched:".
-                projected[key] = null;
-                continue;
-            }
-            if (deltaVal is JsonObject deltaObj && storedVal is JsonObject storedObj)
-                projected[key] = ProjectTouched(storedObj, deltaObj);
-            else
-                projected[key] = storedVal?.DeepClone();
-        }
-        return projected;
-    }
+            .Catch<MeshNode, Exception>(_ => Observable.Return(committed));
 
     /// <summary>
     /// Tries to resolve a path as a Unified Path with prefix (schema/, model/, data/, content/).
@@ -2027,16 +1963,6 @@ public partial class MeshOperations
                         rawArray is not null && index < rawArray.Count ? rawArray[index] as JsonObject : null)
                     ? null
                     : FetchNode(currentPath, caller);
-                // The caller's OWN intended field values (#2469 — see WaitForPatchApplied):
-                // restrict to the mutable surface (PatchableFields) so identity/audit fields
-                // (version, lastModified*, …) — which the OWNER re-stamps on apply and will
-                // therefore never match the caller's submitted snapshot — are never checked.
-                var nodeJson = JsonSerializer.SerializeToNode(nodeForCapture, hub.JsonSerializerOptions)
-                    as JsonObject ?? new JsonObject();
-                var expectedFields = new JsonObject();
-                foreach (var field in PatchableFields)
-                    if (nodeJson.TryGetPropertyValue(field, out var val))
-                        expectedFields[field] = val?.DeepClone();
                 perNode = perNode.Add(
                     ValidateContentWithSchema(nodeForCapture).SelectMany(validationError =>
                         validationError != null
@@ -2049,18 +1975,13 @@ public partial class MeshOperations
                             .SelectMany(claimed => claimed.IsUnavailable
                                 ? Observable.Return(UnavailableMessage(currentPath, claimed.UnavailableReason!))
                                 : mesh.UpdateNode(claimed.Node ?? nodeForCapture)
-                                // Gate the success string on the update PROVABLY landing — see
-                                // WaitForPatchApplied's #2469 note on Patch above; the same
-                                // late-NACK-after-optimistic-emit gap applies here.
-                                .SelectMany(_ => WaitForPatchApplied(currentPath, expectedFields)
+                                // UpdateNode emits only on the owner's commit verdict and faults
+                                // on every refusal — that IS the confirmation (#6635; see
+                                // ConfirmCommitted). Never re-read the caller's values from the
+                                // live node: a field another writer consumes is not a lost write.
+                                .SelectMany(committed => ConfirmCommitted(currentPath, committed)
                                     .Select(after =>
                                     {
-                                        if (after is null)
-                                            return $"Error: the update to {currentPath} did not land "
-                                                + "within the confirmation window — a concurrent change "
-                                                + "may have conflicted with it, or the owner did not "
-                                                + "confirm the write in time. Get the node to see its "
-                                                + "current content and retry.";
                                         OnNodeChange?.Invoke(new NodeChangeEntry
                                         {
                                             Path = after.Path,
@@ -2189,15 +2110,9 @@ public partial class MeshOperations
                 // node so the polymorphic `$type` discriminator is present, so omitted
                 // keys are preserved and only the provided keys change. A null member
                 // deletes that key; arrays/scalars replace wholesale (RFC 7396).
-                // 🚨 Snapshot the CALLER'S OWN intended field values BEFORE the content merge
-                // below overwrites jsonObj["content"] with the full merged blob. WaitForPatchApplied
-                // (#2469) confirms the write landed by checking exactly these leaves against the
-                // live mirror — the caller's raw content sub-delta, not the merged snapshot (which
-                // also carries whatever unrelated fields — e.g. a poller's checkedAt — happened to
-                // be live at merge time, and would never match a busy node's live state again).
-                // The caller's own key PATHS. Values are projected from the normalized
-                // merged node below (ProjectTouched) — never taken from here, because the
-                // raw submitted value is not what gets stored.
+                // 🚨 Snapshot the CALLER'S OWN keys BEFORE the content merge below overwrites
+                // jsonObj["content"] with the full merged blob: the unknown-member refusal further
+                // down judges exactly the keys the caller named, never the merged snapshot.
                 var callerDelta = jsonObj.DeepClone().AsObject();
 
                 if (jsonObj["content"] is JsonObject contentPatch)
@@ -2246,10 +2161,9 @@ public partial class MeshOperations
 
                 // 🚨 REFUSE content members the bound type does not declare. The merged content was
                 // deserialised into the TYPE this portal has bound for the NodeType, and System.Text.Json
-                // drops a member that type does not declare without a word. ProjectTouched then reads
-                // the dropped key as "serializer omits it ⇒ expect absent", the live node satisfies that
-                // on its first emission, and the tool answered "Patched:" for a write that changed
-                // nothing. Measured on a Crm/Counterparty node whose NodeType had just gained
+                // drops a member that type does not declare without a word — the owner then commits a
+                // node without it, and the tool answered "Patched:" for a write that changed
+                // nothing of what the caller asked. Measured on a Crm/Counterparty node whose NodeType had just gained
                 // aliases/domains/matchCaseSensitive: "Patched" twice, version unchanged, keys absent on
                 // read-back — because the running type was the one compiled BEFORE the fields existed.
                 if (callerDelta["content"] is JsonObject callerContent
@@ -2287,15 +2201,6 @@ public partial class MeshOperations
                     ? ValidateContentWithSchema(merged)
                     : Observable.Return<string?>(null);
 
-                // 🚨 Build the expectation from what will actually be STORED — the merged node
-                // as the serializer writes it — projected onto the caller's own key paths. See
-                // ProjectTouched: comparing the caller's RAW values makes any serializer-normalized
-                // field (a default-valued enum, a rewritten date, a renamed enum member) an
-                // expectation that can never be met, so a landed write reports as not landed.
-                var mergedJson = JsonSerializer.SerializeToNode(merged, hub.JsonSerializerOptions)
-                    as JsonObject ?? new JsonObject();
-                var expectedFields = ProjectTouched(mergedJson, callerDelta);
-
                 var versionBefore = existing.Version;
                 return validationObs
                     .CarryAccessContext(hub.ServiceProvider, caller)
@@ -2303,26 +2208,17 @@ public partial class MeshOperations
                     validationError != null
                         ? Observable.Return(validationError)
                         : mesh.UpdateNode(merged)
-                            // 🚨 Gate the success string on the patch PROVABLY landing (#2469 —
-                            // mirrors EditContent's #1716 fix). UpdateNode/UpdateRemote emits
-                            // OPTIMISTICALLY after a short owner-response bound; a LATE
-                            // Conflict/AccessDenied NACK that arrives after that optimistic emit
-                            // is only ever LOGGED server-side (LATE_NACK_TERMINAL) — never
-                            // propagated back to this already-completed caller. The plain
-                            // WaitForReadYourWrites version-advance check cannot catch this on a
-                            // busy node: a concurrent unrelated writer (Admin/UpdatePolicy's
-                            // self-update poller, say) advances the version just as well as this
-                            // write would, so the tool could report "Patched:" — WITH a version
-                            // delta — while the caller's own field never changed. Verify the
-                            // caller's OWN touched leaves specifically instead.
-                            .SelectMany(_ => WaitForPatchApplied(resolvedPath, expectedFields)
+                            // 🚨 The success string is gated on the OWNER'S COMMIT VERDICT, which
+                            // is what UpdateNode emits (#2661) — a late Conflict/AccessDenied NACK
+                            // faults it and lands in the Catch below. Never on re-reading the
+                            // caller's own leaves from the live node: an intent field another
+                            // writer consumes right after it lands (a control plane clearing
+                            // `requestedAction`) made that read report a landed write as NOT landed
+                            // and tell the caller to retry a non-idempotent request (#6635). See
+                            // ConfirmCommitted.
+                            .SelectMany(committed => ConfirmCommitted(resolvedPath, committed)
                                 .Select(after =>
                                 {
-                                    if (after is null)
-                                        return $"Error: the patch to {resolvedPath} did not land within "
-                                            + "the confirmation window — a concurrent change may have "
-                                            + "conflicted with it, or the owner did not confirm the write "
-                                            + "in time. Get the node to see its current content and retry.";
                                     OnNodeChange?.Invoke(new NodeChangeEntry
                                     {
                                         Path = after.Path,
@@ -2891,7 +2787,7 @@ public partial class MeshOperations
         return pathResolver.ResolvePath(resolvedPath).SelectMany(resolution =>
         {
             if (resolution == null)
-                return Observable.Return($"Error: no matching node for path '{resolvedPath}'");
+                return Observable.Return(NoMatchingNodeAnswer(resolvedPath));
             if (string.IsNullOrEmpty(resolution.Remainder))
                 return Observable.Return("Error: path must include '{collection}/{filePath}' after the node path (e.g. 'Systemorph/content/logo.png').");
 
@@ -2907,6 +2803,72 @@ public partial class MeshOperations
             var targetAddress = (Address)resolution.Prefix;
             var qualifiedCollectionName = $"{resolution.Prefix}/{collectionName}";
 
+            // 🚨 AN UPLOAD IS A WRITE, so it is authorized as one — Update on the node that owns the
+            // collection, the permission every content edit of that node requires. This pre-flight
+            // is the EARLY answer (it names the missing permission, and spares staging bytes for a
+            // caller who will be refused); the decision that admits the write is the owning hub's
+            // gate on the delivery that carries the bytes (SaveUpload, #6585). Asked for the caller
+            // captured at entry, fail-closed on every non-granted verdict.
+            return AuthorizeUpload(resolution.Prefix, resolvedPath, caller)
+                .SelectMany(refusal => refusal is not null
+                    ? Observable.Return(refusal)
+                    : SaveUpload(resolution, resolvedPath, collectionName, filePath, targetAddress, qualifiedCollectionName, bytes, caller));
+        })
+        .Catch((Exception ex) =>
+        {
+            logger.LogWarning(ex, "Upload failed for {Path}", path);
+            var message = ex is TimeoutException
+                ? $"the node for '{path}' did not respond to the content-collection lookup in time — " +
+                  "confirm the path resolves to a content-enabled node (one configured with AddContentCollections)."
+                : ex.Message;
+            return Observable.Return($"Error: {message}");
+        });
+    }
+
+    /// <summary>
+    /// The write pre-flight of <see cref="Upload"/>: <c>null</c> when <paramref name="caller"/> holds
+    /// Update on <paramref name="nodePath"/>, otherwise the refusal to answer. Asks the same question
+    /// as every other write pre-flight (<see cref="CheckUpdateOutcome"/> — the raw fold, re-decided
+    /// through the node's access rule on a definitive denial).
+    ///
+    /// <para>🚨 A caller who may not even READ the node gets the answer an absent path gets — naming
+    /// "access denied" there would tell them a node exists at that path. A reader who lacks Update
+    /// already knows the node exists, so they are told which permission is missing.</para>
+    /// </summary>
+    private IObservable<string?> AuthorizeUpload(string nodePath, string resolvedPath, AccessContext caller) =>
+        CheckUpdateOutcome(nodePath, "Upload", caller)
+            .SelectMany(outcome =>
+            {
+                if (outcome.IsGranted)
+                    return Observable.Return<string?>(null);
+                if (outcome.IsUndetermined)
+                    return Observable.Return<string?>(
+                        $"Error: uploading to {nodePath}: the permission check did not complete "
+                        + $"({outcome.UndeterminedReason}). Nothing was written; retry.");
+                return hub.CheckPermissionOutcome(nodePath, UserIdOf(caller), MeshWeaver.Mesh.Security.Permission.Read)
+                    .Take(1)
+                    .Timeout(TimeSpan.FromSeconds(10))
+                    .Catch((Exception _) => Observable.Return(MeshWeaver.Mesh.Security.PermissionCheckOutcome.Denied))
+                    .Select(read => read.IsGranted
+                        ? (string?)$"Error: Access denied: user '{UserIdOf(caller)}' lacks Update permission on "
+                            + $"'{nodePath}'. Nothing was written."
+                        : NoMatchingNodeAnswer(resolvedPath));
+            });
+
+    /// <summary>The answer <see cref="Upload"/> and <see cref="ContentList"/> give for a path that
+    /// resolves to no node — and, identically, for one the caller may not read.</summary>
+    private static string NoMatchingNodeAnswer(string resolvedPath)
+        => $"Error: no matching node for path '{resolvedPath}'";
+
+    /// <summary>
+    /// The write half of <see cref="Upload"/>: looks the collection up on the owning node hub and
+    /// posts the bytes to THAT hub, which decides Update for the caller and writes them. Reached only
+    /// after <see cref="AuthorizeUpload"/> granted, but not admitted by it (#6585).
+    /// </summary>
+    private IObservable<string> SaveUpload(
+        AddressResolution resolution, string resolvedPath, string collectionName, string filePath,
+        Address targetAddress, string qualifiedCollectionName, byte[] bytes, AccessContext caller)
+    {
             // Ask the owning node hub for its collection config — exact same mechanism
             // the static GET endpoint uses (see BlazorHostingExtensions.ResolveStatic).
             // 🚨 .Timeout is mandatory: HandleCollectionConfigRequest is registered ONLY by
@@ -2952,48 +2914,57 @@ public partial class MeshOperations
                     if (contentService == null)
                         return Observable.Return("Error: content service not configured on the hub.");
 
+                    // Registered here only so the post-upload observers can read the file under the
+                    // qualified name — this hub never WRITES through it.
                     contentService.AddConfiguration(collectionConfig);
-                    // Pure composition — the save leaf runs on the collection's own IIoPool.
-                    return contentService.GetCollection(qualifiedCollectionName)
-                        .SelectMany(collection =>
+                    // 🚨 THE WRITE IS DECIDED WHERE IT IS COMMITTED (#6585). The bytes go to the
+                    // OWNING node's hub as the caller, and that hub's inbound gate evaluates Update
+                    // for the caller on the delivery that carries them — the gate every node write
+                    // passes. AuthorizeUpload above is an early answer only: a grant revoked after
+                    // it is refused here, and no path can store bytes without passing the owner.
+                    return hub.SaveContentFile(resolution.Prefix)
+                        .To(collectionName, filePath)
+                        .WithAccessContext(caller)
+                        .Post(bytes)
+                        .Catch((DeliveryFailureException refused) =>
+                            refused.Failure?.ErrorType == ErrorType.Unauthorized
+                                ? OwnerRefusal(resolution.Prefix, resolvedPath, caller)
+                                    .Select(message => ImportContentResponse.Fail(message))
+                                : Observable.Throw<ImportContentResponse>(refused))
+                        .Select(answer =>
                         {
-                            if (collection == null)
-                                return Observable.Return($"Error: failed to initialize collection '{qualifiedCollectionName}'.");
+                            if (!answer.Success)
+                                return answer.Error!.StartsWith("Error:", StringComparison.Ordinal)
+                                    ? answer.Error
+                                    : $"Error: {answer.Error}";
 
-                            var dir = Path.GetDirectoryName(filePath)?.Replace('\\', '/') ?? "";
-                            var fileName = Path.GetFileName(filePath);
-                            var ms = new MemoryStream(bytes);
-                            return collection.SaveFile(dir, fileName, ms)
-                                .Finally(ms.Dispose)
-                                .Select(_ =>
-                                {
-                                    // Post-upload seam: notify registered observers (e.g. the content-indexing
-                                    // pipeline) AFTER the save succeeds. Fire-and-forget — each observer starts its
-                                    // own off-band work (an Activity), so the upload response returns immediately
-                                    // and indexing never runs inline on this continuation. No-op when no
-                                    // observer is registered; ContentCollections itself takes no indexing/AI/pg dep.
-                                    hub.RaiseContentUploaded(qualifiedCollectionName, filePath);
+                            // Post-upload seam: notify registered observers (e.g. the content-indexing
+                            // pipeline) AFTER the save succeeds. Fire-and-forget — each observer starts its
+                            // own off-band work (an Activity), so the upload response returns immediately
+                            // and indexing never runs inline on this continuation. No-op when no
+                            // observer is registered; ContentCollections itself takes no indexing/AI/pg dep.
+                            hub.RaiseContentUploaded(qualifiedCollectionName, filePath);
 
-                                    return ToolAnswerJson.Serialize(new
-                                    {
-                                        status = "Uploaded",
-                                        path = $"{resolution.Prefix}/{collectionName}/{filePath}",
-                                        bytes = bytes.Length,
-                                    }, hub.JsonSerializerOptions);
-                                });
+                            return ToolAnswerJson.Serialize(new
+                            {
+                                status = "Uploaded",
+                                path = $"{resolution.Prefix}/{collectionName}/{filePath}",
+                                bytes = bytes.Length,
+                            }, hub.JsonSerializerOptions);
                         });
                 });
-        })
-        .Catch((Exception ex) =>
-        {
-            logger.LogWarning(ex, "Upload failed for {Path}", path);
-            var message = ex is TimeoutException
-                ? $"the node for '{path}' did not respond to the content-collection lookup in time — " +
-                  "confirm the path resolves to a content-enabled node (one configured with AddContentCollections)."
-                : ex.Message;
-            return Observable.Return($"Error: {message}");
-        });
     }
+
+    /// <summary>
+    /// The answer for a write the OWNING hub's gate refused (#6585) — the caller's grant was revoked
+    /// after <see cref="AuthorizeUpload"/> admitted it, or it never held one. Re-asked for the caller
+    /// now, so it reads exactly as the pre-flight's refusal would (a non-reader gets the absent-path
+    /// answer); should the re-ask grant (the grant came back), the refusal still stands, named plainly.
+    /// </summary>
+    private IObservable<string> OwnerRefusal(string nodePath, string resolvedPath, AccessContext caller)
+        => AuthorizeUpload(nodePath, resolvedPath, caller)
+            .Select(refusal => refusal
+                ?? $"Error: Access denied: the write to '{nodePath}' was refused by the node. Nothing was written.");
 
     /// <summary>
     /// Lists a content collection directory — the read half of the file browser. Path shape is
@@ -3021,7 +2992,7 @@ public partial class MeshOperations
         return pathResolver.ResolvePath(resolvedPath).SelectMany(resolution =>
         {
             if (resolution == null)
-                return Observable.Return($"Error: no matching node for path '{resolvedPath}'");
+                return Observable.Return(NoMatchingNodeAnswer(resolvedPath));
             if (string.IsNullOrEmpty(resolution.Remainder))
                 return Observable.Return("Error: path must include '{collection}[/{dir}]' after the node path (e.g. 'Systemorph/content').");
 
@@ -3074,8 +3045,14 @@ public partial class MeshOperations
                         {
                             if (collection == null)
                                 return Observable.Return($"Error: failed to initialize collection '{qualifiedCollectionName}'.");
+                            // 🚨 The staging folder is framework state, never content (#6585): an
+                            // oversized upload's bytes sit there BEFORE the owner has decided Update
+                            // for them. It is never listed, and listing it answers like an absent folder.
+                            if (ContentStaging.IsStagingPath(dir))
+                                return Observable.Return($"Error: Folder not found: {dir}");
 
                             return collection.GetCollectionItems(dir)
+                                .Where(item => !ContentStaging.IsStagingPath(item.Path?.TrimStart('/')))
                                 .Select(item => item switch
                                 {
                                     FolderItem f => (object)new { kind = "folder", name = f.Name, path = f.Path, itemCount = f.ItemCount },
@@ -3095,6 +3072,13 @@ public partial class MeshOperations
         })
         .Catch((Exception ex) =>
         {
+            // 🚨 A REFUSED lookup answers exactly what an absent path answers: "access denied"
+            // naming the path would tell a caller who may not read it that a node exists there.
+            if (IsAccessDenial(ex))
+            {
+                logger.LogInformation("ContentList DENIED for {Path} — answered as absent", resolvedPath);
+                return Observable.Return(NoMatchingNodeAnswer(resolvedPath));
+            }
             logger.LogWarning(ex, "ContentList failed for {Path}", path);
             var message = ex is TimeoutException
                 ? "the node did not respond to the content-collection lookup in time — confirm the path resolves to a content-enabled node."
@@ -3297,10 +3281,20 @@ public partial class MeshOperations
             // the stream never emitted, the read hung out its whole 5 s budget, and the schema
             // then reported no configuration for a type that has one. A ContentAs further down
             // could never have rescued that: nothing reached it.
-            .Where(n => n.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions)
-                        is { CompilationStatus: CompilationStatus.Ok } d
-                        && !string.IsNullOrEmpty(d.LatestAssemblyCollection)
-                        && !string.IsNullOrEmpty(d.LatestAssemblyPath))
+            //
+            // 🚨 A SETTLED record decides at once — Error included (#6635). The wait exists for a
+            // compile still in flight (Pending / Compiling / Unknown), which may yet publish a
+            // build. A record at Error has finished: its compile failed and nothing more is coming
+            // on this stream, so waiting for Ok burned the whole 5 s on every MCP write to an
+            // instance of that type (measured: two writes landing at exactly +5.008 s). And a failed
+            // compile leaves the LAST GOOD BUILD named on the record (LatestAssemblyPath /
+            // LatestAssemblyMvid) — the build every activation of the type keeps binding until a
+            // newer one exists (Doc/Architecture/StaleStateUntilRecycle) — so the schema is read
+            // from that build, the same bytes the type's instances are running. Error with no build
+            // named answers "no configuration" immediately.
+            .Where(n => n.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions) is { } d
+                        && (d.CompilationStatus == CompilationStatus.Error
+                            || (d.CompilationStatus == CompilationStatus.Ok && NamesABuild(d))))
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(5))
             .SelectMany(node =>
@@ -3309,7 +3303,7 @@ public partial class MeshOperations
                 // earlier emission of the same stream in principle, and ContentAs is the only
                 // reading of Content this method makes.
                 var def = node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions);
-                if (def is null)
+                if (def is null || !NamesABuild(def))
                     return Observable.Return<NodeCompilationResult?>(null);
                 // 🚨 ADOPT-TIME IDENTITY GATE (#3472). One of the six load paths that gated on
                 // CompilationStatus == Ok alone. Ok is a claim SCOPED to CompiledFrameworkVersion,
@@ -3331,10 +3325,17 @@ public partial class MeshOperations
                 var store = string.Equals(def.LatestAssemblyCollection, FrameworkAssemblyStore.CollectionName, StringComparison.Ordinal)
                     ? (IAssemblyStore)FrameworkAssemblyStore.Instance
                     : hub.ServiceProvider.GetService<IAssemblyStore>() ?? NullAssemblyStore.Instance;
-                return store.TryGetBuildPath(node.Path, version, def.LatestAssemblyPath, def.LatestAssemblyMvid)
+                // 🚨 Both leaves are blocking file I/O — the store probes its directory when
+                // SUBSCRIBED, and the load reads and reflection-scans the assembly when CALLED — so
+                // both run on the file-system pool, never on this stream's signalling thread, which
+                // can be a hub's scheduler (the DynamicContentTypeRegistrar shape).
+                var pool = hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem)
+                           ?? IoPool.Unbounded;
+                return pool.InvokeObservable(_ => store.TryGetBuildPath(node.Path, version, def.LatestAssemblyPath, def.LatestAssemblyMvid).Take(1))
                     .SelectMany(localPath => string.IsNullOrEmpty(localPath)
                         ? Observable.Return<NodeCompilationResult?>(null)
-                        : compilationService.GetConfigurationsFromExistingAssembly(localPath!, nodeType).Take(1));
+                        : pool.InvokeBlocking(_ => compilationService.GetConfigurationsFromExistingAssembly(localPath!, nodeType))
+                            .SelectMany(load => load.Take(1)));
             })
             .Select(result =>
             {
@@ -3345,6 +3346,9 @@ public partial class MeshOperations
             })
             .Catch<Func<MessageHubConfiguration, MessageHubConfiguration>?, Exception>(_ =>
                 Observable.Return<Func<MessageHubConfiguration, MessageHubConfiguration>?>(null));
+
+        static bool NamesABuild(NodeTypeDefinition d)
+            => !string.IsNullOrEmpty(d.LatestAssemblyCollection) && !string.IsNullOrEmpty(d.LatestAssemblyPath);
     }
 
     /// <summary>
@@ -4827,6 +4831,15 @@ public partial class MeshOperations
 
         return false;
     }
+
+    /// <summary>
+    /// True when <paramref name="error"/> is the mesh's decided "no" for the caller — the same typed
+    /// test as <see cref="IsWriteDenial"/>, read on the READ side: a caller-facing read that was
+    /// refused answers what an absent path answers, so naming the refusal would disclose that
+    /// something exists at the path.
+    /// </summary>
+    /// <param name="error">The fault the read terminated with.</param>
+    internal static bool IsAccessDenial(Exception error) => IsWriteDenial(error);
 
     /// <summary>
     /// The <c>DisposeRequest.Reason</c> an operator recycle carries — the framework's own sentence

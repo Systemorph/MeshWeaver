@@ -182,6 +182,14 @@ internal static class ModuleServiceForwarding
     /// caller's scope owned disposed a module SINGLETON when the first circuit ended, under every other
     /// user, and a scoped instance twice. A proxy is not owned either: disposing a proxy over an
     /// <see cref="IDisposable"/> interface forwards the call to the module's instance.</para>
+    ///
+    /// <para>🚨 One exception (MeshWeaver#6557): an <see cref="InstalledModuleAssembly"/> the module
+    /// registers (the further reference assemblies a module ships — MeshWeaver.Testing's xunit closure)
+    /// gets no plain forwarder. A plain forwarder can only throw once its module is withdrawn, and every
+    /// enumeration of the installed-module set — the boot pre-warm sweep's included — would fault on it.
+    /// It is declared as an <see cref="InstalledModuleSlot"/> in its place in the set instead, which
+    /// <see cref="InstalledModules"/> answers from the module's current generation while the registry
+    /// holds the module and leaves out once the module is withdrawn or retired.</para>
     /// </summary>
     public static IServiceCollection AddForwarders(IServiceCollection root, ModuleServices services)
     {
@@ -234,6 +242,17 @@ internal static class ModuleServiceForwarding
                     root.Add(NotOwnedServiceDescriptor.Forwarder(type, sp => ModuleServiceProxy.Create(
                         type, sp.GetRequiredService<ModuleContexts>(), module, index,
                         ModuleServiceProvider.CallerOfRootScope(sp)), registration.Descriptor.Lifetime));
+                    break;
+                case ModuleServiceRoute.Current when type == typeof(InstalledModuleAssembly):
+                    // A member of the installed-module set the module contributes: ABSENT once the
+                    // module is withdrawn or retired, never a fault in whoever enumerates the set
+                    // (MeshWeaver#6557, InstalledModules).
+                    // ONE snapshot of the module's generation: a check of Current and a second lookup
+                    // to resolve could see a generation that was disposed in between.
+                    root.Add(InstalledModuleSlot.Declare(sp =>
+                            (InstalledModuleAssembly?)sp.GetRequiredService<ModuleContexts>()
+                                .TryResolveCurrentModuleService(module, index),
+                        $"Module {module} is no longer held by this mesh's module registry — the installed module it contributed is gone with it."));
                     break;
                 case ModuleServiceRoute.Current:
                     // Resolved for the CALLER — the scope this transient forwarder is resolved in — so a
