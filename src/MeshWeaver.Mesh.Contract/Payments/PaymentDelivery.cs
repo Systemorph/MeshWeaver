@@ -57,7 +57,8 @@ public sealed record PaymentDelivery
 
     /// <summary>
     /// Whether this delivery names work the portal would actually DO — a checkout naming an order,
-    /// a subscription event that renews a plan, ends it, or reports a failed charge on it, a setup
+    /// a subscription event that renews a plan, ends it, reports a failed charge on it, or changes
+    /// whether it will renew, a setup
     /// naming its attempt or claim, or a deferred subscription naming its claim. The predicate the retention decision
     /// turns on: a renewal discarded as noise is a subscriber whose plan silently lapses next month
     /// with nothing anywhere to say why. Pure.
@@ -135,7 +136,12 @@ public sealed record PaymentCheckoutEvent(
 /// <summary>What a subscription-lifecycle delivery does to the plan it names.</summary>
 public enum PaymentSubscriptionChange
 {
-    /// <summary>Nothing the portal acts on — including an event that names no viewer and no plan.</summary>
+    /// <summary>
+    /// No change to the plan's PERIOD — including an event that names no viewer and no plan. A
+    /// change to whether the subscription will RENEW rides beside this, on
+    /// <see cref="PaymentSubscriptionEvent.Renewal"/>, never as a member here (policy
+    /// <c>open-vocabulary-string-constants</c>: this enum is not widened).
+    /// </summary>
     None = 0,
 
     /// <summary>
@@ -159,6 +165,31 @@ public enum PaymentSubscriptionChange
     /// <see cref="Ended"/>.
     /// </summary>
     PaymentFailed = 3,
+}
+
+/// <summary>
+/// Whether a subscription will RENEW at the end of the period already paid for, as a delivery
+/// reports it CHANGED (<see cref="PaymentSubscriptionEvent.Renewal"/>). An OPEN vocabulary of string
+/// constants (policy <c>open-vocabulary-string-constants</c>): a provider may answer a word of its
+/// own, and a caller that does not know a word logs it verbatim and changes nothing — it never
+/// reads an unknown word as either of these.
+///
+/// <para>Neither word changes the plan's entitlement. The subscriber has paid through the current
+/// period either way; what changes is what the plan says ("ends on" instead of "renews on"). The
+/// ending itself still arrives as <see cref="PaymentSubscriptionChange.Ended"/>.</para>
+/// </summary>
+public static class PaymentSubscriptionRenewal
+{
+    /// <summary>
+    /// The subscription renews again: a cancellation requested for the period end was WITHDRAWN.
+    /// </summary>
+    public const string Renews = "Renews";
+
+    /// <summary>
+    /// The subscription will NOT renew: a cancellation at the end of the paid period was requested
+    /// — on the portal's own plan page or on the processor's hosted billing portal.
+    /// </summary>
+    public const string CancelsAtPeriodEnd = "CancelsAtPeriodEnd";
 }
 
 /// <summary>
@@ -216,6 +247,37 @@ public sealed record PaymentSubscriptionEvent(
     /// </summary>
     public bool IsPaidRenewal => Renews && AmountPaid is not <= 0m;
 
+    /// <summary>
+    /// The renewal state this delivery reports the subscription CHANGED to — one of
+    /// <see cref="PaymentSubscriptionRenewal"/>, or a provider's own word — or null when the
+    /// delivery does not report such a change.
+    ///
+    /// <para>🚨 Only a CHANGE is reported, never the state an unrelated update happens to carry. A
+    /// processor sends "the subscription was updated" for many reasons (a new period, a new card, a
+    /// price), each stating the current renewal flag; a caller that re-applied that flag from every
+    /// update would let a delayed, older delivery undo a newer request. A provider sets this only
+    /// when the delivery says the renewal flag itself changed.</para>
+    /// </summary>
+    public string? Renewal { get; init; }
+
+    /// <summary>
+    /// When the processor says the reported event HAPPENED, when the payload states it — not when
+    /// it was delivered or processed. A caller orders renewal-state changes by it, so a redelivery
+    /// or an out-of-order older delivery never undoes a newer one.
+    /// </summary>
+    public DateTimeOffset? OccurredAt { get; init; }
+
+    /// <summary>Whether this delivery reports a change to the renewal state at all. Pure.</summary>
+    public bool ChangesRenewal => !string.IsNullOrWhiteSpace(Renewal);
+
+    /// <summary>Whether this delivery reports that the subscription will NOT renew. Pure.</summary>
+    public bool CancelsAtPeriodEnd =>
+        string.Equals(Renewal, PaymentSubscriptionRenewal.CancelsAtPeriodEnd, StringComparison.Ordinal);
+
+    /// <summary>Whether this delivery reports that a requested cancellation was WITHDRAWN. Pure.</summary>
+    public bool ResumesRenewal =>
+        string.Equals(Renewal, PaymentSubscriptionRenewal.Renews, StringComparison.Ordinal);
+
     /// <summary>The claim the subscription was scheduled for, when it is a deferred one.</summary>
     public string? ClaimReference => Meta(PaymentMetadata.ClaimReference);
 
@@ -237,8 +299,12 @@ public sealed record PaymentSubscriptionEvent(
     /// <summary>Whether this event reports a FAILED charge — the plan goes past-due. Pure.</summary>
     public bool FailsPayment => Change is PaymentSubscriptionChange.PaymentFailed;
 
-    /// <summary>Whether this event is one the portal acts on at all. Pure.</summary>
-    public bool IsActionable => Renews || Ends || FailsPayment;
+    /// <summary>
+    /// Whether this event is one the portal acts on at all — a period change, or a change to the
+    /// renewal state (<see cref="ChangesRenewal"/>; an unknown word is still retained, so the caller
+    /// can name it). Pure.
+    /// </summary>
+    public bool IsActionable => Renews || Ends || FailsPayment || ChangesRenewal;
 
     /// <summary>One metadata value, or null when absent or blank. Pure.</summary>
     public string? Meta(string key) =>
