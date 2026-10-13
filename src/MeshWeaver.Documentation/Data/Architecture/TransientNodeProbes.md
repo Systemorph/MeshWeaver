@@ -175,9 +175,50 @@ alive and will come back. The cure is that the watcher is never installed on a h
 never be true, not that its fault is reported more quietly. Downgrading the line would have left the
 re-establish timer armed and the sub-hub still being created.
 
+## Resident initialization: `WithResidentInitialization`
+
+The control plane is not the only thing a NodeType arms for the node's lifetime. An always-on hub
+arms sweeps, timers, inbox watchers and even node writes from its synchronous
+`WithInitialization(Action<IMessageHub>)` hooks — and those run inside `MessageHubConfiguration.Build`,
+so a probe that builds the type's configuration runs every one of them before it is disposed. On the
+control instance's `Hosting/PlatformBuildInbox` that left orphaned FleetWatch `pass 1 (open)` records
+behind registration probes, and a `CreateOrUpdateNodeRequest` issued from a probe hub died at boot on
+`HubDisposedBeforeResponseException` (Systemorph/MeshWeaver#5011, #6641). Each arm used to guard itself
+(`if (hub.Configuration.Get<TransientNodeProbe>() is not null) return;`), which made the next arm
+unguarded by default.
+
+The seam is `config.WithResidentInitialization(Action<IMessageHub>)` (`MeshWeaver.Data`, declared in
+the `MeshWeaver.Messaging` namespace so every configuration lambda sees it beside `WithInitialization`):
+
+```csharp
+config.WithResidentInitialization(hub => ArmMySweep(hub));   // never on a probe
+config.WithInitialization(hub => RegisterWhatAProbeReads(hub)); // probes run this
+```
+
+- On a **resident** hub it runs exactly like `WithInitialization`: synchronously inside `Build`, before
+  message processing starts, at its registration position among the other initializers.
+- On a hub carrying the `TransientNodeProbe` marker it **never runs**. The marker is read from the built
+  hub's configuration, because the producers apply `AsTransientNodeProbe()` *after* the NodeType's
+  configuration — a registration-time check would see nothing.
+- It is idempotent on the caller's delegate, like `WithInitialization`: the guard wrapper is remembered
+  per delegate on the configuration, so a configurator composed through several layers arms once.
+- `hub.IsTransientNodeProbe()` is the one predicate it consults; reach for the seam, not the predicate.
+
+`ResidentInitializationSkipsProbesTest` pins all three: it runs on a resident hub, runs once when
+registered twice, and never runs on a probe — classified by the marker alone (an ordinary address),
+by the address alone (no marker), and on the real registration probe — whose plain `WithInitialization`
+registered beside it *does* run, the negative control that proves the probe built the configuration.
+
 ## Rules
 
 - **Mint every probe address from `TransientProbeAddresses`.** Never a string literal.
+- **A SYNCHRONOUS initializer that arms something for the hub's lifetime is registered with
+  `WithResidentInitialization`**, never a plain `WithInitialization(Action<IMessageHub>)` with a
+  hand-written probe check. Plain synchronous `WithInitialization` is for what a probe needs to read
+  (type registrations, data-context configuration). The rule is about the synchronous overload, which
+  runs inside `Build` — the seam accepts only `Action<IMessageHub>`. Reactive lifecycle work that must
+  run after `Build` (the `WithInitialization(Func<IMessageHub, IObservable<Unit>>)` overload, e.g.
+  `BuildNodeType.StartClaimArbiter`) stays on that overload; never move it onto the build-time path.
 - **A new read seam that can be handed an arbitrary path must consult `IsProbeAddress`** before it
   gates, caches, routes, or opens a breaker on that path.
 - **A watcher of the hub's OWN node is not installed on a probe.** Put the guard at the shared seam
