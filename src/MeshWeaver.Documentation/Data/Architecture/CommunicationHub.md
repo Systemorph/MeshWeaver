@@ -410,7 +410,22 @@ reading content on the page: unread mail is "not `Read`", an unread notification
 `isRead`". An unread row carries `rowClass: inbox-unread` and the grid applies it per row
 (`DataGridControl.WithRowClassProperty`), so it renders bold.
 
-The command row's two buttons act on every ticked row; **Backspace or Delete presses Delete**
+**Approvals are their own source (✅), shown by default.** An approval request is the "approval
+required" notification its flow sends the approver — a document approval, an instance action, a
+governed-activity signature — so the Approvals leg reads the viewer's own `_Notification` partition
+and the notification feed no longer carries them. 🚨 `NotificationType.ApprovalRequired` is the enum
+DEFAULT and is omitted from stored JSON, so the leg NEGATES every stamped type
+(`InboxQueries.StampedNotificationTypes`, pinned against the enum by a test).
+
+**Approve / Reject act on every ticked approval request.** The inbox sends the node the request
+points at (its `TargetNodePath`) a `DecideApprovalRequest` **as the approver** — the decision is
+authored by them and authorized by the node's own type, exactly as its own Approve button is — and
+files the request away once the type answers `Done`. The inbox knows no approval kind: each type
+handles the request on its own hub, answers a refusal with its reason, and answers
+`StepUpRequired` where the instance demands a step-up per decision (one confirmation for a batch is
+owed — §11). A decision is not undoable from the inbox; it is the approval's own record.
+
+The command row's Delete and Undo act on every ticked row; **Backspace or Delete presses Delete**
 (`ButtonControl.WithShortcut`) — never while typing in the search box.
 
 | Button | Does | Never does |
@@ -756,6 +771,12 @@ twice.
 
 ## 11. What is NOT established here
 
+- **Which approval types answer `DecideApprovalRequest`.** The contract and the inbox side ship in
+  core; each approval type handles it in its own package (document approvals and instance actions
+  first). A type that does not answer leaves its requests listed and reports "no answer".
+- **One step-up for a batch.** Where the instance requires a step-up confirmation per decision, a
+  batch is decided item by item today and each answers `StepUpRequired`; a single confirmation bound
+  to the whole batch needs the step-up contract extended.
 - **"Done" is judged on the writer's mirror, not on the owner's verdict.** A handler counts an item
   as put away when its update lambda changed the content it was handed and the written result is in
   the asked-for state. If the same item was put away in ANOTHER session a moment earlier and this

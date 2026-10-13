@@ -176,6 +176,14 @@ public static class InboxLayoutArea
                     .WithReactiveClickAction(ctx => Delete(ctx, acts, owner, rows)), "Delete")
                 .WithView(Controls.Button(host.Localize("inbox.undo")).WithAppearance(Appearance.Neutral)
                     .WithReactiveClickAction(ctx => Undo(ctx, acts)), "Undo")
+                // Decide every ticked approval request — the approval's own type decides and
+                // authorizes, as the clicker (InboxApprovals). Other ticked rows are left alone.
+                .WithView(Controls.Button(host.Localize("inbox.approve")).WithAppearance(Appearance.Neutral)
+                    .WithIconStart(FluentIcons.Checkmark())
+                    .WithReactiveClickAction(ctx => Decide(ctx, acts, owner, rows, ApprovalDecisions.Approve)), "Approve")
+                .WithView(Controls.Button(host.Localize("inbox.reject")).WithAppearance(Appearance.Neutral)
+                    .WithIconStart(FluentIcons.Dismiss())
+                    .WithReactiveClickAction(ctx => Decide(ctx, acts, owner, rows, ApprovalDecisions.Reject)), "Reject")
                 .WithView(toggles, "Sources")
                 .WithView(settings, "Settings"), "Commands")
             // Says which sources could not be read — an unreadable source must never look like an
@@ -458,6 +466,40 @@ public static class InboxLayoutArea
                         // The rows are gone from the grid; so are their ticks.
                         host.UpdateData(InboxRows.SelectionId, new DataGridSelectionState());
                         ctx.ReportSummary(Summary(host, "inbox.summary.deleted", outcomes));
+                    })
+                    .Select(_ => Unit.Default)));
+    }
+
+    /// <summary>
+    /// Approve all / Reject all: every ticked row that is an approval request (the Approvals source),
+    /// re-checked against the owner's own feed exactly as Delete is, decided one at a time as the
+    /// clicker. Not undoable — a decision is the approval's own record — so nothing enters the Undo
+    /// batch; a row that is not an approval request is not touched, and the outcome line names every
+    /// request that was not decided, with the reason its type gave.
+    /// </summary>
+    private static IObservable<Unit> Decide(UiActionContext ctx, InboxActs acts, string owner,
+        IObservable<ImmutableList<InboxRow>> rows, string decision)
+    {
+        var host = ctx.Host;
+        var hub = host.Hub;
+        var access = hub.ServiceProvider.GetService<AccessService>();
+        var caller = access?.Context;
+        var handlers = hub.ServiceProvider.GetServices<IInboxItemHandler>().ToImmutableArray();
+        var noAnswer = host.Localize("inbox.approval.noAnswer");
+        var approve = decision == ApprovalDecisions.Approve;
+        return acts.Exclusive(host.Localize("inbox.busy"), ctx.SelectedRowKeys(InboxRows.SelectionId)
+            .Zip(rows.Take(1), (keys, current) => InboxRows.Targets(current, keys, owner)
+                .Where(row => string.Equals(row.SourceId, InboxQueries.ApprovalsSource, StringComparison.Ordinal))
+                .ToImmutableList())
+            .SelectMany(targets => targets.Count == 0
+                ? Observable.Throw<Unit>(new InvalidOperationException(host.Localize("inbox.nothingToDecide")))
+                : Act(ctx, access, caller, targets.Select(row => new InboxUndoItem(row.Path, row.NodeType)).ToImmutableList(),
+                        handlers, (_, path) => InboxApprovals.Decide(hub, path, decision, noAnswer),
+                        approve ? "inbox.progress.approving" : "inbox.progress.rejecting", _ => { })
+                    .Do(outcomes =>
+                    {
+                        host.UpdateData(InboxRows.SelectionId, new DataGridSelectionState());
+                        ctx.ReportSummary(Summary(host, approve ? "inbox.summary.approved" : "inbox.summary.rejected", outcomes));
                     })
                     .Select(_ => Unit.Default)));
     }
