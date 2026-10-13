@@ -162,6 +162,43 @@ public class ContentFieldSortTest
             .Should().Equal("json-1000+02", "json-0830Z", "typed-0900Z");
     }
 
+    /// <summary>
+    /// A sort function runs on the value as written (as Postgres applies it), not on its canonical
+    /// form: <c>length</c> of <c>…08:30:00Z</c> is 20, of <c>…08:30:00.0000000Z</c> 28.
+    /// </summary>
+    [Fact]
+    public void SortFunction_AppliesToTheValueAsWritten()
+    {
+        var nodes = new[]
+        {
+            Node("long-form", Json("""{"at":"2026-10-13T08:30:00.0000000Z"}""")),
+            Node("short-form", Json("""{"at":"2026-10-13T08:30:00Z"}""")),
+        };
+
+        new QueryEvaluator().OrderResults(nodes, new OrderByClause("length(content.at)", Descending: true))
+            .Select(n => n.Id)
+            .Should().Equal("long-form", "short-form");
+    }
+
+    /// <summary>
+    /// An enum node field orders by its NUMBER — Postgres stores <c>state</c> as SMALLINT — not by
+    /// its member name.
+    /// </summary>
+    [Fact]
+    public void EnumNodeField_OrdersNumerically_LikeItsColumn()
+    {
+        var nodes = new[]
+        {
+            Node("deleted", null) with { State = MeshNodeState.Deleted },
+            Node("new", null) with { State = MeshNodeState.New },
+            Node("active", null) with { State = MeshNodeState.Active },
+        };
+        var expected = nodes.OrderBy(n => (int)n.State).Select(n => n.Id).ToArray();
+
+        new QueryEvaluator().OrderResults(nodes, new OrderByClause("state")).Select(n => n.Id)
+            .Should().Equal(expected);
+    }
+
     /// <summary>A null or absent key is last whichever way the sort runs.</summary>
     [Fact]
     public void NullsAndAbsentKeys_SortLast_InBothDirections()

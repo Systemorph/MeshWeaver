@@ -580,23 +580,44 @@ public class QueryEvaluator
         if (open > 0 && selector.EndsWith(')'))
         {
             var function = selector[..open].Trim();
-            var inner = QuerySortKey.Normalize(ResolveSortSelector(obj, selector[(open + 1)..^1].Trim()));
-            var text = inner switch
-            {
-                null => null,
-                string s => s,
-                _ => Convert.ToString(inner, CultureInfo.InvariantCulture),
-            };
+            var argument = selector[(open + 1)..^1].Trim();
+            // The function runs on the value AS WRITTEN — what Postgres applies it to — and only its
+            // RESULT is normalised: length("…08:30:00Z") is 20 there, not the 28 of the canonical form.
+            var text = AsWrittenText(ResolveSortSelector(obj, argument), SortReadsContent(argument));
             if (function.Equals("length", StringComparison.OrdinalIgnoreCase))
-                return text is null ? null : (double)text.Length;
+                return text is null ? null : (decimal)text.Length;
             if (function.Equals("lower", StringComparison.OrdinalIgnoreCase))
-                return text?.ToLowerInvariant();
+                return QuerySortKey.Normalize(text?.ToLowerInvariant());
             if (function.Equals("upper", StringComparison.OrdinalIgnoreCase))
-                return text?.ToUpperInvariant();
+                return QuerySortKey.Normalize(text?.ToUpperInvariant());
         }
 
-        return QuerySortKey.Normalize(ResolveSortSelector(obj, selector));
+        var value = ResolveSortSelector(obj, selector);
+        // A node field that is an enum is a SMALLINT column on Postgres (state, sync_behavior), which
+        // orders by the underlying number; inside content an enum is written by name, so it is text.
+        if (value is Enum member && !SortReadsContent(selector))
+            return Convert.ToDecimal(member, CultureInfo.InvariantCulture);
+        return QuerySortKey.Normalize(value);
     }
+
+    /// <summary>
+    /// The text a SQL function would see: a string as written; an enum as its name inside content and
+    /// its number on a node column; anything else in its canonical (ISO / invariant) form.
+    /// </summary>
+    private static string? AsWrittenText(object? value, bool readsContent) => value switch
+    {
+        null => null,
+        string s => s,
+        JsonElement { ValueKind: JsonValueKind.String } e => e.GetString(),
+        JsonElement { ValueKind: JsonValueKind.Number } e => e.GetRawText(),
+        Enum member when !readsContent => Convert.ToDecimal(member, CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture),
+        _ => QuerySortKey.Normalize(value) switch
+        {
+            null => null,
+            string s => s,
+            var other => Convert.ToString(other, CultureInfo.InvariantCulture),
+        },
+    };
 
     /// <summary>
     /// Whether a <c>sort:</c> selector reads the node's CONTENT rather than one of its own fields —
