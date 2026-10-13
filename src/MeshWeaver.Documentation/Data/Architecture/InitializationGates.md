@@ -462,8 +462,12 @@ value that stayed was `w1` (#6594).
 
 So the waiting write takes the head of a lane (`ColdStoreWriteLane`, one per primary store), and
 every later MeshNode write on that store queues behind it — in the order its merge turn ran — until
-the lane releases them. When the load lands, the head runs; each write releases the next only once it
-has its answer, so they commit in the order they arrived. If the store never loads within the bound,
+the lane releases them. When the load lands, the head runs; each write releases the next at the end of
+its own merge transform — once its change is computed and handed back to the store's turn, and before
+that change is persisted or acknowledged. The store's turns are serial, so the next write's turn can
+only run after this change is applied: the lane fixes the order in which writes are APPLIED, which is
+the order they arrived. It does not serialize acknowledgements; each write is still acknowledged by
+its own post-commit flush. If the store never loads within the bound,
 the head is answered `OwnerNotReady`, and so is every write behind it: they meet the same unloaded
 store.
 

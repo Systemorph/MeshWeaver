@@ -17,7 +17,9 @@ namespace MeshWeaver.Data;
 ///
 /// <para><b>The rule.</b> While a write is waiting for the store, every later MeshNode write on
 /// that store queues behind it, in the order its merge turn ran. When the store loads, the head
-/// runs, and each finished write dispatches the next. Ordering is per node, which includes the
+/// runs, and each write dispatches the next at the end of its own merge transform — the
+/// store's turns are serial, so the next one is applied after it. The lane orders APPLICATION, not
+/// acknowledgement: each write is still acknowledged by its own post-commit flush. Ordering is per node, which includes the
 /// per-sender order #6589 established: nothing a queued write waits for depends on a reply from
 /// another write, so holding them behind one another cannot deadlock.</para>
 ///
@@ -41,7 +43,8 @@ internal sealed class ColdStoreWriteLane
     public void Enqueue(Entry entry) => queue = queue.Enqueue(entry);
 
     /// <summary>
-    /// The head has been answered: removes it and dispatches the next write, which becomes the head.
+    /// The head's merge transform has run: removes it and dispatches the next write, which becomes the
+    /// head and runs on a later (serial) turn of the same store.
     /// </summary>
     public void ReleaseHead()
     {
