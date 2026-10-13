@@ -213,7 +213,7 @@ public class AManifestClaimsOnlyWhatLandedTest(ITestOutputHelper output) : Monol
     {
         var node = await Mesh.GetWorkspace().GetMeshNodeStream(path)
             .Where(n => n is not null)
-            .FirstAsync().Timeout(30.Seconds()).Await();
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
         return node.ContentAs<MarkdownContent>(Mesh.JsonSerializerOptions)?.Content ?? "";
     }
 
