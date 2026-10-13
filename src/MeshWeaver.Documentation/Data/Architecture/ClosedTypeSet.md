@@ -1,7 +1,7 @@
 ---
 Name: Closed Type Set
 Category: Architecture
-Description: A process that activates only the NodeTypes its image registers in code — no type definition read from the database, compiled, or adopted. The switch (Mesh:ClosedTypeSet), the five places it acts, what it deliberately does not change, and why the control instance needs it.
+Description: A process that activates only the NodeTypes its image registers in code — no type definition read from the database, compiled, or adopted. The switch (Mesh:ClosedTypeSet), the six places it acts, what it deliberately does not change, and why the control instance needs it.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
 ---
 
@@ -71,7 +71,36 @@ container environment variable, next to the module that registers its types.
    `OpenTypeSetBundleAdoptionControlTest` as the open-mesh control that does fetch and does record
    the miss.
 
-Every surface reports one sentence, `ClosedTypeSet.RefusalFor(type, instance)`.
+6. **Package installs** — `PackageInstaller` (every lane: full node-repo install, incremental
+   update, content and code packages) and the boot repair pass (`InstalledPackageRepairService`),
+   through `ClosedTypeSetPackageRows` (#6627). A closed mesh **writes no NodeType definition row**
+   (`nodeType: NodeType`) a package ships, and **removes the ones an earlier install on this host
+   left**. Everything else installs exactly as on an open mesh: the package root, its instances
+   (an instance typed by a withheld type is validated as in-package, as before), `Source/` nodes,
+   access satellites, the install record — and the module assemblies installed beside it, which
+   are not package rows at all. Only the row is removed, never its subtree: a type's path prefixes
+   its own `Source/` and, for a leaf-shaped type, its instances. The row is deleted straight from
+   storage and announced on the mesh change feed; a **claimed** row (`SyncBehavior` other than
+   `Include`) is the user's, so it is named at Warning and kept. The install record carries the
+   withheld files as `PackageManifest.WithheldFiles`, which the completeness sweep and the update
+   lane's restore widening subtract — otherwise every withheld row would read as an absent node and
+   be handed to the heal, which would reinstall the package to restore a row it never writes.
+   The boot repair pass runs the same removal over every install record before the sweep, so a
+   host whose packages never update converges too.
+
+   Why: a row on a closed mesh can only ever settle at the refusal below and read as `Error` in
+   the pre-prod sweep (`nodeType:NodeType content.compilationStatus:Error partitions:all`). On the
+   control instance, once it mounted the public registry and took package content, that was 73 of
+   126 NodeTypes (measured 2026-10-09), none of them a compile defect — so the sweep could never
+   read zero there.
+
+Every surface reports one sentence, `ClosedTypeSet.RefusalFor(type, instance)`, and
+`ClosedTypeSet.IsRefusal(error)` recognises it. The failed-verdict re-drive's **older-platform
+trigger** (a failure formed on an older platform build gets one retry on a newer build, #6349)
+**skips a recorded closed-set refusal on a closed process**: the refusal records this process's
+switch, not the type's source, so no newer build can answer it differently — before, every refused
+row went `Pending` once per platform build only to be refused again. An ordinary compile failure on
+a closed process, and the same refusal text met on an open process, keep their retry.
 
 ## What it deliberately does not change
 
@@ -96,8 +125,10 @@ too — `WithContentType<T>()` registers only on an activated instance hub, and
 
 A row left at the same path as a code registration is shadowed for activation but can still surface
 in a `nodeType:NodeType` query (the merge de-duplicates by path, first to arrive), so a mesh that
-moves a type into its image should not keep the row. The control instance starts from an empty
-database and never has one.
+moves a type into its image should not keep the row. The control instance no longer starts from
+an empty database and stays that way — it takes package content from the registry — so the
+package installer removes such rows itself (6, above); a row written any other way still has to
+be removed by whoever wrote it.
 
 ## Related
 

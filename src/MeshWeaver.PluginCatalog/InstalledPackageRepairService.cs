@@ -109,7 +109,11 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
                             "[PackageRepair] reconciled declared access + install hooks for {Count} "
                             + "installed partition(s)", records.Count)))
                 .Do(_ => ReportDeclaredModulesWithNoBinary(records, logger))
-                .SelectMany(_ => VerifyCompleteness(records, logger))
+                // 🚨 On a CLOSED type set, BEFORE the sweep: remove the NodeType rows earlier
+                // installs left and record them as withheld (#6627), so a host whose packages never
+                // update converges too and the sweep does not count those rows as owed.
+                .SelectMany(_ => WithholdNodeTypeRows(records, logger))
+                .SelectMany(current => VerifyCompleteness(current, logger))
                 // The module half reports before the heal WAITS (on the default install), so a
                 // long boot install cannot delay what the module sweep has to say.
                 .SelectMany(verdicts => VerifyModules(records, logger).Select(_ => verdicts))
@@ -680,6 +684,66 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
     /// record it was taken over (MeshWeaver#4200).</param>
     private sealed record InstalledRecord(
         string PackageId, string Partition, PackageManifest Manifest, string Identity);
+
+    /// <summary>
+    /// 🚨 The boot half of #6627 — on a CLOSED type set, every install record's declared nodes are
+    /// read, the NodeType definition rows among them are removed
+    /// (<see cref="ClosedTypeSetPackageRows.Reconcile"/>), and the record's
+    /// <see cref="PackageManifest.WithheldFiles"/> is stamped through the record's own stream when
+    /// it changed. The install lanes do the same on every install and update; this pass is what
+    /// reaches a host whose packages never move. On an open mesh it reads and writes nothing.
+    /// </summary>
+    /// <returns>The records as the completeness sweep must read them — with the stamped answer.</returns>
+    private IObservable<IReadOnlyList<InstalledRecord>> WithholdNodeTypeRows(
+        IReadOnlyList<InstalledRecord> records, ILogger? logger)
+    {
+        if (records.Count == 0 || !hub.ServiceProvider.IsClosedTypeSet())
+            return Observable.Return(records);
+        var parsers = new FileFormatParserRegistry(
+            hub.JsonSerializerOptions, hub.ServiceProvider.GetServices<IFileFormatParser>());
+        var access = hub.ServiceProvider.GetService<AccessService>();
+        return records
+            .Select(record =>
+            {
+                var files = record.Manifest.InstalledFiles?.Keys.ToArray();
+                return ClosedTypeSetPackageRows.Reconcile(
+                        hub, record.PackageId, ClosedTypeSetPackageRows.NodePathsOf(files, parsers),
+                        Array.Empty<string>(), logger)
+                    .SelectMany(outcome =>
+                    {
+                        var (examined, withheldNow) =
+                            ClosedTypeSetPackageRows.RecordInputs(outcome, files, parsers);
+                        var previous = record.Manifest.WithheldFiles;
+                        var next = ClosedTypeSetPackageRows.MergeWithheldFiles(
+                            true, previous, examined, withheldNow, files);
+                        if ((previous ?? []).SetEquals(next ?? []) && (previous is null) == (next is null))
+                            return Observable.Return(record);
+                        var recordPath = $"{PackageInstaller.InstalledPartition}/{record.PackageId}";
+                        return access.RunAsSystem(() => hub.GetWorkspace().GetMeshNodeStream(recordPath)
+                                .Update(current => current with
+                                {
+                                    Content = current.ContentAs<PackageManifest>(hub.JsonSerializerOptions)
+                                        is { } manifest
+                                        ? manifest with { WithheldFiles = next }
+                                        : current.Content,
+                                }))
+                            .Take(1)
+                            .Select(_ => record with { Manifest = record.Manifest with { WithheldFiles = next } })
+                            .Catch<InstalledRecord, Exception>(ex =>
+                            {
+                                logger?.LogWarning(ex,
+                                    "[PackageRepair] {Id}: recording the NodeType rows this closed type "
+                                    + "set withholds FAILED — the completeness sweep may count them as "
+                                    + "absent until the next boot", record.PackageId);
+                                return Observable.Return(record);
+                            });
+                    });
+            })
+            .ToObservable()
+            .Concat()
+            .ToList()
+            .Select(updated => (IReadOnlyList<InstalledRecord>)updated.ToArray());
+    }
 
     /// <summary>
     /// Every recorded install, one entry per partition. Reads the <c>Package</c> records the
