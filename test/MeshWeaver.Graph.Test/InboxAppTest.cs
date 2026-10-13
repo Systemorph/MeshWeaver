@@ -132,12 +132,13 @@ public class InboxAppTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
         InboxLayoutArea.Sections(InboxQueries.BuiltIn, "alice").Select(s => s.Band).Distinct()
             .Should().Equal(InboxBand.NeedsYou, InboxBand.Running);
         InboxQueries.BuiltIn.Where(l => l.Source == "Activities").Should()
-            .OnlyContain(l => !l.ShownByDefault, "background runs are one switch away, never the default");
+            .OnlyContain(l => l.Query.Contains("content.showInInbox:true"), "only runs marked for the inbox — background runs are never listed");
     }
 
     /// <summary>
-    /// The Activities source on a real partition: a running activity (its default status is OMITTED
-    /// from stored content) and a FAILED one are listed; one that succeeded, warned or was cancelled is not.
+    /// The Activities source on a real partition: a MARKED running activity (its default status is
+    /// OMITTED from stored content) and a marked FAILED one are listed; one that succeeded, warned or was
+    /// cancelled is not, and an unmarked background run is never listed, running or failed.
     /// </summary>
     [Fact(Timeout = 60000)]
     public async Task Activities_ListWhatIsGoingAndWhatFailed_NeverWhatFinishedWell()
@@ -147,19 +148,22 @@ public class InboxAppTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
         await CreateUserAsync(owner, ct);
         var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var access = Mesh.ServiceProvider.GetService<AccessService>();
-        MeshNode Activity(string id, ActivityStatus status) => new(id, $"{owner}/_Activity")
+        MeshNode Activity(string id, ActivityStatus status, bool marked = true) => new(id, $"{owner}/_Activity")
         {
             NodeType = ActivityNodeType.NodeType,
             Name = id,
             MainNode = owner,
             State = MeshNodeState.Active,
-            Content = new ActivityLog(ActivityCategory.Import) { Id = id, HubPath = owner, Status = status },
+            Content = new ActivityLog(ActivityCategory.Import) { Id = id, HubPath = owner, Status = status, ShowInInbox = marked },
         };
         foreach (var node in new[]
                  {
                      Activity("still-running", ActivityStatus.Running), Activity("failed", ActivityStatus.Failed),
                      Activity("finished", ActivityStatus.Succeeded), Activity("warned", ActivityStatus.Warning),
                      Activity("cancelled", ActivityStatus.Cancelled),
+                     // A background run (a script, a Tests-area run): never marked, never listed.
+                     Activity("background-running", ActivityStatus.Running, marked: false),
+                     Activity("background-failed", ActivityStatus.Failed, marked: false),
                  })
             await access.RunAsSystem(() => mesh.CreateNode(node)).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
 
@@ -174,7 +178,7 @@ public class InboxAppTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
         }
 
         (await Ids(InboxBand.Running)).Order(StringComparer.Ordinal).Should().Equal(["failed", "still-running"],
-            "what is going and what failed — never what finished well");
+            "the MARKED runs that are going or failed — never one that finished well, never a background run");
     }
 
     private static int Rank(string band)

@@ -330,9 +330,11 @@ strings, anchored the same way. The bands differ only in what their legs select:
 | **Last 24 hours** | *(designed; core feeds no leg into it today)* | `✅` |
 
 🚨 **As built (policy `inbox-activities-need-someone`):** core's own Activities source lists only
-the runs that still need someone — still going, or failed — and is OFF by default. A run that
-finished well (succeeded, warned, cancelled) is not listed at all; its own page keeps it. A failed
-run therefore stays in Running until it is dealt with on its page, rather than moving on.
+the runs MARKED for the inbox (`ActivityLog.ShowInInbox`, set by the code that starts a run a person
+asked for and waits on, or one that will need their decision) that still need someone — still
+going, or failed. Background runs (scripts, Tests-area runs, indexing) are never marked, so they
+never appear. A run that finished well is not listed; its own page keeps it. A failed marked run
+stays in Running until it is dealt with on its page.
 
 **Running is its own band because it is neither.** It is not owed by the viewer — pushing it into
 *Needs you* invents an obligation nobody has — and it is not finished, so it cannot carry a tick. It

@@ -201,12 +201,12 @@ public static class InboxQueries
             SourceIcon = ActivitiesIcon,
             Band = InboxBand.Running,
             Order = 10,
-            // Policy inbox-activities-need-someone: off by default, and only the runs that still
-            // need someone — those still going and those that FAILED. A run that finished well is
-            // never listed; its own page keeps it.
-            ShownByDefault = false,
+            // Policy inbox-activities-need-someone: only the runs MARKED for the inbox
+            // (ActivityLog.ShowInInbox — background runs never are) and still needing someone —
+            // going, or FAILED. A run that finished well is never listed; its own page keeps it.
+            // Marked runs are few, so the source is shown — it no longer carries the noise.
             // Running itself is the omitted default, so the finished-well states are negated.
-            Query = $"namespace:{ViewerToken}/_Activity nodeType:Activity "
+            Query = $"namespace:{ViewerToken}/_Activity nodeType:Activity content.showInInbox:true "
                     + string.Join(" ", FinishedWellActivityStatuses.Select(s => $"-content.status:{s}"))
                     + $" sort:LastModified-desc {RowProjection}",
         },

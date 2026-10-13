@@ -95,6 +95,15 @@ public record ActivityLog(string Category)
     public ActivityStatus Status { get; init; }
 
     /// <summary>
+    /// Whether the activity belongs in its owner's personal inbox — set by the code that starts it,
+    /// for a run a person must follow (one they asked for and are waiting on, one that will need their
+    /// decision). Background runs (scripts, Tests-area runs, indexing) leave it false and never reach
+    /// the inbox (policy <c>inbox-activities-need-someone</c>). <c>false</c> is the default and is
+    /// omitted from stored JSON, so the inbox matches the stamped <c>true</c>.
+    /// </summary>
+    public bool ShowInInbox { get; init; }
+
+    /// <summary>
     /// Optional JSON-encoded return value of the work that produced this activity.
     /// For script-templated operations (export, import, …) the kernel writes the
     /// script's <c>return</c> value here on terminal status so request handlers
