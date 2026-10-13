@@ -31,6 +31,38 @@ public class ControlsSerializationTest(ITestOutputHelper output) : HubTestBase(o
 
     }
 
+    /// <summary>
+    /// <see cref="ButtonControl.OpenInNewTab"/> must cross the wire: the renderer decides between
+    /// navigating the current tab and drawing a <c>target="_blank"</c> link from it, so a property
+    /// dropped by serialization would silently send a payment page into the portal's own tab.
+    /// Equality must see it too, or a diff that only flips it would never reach the client.
+    /// </summary>
+    [HubFact]
+    public void ButtonOpenInNewTabSurvivesSerialization()
+    {
+        var host = GetHost();
+        var button = Controls.Button("Open billing page")
+            .WithNavigateToHref("https://billing.example.com/session/abc")
+            .WithOpenInNewTab();
+
+        var serialized = JsonSerializer.Serialize<UiControl>(button, host.JsonSerializerOptions);
+        Output.WriteLine($"Serialized: {serialized}");
+        serialized.Should().Contain("\"openInNewTab\":true");
+
+        var deserialized = JsonSerializer.Deserialize<UiControl>(serialized, host.JsonSerializerOptions);
+        var roundTripped = deserialized.Should().BeOfType<ButtonControl>().Subject;
+        roundTripped.NavigateToHref.Should().Be("https://billing.example.com/session/abc");
+        // An `object` property may come back as the CLR bool or as the JSON literal; the
+        // renderer data-binds either, so both shapes are accepted — but it must read TRUE.
+        (roundTripped.OpenInNewTab is true
+            || roundTripped.OpenInNewTab is JsonElement { ValueKind: JsonValueKind.True })
+            .Should().BeTrue($"OpenInNewTab came back as {roundTripped.OpenInNewTab?.GetType().Name ?? "null"}");
+
+        var sameTab = button.WithOpenInNewTab(false);
+        sameTab.Should().NotBe(button);
+        Controls.Button("x").OpenInNewTab.Should().BeNull();
+    }
+
     [HubFact]
     public void OptionCollectionSerialization()
     {
