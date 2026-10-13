@@ -61,20 +61,17 @@ public class InstallRecordUpdateRacingDeleteTest(ITestOutputHelper output) : Mon
                 .Take(1)
                 .Select(_ => "applied")
                 // Only the refusals an update racing a delete can legitimately get are absorbed, and
-                // each says the node is gone: the owner's NotFound NACK (the post-commit flush's
-                // refusal arrives as exactly this), a routing NotFound (the update reached the address
-                // after the node had vanished), and the owner's absent-node reply, which today still
-                // arrives UNCLASSIFIED (Unknown, "No node found at …") for the path under test. Every
-                // classified fault other than NotFound — access denied, an unreachable owner, a
-                // deserialization or validation failure, a conflict — propagates and fails the test,
-                // as does any other exception type, so a broken setup cannot pass as "no survivors".
+                // each says the node is gone: a NotFound from the update (the owner's NACK — the
+                // post-commit flush's refusal arrives as exactly this — or the router's typed
+                // absence once the patch met a vanished node, #6626), and a routing NotFound on the
+                // update's base read. Every other fault — an unclassified Unknown included, access
+                // denied, an unreachable owner, a deserialization or validation failure, a conflict —
+                // propagates and fails the test, as does any other exception type, so a broken setup
+                // cannot pass as "no survivors".
                 .Catch((Exception ex) => ex switch
                 {
                     MeshNodeStreamException { Error.Code: MeshNodeErrorCode.NotFound } =>
-                        Observable.Return("refused: owner NotFound"),
-                    MeshNodeStreamException { Error.Code: MeshNodeErrorCode.Unknown } mse
-                        when string.Equals(mse.Error.Path, path, StringComparison.OrdinalIgnoreCase) =>
-                        Observable.Return("refused: owner Unknown"),
+                        Observable.Return("refused: NotFound"),
                     DeliveryFailureException { Failure.ErrorType: ErrorType.NotFound } =>
                         Observable.Return("refused: routing NotFound"),
                     _ => Observable.Throw<string>(ex),

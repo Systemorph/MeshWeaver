@@ -28,17 +28,18 @@ public MeshNodeStreamException(MeshNodeError error)
 So a log line has the shape `MeshNode {Code} at '{Path}': {Message}`, and **`Code` alone separates
 the two investigations.**
 
-## The four shapes, and what each one means
+## The shapes, and what each one means
 
 | `Code` | Message shape | What actually happened | Where to look |
 |---|---|---|---|
 | `OwnerUnreachable` | `The owner of '…' returned no verdict for this update within Ns. The patch was posted and may still apply… Request trail: …` | The owner produced **no terminal at all**. The writer's late-response window expired. | The **owner's** activation: is it alive, mid-recycle, pinned dead? |
 | `Unknown` | `{ExceptionTypeName}: {message}` — e.g. `TimeoutException: The operation has timed out.` | The owner **answered**, with a NACK carrying its own internal exception. | The owner's **ack chain**: which of its two internal bounds expired. |
+| `NotFound` | `Node deleted` / `Node being deleted` from the owner, or `No node found at '…'. Closest ancestor is '…'` / `No node found at '…' — the node was deleted…` from the mesh | There is **no node** at the path: the owner refused a patch that met a deleted node, or the patch never reached an owner because the router resolved only an ancestor (or the address carries a delete tombstone). The router's answer is a `DeliveryFailure` stamped `NodeAbsent`, which the writer maps to `NotFound` — it never parses the sentence (#6626). An update racing a delete ends here. | Nowhere — the node is gone. Re-read it before writing again. |
 | `AccessDenied` / `Deserialization` / `Validation` | `Access denied: …` / `Patch deserialization failed: …` / `Validation failed: …` | The owner answered with a classified application-level refusal. | The patch itself. |
 | `OwnerDisposing` | `the owner's stream ended before this patch's commit echo arrived — … the write's fate is UNKNOWN; safe to retry …` | The owner **answered**: the stream its ack watcher was on completed before the echo — mirror eviction **while the hub lives**. The writer auto-retries it (a re-enqueue re-diffs, so a merge that did commit is a no-op). | The owner's **stream lifetime** (`ReclaimIfUnheld`, `SynchronizationStream.Dispose`), not its bounds. |
 | `OwnerDisposing` | `owner activation disposing before the merge turn ran — the patch was NOT applied; safe to retry against the fresh activation` | The owner **answered from its ShutDown phase**: the patch was in flight when the owner hub tore down. This is the disposal NACK (`RegisterOwnerDisposingNack`), handed to the armed late watch directly; the writer's re-enqueue lands on the fresh activation. | The owner's **teardown** (`HubDisposalModel`): why did the activation go down under a live patch? |
 
-Rows two and three come from one classifier on the **owner**:
+The `Unknown` row and the classified owner refusals come from one classifier on the **owner**:
 
 ```csharp
 // src/MeshWeaver.Data/DataExtensions.cs — ClassifyPatchException
