@@ -162,18 +162,26 @@ public class QueryEvaluator
     /// <c>status</c> and a miss deeper in the walk stays a miss rather than re-entering some
     /// nested object's own <c>Content</c>.</para>
     /// </summary>
-    public object? GetPropertyValue(object obj, string selector)
+    public object? GetPropertyValue(object obj, string selector) => GetPropertyValue(obj, selector, rawJsonNumbers: false);
+
+    /// <summary>
+    /// <see cref="GetPropertyValue(object, string)"/>, optionally leaving a JSON NUMBER as its
+    /// <see cref="JsonElement"/> — the sort path's read, so <see cref="QuerySortKey"/> can take the
+    /// exact decimal (beyond <see cref="long"/>, high-precision fractions) rather than the double
+    /// the filter path converts to.
+    /// </summary>
+    private object? GetPropertyValue(object obj, string selector, bool rawJsonNumbers)
     {
         var parts = selector.Split('.');
 
-        var current = ResolveRootSelector(obj, parts[0]);
+        var current = ResolveRootSelector(obj, parts[0], rawJsonNumbers);
 
         for (var i = 1; i < parts.Length; i++)
         {
             if (current == null)
                 return null;
 
-            current = GetDirectPropertyValue(current, parts[i]);
+            TryGetDirectPropertyValue(current, parts[i], rawJsonNumbers, out current);
         }
 
         return current;
@@ -181,18 +189,21 @@ public class QueryEvaluator
 
     /// <summary>
     /// The first hop of a selector walk: the object's own property, else the same name read out of
-    /// its <c>Content</c>. See <see cref="GetPropertyValue"/> for why the order is this way round
+    /// its <c>Content</c>. See <see cref="GetPropertyValue(object, string)"/> for why the order is this way round
     /// and why absence — not nullness — opens the fallback.
     /// </summary>
-    private object? ResolveRootSelector(object obj, string propertyName)
+    private object? ResolveRootSelector(object obj, string propertyName, bool rawJsonNumbers = false)
     {
-        if (TryGetDirectPropertyValue(obj, propertyName, out var value))
+        if (TryGetDirectPropertyValue(obj, propertyName, rawJsonNumbers, out var value))
             return value;
 
         // The selector names nothing on the object. SQL would read it out of the content JSONB;
         // do the same, so one query means one thing on every backend.
-        if (TryGetDirectPropertyValue(obj, ContentProperty, out var content) && content is not null)
-            return GetDirectPropertyValue(content, propertyName);
+        if (TryGetDirectPropertyValue(obj, ContentProperty, rawJsonNumbers, out var content) && content is not null)
+        {
+            TryGetDirectPropertyValue(content, propertyName, rawJsonNumbers, out var fromContent);
+            return fromContent;
+        }
 
         return null;
     }
@@ -205,7 +216,7 @@ public class QueryEvaluator
     /// </summary>
     private object? GetDirectPropertyValue(object obj, string propertyName)
     {
-        TryGetDirectPropertyValue(obj, propertyName, out var value);
+        TryGetDirectPropertyValue(obj, propertyName, rawJsonNumbers: false, out var value);
         return value;
     }
 
@@ -217,7 +228,7 @@ public class QueryEvaluator
     /// member", which is what opens the content fallback, while <c>true</c> with a
     /// <see langword="null"/> value means "it has one and it is empty", which must NOT.</para>
     /// </summary>
-    private bool TryGetDirectPropertyValue(object obj, string propertyName, out object? value)
+    private bool TryGetDirectPropertyValue(object obj, string propertyName, bool rawJsonNumbers, out object? value)
     {
         // Handle $type as a special case - return the CLR type name
         if (propertyName == "$type")
@@ -227,10 +238,10 @@ public class QueryEvaluator
         }
 
         if (obj is JsonElement jsonElement)
-            return TryGetJsonPropertyValue(jsonElement, propertyName, out value);
+            return TryGetJsonPropertyValue(jsonElement, propertyName, rawJsonNumbers, out value);
 
         if (obj is JsonObject jsonObject)
-            return TryGetJsonPropertyValue(jsonObject, propertyName, out value);
+            return TryGetJsonPropertyValue(jsonObject, propertyName, rawJsonNumbers, out value);
 
         if (obj is JsonNode)
         {
@@ -255,7 +266,7 @@ public class QueryEvaluator
     /// Gets a property value from a JsonElement, reporting presence separately from content — the
     /// JSON counterpart of <see cref="TryGetDirectPropertyValue"/>. A JSON <c>null</c> is PRESENT.
     /// </summary>
-    private static bool TryGetJsonPropertyValue(JsonElement element, string propertyName, out object? value)
+    private static bool TryGetJsonPropertyValue(JsonElement element, string propertyName, bool rawJsonNumbers, out object? value)
     {
         value = null;
 
@@ -265,7 +276,7 @@ public class QueryEvaluator
         // Try exact match first, then case-insensitive
         if (element.TryGetProperty(propertyName, out var prop))
         {
-            value = JsonElementToObject(prop);
+            value = JsonElementToObject(prop, rawJsonNumbers);
             return true;
         }
 
@@ -274,7 +285,7 @@ public class QueryEvaluator
         {
             if (property.Name.Equals(propertyName, StringComparison.OrdinalIgnoreCase))
             {
-                value = JsonElementToObject(property.Value);
+                value = JsonElementToObject(property.Value, rawJsonNumbers);
                 return true;
             }
         }
@@ -286,11 +297,11 @@ public class QueryEvaluator
     /// Reads as-written JSON content with the same exact-then-case-insensitive lookup and scalar
     /// conversion as a deserialized <see cref="JsonElement"/>. A present JSON null remains present.
     /// </summary>
-    private static bool TryGetJsonPropertyValue(JsonObject jsonObject, string propertyName, out object? value)
+    private static bool TryGetJsonPropertyValue(JsonObject jsonObject, string propertyName, bool rawJsonNumbers, out object? value)
     {
         if (jsonObject.TryGetPropertyValue(propertyName, out var propertyValue))
         {
-            value = JsonNodeToObject(propertyValue);
+            value = JsonNodeToObject(propertyValue, rawJsonNumbers);
             return true;
         }
 
@@ -298,7 +309,7 @@ public class QueryEvaluator
         {
             if (property.Key.Equals(propertyName, StringComparison.OrdinalIgnoreCase))
             {
-                value = JsonNodeToObject(property.Value);
+                value = JsonNodeToObject(property.Value, rawJsonNumbers);
                 return true;
             }
         }
@@ -307,14 +318,16 @@ public class QueryEvaluator
         return false;
     }
 
-    private static object? JsonNodeToObject(JsonNode? node) =>
-        node is null ? null : JsonElementToObject(JsonSerializer.SerializeToElement(node));
+    private static object? JsonNodeToObject(JsonNode? node, bool rawJsonNumbers) =>
+        node is null ? null : JsonElementToObject(JsonSerializer.SerializeToElement(node), rawJsonNumbers);
 
     /// <summary>
     /// Converts a JsonElement to a .NET object.
     /// </summary>
-    private static object? JsonElementToObject(JsonElement element)
+    private static object? JsonElementToObject(JsonElement element, bool rawJsonNumbers = false)
     {
+        if (rawJsonNumbers && element.ValueKind == JsonValueKind.Number)
+            return element;
         return element.ValueKind switch
         {
             JsonValueKind.String => element.GetString(),
@@ -628,7 +641,7 @@ public class QueryEvaluator
             "last_modified_by" => "lastModifiedBy",
             _ => selector,
         };
-        return GetPropertyValue(obj, property);
+        return GetPropertyValue(obj, property, rawJsonNumbers: true);
     }
 
     /// <summary>

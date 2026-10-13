@@ -123,7 +123,10 @@ public class ContentFieldSortTest
             .Should().Equal("hundred", "ninety", "ten", "nine");
     }
 
-    /// <summary>Integers beyond 2^53 stay distinct — the key is exact, not an IEEE double.</summary>
+    /// <summary>
+    /// Numbers stay exact: integers beyond 2^53 and beyond <see cref="long"/>, and fractions past a
+    /// double's 17 digits, keep distinct keys.
+    /// </summary>
     [Fact]
     public void LargeIntegers_KeepExactOrder()
     {
@@ -131,10 +134,14 @@ public class ContentFieldSortTest
         {
             Node("big+1", Json("""{"seq":9007199254740993}""")),
             Node("big", Json("""{"seq":9007199254740992}""")),
+            Node("ulong+1", Json("""{"seq":18446744073709551615}""")),
+            Node("ulong", Json("""{"seq":18446744073709551614}""")),
+            Node("fine+", Json("""{"seq":0.12345678901234567891}""")),
+            Node("fine", Json("""{"seq":0.12345678901234567890}""")),
         };
 
         new QueryEvaluator().OrderResults(nodes, new OrderByClause("content.seq")).Select(n => n.Id)
-            .Should().Equal("big", "big+1");
+            .Should().Equal("fine", "fine+", "big", "big+1", "ulong", "ulong+1");
     }
 
     /// <summary>
@@ -259,6 +266,14 @@ public class ContentFieldSortTest
                 Limit = 2,
             }, ct))
             .Should().Equal(["d", "c"], "9 and 10 — the projection must not turn this into path order (a, b)");
+
+        var change = await query.Query<MeshNode>(new MeshQueryRequest
+            {
+                Query = "path:Book nodeType:Submission scope:descendants select:path,name sort:content.premium",
+                Limit = 2,
+            }, Options).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        change.Items.Should().OnlyContain(n => n.Content == null,
+            "content was kept only to sort on — the caller's projection omits it, so it is not returned");
     }
 
     /// <summary>A provider that answers every query with the same canned rows, in the given order.</summary>
