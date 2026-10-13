@@ -332,6 +332,18 @@ public class ReleaseIdentityFromRegistryTest(ITestOutputHelper output) : Monolit
         Assert.Contains(absent.Packages, p => p.Package == Package && p.Kind == PackageAvailabilityKind.ContentBakeMissing);
         Assert.False(absent.IsIndeterminate);
 
+        // A 404 that does NOT say MANIFEST_UNKNOWN establishes nothing: NAME_UNKNOWN (an unknown
+        // repository, or a refused read concealed as one) and a bare 404 are "I could not look".
+        records.MissingTagCode = "NAME_UNKNOWN";
+        var nameUnknown = await gate.IsUpdatable(Release).FirstAsync().Timeout(Budget).Await(ct);
+        Assert.False(nameUnknown.IsUpdatable);
+        Assert.True(nameUnknown.IsIndeterminate, nameUnknown.HoldReason);
+        records.MissingTagCode = null;
+        var bare = await gate.IsUpdatable(Release).FirstAsync().Timeout(Budget).Await(ct);
+        Assert.False(bare.IsUpdatable);
+        Assert.True(bare.IsIndeterminate, bare.HoldReason);
+        records.MissingTagCode = OciRegistryClient.ManifestUnknownCode;
+
         // The publication cannot be read: "I could not look" — never the snapshot instead.
         records.PublishIndex("plugins", Identity, [Package]);
         records.PublicationsDown = true;
@@ -345,6 +357,19 @@ public class ReleaseIdentityFromRegistryTest(ITestOutputHelper output) : Monolit
         var unnamed = await gate.IsUpdatable(Release).FirstAsync().Timeout(Budget).Await(ct);
         Assert.False(unnamed.IsUpdatable);
         Assert.True(unnamed.IsIndeterminate, unnamed.HoldReason);
+
+        // A bundle entry that is not a valid descriptor (malformed digest, no size) cannot be
+        // pulled — unreadable, never a sealed package.
+        records.PublishIndex("plugins", Identity, [Package], validDescriptors: false);
+        var invalid = await gate.IsUpdatable(Release).FirstAsync().Timeout(Budget).Await(ct);
+        Assert.False(invalid.IsUpdatable);
+        Assert.True(invalid.IsIndeterminate, invalid.HoldReason);
+
+        // A tag whose body is not an OCI image index is not a publication index.
+        records.PublishIndex("plugins", Identity, [Package], indexMediaType: OciRegistryClient.ImageManifestMediaType);
+        var notAnIndex = await gate.IsUpdatable(Release).FirstAsync().Timeout(Budget).Await(ct);
+        Assert.False(notAnIndex.IsUpdatable);
+        Assert.True(notAnIndex.IsIndeterminate, notAnIndex.HoldReason);
 
         // And the same gate clears once the live publication names the package.
         records.PublishIndex("plugins", Identity, [Package]);
@@ -466,39 +491,36 @@ public class ReleaseIdentityFromRegistryTest(ITestOutputHelper output) : Monolit
 
         /// <summary>Moves <c>plugins/&lt;source&gt;:&lt;identity&gt;</c> to a publication index naming
         /// these packages, in the shape <c>push-bundle-publication.sh</c> writes.</summary>
-        public void PublishIndex(string source, string identity, IEnumerable<string> packages, bool annotate = true)
+        public void PublishIndex(
+            string source, string identity, IEnumerable<string> packages, bool annotate = true,
+            bool validDescriptors = true, string indexMediaType = OciRegistryClient.ImageIndexMediaType)
         {
-            var entries = new List<object>
-            {
-                new Dictionary<string, object>
-                {
-                    ["mediaType"] = OciRegistryClient.ImageManifestMediaType,
-                    ["digest"] = OciDigest.Of(Encoding.UTF8.GetBytes("sidecars-" + source)),
-                    ["size"] = 2,
-                    ["artifactType"] = RegistryLivePublications.PublicationArtifactType,
-                    ["annotations"] = new Dictionary<string, string> { ["io.meshweaver.role"] = "sidecars" },
-                },
-            };
-            foreach (var package in packages)
-                entries.Add(new Dictionary<string, object>
-                {
-                    ["mediaType"] = OciRegistryClient.ImageManifestMediaType,
-                    ["digest"] = OciDigest.Of(Encoding.UTF8.GetBytes(package)),
-                    ["size"] = 2,
-                    ["artifactType"] = RegistryLivePublications.BundleArtifactType,
-                    ["annotations"] = annotate
-                        ? new Dictionary<string, string> { [RegistryLivePublications.PackageAnnotation] = package }
-                        : new Dictionary<string, string>(),
-                });
-            var index = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new Dictionary<string, object>
-            {
-                ["schemaVersion"] = 2,
-                ["mediaType"] = OciRegistryClient.ImageIndexMediaType,
-                ["artifactType"] = RegistryLivePublications.PublicationArtifactType,
-                ["manifests"] = entries,
-            }));
+            var sidecars = ImmutableDictionary<string, object>.Empty
+                .Add("mediaType", OciRegistryClient.ImageManifestMediaType)
+                .Add("digest", OciDigest.Of(Encoding.UTF8.GetBytes("sidecars-" + source)))
+                .Add("size", 2)
+                .Add("artifactType", RegistryLivePublications.PublicationArtifactType)
+                .Add("annotations", ImmutableDictionary<string, string>.Empty.Add("io.meshweaver.role", "sidecars"));
+            var bundles = packages.Select(package => ImmutableDictionary<string, object>.Empty
+                .Add("mediaType", OciRegistryClient.ImageManifestMediaType)
+                .Add("digest", validDescriptors ? OciDigest.Of(Encoding.UTF8.GetBytes(package)) : "sha256:not-a-digest")
+                .Add("size", validDescriptors ? 2 : 0)
+                .Add("artifactType", RegistryLivePublications.BundleArtifactType)
+                .Add("annotations", annotate
+                    ? ImmutableDictionary<string, string>.Empty.Add(RegistryLivePublications.PackageAnnotation, package)
+                    : ImmutableDictionary<string, string>.Empty));
+            var index = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(ImmutableDictionary<string, object>.Empty
+                .Add("schemaVersion", 2)
+                .Add("mediaType", indexMediaType)
+                .Add("artifactType", RegistryLivePublications.PublicationArtifactType)
+                .Add("manifests", ImmutableArray.Create(sidecars).AddRange(bundles))));
             ImmutableInterlocked.Update(ref indexes, i => i.SetItem($"plugins/{source.ToLowerInvariant()}:{identity}", index));
         }
+
+        /// <summary>The OCI error code a missing publication tag answers 404 with; null answers a
+        /// bare 404 with no body.</summary>
+        public string? MissingTagCode { get; set; } = OciRegistryClient.ManifestUnknownCode;
+
         public ImmutableList<string> Requests => requests;
 
         public bool Serves(string candidate) => string.Equals(candidate, host, StringComparison.OrdinalIgnoreCase);
@@ -555,7 +577,14 @@ public class ReleaseIdentityFromRegistryTest(ITestOutputHelper output) : Monolit
                 if (PublicationsDown)
                     return Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
                 if (!indexes.TryGetValue($"{publication.Groups[1].Value}:{publication.Groups[2].Value}", out var index))
-                    return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+                    return Task.FromResult(MissingTagCode is { } code
+                        ? new HttpResponseMessage(HttpStatusCode.NotFound)
+                        {
+                            Content = new StringContent(
+                                $$$"""{"errors":[{"code":"{{{code}}}","message":"not found"}]}""",
+                                Encoding.UTF8, "application/json"),
+                        }
+                        : new HttpResponseMessage(HttpStatusCode.NotFound));
                 var served = new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(index) };
                 served.Content.Headers.ContentType = new MediaTypeHeaderValue(OciRegistryClient.ImageIndexMediaType);
                 served.Headers.TryAddWithoutValidation("Docker-Content-Digest", OciDigest.Of(index));

@@ -77,8 +77,8 @@ public sealed class RegistryLivePublications
             .OrderBy(s => s, StringComparer.Ordinal)
             .Select(source => ReadSource(identity, source))
             .Concat()
-            .ToList()
-            .Select(read => new LivePublicationReading(identity, [.. read]));
+            .Aggregate(ImmutableArray<LiveSourcePublication>.Empty, (read, one) => read.Add(one))
+            .Select(read => new LivePublicationReading(identity, read));
 
     /// <summary>One source's live publication — the mounts asked in configuration order, the first
     /// that holds the tag answering.</summary>
@@ -101,7 +101,7 @@ public sealed class RegistryLivePublications
             return RegistryTokenResolver.WithLegacyTokens(options, options.EffectiveRegistries)
                 .Select(mount => FromMount(resolver, mount, repository, identity, source))
                 .Concat()
-                .ToList()
+                .Aggregate(ImmutableArray<LiveSourcePublication?>.Empty, (answers, one) => answers.Add(one))
                 .Select(answers => Decide(source, repository, identity, answers));
         })
         .Catch((Exception ex) => Observable.Return(LiveSourcePublication.Unreadable(source,
@@ -122,9 +122,9 @@ public sealed class RegistryLivePublications
                 $"{RegistryReleaseIdentities.HostOf(mount.Url)}: {ex.Message}")));
 
     private LiveSourcePublication Decide(
-        string source, string repository, string identity, IList<LiveSourcePublication?> answers)
+        string source, string repository, string identity, ImmutableArray<LiveSourcePublication?> answers)
     {
-        var said = answers.Where(a => a is not null).Select(a => a!).ToList();
+        var said = answers.Where(a => a is not null).Select(a => a!).ToImmutableArray();
         var decided = said.FirstOrDefault(a => a.IndexDigest is not null)
             ?? said.FirstOrDefault(a => a.Refusal is not null)
             ?? said.FirstOrDefault()
@@ -141,9 +141,12 @@ public sealed class RegistryLivePublications
 
     /// <summary>
     /// The packages a publication index names: every entry whose <c>artifactType</c> is a bundle's,
-    /// by its <see cref="PackageAnnotation"/>. Pure. A manifest that is not a publication index, or
-    /// a bundle entry naming no package, is Unreadable — never a smaller set, because a smaller set
-    /// is the direction that reads a package as withdrawn.
+    /// by its <see cref="PackageAnnotation"/>. Pure. A manifest that is not a publication index (not
+    /// an OCI image index by media type and <c>schemaVersion</c> 2, or not the publication
+    /// <c>artifactType</c>), a bundle entry that is not a valid descriptor (no media type, no
+    /// well-formed sha256 digest, no positive size) or one naming no package, is Unreadable — never
+    /// a smaller set, because a smaller set is the direction that reads a package as withdrawn, and
+    /// never a sealed package, because <c>bundle-fetch</c> could not pull an invalid descriptor.
     /// </summary>
     internal static LiveSourcePublication FromIndex(string source, string reference, OciManifest manifest)
     {
@@ -154,6 +157,11 @@ public sealed class RegistryLivePublications
             using var document = JsonDocument.Parse(manifest.Bytes);
             var root = document.RootElement;
             if (root.ValueKind != JsonValueKind.Object
+                || !string.Equals(manifest.MediaType, OciRegistryClient.ImageIndexMediaType, StringComparison.OrdinalIgnoreCase)
+                || (StringOf(root, "mediaType") is { } declared
+                    && !string.Equals(declared, OciRegistryClient.ImageIndexMediaType, StringComparison.OrdinalIgnoreCase))
+                || !root.TryGetProperty("schemaVersion", out var schema)
+                || schema.ValueKind != JsonValueKind.Number || !schema.TryGetInt32(out var version) || version != 2
                 || !string.Equals(StringOf(root, "artifactType"), PublicationArtifactType, StringComparison.OrdinalIgnoreCase)
                 || !root.TryGetProperty("manifests", out var entries) || entries.ValueKind != JsonValueKind.Array)
                 return LiveSourcePublication.Unreadable(source, $"{reference} is not a publication index");
@@ -163,6 +171,13 @@ public sealed class RegistryLivePublications
             {
                 if (!string.Equals(StringOf(entry, "artifactType"), BundleArtifactType, StringComparison.OrdinalIgnoreCase))
                     continue;
+                if (string.IsNullOrWhiteSpace(StringOf(entry, "mediaType"))
+                    || StringOf(entry, "digest") is not { } digest || !OciDigest.IsWellFormed(digest)
+                    || !entry.TryGetProperty("size", out var size)
+                    || size.ValueKind != JsonValueKind.Number || !size.TryGetInt64(out var bytes) || bytes <= 0)
+                    return LiveSourcePublication.Unreadable(source,
+                        $"{reference} names a bundle entry that is not a valid OCI descriptor (media type, "
+                        + "sha256 digest and positive size required), so it cannot be pulled");
                 var package = entry.TryGetProperty("annotations", out var annotations)
                               && annotations.ValueKind == JsonValueKind.Object
                     ? StringOf(annotations, PackageAnnotation)
@@ -212,7 +227,7 @@ public sealed record LivePublicationReading(string Identity, ImmutableArray<Live
     /// <summary>Why the set could not be established — every unreadable source named — or null
     /// when every source was read (published or established absent).</summary>
     public string? Refusal =>
-        Sources.Where(s => s.Refusal is not null).Select(s => $"source '{s.Source}': {s.Refusal}").ToList() is { Count: > 0 } r
+        Sources.Where(s => s.Refusal is not null).Select(s => $"source '{s.Source}': {s.Refusal}").ToImmutableArray() is { IsEmpty: false } r
             ? string.Join("; ", r)
             : null;
 
