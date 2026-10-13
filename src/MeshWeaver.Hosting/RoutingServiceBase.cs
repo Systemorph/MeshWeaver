@@ -494,7 +494,10 @@ namespace MeshWeaver.Hosting
                         new DeliveryFailure(delivery)
                         {
                             ErrorType = ErrorType.NotFound,
-                            Message = failureMessage
+                            Message = failureMessage,
+                            // The resolver found no node at the exact path — the typed fact a
+                            // writer maps to MeshNodeErrorCode.NotFound (#6626).
+                            NodeAbsent = true,
                         }, o => o.ResponseFor(delivery));
             }
             // 🚨 Say WHETHER the sender was answered. This routing path is hot — every message to a
