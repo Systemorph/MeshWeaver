@@ -244,8 +244,26 @@ public sealed class AppDirectory
             .Select(nodes => RecordIds(nodes, options));
         var synced = cache.GetQuery(SyncSourcesQueryId, options, SyncSourcesQuery)
             .Select(nodes => PartitionsOf(nodes));
+        // CQRS: the listing names WHICH requests exist; each one's status is read from its own node
+        // stream, because a listing's content can trail the write that moved the request on (the
+        // same split PackageUninstallExecutor.UninstalledHere makes). A request seen in the listing
+        // exists, so its stream answers; a fault reads as "no evidence from that request".
         var uninstalled = cache.GetQuery(UninstallRequestsQueryId, options, UninstallRequestsQuery)
-            .Select(nodes => UninstalledPackages(nodes, options));
+            .Select(nodes => nodes.Select(n => n.Path).Where(p => !string.IsNullOrEmpty(p))
+                .Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(p => p, StringComparer.Ordinal).ToImmutableList())
+            .DistinctUntilChanged(PathListComparer.Instance)
+            .Select(paths => paths.Count == 0
+                ? Observable.Return(ImmutableHashSet<string>.Empty.WithComparer(StringComparer.OrdinalIgnoreCase))
+                : Observable.CombineLatest(paths.Select(path => cache.GetStream(path, options)
+                        .Select(node => (MeshNode?)node)
+                        .Catch<MeshNode?, Exception>(exception =>
+                        {
+                            logger?.LogWarning(exception,
+                                "[AppDirectory] uninstall request {Path} unreadable; it counts as no uninstall evidence", path);
+                            return Observable.Return<MeshNode?>(null);
+                        })))
+                    .Select(requests => UninstalledPackages(requests.OfType<MeshNode>(), options)))
+            .Switch();
         return records.CombineLatest(synced, uninstalled, (r, s, u) => new InstallEvidence(r, s, u))
             .DistinctUntilChanged();
     }
@@ -560,6 +578,14 @@ public sealed class AppDirectory
         public bool Equals(ImmutableList<AppRoot>? x, ImmutableList<AppRoot>? y) =>
             ReferenceEquals(x, y) || (x is not null && y is not null && x.SequenceEqual(y));
         public int GetHashCode(ImmutableList<AppRoot> obj) => obj.Count;
+    }
+
+    private sealed class PathListComparer : IEqualityComparer<ImmutableList<string>>
+    {
+        public static readonly PathListComparer Instance = new();
+        public bool Equals(ImmutableList<string>? x, ImmutableList<string>? y) =>
+            ReferenceEquals(x, y) || (x is not null && y is not null && x.SequenceEqual(y, StringComparer.Ordinal));
+        public int GetHashCode(ImmutableList<string> obj) => obj.Count;
     }
 
     private sealed class EntryListComparer : IEqualityComparer<ImmutableList<AppDirectoryEntry>>
