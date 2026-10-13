@@ -1519,6 +1519,7 @@
   "activity.delete.validatorRejected": "'{path}' kann nicht gelöscht werden: {error}",
   "activity.delete.validationWarning": "'{path}': {warning}",
   "activity.delete.hasChildren": "Der Node unter '{path}' hat untergeordnete Elemente. Verwenden Sie das rekursive Löschen, um ihn zu entfernen.",
+  "activity.delete.versionConflict": "'{path}' wurde nicht gelöscht: Der Node wurde seit dem Lesen geändert (erwartete Version {expected}, gefunden {actual}). Es wurde nichts gelöscht; lesen Sie den Node erneut und entscheiden Sie neu.",
   "activity.delete.blockedByDescendant": "'{path}' kann nicht gelöscht werden: {error}",
   "activity.delete.cancelled": "Das Löschen von '{path}' wurde abgebrochen, bevor ein Node entfernt wurde.",
   "activity.delete.cancelledPartial": "Das Löschen von '{path}' wurde abgebrochen, nachdem {count} Node(s) entfernt wurden — der Teilbaum ist unvollständig gelöscht.",
