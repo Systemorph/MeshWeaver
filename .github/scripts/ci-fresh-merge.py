@@ -221,14 +221,17 @@ def fresh_merge(path: str, main: str, head: str, compare) -> tuple[str, str]:
     # let git find them and merge them into a virtual base exactly as `git merge` does — `--merge-base`
     # takes only one, and any single one of them reports conflicts the real merge does not have.
     pick = [f"--merge-base={bases[0]}"] if len(bases) == 1 else []
-    r = git(path, "merge-tree", "--write-tree", "--name-only", *pick, main, head, check=False)
+    # `-z`: the tree id, then each conflicted path, NUL-terminated and never C-quoted; an EMPTY entry
+    # ends the path list, and the informational messages follow it.
+    r = git(path, "merge-tree", "--write-tree", "-z", "--name-only", *pick, main, head, check=False)
+    entries = r.stdout.split("\0")
     if r.returncode == 1:
-        lines = r.stdout.strip().split("\n")
-        conflicted = [l for l in lines[1:] if l and not l.startswith("Auto-merging") and not l.startswith("CONFLICT")][:20]
+        paths = entries[1:]
+        conflicted = (paths[:paths.index("")] if "" in paths else paths)[:20]
         raise Refused(f"head {head[:12]} CONFLICTS with the current main {main[:12]} ({', '.join(conflicted) or 'see git merge-tree'}) — merge main into the branch, resolve, and push; a stale merge is never tested in its place")
     if r.returncode != 0:
         raise Refused(f"git merge-tree failed ({r.returncode}): {(r.stderr or r.stdout).strip()[:600]}")
-    tree = r.stdout.strip().split("\n")[0]
+    tree = entries[0].strip()
     date = git(path, "show", "-s", "--format=%cI", head).stdout.strip()
     env = dict(IDENTITY, GIT_AUTHOR_DATE=date, GIT_COMMITTER_DATE=date)
     msg = f"CI fresh merge of {head} onto {main}"
