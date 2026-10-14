@@ -110,6 +110,21 @@ public static class ModuleSourceUpdate
     {
         var mesh = hub.ServiceProvider.GetRequiredService<IMeshService>();
         var access = hub.ServiceProvider.GetRequiredService<AccessService>();
+        return UpdateAllWithin(hub, activityBudget, activity => WatchActivity(hub, access, mesh, activity));
+    }
+
+    /// <summary>
+    /// <see cref="UpdateAllWithin(IMessageHub, TimeSpan)"/> with the activity watch supplied — the seam a
+    /// test uses to fault, or end, the watch AFTER the import's activity exists (#6753).
+    /// </summary>
+    /// <param name="hub">A hub of the mesh; it must outlive the imports.</param>
+    /// <param name="activityBudget">How long one source's import may run before its row reads Failed.</param>
+    /// <param name="watchActivity">The activity node's log stream, given the activity path.</param>
+    internal static IObservable<ImmutableList<ModuleSourceUpdateRow>> UpdateAllWithin(
+        IMessageHub hub, TimeSpan activityBudget, Func<string, IObservable<ActivityLog>> watchActivity)
+    {
+        var mesh = hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var access = hub.ServiceProvider.GetRequiredService<AccessService>();
         return access.RunAsSystem(() => mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(
                     MeshWideQuery.OfType(GitHubSyncService.ConfigNodeType)))
                 .Take(1)
@@ -120,7 +135,7 @@ public static class ModuleSourceUpdate
                 .Distinct(StringComparer.Ordinal)
                 .OrderBy(p => p, StringComparer.Ordinal)
                 .ToImmutableList())
-            .SelectMany(paths => Sequence(hub, access, paths, activityBudget))
+            .SelectMany(paths => Sequence(hub, access, paths, activityBudget, watchActivity))
             .Catch((Exception ex) => Observable.Return(ImmutableList.Create(new ModuleSourceUpdateRow(
                 GitHubSyncService.ConfigNodeType, "", null, ModuleSourceUpdateOutcome.Failed,
                 $"the sync sources could not be listed ({ex.GetType().Name}: {ex.Message}) — NOTHING was synced, "
@@ -128,14 +143,17 @@ public static class ModuleSourceUpdate
     }
 
     /// <summary>
-    /// Runs the sources one after another. 🚨 An import that outlived its budget may still be running
-    /// (its cancellation is only REQUESTED), and several sources can target one Space — so once a row
-    /// reports an import still running, no later import is started: each later source reads
-    /// <see cref="ModuleSourceUpdateOutcome.Skipped"/>, naming the import it waits behind. The batch
-    /// ends there; the reboot itself goes on (#6625 review).
+    /// Runs the sources one after another. 🚨 An import whose end was not observed may still be running
+    /// — it outlived its budget (its cancellation is only REQUESTED), or the watch on its activity
+    /// faulted or ended without a terminal status (#6753) — and several sources can target one Space.
+    /// So once a row reports an import still running, no later import is started: each later source
+    /// reads <see cref="ModuleSourceUpdateOutcome.Skipped"/>, naming the import it waits behind. The
+    /// batch ends there; the reboot itself goes on (#6625 review). Only a failure from BEFORE the
+    /// activity exists lets the sequence continue: then no import is running.
     /// </summary>
     private static IObservable<ImmutableList<ModuleSourceUpdateRow>> Sequence(
-        IMessageHub hub, AccessService access, ImmutableList<string> paths, TimeSpan activityBudget)
+        IMessageHub hub, AccessService access, ImmutableList<string> paths, TimeSpan activityBudget,
+        Func<string, IObservable<ActivityLog>> watchActivity)
     {
         if (paths.IsEmpty)
             return Observable.Return(ImmutableList<ModuleSourceUpdateRow>.Empty);
@@ -144,25 +162,25 @@ public static class ModuleSourceUpdate
         // A path that names no space never reaches One: the parse is matched HERE, once, so One
         // receives the parsed parts and has nothing left to assume.
         if (SpaceOf(path) is not { } parsed)
-            return Sequence(hub, access, rest, activityBudget);
-        return One(hub, access, path, parsed.Space, parsed.SourceId, activityBudget)
+            return Sequence(hub, access, rest, activityBudget, watchActivity);
+        return One(hub, access, path, parsed.Space, parsed.SourceId, activityBudget, watchActivity)
             .SelectMany(result => result.StillRunning is { } activity
                 ? Observable.Return(rest
                     .SelectMany(p => SpaceOf(p) is { } later
                         ? [new ModuleSourceUpdateRow(p, later.Space, later.SourceId, ModuleSourceUpdateOutcome.Skipped,
-                            $"not started: the import of {path} (activity {activity}) outlived its budget and may "
+                            $"not started: the import of {path} (activity {activity}) was not seen to end and may "
                             + "still be running, and a later import could write the same tree concurrently")]
                         : Array.Empty<ModuleSourceUpdateRow>())
                     .Prepend(result.Row)
                     .ToImmutableList())
-                : Sequence(hub, access, rest, activityBudget).Select(rows => rows.Insert(0, result.Row)));
+                : Sequence(hub, access, rest, activityBudget, watchActivity).Select(rows => rows.Insert(0, result.Row)));
     }
 
-    /// <summary>One source's row, and the activity of an import that outlived its budget (else null).</summary>
+    /// <summary>One source's row, and the activity of an import whose end was not observed (else null).</summary>
     private sealed record OneResult(ModuleSourceUpdateRow Row, string? StillRunning);
 
     private static IObservable<OneResult> One(IMessageHub hub, AccessService access, string configPath,
-        string space, string? sourceId, TimeSpan activityBudget)
+        string space, string? sourceId, TimeSpan activityBudget, Func<string, IObservable<ActivityLog>> watchActivity)
     {
         ModuleSourceUpdateRow Row(string outcome, string detail) => new(configPath, space, sourceId, outcome, detail);
         IObservable<GitHubSyncConfig?> ReadConfig() =>
@@ -173,11 +191,10 @@ public static class ModuleSourceUpdate
         return ReadConfig()
             .SelectMany(config => NotAModuleSource(config) is { } why
                 ? Observable.Return(new OneResult(Row(ModuleSourceUpdateOutcome.Skipped, why), null))
-                : Import(hub, access, space, sourceId, activityBudget)
-                    .SelectMany(ended => ended.Finished
+                : Import(hub, access, space, sourceId, activityBudget, watchActivity)
+                    .SelectMany(ended => ended.Log is { } log
                         ? ReadConfig().Select(after =>
                         {
-                            var log = ended.Log!;
                             var commit = after?.LastSyncCommitSha is { Length: > 8 } sha ? sha[..8] : after?.LastSyncCommitSha ?? "?";
                             var tail = log.Messages.LastOrDefault(m => m.LogLevel >= Microsoft.Extensions.Logging.LogLevel.Warning)?.Message;
                             var detail = $"{log.Status}: {after?.LastSyncOutcome ?? "no outcome recorded"} at {commit}; {DescribeModules(after)}"
@@ -187,15 +204,16 @@ public static class ModuleSourceUpdate
                                 : Row(ModuleSourceUpdateOutcome.Updated, detail), null);
                         })
                         : Observable.Return(new OneResult(Row(ModuleSourceUpdateOutcome.Failed,
-                            $"the import did not finish within {Budget(activityBudget)} (activity {ended.Activity}) — "
-                            + "its cancellation was requested; its outcome is NOT established"), ended.Activity))))
+                            $"{ended.Unfinished} (activity {ended.Activity}) — its outcome is NOT established"),
+                            ended.Activity))))
             .Catch((Exception ex) => Observable.Return(new OneResult(Row(ModuleSourceUpdateOutcome.Failed,
                 $"the update could not run ({ex.GetType().Name}: {ex.Message})"), null)));
     }
 
-    /// <summary>How one import ended for the row: its terminal log, or <c>Finished = false</c> when the
-    /// budget ran out first.</summary>
-    private sealed record ImportEnd(string Activity, bool Finished, ActivityLog? Log);
+    /// <summary>How one import ended for the row: its terminal <c>Log</c>, or — when no terminal status
+    /// was observed — <c>Unfinished</c>, the sentence saying why. An <see cref="ImportEnd"/> exists only
+    /// once the activity does, so a missing log always means the import may still be running.</summary>
+    private sealed record ImportEnd(string Activity, ActivityLog? Log, string? Unfinished);
 
     /// <summary>
     /// 🚨 Runs one source's import and answers how it ended — bounded by <paramref name="activityBudget"/>
@@ -210,38 +228,43 @@ public static class ModuleSourceUpdate
     /// Activity Control Plane (<see cref="HubActivityExtensions.CancelActivity"/>) and the row says the
     /// outcome is NOT established. The import's own subscription is left to end on its own terms —
     /// cancelled, failed or finished — never cut, so its terminal status is still written.</para>
+    ///
+    /// <para>🚨 Every way the watch can end WITHOUT a terminal status, once the activity exists, answers
+    /// an <see cref="ImportEnd"/> with no log — never a fault and never nothing (#6753). A watch that
+    /// faults (its gate query, or the point read meeting a routing error) or completes early proves
+    /// nothing about the import, which may still be writing: a fault reaching <c>One</c>'s catch used to
+    /// answer "nothing running", so the next source's import started beside it, and an empty end
+    /// dropped the row — and with it every row of the batch, which <see cref="Sequence"/> composes
+    /// recursively. Only a failure from before the activity exists faults this observable.</para>
     /// </summary>
     private static IObservable<ImportEnd> Import(
-        IMessageHub hub, AccessService access, string space, string? sourceId, TimeSpan activityBudget) =>
+        IMessageHub hub, AccessService access, string space, string? sourceId, TimeSpan activityBudget,
+        Func<string, IObservable<ActivityLog>> watchActivity) =>
         Observable.Create<ImportEnd>(observer =>
         {
             var created = new AsyncSubject<string>();
-            var mesh = hub.ServiceProvider.GetRequiredService<IMeshService>();
             var watch = created
-                .SelectMany(activity => access.RunAsSystem(() =>
-                        // 🚨 Gated on an EXACT-PATH query before the point read, as ActivityRunner's
-                        // own cancel watch is: CreateNode proves the activity is PERSISTED, not that
-                        // it is ROUTABLE, and a point read that meets a routing NotFound terminates
-                        // with an error (#2229 item A) — which would fail this row at once and leave
-                        // the import running unbounded and uncancelled.
-                        mesh.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{activity} nodeType:Activity"))
-                            .Where(change => change.Items.Count > 0)
-                            .Take(1)
-                            .SelectMany(_ => hub.GetMeshNodeStream(activity)))
-                    .Select(n => n.ContentAs<ActivityLog>(hub.JsonSerializerOptions))
-                    .OfType<ActivityLog>()
+                .SelectMany(activity => watchActivity(activity)
                     .Where(log => log.Status.IsTerminal())
                     .Take(1)
-                    .Select(log => new ImportEnd(activity, true, log))
+                    .Select(log => new ImportEnd(activity, log, null))
                     .Timeout(activityBudget)
-                    .Catch((TimeoutException _) =>
+                    .DefaultIfEmpty(new ImportEnd(activity, null,
+                        "the watch on the import's activity ended before it reported a terminal status, "
+                        + "so the import may still be running"))
+                    .Catch((Exception ex) =>
                     {
+                        if (ex is not TimeoutException)
+                            return Observable.Return(new ImportEnd(activity, null,
+                                $"the watch on the import's activity faulted ({ex.GetType().Name}: {ex.Message}), "
+                                + "so the import may still be running"));
                         // The timeout fires on a scheduler thread, where no access context is
                         // guaranteed; the cancellation is a control-plane write the reboot makes as
                         // System, so System is established at the write itself.
                         using (access.ImpersonateAsSystem())
                             hub.CancelActivity(activity);
-                        return Observable.Return(new ImportEnd(activity, false, null));
+                        return Observable.Return(new ImportEnd(activity, null,
+                            $"the import did not finish within {Budget(activityBudget)} — its cancellation was requested"));
                     }))
                 .Subscribe(observer);
             // The import runs for its own lifetime; disposing the row's subscription never cuts it.
@@ -260,6 +283,20 @@ public static class ModuleSourceUpdate
                     () => { });
             return watch;
         });
+
+    /// <summary>The activity node's log stream, read as System. 🚨 Gated on an EXACT-PATH query before
+    /// the point read, as ActivityRunner's own cancel watch is: CreateNode proves the activity is
+    /// PERSISTED, not that it is ROUTABLE, and a point read that meets a routing NotFound terminates with
+    /// an error (#2229 item A).</summary>
+    private static IObservable<ActivityLog> WatchActivity(
+        IMessageHub hub, AccessService access, IMeshService mesh, string activity) =>
+        access.RunAsSystem(() =>
+                mesh.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{activity} nodeType:Activity"))
+                    .Where(change => change.Items.Count > 0)
+                    .Take(1)
+                    .SelectMany(_ => hub.GetMeshNodeStream(activity)))
+            .Select(n => n.ContentAs<ActivityLog>(hub.JsonSerializerOptions))
+            .OfType<ActivityLog>();
 
     private static string Budget(TimeSpan budget) =>
         budget.TotalMinutes >= 1 ? $"{budget.TotalMinutes:0} min" : $"{budget.TotalSeconds:0} s";

@@ -68,7 +68,13 @@ process drives a request.
    the import's cancellation is requested through the Activity Control Plane (as System, at the
    write), and the reboot goes on to the next step. Because that import may still be running, no
    later source's import is started behind it in the same pass: those rows read `Skipped`, naming
-   the import they wait behind, since two sources can target one Space. Why an import hangs is the import's own
+   the import they wait behind, since two sources can target one Space. The same holds for every
+   other way the watch on an import's activity can end without a terminal status once that activity
+   exists (MeshWeaver#6753): a watch that faults (its gate query, or the point read meeting a
+   routing error) or ends early proves nothing about the import, so the row reads `Failed` with
+   *"… may still be running … its outcome is NOT established"* and the later sources read
+   `Skipped`. Only a failure from before the activity exists lets the pass go on to the next
+   source, because then no import is running. Why an import hangs is the import's own
    defect and is not answered by this bound (`AHungImportCannotHoldTheRebootTest`).
 2. **Modules.** The executor lands the newest COMPATIBLE published version of every installed
    module through `ModuleReloadExecutor.ResolveAndLand`, which is the module reload's own

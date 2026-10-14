@@ -147,6 +147,64 @@ public class AHungImportCannotHoldTheRebootTest(ITestOutputHelper output) : Mono
         Volatile.Read(ref fetchCount).Should().Be(1, "the second import must never have started");
     }
 
+    /// <summary>
+    /// 🚨 MeshWeaver#6753 — the watch on the import's activity FAULTS after the activity exists (the
+    /// gate query faulting, or the point read terminating with a routing error). That proves nothing
+    /// about the import, which may still be writing — so the row must name the activity as still
+    /// running and no later import may start. The fault used to reach <c>One</c>'s catch, which reported
+    /// "nothing running", and the second source's import started beside the first: the fetch count is
+    /// the control that it did not.
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task AWatchFaultAfterTheActivityExists_KeepsTheImportRunning_AndStartsNoLaterImport()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var first = await GivenAHungModuleSource("FaultA", ct);
+        var second = await GivenAHungModuleSource("FaultB", ct);
+        var fetchCount = 0;
+        using var counting = repoClient.Fetches.Subscribe(_ => Interlocked.Increment(ref fetchCount));
+
+        var rows = await ModuleSourceUpdate.UpdateAllWithin(Mesh, TimeSpan.FromMinutes(5),
+                _ => Observable.Throw<ActivityLog>(new InvalidOperationException("the activity's point read met a routing NotFound")))
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("a faulted watch must still end the batch with a row per source", ct);
+
+        Output.WriteLine(string.Join(Environment.NewLine, rows.Select(r => $"{r.ConfigPath}: {r.Outcome} — {r.Detail}")));
+        var mine = rows.Where(r => r.Space == first || r.Space == second).ToArray();
+        mine.Should().HaveCount(2);
+        mine[0].Outcome.Should().Be(ModuleSourceUpdateOutcome.Failed);
+        mine[0].Detail.Should().Contain("faulted").And.Contain("may still be running").And.Contain("NOT established");
+        mine[1].Outcome.Should().Be(ModuleSourceUpdateOutcome.Skipped);
+        mine[1].Detail.Should().Contain("not started");
+        Volatile.Read(ref fetchCount).Should().BeLessThanOrEqualTo(1, "the second import must never have started");
+    }
+
+    /// <summary>
+    /// 🚨 MeshWeaver#6753 (adjacent) — the watch COMPLETES without a terminal status. The batch still
+    /// emits its rows: the first source reads Failed (still running), the later one Skipped. It used
+    /// to emit NOTHING — the empty import dropped its row, and the recursive <c>Sequence</c> dropped
+    /// every row with it, breaking <see cref="ModuleSourceUpdate.UpdateAll"/>'s "emits once".
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task AWatchThatEndsWithoutATerminalStatus_StillEmitsEveryRow()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var first = await GivenAHungModuleSource("EmptyA", ct);
+        var second = await GivenAHungModuleSource("EmptyB", ct);
+
+        var rows = await ModuleSourceUpdate.UpdateAllWithin(Mesh, TimeSpan.FromMinutes(5),
+                _ => Observable.Empty<ActivityLog>())
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("the batch emits once, whatever the watch did", ct);
+
+        Output.WriteLine(string.Join(Environment.NewLine, rows.Select(r => $"{r.ConfigPath}: {r.Outcome} — {r.Detail}")));
+        var mine = rows.Where(r => r.Space == first || r.Space == second).ToArray();
+        mine.Should().HaveCount(2);
+        mine[0].Outcome.Should().Be(ModuleSourceUpdateOutcome.Failed);
+        mine[0].Detail.Should().Contain("before it reported a terminal status");
+        mine[1].Outcome.Should().Be(ModuleSourceUpdateOutcome.Skipped);
+    }
+
     /// <summary>The transport reduced to a fetch that never answers, recorded on subscribe.</summary>
     private sealed class HangingRepoClient : IGitHubRepoClient
     {
