@@ -202,6 +202,49 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
     internal object? TryResolveCurrentModuleService(string module, int index) =>
         Current(module)?.Services is { } services ? services.TryResolve(Root, index) : null;
 
+    /// <summary>
+    /// 🚨 The ATOMIC "try current service" (MeshWeaver#6715): the instance behind registration
+    /// <paramref name="index"/> of <paramref name="module"/>'s CURRENT generation, together with a lease
+    /// that keeps that generation's services from being disposed and its context from being unloaded
+    /// until it is released — or null when the module has no current generation, or its generation is
+    /// already retiring. Replaces "is it still current?" followed by a call through the forwarder, which
+    /// a retirement in between turned into <c>Module … holds no service scope</c>.
+    ///
+    /// <para>The generation is read ONCE. Its context is leased BEFORE its currency is re-checked, as in
+    /// <see cref="ResolveDependency"/>: <see cref="Retire"/> removes a generation from the current set
+    /// before it waits for quiescence, so a lease taken while it was still current is one the unload
+    /// waits for. Its services are leased the same way (<see cref="ModuleServices.TryLease"/>): a
+    /// <see cref="ModuleServices.Dispose"/> that comes after the lease is deferred to its release.</para>
+    /// </summary>
+    /// <param name="module">The module's entry-assembly name.</param>
+    /// <param name="index">The registration's index.</param>
+    /// <param name="caller">The root-side scope resolving, or null.</param>
+    internal (object Instance, IDisposable Release)? TryLeaseModuleService(string module, int index, Autofac.ILifetimeScope? caller)
+    {
+        if (Current(module) is not { Services: { } services } generation)
+            return null;
+        var context = Leases.Enter(generation.Context);
+        var held = services.TryLease();
+        if (held is null || !ReferenceEquals(Current(module), generation))
+        {
+            held?.Dispose();
+            context.Dispose();
+            return null;
+        }
+        // Released in this order: the services first — their disposal, when this is the last lease of a
+        // retiring generation, runs module code — and the context lease after it.
+        var release = new System.Reactive.Disposables.CompositeDisposable(held, context);
+        try
+        {
+            return (services.Resolve(Root, index, caller), release);
+        }
+        catch
+        {
+            release.Dispose();
+            throw;
+        }
+    }
+
     /// <summary>The scope of <paramref name="module"/>'s CURRENT generation.</summary>
     public IServiceProvider? ModuleScope(string module) =>
         Current(module)?.Services?.Scope(Root);
@@ -567,7 +610,9 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
         {
             ArgumentNullException.ThrowIfNull(generation);
             current.TryRemove(new KeyValuePair<string, ModuleGeneration>(generation.Name, generation));
-            // Its singletons go first — they are this generation's objects and must not outlive it.
+            // Its singletons go first — they are this generation's objects and must not outlive it. A
+            // caller that leased the generation (TryLeaseModuleService) finishes on live services: the
+            // disposal then runs when the last lease is released (MeshWeaver#6715).
             generation.Services?.Dispose();
             var retirement = RetireCore(generation.Context);
             return Leases.UnloadWhenQuiesced(generation.Context, budget, logger, generation.Context.Name)
