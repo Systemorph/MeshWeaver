@@ -11,8 +11,10 @@ namespace MeshWeaver.Hosting;
 /// <see cref="IMeshInvalidationFeed"/>. Logical post-commit events use one subject; direct
 /// publishes additionally fan into the cache subject. The storage adapter's process-local change
 /// channel reaches only the cache subject, so monolith and Orleans hosts invalidate commits made by
-/// every process without duplicating logical side effects. The legacy Orleans wrapper can still
-/// forward into both feeds during its additive retirement window.
+/// every process without duplicating logical side effects. That storage channel is the ONLY
+/// cross-process carrier: the Orleans memory-stream relay is retired (#4802), so a host that runs
+/// more than one process over one store needs a backend that delivers every process's commits to
+/// every process (PostgreSQL LISTEN/NOTIFY) — see <c>CrossProcessChangeDelivery</c>.
 /// </summary>
 public class InProcessMeshChangeFeed : IMeshChangeFeed, IMeshInvalidationFeed, IDisposable
 {
@@ -33,8 +35,7 @@ public class InProcessMeshChangeFeed : IMeshChangeFeed, IMeshInvalidationFeed, I
     /// </summary>
     public InProcessMeshChangeFeed()
     {
-        // Publish and PublishLocal have independent callers (hub threads, storage LISTEN and the
-        // additive Orleans relay). Rx Subject is not safe for concurrent OnNext calls; the
+        // Publish and PublishLocal have independent callers (hub threads and storage LISTEN). Rx Subject is not safe for concurrent OnNext calls; the
         // synchronized wrappers preserve one ordered callback at a time in this process.
         _subject = Subject.Synchronize(_subjectLifetime);
         _invalidations = Subject.Synchronize(_invalidationLifetime);
@@ -123,9 +124,9 @@ public class InProcessMeshChangeFeed : IMeshChangeFeed, IMeshInvalidationFeed, I
     }
 
     /// <summary>
-    /// Publishes a cross-silo event to this process's invalidators without re-running logical
-    /// consumers or re-broadcasting to Orleans streams. Retains the method's exact public
-    /// signature for already-compiled <c>PathCacheInvalidatorGrain</c> callers.
+    /// Publishes an event another process committed to this process's invalidators only, without
+    /// re-running logical consumers. The storage relay is the platform's own caller; the public
+    /// signature is kept for already-compiled callers (the retired Orleans stream relay used it).
     /// </summary>
     public void PublishLocal(MeshChangeEvent change)
     {

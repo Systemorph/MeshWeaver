@@ -21,7 +21,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// investigation left open (the <c>[ImplicitStreamSubscription]</c> grain never activated).
 ///
 /// <para>Publishes directly through the keyed <see cref="IStreamProvider"/> on silo A, and
-/// subscribes directly on silo B (bypassing OrleansMeshChangeFeed / the grain), so a green
+/// subscribes directly on silo B (no change-feed wiring of any kind — that relay is retired, #4802), so a green
 /// result isolates "the memory-stream transport CAN carry MeshChangeEvent cross-silo to a
 /// non-grain subscriber" from any wiring defect in the feed itself. Bounded everywhere — no
 /// Task.Delay, no unbounded await.</para>
