@@ -209,6 +209,16 @@ a decoy that matches only when the character is read as a metacharacter, in both
 the negated form. Both executors run them. The Postgres suite seeds them into a real database, and
 the Snowflake and Cosmos generator tests assert the bound pattern.
 
+## A quoted value is literal — decided once, in the parser
+
+`field:"a|b"` and `field:"x*y"` name exactly those strings (#6634). The decision is the PARSER's, so
+no executor has to learn it: a quoted value is emitted only as operators every executor already
+compares literally — `Equal`, or, for a negated value carrying a `*`, a one-value `NotIn` (the
+negated-wildcard `NotEqual` arm above would read that `*` as a glob). A quoted `namespace:` becomes
+the anchor path, never the `In` alternation filter or the `LIKE` pattern. The `content.code` cases
+`"a|b"` and `"x*y"` in `NegationCorpus` pin it on both executors, each beside the decoy an
+alternation or glob reading would return.
+
 ## What is still divergent
 
 The fallback closes the case where a selector is unknown to **both** providers. It does not close
