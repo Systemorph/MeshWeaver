@@ -339,26 +339,31 @@ public static class WorkspaceOperations
                     {
                         if (g.Key.Op == OperationType.Add || g.Key.Op == OperationType.Replace)
                         {
-                            var allInstances = g.Select(x => ResolveDelta(x.Instance, currentStore, stream, logger))
-                                .Where(x => x is not null).Select(x => x!).ToList();
-                            var invalidInstances = allInstances
-                                .Where(x => g.Key.TypeSource!.TypeDefinition.GetKey(x) == null)
+                            // Key each instance ONCE, without throwing: a keyless instance is
+                            // reported and skipped while the rest of the batch still applies.
+                            // GetKey throws for one, so filtering on `GetKey(x) == null` could
+                            // never select anything — the throw escaped to the catch below and
+                            // faulted the whole stream instead.
+                            var keyed = g.Select(x => ResolveDelta(x.Instance, currentStore, stream, logger))
+                                .Where(x => x is not null)
+                                .Select(x => (Instance: x!, Key: g.Key.TypeSource!.TypeDefinition.GetKeyOrNull(x!)))
                                 .ToList();
-                            if (invalidInstances.Count > 0)
+                            var invalidCount = keyed.Count(x => x.Key is null);
+                            if (invalidCount > 0)
                             {
                                 logger.LogError("Skipping {Count} instances with null key in collection {Collection}",
-                                    invalidInstances.Count, g.Key.TypeSource!.CollectionName);
+                                    invalidCount, g.Key.TypeSource!.CollectionName);
                                 messages = messages.Add(new LogMessage(
-                                    $"Skipping {invalidInstances.Count} instances with null key in collection {g.Key.TypeSource!.CollectionName}",
+                                    $"Skipping {invalidCount} instances with null key in collection {g.Key.TypeSource!.CollectionName}",
                                     LogLevel.Error)
                                     .WithKey("activity.dataUpdate.nullKeyInstancesSkipped",
-                                        ("count", invalidInstances.Count),
+                                        ("count", invalidCount),
                                         ("collection", g.Key.TypeSource!.CollectionName)));
                             }
                             var instances =
-                                new InstanceCollection(allInstances
-                                    .Where(x => g.Key.TypeSource!.TypeDefinition.GetKey(x) != null)
-                                    .ToDictionary(g.Key.TypeSource!.TypeDefinition.GetKey))
+                                new InstanceCollection(keyed
+                                    .Where(x => x.Key is not null)
+                                    .ToDictionary(x => x.Key!, x => x.Instance))
                                 {
                                     GetKey = g.Key.TypeSource!.TypeDefinition.GetKey
                                 };

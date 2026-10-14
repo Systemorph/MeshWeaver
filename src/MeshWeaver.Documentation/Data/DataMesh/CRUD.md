@@ -225,6 +225,12 @@ var request = DataChangeRequest.Update([updatedTodo], changedBy: "user-123");
 workspace.RequestChange(request, delivery);
 ```
 
+**An instance with no key value is skipped, not fatal.** When a batch carries an instance whose key
+resolves to `null`, that instance is reported in the activity log under
+`activity.dataUpdate.nullKeyInstancesSkipped` (with its count and collection) and skipped, while every
+keyed instance of the same batch still applies and the data stream stays live for later writes. A
+type with no key MAPPING at all is a configuration error and still fails the change.
+
 ## Update Options
 
 Control whether a change merges or replaces the entire collection:

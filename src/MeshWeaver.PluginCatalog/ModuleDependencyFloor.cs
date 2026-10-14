@@ -97,7 +97,9 @@ public static class ModuleDependencyFloor
         static bool Usable(ModuleActivationEntry e) => e.Enabled && !string.IsNullOrWhiteSpace(e.Version);
 
         var module = installed.FirstOrDefault(p =>
-            string.Equals(p.Id, dependencyId, StringComparison.OrdinalIgnoreCase))?.Module;
+            // Package ids are ordinal (PluginGrantEntry.Matches, PackageDependencyGraph); module
+            // (assembly) names below stay case-insensitive like every other assembly-name match.
+            string.Equals(p.Id, dependencyId, StringComparison.Ordinal))?.Module;
         if (!string.IsNullOrWhiteSpace(module)
             && landed.Entries.FirstOrDefault(e =>
                 string.Equals(e.Name, module, StringComparison.OrdinalIgnoreCase)) is { } byModule
@@ -106,7 +108,7 @@ public static class ModuleDependencyFloor
         return landed.Entries.FirstOrDefault(e =>
             Usable(e)
             && e.PackagePath?.Split('/') is { Length: 2 } segments
-            && string.Equals(segments[1], dependencyId, StringComparison.OrdinalIgnoreCase));
+            && string.Equals(segments[1], dependencyId, StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -148,6 +150,32 @@ public static class ModuleDependencyFloor
     {
         ArgumentNullException.ThrowIfNull(landing);
         return ReadInstalled(hub).SelectMany(landing.ProposeCheckedModuleSet);
+    }
+
+    /// <summary>
+    /// <see cref="ProposeChecked(IMessageHub, ModuleLandingService)"/>, checked against the install
+    /// records AND <paramref name="aboutToInstall"/> — packages a wave lands modules for BEFORE their
+    /// install records exist (the default install's module phase, policy
+    /// <c>default-install-modules-first</c>). Their requirements bind the set exactly as a record's
+    /// would: a selected package requiring <c>AI@^2</c> must not let a set loading AI 1.x be written
+    /// just because its own record is not there yet. Records and selection are checked TOGETHER: a
+    /// requirement either of them states must be met.
+    /// </summary>
+    /// <param name="hub">The mesh hub.</param>
+    /// <param name="landing">The landing service.</param>
+    /// <param name="aboutToInstall">The manifests the caller is about to install.</param>
+    public static IObservable<ModuleSet?> ProposeChecked(
+        IMessageHub hub, ModuleLandingService landing, IReadOnlyList<PackageManifest> aboutToInstall)
+    {
+        ArgumentNullException.ThrowIfNull(landing);
+        ArgumentNullException.ThrowIfNull(aboutToInstall);
+        // 🚨 BOTH, never one in place of the other: the record read is an eventually consistent
+        // query that may still return a manifest phase 2 has just replaced, and the selection's
+        // manifest may not have installed at all (held, failed). Every requirement either states
+        // must be met — a stricter check fails closed, and the next wave proposes again.
+        return ReadInstalled(hub).SelectMany(installed => landing.ProposeCheckedModuleSet(installed
+            .Concat(aboutToInstall.Where(p => !string.IsNullOrWhiteSpace(p.Id)))
+            .ToImmutableList()));
     }
 }
 
