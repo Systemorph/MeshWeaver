@@ -229,6 +229,15 @@ Marks the primary key. Every data model requires exactly one.
 public string Id { get; init; } = string.Empty;
 ```
 
+Without `[Key]`, the key is resolved from a property named `Id`, then one named `SystemName`, or from
+`WithKey(...)` on the type source. A type with none of these can still be registered, for example
+for serialization, but it cannot be served as a data-source collection: the hub that loads it
+fails initialization with
+*"No key mapping is defined for type {CLR type} (collection '{name}')"*. An instance whose key value
+is null, or a null element in a type source's initial data, also fails initialization with a message
+that names the type. Before these named errors existed, all three cases surfaced as an anonymous
+`NullReferenceException` in `TypeDefinition.GetKey` (Systemorph/MeshWeaver#6643).
+
 ### `[Required]`
 
 Prevents saving until the field contains a non-empty value.

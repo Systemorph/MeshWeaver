@@ -2295,6 +2295,19 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/compile-check.py --self-test
 
+    # 🚨 A plain `git diff --name-only` C-QUOTES a non-ASCII path (`"…C\303\264te…"`), and a script
+    # that reads it verbatim holds a path that names no file — a refused selection
+    # (MeshWeaver.Plugins#3566), a module never selected, a `.cs` silently dropped from a scan. Every
+    # listing a script parses is read with `-z`; this ratchet keeps it so, over .github/scripts and
+    # scripts. Self-test first: it proves the quoting on real git output.
+    - name: "The git path-listing ratchet can fail (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/check-git-path-listings.py --self-test
+
+    - name: "Every git path listing a script parses is read NUL-delimited (-z)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/check-git-path-listings.py
+
     # 🚨 THE LOCAL LOOP, RUN WHERE ITS INPUT CHANGES (#4785). `run-node-tests.py` is the command
     # AGENTS.md tells an author to run before pushing, and it IMPORTS compile-check.py above. When
     # #4711 replaced the compile model and removed `usings_union`, the harness died with an
@@ -2331,6 +2344,23 @@ jobs:
     - name: "A core change rebuilds images only when it touches an image input (self-test)"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/core-image-relevance.py --self-test
+
+    # main-cd's push path delivers in BUILD-COMPLETION order, not commit order, so a parent can be
+    # handed to delivery after its child already published (CD #10796 → 6b9944c after #10795 →
+    # 04d56c7, 2026-10-14) and mint a higher version for older code. Proven both ways here: strictly
+    # behind ⇒ declined; ahead, same commit, diverged, identical, no set, unreadable compare ⇒ publish.
+    - name: "CD never publishes a commit older than the newest published set (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/cd-superseded.py --self-test
+
+    # main-cd's tester leg stages the Razor generator per RID from the SDK FEED (not an MCR image
+    # that lags a new SDK by hours and withheld the seal on the 10.0.402 release day). It runs on
+    # main only, so it is proven here, offline: each RID must hold the compiler built FOR it
+    # (missing, swapped, non-PE refused), the metadata's .tar.gz for the host version is taken
+    # (unreleased version and absent RID named), and a tarball whose digest disagrees is refused.
+    - name: "The Razor generator is staged per RID from the SDK feed, and refuses the wrong architecture (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/stage-razor-generators.py --self-test
 
     # The publish-bake lane's previous-epoch leg (policy bake-per-live-identity, #3583) reads the
     # platform-compatibility declaration to decide whether a second live identity exists. No break

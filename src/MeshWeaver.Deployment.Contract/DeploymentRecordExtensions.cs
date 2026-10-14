@@ -267,6 +267,13 @@ public static class DeploymentRecordExtensions
     /// <summary>Removes every pre-install.</summary>
     public static DeploymentContent ClearPreInstall(this DeploymentContent d) => d with { PreInstall = ImmutableList<string>.Empty };
 
+    /// <summary>Grants this registry seeds into every new instance registration (<c>Plugins/*</c>).</summary>
+    public static DeploymentContent DefaultGrants(this DeploymentContent d, params string[] patterns) =>
+        d with { DefaultGrants = d.DefaultGrants.AddRange(patterns) };
+
+    /// <summary>The single-registry catalog URL this instance consumes (<c>PluginCatalog:RegistryUrl</c>); a registry may name itself.</summary>
+    public static DeploymentContent WithRegistryUrl(this DeploymentContent d, string? url) => d with { RegistryUrl = url };
+
     /// <summary>This deployment IS the plugin registry (serves repos, consumes none).</summary>
     public static DeploymentContent AsPluginRegistry(this DeploymentContent d, bool isRegistry = true) => d with { IsPluginRegistry = isRegistry };
 

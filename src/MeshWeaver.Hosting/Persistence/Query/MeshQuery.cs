@@ -1138,6 +1138,9 @@ public class MeshQuery : IMeshQueryCore
         if (effectiveLimit is int limit && limit > 0)
             merged = merged.Take(limit);
         var finalList = merged.ToList();
+        var contentKeptOnlyForSort = parsed.Select is { Count: > 0 } projected
+            && !projected.Any(f => f.Equals("content", StringComparison.OrdinalIgnoreCase))
+            && QueryEvaluator.SortReadsContent(parsed.EffectiveOrderBy?.Property);
         var items = new List<T>(finalList.Count);
         var scores = new List<double>(finalList.Count);
         foreach (var (item, score) in finalList)
@@ -1161,6 +1164,12 @@ public class MeshQuery : IMeshQueryCore
             if (parsed.Select is { } select && item is MeshNode node && typeof(T) != typeof(MeshNode))
             {
                 items.Add((T)(object)ParsedQuery.ProjectToSelect(node, select));
+            }
+            else if (contentKeptOnlyForSort && item is MeshNode sortedNode && sortedNode.Content is not null)
+            {
+                // The providers kept Content past a `select:` that omits it ONLY so the sort above
+                // had a key (QueryEvaluator.SortReadsContent). Paging is done: honour the projection.
+                items.Add((T)(object)(sortedNode with { Content = null }));
             }
             else
             {

@@ -326,8 +326,15 @@ strings, anchored the same way. The bands differ only in what their legs select:
 | band | selects | glyph |
 |---|---|---|
 | **Needs you** | open obligations addressed to the viewer | `☐` |
-| **Running** | activities in flight (`ActivityStatus.Running`) **and threads executing** | `⏳` |
-| **Last 24 hours** | terminal activities inside a window | `✅` / `❌` |
+| **Running** | marked activities still going (`ActivityStatus.Running`) **and threads executing**; a marked activity that FAILED is in *Needs you* | `⏳` |
+| **Last 24 hours** | *(designed; core feeds no leg into it today)* | `✅` |
+
+🚨 **As built (policy `inbox-activities-need-someone`):** core's own Activities source lists only
+the runs MARKED for the inbox (`ActivityLog.ShowInInbox`, set by the code that starts a run a person
+asked for and waits on, or one that will need their decision) that still need someone: a run still
+going is in *Running*; a run that FAILED is finished, so it is in *Needs you*, dealt with on its own
+page. Background runs (scripts, Tests-area runs, indexing) are never marked, so they never appear.
+A run that finished well is not listed; its own page keeps it.
 
 **Running is its own band because it is neither.** It is not owed by the viewer — pushing it into
 *Needs you* invents an obligation nobody has — and it is not finished, so it cannot carry a tick. It
@@ -335,8 +342,7 @@ is also the band that answers the question people actually open the inbox with w
 slow: *is it still going?*
 
 🚨 **Running is a live band, so it needs no poller.** The rows come from the same node streams
-everything else binds to; an activity that finishes moves itself to the third band on the next
-emission. A timer that re-reads "is it done yet?" is the band's failure mode, not its
+everything else binds to; an activity that finishes well leaves the band on the next emission. A timer that re-reads "is it done yet?" is the band's failure mode, not its
 implementation.
 
 This is also the only place a tick legitimately appears — the third band is *by definition* things
@@ -440,6 +446,25 @@ target (`InboxItemOutcome.StepUp`). When the batch ends, the inbox sends the app
 covering every held decision (`StepUpPaths.StartUrl` with all targets — the endpoint already stamps
 a receipt per target), then back to the inbox. Each type's control plane consumes its own receipt
 and ratifies, and the request leaves the inbox once its type files it away.
+
+**Categories (policy `inbox-categories-by-kind`).** A side menu — the platform's one-choice
+control (`RadioGroupControl`), its value bound to the filter's `category` and its options fed with
+the live counts (`InboxLayoutArea.CategoryOptions`) — lists All, then each category with its symbol
+and count (unread when it has any, else all): Approvals, Mail, Conversations, Notifications,
+Activities. A source names its category (`InboxQueryLeg.Category` and
+`CategoryLabelKey`; WhatsApp, Teams, iMessage and portal chats share **Conversations**), else its
+source is its category. The picked category lives in the page's filter (`InboxFilter.Category`):
+it shows every item filed under it, even from a source switched off by default, and All leaves the
+source switches in charge. The counts are read before any filter applies
+(`InboxRows.CategoryCounts`).
+
+**Put away everything before a day.** The order is ALWAYS newest first (policy
+`inbox-newest-first`; `InboxFilter.Order` is no longer read and the settings menu offers no order). The search box also takes date bounds, `before:2026-10-01` (strictly
+before that day) and `after:2026-10-01` (that day or later), in UTC: they narrow the rows by their
+time (`InboxRows.SplitDates`), and only the remaining text goes to the sources. A bound that is not
+a date stays text and is searched for as written. Tick all, then press Delete, to put away
+everything in the range. It reaches the rows the page has read, each source's newest
+`InboxQueries.LegLimit`; the "capped" notice says when a source has more.
 
 The command row's Delete and Undo act on every ticked row; **Backspace or Delete presses Delete**
 (`ButtonControl.WithShortcut`) — never while typing in the search box.

@@ -123,49 +123,64 @@ public class InboxAppTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
     }
 
     /// <summary>
-    /// All three bands render: Running and Recent are DIFFERENT queries (non-terminal vs stamped
-    /// terminal activity), so the per-page dedup no longer swallows Recent.
+    /// Core's own legs feed two bands: what needs you, and what is still going. A run that FINISHED
+    /// WELL is not listed at all (policy <c>inbox-activities-need-someone</c>) — its page keeps it.
     /// </summary>
     [Fact]
-    public void ThePage_ShowsThreeDistinctBands()
-        => InboxLayoutArea.Sections(InboxQueries.BuiltIn, "alice").Select(s => s.Band).Distinct()
-            .Should().Equal(InboxBand.NeedsYou, InboxBand.Running, InboxBand.Recent);
+    public void ThePage_ShowsWhatNeedsYou_AndWhatIsStillGoing()
+    {
+        InboxLayoutArea.Sections(InboxQueries.BuiltIn, "alice").Select(s => s.Band).Distinct()
+            .Should().Equal(InboxBand.NeedsYou, InboxBand.Running);
+        InboxQueries.BuiltIn.Where(l => l.Source == "Activities").Should()
+            .OnlyContain(l => l.Query.Contains("content.showInInbox:true"), "only runs marked for the inbox — background runs are never listed");
+    }
 
     /// <summary>
-    /// The two activity bands split a real partition: a running activity (its default status is
-    /// OMITTED from stored content) lands in Running only, a finished one in Recent only.
+    /// The Activities source on a real partition: a MARKED running activity (its default status is
+    /// OMITTED from stored content) and a marked FAILED one are listed; one that succeeded, warned or was
+    /// cancelled is not, and an unmarked background run is never listed, running or failed.
     /// </summary>
     [Fact(Timeout = 60000)]
-    public async Task RunningAndRecent_SplitTheOwnersActivities()
+    public async Task Activities_ListWhatIsGoingAndWhatFailed_NeverWhatFinishedWell()
     {
         var ct = TestContext.Current.CancellationToken;
         const string owner = "inbox-bands";
         await CreateUserAsync(owner, ct);
         var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var access = Mesh.ServiceProvider.GetService<AccessService>();
-        MeshNode Activity(string id, ActivityStatus status) => new(id, $"{owner}/_Activity")
+        MeshNode Activity(string id, ActivityStatus status, bool marked = true) => new(id, $"{owner}/_Activity")
         {
             NodeType = ActivityNodeType.NodeType,
             Name = id,
             MainNode = owner,
             State = MeshNodeState.Active,
-            Content = new ActivityLog(ActivityCategory.Import) { Id = id, HubPath = owner, Status = status },
+            Content = new ActivityLog(ActivityCategory.Import) { Id = id, HubPath = owner, Status = status, ShowInInbox = marked },
         };
-        foreach (var node in new[] { Activity("still-running", ActivityStatus.Running), Activity("finished", ActivityStatus.Succeeded) })
+        foreach (var node in new[]
+                 {
+                     Activity("still-running", ActivityStatus.Running), Activity("failed", ActivityStatus.Failed),
+                     Activity("finished", ActivityStatus.Succeeded), Activity("warned", ActivityStatus.Warning),
+                     Activity("cancelled", ActivityStatus.Cancelled),
+                     // A background run (a script, a Tests-area run): never marked, never listed.
+                     Activity("background-running", ActivityStatus.Running, marked: false),
+                     Activity("background-failed", ActivityStatus.Failed, marked: false),
+                 })
             await access.RunAsSystem(() => mesh.CreateNode(node)).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
 
         var legs = InboxQueries.Resolve(InboxQueries.BuiltIn, owner);
         async Task<string[]> Ids(string band)
         {
-            var query = legs.Single(l => l.Band == band).Query;
+            var query = legs.Single(l => l.Band == band && l.Source == "Activities").Query;
             return await mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
                 .Select(c => c.Items.Select(n => n.Id).ToArray())
                 .Where(ids => ids.Length > 0)
                 .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
         }
 
-        (await Ids(InboxBand.Running)).Should().Equal("still-running");
-        (await Ids(InboxBand.Recent)).Should().Equal("finished");
+        (await Ids(InboxBand.Running)).Should().Equal(["still-running"],
+            "the MARKED run still going — never a background run, never a finished one");
+        (await Ids(InboxBand.NeedsYou)).Should().Equal(["failed"],
+            "a MARKED run that FAILED needs you — it is finished, so it is not shown as running");
     }
 
     private static int Rank(string band)

@@ -751,6 +751,31 @@ survives it:
 - **Parameterise pin-bump PRs on a placeholder** until then; a body claiming a number that was
   cancelled is the kind of stale claim that survives into a release note.
 
+### 🚨 A higher number never carries OLDER code — the push path declines a superseded commit
+
+Every consumer takes "the newest set" by its number: each install's self-updater, and every
+satellite lane that resolves *the newest sealed platform*. That is sound only while a higher number
+never names older code. The reconciler always kept that ("it heals to HEAD, never to the failed
+commit"); the **push path** did not, and it is the path where order can invert. `workflow_run` hands
+delivery each commit when its Build-and-Test **completes**, and two merges a minute apart finish
+their builds in either order; the delivery runs then queue behind the one slot and each publishes
+what it was handed.
+
+Measured on 2026-10-14. Core `6b9944c` and its child `04d56c7` (the `xunit.v3.assert` 4.0.2 fix,
+#6738) merged a minute apart. The child's build finished first: CD #10795 published `04d56c7` as
+`3.1.10795`. CD #10796, triggered 21 s later by the PARENT's build, ran next. Its gate logged
+`Newest published set: 04d56c7` and then published `6b9944c` as `3.1.10796`. Every
+MeshWeaver.Plugins `main` run resolved `3.1.10796`, lost the fix, and failed restore with `NU1109`
+(`xunit.v3.assert` 4.0.2 → 4.0.1) on every `portal-hosts` unit, until `3.1.10799` superseded it.
+
+So `main-cd`'s *Decide* step now asks, on BOTH paths and before every other verdict: is the target
+strictly **behind** the newest published set (GitHub's compare `newest...target` reads
+`status: behind`, `ahead_by: 0`)? If so, it declines with `⏭️ … is OLDER than the newest published
+set`. Nothing is lost, because the newer set already carries every change of the older commit. The
+rule and its self-test live in `.github/scripts/cd-superseded.py`; the PR lane runs the self-test.
+An unreadable compare, a diverged history or no published set is **not** superseded, so in those
+cases the decision is the one it was before this check existed.
+
 ## Property 1a — how the set already spans repos, and what the GUI move actually breaks
 
 🚨 **Correction, 2026-08-26.** An earlier draft of this section claimed the shipped artefacts have

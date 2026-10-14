@@ -83,9 +83,37 @@ applied as *"paid through T"* is the same answer however often the same payment 
 ([Plugins#2405](https://github.com/Systemorph/MeshWeaver.Plugins/issues/2405)). `CustomerId` on both
 event kinds is the handle a billing portal is opened for.
 
-A portal-side cancellation needs nothing new: the subscriber cancels on the processor's page, the
-processor stops billing at the period end, and the ordinary `Ended` delivery ends the plan — the same
-rule `CancelAtPeriodEnd` follows, so the portal never revokes access on a guess.
+A cancellation made on the processor's own page ends the plan the same way: the processor stops
+billing at the period end, and the ordinary `Ended` delivery ends the plan — the same rule
+`CancelAtPeriodEnd` follows, so the portal never revokes access on a guess.
+
+### A requested cancellation is reported when it is requested
+
+Between the request and the ending lies a whole paid period, and during it the plan must say
+*"ends on …"*, not *"renews on …"* — wherever the subscriber asked
+([Plugins#3548](https://github.com/Systemorph/MeshWeaver.Plugins/issues/3548)). So a subscription
+delivery also carries **`Renewal`**, an open vocabulary (`PaymentSubscriptionRenewal`):
+`CancelsAtPeriodEnd` (the subscription will not renew) or `Renews` (a requested cancellation was
+withdrawn). It rides **beside** `Change`, which stays `None` on such a delivery — the period and the
+entitlement do not change, only what the plan says. The enum is deliberately not widened (policy
+`open-vocabulary-string-constants`).
+
+Two rules make it safe to act on:
+
+- **Only a change is reported.** A processor sends *"the subscription was updated"* for many reasons,
+  each carrying the current flag. A provider sets `Renewal` only when the delivery says the flag
+  itself changed, so an unrelated update never touches the plan.
+- **`OccurredAt` orders it.** It is when the processor says the change happened. The caller applies a
+  renewal-state change only when it is newer than the last one it applied, so a redelivery is a
+  no-op and a delayed older delivery cannot undo a newer request.
+
+`ChangesRenewal` counts towards `IsActionable` (and so `NamesWork`): a delivery reporting a request is
+retained like any other, and an unknown word is retained so the caller can log it by name — it is
+never read as either known word.
+
+For Stripe this is the `customer.subscription.updated` event, which the provider adds to the events
+its endpoint must carry; an existing endpoint gains it through the governed `EnsurePaymentEndpoint`
+run (below), never by hand.
 
 ### Verify and parse come back together
 
