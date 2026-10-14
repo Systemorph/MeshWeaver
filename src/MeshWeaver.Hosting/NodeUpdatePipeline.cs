@@ -101,10 +101,23 @@ internal static class NodeUpdatePipeline
                     // framework-owned fields to the live values so only REAL field differences
                     // count, then return the LIVE instance — the stream's reference-equality
                     // no-op gate completes the write without touching anything.
+                    // 🚨 CREATION METADATA IS THE LIVE NODE'S — AN UPDATE NEVER CHANGES IT.
+                    // CreatedDate / CreatedBy are set once, at creation: Postgres holds
+                    // created_date / created_by IMMUTABLE (INSERT only, never in the ON CONFLICT
+                    // SET), and CreatedDate is the create rollback's lineage token. So whatever the
+                    // caller's node carries — default / null from an omitted key (the MCP `update`
+                    // tool, which sends what the agent passes, reset both this way), or a value it
+                    // names — the live values win. Writing a caller's value would make the live node
+                    // advertise a creation stamp the durable row never stores, reverting on reload.
+                    // A live node that has none yet (a projection-hydrated instance) takes the
+                    // caller's. Applied BEFORE the no-op gate, so an update that differs from the
+                    // live node only in creation metadata is a no-op.
                     var candidate = node with
                     {
                         Version = live.Version,
                         LastModified = live.LastModified,
+                        CreatedDate = live.CreatedDate != default ? live.CreatedDate : node.CreatedDate,
+                        CreatedBy = !string.IsNullOrEmpty(live.CreatedBy) ? live.CreatedBy : node.CreatedBy,
                     };
                     if (MeshNode.SerializedEquals(live, candidate, hub.JsonSerializerOptions))
                         return live;
