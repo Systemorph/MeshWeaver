@@ -368,8 +368,14 @@ public sealed class PluginUpdateWatcher : Microsoft.Extensions.Hosting.IHostedSe
                 PluginCatalogOptions.SectionName, nameof(PluginCatalogOptions.ReconcileSafetyNetInterval));
             return;
         }
+        // ReconcileNow only enqueues (each pass reports its own fault and never faults the lane), so
+        // nothing reaches the error arm short of the timer itself failing.
         subscriptions.Add(Observable.Interval(interval)
-            .Subscribe(_ => ReconcileNow()));
+            .Subscribe(
+                _ => ReconcileNow(),
+                ex => logger?.LogError(ex,
+                    "Plugin update watcher: the safety-net timer faulted — no further safety-net pass runs "
+                    + "in this process; green builds still reconcile.")));
     }
 
     /// <summary>
