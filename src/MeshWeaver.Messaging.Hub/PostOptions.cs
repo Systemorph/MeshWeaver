@@ -112,7 +112,7 @@ public record PostOptions(Address Sender)
         this with
         {
             Target = requestDelivery.Sender,
-            PropertiesInternal = requestDelivery.Properties.ToImmutableDictionary().SetItem(RequestId, requestDelivery.Id),
+            PropertiesInternal = CorrelatedReplyProperties(requestDelivery),
             // 🚨 Auto-propagate the request's AccessContext to the response.
             // A response IS attributed to the caller who made the request —
             // not to the hub that's now generating it. Without this, every
@@ -134,9 +134,21 @@ public record PostOptions(Address Sender)
     /// <returns>A new <see cref="PostOptions"/> carrying the request id correlation.</returns>
     public PostOptions WithRequestIdFrom(IMessageDelivery requestDelivery) => this with
     {
-        PropertiesInternal = requestDelivery.Properties.ToImmutableDictionary()
-                                                                                                              .SetItem(RequestId, requestDelivery.Id)
+        PropertiesInternal = CorrelatedReplyProperties(requestDelivery)
     };
+
+    /// <summary>
+    /// The property bag of a message correlated to <paramref name="requestDelivery"/>: the
+    /// request's properties, its id under <see cref="RequestId"/>, and WITHOUT
+    /// <see cref="ReasksOnShutdown"/>. That key is one producer's claim about its own request — that
+    /// it asks the next activation again on a <c>ShuttingDown</c> answer. A reply has no such
+    /// producer, so carrying the claim forward would let a teardown discard of the reply report as
+    /// teardown-normal when nobody re-asks for it (MeshWeaver#6717).
+    /// </summary>
+    private static ImmutableDictionary<string, object> CorrelatedReplyProperties(IMessageDelivery requestDelivery)
+        => requestDelivery.Properties.ToImmutableDictionary()
+            .Remove(ReasksOnShutdown)
+            .SetItem(RequestId, requestDelivery.Id);
 
 
     /// <summary>
