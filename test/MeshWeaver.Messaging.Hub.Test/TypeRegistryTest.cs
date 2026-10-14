@@ -168,6 +168,39 @@ public class TypeRegistryTest(ITestOutputHelper output) : HubTestBase(output)
         read.Should().Throw<JsonException>().WithMessage("*openRouterEU*");
     }
 
+    /// <summary>A registered record with a <c>required</c> member — JSON that omits it cannot bind.</summary>
+    public record RequiredMemberPayload
+    {
+        /// <summary>The member a partial write omits.</summary>
+        public required string Body { get; init; }
+    }
+
+    /// <summary>
+    /// #6674 — the converter's "could not be deserialized" warning cannot see what the value is
+    /// nested in. Its promise that "the read seam that holds the node logs its path" holds only for
+    /// mesh node content; for any other <c>object</c> payload — a message, as here — nothing else
+    /// names the carrier. The qualifier must say so. Negative control: on main the line promised
+    /// the node's path unconditionally.
+    /// </summary>
+    [Fact]
+    public void UnbindableRegisteredPayload_WarningPromisesThePathOnlyForNodeContent()
+    {
+        var host = GetHost();
+        var typeRegistry = host.ServiceProvider.GetRequiredService<ITypeRegistry>();
+        typeRegistry.WithType(typeof(RequiredMemberPayload), nameof(RequiredMemberPayload));
+        var captured = new ConcurrentQueue<string>();
+        var options = new JsonSerializerOptions();
+        options.Converters.Add(new ObjectPolymorphicConverter(typeRegistry, new CapturingLogger(captured)));
+
+        var read = JsonSerializer.Deserialize<object>(
+            """{"$type":"RequiredMemberPayload","label":"a message member without its body"}""", options);
+
+        read.Should().BeOfType<JsonElement>("an unbindable registered payload is preserved as raw JSON");
+        var warning = captured.Should().ContainSingle(m => m.Contains("could not be deserialized")).Subject;
+        warning.Should().Contain("if it is a mesh node's content, the read seam that holds the node logs its path");
+        warning.Should().Contain("for any other object payload, such as a message, this line is the only record");
+    }
+
     [Fact]
     public void StrictRegisteredSealedContent_AcceptsItsDiscriminator()
     {

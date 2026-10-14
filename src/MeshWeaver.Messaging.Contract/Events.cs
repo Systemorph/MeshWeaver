@@ -111,6 +111,22 @@ public record DeliveryFailure(IMessageDelivery Delivery, string? Message = null)
     public bool TargetUnserved { get; init; }
 
     /// <summary>
+    /// True when the SENDER of this failure established that NO NODE exists at the failed
+    /// delivery's target path: the router's path resolution matched only an ancestor (or
+    /// nothing), or the target address carries a delete tombstone. It is the typed form of the
+    /// <c>"No node found at '…'"</c> sentence those sites write into <see cref="Message"/>.
+    ///
+    /// <para>🚨 <b>Distinct from <see cref="ErrorType"/> being
+    /// <see cref="MeshWeaver.Messaging.ErrorType.NotFound"/> alone</b>, which also means "no
+    /// handler for this request" or "no route to that host" — neither of which says anything
+    /// about whether a node exists. A writer maps a failure carrying this stamp to the
+    /// node-level NotFound verdict (<c>MeshNodeErrorCode.NotFound</c>) instead of parsing the
+    /// message text (#6626). Absence of the stamp (older producer, any other NACK site) means
+    /// "not established", never "the node exists".</para>
+    /// </summary>
+    public bool NodeAbsent { get; init; }
+
+    /// <summary>
     /// Builds a delivery failure from a caught exception, capturing its type name,
     /// message, and stack trace under <see cref="MeshWeaver.Messaging.ErrorType.Exception"/>.
     /// </summary>
