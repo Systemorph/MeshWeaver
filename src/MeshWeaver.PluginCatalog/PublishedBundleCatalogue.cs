@@ -118,7 +118,35 @@ public static class PublishedBundleCatalogue
     /// when it was not asked or names none.</param>
     /// <param name="logger">Diagnostics.</param>
     public static ReleaseObservation ReadWithRegistryIdentity(
-        string? publishedRoot, string? targetVersion, string? registryIdentity, ILogger? logger = null)
+        string? publishedRoot, string? targetVersion, string? registryIdentity, ILogger? logger = null) =>
+        ReadWithLivePublication(publishedRoot, targetVersion, registryIdentity, null, logger);
+
+    /// <summary>
+    /// 🚨 <see cref="ReadWithRegistryIdentity"/>, and on a registry-fed root the sealed set is the
+    /// LIVE publication's (policy <c>registry-fed-gate-reads-live-publication</c>, MeshWeaver#6622).
+    ///
+    /// <para>When the registry stood in for an absent marker, the bundles on this root are the
+    /// snapshot <c>bundle-fetch</c> pulled when the running pod started — not the publication the
+    /// next pod will pull. <paramref name="live"/> is that publication, read from the registry at the
+    /// moment the gate runs (<see cref="RegistryLivePublications"/>), and it REPLACES the snapshot's
+    /// sealed set: a package counts as sealed exactly when a source's live publication names it. The
+    /// snapshot still supplies what only bytes can — dependency records, the sealed module set, the
+    /// declared ranges — for the packages it holds. A live reading that could not be made is an
+    /// unreadable observation (Indeterminate), never the snapshot as a fall-back: "I could not look"
+    /// is not "the snapshot is current".</para>
+    ///
+    /// <para>Applied only where the registry named the identity (the marker established absent) and
+    /// only to a reading of that same identity; a marked release is read exactly as before, and
+    /// <paramref name="live"/> is then ignored.</para>
+    /// </summary>
+    /// <param name="publishedRoot">The published bundle root.</param>
+    /// <param name="targetVersion">The platform version being rolled to.</param>
+    /// <param name="registryIdentity">The target's framework identity per the registry, or null.</param>
+    /// <param name="live">The live publications under that identity, or null when not read.</param>
+    /// <param name="logger">Diagnostics.</param>
+    public static ReleaseObservation ReadWithLivePublication(
+        string? publishedRoot, string? targetVersion, string? registryIdentity,
+        LivePublicationReading? live, ILogger? logger = null)
     {
         if (string.IsNullOrWhiteSpace(targetVersion))
             return new ReleaseObservation(
@@ -174,20 +202,27 @@ public static class PublishedBundleCatalogue
 
             var (surface, surfaceDetail) = ReleaseSurfaceOf(publishedRoot, targetVersion, identity, logger);
 
+            // The live publication applies only to the identity the registry named, read from it.
+            var liveHere = fromRegistry && live is not null
+                ? string.Equals(live.Identity, identity, StringComparison.Ordinal) ? live : null
+                : null;
+
             if (!Directory.Exists(Path.Combine(publishedRoot, identity)))
             {
-                logger?.LogInformation(
-                    "ReleaseAvailability: release {Version} resolves framework identity {Identity}, "
-                    + "but nothing is published under it — every package would be recompiled",
-                    targetVersion, identity);
+                if (liveHere is null)
+                    logger?.LogInformation(
+                        "ReleaseAvailability: release {Version} resolves framework identity {Identity}, "
+                        + "but nothing is published under it — every package would be recompiled",
+                        targetVersion, identity);
                 return new ReleaseObservation(
                     new ReleaseTarget(targetVersion, identity),
-                    ReleaseArtifacts.Of([]) with { PlatformSurface = surface, PlatformSurfaceDetail = surfaceDetail });
+                    Live(ReleaseArtifacts.Of([]), liveHere, targetVersion, logger)
+                        with { PlatformSurface = surface, PlatformSurfaceDetail = surfaceDetail });
             }
 
             return new ReleaseObservation(
                 new ReleaseTarget(targetVersion, identity),
-                ArtifactsForIdentity(Path.Combine(publishedRoot, identity), logger)
+                Live(ArtifactsForIdentity(Path.Combine(publishedRoot, identity), logger), liveHere, targetVersion, logger)
                     with { PlatformSurface = surface, PlatformSurfaceDetail = surfaceDetail });
         }
         catch (Exception ex)
@@ -201,6 +236,70 @@ public static class PublishedBundleCatalogue
                 new ReleaseTarget(targetVersion, null),
                 ReleaseArtifacts.Unreadable(ex.Message));
         }
+    }
+
+    /// <summary>
+    /// The snapshot's artifacts with the sealed set taken from the live publication — or, when the
+    /// live reading could not be made, an unreadable observation naming why. Unchanged when no live
+    /// reading applies.
+    /// </summary>
+    private static ReleaseArtifacts Live(
+        ReleaseArtifacts snapshot, LivePublicationReading? live, string targetVersion, ILogger? logger)
+    {
+        if (live is null)
+            return snapshot;
+        if (live.Refusal is { } refusal)
+        {
+            logger?.LogWarning(
+                "ReleaseAvailability: release {Version}'s live publications under {Identity} could not be "
+                + "read ({Refusal}) — no package is counted from this pod's snapshot instead",
+                targetVersion, live.Identity, refusal);
+            return snapshot with
+            {
+                SealedBundles = ReleaseArtifacts.Of([]).SealedBundles,
+                ReadFailure = $"the live registry publications under framework identity {live.Identity} "
+                              + $"could not be read ({refusal}); this root's bundles are the snapshot the "
+                              + "running pod pulled at start, not the publication the next pod will pull",
+            };
+        }
+        var sealedLive = ReleaseArtifacts.Of(live.Packages).SealedBundles;
+        var withdrawn = snapshot.SealedBundles.Except(sealedLive);
+        var added = sealedLive.Except(snapshot.SealedBundles);
+        logger?.LogInformation(
+            "ReleaseAvailability: release {Version} is judged against the LIVE registry publications "
+            + "under {Identity} ({Published} of {Sources} source(s) published, {Count} package(s)); "
+            + "this pod's snapshot differs by {Withdrawn} withdrawn [{WithdrawnNames}] and {Added} added [{AddedNames}]",
+            targetVersion, live.Identity, live.Sources.Count(s => s.IndexDigest is not null), live.Sources.Length,
+            sealedLive.Count, withdrawn.Count, string.Join(", ", withdrawn.Order(StringComparer.Ordinal)),
+            added.Count, string.Join(", ", added.Order(StringComparer.Ordinal)));
+        return snapshot with { SealedBundles = sealedLive };
+    }
+
+    /// <summary>
+    /// The SOURCES this root materialises — every <c>&lt;root&gt;/&lt;identity&gt;/&lt;source&gt;</c>
+    /// directory name, across every identity directory, distinct case-insensitively. On a root
+    /// <c>bundle-fetch</c> fills these are the chart's <c>bundles.sources</c> that held a
+    /// publication when the pod started; the gate reads each one's live publication
+    /// (<see cref="RegistryLivePublications"/>). Underscore-prefixed entries (the marker directory, a
+    /// staging directory) are not sources. Throws on an enumeration fault — the caller's I/O pool
+    /// turns it into a named refusal.
+    /// </summary>
+    /// <param name="publishedRoot">The published bundle root.</param>
+    public static ImmutableArray<string> SourcesOnRoot(string? publishedRoot)
+    {
+        if (string.IsNullOrWhiteSpace(publishedRoot) || !Directory.Exists(publishedRoot))
+            return [];
+        return
+        [
+            .. Directory.EnumerateDirectories(publishedRoot)
+                .Where(d => !Path.GetFileName(d).StartsWith('_'))
+                .SelectMany(Directory.EnumerateDirectories)
+                .Select(Path.GetFileName)
+                .Where(name => !string.IsNullOrWhiteSpace(name) && !name.StartsWith('_'))
+                .Select(name => name!)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Order(StringComparer.Ordinal),
+        ];
     }
 
     /// <summary>

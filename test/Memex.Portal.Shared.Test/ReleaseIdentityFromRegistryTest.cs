@@ -16,6 +16,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Memex.Portal.Shared.SelfUpdate;
 using MeshWeaver.Fixture;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
@@ -52,16 +53,27 @@ public class ReleaseIdentityFromRegistryTest(ITestOutputHelper output) : Monolit
 
     private readonly FakeBundleIndex index = new(new Uri(RegistryUrl).Host) { ArtifactRegistry = ArtifactHost };
     private readonly FakeReleaseRecords records = new(ArtifactHost, Key);
+
+    // A SECOND registry mount, after the first in configuration order. It declares no artifact
+    // host (and so says nothing) unless a test points it at its own registry.
+    private const string MirrorUrl = "https://mirror.release-identity.test";
+    private const string MirrorArtifactHost = "cr.mirror.release-identity.test";
+    private readonly FakeBundleIndex mirrorIndex = new(new Uri(MirrorUrl).Host);
+    private readonly FakeReleaseRecords mirrorRecords = new(MirrorArtifactHost, Key);
     private readonly string root = Path.Combine(Path.GetTempPath(), "rifr-" + Guid.NewGuid().ToString("N"));
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
             .AddPluginCatalog()
             .ConfigureServices(s => s
-                .AddSingleton<IHttpClientFactory>(new HostRoutingClientFactory(index, records))
+                .AddSingleton<IHttpClientFactory>(new HostRoutingClientFactory(index, records, mirrorIndex, mirrorRecords))
                 .AddSingleton(new PluginCatalogOptions
                 {
-                    Registries = [new PluginRegistryReference { Name = "fleet", Url = RegistryUrl, Token = Key }],
+                    Registries =
+                    [
+                        new PluginRegistryReference { Name = "fleet", Url = RegistryUrl, Token = Key },
+                        new PluginRegistryReference { Name = "mirror", Url = MirrorUrl, Token = Key },
+                    ],
                 }));
 
     void IDisposable.Dispose()
@@ -262,10 +274,239 @@ public class ReleaseIdentityFromRegistryTest(ITestOutputHelper output) : Monolit
         Assert.True(held.IsIndeterminate);
 
         records.Publish(Release, $$"""{"identity":"{{Identity}}","version":"{{Release}}"}""");
+        records.PublishIndex("plugins", Identity, [Package]);
 
         var cleared = await gate.IsUpdatable(Release).FirstAsync().Timeout(Budget).Await(ct);
         Assert.True(cleared.IsUpdatable, cleared.HoldReason);
     }
+
+    // ── the live publication (policy registry-fed-gate-reads-live-publication, #6622) ─────────
+
+    /// <summary>
+    /// 🚨 The root is the SNAPSHOT this pod pulled at start; the registry tag has moved since. The
+    /// gate must count what the tag names NOW — the publication the next pod will pull. Both
+    /// directions are pinned, on an instance where a missing bake is a hold
+    /// (<c>Modules:RequirePrebuilt</c>), so the verdict itself — not an advisory — shows which of
+    /// the two the gate read. Reading the snapshot (the behaviour before #6622) inverts both.
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task TheGateCountsTheLivePublication_NotTheSnapshotThisPodPulledAtStart()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await InstallPackage(ct);
+        records.Publish(Release, $$"""{"identity":"{{Identity}}","version":"{{Release}}"}""");
+        var gate = Gate(requirePrebuilt: true);
+
+        // WITHDRAWN since this pod started: the snapshot still holds the package, the live
+        // publication of the same source no longer names it. The next pod would compile it at boot.
+        Seal(root, Identity, "plugins", [Package, "Other"]);
+        records.PublishIndex("plugins", Identity, ["Other"]);
+
+        var withdrawn = await gate.IsUpdatable(Release).FirstAsync().Timeout(Budget).Await(ct);
+        Assert.False(withdrawn.IsUpdatable, "a package the live publication no longer names is not sealed");
+        Assert.Contains(withdrawn.Packages,
+            p => p.Package == Package && p.Kind == PackageAvailabilityKind.ContentBakeMissing);
+        Assert.False(withdrawn.IsIndeterminate, "the publication WAS read — this is a verdict, not an unknown");
+        Assert.Contains(records.Requests, r => r.EndsWith($"/v2/plugins/plugins/manifests/{Identity}", StringComparison.Ordinal));
+
+        // ADDED since this pod started: the snapshot lacks the package, the live publication names it.
+        Directory.Delete(root, recursive: true);
+        Seal(root, Identity, "plugins", ["Other"]);
+        records.PublishIndex("plugins", Identity, [Package, "Other"]);
+
+        var added = await gate.IsUpdatable(Release).FirstAsync().Timeout(Budget).Await(ct);
+        Assert.True(added.IsUpdatable, added.HoldReason);
+        Assert.Contains(added.Packages, p => p.Package == Package && p.Kind == PackageAvailabilityKind.Available);
+
+        // Nothing was written to the root, and the registry was only read.
+        Assert.False(Directory.Exists(Path.Combine(root, SealedPublicationIndex.ReleaseMarkerDirectoryName)));
+        Assert.All(records.Requests, r => Assert.StartsWith("GET ", r, StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// NEGATIVE CONTROL: a source whose live publication really is missing, unreadable or not
+    /// countable still fails the gate — although this pod's snapshot holds the package sealed,
+    /// which is exactly the reading that used to clear it.
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task ASourceWhoseLivePublicationIsMissingOrUnreadable_StillFailsTheGate()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await InstallPackage(ct);
+        records.Publish(Release, $$"""{"identity":"{{Identity}}","version":"{{Release}}"}""");
+        Seal(root, Identity, "plugins", [Package]);
+        var gate = Gate(requirePrebuilt: true);
+
+        // No tag: an established absence — nothing is sealed for that source. A verdict.
+        var absent = await gate.IsUpdatable(Release).FirstAsync().Timeout(Budget).Await(ct);
+        Assert.False(absent.IsUpdatable);
+        Assert.Contains(absent.Packages, p => p.Package == Package && p.Kind == PackageAvailabilityKind.ContentBakeMissing);
+        Assert.False(absent.IsIndeterminate);
+
+        // A 404 that does NOT say MANIFEST_UNKNOWN establishes nothing: NAME_UNKNOWN (an unknown
+        // repository, or a refused read concealed as one) and a bare 404 are "I could not look".
+        records.MissingTagCode = "NAME_UNKNOWN";
+        var nameUnknown = await gate.IsUpdatable(Release).FirstAsync().Timeout(Budget).Await(ct);
+        Assert.False(nameUnknown.IsUpdatable);
+        Assert.True(nameUnknown.IsIndeterminate, nameUnknown.HoldReason);
+        records.MissingTagCode = null;
+        var bare = await gate.IsUpdatable(Release).FirstAsync().Timeout(Budget).Await(ct);
+        Assert.False(bare.IsUpdatable);
+        Assert.True(bare.IsIndeterminate, bare.HoldReason);
+        records.MissingTagCode = OciRegistryClient.ManifestUnknownCode;
+
+        // The publication cannot be read: "I could not look" — never the snapshot instead.
+        records.PublishIndex("plugins", Identity, [Package]);
+        records.PublicationsDown = true;
+        var down = await gate.IsUpdatable(Release).FirstAsync().Timeout(Budget).Await(ct);
+        Assert.False(down.IsUpdatable);
+        Assert.True(down.IsIndeterminate, down.HoldReason);
+        records.PublicationsDown = false;
+
+        // A bundle entry that names no package cannot be counted — unreadable, never a smaller set.
+        records.PublishIndex("plugins", Identity, [Package], annotate: false);
+        var unnamed = await gate.IsUpdatable(Release).FirstAsync().Timeout(Budget).Await(ct);
+        Assert.False(unnamed.IsUpdatable);
+        Assert.True(unnamed.IsIndeterminate, unnamed.HoldReason);
+
+        // A bundle entry that is not a valid descriptor (malformed digest, no size) cannot be
+        // pulled — unreadable, never a sealed package.
+        records.PublishIndex("plugins", Identity, [Package], validDescriptors: false);
+        var invalid = await gate.IsUpdatable(Release).FirstAsync().Timeout(Budget).Await(ct);
+        Assert.False(invalid.IsUpdatable);
+        Assert.True(invalid.IsIndeterminate, invalid.HoldReason);
+
+        // A tag whose body is not an OCI image index is not a publication index.
+        records.PublishIndex("plugins", Identity, [Package], indexMediaType: OciRegistryClient.ImageManifestMediaType);
+        var notAnIndex = await gate.IsUpdatable(Release).FirstAsync().Timeout(Budget).Await(ct);
+        Assert.False(notAnIndex.IsUpdatable);
+        Assert.True(notAnIndex.IsIndeterminate, notAnIndex.HoldReason);
+
+        // And the same gate clears once the live publication names the package.
+        records.PublishIndex("plugins", Identity, [Package]);
+        var published = await gate.IsUpdatable(Release).FirstAsync().Timeout(Budget).Await(ct);
+        Assert.True(published.IsUpdatable, published.HoldReason);
+    }
+
+    /// <summary>
+    /// 🚨 The mounts are asked in order and the FIRST Published ends the reading (MeshWeaver#6743):
+    /// a later mount cannot change that verdict, so reading it only lets a slow mount run the
+    /// gate's budget out and turn a decided Published into Indeterminate. Pinned by what the second
+    /// mount's registry was asked; the positive control shows the instrument sees a read of it.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task TheFirstMountThatAnswersPublished_EndsTheReading()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        mirrorIndex.ArtifactRegistry = MirrorArtifactHost;
+        mirrorRecords.PublishIndex("plugins", Identity, [Package]);
+        var mirrorTag = $"/v2/plugins/plugins/manifests/{Identity}";
+        var reader = new RegistryLivePublications(Mesh);
+
+        // Positive control: the first mount holds no tag (Absent), so the second IS read and answers.
+        var fromMirror = await reader.Read(Identity, ["plugins"]).FirstAsync().Timeout(Budget).Await(ct);
+        Assert.Null(fromMirror.Refusal);
+        Assert.Equal([Package], fromMirror.Packages);
+        Assert.Contains(mirrorRecords.Requests, r => r.EndsWith(mirrorTag, StringComparison.Ordinal));
+
+        // The first mount answers Published: the second is never asked.
+        records.PublishIndex("plugins", Identity, ["Other"]);
+        var before = mirrorRecords.Requests.Count(r => r.EndsWith(mirrorTag, StringComparison.Ordinal));
+        var fromFirst = await reader.Read(Identity, ["plugins"]).FirstAsync().Timeout(Budget).Await(ct);
+        Assert.Null(fromFirst.Refusal);
+        Assert.Equal(["Other"], fromFirst.Packages);
+        Assert.Equal(before, mirrorRecords.Requests.Count(r => r.EndsWith(mirrorTag, StringComparison.Ordinal)));
+    }
+
+    /// <summary>
+    /// 🚨 A publication index larger than one is refused WHILE it is read, never after it has been
+    /// held whole (MeshWeaver#6743). The served body is twice the bound with no stated length; the
+    /// reader stops having read at most the bound plus one copy buffer, and the source is Unreadable.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task AnOversizedIndex_IsRefusedAsItArrives()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        records.PublishIndex("plugins", Identity, [Package]);
+        records.OversizedIndexBytes = 2L * RegistryLivePublications.MaxIndexBytes;
+
+        var reading = await new RegistryLivePublications(Mesh).Read(Identity, ["plugins"])
+            .FirstAsync().Timeout(Budget).Await(ct);
+
+        Assert.NotNull(reading.Refusal);
+        Assert.Empty(reading.Packages);
+        Assert.InRange(records.OversizedBytesRead, 1, RegistryLivePublications.MaxIndexBytes + 128 * 1024);
+    }
+
+    /// <summary>
+    /// 🚨 The gate counts as sealed only what <c>bundle-fetch</c> would materialise
+    /// (MeshWeaver#6743): it pulls the WHOLE index and dies on a malformed descriptor anywhere in it
+    /// and on a publication without <c>_complete</c>. Each of those is Unreadable, and the whole,
+    /// well-formed publication (the control) is Published.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task OnlyAPublicationBundleFetchWouldMaterialise_IsCountedSealed()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var reader = new RegistryLivePublications(Mesh);
+        Task<LivePublicationReading> Read() => reader.Read(Identity, ["plugins"]).FirstAsync().Timeout(Budget).Await(ct);
+
+        records.PublishIndex("plugins", Identity, [Package]);
+        var whole = await Read();
+        Assert.Null(whole.Refusal);
+        Assert.Equal([Package], whole.Packages);
+
+        foreach (var shape in new[]
+                 {
+                     SidecarShape.InvalidDescriptor, SidecarShape.Missing, SidecarShape.NoComplete,
+                     SidecarShape.EmptyComplete, SidecarShape.InvalidLayer,
+                 })
+        {
+            records.PublishIndex("plugins", Identity, [Package], sidecar: shape);
+            var reading = await Read();
+            Assert.True(reading.Refusal is not null, $"{shape}: a publication bundle-fetch refuses is not sealed");
+            Assert.Empty(reading.Packages);
+        }
+    }
+
+    [Fact]
+    public void AMarkedRelease_IsNeverJudgedAgainstALiveReading()
+    {
+        Seal(root, "published", "plugins", [Package]);
+        var markers = Path.Combine(root, SealedPublicationIndex.ReleaseMarkerDirectoryName);
+        Directory.CreateDirectory(markers);
+        File.WriteAllText(Path.Combine(markers, Release), "published\n");
+        var live = new LivePublicationReading("published",
+            [new LiveSourcePublication("plugins", "sha256:" + new string('0', 64), [], null)]);
+
+        var read = PublishedBundleCatalogue.ReadWithLivePublication(root, Release, "published", live);
+
+        // The publisher's marker wins, and with it the publisher's root: the live reading is ignored.
+        Assert.Contains(Package, read.Artifacts.SealedBundles);
+        Assert.Equal(ImmutableArray.Create("plugins"), PublishedBundleCatalogue.SourcesOnRoot(root));
+    }
+
+    private Task InstallPackage(CancellationToken ct) =>
+        PackageInstaller.Install(
+                Mesh,
+                new PackageManifest
+                {
+                    Id = Package, Name = Package, Kind = PackageKind.Content,
+                    TargetPartition = Package, SourceFolder = Package,
+                    Version = "1.0.0", ReleasedVersion = "1.0.0", Source = "plugins",
+                },
+                [new PackageFile($"{Package}/Doc.md", $"# {Package}")],
+                "HEAD")
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(120)).Await(ct);
+
+    private ReleaseAvailabilityService Gate(bool requirePrebuilt) =>
+        new(
+            Mesh,
+            new ConfigurationBuilder()
+                .AddInMemoryCollection(ImmutableDictionary<string, string?>.Empty
+                    .Add(ShippedPrebuiltBundles.PublishedRootConfigKey, root)
+                    .Add(PrebuiltAssemblySeeder.RequirePrebuiltConfigKey, requirePrebuilt ? "true" : "false"))
+                .Build());
 
     // ── staging ───────────────────────────────────────────────────────────────────────────────
 
@@ -334,8 +575,76 @@ public class ReleaseIdentityFromRegistryTest(ITestOutputHelper output) : Monolit
             ImmutableDictionary<string, (byte[], byte[])>.Empty;
         private ImmutableList<string> requests = ImmutableList<string>.Empty;
 
+        private ImmutableDictionary<string, (byte[] Bytes, string MediaType)> indexes =
+            ImmutableDictionary<string, (byte[], string)>.Empty;
+        private long oversizedBytesRead;
+
+        /// <summary>When set, every publication TAG answers a body of this many bytes, with no
+        /// stated length, counting how many of them the reader consumed.</summary>
+        public long? OversizedIndexBytes { get; set; }
+
+        public long OversizedBytesRead => Interlocked.Read(ref oversizedBytesRead);
+
         public bool TamperConfig { get; set; }
+        public bool PublicationsDown { get; set; }
         public string? PresentedSecret { get; private set; }
+
+        /// <summary>Moves <c>plugins/&lt;source&gt;:&lt;identity&gt;</c> to a publication index naming
+        /// these packages, in the shape <c>push-bundle-publication.sh</c> writes.</summary>
+        public void PublishIndex(
+            string source, string identity, IEnumerable<string> packages, bool annotate = true,
+            bool validDescriptors = true, string indexMediaType = OciRegistryClient.ImageIndexMediaType,
+            SidecarShape sidecar = SidecarShape.Whole)
+        {
+            var repository = $"plugins/{source.ToLowerInvariant()}";
+            static ImmutableDictionary<string, object> Layer(string title, int size, bool valid = true) =>
+                ImmutableDictionary<string, object>.Empty
+                    .Add("mediaType", "text/plain")
+                    .Add("digest", valid ? OciDigest.Of(Encoding.UTF8.GetBytes(title)) : "sha256:nope")
+                    .Add("size", size)
+                    .Add("annotations", ImmutableDictionary<string, string>.Empty
+                        .Add(RegistryLivePublications.TitleAnnotation, title));
+            var layers = ImmutableArray.Create(Layer("source-commit.txt", 41, valid: sidecar != SidecarShape.InvalidLayer));
+            if (sidecar is not SidecarShape.NoComplete)
+                layers = layers.Add(Layer(RegistryLivePublications.CompletionSentinel, sidecar == SidecarShape.EmptyComplete ? 0 : 12));
+            var sidecarManifest = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(ImmutableDictionary<string, object>.Empty
+                .Add("schemaVersion", 2)
+                .Add("mediaType", OciRegistryClient.ImageManifestMediaType)
+                .Add("artifactType", RegistryLivePublications.PublicationArtifactType)
+                .Add("config", ImmutableDictionary<string, object>.Empty
+                    .Add("mediaType", RegistryLivePublications.PublicationArtifactType)
+                    .Add("digest", OciDigest.Of(Encoding.UTF8.GetBytes("{}")))
+                    .Add("size", 2))
+                .Add("layers", layers)));
+            var sidecarDigest = OciDigest.Of(sidecarManifest);
+            ImmutableInterlocked.Update(ref indexes, i => i.SetItem(
+                $"{repository}:{sidecarDigest}", (sidecarManifest, OciRegistryClient.ImageManifestMediaType)));
+            var sidecars = ImmutableDictionary<string, object>.Empty
+                .Add("mediaType", OciRegistryClient.ImageManifestMediaType)
+                .Add("digest", sidecar == SidecarShape.InvalidDescriptor ? "sha256:not-a-digest" : sidecarDigest)
+                .Add("size", sidecarManifest.Length)
+                .Add("artifactType", RegistryLivePublications.PublicationArtifactType)
+                .Add("annotations", ImmutableDictionary<string, string>.Empty.Add("io.meshweaver.role", "sidecars"));
+            var bundles = packages.Select(package => ImmutableDictionary<string, object>.Empty
+                .Add("mediaType", OciRegistryClient.ImageManifestMediaType)
+                .Add("digest", validDescriptors ? OciDigest.Of(Encoding.UTF8.GetBytes(package)) : "sha256:not-a-digest")
+                .Add("size", validDescriptors ? 2 : 0)
+                .Add("artifactType", RegistryLivePublications.BundleArtifactType)
+                .Add("annotations", annotate
+                    ? ImmutableDictionary<string, string>.Empty.Add(RegistryLivePublications.PackageAnnotation, package)
+                    : ImmutableDictionary<string, string>.Empty));
+            var index = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(ImmutableDictionary<string, object>.Empty
+                .Add("schemaVersion", 2)
+                .Add("mediaType", indexMediaType)
+                .Add("artifactType", RegistryLivePublications.PublicationArtifactType)
+                .Add("manifests", (sidecar == SidecarShape.Missing ? [] : ImmutableArray.Create(sidecars)).AddRange(bundles))));
+            ImmutableInterlocked.Update(ref indexes, i => i.SetItem($"{repository}:{identity}", (index, OciRegistryClient.ImageIndexMediaType)));
+        }
+
+        /// <summary>The OCI error code a missing publication tag answers 404 with; null answers a
+        /// bare 404 with no body.</summary>
+        public string? MissingTagCode { get; set; } = OciRegistryClient.ManifestUnknownCode;
+
         public ImmutableList<string> Requests => requests;
 
         public bool Serves(string candidate) => string.Equals(candidate, host, StringComparison.OrdinalIgnoreCase);
@@ -384,6 +693,35 @@ public class ReleaseIdentityFromRegistryTest(ITestOutputHelper output) : Monolit
                 return Task.FromResult(challenge);
             }
 
+            // A source's publication index — any plugins/<source> repository but the release one.
+            var publication = System.Text.RegularExpressions.Regex.Match(
+                uri.AbsolutePath, "^/v2/(plugins/[a-z0-9._-]+)/manifests/([^/]+)$");
+            if (publication.Success && publication.Groups[1].Value != Repository)
+            {
+                if (PublicationsDown)
+                    return Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
+                if (OversizedIndexBytes is { } oversized && !OciDigest.IsWellFormed(publication.Groups[2].Value))
+                {
+                    var stream = new CountingFiller(oversized, read => Interlocked.Add(ref oversizedBytesRead, read));
+                    var big = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(stream) };
+                    big.Content.Headers.ContentType = new MediaTypeHeaderValue(OciRegistryClient.ImageIndexMediaType);
+                    return Task.FromResult(big);
+                }
+                if (!indexes.TryGetValue($"{publication.Groups[1].Value}:{publication.Groups[2].Value}", out var index))
+                    return Task.FromResult(MissingTagCode is { } code
+                        ? new HttpResponseMessage(HttpStatusCode.NotFound)
+                        {
+                            Content = new StringContent(
+                                $$$"""{"errors":[{"code":"{{{code}}}","message":"not found"}]}""",
+                                Encoding.UTF8, "application/json"),
+                        }
+                        : new HttpResponseMessage(HttpStatusCode.NotFound));
+                var served = new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(index.Bytes) };
+                served.Content.Headers.ContentType = new MediaTypeHeaderValue(index.MediaType);
+                served.Headers.TryAddWithoutValidation("Docker-Content-Digest", OciDigest.Of(index.Bytes));
+                return Task.FromResult(served);
+            }
+
             var manifests = $"/v2/{Repository}/manifests/";
             if (uri.AbsolutePath.StartsWith(manifests, StringComparison.Ordinal))
             {
@@ -415,6 +753,34 @@ public class ReleaseIdentityFromRegistryTest(ITestOutputHelper output) : Monolit
             }
 
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+        }
+    }
+
+    /// <summary>How a published index's sidecar manifest is shaped.</summary>
+    internal enum SidecarShape { Whole, Missing, InvalidDescriptor, NoComplete, EmptyComplete, InvalidLayer }
+
+    /// <summary>A body of <c>length</c> bytes of JSON-ish filler, with no stated length, that
+    /// reports every read so a test can see how much of it a reader consumed.</summary>
+    private sealed class CountingFiller(long length, Action<int> onRead) : Stream
+    {
+        private long position;
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => position; set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            var n = (int)Math.Min(count, length - position);
+            buffer.AsSpan(offset, n).Fill((byte)' ');
+            position += n;
+            onRead(n);
+            return n;
         }
     }
 }
