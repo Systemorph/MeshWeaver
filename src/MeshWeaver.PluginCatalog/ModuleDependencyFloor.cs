@@ -158,8 +158,8 @@ public static class ModuleDependencyFloor
     /// install records exist (the default install's module phase, policy
     /// <c>default-install-modules-first</c>). Their requirements bind the set exactly as a record's
     /// would: a selected package requiring <c>AI@^2</c> must not let a set loading AI 1.x be written
-    /// just because its own record is not there yet. A manifest whose id already has a record is
-    /// represented by the record.
+    /// just because its own record is not there yet. Records and selection are checked TOGETHER: a
+    /// requirement either of them states must be met.
     /// </summary>
     /// <param name="hub">The mesh hub.</param>
     /// <param name="landing">The landing service.</param>
@@ -169,15 +169,13 @@ public static class ModuleDependencyFloor
     {
         ArgumentNullException.ThrowIfNull(landing);
         ArgumentNullException.ThrowIfNull(aboutToInstall);
-        return ReadInstalled(hub).SelectMany(installed =>
-        {
-            // Package ids are ORDINAL everywhere they are matched (PluginGrantEntry.Matches,
-            // PackageDependencyGraph) — never case-folded here.
-            var recorded = installed.Select(p => p.Id).ToImmutableHashSet(StringComparer.Ordinal);
-            return landing.ProposeCheckedModuleSet(installed
-                .Concat(aboutToInstall.Where(p => !string.IsNullOrWhiteSpace(p.Id) && !recorded.Contains(p.Id)))
-                .ToImmutableList());
-        });
+        // 🚨 BOTH, never one in place of the other: the record read is an eventually consistent
+        // query that may still return a manifest phase 2 has just replaced, and the selection's
+        // manifest may not have installed at all (held, failed). Every requirement either states
+        // must be met — a stricter check fails closed, and the next wave proposes again.
+        return ReadInstalled(hub).SelectMany(installed => landing.ProposeCheckedModuleSet(installed
+            .Concat(aboutToInstall.Where(p => !string.IsNullOrWhiteSpace(p.Id)))
+            .ToImmutableList()));
     }
 }
 
