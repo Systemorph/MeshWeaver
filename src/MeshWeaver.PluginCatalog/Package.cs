@@ -765,17 +765,39 @@ public interface IPackageSource
     /// <returns>The files and, when the source knows it, the commit they were read at.</returns>
     IObservable<PackageFetch> FetchPackage(
         PackageManifest package, string gitRef, IReadOnlyCollection<string>? paths) =>
-        FetchPackageFiles(package, gitRef, paths).Select(files => new PackageFetch(files, null));
+        FetchPackageFiles(package, gitRef, paths).Select(files => new PackageFetch([.. files], null));
+
+    /// <summary>
+    /// Whether <paramref name="commit"/> was PUBLISHED on <paramref name="gitRef"/> — the ref
+    /// itself or one of its ancestors — so a registry may serve a package's files at it.
+    ///
+    /// <para>A registry serves its own configured ref, never a ref a consumer names, with ONE
+    /// exception: a snapshot token (MeshWeaver#6718). An incremental install reads the manifest,
+    /// then the delta; the manifest read names the commit it was served at, and the delta asks for
+    /// exactly that commit, so the two reads cannot straddle a ref that moved in between. The
+    /// registry honours the token only when this answers <c>true</c>, so it can never become a way
+    /// to read a package at a commit that exists only on an unmerged branch.</para>
+    ///
+    /// <para>The default answers <c>false</c> — ancestry not established, the token is not
+    /// honoured, the registry serves its configured ref, and the consumer refuses the mismatched
+    /// snapshot and installs in full. Sources backed by a git transport override it, and so must
+    /// every decorator that forwards to one.</para>
+    /// </summary>
+    /// <param name="commit">The full commit sha the consumer asks for.</param>
+    /// <param name="gitRef">The ref this source publishes (the registry's configured ref).</param>
+    /// <returns>One value: whether the commit is reachable from the ref.</returns>
+    IObservable<bool> PublishesCommit(string commit, string gitRef) => Observable.Return(false);
 }
 
 /// <summary>
 /// One package read: its files and the exact commit the source served them at, when the source
 /// can name it (<see cref="IPackageSource.FetchPackage"/>).
 /// </summary>
-/// <param name="Files">The package's files.</param>
+/// <param name="Files">The package's files — immutable, so the files a commit is stated for
+/// cannot change after the read.</param>
 /// <param name="Commit">The full commit sha the files were read at; <c>null</c> when the source
 /// does not know it (an old registry, a source with no git snapshot behind it).</param>
-public sealed record PackageFetch(IReadOnlyList<PackageFile> Files, string? Commit)
+public sealed record PackageFetch(ImmutableList<PackageFile> Files, string? Commit)
 {
     /// <summary>
     /// The ref an install record states for this read: the served <see cref="Commit"/> when it is

@@ -155,8 +155,8 @@ public sealed class InstanceComboVerifier
                 + $"the install: recorded {diverged.RecordedModuleVersion}, fetched "
                 + $"{diverged.FetchedModuleVersion}).");
 
-        // 🚨 Retired modules (MeshWeaver#3848, decided by the maintainer) are reported on their own
-        // list and folded NOWHERE else: their source folder is gone, so they can be neither
+        // 🚨 Retired modules (MeshWeaver#3848, policy `record-served-commit-on-install`) are reported
+        // on their own list and folded NOWHERE else: their source folder is gone, so they can be neither
         // verified nor failed — counting them as NotVerified would hold every verdict of an
         // instance that ever installed one at NotVerifiable forever.
         var retired = assembly.RetiredModules

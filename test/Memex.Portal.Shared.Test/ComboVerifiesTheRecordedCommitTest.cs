@@ -14,7 +14,7 @@ using Xunit;
 namespace Memex.Portal.Shared.Test;
 
 /// <summary>
-/// 🚨 MeshWeaver#3848 / #4413 — decided by the maintainer, "Record commit on install": the package
+/// 🚨 MeshWeaver#3848 / #4413 — policy <c>record-served-commit-on-install</c>: the package
 /// integrity verifier (the combo assembler under <see cref="InstanceComboVerifier"/>) checks an
 /// installed package against the commit its install RECORD names, never against the source
 /// repository's moving <c>HEAD</c>; and a package whose source folder was retired is reported as
@@ -125,6 +125,48 @@ public class ComboVerifiesTheRecordedCommitTest : IDisposable
         var reported = run.Verdict.RetiredModules.Should().ContainSingle().Which;
         reported.ModuleId.Should().Be("PlatformUI");
         reported.Status.Should().Be(ModuleAssemblyStatus.Retired);
+    }
+
+    /// <summary>
+    /// The CI summary names the retired module on its own line and counts it apart: never as a
+    /// failure and never as not verified — the reporting contract the verdict's own list carries.
+    /// </summary>
+    [Fact]
+    public async Task TheSummary_NamesARetiredModule_AndCountsItApart()
+    {
+        var run = await Verify(
+            Combo(
+                Package("Widget", InstalledCommit, InstalledVersion),
+                Package("PlatformUI", null, InstalledVersion)),
+            Repository(
+                At(InstalledCommit, Module("Widget", InstalledVersion)),
+                At("HEAD", Module("Widget", MovedVersion))));
+
+        using var output = new StringWriter();
+        run.WriteSummary(output);
+        var summary = output.ToString();
+
+        summary.Should().Contain($"  --  PlatformUI [{ModuleAssemblyStatus.Retired}] retired, not verifiable",
+            "the retired module is named on its own line, with its reason");
+        summary.Should().Contain(
+            "verdict: Green — 1 module(s), 1 passed, 0 failed, 0 not verified, 1 retired (not verifiable, not failing).",
+            "it is counted as retired, and neither as failed nor as not verified");
+    }
+
+    /// <summary>NEGATIVE CONTROL — with nothing retired the summary counts zero retired and names
+    /// no retired line.</summary>
+    [Fact]
+    public async Task TheSummary_WithNothingRetired_CountsZeroRetired()
+    {
+        var run = await Verify(Combo(Package("Widget", InstalledCommit, InstalledVersion)), Repository(
+            At(InstalledCommit, Module("Widget", InstalledVersion))));
+
+        using var output = new StringWriter();
+        run.WriteSummary(output);
+        var summary = output.ToString();
+
+        summary.Should().NotContain("  --  ");
+        summary.Should().Contain(", 0 retired (not verifiable, not failing).");
     }
 
     /// <summary>The <c>DeepSign</c> shape: recorded at a commit whose tree no longer carries the

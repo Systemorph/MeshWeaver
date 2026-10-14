@@ -162,8 +162,8 @@ public sealed record ComboVerification
 
     /// <summary>
     /// The modules this instance carries whose source folder has been RETIRED — reported as
-    /// <b>retired, not verifiable</b> (<see cref="ModuleAssemblyStatus.Retired"/>), and, as the
-    /// maintainer decided (MeshWeaver#3848), NOT failing the verification: they are absent from
+    /// <b>retired, not verifiable</b> (<see cref="ModuleAssemblyStatus.Retired"/>), and, under policy
+    /// <c>record-served-commit-on-install</c> (MeshWeaver#3848), NOT failing the verification: they are absent from
     /// <see cref="Modules"/>, so they neither turn a verdict Red nor make it NotVerifiable.
     ///
     /// <para>A SEPARATE list rather than a new <see cref="ModuleVerificationOutcome"/> member on
