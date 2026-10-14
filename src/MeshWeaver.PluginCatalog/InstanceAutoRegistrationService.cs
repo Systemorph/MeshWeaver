@@ -2259,7 +2259,8 @@ public sealed class InstanceAutoRegistrationService(
 
         // (Fresh: a not-yet-installed carrier this phase decided; Landed: the module it newly landed;
         // Blocked: the module of a carrier this phase could NOT clear — an unreadable install record,
-        // missing parameters, an ownership hold, an entitlement or licence refusal).
+        // missing parameters, an ownership hold, an entitlement or licence refusal, or an adoption that
+        // neither landed nor proved the existing entry up to date).
         IObservable<(bool Fresh, string? Landed, string? Blocked)> One(InstallCandidate candidate, PluginBundleClient bundles)
         {
             var package = candidate.Package;
@@ -2313,12 +2314,18 @@ public sealed class InstanceAutoRegistrationService(
                         {
                             if (outcome.FilesLanded > 0)
                                 return (Fresh: true, Landed: package.Module, Blocked: (string?)null);
-                            if (outcome.Failure is { } failure)
-                                logger.LogWarning(
-                                    "[DefaultInstall] module phase: {Module} of {Id} did not land — {Failure}. "
-                                    + "Packages whose nodes need its NodeTypes fail validation this pass "
-                                    + "and are retried by the next.", package.Module, package.Id, failure);
-                            return (Fresh: true, Landed: (string?)null, Blocked: (string?)null);
+                            // 🚨 Only SkipUpToDate proves an existing entry IS the artifact served now.
+                            // Every other zero-land outcome (a floor hold, a declined or failed fetch,
+                            // a refused landing) may leave an OLDER generation in the record, and a
+                            // proposal must not activate it under the newer content phase 2 installs.
+                            if (outcome.Failure is null && outcome.Verdict?.Action == ModuleUpdateAction.SkipUpToDate)
+                                return (Fresh: true, Landed: (string?)null, Blocked: (string?)null);
+                            logger.LogWarning(
+                                "[DefaultInstall] module phase: {Module} of {Id} did not land — {Outcome}. "
+                                + "Packages whose nodes need its NodeTypes fail validation this pass and are "
+                                + "retried by the next.", package.Module, package.Id,
+                                outcome.Failure ?? $"{outcome.Verdict?.Action}: {outcome.Verdict?.Reason}");
+                            return (Fresh: true, Landed: (string?)null, Blocked: package.Module);
                         })
                         // A refusal is the content phase's to report (it applies the same gate and
                         // records it as a skip or a failure); here it only means "no module ahead".
@@ -2335,7 +2342,7 @@ public sealed class InstanceAutoRegistrationService(
                                 "[DefaultInstall] module phase: {Module} of {Id} did not land — {Cause}. "
                                 + "The content phase decides the package as before.",
                                 package.Module, package.Id, ex.Message);
-                            return Observable.Return((Fresh: true, Landed: (string?)null, Blocked: (string?)null));
+                            return Observable.Return((Fresh: true, Landed: (string?)null, Blocked: package.Module));
                         });
                 });
         }
