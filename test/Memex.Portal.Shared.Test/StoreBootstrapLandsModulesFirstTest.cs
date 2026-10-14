@@ -319,9 +319,14 @@ public class StoreBootstrapLandsModulesFirstTest(ITestOutputHelper output) : Sto
         foreach (var plugin in new[] { "AI", "EntityViews", "Chat" })
             log.FindIndex(r => r == $"bundle:{plugin}").Should().BeInRange(0, firstFiles - 1,
                 $"{plugin}'s module must be downloaded before any package content is fetched");
-        // …and the pass's ONE proposal names them, so a restart loads them.
+        // …and the pass's ONE proposal is written (or finds the set already naming them), so a
+        // restart loads them.
+        var verdict = pass.ModuleSetVerdict ?? "";
+        (verdict.StartsWith(InstanceAutoRegistrationService.ModuleSetProposed, StringComparison.Ordinal)
+         || verdict.StartsWith(InstanceAutoRegistrationService.ModuleSetUnchanged, StringComparison.Ordinal))
+            .Should().BeTrue($"the pass's own proposal is written or already current, but its verdict was '{verdict}'");
         var proposed = ModuleSetStore.Read(LandingRoot).Proposed;
-        proposed.Should().NotBeNull("the pass proposes the module set naming what it landed");
+        proposed.Should().NotBeNull("a module set naming what landed exists");
         proposed!.Generations.Keys.Should().Contain(new[] { AiModule, ViewsModule, ChatModule });
         pass.ModulesLanded.Order(StringComparer.Ordinal).Should().Equal(new[] { AiModule, ViewsModule, ChatModule }.Order(StringComparer.Ordinal));
         pass.ToString().Should().Contain("MODULES LANDED ahead of content");
@@ -388,8 +393,8 @@ public class AnUnmetSelectionFloorProposesNoSetTest(ITestOutputHelper output) : 
         Output.WriteLine($"pass: {pass}");
         pass.Delivered.Should().Contain("AI", "phase 2 installed AI — the install that used to propose on its own");
         ModuleActivationSidecar.Read(LandingRoot).Entries.Select(e => e.Name).Should().Contain(new[] { AiModule, ChatModule });
-        ModuleSetStore.Read(LandingRoot).Proposed.Should().BeNull(
-            "Chat's floor AI@^2 is not met by the landed AI 1.0.0, so no set may be written");
+        pass.ModuleSetVerdict.Should().StartWith(InstanceAutoRegistrationService.ModuleSetRefused,
+            "Chat's floor AI@^2 is not met by the landed AI 1.0.0, so this pass may not write the set");
     }
 }
 
@@ -410,7 +415,9 @@ public class ARequiredModuleThatDidNotLandProposesNoSetTest(ITestOutputHelper ou
         var landed = ModuleActivationSidecar.Read(LandingRoot).Entries.Select(e => e.Name).ToList();
         landed.Should().Contain(ChatModule);
         landed.Should().NotContain(AiModule, "the registry served no AI bytes");
-        ModuleSetStore.Read(LandingRoot).Proposed.Should().BeNull(
+        // THIS lane's verdict — the reconciler's own boot wave close proposes independently
+        // (records only), so the store is not this lane's evidence.
+        pass.ModuleSetVerdict.Should().StartWith(InstanceAutoRegistrationService.ModuleSetWithheld,
             "Chat requires AI, whose module did not land — a Chat-only set must not be proposed");
     }
 }

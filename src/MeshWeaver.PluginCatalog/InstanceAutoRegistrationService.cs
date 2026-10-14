@@ -2210,7 +2210,7 @@ public sealed class InstanceAutoRegistrationService(
                     : ProposeCheckedForTheSelection(
                             installable.Select(c => c.Package).ToImmutableList(),
                             BlockedAfterPhase2(phase1.Blocked, summary))
-                        .Select(_ => summary)));
+                        .Select(verdict => summary with { ModuleSetVerdict = verdict })));
 
         // Phase 2's own verdicts are NEWER than phase 1's: a package it HELD (ownership re-read) or
         // SKIPPED (a terminal refusal before the pass, or one visible only at install time) blocks its
@@ -2432,12 +2432,12 @@ public sealed class InstanceAutoRegistrationService(
     /// <param name="selection">The manifests this pass is about to install.</param>
     /// <param name="blocked">The modules of carriers this pass could not clear — an enabled
     /// activation entry for any of them blocks the proposal.</param>
-    private IObservable<ModuleSet?> ProposeCheckedForTheSelection(
+    private IObservable<string> ProposeCheckedForTheSelection(
         IReadOnlyList<PackageManifest> selection, IReadOnlySet<string> blocked)
     {
         var landing = hub.ServiceProvider.GetService<ModuleLandingService>();
         if (landing is null)
-            return Observable.Return<ModuleSet?>(null);
+            return Observable.Return("no module landing service on this host — nothing to propose");
         return landing.GetActivation().Take(1)
             .SelectMany(activation =>
             {
@@ -2457,38 +2457,48 @@ public sealed class InstanceAutoRegistrationService(
                     .Where(blockedIds.Contains)
                     .Distinct(StringComparer.Ordinal)
                     .ToList();
-                if (carried.Count == 0 && requiredButBlocked.Count == 0)
+                string? withheld = carried.Count > 0
+                    ? $"the activation record carries [{string.Join(", ", carried)}] for package(s) this pass "
+                      + "could not clear (a gate refusal, an ownership hold, missing parameters or an unreadable "
+                      + "install record), and a proposal would activate them"
+                    : requiredButBlocked.Count > 0
+                        ? $"package(s) [{string.Join(", ", requiredButBlocked)}] are required by this selection but "
+                          + "their modules could not be cleared this pass; a set without them would load their "
+                          + "dependents alone"
+                        : null;
+                if (withheld is null)
                     return Propose();
-                if (carried.Count == 0)
-                {
-                    logger.LogWarning(
-                        "[DefaultInstall] module phase: proposing NO module set — package(s) [{Packages}] are "
-                        + "required by this selection but their modules could not be cleared this pass; a set "
-                        + "without them would load their dependents alone.", string.Join(", ", requiredButBlocked));
-                    return Observable.Return<ModuleSet?>(null);
-                }
-                logger.LogWarning(
-                    "[DefaultInstall] module phase: proposing NO module set — the activation record carries "
-                    + "[{Modules}] for package(s) this pass could not clear (a gate refusal, an ownership hold, "
-                    + "missing parameters or an unreadable install record), and a proposal would activate them.",
-                    string.Join(", ", carried));
-                return Observable.Return<ModuleSet?>(null);
+                var verdict = $"{ModuleSetWithheld}: {withheld}";
+                logger.LogWarning("[DefaultInstall] module phase: proposing NO module set — {Verdict}", verdict);
+                return Observable.Return(verdict);
             });
 
-        IObservable<ModuleSet?> Propose() => ModuleDependencyFloor.ProposeChecked(hub, landing, selection)
-            .Do(set => logger.LogInformation(
-                "[DefaultInstall] module phase: {Outcome}",
-                set is null
-                    ? "the module set is unchanged by this wave (nothing new to propose)"
-                    : "the module set naming the landed modules is proposed — they load at the next restart"))
+        IObservable<string> Propose() => ModuleDependencyFloor.ProposeChecked(hub, landing, selection)
+            .Select(set => set is null
+                ? $"{ModuleSetUnchanged}: nothing new to propose"
+                : $"{ModuleSetProposed}: sequence {set.Sequence} — the landed modules load at the next restart")
+            .DefaultIfEmpty($"{ModuleSetUnchanged}: nothing new to propose")
+            .Do(verdict => logger.LogInformation("[DefaultInstall] module phase: {Verdict}", verdict))
             .Catch((Exception ex) =>
             {
                 logger.LogWarning(ex,
                     "[DefaultInstall] module phase: the landed module set could not be proposed — the mesh "
                     + "stays on its current set and the next wave proposes again. Cause: {Cause}", ex.Message);
-                return Observable.Return<ModuleSet?>(null);
+                return Observable.Return($"{ModuleSetRefused}: {ex.Message}");
             });
     }
+
+    /// <summary>Verdict prefix: the pass proposed a module set.</summary>
+    internal const string ModuleSetProposed = "proposed";
+
+    /// <summary>Verdict prefix: the pass proposed, and the set was already current.</summary>
+    internal const string ModuleSetUnchanged = "unchanged";
+
+    /// <summary>Verdict prefix: the pass WITHHELD its proposal (an uncleared carrier).</summary>
+    internal const string ModuleSetWithheld = "withheld";
+
+    /// <summary>Verdict prefix: the proposal was refused (a dependency floor, an unreadable record).</summary>
+    internal const string ModuleSetRefused = "refused";
 
     /// <summary>The principal a candidate is installed on the authority of — the deployment
     /// configuration's, for a commercial package it authorizes; null for every other (a free package
@@ -3345,6 +3355,15 @@ public readonly record struct DefaultInstallSummary(
     public ImmutableList<string> ModulesLanded { get; init; } = ImmutableList<string>.Empty;
 
     /// <summary>
+    /// What THIS pass decided about the mesh's module set, once, at its end (policy
+    /// <c>default-install-modules-first</c>): <c>proposed: …</c>, <c>unchanged: …</c>,
+    /// <c>withheld: …</c> (a carrier the pass could not clear) or <c>refused: …</c> (a declared floor,
+    /// an unreadable record). Null when the pass ran no module wave. Other lanes (the reconciler's
+    /// wave close) propose on their own; this is this lane's verdict only.
+    /// </summary>
+    public string? ModuleSetVerdict { get; init; }
+
+    /// <summary>
     /// 🚨 True when at least one source's listing FAILED this pass (#4097), so what the pass did
     /// not see is unknown rather than absent. <see cref="TierRefused"/> is then a partial answer:
     /// the ledger keeps its previous refusals and the activation markers are left standing,
@@ -3419,6 +3438,7 @@ public readonly record struct DefaultInstallSummary(
             .AddRange(other.Authorized ?? ImmutableList<DefaultInstallAuthorization>.Empty),
         ModulesLanded = (ModulesLanded ?? ImmutableList<string>.Empty)
             .AddRange(other.ModulesLanded ?? ImmutableList<string>.Empty),
+        ModuleSetVerdict = other.ModuleSetVerdict ?? ModuleSetVerdict,
         ListingIncomplete = ListingIncomplete || other.ListingIncomplete,
         SourceUnreachable = SourceUnreachable || other.SourceUnreachable,
     };
@@ -3444,7 +3464,8 @@ public readonly record struct DefaultInstallSummary(
             : "")
         + (ModulesLanded is { Count: > 0 } m
             ? $" — MODULES LANDED ahead of content: [{string.Join(", ", m)}]"
-            : "");
+            : "")
+        + (ModuleSetVerdict is { Length: > 0 } v ? $" — MODULE SET {v}" : "");
 }
 
 /// <summary>
