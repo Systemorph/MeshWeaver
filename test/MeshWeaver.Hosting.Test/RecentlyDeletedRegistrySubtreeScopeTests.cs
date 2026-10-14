@@ -119,4 +119,56 @@ public class RecentlyDeletedRegistrySubtreeScopeTests
         subscription.Dispose();
         registry.IsUnderActiveDeletion("n/m", out _).Should().BeFalse("unsubscribing releases the scope");
     }
+
+    /// <summary>
+    /// #6719: a deletion waits for the writes ADMITTED under its root before it runs, and only for
+    /// those — a write elsewhere (including a prefix-sharing sibling) never holds it up.
+    /// </summary>
+    [Fact]
+    public void AdmittedWritesSettled_waits_for_admitted_writes_under_the_root_only()
+    {
+        var registry = new RecentlyDeletedRegistry();
+        var under = registry.AdmitWrite(["w/x/y"]);
+        var sibling = registry.AdmitWrite(["w/xy"]);
+        using var scope = registry.BeginSubtreeDeletion("w/x");
+
+        var settled = false;
+        using var wait = registry.AdmittedWritesSettled("w/x").Subscribe(_ => settled = true);
+        settled.Should().BeFalse("a write admitted under the root is still in flight");
+        registry.AdmittedWritesUnder("w/x").Should().Equal("w/x/y");
+
+        sibling.Dispose();
+        settled.Should().BeFalse("the sibling is outside the subtree and was never waited on");
+
+        under.Dispose();
+        settled.Should().BeTrue("the last admitted write under the root settled");
+
+        // Control: nothing pending answers at once, and a second Dispose is harmless.
+        under.Dispose();
+        var immediate = false;
+        using var again = registry.AdmittedWritesSettled("w/x").Subscribe(_ => immediate = true);
+        immediate.Should().BeTrue("no admitted write is pending under the root");
+    }
+
+    /// <summary>
+    /// #6719: <see cref="RecentlyDeletedRegistry.WithinSubtreeDeletion{T}"/> (move, partition teardown)
+    /// runs its body only after the writes admitted under the root have settled.
+    /// </summary>
+    [Fact]
+    public void WithinSubtreeDeletion_runs_its_body_after_admitted_writes_settle()
+    {
+        var registry = new RecentlyDeletedRegistry();
+        var admitted = registry.AdmitWrite(["v/w"]);
+        var bodyRan = false;
+
+        using var subscription = registry.WithinSubtreeDeletion("v", () =>
+        {
+            bodyRan = true;
+            return Observable.Return(1);
+        }).Subscribe(_ => { });
+
+        bodyRan.Should().BeFalse("a write admitted under the root is still in flight");
+        admitted.Dispose();
+        bodyRan.Should().BeTrue("the admitted write settled, so the scope's body runs");
+    }
 }

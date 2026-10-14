@@ -45,6 +45,41 @@ subtree-deletion scope (`RecentlyDeletedRegistry.BeginSubtreeDeletion`) opens BE
 taken and refuses every in-process write at or under the root until the operation ends. The drain
 loop is what covers writers this process cannot refuse.
 
+### A write admitted BEFORE the scope opened is waited for, not outrun
+
+The scope refuses a write at **admission** — when the write is subscribed at the outermost storage
+decorator (`SubtreeDeletionGuardStorageAdapter`). That alone left one ordering open (#6719): a write
+admitted a moment before the scope opened is already on its way to the store — queued on the I/O
+pool, or slow at the backend — and commits whenever the backend reaches it. Nothing ordered that
+commit against the delete, so it could land AFTER the storage delete, recreate the node the delete
+had just answered "removed" for, and its post-commit `Supersede` then erased the tombstone, so the
+recreate looked like a legitimate re-create. It also outran the drain: it landed after the last
+verification.
+
+The ordering is closed from the delete's side, in two halves:
+
+- **The guard REGISTERS every write it admits** (`RecentlyDeletedRegistry.AdmitWrite`) until that
+  write terminates — completion, error or unsubscription.
+- **The delete, once its scope is open, waits for every write admitted under its root to settle**
+  (`AdmittedWritesSettled`, its own bounded stage `settle-admitted-writes`) before it checks the
+  expected version, takes the plan, or removes anything. `WithinSubtreeDeletion` — the move and the
+  partition teardown — does the same before its body runs.
+
+The scope stops new admissions, so the set it waits on only shrinks, and in the common case it is
+empty and the wait answers at once. 🚨 **Each side acts first and checks second:** the guard
+registers and THEN tests the scope; the delete opens the scope and THEN reads the registrations. Both
+are full-fence dictionary writes, so at least one side always sees the other — the write is refused,
+or the delete waits for it. Checked the other way round, both could miss each other.
+
+So, in-process, every write under the root is either **refused** or **committed BEFORE the delete,
+which then removes it** — never committed after it. The delete answers success only once that holds.
+A write that never terminates fails the delete by name at `settle-admitted-writes`, listing the
+paths it waited on, with nothing deleted. Not covered: a writer in ANOTHER process, which this
+registry cannot see; the drain's re-enumeration remains its only cover, and only up to the last
+verification. Regression test: `AWriteAdmittedBeforeADeleteNeverRecreatesItTest` (parks an admitted
+write at the store of record, starts the delete, releases the write only once the delete's scope is
+provably open, and asserts the delete waited and the store holds nothing afterwards).
+
 ## 2. Completion is TWO reads, because one cannot see the whole subtree
 
 `IStorageAdapter.ListDescendantPaths` is **strict descendants — the root is excluded by contract**.

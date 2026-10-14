@@ -42,6 +42,15 @@ namespace MeshWeaver.Hosting.Persistence;
 /// — so a reader whose delivery reached the still-disposing old hub after <c>Created</c> had already
 /// been published was NACKed with the authoritative, non-retryable "will not reactivate".</para>
 ///
+/// <para><b>A refusal at admission is not enough on its own (#6719).</b> A write admitted a moment
+/// BEFORE the scope opened is already on its way to the store and commits whenever the backend gets
+/// to it — possibly after the delete removed the row, recreating it (and its <c>Supersede</c> then
+/// erased the tombstone, so the recreate looked legitimate). So every admitted write is also
+/// REGISTERED with the registry until it terminates, and a deletion waits for the writes admitted
+/// under its root (<see cref="RecentlyDeletedRegistry.AdmittedWritesSettled"/>) before it plans or
+/// removes anything. In-process, every write under the root is therefore refused or committed
+/// BEFORE the delete, never after it.</para>
+///
 /// <para>Pass-through when no <see cref="RecentlyDeletedRegistry"/> is registered (meshes
 /// without Graph) and O(active deletions) — i.e. effectively free — on the write hot path.</para>
 /// </summary>
@@ -63,54 +72,49 @@ internal sealed class SubtreeDeletionGuardStorageAdapter(
     public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
         => registry is null
             ? inner.Write(node, options)
-            : Observable.Defer(() =>
-            {
-                if (registry.IsUnderActiveDeletion(node.Path, out var root))
+            : Admitted(
+                [node.Path],
+                (path, root) =>
                 {
                     logger?.LogWarning(
                         "[SubtreeDeletionGuard] REFUSED write to {Path}: the subtree '{Root}' is being "
                         + "deleted. Nodes must not be created under a subtree while its recursive "
                         + "deletion is in flight.",
-                        node.Path, root);
-                    return Observable.Throw<MeshNode?>(new SubtreeDeletionInFlightException(node.Path, root));
-                }
+                        path, root);
+                    return Observable.Throw<MeshNode?>(new SubtreeDeletionInFlightException(path, root));
+                },
                 // Post-commit, pre-publish: the null sentinel means "no adapter owns this path" —
                 // nothing was written, so nothing is superseded.
-                return inner.Write(node, options)
+                () => inner.Write(node, options)
                     .Do(saved =>
                     {
                         if (saved is not null)
                             registry.Supersede(saved.Path, saved.Version);
-                    });
-            });
+                    }));
 
     /// <inheritdoc />
     public IObservable<IReadOnlyList<MeshNode>> WriteMany(
         IReadOnlyCollection<MeshNode> nodes, JsonSerializerOptions options)
         => registry is null
             ? inner.WriteMany(nodes, options)
-            : Observable.Defer(() =>
-            {
-                foreach (var node in nodes)
+            : Admitted(
+                nodes.Select(n => n.Path).ToArray(),
+                (path, root) =>
                 {
-                    if (registry.IsUnderActiveDeletion(node.Path, out var root))
-                    {
-                        logger?.LogWarning(
-                            "[SubtreeDeletionGuard] REFUSED batch write: {Path} lies under the subtree "
-                            + "'{Root}' whose deletion is in flight.",
-                            node.Path, root);
-                        return Observable.Throw<IReadOnlyList<MeshNode>>(new SubtreeDeletionInFlightException(node.Path, root));
-                    }
-                }
+                    logger?.LogWarning(
+                        "[SubtreeDeletionGuard] REFUSED batch write: {Path} lies under the subtree "
+                        + "'{Root}' whose deletion is in flight.",
+                        path, root);
+                    return Observable.Throw<IReadOnlyList<MeshNode>>(new SubtreeDeletionInFlightException(path, root));
+                },
                 // Only the nodes the adapter reports as written were claimed — same rule as the
                 // singular null sentinel.
-                return inner.WriteMany(nodes, options)
+                () => inner.WriteMany(nodes, options)
                     .Do(written =>
                     {
                         foreach (var saved in written)
                             registry.Supersede(saved.Path, saved.Version);
-                    });
-            });
+                    }));
 
     /// <inheritdoc />
     /// <remarks>
@@ -123,24 +127,50 @@ internal sealed class SubtreeDeletionGuardStorageAdapter(
         MeshNode node, long expectedVersion, JsonSerializerOptions options)
         => registry is null
             ? inner.WriteIfVersion(node, expectedVersion, options)
-            : Observable.Defer(() =>
-            {
-                if (registry.IsUnderActiveDeletion(node.Path, out var root))
+            : Admitted(
+                [node.Path],
+                (path, root) =>
                 {
                     logger?.LogWarning(
                         "[SubtreeDeletionGuard] REFUSED compare-and-set write to {Path}: the subtree "
                         + "'{Root}' is being deleted.",
-                        node.Path, root);
-                    return Observable.Throw<bool?>(new SubtreeDeletionInFlightException(node.Path, root));
-                }
+                        path, root);
+                    return Observable.Throw<bool?>(new SubtreeDeletionInFlightException(path, root));
+                },
                 // `true` is the one outcome that committed; a version mismatch (false) or an
                 // unowned path (null) wrote nothing.
-                return inner.WriteIfVersion(node, expectedVersion, options)
+                () => inner.WriteIfVersion(node, expectedVersion, options)
                     .Do(written =>
                     {
                         if (written == true)
                             registry.Supersede(node.Path, node.Version);
-                    });
+                    }));
+
+    /// <summary>
+    /// Admits one write, or refuses it (#6719). On Subscribe the write is REGISTERED with the
+    /// registry FIRST and only then tested against the active deletions — the order that makes a
+    /// deletion opening concurrently either refuse this write or wait for it
+    /// (<see cref="RecentlyDeletedRegistry.AdmittedWritesSettled"/>), never miss it. An admitted
+    /// write stays registered until it terminates (completion, error or unsubscription), so a
+    /// deletion whose scope opened after the admission runs only once this write has committed:
+    /// its storage delete then removes what the write stored, instead of the write recreating what
+    /// the delete removed. Cold, like the write it wraps.
+    /// </summary>
+    /// <param name="paths">Every node path the write commits.</param>
+    /// <param name="refuse">Builds the refusal for the first path found under an active deletion.</param>
+    /// <param name="write">The write itself, subscribed only when admitted.</param>
+    private IObservable<T> Admitted<T>(
+        IReadOnlyCollection<string> paths,
+        Func<string, string?, IObservable<T>> refuse,
+        Func<IObservable<T>> write)
+        => Observable.Using(
+            () => registry!.AdmitWrite(paths),
+            _ =>
+            {
+                foreach (var path in paths)
+                    if (registry!.IsUnderActiveDeletion(path, out var root))
+                        return refuse(path, root);
+                return write();
             });
 
     /// <inheritdoc />

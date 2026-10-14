@@ -3644,10 +3644,30 @@ public static class MeshExtensions
             });
     }
 
+    /// <summary>
+    /// Waits, inside the delete's open subtree scope, for every write the storage guard ADMITTED at
+    /// or under <paramref name="path"/> before the scope opened (#6719). The scope refuses new writes;
+    /// this drains the ones already on their way, so none of them can commit after the storage delete
+    /// and recreate the node. Emits at once when nothing is pending — the common case. Bounded as its
+    /// own stage: a write that never terminates fails the delete BY NAME, listing what it waited on,
+    /// instead of being outrun by it.
+    /// </summary>
+    private static IObservable<System.Reactive.Unit> AdmittedWritesSettled(
+        RecentlyDeletedRegistry? registry, string path, TimeSpan budget)
+        => registry is null
+            ? Observable.Return(System.Reactive.Unit.Default)
+            : registry.AdmittedWritesSettled(path)
+                .TimeoutAtStage(budget, () => DeleteStageTimeout(
+                    DeleteStage.SettleAdmittedWrites,
+                    $"write(s) admitted under '{path}' before the delete began did not settle within "
+                    + $"{budget.TotalSeconds:0}s: {string.Join(", ", registry.AdmittedWritesUnder(path).Take(10))}. "
+                    + "Nothing was deleted."));
+
     /// <summary>Stage names — one per bounded stage of <see cref="HandleDeleteNodeRequest"/>.</summary>
     private static class DeleteStage
     {
         public const string ReadRoot = "read-root";
+        public const string SettleAdmittedWrites = "settle-admitted-writes";
         public const string CheckPermission = "check-permission";
         public const string ValidateRoot = "validate-root";
         public const string CheckExpectedVersion = "check-expected-version";
@@ -4108,10 +4128,19 @@ public static class MeshExtensions
                                 //    landing during the permission / validator stages would slip
                                 //    between the check and the delete — the read-then-delete race
                                 //    the precondition exists to close.
+                                //    🚨 And the scope only stops NEW writes. A write the
+                                //    storage guard admitted a moment before the scope opened
+                                //    is still on its way to the store; committed after the
+                                //    storage delete, it would recreate the node this delete
+                                //    reports removed (#6719). So the delete first waits for
+                                //    every write admitted under `path` to settle, and only
+                                //    then checks the version, plans and removes — the writes
+                                //    are ordered BEFORE the delete, never after it.
                                 return Observable.Using(
                                     () => recentlyDeleted?.BeginSubtreeDeletion(path)
                                           ?? System.Reactive.Disposables.Disposable.Empty,
-                                    subtreeScope => ExpectedVersionHolds(
+                                    subtreeScope => AdmittedWritesSettled(recentlyDeleted, path, budget)
+                                    .SelectMany(_ => ExpectedVersionHolds(
                                         persistence, hub.JsonSerializerOptions, path,
                                         capturedRequest.ExpectedVersion, budget, logger,
                                         onChanged: actual =>
@@ -4127,7 +4156,7 @@ public static class MeshExtensions
                                                         ("actual", actual.ToString(System.Globalization.CultureInfo.InvariantCulture)))],
                                                 ImmutableList.Create(path));
                                         },
-                                        onAbsent: PostAlreadyAbsent)
+                                        onAbsent: PostAlreadyAbsent))
                                     .SelectMany(_ => CollectPathsForDelete(hub, path, capturedRequest.Recursive, budget, logger))
                                     .SelectMany(collected =>
                                     {
