@@ -451,7 +451,7 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator, ISy
             return PlatformAdminGrantRepair.MayIssue(_hub, context, effectiveUserId)
                 .SelectMany(mayIssue => mayIssue
                     ? Observable.Return(GrantedAsPlatformRepair(context, effectiveUserId))
-                    : DiagnoseDenial(context, effectiveUserId, denial));
+                    : DiagnoseDenial(context, effectiveUserId, requiredPermission, denial));
         });
     }
 
@@ -465,12 +465,14 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator, ISy
     }
 
     private IObservable<NodeValidationResult> DiagnoseDenial(
-        NodeValidationContext context, string effectiveUserId, string denial)
+        NodeValidationContext context, string effectiveUserId, Permission requiredPermission, string denial)
     {
         // The principal is passed so the probe can name the ONE denial the durable store
-        // disagrees with (#4061 finding 2) — see DescribeDeniedWrite. It changes no verdict.
+        // disagrees with (#4061 finding 2) — see DescribeDeniedWrite — and the permission so it
+        // can tell that from a settled denial whose grant simply lacks it (#6637). It changes no
+        // verdict.
         return PartitionWriteGuardValidator.DescribeDeniedWriteIn(
-                _hub, context.Node.Path, effectiveUserId, context.AccessContext?.Locale)
+                _hub, context.Node.Path, effectiveUserId, requiredPermission, context.AccessContext?.Locale)
             .Take(1)
             .Select(diagnosis => NodeValidationResult.Unauthorized(
                 diagnosis is null ? denial : $"{denial}. {diagnosis}"))

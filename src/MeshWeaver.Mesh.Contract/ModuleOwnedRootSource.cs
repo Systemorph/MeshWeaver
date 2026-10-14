@@ -1,3 +1,4 @@
+using Autofac;
 using Autofac.Builder;
 using Autofac.Core;
 using MeshWeaver.ServiceProvider;
@@ -32,20 +33,16 @@ public sealed class ModuleOwnedRootSource(ModuleContexts contexts) : IRegistrati
             return KeyedStandIns(keyed.ServiceType, key, registrationAccessor(service).Any());
         if (service is not TypedService typed)
             return [];
-        // A module withdrawn at boot because its shared instances could not be built (MeshWeaver#6542)
-        // is reported where every other module that failed to install is: as an IncompatibleModule.
-        if (typed.ServiceType == typeof(IncompatibleModule))
-            return contexts.NotBuilt
-                .Select(record => (IComponentRegistration)RegistrationBuilder.ForDelegate((_, _) => record)
-                    .As<IncompatibleModule>()
-                    .ExternallyOwned()
-                    .SingleInstance()
-                    .CreateRegistration())
-                .ToArray();
-        var resolvers = ModuleServices.RegistrationsElsewhere(contexts, null, typed.ServiceType);
+        // A module withdrawn at boot (MeshWeaver#6542) is NOT answered here: its IncompatibleModule
+        // record is served by the mesh's InstalledModules registry through an ordinary IEnumerable<T>
+        // factory, which a plain MS DI host answers too — a registration source it ignores (#6557).
+        // Each resolved for the CALLER — the hub, circuit or request scope the stand-in is resolved in —
+        // so a module's scoped registration is that caller's instance (MeshWeaver#6584).
+        var resolvers = ModuleServices.RegistrationsElsewhereForCallers(contexts, null, typed.ServiceType);
         return resolvers.Count == 0
             ? []
-            : ModuleServiceProvider.StandIns(typed.ServiceType, resolvers, registrationAccessor(service).Any());
+            : ModuleServiceProvider.StandIns(typed.ServiceType, resolvers, registrationAccessor(service).Any(),
+                ModuleServiceProvider.CallerOfRootScope);
     }
 
     // A module's KEYED registration of a type it declares, asked for by its key — a module keeps the key
@@ -53,10 +50,10 @@ public sealed class ModuleOwnedRootSource(ModuleContexts contexts) : IRegistrati
     // module's (core #6128: keyed module services are forwarded under their own key, not refused).
     private IEnumerable<IComponentRegistration> KeyedStandIns(Type type, object key, bool explicitRegistrationsExist)
     {
-        var resolvers = ModuleServices.KeyedRegistrationsElsewhere(contexts, null, type, key);
+        var resolvers = ModuleServices.KeyedRegistrationsElsewhereForCallers(contexts, null, type, key);
         var standIns = resolvers
             .Select(resolve => RegistrationBuilder
-                .ForDelegate(type, (_, _) => resolve())
+                .ForDelegate(type, (context, _) => resolve(ModuleServiceProvider.CallerOfRootScope(context.Resolve<ILifetimeScope>())))
                 .Keyed(key, type)
                 .ExternallyOwned()
                 .InstancePerDependency()
@@ -71,11 +68,20 @@ public sealed class ModuleOwnedRootSource(ModuleContexts contexts) : IRegistrati
 /// <summary>
 /// Builds every held module's shared instances once the root container is built, before the root
 /// provider is handed to anyone (MeshWeaver#6542, <see cref="ModuleContexts.BuildAllBeforePublish"/>).
-/// Resolves the registry THROUGH the root, which attaches it to that root.
+/// It CLAIMS the publication first, then resolves the registry THROUGH the root (which attaches it to
+/// that root), then builds — so the build runs outside the root's shared-instance lock, never inside the
+/// registry's own singleton registration, which would otherwise run it on its first resolve
+/// (<see cref="ModuleContexts.PublishOnce"/>, the path a plain MS DI host takes — MeshWeaver#6557).
 /// </summary>
-internal sealed class ModulesBuiltBeforePublished : IRootContainerBuilt
+/// <param name="contexts">The mesh's module registry.</param>
+internal sealed class ModulesBuiltBeforePublished(ModuleContexts contexts) : IRootContainerBuilt
 {
     /// <inheritdoc />
-    public void Built(IServiceProvider root) =>
-        (root.GetService(typeof(ModuleContexts)) as ModuleContexts)?.BuildAllBeforePublish();
+    public void Built(IServiceProvider root)
+    {
+        if (!contexts.TryClaimPublication())
+            return;
+        if (root.GetService(typeof(ModuleContexts)) is ModuleContexts attached)
+            attached.BuildAllBeforePublish();
+    }
 }

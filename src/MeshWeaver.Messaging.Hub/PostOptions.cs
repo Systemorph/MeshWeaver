@@ -10,7 +10,9 @@ namespace MeshWeaver.Messaging;
 /// metadata applied to a message as it is dispatched into the mesh. Immutable record — each
 /// <c>With…</c> method returns a new instance with the change applied.
 /// </summary>
-/// <param name="Sender">The address the message is sent from; also used as the identity when impersonating as a hub.</param>
+/// <param name="Sender">The address the message is sent from; also used as the identity when impersonating as a hub.
+/// Owned by the posting hub: <c>MessageHub.Post</c> constructs these options with its own address and replaces any
+/// other value a caller writes here (logged as <c>[ForeignSender]</c>; Doc/Architecture/SenderIsThePostingHub).</param>
 public record PostOptions(Address Sender)
 {
     /// <summary>
@@ -44,6 +46,29 @@ public record PostOptions(Address Sender)
     /// </summary>
     /// <returns>A new <see cref="PostOptions"/> declaring that the sender understands progress.</returns>
     public PostOptions AcceptingProgress() => WithProperty(AcceptsProgress, "true");
+
+    /// <summary>
+    /// Well-known property key a PRODUCER stamps on a request it re-asks on a transient
+    /// <c>ShuttingDown</c> answer: it observes the reply and, on the refusal an activation gives
+    /// while it goes down, sends the request again to the address's next activation.
+    ///
+    /// <para>The per-delivery form of <c>[ReaskedOnShutdown]</c>. That attribute is a claim about
+    /// EVERY producer of a type, so it cannot be put on a type with several producers of which only
+    /// some re-ask: <c>GetDataRequest</c> is sent by the node point read, which re-asks, and by the
+    /// content-collection reads and the MCP <c>get</c>, which do not (MeshWeaver#5718). This key is
+    /// the claim of ONE producer about ONE request. It is read in one place, the discard report of
+    /// a hub disposed while the delivery was parked behind its initialization gates
+    /// (<c>MessageService</c>, event 7301): a delivery that carries it is teardown-normal (Debug),
+    /// not an Error, exactly as a marked type is.</para>
+    /// </summary>
+    public const string ReasksOnShutdown = nameof(ReasksOnShutdown);
+
+    /// <summary>
+    /// Returns a copy of these options stamped <see cref="ReasksOnShutdown"/>. Stamp it only from a
+    /// producer that really asks the next activation on a <c>ShuttingDown</c> answer.
+    /// </summary>
+    /// <returns>A new <see cref="PostOptions"/> declaring that this sender re-asks on shutdown.</returns>
+    public PostOptions ReaskingOnShutdown() => WithProperty(ReasksOnShutdown, "true");
 
     internal Address Target { get; init; } = null!;
 
@@ -187,6 +212,22 @@ public record PostOptions(Address Sender)
         ImpersonationRequestedBy = requestedBy,
         ImpersonationSurface = nameof(ImpersonateAsHub),
     };
+
+    /// <summary>
+    /// 🚨 The ONE sanctioned way a post leaves a hub under another hub's address (#6553): a parent
+    /// CARRYING a delivery its hosted hub posted but can no longer send itself (a correlated reply or
+    /// a release posted during that hub's teardown). Only this assembly can set it.
+    ///
+    /// <para>Every other post is stamped with the address of the hub that actually posts it
+    /// (<see cref="MessageHub.Post{TMessage}"/>): a <see cref="Sender"/> the caller wrote is
+    /// overwritten, so a hub guard that decides by sender — the stamped-field guard admitting only
+    /// the owning hub — cannot be passed by code that merely names another hub's address.</para>
+    /// </summary>
+    internal bool CarriedForHostedHub { get; init; }
+
+    /// <summary>Marks these options as carried by a parent for one of its hosted hubs (see
+    /// <see cref="CarriedForHostedHub"/>).</summary>
+    internal PostOptions CarriedByParent() => this with { CarriedForHostedHub = true };
 
     internal string MessageId { get; init; } = Guid.NewGuid().AsString();
     /// <summary>

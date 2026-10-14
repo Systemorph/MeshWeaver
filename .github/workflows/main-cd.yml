@@ -2494,38 +2494,21 @@ jobs:
       # else. This image publishes BOTH architectures from ONE x64 host, so both copies are staged
       # and the builder picks the one for the RID it is running on.
       #
-      # The arm64 copy comes from the dotnet/sdk image of the EXACT SAME SDK VERSION the runner is
-      # using — one source of truth, no second pin to drift — and `docker create` + `docker cp`
-      # reads it out without ever executing an arm64 binary, so no qemu is needed.
+      # The arm64 copy comes from the SDK FEED — the linux-arm64 tarball of the EXACT SAME SDK
+      # VERSION, checked against the SHA-512 the release metadata publishes, generator directory
+      # only, nothing executed. NOT from mcr.microsoft.com/dotnet/sdk:<version>: setup-dotnet's
+      # `10.0.x` takes a new SDK the moment the metadata names it, MCR tags its image hours later,
+      # and in between this leg failed `manifest unknown` and withheld the whole set from the seal
+      # (10.0.402 release day: runs 38469625713, 38476972766, 38477708481). The feed is published
+      # with the metadata setup-dotnet resolved from, so it cannot lag the host SDK. Every RID is
+      # then checked for the compiler built FOR it (PE machine), not merely present. Self-tested
+      # in dotnet-test.yml; the script's header carries the measurement.
       - name: Stage the Razor source generator for linux-x64 and linux-arm64
         id: razor
         run: |
           set -euo pipefail
-          test "$(uname -m)" = "x86_64" \
-            || { echo "::error::this step assumes an x64 runner (it takes the host SDK's copy as the linux-x64 one)"; exit 1; }
-          SDK_VERSION="$(dotnet --version)"
-          SDK_ROOT="$(dotnet --list-sdks | sed -n "s|^${SDK_VERSION} \[\(.*\)\]$|\1|p" | head -1)"
-          HOST_SOURCE="$SDK_ROOT/$SDK_VERSION/Sdks/Microsoft.NET.Sdk.Razor/source-generators"
           ROOT="$RUNNER_TEMP/razor-generators"
-          echo "SDK $SDK_VERSION; host source-generators: $HOST_SOURCE"
-
-          mkdir -p "$ROOT/linux-x64" "$ROOT/linux-arm64"
-          cp "$HOST_SOURCE"/*.dll "$ROOT/linux-x64/"
-
-          IMAGE="mcr.microsoft.com/dotnet/sdk:$SDK_VERSION"
-          docker pull --platform linux/arm64 "$IMAGE"
-          CID="$(docker create --platform linux/arm64 "$IMAGE")"
-          trap 'docker rm -f "$CID" >/dev/null 2>&1 || true' EXIT
-          docker cp "$CID:/usr/share/dotnet/sdk/$SDK_VERSION/Sdks/Microsoft.NET.Sdk.Razor/source-generators/." \
-            "$ROOT/linux-arm64/"
-
-          # 🚨 Fail closed. An empty or half-staged RID ships an image whose Razor builds fail on
-          # exactly one architecture — which nothing in this pipeline would notice.
-          for rid in linux-x64 linux-arm64; do
-            test -f "$ROOT/$rid/Microsoft.CodeAnalysis.Razor.Compiler.dll" \
-              || { echo "::error::no Razor compiler staged for $rid"; exit 1; }
-            echo "$rid: $(ls "$ROOT/$rid" | tr '\n' ' ')"
-          done
+          python3 .github/scripts/stage-razor-generators.py "$ROOT"
           echo "root=$ROOT" >> "$GITHUB_OUTPUT"
       # The module-libraries SHELF: the curated additional libraries a container-built module may
       # bind (tools/MeshWeaver.ModuleLibraries). One publish — the assemblies are AnyCPU IL, so
@@ -3172,13 +3155,14 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ needs.gate.outputs.sha }}
-      # 🚨 The plugins are BUILT HERE, in the same run and against the same image as the platform's
-      # own content — maintainer decision 2026-08-26 ("run full plugin build in main memex build";
-      # "plugins should not have a lane in this sense"). One run, one framework identity, one
-      # sealed publish: a plugin bundle can no longer carry bytes from a framework that is not the
-      # one shipping (#1814's class), and its version is the version THIS run computed (#695's
-      # class — see the publish step). Same repo as portal-image's checkout; PlatformBakeLaneGuard
-      # asserts it is the only foreign repository in this file.
+      # 🚨 This job bakes and publishes the PLATFORM's own content (`meshweaver-content`) and
+      # nothing else. Core CD no longer builds, bakes or seals any MeshWeaver.Plugins content: the
+      # `plugins-modules` / `plugins-bake` / `report-plugins-seal` legs were removed by #6143
+      # (policy `platform-module-deploy-separate`, Doc/Architecture/PlatformAndModuleDeploy). The
+      # ONLY writer of the `plugins` publication is MeshWeaver.Plugins' own CI, through
+      # `node-repo-publish-bake.yml`; this run merely READS that sealed publication in
+      # `published-modules` below. Sealing it per package instead of per commit is in flight
+      # (Systemorph/MeshWeaver.Plugins#3507). The checkout is this repository at the gate's sha.
       - name: "Preflight: the publish targets must be provisioned"
         run: |
           set -euo pipefail

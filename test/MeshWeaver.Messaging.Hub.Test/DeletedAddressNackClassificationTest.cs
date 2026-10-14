@@ -108,6 +108,9 @@ public class DeletedAddressNackClassificationTest(ITestOutputHelper output) : Hu
         failure.Failure.Message.Should().NotContain("shutting down",
             "IsTransientOwnerFailure matches 'is shutting down' anywhere in the message, which "
             + "would re-classify this verdict as retryable and restore the silent park");
+        failure.Failure.NodeAbsent.Should().BeTrue(
+            "the tombstone is the sender's own proof that no node exists at this address; it must "
+            + "travel TYPED so a writer maps it to MeshNodeErrorCode.NotFound without parsing (#6626)");
     }
 
     // ── The SECOND door into the same NACK: a handler that throws HubDisposingException ─────────
@@ -173,6 +176,8 @@ public class DeletedAddressNackClassificationTest(ITestOutputHelper output) : Hu
         failure.Failure.Message.Should().NotContain("shutting down",
             "IsTransientOwnerFailure matches 'is shutting down' anywhere in the message; leaving "
             + "the raw exception text in would re-classify the verdict as retryable");
+        failure.Failure.NodeAbsent.Should().BeTrue(
+            "both tombstone doors stamp the typed absence, or a writer sees Unknown for one of them (#6626)");
     }
 
     [Fact(Timeout = 30_000)]
@@ -190,6 +195,9 @@ public class DeletedAddressNackClassificationTest(ITestOutputHelper output) : Hu
             "no tombstone means the address is recycling and WILL come back; answering NotFound "
             + "here would tear down the sync stream's keep-alive and change-feed resubscribe latch "
             + "— the regression the transient classification exists to prevent (#672)");
+        failure.Failure.NodeAbsent.Should().BeFalse(
+            "a recycling address still has its node; stamping it absent would turn a retryable "
+            + "refusal into a NotFound verdict for the writer (#6626)");
     }
 
     /// <summary>

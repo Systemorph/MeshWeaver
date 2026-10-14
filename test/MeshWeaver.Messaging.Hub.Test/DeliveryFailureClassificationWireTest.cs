@@ -58,6 +58,27 @@ public class DeliveryFailureClassificationWireTest(ITestOutputHelper output) : H
     }
 
     /// <summary>
+    /// The router's typed "no node at this path" stamp is what a writer classifies on (#6626), so it
+    /// must survive the JSON transport exactly like <see cref="DeliveryFailure.ErrorType"/>.
+    /// </summary>
+    [Fact]
+    public void TheNodeAbsentStamp_SurvivesTheRoundTrip()
+    {
+        var options = GetHost().JsonSerializerOptions;
+        var failure = new DeliveryFailure(ADelivery())
+        {
+            ErrorType = ErrorType.NotFound,
+            NodeAbsent = true,
+            Message = "No node found at 'type/Broken/instance'.",
+        };
+
+        var json = JsonSerializer.Serialize(failure, options);
+        var round = JsonSerializer.Deserialize<DeliveryFailure>(json, options)!;
+
+        round.NodeAbsent.Should().BeTrue("serialized as: {0}", json);
+    }
+
+    /// <summary>
     /// Every classification, not just the one that happened to be caught. A value that does not
     /// survive is worse than useless: it reads as <see cref="ErrorType.Unknown"/>, which callers
     /// treat as "unclassified" rather than "this failed to transmit".

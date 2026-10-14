@@ -48,6 +48,28 @@
         public ButtonControl WithNavigateToHref(object navigateToHref)
             => this with { NavigateToHref = navigateToHref };
 
+        /// <summary>
+        /// When true, <see cref="NavigateToHref"/> opens in a NEW browser tab instead of the current
+        /// one. The renderer then draws the button as a real link —
+        /// <c>&lt;a href="…" target="_blank" rel="noopener"&gt;</c> — so the browser opens the tab
+        /// from the viewer's own click and no pop-up blocker refuses it (a tab opened by script after
+        /// a server round trip is blocked). <c>rel="noopener"</c> is always set with
+        /// <c>target="_blank"</c>, so the opened page gets no handle on the portal's window.
+        /// Ignored when <see cref="NavigateToHref"/> is not set. Use it for an external page the
+        /// viewer should not leave the portal for — a payment provider's billing page, a document
+        /// on another site. See <c>Doc/GUI/ButtonPendingState</c> → "Opening in a new tab".
+        /// </summary>
+        public object? OpenInNewTab { get; init; }
+
+        /// <summary>
+        /// Returns a copy whose <see cref="NavigateToHref"/> opens in a new browser tab
+        /// (<see cref="OpenInNewTab"/>).
+        /// </summary>
+        /// <param name="openInNewTab">True to open in a new tab; false for the current tab (the default).</param>
+        /// <returns>A new <see cref="ButtonControl"/> with <see cref="OpenInNewTab"/> set.</returns>
+        public ButtonControl WithOpenInNewTab(bool openInNewTab = true)
+            => this with { OpenInNewTab = openInNewTab };
+
 
         /// <summary>
         /// Where the client navigates the moment the owner ACCEPTS this button's click — i.e. when the

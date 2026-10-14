@@ -178,10 +178,29 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
 
     /// <summary>The instance behind forwarded registration <paramref name="index"/> of
     /// <paramref name="module"/>'s CURRENT generation — what every root forwarder resolves.</summary>
-    public object ResolveModuleService(string module, int index) =>
+    public object ResolveModuleService(string module, int index) => ResolveModuleService(module, index, null);
+
+    /// <summary>As <see cref="ResolveModuleService(string, int)"/>, for <paramref name="caller"/> — the
+    /// root-side scope resolving (a Blazor circuit's, a request's, a hub's), or null (MeshWeaver#6584,
+    /// <see cref="ModuleServices.Resolve(IServiceProvider, int, Autofac.ILifetimeScope?)"/>).</summary>
+    /// <param name="module">The module's entry-assembly name.</param>
+    /// <param name="index">The registration's index.</param>
+    /// <param name="caller">The root-side scope resolving, or null.</param>
+    public object ResolveModuleService(string module, int index, Autofac.ILifetimeScope? caller) =>
         (Current(module)?.Services ?? throw new InvalidOperationException(
             $"Module {module} holds no service scope in this mesh."))
-        .Resolve(Root, index);
+        .Resolve(Root, index, caller);
+
+    /// <summary>
+    /// The instance behind registration <paramref name="index"/> of <paramref name="module"/>'s CURRENT
+    /// generation, or null when there is none — read off ONE snapshot of that generation
+    /// (MeshWeaver#6557). A live uninstall or a boot withdrawal can remove and dispose the generation
+    /// at any moment; a check of <see cref="Current"/> followed by <see cref="ResolveModuleService(string, int)"/>
+    /// reads it twice and faults when it went in between. Here the generation read once is the one
+    /// resolved, and its disposal — before or during the resolve — answers null: the member is absent.
+    /// </summary>
+    internal object? TryResolveCurrentModuleService(string module, int index) =>
+        Current(module)?.Services is { } services ? services.TryResolve(Root, index) : null;
 
     /// <summary>The scope of <paramref name="module"/>'s CURRENT generation.</summary>
     public IServiceProvider? ModuleScope(string module) =>
@@ -198,11 +217,11 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
     internal IServiceProvider? ModuleScopeSeenFrom(string module, ModuleSwapStage? stage) =>
         (stage?.Get(module) ?? Current(module))?.Services?.Scope(Root);
 
-    /// <summary>As <see cref="ResolveModuleService"/>, seen from a container of <paramref name="stage"/>.</summary>
-    internal object ResolveModuleServiceSeenFrom(string module, int index, ModuleSwapStage? stage) =>
+    /// <summary>As <see cref="ResolveModuleService(string, int, Autofac.ILifetimeScope?)"/>, seen from a container of <paramref name="stage"/>.</summary>
+    internal object ResolveModuleServiceSeenFrom(string module, int index, ModuleSwapStage? stage, Autofac.ILifetimeScope? caller) =>
         ((stage?.Get(module) ?? Current(module))?.Services ?? throw new InvalidOperationException(
             $"Module {module} holds no service scope in this mesh."))
-        .Resolve(Root, index);
+        .Resolve(Root, index, caller);
 
     /// <summary>
     /// 🚨 <b>Built before published</b> (MeshWeaver#6542): builds every shared instance of
@@ -232,10 +251,31 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
     }
 
     private ImmutableList<IncompatibleModule> notBuilt = [];
+    private int publicationClaimed;
 
     /// <summary>The modules whose shared instances could not be built at boot, so were never published
-    /// — served as <see cref="IncompatibleModule"/> records by <see cref="ModuleOwnedRootSource"/>.</summary>
+    /// — served as <see cref="IncompatibleModule"/> records by the mesh's <see cref="InstalledModules"/>
+    /// registry, on every container kind (MeshWeaver#6557).</summary>
     internal ImmutableList<IncompatibleModule> NotBuilt => notBuilt;
+
+    /// <summary>Claims the ONE boot publication (<see cref="BuildAllBeforePublish"/>) for the caller;
+    /// false when somebody already claimed it. Whoever claims it runs it.</summary>
+    internal bool TryClaimPublication() => Interlocked.Exchange(ref publicationClaimed, 1) == 0;
+
+    /// <summary>
+    /// Runs the boot publication unless it was already claimed — what the registry's own singleton
+    /// registration calls on its first resolve (MeshWeaver#6557), so every host kind withdraws a module
+    /// whose shared instances cannot be built. The Autofac root claims it earlier, outside any lock
+    /// (<see cref="MeshWeaver.ServiceProvider.IRootContainerBuilt"/>); a host built with plain MS DI
+    /// <c>BuildServiceProvider()</c> reaches it here, at the first read of the registry. Claimed BEFORE it
+    /// runs, so a resolve of the registry from inside a constructor it builds does not run it again.
+    /// </summary>
+    internal ModuleContexts PublishOnce()
+    {
+        if (TryClaimPublication())
+            BuildAllBeforePublish();
+        return this;
+    }
 
     /// <summary>
     /// 🚨 <b>Built before published, at boot</b> (MeshWeaver#6542): called once the root container is

@@ -120,6 +120,36 @@ public class StampedFieldsTest(ITestOutputHelper output) : MonolithMeshTestBase(
     }
 
     /// <summary>
+    /// 🚨 The impersonation (#6553): the guard admits a patch whose sender is the node's own hub, so
+    /// a client that WRITES the node's address as its sender must not be that hub. The posting hub
+    /// stamps its own address over the forged one, the guard sees the real poster and refuses — and
+    /// the refusal comes back to the real poster, which a delivery that left under the forged address
+    /// could never do.
+    /// </summary>
+    [Fact(Timeout = 180000)]
+    public async Task ClientPatch_ForgingTheOwningHubAsSender_IsStillRefused()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var path = await CreateConfirmedAndStamped(StampedProbeTypeProvider.Declaring);
+        var owner = new Address(path);
+
+        var failure = await Record.ExceptionAsync(() => RequestHub
+            .Observe<PatchDataResponse>(
+                new PatchDataRequest(new MeshNodeReference(),
+                    new RawJson("{\"content\":{\"confirmedBy\":\"victim\"}}")),
+                o => o.WithTarget(owner) with { Sender = owner })
+            .Take(1)
+            .Timeout(60.Seconds())
+            .Await(ct));
+
+        failure.Should().NotBeNull("a patch claiming the owner's address is still a client patch");
+        failure!.Message.Should().Contain("confirmedBy",
+            "the guard judged the real poster and refused naming the field — not a timeout of a reply sent to the forged sender");
+        var node = await WaitFor(path, c => c.ConfirmedBy == Stamp, "the stored value is still the owner's stamp");
+        ContentOf(node)!.ConfirmedBy.Should().Be(Stamp);
+    }
+
+    /// <summary>
     /// A synced subscriber's write-back arrives as a data change, not a merge patch — the data layer's
     /// half of the guard must refuse it the same way, and the same write-back on a type that declares
     /// nothing must commit (the control: the refusal is the declaration's doing, not the route's).

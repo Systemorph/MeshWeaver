@@ -29,6 +29,15 @@ public interface ITypeDefinition
     /// <returns>The key value identifying the instance.</returns>
     object GetKey(object instance);
     /// <summary>
+    /// Extracts the identity key for the given instance, or returns <c>null</c> when the instance
+    /// carries no key VALUE. Use it where a keyless instance is an expected input to report and
+    /// skip (a bulk update), because <see cref="GetKey"/> throws for one. A type with no key
+    /// MAPPING at all still throws: that is a configuration error, not a property of the instance.
+    /// </summary>
+    /// <param name="instance">The instance whose key should be returned.</param>
+    /// <returns>The key value, or <c>null</c> when the instance has none.</returns>
+    object? GetKeyOrNull(object instance) => GetKey(instance);
+    /// <summary>
     /// An optional sort position for the type, or <c>null</c> if unspecified.
     /// </summary>
     int? Order { get; }

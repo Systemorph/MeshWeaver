@@ -917,7 +917,10 @@ internal class RoutingGrain(
                             : $"No node found at '{addressPath}'. Closest ancestor is '{resolution.Prefix}' (remainder='{resolution.Remainder}').";
                         logger.LogWarning("[ROUTE] NotFound: {FailureMessage}", failureMessage);
                         RoutingGrainTrace.Write($"RoutingGrain.RouteMessage NOT_FOUND id={delivery.Id} addr={addressPath} sender={delivery.Sender}");
-                        PostFailureToSender(failureMessage, ErrorType.NotFound);
+                        // NodeAbsent: the resolver found no node at the exact path — the typed
+                        // fact a writer maps to MeshNodeErrorCode.NotFound (#6626).
+                        PostFailure(delivery, address, streamProvider, grainFactory, failureMessage,
+                            ErrorType.NotFound, nodeAbsent: true);
                         return Observable.Return(Unit.Default);
                     }
 
@@ -993,7 +996,8 @@ internal class RoutingGrain(
         IGrainFactory grainFactory,
         string failureMessage,
         ErrorType errorType,
-        bool targetUnserved = false)
+        bool targetUnserved = false,
+        bool nodeAbsent = false)
     {
         if (delivery.Sender == null) return;
         // The answer-once contract — see AnswerPolicy for what it forbids and why. 🚨 Read the
@@ -1021,6 +1025,8 @@ internal class RoutingGrain(
                 // answered. The stamp is the eviction gate; the ErrorType beside it says whether
                 // the SENDER should keep its own recovery armed, and the two are independent.
                 TargetUnserved = targetUnserved,
+                // Stamped ONLY where path resolution found no node at the exact target path.
+                NodeAbsent = nodeAbsent,
             },
             new PostOptions(address)
                 .WithTarget(delivery.Sender)

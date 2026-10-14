@@ -700,9 +700,18 @@ PE machine `0xFD1D` on linux-x64, `0xD11D` on linux-arm64 and `0xEC20` on osx-ar
 machine XOR'd with the operating system's R2R marker), and the wrong one throws
 `BadImageFormatException`. `mw-plugin-test` publishes BOTH architectures from ONE x64 build host, so
 copying the build machine's SDK once would have shipped an arm64 image that cannot compile a single
-Blazor project. CD stages one directory per RID (`razor-generators/<rid>/`, the arm64 copy read out
-of the dotnet/sdk image of the same SDK version with `docker create` + `docker cp`, so no emulation
-is involved), and the builder picks the directory for the RID it is running on.
+Blazor project. CD stages one directory per RID (`razor-generators/<rid>/`), and the builder picks
+the directory for the RID it is running on. The arm64 copy is extracted from the linux-arm64 SDK
+tarball of the same SDK version on the .NET feed, checked against the SHA-512 in the release
+metadata, so nothing is executed and no emulation is involved
+(`.github/scripts/stage-razor-generators.py`). It used to be read out of the
+`mcr.microsoft.com/dotnet/sdk:<version>` image, and that tied the seal to a second clock: CD's
+`setup-dotnet` (`10.0.x`) takes a new SDK as soon as the release metadata names it, MCR tags the
+image hours later, and in between the tester leg failed `manifest unknown`. On the 10.0.402 release
+day that withheld three main-cd runs (38469625713, 38476972766, 38477708481) from the seal. The
+feed's copy is byte-identical to the image's (measured for 10.0.402). Each staged compiler is also
+checked for the PE machine of its RID, so a copy of the wrong architecture fails the leg rather
+than shipping.
 
 ### What it refuses, and why
 

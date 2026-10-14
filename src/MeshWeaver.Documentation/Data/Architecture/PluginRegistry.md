@@ -65,6 +65,13 @@ with no admin step). Registration then *seeds* those entries into the grant node
 the single authority, so an admin can still revoke or extend per instance — and private/paid
 sources are never listed there. With no defaults configured, registering grants exactly nothing.
 
+The seed is **declared on the registry's deployment record** — `defaultGrants` on
+`Hosting/Deployment` (`DeploymentContent.DefaultGrants`, e.g. `"defaultGrants": ["Plugins/*"]`) —
+and every renderer delivers it from there: the Helm values' `pluginCatalog.defaultGrants`, the
+operator's boot catalog file and the Aspire portal keys, all as `PluginCatalog:DefaultGrants:N`.
+Before the field existed the seed lived only in a hand-edited Helm overlay, so a re-render from the
+record dropped it and the deploy-drift sentinel reported it as never delivered (Memex#116).
+
 **First-startup auto-registration** removes the remaining hand-off. A platform admin mints a
 *registration key* (`mwr_…` — Admin app `/Admin` ▸ Instance grants ▸ Registration keys;
 reusable, revocable, optionally expiring) and puts it in the deployment scaffold. A new install
@@ -499,6 +506,18 @@ rendered as one titled catalog section each. It lists each registry's packages v
 `RegistryPackageSource` (an `IPackageSource` over HTTP, on the mesh's Http I/O pool), and joins them
 against this instance's install registry — the `Package` nodes under the `Plugins` partition — to
 render **Install / Update / Installed** per module.
+
+On a deployed instance the single URL is **declared on its deployment record** — `registryUrl` on
+`Hosting/Deployment` (`DeploymentContent.RegistryUrl`), trimmed and without a trailing slash — and
+every renderer delivers it from there: the Helm values' `pluginCatalog.registryUrl`, the operator's
+boot catalog file and the Aspire portal keys, all as `PluginCatalog:RegistryUrl`. The named list is
+the record's consumer `pluginRepos` mounts. A **registry may name itself** here, and that is
+deliberate, not leftover configuration: it makes the registry a consumer of its own `/api/plugins`,
+so the update reconciler, the Store's registry section, module refresh and the pin audit act on it
+exactly as on any other instance. The token half (`PluginCatalog:RegistryToken`) is a credential and
+comes from the vault only — never from the record. Before the field existed the URL lived only in a
+hand-edited Helm overlay, so a re-render from the record dropped it and the deploy-drift sentinel
+reported it as never delivered (Memex#116).
 
 ### Categories first, packages per category
 

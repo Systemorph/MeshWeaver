@@ -58,16 +58,37 @@ public static class InboxQueries
     /// it is; otherwise the page's is appended, and the parser takes the LAST one it reads.
     /// </summary>
     /// <param name="query">A resolved leg query.</param>
-    public static string Bounded(string query)
+    public static string Bounded(string query) => Bounded(query, timeField: null);
+
+    /// <summary>
+    /// <see cref="Bounded(string)"/> for a leg timed by a content property
+    /// (<see cref="InboxQueryLeg.TimeField"/>): its projection keeps <c>content</c>, where the row
+    /// reads its time (<see cref="TimedRowProjection"/>).
+    /// </summary>
+    /// <param name="query">The leg's resolved query.</param>
+    /// <param name="timeField">The leg's time field, or null for <see cref="RowProjection"/>.</param>
+    public static string Bounded(string query, string? timeField)
     {
         var parsed = new QueryParser().Parse(query);
         var limit = EffectiveLimit(query);
+        var (projection, fields) = string.IsNullOrWhiteSpace(timeField)
+            ? (RowProjection, RowFields)
+            : (TimedRowProjection, TimedRowFields);
         var projected = parsed.Select is { } select && select.Order(StringComparer.Ordinal)
-            .SequenceEqual(RowFields.Order(StringComparer.Ordinal), StringComparer.Ordinal);
+            .SequenceEqual(fields.Order(StringComparer.Ordinal), StringComparer.Ordinal);
         return query
                + (parsed.Limit == limit ? string.Empty : $" limit:{limit.ToString(System.Globalization.CultureInfo.InvariantCulture)}")
-               + (projected ? string.Empty : " " + RowProjection);
+               + (projected ? string.Empty : " " + projection);
     }
+
+    /// <summary>
+    /// The projection of a leg timed by a content property: <see cref="RowProjection"/> plus
+    /// <c>content</c>, where the row reads its time.
+    /// </summary>
+    public const string TimedRowProjection = RowProjection + ",content";
+
+    /// <summary>The fields a timed row reads — <see cref="TimedRowProjection"/> as a list.</summary>
+    internal static ImmutableArray<string> TimedRowFields { get; } = [.. TimedRowProjection["select:".Length..].Split(',')];
 
     /// <summary>The fields a row reads — <see cref="RowProjection"/> as a list.</summary>
     internal static ImmutableArray<string> RowFields { get; } = [.. RowProjection["select:".Length..].Split(',')];
@@ -158,6 +179,9 @@ public static class InboxQueries
         // stamped `true` and read matches it — a positive match on `false` would select nothing.
         Notifications(unread: true),
         Notifications(unread: false),
+        // Approval requests — their own source, shown by default (the notification feed is not).
+        Approvals(unread: true),
+        Approvals(unread: false),
         // The viewer's own stored mail, inbound and not archived. Both defaults (Inbound, New) are
         // omitted from stored JSON, so the legs negate the stamped values they exclude: unread is
         // "not Read", read is "Read".
@@ -202,11 +226,63 @@ public static class InboxQueries
         Unread = unread,
         Band = InboxBand.NeedsYou,
         Order = unread ? 10 : 11,
+        // Timed by when it ARRIVED: reading a notification flips isRead, and that write must not
+        // move it ahead of newer ones.
+        TimeField = "createdAt",
+        // Every notification that is NOT an approval request: those are the Approvals source.
         Query = $"namespace:{ViewerToken}/{NotificationService.SatelliteSegment} "
                 + $"nodeType:{NotificationNodeType.NodeType} -content.dismissed:true "
+                + $"content.notificationType:{string.Join("|", StampedNotificationTypes)} "
                 + (unread ? "-content.isRead:true " : "content.isRead:true ")
-                + $"sort:CreatedAt-desc {RowProjection}",
+                + $"sort:CreatedAt-desc {TimedRowProjection}",
     };
+
+    /// <summary>
+    /// The approval requests addressed to the viewer — the "approval required" notifications every
+    /// approval flow sends its approver (document approvals, instance actions, …), not put away.
+    /// Shown by default: they need the viewer. 🚨 <see cref="NotificationType.ApprovalRequired"/> is
+    /// the enum DEFAULT and is omitted from stored JSON, so the leg NEGATES every stamped type
+    /// (<see cref="StampedNotificationTypes"/>) rather than matching it.
+    /// </summary>
+    private static InboxQueryLeg Approvals(bool unread) => new()
+    {
+        Source = ApprovalsSource,
+        SourceLabelKey = "inbox.source.Approvals",
+        SourceIcon = ApprovalsIcon,
+        Unread = unread,
+        Band = InboxBand.NeedsYou,
+        Order = unread ? 5 : 6,
+        // Timed by when the request ARRIVED, like every notification: reading it must not reorder.
+        TimeField = "createdAt",
+        Query = $"namespace:{ViewerToken}/{NotificationService.SatelliteSegment} "
+                + $"nodeType:{NotificationNodeType.NodeType} -content.dismissed:true "
+                + string.Concat(StampedNotificationTypes.Select(t => $"-content.notificationType:{t} "))
+                + (unread ? "-content.isRead:true " : "content.isRead:true ")
+                + $"sort:CreatedAt-desc {TimedRowProjection}",
+    };
+
+    /// <summary>The source id of the approval requests.</summary>
+    public const string ApprovalsSource = "Approvals";
+
+    private const string ApprovalsIcon = "✅";
+
+    /// <summary>
+    /// Every <see cref="NotificationType"/> other than the default
+    /// <see cref="NotificationType.ApprovalRequired"/> — the values that ARE stamped in stored JSON.
+    /// 🚨 A type appended to the enum must be added here, or it would be listed as an approval;
+    /// <c>InboxSelectAndDeleteTest.EveryStampedNotificationType_IsClassified</c> fails until it is.
+    /// </summary>
+    // A computed property, not an initialized one: BuiltIn (declared above) reads it while the type
+    // initializes, before a later static initializer would have run.
+    internal static ImmutableArray<string> StampedNotificationTypes =>
+    [
+        nameof(NotificationType.ApprovalGiven),
+        nameof(NotificationType.ApprovalRejected),
+        nameof(NotificationType.General),
+        nameof(NotificationType.AccessGranted),
+        nameof(NotificationType.ChatReady),
+        nameof(NotificationType.System),
+    ];
 
     private static InboxQueryLeg Mail(bool unread) => new()
     {
@@ -216,11 +292,14 @@ public static class InboxQueries
         Unread = unread,
         Band = InboxBand.NeedsYou,
         Order = unread ? 20 : 21,
+        // Timed by when it was RECEIVED: marking a mail read is a write, and it must not move the
+        // mail ahead of newer ones. The bound still keeps the newest-touched (LastModified).
+        TimeField = "receivedAt",
         Query = $"namespace:{ViewerToken}/{EmailNodeType.UserEmailSegment} "
                 + $"nodeType:{EmailNodeType.NodeType} -content.status:{nameof(EmailStatus.Archived)} "
                 + $"-content.direction:{nameof(EmailDirection.Outbound)} "
                 + (unread ? $"-content.status:{nameof(EmailStatus.Read)} " : $"content.status:{nameof(EmailStatus.Read)} ")
-                + $"sort:LastModified-desc {RowProjection}",
+                + $"sort:LastModified-desc {TimedRowProjection}",
     };
 
     /// <summary>
