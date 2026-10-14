@@ -27,9 +27,9 @@ namespace MeshWeaver.Graph.Test;
 /// </summary>
 public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private const string DeleteArea = InboxLayoutArea.AreaName + "/Commands/Delete";
-    private const string UndoArea = InboxLayoutArea.AreaName + "/Commands/Undo";
-    private const string GridArea = InboxLayoutArea.AreaName + "/Grid";
+    private const string DeleteArea = InboxLayoutArea.AreaName + "/Main/Commands/Delete";
+    private const string UndoArea = InboxLayoutArea.AreaName + "/Main/Commands/Undo";
+    private const string GridArea = InboxLayoutArea.AreaName + "/Main/Grid";
 
     /// <inheritdoc />
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
@@ -144,8 +144,19 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
         (await rows.Buffer(TimeSpan.FromMilliseconds(600)).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct))
             .Count.Should().BeLessThanOrEqualTo(2, "an idle inbox writes nothing");
 
+        // There is no order to choose (policy inbox-newest-first): a stored order changes nothing.
         Set("order", JsonValue.Create(InboxOrder.Title));
-        await Titles("the order select re-orders the grid", "Alpha invoice", "Zulu workshop");
+        await Titles("always newest first, whatever order is stored", "Zulu workshop", "Alpha invoice");
+
+        // The side menu: a category shows only its rows — here even a source switched OFF by
+        // default would be reached by its category — and All brings everything back.
+        void Pick(string category) => Set("category", JsonValue.Create(category));
+        Pick("Notifications");
+        await Titles("the Notifications category lists only notifications", "Alpha invoice");
+        Pick("Mail");
+        await Titles("the Mail category lists only mail", "Zulu workshop");
+        Pick(string.Empty);
+        await Titles("All lists everything again", "Zulu workshop", "Alpha invoice");
 
         Set($"sources/{InboxRows.SourceKey("Mail")}", JsonValue.Create(false));
         await Titles("a source switched off leaves the grid", "Alpha invoice");
@@ -153,14 +164,14 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
             .Should().Within(TestTimeouts.Convergence).Match(t => t != null && t.StartsWith("1 "),
                 "the switch hides a mail that needs the viewer, and the page says so", ct);
         Set($"sources/{InboxRows.SourceKey("Mail")}", JsonValue.Create(true));
-        await Titles("and returns when switched on", "Alpha invoice", "Zulu workshop");
+        await Titles("and returns when switched on, newest first", "Zulu workshop", "Alpha invoice");
         await stream.GetDataStream<string>(new JsonPointerReference(LayoutAreaReference.GetDataPointer(InboxLayoutArea.HiddenId)))
             .Should().Within(TestTimeouts.Convergence).Match(t => string.IsNullOrEmpty(t), "nothing is hidden any more", ct);
 
         Set("search", JsonValue.Create("workshop"));
         await Titles("a term is evaluated by the query engine, per leg", "Zulu workshop");
         Set("search", JsonValue.Create(""));
-        await Titles("clearing the box restores the list", "Alpha invoice", "Zulu workshop");
+        await Titles("clearing the box restores the list, newest first", "Zulu workshop", "Alpha invoice");
     }
 
     /// <summary>
@@ -197,7 +208,7 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
         delete.Shortcut.Should().Be("Backspace|Delete", "Backspace deletes the ticked rows, as in a mail client");
 
         var toggle = (ToggleButtonControl)(await stream.GetControlStream(
-                $"{InboxLayoutArea.AreaName}/Commands/Sources/Toggle{InboxRows.SourceKey("Notifications")}")
+                $"{InboxLayoutArea.AreaName}/Main/Commands/Sources/Toggle{InboxRows.SourceKey("Notifications")}")
             .Should().Within(TestTimeouts.Convergence).Match(c => c is ToggleButtonControl, "the notifications toggle", ct))!;
         toggle.Icon.Should().NotBeNull("a source is switched by its symbol");
         (await stream.GetDataStream<InboxFilter>(new JsonPointerReference(LayoutAreaReference.GetDataPointer(InboxRows.FilterId)))
@@ -421,8 +432,12 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
         foreach (var leg in new[] { "namespace:alice/_Thread nodeType:Thread", "namespace:alice/_Thread select:path,content" })
             parser.Parse(InboxQueries.Bounded(leg)).Select.Should().BeEquivalentTo(InboxQueries.RowFields, new JsonSerializerOptions(),
                 because: $"'{leg}' must not fetch whole bodies to render one row");
-        var built = InboxQueries.BuiltIn.Select(l => l.Query.Replace(InboxQueries.ViewerToken, "alice")).First();
-        InboxQueries.Bounded(built).Should().Be($"{built} limit:{InboxQueries.LegLimit}", "a leg already projected is not re-projected");
+        foreach (var builtIn in InboxQueries.BuiltIn)
+        {
+            var built = builtIn.Query.Replace(InboxQueries.ViewerToken, "alice");
+            InboxQueries.Bounded(built, builtIn.TimeField).Should().Be($"{built} limit:{InboxQueries.LegLimit}",
+                $"a leg already projected (for its time, when timed) is not re-projected: {builtIn.Source}");
+        }
         InboxQueries.BuiltIn.Should().OnlyContain(leg => leg.Query.Contains("sort:"),
             "the bound keeps the NEWEST rows only because every leg sorts newest first");
     }
@@ -562,22 +577,6 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
     public void ASourceWithoutASymbol_IsToggledByItsInitial(string label, string expected)
         => InboxLayoutArea.Initial(label).Should().Be(expected);
 
-    /// <summary>
-    /// "By title" is alphabetical in the VIEWER's language: for a German viewer Ä sorts with A, not
-    /// after Z as it does by code point.
-    /// </summary>
-    [Fact]
-    public void ByTitle_IsAlphabeticalInTheViewersLanguage()
-    {
-        var mail = new InboxSection(InboxBand.NeedsYou, "Mail", 20, "q");
-        ImmutableList<InboxRow> rows = [.. new[] { "Zebra", "Ärger", "apfel" }.Select((title, i) =>
-            InboxRows.Of(new MeshNode("n" + i, "alice/_X") { Name = title }, mail, null, null))];
-
-        InboxRows.Apply(rows, new InboxFilter { Order = InboxOrder.Title }, InboxLayoutArea.ViewerCulture("de-CH"))
-            .Select(r => r.Title).Should().Equal("apfel", "Ärger", "Zebra");
-        // Control: by code point the umlaut lands last, which is what the comparer replaced.
-        rows.Select(r => r.Title).OrderBy(t => t, StringComparer.OrdinalIgnoreCase).Should().Equal("apfel", "Zebra", "Ärger");
-    }
 
     /// <summary>Only an inbound mail that is New or Read may be filed from the inbox.</summary>
     [Theory]
@@ -675,17 +674,18 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
     }
 
     /// <summary>
-    /// Every ordering the select offers — and an order the page does not know falls back to the
-    /// default, newest first.
+    /// 🚨 Always newest first (policy <c>inbox-newest-first</c>): whatever order a
+    /// stored filter names — an old one, or one the page does not know — the rows are by date, newest
+    /// first, never by band, title or source.
     /// </summary>
     [Theory]
-    [InlineData(InboxOrder.Importance, "urgentNew,urgentOld,doneNewest")]
+    [InlineData(InboxOrder.Importance, "doneNewest,urgentNew,urgentOld")]
     [InlineData(InboxOrder.Newest, "doneNewest,urgentNew,urgentOld")]
-    [InlineData(InboxOrder.Oldest, "urgentOld,urgentNew,doneNewest")]
+    [InlineData(InboxOrder.Oldest, "doneNewest,urgentNew,urgentOld")]
     [InlineData(InboxOrder.Title, "doneNewest,urgentNew,urgentOld")]
     [InlineData(InboxOrder.Source, "doneNewest,urgentNew,urgentOld")]
     [InlineData("SomethingElse", "doneNewest,urgentNew,urgentOld")]
-    public void TheChosenOrder_ArrangesTheRows(string order, string expected)
+    public void TheRows_AreAlwaysNewestFirst(string order, string expected)
     {
         var needs = new InboxSection(InboxBand.NeedsYou, "Mail", 20, "q1");
         var recent = new InboxSection(InboxBand.Recent, "Activities", 20, "q2");

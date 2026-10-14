@@ -94,7 +94,9 @@ each row needs its own state: a row-scoped click is keyed by the row's `Key` (a 
 `DataGridControl.RowKey` / `WithRowKey`), path, pointer or index. A row known only by its value has
 none, so while a click runs on such a control a click on another of its rows is **refused**
 ("Another action on this control is still running", `click.busyElsewhere`) rather than sharing — and
-overwriting — the running click's state. The window
+overwriting — the running click's state. So **a grid with a per-row action declares its row key**
+(`WithRowKey("path")`): otherwise a person acting on two rows in quick succession is refused on the
+second. The window
 is the click's own lifetime — once it settled, the next click is a new one; an action that must be
 idempotent across clicks (an approval that may only happen once) still says so in its own state, as
 the domain owner's watcher does. The session is per layout-area stream, so two viewers each get
@@ -187,6 +189,29 @@ client navigates to `href` immediately — without waiting for anything the acti
 |---|---|---|
 | `NavigateToHref` | at the click, before anything is sent | plain links styled as buttons |
 | `NavigateOnAccepted` | on the owner's acceptance; a refused click stays on the page and says why | "do X, then show me X happening" — approve → the run's live progress |
+
+## Opening in a new tab
+
+`ButtonControl.WithOpenInNewTab()` sets `OpenInNewTab` and makes `NavigateToHref` open in a **new
+browser tab**. The renderer then draws the button as a real link,
+`<a href="…" target="_blank" rel="noopener">`, so the tab opens from the viewer's own click.
+`rel="noopener"` is always set together with `target="_blank"`, so the opened page gets no handle
+on the portal's window. Without `NavigateToHref` the option does nothing.
+
+```csharp
+Controls.Button("Open billing page ↗")
+    .WithNavigateToHref(portalUrl)
+    .WithOpenInNewTab();
+```
+
+Use it for an external page the viewer should not leave the portal for: a payment provider's
+billing page, a document on another site.
+
+🚨 **A tab opened by script after a server round trip is blocked as a pop-up.** When the URL only
+exists after a click (a billing session the server creates on demand), the first click creates
+it, and the view then shows a second button that carries the URL and `WithOpenInNewTab()`. That
+second click is the viewer's own, and the browser honours it. Never try to open the tab from the
+click action itself.
 
 # Client contract
 

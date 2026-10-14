@@ -215,13 +215,37 @@ public static class ModuleServiceProvider
     /// module-type stand-ins. A singleton exposing none of them is left to its first resolve.</param>
     public static void BuildRootReachableSingletons(
         IServiceProvider moduleContainer, IServiceProvider root, Func<Service, bool> rootReachable)
+        => BuildRootReachableSingletons(moduleContainer, root, rootReachable, NoRegistriesElsewhere);
+
+    /// <summary>
+    /// As <see cref="BuildRootReachableSingletons(IServiceProvider, IServiceProvider, Func{Service, bool})"/>,
+    /// with the registrations a type a module DECLARES has in OTHER module containers — so a singleton
+    /// whose constructor takes another module's SCOPED type is recognised as reaching a scoped service
+    /// and is left to its first resolve. Without it the walk sees only this container and the root, and
+    /// the root is never asked about a module's type: the singleton was judged sound, built at boot, and
+    /// built the other module's scoped service with no caller, against scoped state nobody initialised —
+    /// which threw and withdrew the module.
+    /// </summary>
+    /// <param name="moduleContainer">A provider <see cref="Create(IServiceCollection, IServiceProvider, Func{Type, bool}, IEnumerable{ServiceDescriptor})"/>
+    /// built, not yet reachable from the root.</param>
+    /// <param name="root">The mesh's root provider — whose registrations the module's fallback resolves.</param>
+    /// <param name="rootReachable">The services the root reaches the module by.</param>
+    /// <param name="registrationsElsewhere">For a type a module declares, EVERY module container that
+    /// registers it and the service it is held under there — what <c>ModuleFallbackSource</c> resolves it
+    /// from. The walk skips the container it is currently in, so this must not pre-exclude the module the
+    /// walk started in: a nested walk (A → B → A) reaches A's registrations from inside B.</param>
+    public static void BuildRootReachableSingletons(
+        IServiceProvider moduleContainer, IServiceProvider root, Func<Service, bool> rootReachable,
+        Func<Type, IEnumerable<(IComponentRegistry Registry, Service Service)>> registrationsElsewhere)
     {
         ArgumentNullException.ThrowIfNull(moduleContainer);
         ArgumentNullException.ThrowIfNull(root);
         ArgumentNullException.ThrowIfNull(rootReachable);
+        ArgumentNullException.ThrowIfNull(registrationsElsewhere);
         if (moduleContainer.GetService<ILifetimeScope>() is not { } scope)
             return;
-        var walk = new ScopedDependencyWalk(scope.ComponentRegistry, root.GetService<ILifetimeScope>()?.ComponentRegistry);
+        var walk = new ScopedDependencyWalk(scope.ComponentRegistry, root.GetService<ILifetimeScope>()?.ComponentRegistry,
+            registrationsElsewhere);
         var registrations = scope.ComponentRegistry.Registrations
             .Where(r => ScopedDependencyWalk.IsSingleton(r)
                         && r.Services.Any(rootReachable)
@@ -238,6 +262,8 @@ public static class ModuleServiceProvider
             scope.ResolveComponent(new ResolveRequest(service, serviceRegistration, []));
         }
     }
+
+    private static IEnumerable<(IComponentRegistry Registry, Service Service)> NoRegistriesElsewhere(Type type) => [];
 
     /// <summary>
     /// One stand-in registration per resolver in <paramref name="resolvers"/>, each answering its own
@@ -643,6 +669,9 @@ internal sealed class ModuleFallbackSource(
                 .Select(rootRegistration => RegistrationBuilder
                     .ForDelegate(type, (context, _) => context.Resolve<RootResolutionScope>().Scope
                         .ResolveComponent(new ResolveRequest(service, rootRegistration, [])))
+                    // Names the root registration it resolves, so the scoped-dependency walk follows
+                    // exactly what this module's fallback reaches (ScopedDependencyWalk).
+                    .WithMetadata(ScopedDependencyWalk.StandsInFor, rootRegistration.Registration)
                     .ExternallyOwned()
                     .InstancePerDependency()
                     .CreateRegistration())
@@ -669,7 +698,7 @@ internal sealed class ModuleFallbackSource(
 /// <summary>
 /// Whether building a registration would build a SCOPED service, read STRUCTURALLY off the
 /// registrations — never off type names (MeshWeaver#6556,
-/// <see cref="ModuleServiceProvider.BuildRootReachableSingletons"/>). A reflection-activated
+/// <see cref="ModuleServiceProvider.BuildRootReachableSingletons(IServiceProvider, IServiceProvider, Func{Service, bool})"/>). A reflection-activated
 /// registration depends on every parameter type of its public constructors — a superset of the one
 /// Autofac picks, and over-approximating only leaves a singleton to its first resolve; a delegate or a
 /// provided instance names none. Followed through transients and the module's own singletons, and into
@@ -677,7 +706,10 @@ internal sealed class ModuleFallbackSource(
 /// module's fallback resolves there. A ROOT singleton ends the walk: it is the root's one instance,
 /// built in the root whoever asks. One walk per build, never shared.
 /// </summary>
-internal sealed class ScopedDependencyWalk(IComponentRegistry module, IComponentRegistry? root)
+internal sealed class ScopedDependencyWalk(
+    IComponentRegistry module,
+    IComponentRegistry? root,
+    Func<Type, IEnumerable<(IComponentRegistry Registry, Service Service)>>? elsewhere = null)
 {
     /// <summary>Which container a registration lives in — what its dependencies are looked up in.</summary>
     internal enum Side
@@ -701,32 +733,67 @@ internal sealed class ScopedDependencyWalk(IComponentRegistry module, IComponent
         registration.Sharing == InstanceSharing.Shared && registration.Lifetime is not Autofac.Core.Lifetime.RootScopeLifetime;
 
     /// <summary>Whether building <paramref name="registration"/> builds a scoped service on the way.</summary>
-    internal bool ReachesAScopedService(IComponentRegistration registration, Side side)
+    internal bool ReachesAScopedService(IComponentRegistration registration, Side side) =>
+        ReachesAScopedService(registration, side == Side.Module ? module : null);
+
+    // registry = the module container the registration lives in (this module's, or another module's a
+    // module-declared type is resolved from); null = the root.
+    private bool ReachesAScopedService(IComponentRegistration registration, IComponentRegistry? registry)
     {
         if (verdicts.TryGetValue(registration, out var known))
             return known;
         // Marked while in progress: a cycle reaches nothing new through itself.
         verdicts = verdicts.SetItem(registration, false);
         var verdict = Dependencies(registration)
-            .SelectMany(type => RegistrationsOf(type, side))
+            .SelectMany(type => RegistrationsOf(type, registry))
             .Any(dependency => IsScoped(dependency.Registration)
-                               || (!(dependency.Side == Side.Root && IsSingleton(dependency.Registration))
-                                   && ReachesAScopedService(dependency.Registration, dependency.Side)));
+                               || (!(dependency.Registry is null && IsSingleton(dependency.Registration))
+                                   && ReachesAScopedService(dependency.Registration, dependency.Registry)));
         verdicts = verdicts.SetItem(registration, verdict);
         return verdict;
     }
 
-    private IEnumerable<(IComponentRegistration Registration, Side Side)> RegistrationsOf(Type type, Side side)
+    /// <summary>The metadata key under which a module container's stand-in for a ROOT registration
+    /// (<see cref="ModuleFallbackSource"/>) names the root registration it resolves.</summary>
+    internal const string StandsInFor = "MeshWeaver.ModuleFallback.StandsInFor";
+
+    // 🚨 What a MODULE container answers for `type`, exactly as it resolves it: the module's own
+    // registrations; for a type a module DECLARES, the registrations in the other module containers
+    // that hold it (ModuleFallbackSource adds a stand-in for each, after the module's own — read THEIR
+    // lifetimes, or another module's SCOPED type looks like no dependency at all); and a root
+    // registration only where the module's fallback stands in for it. The fallback consults the root
+    // only when the module registers no `T` of its own, so a module that overrides a root-SCOPED `T`
+    // with its own singleton never reaches the root's `T` — and that unreachable registration must not
+    // mark a root-reachable singleton as scoped (it would then be left to its first resolve, and the
+    // #6542 lock inversion with it). registry = the module container asked; null = the root.
+    private IEnumerable<(IComponentRegistration Registration, IComponentRegistry? Registry)> RegistrationsOf(
+        Type type, IComponentRegistry? registry)
     {
         var service = new TypedService(type);
-        if (side == Side.Module)
-            foreach (var own in module.ServiceRegistrationsFor(service))
-                yield return (own.Registration, Side.Module);
+        if (registry is not null)
+        {
+            var any = false;
+            foreach (var own in registry.ServiceRegistrationsFor(service))
+            {
+                any = true;
+                yield return own.Registration.Metadata.TryGetValue(StandsInFor, out var stood)
+                             && stood is IComponentRegistration inRoot
+                    ? (inRoot, null)
+                    : (own.Registration, registry);
+            }
+            if (NamesACollectibleAssembly(type) && elsewhere is not null)
+                foreach (var (other, held) in elsewhere(type))
+                    if (!ReferenceEquals(other, registry))
+                        foreach (var there in other.ServiceRegistrationsFor(held))
+                            yield return (there.Registration, other);
+            if (any)
+                yield break;
+        }
         // Never ASK the root about a type that names a collectible assembly: asking caches the type in
         // the root's registry, which pins its context (ModuleFallbackSource refuses the same).
         if (root is not null && !NamesACollectibleAssembly(type))
             foreach (var inRoot in root.ServiceRegistrationsFor(service))
-                yield return (inRoot.Registration, Side.Root);
+                yield return (inRoot.Registration, null);
     }
 
     private static IEnumerable<Type> Dependencies(IComponentRegistration registration) =>

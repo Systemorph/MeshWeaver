@@ -248,7 +248,7 @@ def run(root: Path, base: str, resolve, this_pr: int | None = None) -> int:
     allow_lines = ta.report(ALLOW_FILE, judgements, landed)
     allow_failures = ta.failures(judgements)
 
-    changed = [f for f in git(root, "diff", "--name-only", f"{base}...HEAD").splitlines()
+    changed = [f for f in git(root, "diff", "-z", "--name-only", f"{base}...HEAD").split("\0")
                if f.endswith(".cs") and "/obj/" not in f and "/bin/" not in f]
 
     findings: list[Finding] = []

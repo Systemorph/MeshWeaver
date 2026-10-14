@@ -159,4 +159,57 @@ public class PaymentProviderContractTest
             }
             .NamesWork.Should().BeFalse("…while one that names nothing is junk and may be discarded");
     }
+
+    private static PaymentSubscriptionEvent Updated(string? renewal) =>
+        new(PaymentSubscriptionChange.None, "sub_1",
+            ImmutableDictionary<string, string>.Empty
+                .Add(PaymentMetadata.Buyer, "alice")
+                .Add(PaymentMetadata.PlanTier, "personal"))
+        {
+            Renewal = renewal,
+            OccurredAt = new DateTimeOffset(2026, 10, 13, 12, 0, 0, TimeSpan.Zero),
+        };
+
+    /// <summary>
+    /// Plugins#3548: a cancellation requested on the processor's own page is reported when it is
+    /// REQUESTED, beside an unchanged period — retained as work, and neither a renewal nor an ending.
+    /// </summary>
+    [Fact]
+    public void ARequestedCancellation_IsWork_AndChangesNoPeriod()
+    {
+        var cancels = Updated(PaymentSubscriptionRenewal.CancelsAtPeriodEnd);
+        cancels.CancelsAtPeriodEnd.Should().BeTrue();
+        cancels.ResumesRenewal.Should().BeFalse();
+        cancels.ChangesRenewal.Should().BeTrue();
+        cancels.Renews.Should().BeFalse("a requested cancellation pays for nothing");
+        cancels.Ends.Should().BeFalse("the subscriber paid through the period — the plan ends at its end, not now");
+        cancels.IsActionable.Should().BeTrue();
+        new PaymentDelivery { CanAuthenticate = true, Authentic = false, Subscription = cancels }
+            .NamesWork.Should().BeTrue("an unverifiable cancellation request is retained as evidence");
+
+        var resumes = Updated(PaymentSubscriptionRenewal.Renews);
+        resumes.ResumesRenewal.Should().BeTrue();
+        resumes.CancelsAtPeriodEnd.Should().BeFalse();
+        resumes.IsActionable.Should().BeTrue("withdrawing the request must clear what the plan says");
+    }
+
+    /// <summary>
+    /// Negative control: an update that reports NO change to the renewal state is not work, and an
+    /// unknown provider word is retained but is never read as either known word.
+    /// </summary>
+    [Fact]
+    public void AnUpdateWithoutARenewalChange_IsNotWork_AndAnUnknownWordIsNeitherKnownWord()
+    {
+        var unrelated = Updated(null);
+        unrelated.ChangesRenewal.Should().BeFalse();
+        unrelated.IsActionable.Should().BeFalse("an update that changes neither period nor renewal is nothing to do");
+        new PaymentDelivery { CanAuthenticate = true, Authentic = true, Subscription = unrelated }
+            .NamesWork.Should().BeFalse();
+        Updated(" ").ChangesRenewal.Should().BeFalse("a blank word reports nothing");
+
+        var unknown = Updated("PausesCollection");
+        unknown.ChangesRenewal.Should().BeTrue("an open vocabulary: a provider's own word is retained so the caller can name it");
+        unknown.CancelsAtPeriodEnd.Should().BeFalse();
+        unknown.ResumesRenewal.Should().BeFalse("an unknown word is never read as either known word");
+    }
 }

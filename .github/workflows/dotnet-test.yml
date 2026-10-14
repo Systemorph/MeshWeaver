@@ -697,6 +697,18 @@ jobs:
     - name: Shelve the packages this restore fetched
       if: always()
       run: python3 .github/scripts/nuget-shelf.py save
+    # The licence gate reads THIS restore (MeshWeaver#6596). It used to restore the whole solution a
+    # second time on its own runner under a 15-minute cap, and one package in the graph
+    # (Microsoft.Playwright, 213 MB) occasionally downloads from nuget.org for 10+ minutes: measured
+    # restores of 440 s, 675 s and 729 s, and on main 3229abd a restore cut at 908 s — the gate was
+    # CANCELLED having judged nothing, `Consolidate test results` went red, and that commit never
+    # published. Staging copies only what the gate reads (the restored graph and each package's
+    # nuspec + named licence file), never the packages.
+    - name: Stage the licence gate's evidence from this restore
+      run: python3 .github/scripts/check-licenses.py --stage-evidence licence-evidence
+    - name: "Upload artifact: licence evidence"
+      uses: actions/upload-artifact@v7
+      with: { name: licence-evidence, path: licence-evidence, retention-days: 1, overwrite: true, if-no-files-found: error }
     - name: Build
       # Merge precondition (a): build green with warnings-as-errors (ReleaseStrategy.md → "Merge
       # preconditions"). The compiler-warning burn-down (release-governance step A2) is DONE and
@@ -2156,33 +2168,37 @@ jobs:
     # 🚨 NO `continue-on-error`, and NO input-shaped `if:`. This gate reads only the repo
     # and the public NuGet feed — it needs no secret, so it has no legitimate reason to be
     # skipped and no fork exemption. It runs on every PR including forks.
-    needs: [precheck]
+    needs: [precheck, build]
     # Mirrors `build`: the ONLY thing that skips this is the already-green-tree
-    # optimisation, which means this exact tree already passed this exact gate.
-    if: ${{ !cancelled() && needs.precheck.outputs.skip != 'true' }}
+    # optimisation, which means this exact tree already passed this exact gate. A build that
+    # did not succeed leaves this job skipped, and collect-results names THAT as "no
+    # verdict", never as a licence finding.
+    if: ${{ !cancelled() && needs.precheck.outputs.skip != 'true' && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
-    # ⏱️ Depends only on `precheck`, so it runs CONCURRENTLY with the build and the test
-    # shards and costs the PR no wall-clock. It restores (not builds) the solution, which
-    # is what produces the project.assets.json graph it reads.
-    timeout-minutes: 15
+    # ⏱️ It does not restore (MeshWeaver#6596): the `build` job's restore — the one restore of
+    # the run, of the tree CI actually builds and ships — stages the evidence this gate reads,
+    # so a slow nuget.org download can no longer cancel the gate having judged nothing. It runs
+    # beside the test shards, which `collect-results` waits for anyway: no wall-clock cost.
+    timeout-minutes: 5
     steps:
     - uses: actions/checkout@v7
       with: { fetch-depth: 1 }
-    - uses: actions/setup-dotnet@v6
+    # 🔀 Judge with the checker, allowlist and declarations of the SAME tree the evidence came
+    # from: the head merged onto the main the build compiled (build's main-sha) — policy
+    # suites-test-fresh-merge, Doc/Architecture/FreshMergeUnderTest. A no-op off pull requests.
+    - name: Merge the head onto the main the build compiled
+      uses: ./.github/actions/fresh-merge
       with:
-        dotnet-version: 10.0.x
+        main-sha: ${{ needs.build.outputs.main-sha }}
     # The gate resolves licences from the RESTORED graph — direct and transitive — because a
     # copyleft dependency that arrives transitively binds us exactly as hard as a declared one.
-    # No `continue-on-error`: if the restore fails, the gate has no evidence, and a gate that
-    # passes on absent evidence is worse than no gate (the script fails closed on this too).
-    # Same invocation as the `build` job's restore step, so the graph this gate reads is the
-    # same graph CI actually builds and ships.
-    - name: Hydrate the local packages folder from the NuGet shelf
-      run: python3 .github/scripts/nuget-shelf.py hydrate
-    - name: Restore (produces the dependency graph the gate reads)
-      run: dotnet restore
+    # No `continue-on-error`: a missing artifact fails the download, and an artifact without a
+    # graph fails the script (it fails closed on absent evidence).
+    - name: "Download artifact: licence evidence"
+      uses: actions/download-artifact@v8
+      with: { name: licence-evidence, path: licence-evidence }
     - name: Check dependency licences
-      run: python3 .github/scripts/check-licenses.py --report
+      run: python3 .github/scripts/check-licenses.py --evidence licence-evidence --report
 
   workflow-shell:
     name: "CI's own shell"
@@ -2279,6 +2295,19 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/compile-check.py --self-test
 
+    # 🚨 A plain `git diff --name-only` C-QUOTES a non-ASCII path (`"…C\303\264te…"`), and a script
+    # that reads it verbatim holds a path that names no file — a refused selection
+    # (MeshWeaver.Plugins#3566), a module never selected, a `.cs` silently dropped from a scan. Every
+    # listing a script parses is read with `-z`; this ratchet keeps it so, over .github/scripts and
+    # scripts. Self-test first: it proves the quoting on real git output.
+    - name: "The git path-listing ratchet can fail (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/check-git-path-listings.py --self-test
+
+    - name: "Every git path listing a script parses is read NUL-delimited (-z)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/check-git-path-listings.py
+
     # 🚨 THE LOCAL LOOP, RUN WHERE ITS INPUT CHANGES (#4785). `run-node-tests.py` is the command
     # AGENTS.md tells an author to run before pushing, and it IMPORTS compile-check.py above. When
     # #4711 replaced the compile model and removed `usings_union`, the harness died with an
@@ -2315,6 +2344,23 @@ jobs:
     - name: "A core change rebuilds images only when it touches an image input (self-test)"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/core-image-relevance.py --self-test
+
+    # main-cd's push path delivers in BUILD-COMPLETION order, not commit order, so a parent can be
+    # handed to delivery after its child already published (CD #10796 → 6b9944c after #10795 →
+    # 04d56c7, 2026-10-14) and mint a higher version for older code. Proven both ways here: strictly
+    # behind ⇒ declined; ahead, same commit, diverged, identical, no set, unreadable compare ⇒ publish.
+    - name: "CD never publishes a commit older than the newest published set (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/cd-superseded.py --self-test
+
+    # main-cd's tester leg stages the Razor generator per RID from the SDK FEED (not an MCR image
+    # that lags a new SDK by hours and withheld the seal on the 10.0.402 release day). It runs on
+    # main only, so it is proven here, offline: each RID must hold the compiler built FOR it
+    # (missing, swapped, non-PE refused), the metadata's .tar.gz for the host version is taken
+    # (unreleased version and absent RID named), and a tarball whose digest disagrees is refused.
+    - name: "The Razor generator is staged per RID from the SDK feed, and refuses the wrong architecture (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/stage-razor-generators.py --self-test
 
     # The publish-bake lane's previous-epoch leg (policy bake-per-live-identity, #3583) reads the
     # platform-compatibility declaration to decide whether a second live identity exists. No break
@@ -3093,6 +3139,13 @@ jobs:
     - name: "Execute carry-forward-bundles.sh against its own fixtures"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: bash .github/scripts/carry-forward-bundles.sh --self-test
+
+    # seal-packages.py decides, per package, what a publication SEALS fresh and what it carries, and
+    # refuses a seal whose own dependency floors are unmet (MeshWeaver.Plugins#3507, the #6192
+    # class). It runs only inside a node repo's publish lane, so this is its first execution.
+    - name: "Execute seal-packages.py against its own fixtures (the per-package seal)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/seal-packages.py --self-test
 
     # 🚨 …and its SIBLING had none either, which is worse: bake-scope.sh decides what does NOT get
     # rebuilt, and its self-test is one of the two proofs `SealedPublicationGenerations.md` leans on
@@ -4533,9 +4586,18 @@ jobs:
     - name: Fail if the licence gate failed
       # Same shape as the doc gate: skipped/cancelled is not a pass; the reuse path is the one exemption.
       if: needs.precheck.outputs.skip != 'true' && needs.licence-gate.result != 'success'
+      env:
+        LICENCE_RESULT: ${{ needs.licence-gate.result }}
       run: |
-        echo "::error::A dependency licence is incompatible with shipping MeshWeaver under Apache-2.0 / MIT — see the 'Dependency licences' job for the offending package(s) and their licence."
-        echo "::error::Fix it by removing the package or replacing it with a permissively-licensed one. Do NOT add it to EXCEPTIONS unless the upstream licence genuinely IS permissive and only the package metadata is missing."
+        # 🚨 Only a `failure` can be a licence FINDING. A cancelled or skipped gate judged nothing,
+        # and "a dependency licence is incompatible" over it sent the reader of main 3229abd's red
+        # after a licence that did not exist (MeshWeaver#6596). Both stay RED; only the words differ.
+        if [ "$LICENCE_RESULT" = "failure" ]; then
+          echo "::error::A dependency licence is incompatible with shipping MeshWeaver under Apache-2.0 / MIT, or the gate had no evidence to judge — see the 'Dependency licences' job for the offending package(s) and their licence."
+          echo "::error::Fix it by removing the package or replacing it with a permissively-licensed one. Do NOT add it to EXCEPTIONS unless the upstream licence genuinely IS permissive and only the package metadata is missing."
+        else
+          echo "::error::The licence gate produced NO verdict (result: ${LICENCE_RESULT}) — no licence was judged, so none is accused. It reads the build job's restore: read the 'Build solution (once)' job first (a build that did not succeed leaves the gate skipped), then 'Dependency licences'."
+        fi
         exit 1
 
     # ── …and a BINARY-COMPATIBILITY break decides it too ────────────────────────────────────

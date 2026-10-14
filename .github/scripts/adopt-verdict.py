@@ -73,8 +73,8 @@ def merge_chain(root: Path, base: str, head: str = "HEAD", limit: int = 40) -> t
 
 
 def lock_only(root: Path, sha: str) -> bool:
-    names = git(root, ["diff", "--name-only", f"{sha}^", sha])
-    files = [n for n in (names or "").splitlines() if n.strip()]
+    names = git(root, ["diff", "-z", "--name-only", f"{sha}^", sha])
+    files = [n for n in (names or "").split("\0") if n]
     return bool(files) and all(n.endswith("manifest.lock") for n in files)
 
 

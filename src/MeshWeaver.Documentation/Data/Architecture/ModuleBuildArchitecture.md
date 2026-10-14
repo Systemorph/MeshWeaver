@@ -584,6 +584,25 @@ keeps the supersede model in the next section.
    sealing it would move every instance's sources back, since `SealedSyncGate` holds a repository's
    sources at the sealed commit. The bake is narrowed too (`narrow-by-affected`), so a merge re-bakes
    only what its diff affects.
+   **The seal is PER PACKAGE (`withhold-packages`, MeshWeaver.Plugins#3507).** A caller that
+   withholds packages from the module hand-over (rule 4) passes the same list to the bake: every
+   other package is sealed at this commit, and each withheld package's previously SEALED build — its
+   bundle and its module package — is carried forward in its place (`seal-packages.py withhold`,
+   then `carry-forward-bundles.sh`, digest- and stamp-verified; a package never sealed stays out, and
+   every package requiring it waits with it — carried at its own sealed build, or out — so the seal
+   never fails on it. A waiting package that bakes NO bundle and no module package (content only)
+   is not "never sealed": no publication seals it, so a requirement on it is not the listing's to
+   check — reading it as never-sealed refused a whole seal in Plugins run 38527548962).
+   The publication then carries `sealed-packages.json` beside `source-commit.txt`: per package, the
+   commit its bytes were baked from, its version, its `requires`, and whether it was carried. Before
+   anything is written, `seal-packages.py listing` refuses a seal in which a package's `requires` on
+   another package of the same listing is not met by the version the listing seals (the class of
+   MeshWeaver#6192). `source-commit.txt` stays the run's commit, so rule 5's never-seal-backwards is
+   unchanged; `bake-scope.sh` narrows from the OLDEST commit the listing names, so a carried package
+   is rebuilt the run it becomes publishable. Before this, a seal was one listing for one commit and
+   a caller could seal only a commit at which nothing waited — which, under steady merging, almost
+   never existed. Readers adopt the listing through `SealedSource.Packages` / `CommitOf(package)`
+   and read a publication without one as before: every bundle at `source-commit.txt`.
 6. **The platform release is the ONE full run.** `repository_dispatch` and the `schedule` poll
    rebuild and republish everything against the new platform — the compatibility check across the
    whole catalog. It is the only run that is superseded, and only by the next platform run: the
@@ -796,7 +815,8 @@ line of the verdict naming the CONTENT.
   run on `main` whose `Promote: tag the full set`, `Verify every image shipped` and `Bake platform
   content in the shipped image + publish` all succeeded, images present in ACR by the version or
   identity tag; the Plugins publication found on its own (the newest run whose `Plugins: bake +
-  seal …` succeeded — possibly an older run) and printed beside it in the log, the `::notice` and
+  seal …` succeeded — possibly an older run; that job left core CD with #6143, so this now names a
+  pre-#6143 run, while the publication consumers fetch is MeshWeaver.Plugins' own) and printed beside it in the log, the `::notice` and
   the step summary; the caller's repository variable `MW_PLATFORM_REF` honoured as a freeze (in a
   reusable workflow `vars` resolves from the **caller's** repository — GitHub docs, Variables
   reference). Non-empty digests are taken verbatim and the resolver never runs — a caller that pins
@@ -919,7 +939,7 @@ equal, every map gallery declined. The maintainer's ruling closes it structurall
 be in plugins and removed from core — move 100% to plugins."* The portal host references no module
 project; a module is landed from the registry and composed into bakes, nowhere else.
 
-The second row is a **second producer in time**: core CD's `plugins-modules` rebuilds
+The second row was a **second producer in time** until #6143 removed it: core CD's `plugins-modules` rebuilt
 `MeshWeaver.Markdown.Collaboration` per platform release to feed the Plugins seal (mvid A), while
 the registry's package endpoint serves the Plugins lane's last content-versioned publication (mvid
 B) — the bytes a portal actually installs. The availability gate saw it from #3242 on instead of
@@ -963,8 +983,9 @@ defect was the missing declarations. Naming all four took them to **114/114** an
 adopted with zero declines. MeshWeaver.Crm already declared all four and never showed the shape —
 the control that makes the reading conclusive.
 
-🚨 **The set is not "the modules we started with".** Core CD's `plugins-modules` packs every module
-the content can bind (today `AI`, `Essentials`, `Maps`, `Stripe`) and says so in its own comment:
+🚨 **The set is not "the modules we started with".** Core CD's `plugins-modules` packed every module
+the content can bind (`AI`, `Essentials`, `Maps`, `Stripe` — since #6143 that list is
+`published-modules`' `PUBLISHED_MODULES`, read, not packed) and said so in its own comment:
 *"THE SET IS 'EVERY MODULE THE CONTENT BINDS', not 'the two we started with'"*. A satellite whose
 list lags that one does not fail loudly — each declined assembly falls back to a **local compile**,
 so the bytes the bake shipped are never judged. The gate's `adopted N of M` fatal is what turns that
@@ -1053,8 +1074,8 @@ and NOT when a seal for the running identity appears while the shelf sits still.
 window keeps the build it has, and `ShippedPrebuiltBundles`' `dependency record mismatch … live is
 mvid:` line is that residue rather than a new defect.
 
-The remaining structural half is core CD's, and it is a credential decision rather than a code one:
-`plugins-modules` REBUILDS the modules it composes instead of taking `registry-modules`, because core
+The remaining structural half was core CD's — moot since #6143 removed `plugins-modules`, so core no
+longer produces these bytes at all. As it stood: `plugins-modules` REBUILT the modules it composes instead of taking `registry-modules`, because core
 holds no registry credential (`MW_REGISTRY_KEY` is validated in `node-repo-publish-bake.yml` as the
 *caller's* secret and is not among core's own). Composing the registry's bytes would make the
 publication and the shelf one producer at the source, which is strictly better than resolving them at
@@ -1230,8 +1251,8 @@ under `.github/workflows` — there is no ledger — and
 watcher registers `Hosting/PlatformBuilds/<source>` and handles `event: bundle-publication` (added
 by Plugins#1274, made directed and non-reflexive by #1484/#1485 on 2026-09-07); every satellite
 passes `webhook-url`/`webhook-secret` to the lane (the pins themselves are gone since #3842). NOT
-landed, by decision: core CD's `plugins-bake` stays (maintainer, 2026-08-29: *"plugins is top level
-— built with platform"*) — the second producer is deduplicated by the register's `IsRepeat` rule.
+landed at the time, by decision: core CD's `plugins-bake` stayed (maintainer, 2026-08-29: *"plugins is top level
+— built with platform"*) — reversed by #6143 (policy `platform-module-deploy-separate`), which removed it — the second producer is deduplicated by the register's `IsRepeat` rule.
 And since 2026-09-12 the platform broadcast itself is off by default (see the callout above).
 
 **In flight, in this order (the contract is complete only when all have landed):** MeshWeaver.Plugins#1241
@@ -1243,7 +1264,7 @@ follow-up makes the watcher REGISTER the nodes named in (2) and handle `event: b
 `webhook-url` / `webhook-secret` to the lane when it moves its pin (the lane is RED, naming them,
 until it does — a sealed publication memex was not told about is silent drift). Once Plugins receives
 the platform event and publishes its own bundles on it, core CD's `plugins-bake` job is a SECOND
-producer of the same publication and is removed — a follow-up, not part of this change.
+producer of the same publication and is removed — LANDED as #6143.
 
 ## Roadmap (agreed, in flight)
 

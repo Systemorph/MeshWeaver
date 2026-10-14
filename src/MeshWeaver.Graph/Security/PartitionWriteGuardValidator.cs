@@ -360,12 +360,38 @@ public sealed class PartitionWriteGuardValidator : INodeValidator, IOwnerEnforce
     /// <returns>The diagnosis, or <c>null</c> when the partition is healthy / not diagnosable.</returns>
     public static IObservable<string?> DescribeDeniedWriteIn(
         IMessageHub hub, string? nodePath, string? deniedUserId, string? locale)
+        => DescribeDeniedWriteIn(hub, nodePath, deniedUserId, deniedPermission: null, locale);
+
+    /// <summary>
+    /// <see cref="DescribeDeniedWriteIn(IMessageHub, string?, string?, string?)"/>, told which
+    /// permission was refused — which lets the disagreement check READ the grant it found instead of
+    /// assuming it would have granted (#6637). A readable <see cref="AccessAssignment"/> whose roles
+    /// do not carry <paramref name="deniedPermission"/> is not a disagreement: the denial is settled,
+    /// and the note names the roles the principal does hold.
+    /// </summary>
+    /// <param name="hub">The hub whose service provider resolves the storage adapter.</param>
+    /// <param name="nodePath">The path being written; its first segment is the partition.</param>
+    /// <param name="deniedUserId">The principal the write was refused for, or <c>null</c>.</param>
+    /// <param name="deniedPermission">The permission the write required, or <c>null</c> when unknown
+    /// (then a grant at the principal's path is reported as a disagreement, as before).</param>
+    /// <param name="locale">The caller's language tag (<c>AccessContext.Locale</c>), or <c>null</c>
+    /// for the catalog's default.</param>
+    /// <returns>The diagnosis, or <c>null</c> when the partition is healthy / not diagnosable.</returns>
+    public static IObservable<string?> DescribeDeniedWriteIn(
+        IMessageHub hub, string? nodePath, string? deniedUserId, Permission? deniedPermission, string? locale)
     {
         ArgumentNullException.ThrowIfNull(hub);
         if (GetFirstSegment(nodePath) is not { } partition)
             return Observable.Return<string?>(null);
         return ProbeOwnership(hub, partition)
-            .Select(state => state switch
+            // The one arm that reads further — the grant at the principal's path — is taken here;
+            // every other state is described synchronously below, in the same order as always.
+            .SelectMany(state => state is { Ownerless: false, ConfiguredGrant: false, GrantPaths: { } grants }
+                                 && !(state.SystemOwned && AccessAssignmentGuard.IsContentPath(nodePath))
+                ? Disagreement(hub, partition, deniedUserId, deniedPermission, grants, locale)
+                : Observable.Return(Describe(state)));
+
+        string? Describe(OwnershipState? state) => state switch
             {
                 null => null,
                 // 🚨 The grants probe could not answer: say NOTHING. Neither "ownerless" nor "the
@@ -383,9 +409,9 @@ public sealed class PartitionWriteGuardValidator : INodeValidator, IOwnerEnforce
                 // not in the store, so the durable-vs-fold disagreement check has nothing to compare.
                 // Silent — exactly what the pre-#5904 early return answered.
                 { ConfiguredGrant: true } => null,
-                // Grants (or a policy) exist, so this is NOT the #638 residue. But if one of them is
-                // the refused principal's, the denial disagrees with the store.
-                { Ownerless: false, GrantPaths: { } paths } => Disagreement(partition, deniedUserId, paths),
+                // Grants (or a policy) exist, so this is NOT the #638 residue — routed to
+                // Disagreement above, which reads the refused principal's grant if there is one.
+                { Ownerless: false, GrantPaths: not null } => null,
                 // 🚨 A SYSTEM-OWNED partition is not restored to its creator — the bootstrap's
                 // repair deliberately skips it (the repo owns it; retraction took the creator's Admin
                 // away on purpose), so telling the creator they "regain access on their next write"
@@ -400,7 +426,7 @@ public sealed class PartitionWriteGuardValidator : INodeValidator, IOwnerEnforce
                     + "ownership was never recorded, so it denies everyone (a broken partition, not an ordinary permission "
                     + "decision). Its original creator regains access automatically on their next write into it; anyone "
                     + $"else needs a platform admin to grant access under '{partition}/{AccessSegment}'.",
-            });
+            };
     }
 
     /// <summary>
@@ -507,15 +533,101 @@ public sealed class PartitionWriteGuardValidator : INodeValidator, IOwnerEnforce
     /// denial is not a place to pay N content reads, and the id is in the path by construction of
     /// the one writer that mints them. A grant written under some other id simply does not match:
     /// this says less than it could, never more than it knows.</para>
+    ///
+    /// <para>🚨 <b>A grant at the principal's path is not yet a disagreement — its ROLES decide
+    /// (#6637).</b> The path match alone fired the note on a grant whose roles were Viewer and
+    /// Commenter for a refused Create: the denial was settled and correct, and the note told the
+    /// caller the opposite and invited a retry that could not succeed. So, when the refused
+    /// permission is known, the grant is READ (one node, on a denial path only): a typed
+    /// <see cref="AccessAssignment"/> whose granted roles all resolve and none carries the permission
+    /// yields a plain note naming the roles held. The disagreement note stays for every case the
+    /// evidence still supports — the roles DO carry the permission, the node is not a readable
+    /// AccessAssignment (untyped content — the fold skips it), a role does not resolve, or the
+    /// permission is unknown. Like the rest of this probe it changes no verdict.</para>
     /// </summary>
-    private static string? Disagreement(
-        string partition, string? deniedUserId, IReadOnlyList<string> grantPaths)
+    private static IObservable<string?> Disagreement(
+        IMessageHub hub, string partition, string? deniedUserId, Permission? deniedPermission,
+        IReadOnlyList<string> grantPaths, string? locale)
     {
         if (string.IsNullOrEmpty(deniedUserId) || grantPaths.Count == 0)
-            return null;
+            return Observable.Return<string?>(null);
         var expected = $"{partition}/{AccessSegment}/{deniedUserId}{AccessIdSuffix}";
         if (!grantPaths.Any(p => string.Equals(p, expected, StringComparison.OrdinalIgnoreCase)))
-            return null;
+            return Observable.Return<string?>(null);
+        if (deniedPermission is not { } permission
+            || hub.ServiceProvider.GetService<IStorageAdapter>() is not { } persistence)
+            return Observable.Return<string?>(DisagreementNote(partition, deniedUserId, expected));
+
+        return persistence.Read(expected, hub.JsonSerializerOptions)
+            .Take(1)
+            .DefaultIfEmpty(null)
+            .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
+            .SelectMany(node =>
+            {
+                var assignment = string.Equals(node?.NodeType, AccessAssignmentNodeType.NodeType, StringComparison.Ordinal)
+                    ? node!.ContentAs<AccessAssignment>(hub.JsonSerializerOptions)
+                    : null;
+                // The fold applies a grant only to the principal its AccessObject names; a row at
+                // this principal's path that names someone else says nothing about their roles.
+                if (assignment is null
+                    || !string.Equals(assignment.AccessObject, deniedUserId, StringComparison.Ordinal))
+                    return Observable.Return<string?>(DisagreementNote(partition, deniedUserId, expected));
+                // As the fold does: a role that is also DENIED in the same grant is not held.
+                var denied = assignment.Roles
+                    .Where(r => r.Denied && !string.IsNullOrEmpty(r.Role))
+                    .Select(r => r.Role)
+                    .ToImmutableHashSet(StringComparer.Ordinal);
+                var held = assignment.Roles
+                    .Where(r => !r.Denied && !string.IsNullOrEmpty(r.Role) && !denied.Contains(r.Role))
+                    .Select(r => r.Role)
+                    .Distinct(StringComparer.Ordinal)
+                    .ToImmutableList();
+                // Settled only on evidence that cannot be stale: the built-in roles' permissions are
+                // fixed. A custom role is read from a cached role stream and may lag the edit that
+                // gave it the permission, so it keeps the disagreement note.
+                if (held.Any(id => !BuiltInRolePermissions.ContainsKey(id)))
+                    return Observable.Return<string?>(DisagreementNote(partition, deniedUserId, expected));
+                var permissions = held.Aggregate(Permission.None, (acc, id) => acc | BuiltInRolePermissions[id]);
+                return Observable.Return<string?>(WouldAuthorize(permissions, permission)
+                    ? DisagreementNote(partition, deniedUserId, expected)
+                    : SettledNote(expected, deniedUserId, held, permission, partition, locale));
+            })
+            .Catch<string?, Exception>(_ => Observable.Return<string?>(DisagreementNote(partition, deniedUserId, expected)));
+    }
+
+    /// <summary>The fixed permissions of the built-in roles — the only roles whose definition a
+    /// settled diagnosis may rely on (#6637).</summary>
+    private static readonly ImmutableDictionary<string, Permission> BuiltInRolePermissions =
+        new[] { Role.Admin, Role.Editor, Role.Viewer, Role.Commenter, Role.PlatformAdmin }
+            .ToImmutableDictionary(r => r.Id, r => r.Permissions, StringComparer.Ordinal);
+
+    /// <summary>
+    /// Whether <paramref name="held"/> authorizes a write that requires <paramref name="required"/>,
+    /// by the write authorizer's own predicate (<c>RlsNodeValidator.CheckPermission</c>): Comment is
+    /// granted by Comment, Update or Sync; Create, Update and Delete also by Sync.
+    /// </summary>
+    private static bool WouldAuthorize(Permission held, Permission required) => required switch
+    {
+        Permission.Comment => held.HasFlag(Permission.Comment) || held.HasFlag(Permission.Update) || held.HasFlag(Permission.Sync),
+        Permission.Create or Permission.Update or Permission.Delete => held.HasFlag(required) || held.HasFlag(Permission.Sync),
+        _ => held.HasFlag(required),
+    };
+
+    /// <summary>
+    /// The note for a refusal the principal's own readable grant does NOT contradict: its roles do
+    /// not carry the refused permission, so the denial is a settled decision (#6637).
+    /// </summary>
+    private static string SettledNote(
+        string grantPath, string deniedUserId, IReadOnlyList<string> roles, Permission permission,
+        string partition, string? locale)
+        => LocalizationCatalog.Get("access.denial.rolesLackPermission", locale,
+            grantPath, deniedUserId,
+            roles.Count == 0 ? "—" : string.Join(", ", roles),
+            permission, partition);
+
+    /// <summary>The #4061 note: the durable store holds a grant the fold did not honour.</summary>
+    private static string DisagreementNote(string partition, string deniedUserId, string expected)
+    {
         // 🚨 It says what it SAW, and names both causes rather than picking one. This probe reads
         // PATHS, not content — so "the fold read a stale snapshot" and "that node is not a grant
         // the fold can read" are equally consistent with the evidence, and asserting the first

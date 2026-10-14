@@ -106,7 +106,10 @@ apart from the message they already receive.
 
 ```text
 rejection arrives (a ShuttingDown NACK, or the owner's StreamEndedEvent)
-  ├─ activation not yet seen since the last answer (or unknown)
+  ├─ NO activation tag AND no owner banner — the ROUTING LAYER refused, not the owner (#6729)
+  │     → charge the TIME budget under the "(route)" key (MaxSameActivationReAsks = 16)
+  │     → REST first (RecycleReAskPace), then re-ask
+  ├─ activation not yet seen since the last answer (or unknown, from the owner)
   │     → charge the ACTIVATION budget (MaxRecycleReArms = 3)
   │     → join on the rejecting instance's DisposalCompleted, then re-ask
   ├─ activation already refused us since the last answer
@@ -237,6 +240,31 @@ were run by hand. With the terminal removed, the distinct-activations case never
 With the announcement's activation ignored, the one-activation case gives up on a teardown that was
 only settling.
 
+### A routing refusal is not an owner activation (#6729)
+
+Measured on memex-cloud on 2026-10-13: pods `…-m2jn9` (19:52:18Z) and `…-54lxb` (20:01:57Z) each
+logged `Drain: GIVING UP … 5 circuit(s) are STILL OPEN` and `Application is shutting down...`, and in
+that same second every open circuit's sync streams ended with *"4 DISTINCT owner activations have
+refused this stream (budget 3)"* — for owners that had nothing to do with one another (a user home,
+`Admin`, threads, a payment record). Some twenty incidents were filed against "an owner recycling in a
+loop". No owner had recycled. The subscriber's OWN router answered every re-ask *"Host is shutting
+down, cannot route to …"* (`OrleansRoutingService.DeliverMessage`), a `ShuttingDown` NACK with no
+activation tag. Untagged meant "a distinct activation", there was no local teardown to join, so the
+re-ask went out at once, and four router refusals inside a millisecond spent the activation budget.
+
+The latch now asks who spoke, with the predicate that already exists for that question,
+`ShutdownNack.IsAnsweredByOwner`: a refusal with neither an activation tag nor the owner's banner came
+from the routing layer — this host stopping, the silo directory in flux during a roll, a pod hub not
+yet claimed. That is ONE condition, the route being unavailable, so it is charged on the TIME axis
+under its own `(route)` key, paced like a teardown ride-out, and its give-up names the ROUTE and says
+no owner recycle loop is implied. An untagged refusal that does carry the owner's banner keeps the old
+accounting (one distinct activation each), because the owner did speak.
+
+Pinned by three cases in `ASyncStreamThatGivesUpOnItsOwnerEndsTest`: six router refusals are ridden
+out and the stream recovers (red before the fix: it ended on the fourth); a route that never serves
+again still ends the stream, naming the route; and untagged OWNER refusals still give up on the
+activation budget (the control that the discrimination is by speaker, not by tag alone).
+
 ## One request type, several producers: `GetDataRequest`
 
 `[ReaskedOnShutdown]` makes a claim about every producer of a type. `GetDataRequest` cannot carry it
@@ -266,6 +294,42 @@ None of those lines could name the read.
 Once every producer rides the answer out, mark the type `[ReaskedOnShutdown]` and the line moves to
 Debug by the rule above. Producers in other repositories and in mesh-compiled code count too.
 
+**Until then, a producer that rides the answer out says so on its own request.**
+`PostOptions.ReaskingOnShutdown()` stamps the delivery property `ReasksOnShutdown`. This is the
+per-delivery form of the attribute: one producer's claim about one request, never a claim about the
+type. `MessageService.Dispose` reads either form, and a discard of a delivery that carries the
+property is teardown-normal (Debug), the same as a marked type. The NACK is unchanged, and the
+producer's re-ask runs on it. `GetMeshNodeOutcome` stamps it on its point read. The other producers
+in the table do not, so their discards stay Errors. With that, the bring-up discard Errors that kept
+reopening #5718, partition roots recycled by a live module update while a NodeType hub's point read
+(`GetDataRequest { MeshNodeReference }`) was parked, move to Debug. Stamp it only from code that
+really re-asks: a stamped producer that takes the NACK as final would silence a real loss.
+
+**A reply never inherits the stamp.** `PostOptions.ResponseFor` and `WithRequestIdFrom` copy the
+request's property bag onto the reply, and they drop `ReasksOnShutdown` while doing it (#6717). The
+stamp is one producer's claim about its own request. A reply discarded by a teardown has no producer
+that asks again, so it keeps the level its own type and answer policy give it.
+
+## Node writes: `PatchDataRequest`
+
+A node write has one producer: `UpdateRemote`, behind `GetMeshNodeStream(path).Update(...)`. It
+rides a `ShuttingDown` answer out on both arms. On the early arm it logs
+`OWNER_SHUTTING_DOWN_REENQUEUE`, and on the late watch it logs `LATE_SHUTTING_DOWN_REENQUEUE`. Each
+re-runs the caller's original update function against the address's next activation, up to
+`MaxOwnerDisposingReenqueues` attempts. When the budget is spent, the caller gets a failure, never a
+silent success. A write parked behind a young activation's gates is therefore **not lost** when that
+activation is torn down mid-bring-up. The discard answers it `ShuttingDown`, the write is re-asked,
+and it lands on the next activation.
+
+The producer did not say so, though. The patch carried neither the attribute nor the property, so
+that routine roll-time discard was reported at Error as stranded work. One measured case was #6733:
+an Orleans deactivation (`DirectoryFailure`, the directory owner's silo stopping) took down an
+`Admin/Threads` activation while a cache client's patch was parked behind
+`[DataContextInit,MeshNodeInit]`. `UpdateRemote` now stamps `ReaskingOnShutdown()` on its patch, so
+the discard reports at Debug. It does not stamp the last attempt: once the re-enqueue budget is
+spent, a `ShuttingDown` answer fails the caller, so that discard stays an Error. The type stays
+unmarked, because producers outside this repository may post it too.
+
 ## Where this is pinned
 
 | Test | What it fails on |
@@ -275,9 +339,12 @@ Debug by the rule above. Producers in other repositories and in mesh-compiled co
 | `SubscribeDuringRecycleTest` (`MeshWeaver.Layout.Test`) | a layout area subscribing into the recycle window rendering an error instead of a "coming back" state |
 | `RecyclingShapeDiagnosticTest` (`MeshWeaver.Graph.Test`) | the diagnostic naming both shapes at once, or inventing one from zero observations |
 | `ChangeFeedResubscribeCoalesceTest` (`MeshWeaver.Data.Test`) | a burst of owner change events producing one resubscribe per event |
-| `ASyncStreamThatGivesUpOnItsOwnerEndsTest` (`MeshWeaver.Data.Test`) | a give-up that leaves the stream alive on its last value, or one activation's NACK and announcement charged as two activations (#6602) |
+| `ASyncStreamThatGivesUpOnItsOwnerEndsTest` (`MeshWeaver.Data.Test`) | a give-up that leaves the stream alive on its last value, or one activation's NACK and announcement charged as two activations (#6602), or routing-layer refusals charged as owner activations (#6729) |
 | `ADrainingSiloDoesNotSilenceItsSubscribersTest` (`MeshWeaver.Hosting.Orleans.Test`) | a grain on a stopping silo accepting a subscribe it can only answer into the void (#5256) |
 | `DeferredDeliveryNackedOnDisposeTest.ADiscardError_NamesTheRequest_SoItsProducerCanBeTold` (`MeshWeaver.Messaging.Hub.Test`) | a bring-up discard Error that names the request type but not its declared description (#5718), or that prints an undeclared payload |
+| `DeferredDeliveryNackedOnDisposeTest.ARequestWhoseProducerDeclaresTheReask_IsTeardownNormal_NotAnError` (`MeshWeaver.Messaging.Hub.Test`) | a delivery stamped `ReasksOnShutdown` still reported at Error when a teardown discards it, or no longer answered `ShuttingDown` (#5718) |
+| `PatchDiscardedByABringUpTeardownIsReaskedTest` (`MeshWeaver.Graph.Test`) | a node write parked behind a young activation's gates that does not land on the next activation after a direct teardown, or whose discard is reported at Error (#6733) |
+| `PostOptionsReaskStampTest` (`MeshWeaver.Messaging.Hub.Test`) | a reply built with `ResponseFor` / `WithRequestIdFrom` that inherits the request's `ReasksOnShutdown` stamp (#6717) |
 
 ## See also
 

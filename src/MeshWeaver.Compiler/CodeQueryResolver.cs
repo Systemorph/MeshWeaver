@@ -95,7 +95,14 @@ public static class CodeQueryResolver
         var (_, query) = ParseName(rawQuery);
         var expanded = query.Replace("$self", selfPath).Trim();
 
-        var isAt = expanded.StartsWith("@@") || expanded.StartsWith("@");
+        // 🚨 A BARE PATH is a path reference, exactly like its `@` spelling (MeshWeaver#5508). An
+        // entry such as `$self/Source/Country` carries no field qualifier, so handed to the query
+        // engine verbatim it is FREE TEXT: no `path:`/`namespace:` anchor, so the partitioned store
+        // serves it as a UNION over every partition schema (and with an embedding provider, as a
+        // vector search that can pull unrelated Code nodes into the compile). An entry the query
+        // lexer reads as ONE unquoted bare term containing a `/` can only mean the node at that
+        // path; a quoted entry or one the lexer splits stays a query (see IsBarePath).
+        var isAt = expanded.StartsWith("@@") || expanded.StartsWith("@") || IsBarePath(expanded);
         if (isAt)
         {
             var stripped = expanded.TrimStart('@').TrimStart();
@@ -279,6 +286,28 @@ public static class CodeQueryResolver
             foreach (var final in Expand(raw, selfPath))
                 yield return final;
         }
+    }
+
+    /// <summary>
+    /// Whether an expanded entry is a bare node path: at least one <c>/</c>, and the query lexer
+    /// itself reads the WHOLE entry as exactly one unquoted free-text term — no field, no
+    /// qualifier, no operator, no second token. Asking <see cref="QueryParser"/> rather than
+    /// re-implementing its token rules keeps the two in agreement: an explicitly quoted entry
+    /// (<c>"Country/Name"</c>) is free text the author asked for and stays a query, and an entry
+    /// the lexer splits (on any <see cref="char.IsWhiteSpace(char)"/>, Unicode included) is several
+    /// terms and stays a query.
+    /// </summary>
+    /// <param name="expanded">The entry after <c>name=</c> and <c>$self</c> expansion.</param>
+    /// <returns><c>true</c> when the entry is a bare path.</returns>
+    private static bool IsBarePath(string expanded)
+    {
+        if (!expanded.Contains('/'))
+            return false;
+        var parsed = new QueryParser().Parse(expanded);
+        return parsed.Filter is null
+            && parsed.Path is null
+            && parsed.Paths is null
+            && string.Equals(parsed.TextSearch, expanded, System.StringComparison.Ordinal);
     }
 
     private static string RebaseRelativeNamespace(string query, string selfPath)

@@ -163,20 +163,16 @@ internal static class BundleKeyedHoldReading
                         .ToImmutableArray();
                     if (typePaths.IsEmpty)
                         return Observable.Return(BundleHoldDecision.Nothing);
-                    // 🚨 The DEFINITIONS come from each node's own stream, never from the listing
-                    // above: this decides whether content moves, and a query answer can be minutes
-                    // old (CQRS). The listing answers EXISTENCE, the stream answers CONTENT.
-                    return Observable
-                        .Zip(typePaths.Select(path => hub.GetWorkspace().GetMeshNodeStream(path)
-                            .Take(1)
-                            .Select(node => (Path: path,
-                                Definition: node?.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions, logger)))))
-                        .Take(1)
-                        .SelectMany(definitions =>
+                    // 🚨 The DEFINITIONS never come from the listing above: this decides whether
+                    // content moves, and a query answer can be minutes old (CQRS). The listing
+                    // answers EXISTENCE, the STORE answers CONTENT — one batched read that builds
+                    // no per-node hub (#6623). It is the DURABLE snapshot and can trail a live
+                    // owner; Decide's calibration step is what makes a hold safe on it
+                    // (NodeTypeDefinitionReads says how). Reading each type's own stream activated
+                    // every NodeType of the Space for one read apiece.
+                    return NodeTypeDefinitionReads.ReadDefinitions(hub, typePaths, logger)
+                        .SelectMany(live =>
                         {
-                            var live = definitions
-                                .Where(d => d.Definition is not null)
-                                .ToImmutableDictionary(d => d.Path, d => d.Definition!, StringComparer.Ordinal);
                             // Only a VERIFIED adoption can be held — so a partition with none needs
                             // neither the inventory nor the partition's code nodes.
                             if (!live.Values.Any(d => d.BuildProvenance is BuildProvenance.AdoptedVerified))

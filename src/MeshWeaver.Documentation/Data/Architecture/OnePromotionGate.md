@@ -174,7 +174,7 @@ An `unresolved` base never holds CI and never arms merges nobody measured. A rec
 this rule carries no `base_kind` and is judged as before, so no set promoted during the transition is
 stranded.
 
-**What the gate does not hold:** promote, `verify-images`, the platform bake, the Plugins seal, the
+**What the gate does not hold:** promote, `verify-images`, the platform bake, the `plugins` publication (sealed by MeshWeaver.Plugins' own lane since #6143), the
 satellites' compatibility legs and every CI resolver. `delivery-verdict` judges platform delivery
 without `arm` or `notify-platform-update` (`PlatformDeliveryNeverWaitsOnPluginsGuard.
 TheArmingIsNeverAPlatformDeliveryLeg`). What waits for Plugins is only the fleet's roll.

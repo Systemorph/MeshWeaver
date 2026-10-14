@@ -51,8 +51,9 @@ Measured on 2026-09-06 (MeshWeaver.Plugins run 34029118937, one publish, two tar
 11:59:47  sealed: target 2/_complete (36 bundle(s))
 ```
 
-🚨 **And the prefix has SEVERAL writers.** Core CD's `plugins-bake` job and the MeshWeaver.Plugins
-satellite's own `publish-bake` both publish `bake-source: plugins`, so both write
+🚨 **And the prefix had SEVERAL writers** (until #6143 removed core CD's; MeshWeaver.Plugins' own
+lane is now the only one). Core CD's `plugins-bake` job and the MeshWeaver.Plugins
+satellite's own `publish-bake` both published `bake-source: plugins`, so both wrote
 `prebuilt-bundles/<identity>/plugins/`. Attributing a window to "core CD is rolling" is therefore
 wrong roughly half the time — the 2026-09-06 red was the satellite's own bake, while two core CD
 runs were in flight publishing a *different* identity. And the more frequent overlap is not between
@@ -631,8 +632,8 @@ Stated plainly, because a page that only lists what works is how the next sessio
   would keep serving its generation and never see the flat writer's newer publication, a stale serve
   with nothing red anywhere. The writer is behind a `publication-layout` selector whose lane
   default moved from `flat` to **`generation`** at phase 4 (2026-09-14), so **every producer now
-  writes generations** — core CD's `plugins-bake` by its own explicit input, the six node repos by
-  that default. 🚨 **And since phase 5 (2026-09-17) the FLAT COMPATIBILITY COPY is DISPOSED OF
+  writes generations** — the six node repos by that default (and core CD's `plugins-bake`, until
+  #6143 removed it, by its own explicit input). 🚨 **And since phase 5 (2026-09-17) the FLAT COMPATIBILITY COPY is DISPOSED OF
   rather than rewritten**: once `_current` has moved and been read back, the prefix's own
   `_complete` is deleted first and then the files it positively identifies, so nothing is written at
   the prefix in place any more and the window in this section's first paragraph has no subject left.
@@ -646,8 +647,9 @@ Stated plainly, because a page that only lists what works is how the next sessio
   precondition on flipping — has landed too**: the portal's own `PrebuiltBundleStore` sweep now
   collects a generation no `_current` names, whose pointer resolved cleanly, whose own seal could be
   read, and that is older than the 30-day window, applying the identity rules' fail-closed discipline
-  one level down. What remains is each producer's pin reaching the writer, then flipping — `plugins`
-  in ONE change set, because it is the only prefix with two producers.
+  one level down. Every producer's pin has reached the writer and flipped, and since #6143 every
+  prefix has ONE producer — `plugins` is written by MeshWeaver.Plugins' own lane alone — so no
+  migration step remains here.
 
   🚨 That page also records what an **OCI registry** does and does not close, since the fleet is
   moving plugin bundles into one: content-addressed blobs make a mix unrepresentable, but a **tag**

@@ -240,7 +240,7 @@ Stated because #3878 says it must not be described as solved by moving one step:
   validates the whole set before it POSTs, but the POSTs are still per module;
 * **every publisher's source provenance**, and **last-green source selection** — MeshWeaver#3842
   and the generation work in #3461;
-* **core's own `plugins-bake`**, which publishes a NodeType and module set through a separate path.
+* ~~core's own `plugins-bake`~~ — removed by #6143; core CD publishes no module set any more.
 * **MeshWeaver.SocialMedia still publishes in-leg.** Its `module` job calls the pack lane with
   `publish:` set and no `publish-mode`, so each bundle still reaches the registry right after its
   own suite. `check-callers` names it on every SocialMedia pull request; adopting the lane there is
