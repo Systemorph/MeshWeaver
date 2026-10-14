@@ -2344,7 +2344,19 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                             };
                             Func<PostOptions, PostOptions> patchPostOptions = o =>
                             {
+                                // This write rides a ShuttingDown answer out — both arms below
+                                // (OWNER_SHUTTING_DOWN_REENQUEUE, LATE_SHUTTING_DOWN_REENQUEUE)
+                                // re-run the update against the next activation — so it says so on
+                                // the request. A teardown that discards it parked behind a young
+                                // activation's gates is then teardown-normal, not an Error naming
+                                // lost work (MeshWeaver#6733). The TYPE stays unmarked: other
+                                // producers of PatchDataRequest may not re-ask. Nor does the LAST
+                                // attempt: once MaxOwnerDisposingReenqueues is spent, a ShuttingDown
+                                // answer is the caller's terminal failure, so that discard stays an
+                                // Error and the claim is never made for it.
                                 o = o.WithTarget(new Address(_path!));
+                                if (attempt < MaxOwnerDisposingReenqueues)
+                                    o = o.ReaskingOnShutdown();
                                 return capturedContext is null
                                     ? o
                                     : o.WithAccessContext(capturedContext);
