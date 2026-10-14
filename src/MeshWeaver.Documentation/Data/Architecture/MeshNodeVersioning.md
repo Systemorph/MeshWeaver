@@ -138,6 +138,31 @@ A client/subscriber writing a node it does not own (a cross-hub `GetMeshNodeStre
 
 **Each write bumps once.** The write path that commits a change is the one that bumps. `MeshNodeTypeSource.UpdateImpl` re-stamps only a node whose incoming version did **not** already advance past what it previously carried (a sync-stream value update, a client-carried base version) — re-stamping a node the write path already bumped would count one edit twice.
 
+### A data change mints when it commits, not after
+
+`UpdateImpl` runs **after** the store content is fixed (`ITypeSource.Update` is side-effect-only), so a
+version it mints lands only in the type source's own diff bookkeeping — never in the committed node.
+That was the whole story for a `DataChangeRequest` that carried a node at the version it replaced (read
+the node, change it, send it back: a synced subscriber's write-back, an undo, an in-mesh script). The
+owner answered `Committed`, every reader saw the new content **at the old version**, and the change was
+never persisted: the persistence sampler's save carried the version the create had already made durable,
+so `HandleSaveMeshNode` dropped it as "already persisted" (the `<=` predicate below), the dispose flush
+skipped it on the same predicate, and a recycle reloaded the older row. An acknowledged change was
+silently gone.
+
+So the change pipeline now asks the type source before it merges: `ITypeSource.PrepareCommit(current,
+incoming)` runs inside the stream's apply turn (`WorkspaceOperations.UpdateDataChangeRequest`), and what
+it returns is what commits. `MeshNodeTypeSource` mints there with the same rule as `UpdateImpl`
+(`AdvanceVersion`): a node that changed but did not advance past the stored version commits at its
+`NextVersion`, a node the sender already advanced keeps its version, a node equal to the stored one but
+for its version is not a change, and a node the store does not hold yet is a create. `UpdateImpl` then
+finds nothing left to mint, so one edit is still one bump.
+
+Pinned by `ADataChangeOfTheOwnNodeSurvivesARecycleTest` (MeshWeaver.Graph.Test): a data change at the
+current version is sent to the node's own address, the hub is recycled at once, and the durable row and
+the fresh activation must carry the change at an advanced version. The negative control sends the same
+change with the version already advanced, the one shape that was always persisted.
+
 ## Not the Hub Clock (#325)
 
 `MessageHub.Version` increments once per message dispatch — it counts **operations the hub processed**. `MeshNode.Version` used to be stamped from it (`max(hubVersion, current + 1)`), which had two consequences that are now gone:
@@ -177,7 +202,7 @@ For a patch, both used to fire. That is not merely a wasted write: **the two are
 **`PostCommitFlushRegistry` is what keeps it to one.** The flush records `path → durable version` on the write's emission; `HandleSaveMeshNode` and the dispose-time `FlushPendingOwnSave` drop any sampled state at or below that mark. Three properties make the predicate sound:
 
 - **A version, not a snapshot stamp.** The sampler's gate chain runs in the *same synchronous fan-out* as the flush and — having subscribed at hub init — runs **first**, so nothing the flush stamps can be visible to it. The mark is therefore read at **handler** time, after the flush settled. `OwnNodeCache.PersistedSnapshot` cannot serve here — and, it turned out, could not serve the initial-**load** echo it was written for either: see below.
-- **`<=` cannot suppress newer content.** Two distinct own states never share a version — `MeshNodeTypeSource.UpdateImpl` re-stamps any own update arriving at or below its previous version with `NextVersion`.
+- **`<=` cannot suppress newer content.** Two distinct own states never share a version — every write path mints, and a data change that arrives at or below its previous version is minted at commit by `MeshNodeTypeSource.PrepareCommit` (see "A data change mints when it commits, not after" above; before that, the mint happened only in `UpdateImpl`'s bookkeeping, and this predicate dropped the change).
 - **It fails open.** The mark is raised only on a write that actually emitted (a failed flush, or the try-then-claim `null` sentinel, leaves the sampler as the writer of record), and it is dropped on delete so a same-id recreate at `Version = 1` is never read as already-persisted.
 
 It is registered at the mesh **root** (`MeshBuilder`, next to `RecentlyDeletedRegistry`) because the flush is a mesh-level singleton while its reader runs on the per-node owner hub; a hub-level registration would hand each side its own instance and neither would see the other's writes.
