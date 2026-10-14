@@ -304,7 +304,8 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
 
     /// <summary>
     /// Registers a write the storage write guard has ADMITTED, for the paths it writes. Dispose the
-    /// returned handle when the write terminates — completion, error or unsubscription alike — and
+    /// returned handle when the write ITSELF terminates — completion or error; a caller unsubscribing does
+    /// not stop an eager store write, so it is not a settlement — and
     /// any deletion waiting in <see cref="AdmittedWritesSettled"/> re-checks. Register BEFORE testing
     /// <see cref="IsUnderActiveDeletion"/>, never after: that order is what makes the two sides see
     /// each other (see the section comment).

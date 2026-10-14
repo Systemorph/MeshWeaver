@@ -59,7 +59,11 @@ verification.
 The ordering is closed from the delete's side, in two halves:
 
 - **The guard REGISTERS every write it admits** (`RecentlyDeletedRegistry.AdmitWrite`) until that
-  write terminates — completion, error or unsubscription.
+  write ITSELF terminates — completion or error. A caller unsubscribing is NOT a settlement: the
+  store adapters are eager (`IIoPool.Run` keeps the I/O running whoever unsubscribes), so a write
+  whose caller timed out can still commit. The guard therefore connects every admitted write
+  itself, releases the registration only on the write's own terminal, and hands the caller a
+  replay; an unsubscribe only stops the caller listening.
 - **The delete, once its scope is open, waits for every write admitted under its root to settle**
   (`AdmittedWritesSettled`, its own bounded stage `settle-admitted-writes`) before it checks the
   expected version, takes the plan, or removes anything. `WithinSubtreeDeletion` — the move and the

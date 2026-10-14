@@ -22,7 +22,9 @@ namespace MeshWeaver.Hosting.Test;
 /// <see cref="InMemoryStorageAdapter"/> that can PARK writes to one path until the test releases
 /// them. It sits BELOW the production decorators, so a parked write has already been admitted by
 /// the subtree-deletion guard — exactly a write queued on the I/O pool, or slow at the backend,
-/// when a delete begins. Parking is an Rx continuation on the release, never a sleep.
+/// when a delete begins. Parking is an Rx continuation on the release, never a sleep. A parked
+/// write is EAGER, as the production stores are (<c>IIoPool.Run</c>): it commits once released
+/// even if its caller has unsubscribed.
 /// </summary>
 internal sealed class ParkedWriteStorageAdapter(InMemoryStorageAdapter inner) : IStorageAdapter
 {
@@ -56,7 +58,11 @@ internal sealed class ParkedWriteStorageAdapter(InMemoryStorageAdapter inner) : 
                 return inner.Write(node, options);
             _writeParked.OnNext(Unit.Default);
             _writeParked.OnCompleted();
-            return _release.SelectMany(_ => inner.Write(node, options));
+            // EAGER, like IIoPool.Run under every production store: once called, the write runs
+            // to its own terminal whoever unsubscribes — so a caller's unsubscribe cannot cancel it.
+            var parked = _release.SelectMany(_ => inner.Write(node, options)).Replay();
+            parked.Connect();
+            return parked.AsObservable();
         });
 
     /// <inheritdoc />
@@ -160,8 +166,37 @@ public class AWriteAdmittedBeforeADeleteNeverRecreatesItTest(ITestOutputHelper o
 
     private RecentlyDeletedRegistry Registry => Mesh.ServiceProvider.GetRequiredService<RecentlyDeletedRegistry>();
 
+    /// <summary>
+    /// The window in which a delete that does NOT wait for the admitted write would answer. It must
+    /// sit strictly INSIDE the delete's own stage budget: wider, and the waiting delete's
+    /// <c>settle-admitted-writes</c> stage times out first, and the instrument reads the product's
+    /// own timeout as "answered while parked". On CI <see cref="TestTimeouts.Quick"/> is the
+    /// CI-scaled convergence over three (~36 s), past the 30 s budget, which is exactly how it failed.
+    /// </summary>
+    private TimeSpan WhileParkedWindow
+    {
+        get
+        {
+            var budget = (Mesh.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions()).Timeout;
+            var quarter = TimeSpan.FromTicks(budget.Ticks / 4);
+            return quarter < TestTimeouts.Quick ? quarter : TestTimeouts.Quick;
+        }
+    }
+
     [Fact]
-    public async Task AWriteAdmittedBeforeTheDelete_CommitsBeforeIt_AndTheNodeStaysDeleted()
+    public Task AWriteAdmittedBeforeTheDelete_CommitsBeforeIt_AndTheNodeStaysDeleted()
+        => RunScenario(callerUnsubscribes: false);
+
+    /// <summary>
+    /// The same ordering when the write's CALLER gives up (a timeout, an unsubscribe) while the write
+    /// is in flight. The store write is eager and still commits, so the caller leaving must not
+    /// release the admission: the delete still waits for the write's own terminal.
+    /// </summary>
+    [Fact]
+    public Task AWriteWhoseCallerUnsubscribed_IsStillWaitedFor_AndTheNodeStaysDeleted()
+        => RunScenario(callerUnsubscribes: true);
+
+    private async Task RunScenario(bool callerUnsubscribes)
     {
         var node = await NodeFactory.CreateNode(
                 new MeshNode($"admitted-{Guid.NewGuid():N}"[..17], TestPartition) { Name = "seed", NodeType = "Markdown" })
@@ -174,7 +209,7 @@ public class AWriteAdmittedBeforeADeleteNeverRecreatesItTest(ITestOutputHelper o
             .Materialize()
             .Where(n => n.Kind != System.Reactive.NotificationKind.OnCompleted)
             .Replay(1);
-        using var writeConnection = write.Connect();
+        var writeConnection = write.Connect();
 
         // Released explicitly at step 5; the finally only guarantees a failing assertion cannot
         // strand the parked write (Release is idempotent).
@@ -182,6 +217,10 @@ public class AWriteAdmittedBeforeADeleteNeverRecreatesItTest(ITestOutputHelper o
         {
             await _store.WriteParked.Should().Within(TestTimeouts.Convergence)
                 .Emit("the write passed the guard and is parked at the store", cancellationToken: Ct);
+
+            // The caller walks away from the in-flight write. The (eager) store write keeps going.
+            if (callerUnsubscribes)
+                writeConnection.Dispose();
 
             // 2. The delete starts while the write is in flight.
             var delete = ObserveNodeOperation(new DeleteNodeRequest(path))
@@ -201,9 +240,10 @@ public class AWriteAdmittedBeforeADeleteNeverRecreatesItTest(ITestOutputHelper o
                 .Emit("the delete has begun", cancellationToken: Ct);
 
             // 4. Give a delete that does NOT wait for the admitted write every chance to finish while it
-            //    is parked. A "nothing happened" reading, so a bounded window is the instrument.
+            //    is parked. A "nothing happened" reading, so a bounded window is the instrument — and
+            //    it sits inside the delete's own budget (WhileParkedWindow).
             var whileParked = await delete.Select(r => (DeleteNodeResponse?)r)
-                .Merge(Observable.Timer(TestTimeouts.Quick).Select(_ => (DeleteNodeResponse?)null))
+                .Merge(Observable.Timer(WhileParkedWindow).Select(_ => (DeleteNodeResponse?)null))
                 .Should().Within(TestTimeouts.Convergence).Emit("either the answer or the window", cancellationToken: Ct);
             Output.WriteLine(whileParked is null
                 ? "[delete] still waiting for the admitted write while it is parked"
@@ -211,17 +251,23 @@ public class AWriteAdmittedBeforeADeleteNeverRecreatesItTest(ITestOutputHelper o
 
             // 5. Release the admitted write and let everything settle.
             _store.Release();
-            var writeOutcome = await write.Should().Within(TestTimeouts.Convergence)
-                .Emit("the admitted write terminates once released", cancellationToken: Ct);
-            Output.WriteLine($"[write] {writeOutcome.Kind} {writeOutcome.Exception?.Message}");
+            if (!callerUnsubscribes)
+            {
+                var writeOutcome = await write.Should().Within(TestTimeouts.Convergence)
+                    .Emit("the admitted write terminates once released", cancellationToken: Ct);
+                Output.WriteLine($"[write] {writeOutcome.Kind} {writeOutcome.Exception?.Message}");
+                writeOutcome.Kind.Should().Be(System.Reactive.NotificationKind.OnNext,
+                    "the admitted write commits — BEFORE the delete, which then removes it");
+            }
 
             var response = await delete.Should().Within(TestTimeouts.Convergence)
                 .Emit("the delete answers", cancellationToken: Ct);
             Output.WriteLine($"[delete] success={response.Success} error={response.Error}");
             response.Success.Should().BeTrue(response.Error ?? "nothing objects to deleting this node");
 
-            // THE SUBJECT: the delete answered "removed" — the store of record must agree, read AFTER
-            // the write admitted before the delete has terminated.
+            // THE SUBJECT: the delete answered "removed" — the store of record must agree. Read once
+            // the admitted write has been released; a delete that waited for it answered only after
+            // it committed.
             var stored = await _store.Read(path, Mesh.JsonSerializerOptions)
                 .DefaultIfEmpty(null)
                 .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: Ct);
@@ -232,12 +278,11 @@ public class AWriteAdmittedBeforeADeleteNeverRecreatesItTest(ITestOutputHelper o
 
             whileParked.Should().BeNull(
                 "the delete must wait for the write admitted before it, not answer while it is in flight");
-            writeOutcome.Kind.Should().Be(System.Reactive.NotificationKind.OnNext,
-                "the admitted write commits — BEFORE the delete, which then removes it");
         }
         finally
         {
             _store.Release();
+            writeConnection.Dispose();
         }
     }
 }

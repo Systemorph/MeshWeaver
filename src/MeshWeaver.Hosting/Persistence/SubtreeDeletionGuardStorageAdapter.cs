@@ -151,10 +151,19 @@ internal sealed class SubtreeDeletionGuardStorageAdapter(
     /// registry FIRST and only then tested against the active deletions — the order that makes a
     /// deletion opening concurrently either refuse this write or wait for it
     /// (<see cref="RecentlyDeletedRegistry.AdmittedWritesSettled"/>), never miss it. An admitted
-    /// write stays registered until it terminates (completion, error or unsubscription), so a
+    /// write stays registered until the WRITE ITSELF terminates (completion or error), so a
     /// deletion whose scope opened after the admission runs only once this write has committed:
     /// its storage delete then removes what the write stored, instead of the write recreating what
-    /// the delete removed. Cold, like the write it wraps.
+    /// the delete removed. Cold: nothing is registered or written before Subscribe.
+    ///
+    /// <para>🚨 <b>Once admitted, the write runs to its own terminal, detached from the caller's
+    /// subscription.</b> The store adapters below are EAGER (<c>IIoPool.Run</c> schedules the I/O
+    /// on call and keeps it running whoever unsubscribes), so a caller's timeout or unsubscribe
+    /// does NOT stop the write — it can still commit. Releasing the registration on that
+    /// unsubscribe would let a delete proceed while the write is still on its way and recreate the
+    /// node after it. So the admitted write is connected here, its registration is released only
+    /// by its own completion or error, and the caller observes a replay of it; an unsubscribe only
+    /// stops the caller listening.</para>
     /// </summary>
     /// <param name="paths">Every node path the write commits.</param>
     /// <param name="refuse">Builds the refusal for the first path found under an active deletion.</param>
@@ -163,15 +172,32 @@ internal sealed class SubtreeDeletionGuardStorageAdapter(
         IReadOnlyCollection<string> paths,
         Func<string, string?, IObservable<T>> refuse,
         Func<IObservable<T>> write)
-        => Observable.Using(
-            () => registry!.AdmitWrite(paths),
-            _ =>
+        => Observable.Defer(() =>
+        {
+            var admission = registry!.AdmitWrite(paths);
+            foreach (var path in paths)
+                if (registry.IsUnderActiveDeletion(path, out var root))
+                {
+                    admission.Dispose();
+                    return refuse(path, root);
+                }
+
+            IObservable<T> inner;
+            try
             {
-                foreach (var path in paths)
-                    if (registry!.IsUnderActiveDeletion(path, out var root))
-                        return refuse(path, root);
-                return write();
-            });
+                inner = write();
+            }
+            catch
+            {
+                // Not swallowed: the registration is released and the fault propagates.
+                admission.Dispose();
+                throw;
+            }
+
+            var outcome = inner.Finally(admission.Dispose).Replay();
+            outcome.Connect();
+            return outcome.AsObservable();
+        });
 
     /// <inheritdoc />
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
