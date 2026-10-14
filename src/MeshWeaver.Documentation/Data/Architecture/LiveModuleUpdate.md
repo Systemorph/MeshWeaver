@@ -188,7 +188,10 @@ interface it was created for) every named configuration a module made was theref
 root `IHttpClientFactory` handed out a module's typed client with none of its headers, base address or timeout,
 at boot, with nothing logged. The root now holds a `ModuleConfigureOptionsForwarder<T>` for every forwarded
 `IConfigureOptions<T>`; it applies the CURRENT generation's setup exactly as `OptionsFactory<T>` would — by name
-when it is named, to the default name otherwise. And because `IOptionsMonitor<T>` builds a named instance once
+when it is named, to the default name otherwise. `HealthCheckServiceOptions` keeps its own forwarder
+(`ModuleHealthCheckOptionsForwarder`, which also rebinds each added check to activate in the module's scope), and
+that forwarder is named in the same way, so a module's `Configure<HealthCheckServiceOptions>("name", …)` reaches
+`IOptionsMonitor.Get("name")` (MeshWeaver#6749). And because `IOptionsMonitor<T>` builds a named instance once
 and caches it, `ModuleContexts.CommitAll` clears the root's `IOptionsMonitorCache<T>` for every options type the
 swapped generations configure (configure, post-configure or validate), after they are current — otherwise N+1's
 client kept N's configuration, and the cached delegates kept N's collectible context reachable. Not reached:

@@ -172,15 +172,27 @@ internal sealed class ModuleHostedServicesHost(ModuleContexts contexts, ILogger?
 /// registration it added to activate in that module's CURRENT scope — the same scope the check's
 /// dependencies (and the hosted service that feeds them) are served from, read at every activation so a
 /// live swap is followed.</para>
+///
+/// <para>🚨 It is an <see cref="IConfigureNamedOptions{TOptions}"/>, as <see cref="ModuleConfigureOptionsForwarder{TOptions}"/>
+/// is, and applies the module's setup by name exactly as <see cref="OptionsFactory{TOptions}"/> would: a module's
+/// <c>Configure&lt;HealthCheckServiceOptions&gt;("name", …)</c> must reach <c>IOptionsMonitor.Get("name")</c>, and a
+/// setup that is not named reaches the default name only (MeshWeaver#6749).</para>
 /// </summary>
 internal sealed class ModuleHealthCheckOptionsForwarder(ModuleContexts contexts, string module, int index)
-    : IConfigureOptions<HealthCheckServiceOptions>
+    : IConfigureNamedOptions<HealthCheckServiceOptions>
 {
-    public void Configure(HealthCheckServiceOptions options)
+    public void Configure(HealthCheckServiceOptions options) => Configure(Options.DefaultName, options);
+
+    public void Configure(string? name, HealthCheckServiceOptions options)
     {
-        var target = (IConfigureOptions<HealthCheckServiceOptions>)contexts.ResolveModuleService(module, index);
+        var target = contexts.ResolveModuleService(module, index);
         var before = options.Registrations.ToHashSet(ReferenceEqualityComparer.Instance);
-        target.Configure(options);
+        if (target is IConfigureNamedOptions<HealthCheckServiceOptions> named)
+            named.Configure(name, options);
+        else if (name == Options.DefaultName)
+            ((IConfigureOptions<HealthCheckServiceOptions>)target).Configure(options);
+        else
+            return;
         foreach (var registration in options.Registrations.Where(r => !before.Contains(r)).ToArray())
         {
             var activate = registration.Factory;
