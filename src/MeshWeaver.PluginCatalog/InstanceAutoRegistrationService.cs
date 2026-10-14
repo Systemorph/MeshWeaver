@@ -2257,8 +2257,9 @@ public sealed class InstanceAutoRegistrationService(
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
         var configuration = hub.ServiceProvider.GetService<IConfiguration>();
 
-        // (Fresh: a not-yet-installed carrier this phase decided; Landed: the module it newly landed).
-        IObservable<(bool Fresh, string? Landed)> One(InstallCandidate candidate, PluginBundleClient bundles)
+        // (Fresh: a not-yet-installed carrier this phase decided; Landed: the module it newly landed;
+        // Refused: an entitlement or licence gate refused it).
+        IObservable<(bool Fresh, string? Landed, bool Refused)> One(InstallCandidate candidate, PluginBundleClient bundles)
         {
             var package = candidate.Package;
             return persistence.Read($"{PackageInstaller.InstalledPartition}/{package.Id}", hub.JsonSerializerOptions)
@@ -2274,15 +2275,15 @@ public sealed class InstanceAutoRegistrationService(
                             "[DefaultInstall] module phase: the install record of {Id} could not be read "
                             + "({Cause}) — its module {Module} is not landed ahead of its content; the "
                             + "install funnel decides it as before.", package.Id, cause, package.Module);
-                        return Observable.Return((Fresh: false, Landed: (string?)null));
+                        return Observable.Return((Fresh: false, Landed: (string?)null, Refused: false));
                     }
                     if (!state.Fresh)
-                        return Observable.Return((Fresh: false, Landed: (string?)null));
+                        return Observable.Return((Fresh: false, Landed: (string?)null, Refused: false));
                     if (PackageParameters.Missing(configuration, package) is { Count: > 0 })
                         // The content phase refuses it by name (PackageParameters.Require, at Error);
                         // saying it twice adds nothing, landing its module ahead would add a module
                         // for a package this environment cannot run.
-                        return Observable.Return((Fresh: false, Landed: (string?)null));
+                        return Observable.Return((Fresh: false, Landed: (string?)null, Refused: false));
                     var principal = AuthorizingPrincipal(candidate);
                     return PackageEntitlement.Authorize(hub, package, principal, logger)
                         // The licence gate the installer applies after the entitlement
@@ -2298,13 +2299,13 @@ public sealed class InstanceAutoRegistrationService(
                         .Select(outcome =>
                         {
                             if (outcome.FilesLanded > 0)
-                                return (Fresh: true, Landed: package.Module);
+                                return (Fresh: true, Landed: package.Module, Refused: false);
                             if (outcome.Failure is { } failure)
                                 logger.LogWarning(
                                     "[DefaultInstall] module phase: {Module} of {Id} did not land — {Failure}. "
                                     + "Packages whose nodes need its NodeTypes fail validation this pass "
                                     + "and are retried by the next.", package.Module, package.Id, failure);
-                            return (Fresh: true, Landed: (string?)null);
+                            return (Fresh: true, Landed: (string?)null, Refused: false);
                         })
                         // A refusal is the content phase's to report (it applies the same gate and
                         // records it as a skip or a failure); here it only means "no module ahead".
@@ -2316,12 +2317,12 @@ public sealed class InstanceAutoRegistrationService(
                             // the module-set proposal, or an entry an earlier pass landed would be
                             // proposed — and activated — against the current refusal.
                             if (ex is PackageAuthorizationException or LicenseAcceptanceRequiredException)
-                                return Observable.Return((Fresh: false, Landed: (string?)null));
+                                return Observable.Return((Fresh: false, Landed: (string?)null, Refused: true));
                             logger.LogWarning(ex,
                                 "[DefaultInstall] module phase: {Module} of {Id} did not land — {Cause}. "
                                 + "The content phase decides the package as before.",
                                 package.Module, package.Id, ex.Message);
-                            return Observable.Return((Fresh: true, Landed: (string?)null));
+                            return Observable.Return((Fresh: true, Landed: (string?)null, Refused: false));
                         });
                 });
         }
@@ -2340,6 +2341,20 @@ public sealed class InstanceAutoRegistrationService(
                     // the proposal then would keep it out of the boot set for good.
                     if (!outcomes.Any(o => o.Fresh))
                         return Observable.Return(ImmutableList<string>.Empty);
+                    // 🚨 The set is derived from the WHOLE activation record, so a proposal here would
+                    // also carry a module an earlier pass landed for a package a gate refuses NOW.
+                    // A wave with a refusal therefore proposes nothing; the modules it landed load
+                    // once a wave without a refusal (or the install funnel, after the package's own
+                    // gates pass) proposes.
+                    if (outcomes.Any(o => o.Refused))
+                    {
+                        logger.LogWarning(
+                            "[DefaultInstall] module phase: a selected package was refused by its entitlement or "
+                            + "licence gate, so this wave proposes NO module set (the record it would derive from "
+                            + "may carry that package's module). Landed this wave: [{Modules}].",
+                            string.Join(", ", landed));
+                        return Observable.Return(landed.ToImmutableList());
+                    }
                     if (landed.Count > 0)
                         logger.LogInformation(
                         "[DefaultInstall] module phase: landed {Count} module(s) BEFORE any package content — "

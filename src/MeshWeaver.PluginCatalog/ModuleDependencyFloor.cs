@@ -169,7 +169,9 @@ public static class ModuleDependencyFloor
         ArgumentNullException.ThrowIfNull(aboutToInstall);
         return ReadInstalled(hub).SelectMany(installed =>
         {
-            var recorded = installed.Select(p => p.Id).ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+            // Package ids are ORDINAL everywhere they are matched (PluginGrantEntry.Matches,
+            // PackageDependencyGraph) — never case-folded here.
+            var recorded = installed.Select(p => p.Id).ToImmutableHashSet(StringComparer.Ordinal);
             return landing.ProposeCheckedModuleSet(installed
                 .Concat(aboutToInstall.Where(p => !string.IsNullOrWhiteSpace(p.Id) && !recorded.Contains(p.Id)))
                 .ToImmutableList());
