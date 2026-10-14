@@ -266,9 +266,13 @@ public partial class QueryParser
         {
             // List: (A OR B OR C)
             i++; // consume (
-            var listValues = ParseListValues(input, ref i);
+            var listValues = ParseListValues(input, ref i, out var allQuoted);
             op = isNegated ? QueryOperator.NotIn : QueryOperator.In;
-            return (new QueryCondition(field, op, listValues), i - start, false);
+            // A ONE-value list whose value was quoted (`namespace:("x*")`) is the same literal as
+            // `namespace:"x*"` (#6752): carry the flag, or the reserved-qualifier pass re-reads its
+            // `*` as a glob — and turns `-namespace:("x*")` into a POSITIVE Like. A multi-value list
+            // is exact membership already and needs no flag.
+            return (new QueryCondition(field, op, listValues), i - start, listValues.Length == 1 && allQuoted);
         }
         else
         {
@@ -369,9 +373,10 @@ public partial class QueryParser
     /// <summary>
     /// Parses values inside parentheses: (A OR B OR C)
     /// </summary>
-    private string[] ParseListValues(string input, ref int i)
+    private string[] ParseListValues(string input, ref int i, out bool allQuoted)
     {
         var values = new List<string>();
+        allQuoted = true;
 
         while (i < input.Length && input[i] != ')')
         {
@@ -390,9 +395,12 @@ public partial class QueryParser
             }
 
             // Parse a value
-            var value = ParseSingleValue(input, ref i);
+            var value = ParseSingleValue(input, ref i, stopAtParens: true, out var quoted);
             if (!string.IsNullOrEmpty(value))
+            {
                 values.Add(value);
+                allQuoted &= quoted;
+            }
         }
 
         if (i < input.Length && input[i] == ')')
@@ -586,7 +594,9 @@ public partial class QueryParser
                         // Only a positive equality anchors the query; every other operator — a
                         // negation or an ordered comparison (`namespace:>"x*"`) — stays a FILTER
                         // with its operator, so nothing is dropped.
-                        if (token.Condition!.Operator is QueryOperator.Equal)
+                        // A one-value quoted list (`namespace:("x")`, #6752) is the same equality.
+                        if (token.Condition!.Operator is QueryOperator.Equal
+                            || (token.Condition.Operator is QueryOperator.In && token.Condition.Values.Length == 1))
                         {
                             path = value;
                             namespaceUsed = true;
@@ -613,7 +623,11 @@ public partial class QueryParser
                     // dropped and the exclusion returned exactly what it was written to exclude.
                     // Left as `namespace NotEqual value` it is evaluated by every backend, a `*` in
                     // the value reading as the complement of the glob (see QueryWildcard).
-                    if (token.Condition!.Operator is QueryOperator.NotEqual)
+                    // A one-value NEGATED list `-namespace:(X)` (#6752) is the same exclusion as
+                    // `-namespace:X`: it used to skip this arm (it is a NotIn, not a NotEqual) and fall
+                    // through to `path = X`, a positive anchor.
+                    if (token.Condition!.Operator is QueryOperator.NotEqual
+                        || (token.Condition.Operator is QueryOperator.NotIn && token.Condition.Values.Length == 1))
                     {
                         // A negated WILDCARD is widened with its positive twin once `scope:` is
                         // known — to the AND of the two negated patterns, the complement of the

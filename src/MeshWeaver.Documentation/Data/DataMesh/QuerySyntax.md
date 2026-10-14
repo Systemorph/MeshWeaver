@@ -116,7 +116,12 @@ namespace:"acme/Docs/a|b"     # exactly the namespace acme/Docs/a|b — not a OR
 namespace:"acme/report*"      # exactly the namespace acme/report* — not a prefix pattern
 -name:"draft*"                # every node whose name is not literally draft*
 path:"a/b c"|"a"              # the bar BETWEEN quoted values is still alternation
+namespace:("acme/report*")    # a one-value list keeps the quoting: the same literal anchor
+-namespace:("acme/report*")   # ... and its negation stays an exclusion of exactly that namespace
 ```
+
+A one-value list is read as its single value: `-namespace:(acme/Docs)` excludes like
+`-namespace:acme/Docs`, never anchors the query at `acme/Docs` (#6752).
 
 So a caller that builds a `namespace:` or `path:` token from a string it does not control (a
 document path, a user-typed name) quotes it and gets exactly that one value — provided the string

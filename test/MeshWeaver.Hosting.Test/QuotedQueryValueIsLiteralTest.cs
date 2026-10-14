@@ -97,4 +97,48 @@ public class QuotedQueryValueIsLiteralTest
         condition.Operator.Should().Be(op, "no Like, no In-split; a negated literal star is a one-value NotIn so no executor globs it");
         string.Join(",", condition.Values).Should().Be(value);
     }
+
+    /// <summary>#6752 — a ONE-value list whose value is quoted is the same literal as the bare quoted
+    /// value: it anchors at exactly that namespace, never a LIKE pattern.</summary>
+    [Fact]
+    public void AOneValueQuotedNamespaceListIsThatNamespace()
+    {
+        var parsed = Parser.Parse("namespace:(\"acme/report*\")");
+        parsed.Path.Should().Be("acme/report*", "the quoted value is the anchor, its `*` is literal");
+        parsed.Filter.Should().BeNull("a quoted value may not come out as a LIKE pattern");
+    }
+
+    /// <summary>#6752 — a ONE-value negated list stays an EXCLUSION, quoted (literal) or not (the
+    /// glob complement, as `-namespace:x*`); it was a positive Like / a positive anchor.</summary>
+    [Theory]
+    [InlineData("-namespace:(\"acme/report*\") partitions:all", "acme/report*")]
+    [InlineData("-namespace:(acme/report*) partitions:all", "acme/report-2026")]
+    [InlineData("-namespace:(acme/Docs) partitions:all", "acme/Docs")]
+    public void AOneValueNegatedNamespaceListExcludes(string query, string excludedNamespace)
+    {
+        var parsed = Parser.Parse(query);
+        parsed.Path.Should().BeNullOrEmpty("an exclusion never anchors the query");
+        var condition = parsed.Filter.Should().BeOfType<QueryComparison>().Subject.Condition;
+        condition.Selector.Should().Be("namespace");
+        condition.Operator.Should().NotBe(QueryOperator.Like, "the negation must survive");
+        Evaluator.Matches(new MeshNode("x", excludedNamespace) { Name = "x" }, parsed).Should().BeFalse($"`{excludedNamespace}` is excluded");
+        Evaluator.Matches(new MeshNode("y", "other/ns") { Name = "y" }, parsed).Should().BeTrue("an unrelated namespace is kept");
+    }
+
+    /// <summary>#6752 negative control — the quoted negated list is LITERAL: a namespace the `*`
+    /// would glob is kept.</summary>
+    [Fact]
+    public void AOneValueNegatedQuotedListDoesNotGlob()
+    {
+        var parsed = Parser.Parse("-namespace:(\"acme/report*\") partitions:all");
+        Evaluator.Matches(new MeshNode("z", "acme/report-2026") { Name = "z" }, parsed).Should().BeTrue("the quoted `*` is literal");
+    }
+
+    /// <summary>#6752 negative control — an UNQUOTED one-value list keeps its glob.</summary>
+    [Fact]
+    public void AnUnquotedOneValueNamespaceListStillGlobs()
+    {
+        var condition = Parser.Parse("namespace:(acme/report*) partitions:all").Filter.Should().BeOfType<QueryComparison>().Subject.Condition;
+        condition.Operator.Should().Be(QueryOperator.Like);
+    }
 }
