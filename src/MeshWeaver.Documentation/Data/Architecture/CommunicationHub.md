@@ -386,6 +386,7 @@ function of the filter and the legs.
 |---|---|---|
 | search box | `search` | the term goes to the query engine with EVERY leg, as free text (full text and the semantic index), under the owner's identity — never a match over the rows already loaded |
 | one icon toggle per source (`ToggleButtonControl`), beside the search | `sources/{key}` (the id, hex-encoded) | shows or hides what one provider brought, by its symbol (`InboxQueryLeg.SourceIcon`), its name the tooltip; a source with no entry is shown, so a leg a package brings later never arrives switched off — unless its legs say `ShownByDefault: false` (notifications: the feed is long, so it is one click away and the bell still shows it) |
+| the Only select (`SelectControl`), before the toggles | `only` (a source key, empty for all) | Only / Show / Hide per source: picking one source lists that source alone and wins over its switch (so "only Outlook" shows Outlook even while its toggle is off); "All sources" gives the switches back exactly as they were. A side-menu category still wins over both, and what Only hides of the "Needs you" band is counted in the hidden-obligations notice like a switch |
 | ⚙︎ settings menu (`MenuItemControl`, icon only) | `order`, `sources/{key}` | the order select — `InboxOrder.Newest` by default, everything by date as a mail client lists it; also oldest, by title, by source, and what needs you first (band rank) — and the same source switches with their names |
 | the grid's checkboxes | `inboxSelection` | the ticked row keys, read by Delete |
 

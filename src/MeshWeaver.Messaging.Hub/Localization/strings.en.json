@@ -1951,6 +1951,8 @@
   "inbox.reject": "Reject",
   "inbox.nothingToDecide": "Tick the approval requests to decide.",
   "inbox.category.all": "All",
+  "inbox.only": "Only",
+  "inbox.only.all": "All sources",
   "inbox.category.Conversations": "Conversations",
   "inbox.decide.capped": "{0} more were not decided: one click decides at most {1}. Decide them with another click.",
   "inbox.approval.noAnswer": "no answer from the item",

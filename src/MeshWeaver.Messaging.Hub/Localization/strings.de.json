@@ -1951,6 +1951,8 @@
   "inbox.reject": "Ablehnen",
   "inbox.nothingToDecide": "Wählen Sie die zu entscheidenden Genehmigungsanfragen aus.",
   "inbox.category.all": "Alle",
+  "inbox.only": "Nur",
+  "inbox.only.all": "Alle Quellen",
   "inbox.category.Conversations": "Unterhaltungen",
   "inbox.decide.capped": "{0} weitere wurden nicht entschieden: Ein Klick entscheidet höchstens {1}. Entscheiden Sie sie mit einem weiteren Klick.",
   "inbox.approval.noAnswer": "keine Antwort vom Eintrag",
