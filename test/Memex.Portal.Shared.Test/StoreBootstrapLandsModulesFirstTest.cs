@@ -68,7 +68,7 @@ public abstract class StoreBootstrapTestBase(ITestOutputHelper output) : Monolit
     /// <c>Chat</c> (modules, rooted on <c>Store/Plugin</c>, Chat requiring AI), and <c>Games</c> — a
     /// <c>preInstalled</c> package nobody names.
     /// </summary>
-    protected static readonly IReadOnlyList<RepoFile> Repo =
+    protected static readonly ImmutableArray<RepoFile> Repo =
     [
         new("Store/index.json",
             """{"$type":"MeshNode","id":"Store","namespace":"","path":"Store","mainNode":"Store","name":"Store","nodeType":"Space","state":"Active"}"""),
@@ -148,12 +148,13 @@ public abstract class StoreBootstrapTestBase(ITestOutputHelper output) : Monolit
     /// </summary>
     private sealed class BootstrapRegistry : HttpMessageHandler
     {
-        private static readonly IReadOnlyDictionary<string, string> Modules = new Dictionary<string, string>
-        {
-            ["AI"] = AiModule,
-            ["EntityViews"] = ViewsModule,
-            ["Chat"] = ChatModule,
-        };
+        private static readonly ImmutableDictionary<string, string> Modules = ImmutableDictionary.CreateRange(
+            StringComparer.Ordinal,
+            [
+                KeyValuePair.Create("AI", AiModule),
+                KeyValuePair.Create("EntityViews", ViewsModule),
+                KeyValuePair.Create("Chat", ChatModule),
+            ]);
 
         private static PackageManifest Package(string id, bool preInstalled, params string[] requires) => new()
         {
@@ -169,7 +170,7 @@ public abstract class StoreBootstrapTestBase(ITestOutputHelper output) : Monolit
             Module = Modules.TryGetValue(id, out var module) ? module : null,
         };
 
-        private static readonly IReadOnlyList<PackageManifest> Listing =
+        private static readonly ImmutableArray<PackageManifest> Listing =
         [
             Package("Store", preInstalled: false),
             Package("AI", preInstalled: true, "Store@^1.0.0"),

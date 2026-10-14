@@ -134,7 +134,8 @@ public sealed class PluginCatalogOptions
     /// <see cref="PackageManifest.PreInstalled"/> — the platform's own baseline catalogs (the
     /// Agents and Skills libraries, Essentials, …). <b>Applies by default wherever the deployment
     /// does not name its packages</b>: the platform only works when its baseline is present, so an
-    /// operator who declares nothing opts OUT deliberately rather than having to know to opt in. Set <c>PluginCatalog:InstallPreInstalledPackages=false</c> to
+    /// operator opts OUT deliberately (or by naming an explicit set) rather than having to know to
+    /// opt in. Set <c>PluginCatalog:InstallPreInstalledPackages=false</c> to
     /// suppress it entirely (an air-gapped or hand-curated instance that manages its own content).
     ///
     /// <para>Unlike <see cref="InstallByDefault"/> — which SEEDS each package once, per the
@@ -146,16 +147,32 @@ public sealed class PluginCatalogOptions
     /// an instance whose baseline partition was lost (#902 — the platform's agent catalog vanished
     /// from the production portal and nothing could bring it back).</para>
     ///
-    /// <para>🚨 <b>Unset (null, the default) it follows <see cref="InstallByDefault"/></b> (the
+    /// <para>🚨 <b>Unset it follows <see cref="InstallByDefault"/></b> (the
     /// platform bootstrap, 2026-10-14): the baseline applies unless <see cref="InstallByDefault"/>
     /// declares an EXPLICIT set — every entry naming a package (<c>Source/Package</c>), none a whole
     /// source (<c>Source/*</c>). A deployment that names its packages gets exactly those plus their
     /// declared <c>requires</c>; until this, the baseline added every <c>preInstalled</c> package of
     /// every source on top (a fresh control instance naming five packages selected 48). Set it
     /// <c>true</c> to keep the baseline beside a declared set, <c>false</c> to suppress it
-    /// everywhere — an explicit value always wins.</para>
+    /// everywhere — an explicit value always wins. The getter keeps reading <c>true</c> while
+    /// unset (the surface and its default are unchanged); the decision reads
+    /// <see cref="InstallPreInstalledPackagesConfigured"/>, which tells "unset" from "true".</para>
     /// </summary>
-    public bool? InstallPreInstalledPackages { get; set; }
+    public bool InstallPreInstalledPackages
+    {
+        get => installPreInstalledPackages ?? true;
+        set => installPreInstalledPackages = value;
+    }
+
+    private bool? installPreInstalledPackages;
+
+    /// <summary>
+    /// <see cref="InstallPreInstalledPackages"/> as CONFIGURED: null when nothing set it (no
+    /// configuration key, no assignment), else the value set. What the default install's baseline
+    /// decision reads — an explicit value wins, an unset one follows
+    /// <see cref="InstallByDefault"/>.
+    /// </summary>
+    public bool? InstallPreInstalledPackagesConfigured => installPreInstalledPackages;
     /// <summary>This installation's public base URL, recorded on the instance node (advisory).
     /// 🚨 Since #3650 it is also where a registry DELIVERS its module-published broadcast
     /// (<see cref="ModulePublished"/>): an installation that records none is reached by the safety

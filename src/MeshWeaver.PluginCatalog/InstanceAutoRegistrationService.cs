@@ -835,8 +835,8 @@ public sealed class InstanceAutoRegistrationService(
             .Where(e => e is not null)
             .Select(e => e!)
             .ToList();
-        var baseline = BaselineApplies(options.InstallPreInstalledPackages, wanted);
-        if (options.InstallPreInstalledPackages is null && !baseline)
+        var baseline = BaselineApplies(options.InstallPreInstalledPackagesConfigured, wanted);
+        if (options.InstallPreInstalledPackagesConfigured is null && !baseline)
             logger.LogInformation(
                 "[DefaultInstall] PluginCatalog:InstallByDefault declares an EXPLICIT package set [{Wanted}] — "
                 + "exactly those packages and what they declare in `requires` are selected; the "
@@ -2240,7 +2240,8 @@ public sealed class InstanceAutoRegistrationService(
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
         var configuration = hub.ServiceProvider.GetService<IConfiguration>();
 
-        IObservable<string?> One(InstallCandidate candidate, PluginBundleClient bundles)
+        // (Fresh: a not-yet-installed carrier this phase decided; Landed: the module it newly landed).
+        IObservable<(bool Fresh, string? Landed)> One(InstallCandidate candidate, PluginBundleClient bundles)
         {
             var package = candidate.Package;
             return persistence.Read($"{PackageInstaller.InstalledPartition}/{package.Id}", hub.JsonSerializerOptions)
@@ -2256,34 +2257,51 @@ public sealed class InstanceAutoRegistrationService(
                             "[DefaultInstall] module phase: the install record of {Id} could not be read "
                             + "({Cause}) — its module {Module} is not landed ahead of its content; the "
                             + "install funnel decides it as before.", package.Id, cause, package.Module);
-                        return Observable.Return<string?>(null);
+                        return Observable.Return((Fresh: false, Landed: (string?)null));
                     }
                     if (!state.Fresh)
-                        return Observable.Return<string?>(null);
+                        return Observable.Return((Fresh: false, Landed: (string?)null));
                     if (PackageParameters.Missing(configuration, package) is { Count: > 0 })
                         // The content phase refuses it by name (PackageParameters.Require, at Error);
                         // saying it twice adds nothing, landing its module ahead would add a module
                         // for a package this environment cannot run.
-                        return Observable.Return<string?>(null);
-                    return PackageEntitlement.Authorize(hub, package, AuthorizingPrincipal(candidate), logger)
+                        return Observable.Return((Fresh: false, Landed: (string?)null));
+                    var principal = AuthorizingPrincipal(candidate);
+                    return PackageEntitlement.Authorize(hub, package, principal, logger)
+                        // The licence gate the installer applies after the entitlement
+                        // (PackageInstaller.Install): no licensed byte lands before its terms are
+                        // accepted, and a deployment-config principal cannot accept on anyone's behalf.
+                        .SelectMany(_ => LicenseAcceptanceGate.Require(hub, package, principal, logger))
                         .SelectMany(_ => bundles.AdoptModuleOutcome(package.Id, package.Module!,
-                            $"{PackageInstaller.InstalledPartition}/{package.Id}"))
+                                $"{PackageInstaller.InstalledPartition}/{package.Id}")
+                            // Bounded per package exactly like the reconciler's adoption
+                            // (RegistryUpdateReconciler.PerPackageAdoptBudget): a trickling transfer
+                            // must not starve the remaining modules and the whole content phase.
+                            .Timeout(RegistryUpdateReconciler.PerPackageAdoptBudget))
                         .Select(outcome =>
                         {
                             if (outcome.FilesLanded > 0)
-                                return package.Module;
+                                return (Fresh: true, Landed: package.Module);
                             if (outcome.Failure is { } failure)
                                 logger.LogWarning(
                                     "[DefaultInstall] module phase: {Module} of {Id} did not land — {Failure}. "
                                     + "Packages whose nodes need its NodeTypes fail validation this pass "
                                     + "and are retried by the next.", package.Module, package.Id, failure);
-                            return null;
+                            return (Fresh: true, Landed: (string?)null);
                         })
                         // A refusal is the content phase's to report (it applies the same gate and
                         // records it as a skip or a failure); here it only means "no module ahead".
-                        .Catch((Exception ex) => ex is PackageAuthorizationException or LicenseAcceptanceRequiredException
-                            ? Observable.Return<string?>(null)
-                            : Observable.Throw<string?>(ex));
+                        // Anything else (the budget expiring, an unexpected fault) is named and this
+                        // carrier steps aside, so the remaining carriers still run.
+                        .Catch((Exception ex) =>
+                        {
+                            if (ex is not (PackageAuthorizationException or LicenseAcceptanceRequiredException))
+                                logger.LogWarning(ex,
+                                    "[DefaultInstall] module phase: {Module} of {Id} did not land — {Cause}. "
+                                    + "The content phase decides the package as before.",
+                                    package.Module, package.Id, ex.Message);
+                            return Observable.Return((Fresh: true, Landed: (string?)null));
+                        });
                 });
         }
 
@@ -2291,19 +2309,23 @@ public sealed class InstanceAutoRegistrationService(
                 .Select(x => One(x.Candidate, x.Bundles!))
                 .ToObservable()
                 .Concat()
-                .Where(module => module is not null)
-                .Select(module => module!)
                 .ToList()
-                .SelectMany(landed =>
+                .SelectMany(outcomes =>
                 {
-                    if (landed.Count == 0)
+                    var landed = outcomes.Where(o => o.Landed is not null).Select(o => o.Landed!).ToList();
+                    // 🚨 Proposed whenever a FRESH carrier was decided — not only when bytes were
+                    // newly copied. A module landed by an earlier pass whose proposal failed (the
+                    // proposal absorbs its own fault) reads FilesLanded == 0 from then on; skipping
+                    // the proposal then would keep it out of the boot set for good.
+                    if (!outcomes.Any(o => o.Fresh))
                         return Observable.Return(ImmutableList<string>.Empty);
-                    logger.LogInformation(
+                    if (landed.Count > 0)
+                        logger.LogInformation(
                         "[DefaultInstall] module phase: landed {Count} module(s) BEFORE any package content — "
                         + "[{Modules}]. A newly landed module loads at the next restart (restart-as-activation); "
                         + "a package whose nodes need its NodeTypes fails validation in this pass and is "
                         + "installed by the pass that follows that restart.",
-                        landed.Count, string.Join(", ", landed));
+                            landed.Count, string.Join(", ", landed));
                     // One landing wave → one proposal of the module set it describes (#3395), the
                     // same close the install funnel and the reconciler take.
                     return CatalogLayoutAreas.ProposeMeshModuleSet(hub, logger)
