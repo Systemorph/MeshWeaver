@@ -2332,6 +2332,15 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/core-image-relevance.py --self-test
 
+    # main-cd's tester leg stages the Razor generator per RID from the SDK FEED (not an MCR image
+    # that lags a new SDK by hours and withheld the seal on the 10.0.402 release day). It runs on
+    # main only, so it is proven here, offline: each RID must hold the compiler built FOR it
+    # (missing, swapped, non-PE refused), the metadata's .tar.gz for the host version is taken
+    # (unreleased version and absent RID named), and a tarball whose digest disagrees is refused.
+    - name: "The Razor generator is staged per RID from the SDK feed, and refuses the wrong architecture (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/stage-razor-generators.py --self-test
+
     # The publish-bake lane's previous-epoch leg (policy bake-per-live-identity, #3583) reads the
     # platform-compatibility declaration to decide whether a second live identity exists. No break
     # is declared today, so the leg's real path would first run in a satellite after a break —
