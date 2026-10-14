@@ -115,6 +115,9 @@ public abstract class StoreBootstrapTestBase(ITestOutputHelper output) : Monolit
         InstallByDefault = [$"{SourceName}/EntityViews", $"{SourceName}/Chat"],
     };
 
+    /// <summary>What the registry's <c>Chat</c> declares it needs of <c>AI</c>.</summary>
+    protected virtual string ChatRequiresAi => "AI@^1.0.0";
+
     /// <summary>What the boot pass is configured to install — the control instance's explicit set.</summary>
     protected virtual IReadOnlyList<string> BootSet => [$"{SourceName}/EntityViews", $"{SourceName}/Chat"];
 
@@ -126,7 +129,7 @@ public abstract class StoreBootstrapTestBase(ITestOutputHelper output) : Monolit
     {
         Directory.CreateDirectory(LandingRoot);
         Options.InstallByDefault = [.. BootSet];
-        var registry = new BootstrapRegistry(Requests);
+        var registry = new BootstrapRegistry(Requests, ChatRequiresAi);
         return Arrange(base.ConfigureMesh(builder))
             .AddPluginCatalog()
             .ConfigureServices(services => services
@@ -161,7 +164,7 @@ public abstract class StoreBootstrapTestBase(ITestOutputHelper output) : Monolit
     /// <c>GET /api/plugins/bundles/{plugin}/{version}</c> — the listing stamped with the source name
     /// the registry stamps, the files exactly as a node-repo source serves them (repo-relative paths).
     /// </summary>
-    private sealed class BootstrapRegistry(ConcurrentQueue<string> requests) : HttpMessageHandler
+    private sealed class BootstrapRegistry(ConcurrentQueue<string> requests, string chatRequiresAi) : HttpMessageHandler
     {
         private static readonly ImmutableDictionary<string, string> Modules = ImmutableDictionary.CreateRange(
             StringComparer.Ordinal,
@@ -185,12 +188,12 @@ public abstract class StoreBootstrapTestBase(ITestOutputHelper output) : Monolit
             Module = Modules.TryGetValue(id, out var module) ? module : null,
         };
 
-        private static readonly ImmutableArray<PackageManifest> Listing =
+        private readonly ImmutableArray<PackageManifest> Listing =
         [
             Package("Store", preInstalled: false),
             Package("AI", preInstalled: true, "Store@^1.0.0"),
             Package("EntityViews", preInstalled: true, "Store@^1.0.0"),
-            Package("Chat", preInstalled: true, "Store@^1.0.0", "AI@^1.0.0"),
+            Package("Chat", preInstalled: true, "Store@^1.0.0", chatRequiresAi),
             Package("Games", preInstalled: true),
         ];
 
@@ -310,6 +313,10 @@ public class StoreBootstrapLandsModulesFirstTest(ITestOutputHelper output) : Sto
         foreach (var plugin in new[] { "AI", "EntityViews", "Chat" })
             log.FindIndex(r => r == $"bundle:{plugin}").Should().BeInRange(0, firstFiles - 1,
                 $"{plugin}'s module must be downloaded before any package content is fetched");
+        // …and the pass's ONE proposal names them, so a restart loads them.
+        var proposed = ModuleSetStore.Read(LandingRoot).Proposed;
+        proposed.Should().NotBeNull("the pass proposes the module set naming what it landed");
+        proposed!.Generations.Keys.Should().Contain(new[] { AiModule, ViewsModule, ChatModule });
         pass.ModulesLanded.Order(StringComparer.Ordinal).Should().Equal(new[] { AiModule, ViewsModule, ChatModule }.Order(StringComparer.Ordinal));
         pass.ToString().Should().Contain("MODULES LANDED ahead of content");
     }
@@ -350,6 +357,33 @@ public class ModulePhaseProposalHonoursTheSelectionsFloorsTest(ITestOutputHelper
             .Catch((Exception ex) => Observable.Return<Exception?>(ex))
             .LastOrDefaultAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         accepted.Should().BeNull("a met floor proposes (or finds nothing changed) without a fault");
+    }
+}
+
+/// <summary>
+/// 🚨 End to end: the selection's floors bind the pass's one proposal. <c>Chat</c> requires
+/// <c>AI@^2</c> while the registry's AI bundle is 1.0.0 — every module still lands, but NO module set is
+/// proposed (by phase 1 or by any phase-2 install), so a restart cannot load the incompatible pair.
+/// </summary>
+public class AnUnmetSelectionFloorProposesNoSetTest(ITestOutputHelper output) : StoreBootstrapTestBase(output)
+{
+    /// <inheritdoc />
+    protected override string ChatRequiresAi => "AI@^2.0.0";
+
+    /// <inheritdoc />
+    protected override MeshBuilder Arrange(MeshBuilder builder) =>
+        // The modules' types "loaded", so phase 2 installs packages (and would propose per package).
+        builder.AddMeshNodes(new MeshNode("Skill") { Name = "Skill", NodeType = MeshNode.NodeTypePath, IsSatelliteType = false });
+
+    [Fact(Timeout = 180_000)]
+    public async Task ChatRequiringAi2_AgainstALandedAi1_ProposesNoSet()
+    {
+        var pass = await FirstPass(TestContext.Current.CancellationToken);
+        Output.WriteLine($"pass: {pass}");
+        pass.Delivered.Should().Contain("AI", "phase 2 installed AI — the install that used to propose on its own");
+        ModuleActivationSidecar.Read(LandingRoot).Entries.Select(e => e.Name).Should().Contain(new[] { AiModule, ChatModule });
+        ModuleSetStore.Read(LandingRoot).Proposed.Should().BeNull(
+            "Chat's floor AI@^2 is not met by the landed AI 1.0.0, so no set may be written");
     }
 }
 

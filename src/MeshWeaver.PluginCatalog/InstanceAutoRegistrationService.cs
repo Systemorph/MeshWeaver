@@ -2192,11 +2192,21 @@ public sealed class InstanceAutoRegistrationService(
         // 🚨 PHASE 1 — MODULES, THEN PHASE 2 — NODES (see LandModulesFirst). Strictly sequential:
         // the content phase is subscribed only once every module of the selection has been decided.
         return LandModulesFirst(installable)
-            .SelectMany(landed => installable
+            .SelectMany(phase1 => installable
                 .Select(Install)
                 .ToObservable()
                 .Concat()
-                .Aggregate(seed with { ModulesLanded = landed }, (acc, one) => acc.Add(one)));
+                .Aggregate(seed with { ModulesLanded = phase1.Landed }, (acc, one) => acc.Add(one))
+                // 🚨 ONE proposal per pass, at its END: checked against the install records AND the
+                // whole selection's declared floors, and blocked by any carrier phase 1 could not
+                // clear. Phase 2's per-package installs propose nothing (proposeModuleSet: false) —
+                // each would be checked against the records written so far and could publish a
+                // module phase 1 pre-landed for a package whose floor a LATER package refuses.
+                .SelectMany(summary => !installable.Any(c => !string.IsNullOrWhiteSpace(c.Package.Module))
+                    ? Observable.Return(summary)
+                    : ProposeCheckedForTheSelection(
+                            installable.Select(c => c.Package).ToImmutableList(), phase1.Blocked)
+                        .Select(_ => summary)));
     }
 
     /// <summary>
@@ -2243,7 +2253,8 @@ public sealed class InstanceAutoRegistrationService(
     /// </summary>
     /// <param name="installable">The pass's installable candidates, in dependency order.</param>
     /// <returns>Cold; emits the entry-assembly names of the modules this phase LANDED, once.</returns>
-    private IObservable<ImmutableList<string>> LandModulesFirst(IReadOnlyList<InstallCandidate> installable)
+    private IObservable<(ImmutableList<string> Landed, IReadOnlySet<string> Blocked)> LandModulesFirst(
+        IReadOnlyList<InstallCandidate> installable)
     {
         var carriers = installable
             .Select(c => (Candidate: c,
@@ -2251,8 +2262,9 @@ public sealed class InstanceAutoRegistrationService(
             .Where(x => !string.IsNullOrWhiteSpace(x.Candidate.Package.Module) && x.Bundles is not null)
             .ToList();
         var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
+        IReadOnlySet<string> none = ImmutableHashSet<string>.Empty;
         if (carriers.Count == 0 || persistence is null)
-            return Observable.Return(ImmutableList<string>.Empty);
+            return Observable.Return((ImmutableList<string>.Empty, none));
 
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
         var configuration = hub.ServiceProvider.GetService<IConfiguration>();
@@ -2352,43 +2364,33 @@ public sealed class InstanceAutoRegistrationService(
                 .ToObservable()
                 .Concat()
                 .ToList()
-                .SelectMany(outcomes =>
+                .Select(outcomes =>
                 {
-                    var landed = outcomes.Where(o => o.Landed is not null).Select(o => o.Landed!).ToList();
-                    // 🚨 Proposed whenever a FRESH carrier was decided — not only when bytes were
-                    // newly copied. A module landed by an earlier pass whose proposal failed (the
-                    // proposal absorbs its own fault) reads FilesLanded == 0 from then on; skipping
-                    // the proposal then would keep it out of the boot set for good.
-                    if (!outcomes.Any(o => o.Fresh))
-                        return Observable.Return(ImmutableList<string>.Empty);
-                    // 🚨 The set is derived from the WHOLE activation record, so a proposal here would
+                    var landed = outcomes.Where(o => o.Landed is not null).Select(o => o.Landed!).ToImmutableList();
+                    // 🚨 The set is derived from the WHOLE activation record, so a proposal would
                     // also carry a module an earlier pass landed for a package this phase could not
-                    // clear NOW (a gate refusal, an ownership hold, missing parameters, or an install
-                    // record it could not read — fail closed). An ENABLED activation entry for such a
-                    // module blocks the proposal (ProposeCheckedForTheSelection); a module that was
-                    // never landed cannot be activated by it, so it blocks nothing.
-                    var blocked = outcomes.Where(o => o.Blocked is not null).Select(o => o.Blocked!)
+                    // clear NOW (a gate refusal, an ownership hold, missing parameters, an adoption
+                    // that neither landed nor proved the entry up to date, or an install record it
+                    // could not read — fail closed). The pass's one proposal (at its end) is blocked
+                    // by an ENABLED activation entry for any such module; a module that was never
+                    // landed cannot be activated by it, so it blocks nothing.
+                    IReadOnlySet<string> blocked = outcomes.Where(o => o.Blocked is not null).Select(o => o.Blocked!)
                         .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
                     if (landed.Count > 0)
                         logger.LogInformation(
-                        "[DefaultInstall] module phase: landed {Count} module(s) BEFORE any package content — "
-                        + "[{Modules}]. A newly landed module loads at a restart once the module set naming it is "
-                        + "proposed (restart-as-activation; the proposal follows); a package whose nodes need its "
-                        + "NodeTypes fails validation in this pass and is installed by a pass after that restart.",
+                            "[DefaultInstall] module phase: landed {Count} module(s) BEFORE any package content — "
+                            + "[{Modules}]. A newly landed module loads at a restart once the module set naming it "
+                            + "is proposed (once, at the end of this pass); a package whose nodes need its NodeTypes "
+                            + "fails validation in this pass and is installed by a pass after that restart.",
                             landed.Count, string.Join(", ", landed));
-                    // One landing wave → one proposal of the module set it describes (#3395), the
-                    // same close the install funnel and the reconciler take.
-                    // 🚨 CHECKED against the records AND the selection about to install: the fresh
-                    // packages have no record yet, and their declared floors bind the set too.
-                    return ProposeCheckedForTheSelection(installable.Select(c => c.Package).ToImmutableList(), blocked)
-                        .Select(_ => landed.ToImmutableList());
+                    return (landed, blocked);
                 }))
             .Catch((Exception ex) =>
             {
                 logger.LogError(ex,
                     "[DefaultInstall] module phase faulted: {Cause}. The content phase runs as before — "
                     + "each package's module still follows its content on the install funnel.", ex.Message);
-                return Observable.Return(ImmutableList<string>.Empty);
+                return Observable.Return((ImmutableList<string>.Empty, none));
             });
     }
 
@@ -2655,7 +2657,9 @@ public sealed class InstanceAutoRegistrationService(
         return accessService
             .RunAsSystem(() => CatalogLayoutAreas
                     .InstallOrUpdate(hub, candidate.Source.Source, candidate.Source.GitRef, package, logger,
-                        authorizingUserId: principal)
+                        authorizingUserId: principal,
+                        // The pass proposes ONCE, at its end, checked against the whole selection.
+                        proposeModuleSet: false)
                     .Take(1)
                     .Do(result => logger.LogInformation(
                         "[DefaultInstall] {Id} → {Partition}: {Written} written, {Unchanged} unchanged",

@@ -158,8 +158,8 @@ failed`, `/data/modules` empty.
 A module's bytes depend on no node, so phase 1 lands them all (fetched from the registry, link-probed,
 written to `modules/`). A brand-new module is `NotHeld` in the running process and activates at the
 next restart after a proposed module set names it ([Live Module Update](/Doc/Architecture/LiveModuleUpdate));
-phase 1 proposes that set (checked, see below) and the landing raises the pending-restart marker the
-self-updater takes. The pass after that restart finds `Skill`/`Agent`
+the pass proposes that set ONCE, at its end (checked, see below), and the landing raises the
+pending-restart marker the self-updater takes. The pass after that restart finds `Skill`/`Agent`
 registered and installs `Store` first — the declared `requires` already put it ahead of every package
 rooted on `Store/Plugin` — and the rest after it. The validation itself is unchanged: phase 2's
 failures in the first pass are recorded as FAILED with their cause and retried by the next pass.
@@ -170,9 +170,11 @@ partition-ownership hold (a candidate whose partition another writer keeps curre
 install and lands no module ahead either) — so a package the funnel would
 refuse lands no module ahead of that refusal; the platform floor is the adoption's own hold. An
 already-installed package keeps its module on the funnel (after its content, inside the floor and
-update-policy holds), so phase 1 never lands drift those holds gate. The module set phase 1 proposes is checked
-against the install records AND the selection about to install (`ModuleDependencyFloor.ProposeChecked`
-with the fresh manifests) — a fresh package's declared floor binds the set before its record exists. The pass's summary line names
+update-policy holds), so phase 1 never lands drift those holds gate. The pass proposes the module set ONCE, at its end —
+phase 2's per-package installs propose nothing (`InstallOrUpdate(…, proposeModuleSet: false)`) — checked
+against the install records AND the whole selection (`ModuleDependencyFloor.ProposeChecked` with the
+selection's manifests), so a fresh package's declared floor binds the set before its record exists; an
+enabled entry for a module of a carrier the phase could not clear blocks the proposal. The pass's summary line names
 what phase 1 landed: `MODULES LANDED ahead of content: […]`; a landed module loads at a restart only
 once a proposed module set names it, and the phase logs whether its proposal was written or refused.
 
