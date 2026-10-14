@@ -68,7 +68,7 @@ Configuration is layered (last wins):
 | `Features:Ai:Clis:ClaudeCode` | bool | `true` | Deploys the co-hosted Claude Code CLI **runtime** (per-user Connect login). The harness is NOT offered to users by default: its catalog node is install-gated (`Harness.RequiresInstall`) — a user opts in by installing the Claude Code plugin from the Store, which localizes the harness node into `{user}/Harness`. |
 | `Features:Ai:Clis:Copilot` | bool | `true` | Deploys the co-hosted GitHub Copilot CLI **runtime**. Same per-user install gate as Claude Code. |
 | `Features:Onboarding:AllowSelfOnboarding` | bool | `true` | When `false`, registration is **closed** — only the first-ever user may onboard. |
-| `Features:Onboarding:InvitationOnly` | bool | `false` | When `true`, only an email with a Pending invitation may onboard. See [Invitation-Only Onboarding](/Doc/Architecture/InvitationOnlyOnboarding). |
+| `Features:Onboarding:InvitationOnly` | bool | `false` | When `true`, only an email with a Pending invitation may onboard — except where the instance's own Entra directory demonstrably gates sign-in (the own-directory exemption). See [Invitation-Only Onboarding](/Doc/Architecture/InvitationOnlyOnboarding). |
 | `Features:Orleans:Clustering` | string | `AzureTables` | Cluster-membership provider: `AzureTables`, `AdoNet` (PostgreSQL), or `Localhost` (single in-process silo; dev only). |
 | `Features:SignalR` | bool | `true` | Opens the SignalR mesh transport (`/signalr`) for external participants (native clients). `false` closes the connection surface. |
 | `Features:StaticRepoSync:Partitions` | string[] | `[]` | Partitions whose build-time static content is **materialized into and served from the database** instead of the in-memory read-only static provider (e.g. `["Doc","Agent","Provider","Harness","Skill"]` — what the default Helm deployment sets). Empty = every partition keeps the in-memory provider. Matching is case-insensitive; `Model` is a legacy alias for `Provider`. See [Static Repo Import](/Doc/Architecture/StaticRepoImport). |
@@ -121,10 +121,10 @@ onboard (and become platform admin), so the platform can never lock itself out.
 |---|---|---|---|
 | `false` | `true` (default) | **Open** | Anyone who authenticates. |
 | `false` | `false` | **Closed** | First user only — everyone else sees "Registration Closed". |
-| `true` | *(any)* | **Invitation-only** | Only an email with a Pending invitation (plus the first user) — **exempt** where the instance's own tenant directory gates sign-in (Microsoft the only route, a named tenant): there, whom the directory signed in. See [Invitation-Only Onboarding](/Doc/Architecture/InvitationOnlyOnboarding#exempt-where-the-instances-own-directory-gates-sign-in). |
+| `true` | *(any)* | **Invitation-only** | Only an email with a Pending invitation (plus the first user) — **exempt** where the instance's own Entra directory gates sign-in: Microsoft the only route, a named tenant, AND Microsoft Graph confirming the application requires user assignment (fails closed when Graph cannot be read). There, whom the directory signed in. See [Invitation-Only Onboarding](/Doc/Architecture/InvitationOnlyOnboarding#exempt-where-the-instances-own-directory-gates-sign-in). |
 
-`InvitationOnly` **takes precedence**: when it is on, the gate is "has a Pending invitation"
-regardless of `AllowSelfOnboarding`. The security boundary is enforced at the `CreateUser` call in
+`InvitationOnly` **takes precedence**: when it is on, the gate is "has a Pending invitation, or the
+own-directory exemption holds" regardless of `AllowSelfOnboarding`. The security boundary is enforced at the `CreateUser` call in
 `Onboarding.razor` (not just the UI). Full treatment: [Invitation-Only Onboarding](/Doc/Architecture/InvitationOnlyOnboarding).
 
 ---
