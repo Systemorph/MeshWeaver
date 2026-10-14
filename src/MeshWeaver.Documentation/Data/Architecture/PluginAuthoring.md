@@ -124,7 +124,8 @@ POST {registry}/api/plugins/files {id}  → a package's files { files:[…] } (B
 ```
 
 A fresh installation does not need the click at all: `PluginCatalog:InstallPreInstalledPackages`
-(default **true**) reconciles the platform baseline on every boot, and `PluginCatalog:InstallByDefault`
+reconciles the platform baseline on every boot (unset, it applies unless `InstallByDefault` names an
+explicit `Source/Package` set — then exactly that set and its `requires` install), and `PluginCatalog:InstallByDefault`
 (e.g. `["Plugins/*"]`) seeds each matching package once — on every boot, gated per package by the
 `Plugins/_DefaultInstallLedger`. On an already-seeded instance a package newly listed under a
 whole-source pattern is held for a governed `package.provision` (no ledger entry); a commercial package

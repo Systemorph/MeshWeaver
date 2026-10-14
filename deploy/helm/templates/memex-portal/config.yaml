@@ -1422,7 +1422,8 @@ data:
   PluginCatalog__InstallByDefault__{{ $i }}: "{{ $p }}"
   {{- end }}
   {{- /* The platform's own baseline (packages whose manifest declares preInstalled), reconciled on
-         every boot. Defaults to true in code; templated HERE because it was one of the keys this
+         every boot. Unset in code it applies unless InstallByDefault names an explicit Source/Package
+         set (then exactly that set and its requires); true/false here always wins. Templated HERE because it was one of the keys this
          configmap did not list, i.e. an env overlay that set it was SILENTLY DROPPED and the
          documented opt-out could not be exercised per environment at all. */}}
   {{- if kindIs "bool" .Values.pluginCatalog.installPreInstalledPackages }}
