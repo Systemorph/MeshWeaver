@@ -588,7 +588,11 @@ keeps the supersede model in the next section.
    withholds packages from the module hand-over (rule 4) passes the same list to the bake: every
    other package is sealed at this commit, and each withheld package's previously SEALED build — its
    bundle and its module package — is carried forward in its place (`seal-packages.py withhold`,
-   then `carry-forward-bundles.sh`, digest- and stamp-verified; a package never sealed stays out).
+   then `carry-forward-bundles.sh`, digest- and stamp-verified; a package never sealed stays out, and
+   every package requiring it waits with it — carried at its own sealed build, or out — so the seal
+   never fails on it. A waiting package that bakes NO bundle and no module package (content only)
+   is not "never sealed": no publication seals it, so a requirement on it is not the listing's to
+   check — reading it as never-sealed refused a whole seal in Plugins run 38527548962).
    The publication then carries `sealed-packages.json` beside `source-commit.txt`: per package, the
    commit its bytes were baked from, its version, its `requires`, and whether it was carried. Before
    anything is written, `seal-packages.py listing` refuses a seal in which a package's `requires` on

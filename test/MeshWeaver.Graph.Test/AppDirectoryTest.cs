@@ -410,6 +410,122 @@ public class AppDirectoryPureTest
         a.Should().Be(appId);
     }
 
+    // ── Installed, and not a section of another app ──────────────────────────────────────────
+
+    private static InstallEvidence Evidence(string[] records, string[]? synced = null, string[]? uninstalled = null) =>
+        new(Set(records), Set(synced ?? []), Set(uninstalled ?? []));
+
+    // The directory reads every set case-insensitively (RecordIds / PartitionsOf / UninstalledPackages).
+    private static ImmutableHashSet<string> Set(string[] ids) => ids.ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+
+    [Fact]
+    public void ARoot_CarriesItsHostedIn()
+    {
+        AppDirectory.ReadRoot(Root("Signature", """{"app":true,"hostedIn":"{user}/Settings"}"""), Options)!
+            .HostedIn.Should().Be("{user}/Settings");
+        AppDirectory.ReadRoot(Root("Crm", """{"app":true}"""), Options)!.HostedIn.Should().BeNull();
+    }
+
+    [Theory]
+    // record present → installed, whatever else is said
+    [InlineData(true, false, false, true)]
+    [InlineData(true, true, true, true)]
+    // a git-provisioned package writes no record: its sync source is the evidence…
+    [InlineData(false, true, false, true)]
+    // …until an uninstall request names it (phase 1 removed the record, the data and sync stayed)
+    [InlineData(false, true, true, false)]
+    // uninstalled with its data retained, never git-provisioned: nothing says installed
+    [InlineData(false, false, false, false)]
+    [InlineData(false, false, true, false)]
+    public void Installed_IsTheRecord_OrAGitSyncNoUninstallNames(bool record, bool synced, bool uninstalled, bool expected)
+    {
+        var evidence = Evidence(record ? ["Crm"] : [], synced ? ["Crm"] : [], uninstalled ? ["Crm"] : []);
+        evidence.IsInstalled("Crm").Should().Be(expected);
+        evidence.IsInstalled("crm").Should().Be(expected, "package ids are case-insensitive, like paths");
+    }
+
+    [Fact]
+    public void AnUninstalledApp_IsNoTile_EvenWithItsRootAndAppFlagLeft()
+    {
+        var parties = AppDirectory.ReadRoot(Root("Parties", """{"app":true}"""), Options)!;
+        AppDirectory.IsTile(parties, Evidence(["Crm"])).Should().BeFalse(
+            "phase 1 of an uninstall removes the record and keeps the root — the tile must go with the record");
+        AppDirectory.IsTile(parties, Evidence(["Parties"])).Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("Developer/Home", false)]
+    [InlineData("Games/Home", false)]
+    [InlineData("AI/AiThreads", false)]
+    // a settings tab of the person app may still belong to an app (Signature)
+    [InlineData("{user}/Settings", true)]
+    [InlineData("{USER}/settings", true)]
+    public void AHostedPackage_IsNoTile_UnlessItsHostIsThePersonApp(string host, bool tile)
+    {
+        var root = AppDirectory.ReadRoot(Root("Pack", $$"""{"app":true,"hostedIn":"{{host}}"}"""), Options)!;
+        AppDirectory.IsTile(root, Evidence(["Pack"])).Should().Be(tile);
+    }
+
+    [Fact]
+    public void TheEvidence_IsReadOffTheRecordsSyncSourcesAndUninstallRequests()
+    {
+        AppDirectory.RecordIds([
+            new MeshNode("Crm", AppDirectory.InstallRecordsPartition) { NodeType = "Package" },
+            new MeshNode("_DefaultInstallLedger", "Elsewhere"),
+        ]).OrderBy(x => x, StringComparer.Ordinal).Should().Equal(["Crm"], "only a node IN the records partition is a record");
+
+        // A record whose package installs into ANOTHER partition is keyed by that partition — the root's path.
+        AppDirectory.RecordIds([
+            new MeshNode("CrmPackage", AppDirectory.InstallRecordsPartition)
+            {
+                NodeType = "Package",
+                Content = JsonDocument.Parse("""{"id":"CrmPackage","targetPartition":"Crm"}""").RootElement,
+            },
+        ], Options).OrderBy(x => x, StringComparer.Ordinal).Should().Equal(["Crm"]);
+
+        AppDirectory.PartitionsOf([
+            MeshNode.FromPath("Reinsurance/_GitSync"),
+            MeshNode.FromPath("Manufacturing/_GitSync/main"),
+        ]).OrderBy(x => x, StringComparer.Ordinal).Should().Equal("Manufacturing", "Reinsurance");
+
+        AppDirectory.UninstalledPackages([
+            new MeshNode("r1", "Admin/_PackageUninstall") { Content = JsonDocument.Parse("""{"package":"Parties","status":"AwaitingConfirmation"}""").RootElement },
+            new MeshNode("r2", "Admin/_PackageUninstall") { Content = new System.Text.Json.Nodes.JsonObject { ["Package"] = "DeepSign", ["Status"] = "Done" } },
+            new MeshNode("r3", "Admin/_PackageUninstall") { Content = new PackageUninstallRequest { Package = "Crm", Status = PackageUninstallStatus.TearingDown } },
+            new MeshNode("r4", "Admin/_PackageUninstall") { Content = JsonDocument.Parse("""{"status":"Done"}""").RootElement },
+            // the partitions a completed request recorded count too — roots are keyed by partition
+            new MeshNode("r5", "Admin/_PackageUninstall") { Content = JsonDocument.Parse("""{"package":"Pkg","status":"Done","partitions":[{"partition":"PkgSpace"}]}""").RootElement },
+        ], Options).OrderBy(x => x, StringComparer.Ordinal).Should().Equal(["Crm", "DeepSign", "Parties", "Pkg", "PkgSpace"], "content is read in whatever shape it arrives");
+    }
+
+    [Theory]
+    // phase 1 has not removed anything yet…
+    [InlineData("Requested")]
+    [InlineData("Uninstalling")]
+    // …or refused (a git-provisioned package has no record, a shared partition, user data) and removed nothing
+    [InlineData("Failed")]
+    [InlineData(null)]
+    public void ARequestThatDidNotCompletePhaseOne_UninstallsNothing(string? status)
+    {
+        var json = status is null ? """{"package":"Crm"}""" : $$"""{"package":"Crm","status":"{{status}}"}""";
+        var uninstalled = AppDirectory.UninstalledPackages(
+            [new MeshNode("r1", "Admin/_PackageUninstall") { Content = JsonDocument.Parse(json).RootElement }], Options);
+        uninstalled.Should().BeEmpty("only AwaitingConfirmation, TearingDown and Done say the package is gone");
+        new InstallEvidence([], ImmutableHashSet.Create(StringComparer.OrdinalIgnoreCase, "Crm"), uninstalled)
+            .IsInstalled("Crm").Should().BeTrue("a refused uninstall leaves a git-provisioned app installed — and its tile");
+    }
+
+    [Fact]
+    public void TheEvidenceQueries_AreAnchoredOrDeclared_AndComplete()
+    {
+        var parser = new QueryParser();
+        AppDirectory.InstallRecordsQuery.Should().Contain("path:Plugins scope:children nodeType:Package");
+        AppDirectory.UninstallRequestsQuery.Should().Contain("namespace:Admin/_PackageUninstall");
+        parser.Parse(AppDirectory.SyncSourcesQuery).CrossPartition.Should().BeTrue("sync sources live in every partition");
+        foreach (var query in new[] { AppDirectory.InstallRecordsQuery, AppDirectory.SyncSourcesQuery, AppDirectory.UninstallRequestsQuery })
+            query.Should().Contain(MeshQueryRequest.CompleteQualifier, "an enumeration — a truncated page would drop an installed app");
+    }
+
     [Fact]
     public void TheRootsQuery_IsTheDeclaredPackageRootShape_WithAnExplicitLimit()
     {
@@ -468,12 +584,104 @@ public class AppDirectoryPureTest
         => HomeAppSource.IsDirectory(configured).Should().BeTrue();
 
     [Fact]
-    public void DirectorySource_ReadsTheVirtualNamespace()
+    public void DirectorySource_ReadsTheVirtualNamespace_WithoutTheHiddenApps()
     {
         var band = UserActivityLayoutAreas.BuildAppsBand("alice", null, fromDirectory: true);
-        band.HiddenQuery.Should().Be("path:alice/_Apps scope:children nodeType:InstalledApp sort:Name-asc");
+        band.HiddenQuery.Should().Be("path:alice/_Apps scope:children nodeType:InstalledApp -content.hidden:true sort:Name-asc");
         band.ScopeTabs![0].Query.Should().Be((string?)band.HiddenQuery);
         band.ScopeTabs[0].Sortable.Should().BeTrue("drag and drop stays on: the view routes it to the arrangement");
+    }
+
+    /// <summary>The directory band offers a third scope — the apps the viewer hid — so a hidden
+    /// tile is always reachable to be shown again; the Records band has no such scope.</summary>
+    [Fact]
+    public void DirectorySource_OffersTheHiddenScope_RecordsDoesNot()
+    {
+        var band = UserActivityLayoutAreas.BuildAppsBand("alice", null, fromDirectory: true);
+        band.ScopeTabs.Should().HaveCount(3, "apps, spaces, hidden");
+        var hidden = band.ScopeTabs![2];
+        hidden.Label.Should().Be("Hidden");
+        hidden.Query.Should().Be("path:alice/_Apps scope:children nodeType:InstalledApp content.hidden:true sort:Name-asc");
+        hidden.Sortable.Should().BeFalse("a hidden tile has no place on the grid to drag to");
+        hidden.NavigateToMainNode.Should().BeTrue("a hidden app still opens");
+
+        UserActivityLayoutAreas.BuildAppsBand("alice", null, fromDirectory: false)
+            .ScopeTabs.Should().HaveCount(2, "the legacy records band is unchanged");
+        UserActivityLayoutAreas.BuildAppsBand("alice", "de", fromDirectory: true)
+            .ScopeTabs![2].Label.Should().Be("Ausgeblendet");
+    }
+
+    // ── Hide ─────────────────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void AnArrangementWithoutTheFlag_HidesNothing()
+    {
+        var arrangement = JsonSerializer.Deserialize<LauncherArrangement>(
+            """{"entries":{"Crm":{"group":"Mine","order":2,"customGroup":true}}}""", Options)!;
+        arrangement.For("Crm")!.Hidden.Should().BeFalse("an arrangement written before the flag existed shows every tile");
+        arrangement.IsHidden("Crm").Should().BeFalse();
+        arrangement.IsHidden("NeverPlaced").Should().BeFalse();
+    }
+
+    [Fact]
+    public void Hiding_KeepsThePlacement_AndShowingPutsTheTileBack()
+    {
+        var placed = new LauncherArrangement().Place("Crm", "Mine", 4);
+        var hidden = placed.SetHidden("Crm", true);
+        hidden.IsHidden("Crm").Should().BeTrue();
+        hidden.For("Crm").Should().Be(new LauncherEntry { Group = "Mine", Order = 4, CustomGroup = true, Hidden = true });
+
+        var shown = hidden.SetHidden("Crm", false);
+        shown.For("Crm").Should().Be(placed.For("Crm"), "showing again restores exactly the placement it had");
+    }
+
+    [Fact]
+    public void HidingAnUnplacedApp_CarriesOnlyTheFlag()
+    {
+        var hidden = new LauncherArrangement().SetHidden("chess", true);
+        hidden.IsHidden("Chess").Should().BeTrue("app ids are case-insensitive, like every placement");
+        hidden.For("Chess").Should().Be(new LauncherEntry { Hidden = true },
+            "no group (the category still applies), no order, no custom-group claim");
+    }
+
+    [Fact]
+    public void MovingAHiddenTile_KeepsItHidden()
+    {
+        var moved = new LauncherArrangement().SetHidden("Crm", true).Place("Crm", "Elsewhere", 1);
+        moved.For("Crm").Should().Be(new LauncherEntry { Group = "Elsewhere", Order = 1, CustomGroup = true, Hidden = true });
+    }
+
+    [Fact]
+    public void Rows_CarryTheHiddenFlag_AndTheQueriesSplitOnIt()
+    {
+        var entries = ImmutableList.Create(
+            new AppDirectoryEntry("Crm", "CRM", "c.svg", null, "Business", "Crm"),
+            new AppDirectoryEntry("Chess", "Chess", "k.svg", null, "Games", "Chess"));
+        var rows = AppDirectoryQueryProvider.Rows("alice", entries,
+            new LauncherArrangement().Place("Crm", "Mine", 2).SetHidden("Crm", true), Options);
+        var crm = rows[0].ContentAs<App>(Options)!;
+        crm.Hidden.Should().BeTrue();
+        crm.Group.Should().Be("Mine", "a hidden tile keeps its place for when it is shown again");
+        rows[1].ContentAs<App>(Options)!.Hidden.Should().BeFalse();
+        AppDirectoryQueryProvider.Rows("alice", entries, null, Options)
+            .Should().OnlyContain(r => !r.ContentAs<App>(Options)!.Hidden, "no arrangement hides nothing");
+
+        // The two band queries, evaluated by the predicate the provider applies.
+        var parser = new QueryParser();
+        var evaluator = new MeshWeaver.Hosting.Persistence.Query.QueryEvaluator();
+        var shown = parser.Parse(UserActivityLayoutAreas.AppsQuery("alice", fromDirectory: true));
+        var hiddenOnly = parser.Parse(UserActivityLayoutAreas.HiddenAppsQuery("alice"));
+        rows.Where(r => evaluator.Matches(r, shown)).Select(r => r.Id).Should().Equal("Chess");
+        rows.Where(r => evaluator.Matches(r, hiddenOnly)).Select(r => r.Id).Should().Equal("Crm");
+    }
+
+    [Fact]
+    public void SetHidden_RefusesAPathThatIsNoDirectoryRow()
+    {
+        Exception? error = null;
+        using var _ = LauncherArrangementPaths.SetHidden(null!, "alice/_App/Crm", true, Options)
+            .Subscribe(_ => { }, e => error = e);
+        error.Should().BeOfType<ArgumentException>().Which.Message.Should().Contain("not an app directory row");
     }
 
     [Fact]
@@ -514,24 +722,68 @@ public class AppDirectoryTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         public bool App { get; init; }
         /// <summary>Where the app opens.</summary>
         public string? EntryPoint { get; init; }
+        /// <summary>The host app the package is a section of, when it is one.</summary>
+        public string? HostedIn { get; init; }
     }
 
+
+    // A package-uninstall request as the platform writes it.
+    private static MeshNode UninstallRequest(string package, string status) =>
+        new($"20261013-{package}", PackageUninstallRequest.Namespace)
+        {
+            NodeType = PackageUninstallRequest.NodeType,
+            State = MeshNodeState.Active,
+            Content = new PackageUninstallRequest { Package = package, Status = status },
+        };
+
+    // The install record the platform's installer writes for an installed package.
+    private static MeshNode InstallRecord(string id) => new(id, AppDirectory.InstallRecordsPartition)
+    {
+        NodeType = "Package",
+        Name = id,
+        State = MeshNodeState.Active,
+    };
+
     // A package root as a mirror may index it: a Space whose typed content says app.
-    private static MeshNode AppRootNode(string id, bool app) => new(id)
+    private static MeshNode AppRootNode(string id, bool app, string? hostedIn = null) => new(id)
     {
         NodeType = "Space",
         Name = id,
         Category = "Business",
         State = MeshNodeState.Active,
-        Content = new TestPackageContent { App = app, EntryPoint = $"{id}/Home" },
+        Content = new TestPackageContent { App = app, EntryPoint = $"{id}/Home", HostedIn = hostedIn },
     };
 
     /// <inheritdoc />
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder)
-            .ConfigureHub(config => config.WithType<TestPackageContent>(nameof(TestPackageContent)))
+            .ConfigureHub(config => config
+                .WithType<TestPackageContent>(nameof(TestPackageContent))
+                // The uninstall request's content type, as the PluginCatalog registers it in production —
+                // without it the request nodes read as untyped content (the untyped-content CI gate).
+                .WithType<PackageUninstallRequest>(nameof(PackageUninstallRequest)))
             .AddMeshNodes(
             AppRootNode("DirApp", app: true),
+            InstallRecord("DirApp"),
+            InstallRecord("DirNotAnApp"),
+            InstallRecord("DirEntryOnly"),
+            // Uninstalled with its data retained (phase 1): root and app flag left, no record.
+            AppRootNode("DirUninstalled", app: true),
+            AssignmentNodeFactory.UserRole(Granted, "Viewer", "DirUninstalled"),
+            // A section of another app: installed and readable, still no tile.
+            AppRootNode("DirHosted", app: true, hostedIn: "Developer/Home"),
+            InstallRecord("DirHosted"),
+            AssignmentNodeFactory.UserRole(Granted, "Viewer", "DirHosted"),
+            // Provisioned by a git import (no record), then uninstalled: the sync source stays.
+            AppRootNode("DirRetired", app: true),
+            MeshNode.FromPath("DirRetired/_GitSync") with { NodeType = "GitHubSyncConfig", State = MeshNodeState.Active },
+            UninstallRequest("DirRetired", PackageUninstallStatus.AwaitingConfirmation),
+            AssignmentNodeFactory.UserRole(Granted, "Viewer", "DirRetired"),
+            // Provisioned by a git import, and its uninstall was REFUSED: still installed, still a tile.
+            AppRootNode("DirRefused", app: true),
+            MeshNode.FromPath("DirRefused/_GitSync") with { NodeType = "GitHubSyncConfig", State = MeshNodeState.Active },
+            UninstallRequest("DirRefused", PackageUninstallStatus.Failed),
+            AssignmentNodeFactory.UserRole(Granted, "Viewer", "DirRefused"),
             // A person with a display name: their Settings tile carries it.
             new MeshNode(Named) { NodeType = "User", Name = "Max Muster", State = MeshNodeState.Active },
             AppRootNode("DirNotAnApp", app: false),
@@ -551,7 +803,7 @@ public class AppDirectoryTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         => await stream.Where(until).FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
 
     [Theory(Timeout = 60000)]
-    [InlineData(Granted, new[] { "Settings", "Inbox", "DirApp", "DirEntryOnly" })]
+    [InlineData(Granted, new[] { "Settings", "Inbox", "DirApp", "DirEntryOnly", "DirRefused" })]
     [InlineData(Ungranted, new[] { "Settings", "Inbox" })]
     [InlineData(Admin, new[] { "Settings", "Inbox", "Admin" })]
     public async Task Visibility_IsAppFlagAndReadOnTheEntryPoint_PlusBuiltIns(string viewer, string[] expected)
@@ -560,11 +812,41 @@ public class AppDirectoryTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         // Wait until the shared roots query has seen every seeded package, then read the FIRST
         // computation over it — never a count that a transient partial list could satisfy.
         await Directory.Roots()
-            .Where(roots => roots.Any(r => r.Path == "DirApp") && roots.Any(r => r.Path == "DirEntryOnly"))
+            .Where(roots => roots.Any(r => r.Path == "DirApp") && roots.Any(r => r.Path == "DirEntryOnly")
+                            && roots.Any(r => r.Path == "DirRefused"))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        // …and the install evidence has seen every seeded record, sync source and request.
+        await Directory.Installed()
+            .Where(e => e.Records.Contains("DirEntryOnly") && e.Synced.Contains("DirRefused") && e.Uninstalled.Contains("DirRetired"))
             .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
         var list = await Directory.Compute(viewer).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
         list.Select(e => e.Id).Should().Equal(expected);
         list.Should().NotContain(e => e.Id == "DirNotAnApp", "a package without app:true is no tile, whatever the grant");
+    }
+
+    /// <summary>
+    /// The installed filter on a real mesh: the granted viewer can READ the uninstalled, the hosted
+    /// and the git-provisioned-then-uninstalled packages, and gets no tile for any of them — the
+    /// tile follows the install evidence, not the leftover root.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task UninstalledAndHostedPackages_GetNoTile_ThoughTheViewerCanReadThem()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await Directory.Roots()
+            .Where(roots => new[] { "DirUninstalled", "DirHosted", "DirRetired" }.All(id => roots.Any(r => r.Path == id)))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        var installed = await Directory.Installed()
+            .Where(e => e.Records.Contains("DirHosted") && e.Synced.Contains("DirRetired") && e.Synced.Contains("DirRefused")
+                        && e.Uninstalled.Contains("DirRetired"))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        installed.IsInstalled("DirUninstalled").Should().BeFalse();
+        installed.IsInstalled("DirRetired").Should().BeFalse();
+        installed.IsInstalled("DirRefused").Should().BeTrue("a refused uninstall removed nothing");
+
+        var list = await Directory.Compute(Granted).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        list.Select(e => e.Id).Should().NotContain(["DirUninstalled", "DirHosted", "DirRetired"]);
+        list.Select(e => e.Id).Should().Contain(["DirApp", "DirRefused"]);
     }
 
     [Fact(Timeout = 60000)]
@@ -679,6 +961,66 @@ public class AppDirectoryTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         var foreign = await access.RunAs(intruder, () => mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(query)))
             .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
         foreign.Items.Should().BeEmpty("a viewer's directory is served to that viewer only");
+    }
+
+    /// <summary>
+    /// Hide and show again, end to end: the flag is written onto the OWNER's arrangement node, the
+    /// apps scope drops the tile and the Hidden scope lists it, the placement survives, and the
+    /// viewer's ACCESS is untouched throughout — the directory (which is the access check) still
+    /// lists the app while it is hidden.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task HidingATile_MovesItToTheHiddenScope_AndShowingBringsItBack_WithoutTouchingAccess()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string hider = "dir-hider";
+        var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var cache = Mesh.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+        var options = Mesh.JsonSerializerOptions;
+        await CreateUserAsync(hider, ct);
+        await access.RunAsSystem(() => mesh.CreateNode(AssignmentNodeFactory.UserRole(hider, "Viewer", "DirApp")))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        var owner = new AccessContext { ObjectId = hider, Name = hider };
+        IObservable<List<MeshNode>> Rows(string query) =>
+            Live(access.RunAs(owner, () => mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(query))));
+        var shownQuery = UserActivityLayoutAreas.AppsQuery(hider, fromDirectory: true);
+        var hiddenQuery = UserActivityLayoutAreas.HiddenAppsQuery(hider);
+        var row = $"{hider}/_Apps/DirApp";
+
+        // Visible, and seeded (the rows wait for the arrangement node).
+        await Rows(shownQuery).Where(items => items.Any(r => r.Path == row))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        await access.RunAs(owner, () => LauncherArrangementPaths.Place(cache, row, "Mine", 3, options))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+
+        // Hide.
+        await access.RunAs(owner, () => LauncherArrangementPaths.SetHidden(cache, row, true, options))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        await Rows(shownQuery).Where(items => items.Count > 0 && items.All(r => r.Path != row))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        var hiddenRows = await Rows(hiddenQuery).Where(items => items.Any(r => r.Path == row))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        hiddenRows.Select(r => r.Path).Should().Equal(row);
+        var arrangement = await Mesh.GetWorkspace().GetMeshNodeStream(LauncherArrangementPaths.PathFor(hider))
+            .Select(n => n?.ContentAs<LauncherArrangement>(options))
+            .Where(a => a?.IsHidden("DirApp") == true)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        arrangement!.For("DirApp")!.Group.Should().Be("Mine", "hiding keeps the placement");
+
+        // Access is untouched: the directory (the access check itself) still lists the app.
+        (await Directory.Compute(hider).Where(l => l.Any(e => e.Id == "DirApp"))
+                .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct))
+            .Should().Contain(e => e.Id == "DirApp");
+
+        // Show again: back in the apps scope, in its old group, gone from the Hidden scope.
+        await access.RunAs(owner, () => LauncherArrangementPaths.SetHidden(cache, row, false, options))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        var back = await Rows(shownQuery).Where(items => items.Any(r => r.Path == row))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        back.Single(r => r.Path == row).ContentAs<App>(options)!.Group.Should().Be("Mine");
+        await Rows(hiddenQuery).Where(items => items.All(r => r.Path != row))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
     }
 
     /// <summary>

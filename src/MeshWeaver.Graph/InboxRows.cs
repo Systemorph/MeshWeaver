@@ -30,6 +30,12 @@ public sealed record InboxSection(string Band, string Source, int Order, string 
 
     /// <summary>The content property the rows are timed by (<see cref="InboxQueryLeg.TimeField"/>), or null for <c>LastModified</c>.</summary>
     public string? TimeField { get; init; }
+
+    /// <summary>The side-menu category (<see cref="InboxQueryLeg.Category"/>, else the source).</summary>
+    public string Category { get; init; } = string.Empty;
+
+    /// <summary>The catalog key of the category's display name, when the provider gave one.</summary>
+    public string? CategoryLabelKey { get; init; }
 }
 
 /// <summary>
@@ -73,6 +79,9 @@ public sealed record InboxRow
 
     /// <summary>Whether the item is unread — the row is shown bold.</summary>
     public bool Unread { get; init; }
+
+    /// <summary>The side-menu category the row is filed under (<see cref="InboxSection.Category"/>).</summary>
+    public string Category { get; init; } = string.Empty;
 
     /// <summary>
     /// The row's CSS class — <see cref="InboxRows.UnreadClass"/> for an unread item, else empty. The
@@ -130,8 +139,11 @@ public sealed record InboxFilter
     /// <summary>The search text. It is handed to the mesh query engine with every leg — not matched against the rows already loaded.</summary>
     public string Search { get; init; } = string.Empty;
 
-    /// <summary>An <see cref="InboxOrder"/> constant.</summary>
+    /// <summary>An <see cref="InboxOrder"/> constant — no longer read: the list is always newest first.</summary>
     public string Order { get; init; } = InboxOrder.Newest;
+
+    /// <summary>The side-menu category picked (<see cref="InboxRow.Category"/>), or empty for all.</summary>
+    public string Category { get; init; } = string.Empty;
 
     /// <summary>
     /// Which sources are shown, by <see cref="InboxRows.SourceKey"/>. A source with no entry is
@@ -187,7 +199,7 @@ public static class InboxRows
     /// </summary>
     /// <param name="filter">The filter.</param>
     public static string Fingerprint(InboxFilter filter)
-        => string.Join('\n', new[] { filter.Search, filter.Order }
+        => string.Join('\n', new[] { filter.Search, filter.Order, filter.Category }
             .Concat(filter.Sources.OrderBy(s => s.Key, StringComparer.Ordinal).Select(s => $"{s.Key}={s.Value}")));
 
     /// <summary>
@@ -242,6 +254,7 @@ public static class InboxRows
             Stamp = at.UtcDateTime.ToString("O", CultureInfo.InvariantCulture),
             BlockedReason = blockedReason ?? string.Empty,
             SourceIcon = section.SourceIcon,
+            Category = section.Category.Length > 0 ? section.Category : section.Source,
             Unread = section.Unread,
             RowClass = section.Unread ? UnreadClass : string.Empty,
         };
@@ -311,24 +324,72 @@ public static class InboxRows
     /// (in German, Ä sorts with A, not after Z). Invariant when omitted.
     /// </param>
     public static ImmutableList<InboxRow> Apply(IEnumerable<InboxRow> rows, InboxFilter filter, CultureInfo? culture = null)
+        => Apply(rows, filter, filter.Category);
+
+    /// <summary>
+    /// The rows the viewer asked for, ALWAYS newest first (policy <c>inbox-newest-first</c>; the order
+    /// is not a choice, <see cref="InboxFilter.Order"/> is ignored).
+    /// With a <paramref name="category"/> picked in the side menu, every row filed under it is shown,
+    /// whatever the source switches say (a source off by default is reached by its category); with
+    /// none, the switches apply. Date bounds in the search narrow both. Pure.
+    /// </summary>
+    /// <param name="rows">The merged rows.</param>
+    /// <param name="filter">The search and the source switches.</param>
+    /// <param name="category">The side-menu category, or null/empty for all.</param>
+    public static ImmutableList<InboxRow> Apply(IEnumerable<InboxRow> rows, InboxFilter filter, string? category)
     {
-        var text = StringComparer.Create(culture ?? CultureInfo.InvariantCulture, ignoreCase: true);
-        var shown = rows.Where(row => !filter.Sources.TryGetValue(SourceKey(row.SourceId), out var on) || on);
-        var ordered = filter.Order switch
-        {
-            InboxOrder.Importance => shown.OrderBy(r => r.Rank).ThenByDescending(r => r.Stamp, StringComparer.Ordinal),
-            InboxOrder.Oldest => shown.OrderBy(r => r.Stamp, StringComparer.Ordinal),
-            InboxOrder.Title => shown.OrderBy(r => r.Title, text)
-                .ThenByDescending(r => r.Stamp, StringComparer.Ordinal),
-            // By the name the viewer READS, so the list is alphabetical in their language; the id
-            // only separates two sources that happen to share a display name.
-            InboxOrder.Source => shown.OrderBy(r => r.Source, text)
-                .ThenBy(r => r.SourceId, StringComparer.Ordinal)
-                .ThenByDescending(r => r.Stamp, StringComparer.Ordinal),
-            // Newest — the default, and what anything unrecognised reads as: everything by date.
-            _ => shown.OrderByDescending(r => r.Stamp, StringComparer.Ordinal),
-        };
-        return ordered.ThenBy(r => r.Path, StringComparer.Ordinal).ToImmutableList();
+        var (_, before, after) = SplitDates(filter.Search);
+        var shown = string.IsNullOrEmpty(category)
+            ? rows.Where(row => !filter.Sources.TryGetValue(SourceKey(row.SourceId), out var on) || on)
+            : rows.Where(row => string.Equals(row.Category, category, StringComparison.Ordinal));
+        return shown.Where(row => InRange(row.Stamp, before, after))
+            .OrderByDescending(r => r.Stamp, StringComparer.Ordinal)
+            .ThenBy(r => r.Path, StringComparer.Ordinal)
+            .ToImmutableList();
+    }
+
+    /// <summary>
+    /// The side menu's counts: how many rows each category holds, and how many of them are unread —
+    /// read off the merged rows BEFORE the switches and the category apply, so a category's count is
+    /// never filtered away with its rows. Pure.
+    /// </summary>
+    public static ImmutableDictionary<string, (int Total, int Unread)> CategoryCounts(IEnumerable<InboxRow> rows)
+        => rows.GroupBy(r => r.Category, StringComparer.Ordinal)
+            .ToImmutableDictionary(g => g.Key, g => (g.Count(), g.Count(r => r.Unread)), StringComparer.Ordinal);
+
+    /// <summary>
+    /// The date bounds a search carries — <c>before:2026-10-01</c> (strictly before that day) and
+    /// <c>after:2026-10-01</c> (that day or later), dates as <c>yyyy-MM-dd</c> in UTC — and the rest of
+    /// the text, which goes to the sources as before. A bound that is not a date stays in the text,
+    /// so a typo narrows nothing silently. With a bound, a viewer can list everything before a day,
+    /// tick all and put it away in one Delete. Pure.
+    /// </summary>
+    /// <param name="search">What the viewer typed.</param>
+    public static (string Text, DateTimeOffset? Before, DateTimeOffset? After) SplitDates(string? search)
+    {
+        var tokens = (search ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries).ToImmutableArray();
+        // The LAST bound of each kind wins, as a later word overrides an earlier one.
+        var before = tokens.Select(t => Bound(t, "before:")).LastOrDefault(b => b is not null);
+        var after = tokens.Select(t => Bound(t, "after:")).LastOrDefault(a => a is not null);
+        var rest = tokens.Where(t => Bound(t, "before:") is null && Bound(t, "after:") is null);
+        return (string.Join(' ', rest), before, after);
+
+        static DateTimeOffset? Bound(string token, string prefix)
+            => token.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+               && DateTime.TryParseExact(token[prefix.Length..], "yyyy-MM-dd", CultureInfo.InvariantCulture,
+                   DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var day)
+                ? new DateTimeOffset(day, TimeSpan.Zero)
+                : null;
+    }
+
+    /// <summary>Whether a row's stamp lies in [<paramref name="after"/>, <paramref name="before"/>). Pure.</summary>
+    internal static bool InRange(string stamp, DateTimeOffset? before, DateTimeOffset? after)
+    {
+        if (before is null && after is null)
+            return true;
+        if (!DateTimeOffset.TryParse(stamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var at))
+            return false;
+        return (before is not { } b || at < b) && (after is not { } a || at >= a);
     }
 
     /// <summary>

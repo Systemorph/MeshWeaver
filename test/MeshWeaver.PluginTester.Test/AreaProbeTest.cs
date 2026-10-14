@@ -176,6 +176,41 @@ public class AreaProbeTest
         Assert.Contains("Second_Fails", verdict.Detail);
     }
 
+    // The streaming runner's VERDICT frame (MeshTestRunner.Render), in its wire shape: a Title carrying
+    // "N/M passed" and a DataGrid whose rows are objects — the ❌ is one cell, the case and the failing
+    // assertion are its sibling cells.
+    private static readonly JsonElement RedGridVerdict = Frame(
+        """
+        {"areas":{
+          "Tests":{"$type":"MeshWeaver.Layout.StackControl","areas":[{"area":"Tests/Title"},{"area":"Tests/Cases"}]},
+          "Tests/Title":{"$type":"MeshWeaver.Layout.TitleControl","data":"ActionLink tests — 16/17 passed","headingLevel":2},
+          "Tests/Cases":{"$type":"MeshWeaver.Layout.DataGrid.DataGridControl",
+            "columns":[{"property":"class","title":"Class"},{"property":"result","title":"Result"},{"property":"output","title":"Output"}],
+            "data":[
+              {"$type":"CaseRow","class":"ActionLinkTests","case":"ManifestPaths_AreTopLevel","result":"✅ pass","time":"0.1s","output":""},
+              {"$type":"CaseRow","class":"ActionLinkLiveTests","case":"PublishResolveContinueRevoke","result":"❌ FAIL","time":"3.2s",
+               "output":"Expected the live handler chain to refuse the synthetic publisher, but it continued to /a/x"}]}}}
+        """);
+
+    /// <summary>
+    /// A red DATA-GRID verdict names the failing case AND its reason. The ❌ is one cell of the row; the
+    /// gate used to report that cell alone, so a failing streaming suite printed a bare "❌ FAIL" with
+    /// neither the case nor the assertion — nothing to act on without re-running the suite.
+    /// </summary>
+    [Fact]
+    public async Task RedGridRow_ReportsTheFailingCaseWithItsReason_AndTheSummary()
+    {
+        var verdict = await AreaProbe.ClassifyTestsFrames(FrameStream(RedGridVerdict), TimeSpan.FromSeconds(5))
+            .FirstAsync().Await();
+
+        Assert.Equal(CheckOutcome.Failed, verdict.Outcome);
+        Assert.Contains("ActionLinkLiveTests", verdict.Detail);
+        Assert.Contains("PublishResolveContinueRevoke", verdict.Detail);
+        Assert.Contains("refuse the synthetic publisher", verdict.Detail);
+        Assert.Contains("16/17 passed", verdict.Detail);
+        Assert.DoesNotContain("ManifestPaths_AreTopLevel", verdict.Detail);
+    }
+
     /// <summary>An empty stream (no frames at all) still reports the generic no-verdict red.</summary>
     [Fact]
     public async Task NoFrames_TimesOut_WithTheGenericNoVerdict()

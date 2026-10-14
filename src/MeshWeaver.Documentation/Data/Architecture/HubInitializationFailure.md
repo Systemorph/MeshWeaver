@@ -131,6 +131,41 @@ Pinned by `MeshWeaver.Data.Test.TransientInitializationFaultRetiresTheActivation
 seams, plus the control without the declaration. Falsified by reverting the two seams: the
 positive cases then fail with `ErrorType.Failed` (the latch) while the controls stay green.
 
+## A host ending an activation mid-init is a SHUTDOWN — dispose first, then cancel (#6648)
+
+The recognised-shutdown arm asks `IsShuttingDown`, and it asks **synchronously inside the
+cancellation**: `HandleInitialize` races the BuildupActions against the init turn's execution
+token, and that token's registration errors the race from within
+`CancellationTokenSource.Cancel()`. So whoever cancels a mid-init hub's execution decides the
+classification by WHEN it does so relative to `Dispose()`:
+
+- `Dispose()` sets the disposal flag first and only then cancels a not-yet-started hub's bring-up
+  itself, so a plain dispose is always classified as the shutdown it is.
+- A host that ALSO aborts the current turn — the Orleans grain on deactivation does, so a
+  started hub's in-flight turn does not hold the deactivation — must cancel **after** the
+  dispose. Cancelling first runs the classifier while `IsShuttingDown` is still `false`: the
+  routine end of the activation is logged at Error as *"initialization failed — BuildupAction
+  n of m (…) faulted (OperationCanceledException: Hub X was told to shut down before its
+  initialization completed). Hub is now in FAILED state."* and `InitializationError` latches on
+  a hub that is leaving. Measured on an Orleans-hosted portal: one such line per hub still
+  initializing in a deactivation wave, dozens of fingerprints in one second, many of them
+  partition roots.
+
+The order lives in ONE place, `HubDeactivation.DisposeAbortingCurrentTurn()`
+(`MeshWeaver.Messaging.Hub`), and `MessageHubGrain` calls it; a host never spells the two calls
+itself. The cancel that follows the dispose still aborts a started hub's in-flight turn —
+`Dispose()` leaves that turn to finish by design, and its `ShutdownRequest` runs with no token,
+so the cancel cannot reach the shutdown. Classifying "any cancellation of the init token" as a
+shutdown inside `HandleInitialize` instead was rejected: `CancelCurrentExecution()` on a hub
+that is NOT being disposed leaves a hub that did not finish initializing and is staying, and
+FAILED is the honest state for that one.
+
+Pinned by `MeshWeaver.Messaging.Hub.Test.DeactivationDuringInitializationIsShutdownTest` — a
+BuildupAction that never answers, ended only by the deactivation; it asserts the
+recognised-shutdown Debug line (so the classifier provably ran), no Error-level
+"initialization failed" line and no `InitializationError`. Falsified by swapping the two calls
+back: the test then reproduces the production line verbatim and fails.
+
 ## Where it lives
 
 `MessageHub.HandleInitialize` wraps the BuildupAction composition in a **liveness bound plus** a
@@ -344,6 +379,10 @@ attribution; the stalled provider is a separate fault and the warning names it.
 faulting BuildupAction answers a probe request with a `DeliveryFailureException` carrying
 `"initialization failed: <reason>"` **fast** (a `TimeoutException` would mean the gate never opened —
 the regression), and exposes the `InitializationError` status marker.
+
+`test/MeshWeaver.Messaging.Hub.Test/DeactivationDuringInitializationIsShutdownTest.cs` pins the
+other direction: a host deactivation landing mid-init records no failure (see "A host ending an
+activation mid-init is a SHUTDOWN" above).
 
 `test/MeshWeaver.Data.Test/DataContextInitWatchdogTest.cs` pins the DataContext side — the
 watchdog's four terminal outcomes, plus

@@ -5,8 +5,9 @@ namespace MeshWeaver.Mesh;
 /// deliberately never thrown.</b>
 ///
 /// <para><b>What it marks.</b> A <c>MeshNode</c>'s <c>Content</c> arrived as JSON, the
-/// polymorphic reader could not resolve its <c>$type</c> against the reading hub's TypeRegistry,
-/// and the mesh-wide <c>IMeshContentTypeRegistry</c> could not recover it either. The value crosses
+/// polymorphic reader did not produce a typed value — its <c>$type</c> resolved to nothing, or it
+/// resolved to a type the stored JSON does not bind to (<see cref="Cause"/> says which) — and the
+/// mesh-wide <c>IMeshContentTypeRegistry</c> could not recover it either. The value crosses
 /// the read boundary STILL untyped, so every downstream <c>Content is X</c> / <c>as X</c> silently
 /// answers absent: a view renders empty, a reactive wait never completes. Nothing throws — a READ
 /// must stay bad-data tolerant, and that is exactly why this class of defect is invisible.</para>
@@ -50,6 +51,20 @@ public sealed class MeshNodeContentDegradedException : System.Exception
     /// <summary>Truncated raw JSON of the content that could not be materialised.</summary>
     public string? RawJson { get; }
 
+    /// <summary>
+    /// WHY the content stayed untyped, as the site that observed it classified it — e.g. a
+    /// <c>$type</c> nothing in the process resolves, or a registered type whose stored JSON does not
+    /// bind (Systemorph/MeshWeaver#6674). <c>null</c> when the site did not classify it; the message
+    /// is then cause-neutral rather than guessing.
+    ///
+    /// <para>🚨 An <c>init</c> property, deliberately not a constructor parameter: a new parameter
+    /// replaces the constructor every already-compiled module bundle calls (a binary break), and a
+    /// fifth <c>string</c> overload would make an existing <c>null</c> inner-exception argument
+    /// ambiguous. The message is composed when it is READ, so a cause set by the initializer is the
+    /// one <see cref="System.Exception.ToString"/> — what every sink appends — carries.</para>
+    /// </summary>
+    public string? Cause { get; init; }
+
     /// <summary>Creates the degradation marker.</summary>
     /// <param name="seam">The read seam that observed it.</param>
     /// <param name="nodePath">The node path.</param>
@@ -58,17 +73,25 @@ public sealed class MeshNodeContentDegradedException : System.Exception
     /// <param name="inner">The deserialization exception, when there was one.</param>
     public MeshNodeContentDegradedException(
         string seam, string? nodePath, string? nodeType, string? rawJson, System.Exception? inner = null)
-        : base(
-            $"{seam}: content for '{nodePath ?? "<unknown>"}' (nodeType '{nodeType ?? "<none>"}') "
-            + "stayed an untyped JsonElement — the $type discriminator resolved to no registered "
-            + "CLR type on the reading hub and the mesh-wide content-type registry did not recover "
-            + "it. Downstream 'Content is X' / 'as X' consumers read it as ABSENT: views render "
-            + $"empty and reactive waits never complete. Raw: {rawJson ?? "<none>"}",
-            inner)
+        : base(null, inner)
     {
         Seam = seam;
         NodePath = nodePath;
         NodeType = nodeType;
         RawJson = rawJson;
     }
+
+    /// <summary>
+    /// The record a sink appends. Names exactly ONE cause — <see cref="Cause"/> when the observing
+    /// site classified it, otherwise a cause-neutral statement. Before #6674 this always said the
+    /// discriminator resolved to no registered CLR type, so a bind failure the formatted line
+    /// correctly named arrived with a second, contradicting cause attached.
+    /// </summary>
+    public override string Message =>
+        $"{Seam}: content for '{NodePath ?? "<unknown>"}' (nodeType '{NodeType ?? "<none>"}') "
+        + "stayed an untyped JsonElement — "
+        + (Cause ?? "neither the reading hub's TypeRegistry nor the mesh-wide content-type registry "
+                    + "produced a typed value (the cause was not classified at this site)")
+        + ". Downstream 'Content is X' / 'as X' consumers read it as ABSENT: views render "
+        + $"empty and reactive waits never complete. Raw: {RawJson ?? "<none>"}";
 }

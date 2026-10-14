@@ -32,6 +32,21 @@ THE TWO HALVES.
              publication that could not be READ is a refusal: carrying forward from an unknown
              publication either shrinks it or seals a guess.
 
+             THREE kinds of waiting package, and only one of them is "never sealed":
+               carried       its bundle (or module package) is in the sealed publication — fetched.
+               never sealed  this run baked bytes for it (a bundle or a module package) that the
+                             sealed publication does NOT hold — it stays out, and so does every
+                             package that requires it: withhold widens the waiting set over that
+                             closure (with --content), so a dependent WAITS, with the reason named,
+                             instead of the listing refusing the whole seal.
+               bundle-less   it bakes neither a bundle nor a module package (a content-only package),
+                             so this publication never seals it either way: a requirement on it is
+                             not this listing's to check, exactly like another repository's package.
+             The effective waiting set and the never-sealed set are written to the state directory,
+             and `listing` reads them — the listing and its floor check see what withhold decided.
+             (Plugins run 38527548962: 26 waiting content-only packages, AI among them, were read as
+             "never sealed", and every carried dependent's `requires AI@…` refused the seal.)
+
   listing    runs after the carry-forward. It writes the per-package listing and REFUSES a seal in
              which a package's declared `requires` on another package of the SAME listing is not
              met by the version the listing seals for it — a carried dependency held at 1.21.1
@@ -68,6 +83,8 @@ STATE_MODULES = "published-modules.txt"          # the sealed `modules/_index` (
 STATE_COMMIT = "published-commit.txt"            # the sealed `source-commit.txt`
 STATE_PACKAGES = "published-packages.json"       # the sealed per-package listing (absent: legacy)
 STATE_CARRY_MODULES = "carry-modules.txt"        # what `withhold` asks the module carry to fetch
+STATE_WITHHELD = "withheld-effective.txt"        # the waiting set `withhold` settled on (input + closure)
+STATE_NEVER_SEALED = "never-sealed.txt"          # waiting packages with fresh bytes and no sealed build
 
 
 # ─── THE ONE reading of a requirement — MeshWeaver.Plugin.Packaging.PackageRequirement, in Python ───
@@ -194,8 +211,16 @@ def _lines(path: Path) -> list[str]:
 
 
 # ─── withhold ────────────────────────────────────────────────────────────────────────────────────
-def withhold(bake: Path, withheld: list[str], state: Path) -> dict:
-    """Remove every withheld package's fresh bytes and say what the carry must fetch instead."""
+def _requires_in(repo: Path, package: str) -> list[str]:
+    return _requires(_json(_read(repo / package / "index.json")))
+
+
+def withhold(bake: Path, withheld: list[str], state: Path, repo: Path | None = None) -> dict:
+    """Remove every withheld package's fresh bytes and say what the carry must fetch instead.
+
+    With `repo` (the content checkout), a package this run would seal FRESH that requires a waiting
+    package with NO sealed build waits too — transitively — so the listing never meets a dependent
+    whose dependency it cannot seal. Without it the waiting set is exactly the input."""
     raw = (_read(state / STATE_PUBLICATION) or "").strip()
     status = raw.split(None, 1)[0] if raw else ""
     if status not in ("sealed", "absent"):
@@ -207,41 +232,92 @@ def withhold(bake: Path, withheld: list[str], state: Path) -> dict:
             "adopts) or seals a guess; nothing is written, and the existing publication stays sealed and intact.")
     listed = set(_lines(state / STATE_BUNDLES)) if status == "sealed" else set()
     listed_modules = set(_lines(state / STATE_MODULES)) if status == "sealed" else set()
-    carried, absent, modules_carried = [], [], []
-    for package in withheld:
+    carried, absent, bundleless, modules_carried = [], [], [], []
+    pulled: dict[str, str] = {}  # package → the never-sealed dependency that made it wait
+
+    def hold(package: str) -> None:
         bundle = bake / f"{package}.zip"
-        if bundle.exists():
+        fresh_bundle = bundle.exists()
+        if fresh_bundle:
             bundle.unlink()
-        (carried if f"{package}.zip" in listed else absent).append(package)
         module = f"{package.lower()}.module.nupkg"
         fresh = bake / MODULES_DIR / module
-        if fresh.exists():
+        fresh_module = fresh.exists()
+        if fresh_module:
             fresh.unlink()
         if module in listed_modules:
             modules_carried.append(module)
+        sealed_bundle = f"{package}.zip" in listed
+        if sealed_bundle:
+            carried.append(package)
+        # Never sealed = this run baked bytes the sealed publication holds no build of. A package
+        # that bakes NEITHER (content-only) is not "never sealed": no publication ever seals it.
+        if (fresh_bundle and not sealed_bundle) or (fresh_module and module not in listed_modules):
+            absent.append(package)
+        elif not sealed_bundle and module not in listed_modules:
+            bundleless.append(package)
+
+    waiting = list(dict.fromkeys(withheld))
+    for package in waiting:
+        hold(package)
+    if repo is not None:
+        by_lower = {d.name.lower(): d.name for d in repo.iterdir() if d.is_dir()} if repo.is_dir() else {}
+        while True:
+            never, held = set(absent), set(waiting)
+            # Every package this run would still seal FRESH: a bundle left in the bake, or a module
+            # package (named lower-case — mapped back to its package folder).
+            fresh_now = {b.stem for b in bake.glob("*.zip")}
+            if (bake / MODULES_DIR).is_dir():
+                fresh_now |= {by_lower.get(m.name[:-len(".module.nupkg")], m.name[:-len(".module.nupkg")])
+                              for m in (bake / MODULES_DIR).glob("*.module.nupkg")}
+            more = {}
+            for package in sorted(fresh_now - held):
+                blocker = next((d for d in (dependency_id(r) for r in _requires_in(repo, package))
+                                if d in never and d != package), None)
+                if blocker:
+                    more[package] = blocker
+            if not more:
+                break
+            for package, blocker in more.items():
+                pulled[package] = blocker
+                waiting.append(package)
+                hold(package)
     (state / STATE_CARRY_MODULES).write_text("".join(f"{m}\n" for m in modules_carried), encoding="utf-8")
-    return {"carried": carried, "absent": absent, "modulesCarried": modules_carried, "status": status}
+    (state / STATE_WITHHELD).write_text("".join(f"{p}\n" for p in waiting), encoding="utf-8")
+    (state / STATE_NEVER_SEALED).write_text("".join(f"{p}\n" for p in absent), encoding="utf-8")
+    return {"carried": carried, "absent": absent, "bundleless": bundleless, "modulesCarried": modules_carried,
+            "status": status, "waiting": waiting, "pulled": pulled}
 
 
 def cmd_withhold(a: argparse.Namespace) -> int:
     withheld = _words(a.withhold)
     if not withheld:
         print("seal-packages: nothing is withheld — every package this run baked is sealed at this commit")
+        state = Path(a.state)
+        state.mkdir(parents=True, exist_ok=True)
+        for name in (STATE_WITHHELD, STATE_NEVER_SEALED):
+            (state / name).write_text("", encoding="utf-8")
         if a.github_output:
             with open(a.github_output, "a", encoding="utf-8") as out:
                 out.write("carry=false\ncarry-modules=false\n")
         return 0
-    result = withhold(Path(a.bake), withheld, Path(a.state))
-    print(f"seal-packages: {len(withheld)} package(s) wait — their fresh bytes are NOT sealed:")
+    result = withhold(Path(a.bake), withheld, Path(a.state), Path(a.content) if a.content else None)
+    print(f"seal-packages: {len(result['waiting'])} package(s) wait — their fresh bytes are NOT sealed:")
     for p in result["carried"]:
         print(f"  · {p}: carried forward — the previously sealed {p}.zip is fetched and verified in its place")
     for p in result["absent"]:
         print(f"  · {p}: never sealed for this identity — it stays out of the listing until it is publishable")
+    for p in result["bundleless"]:
+        print(f"  · {p}: bakes no bundle and no module package — nothing of it is sealed in any publication, "
+              "so it neither travels nor blocks a dependent here")
+    for p, dep in result["pulled"].items():
+        print(f"  · {p}: waits too — it requires {dep}, which waits and has never been sealed for this identity")
     for m in result["modulesCarried"]:
         print(f"  · module {m}: carried forward from the sealed module set")
     print(f"::notice title=Sealed per package::{len(result['carried'])} waiting package(s) carried forward at their "
-          f"previously sealed build, {len(result['absent'])} never sealed and left out; every other package this run "
-          f"baked is sealed at this commit")
+          f"previously sealed build, {len(result['absent'])} never sealed and left out, {len(result['bundleless'])} "
+          f"bake no bundle, {len(result['pulled'])} wait because a dependency was never sealed; every other package "
+          "this run baked is sealed at this commit")
     if a.github_output:
         with open(a.github_output, "a", encoding="utf-8") as out:
             out.write(f"carry={'true' if result['carried'] else 'false'}\n")
@@ -317,10 +393,27 @@ def build_listing(bake: Path, repo: Path, commit: str, withheld: list[str], stat
     return {"schema": SCHEMA, "publicationCommit": commit, "packages": entries}
 
 
-def floor_violations(listing: dict, repo: Path, withheld: list[str]) -> list[str]:
+def settled_waiting(withheld: list[str], state: Path | None) -> tuple[list[str], set[str] | None]:
+    """The waiting set `withhold` settled on (the input plus its closure) and the never-sealed set.
+
+    None for the never-sealed set when `withhold` recorded none (it did not run, or predates the
+    record): the floor check then reads every waiting package missing from the listing as unmet."""
+    if state is None or not (state / STATE_WITHHELD).exists():
+        return withheld, None
+    effective = list(dict.fromkeys([*withheld, *_lines(state / STATE_WITHHELD)]))
+    never = set(_lines(state / STATE_NEVER_SEALED)) if (state / STATE_NEVER_SEALED).exists() else None
+    return effective, never
+
+
+def floor_violations(listing: dict, repo: Path, withheld: list[str],
+                     never_sealed: set[str] | None = None) -> tuple[list[str], list[str]]:
+    """(refusals, notes). A requirement on a package this listing does not hold is this listing's to
+    refuse only when that package HAS bytes no publication sealed (`never_sealed`): one that bakes no
+    bundle (content-only, or another repository's) is sealed by no publication either way."""
     by_name = {e["package"]: e for e in listing["packages"]}
     waiting = set(withheld)
     problems: list[str] = []
+    notes: list[str] = []
     for entry in listing["packages"]:
         for requirement in entry.get("requires") or []:
             dep = dependency_id(requirement)
@@ -328,10 +421,19 @@ def floor_violations(listing: dict, repo: Path, withheld: list[str]) -> list[str
                 continue
             sealed = by_name.get(dep)
             if sealed is None:
-                if dep in waiting:
-                    problems.append(f"{entry['package']} (sealed at {_short(entry.get('sourceCommit'))}) requires "
-                                    f"{requirement}, but {dep} waits and this listing seals NO build of it")
-                continue  # another repository's package, or one with no NodeType bundle at all
+                unsealable = dep in waiting if never_sealed is None else dep in never_sealed
+                if not unsealable:
+                    continue  # another repository's package, or one with no NodeType bundle at all
+                if entry.get("carried") and never_sealed is not None:
+                    # The carried bytes are the ones the sealed publication already holds beside the
+                    # same absence: re-sealing them changes nothing, refusing them seals nothing better.
+                    notes.append(f"{entry['package']} (carried at {_short(entry.get('sourceCommit'))}) requires "
+                                 f"{requirement}, and {dep} has never been sealed for this identity — unchanged "
+                                 f"from the sealed publication; it adopts once {dep} is sealed")
+                    continue
+                problems.append(f"{entry['package']} (sealed at {_short(entry.get('sourceCommit'))}) requires "
+                                f"{requirement}, but {dep} waits and this listing seals NO build of it")
+                continue
             have = sealed.get("version")
             verdict = satisfies(range_of(requirement), have) if have else None
             if verdict is True:
@@ -343,7 +445,7 @@ def floor_violations(listing: dict, repo: Path, withheld: list[str]) -> list[str
             else:
                 problems.append(f"{entry['package']} requires {requirement}, and {dep}'s sealed version "
                                 f"'{have}' cannot be checked against it — an unverifiable floor is not a met one")
-    return problems
+    return problems, notes
 
 
 def _short(sha) -> str:
@@ -352,15 +454,18 @@ def _short(sha) -> str:
 
 def cmd_listing(a: argparse.Namespace) -> int:
     bake, repo = Path(a.bake), Path(a.content)
-    withheld = _words(a.withhold)
-    listing = build_listing(bake, repo, a.commit, withheld, Path(a.state) if a.state else None)
-    problems = floor_violations(listing, repo, withheld)
+    state = Path(a.state) if a.state else None
+    withheld, never_sealed = settled_waiting(_words(a.withhold), state)
+    listing = build_listing(bake, repo, a.commit, withheld, state)
+    problems, notes = floor_violations(listing, repo, withheld, never_sealed)
     fresh = [e for e in listing["packages"] if not e.get("carried")]
     carried = [e for e in listing["packages"] if e.get("carried")]
     print(f"sealed per package: {len(listing['packages'])} package(s) — {len(fresh)} at this commit "
           f"{_short(a.commit)}, {len(carried)} carried at their previously sealed build")
     for e in carried:
         print(f"  · {e['package']} {e.get('version') or '?'} carried at {_short(e.get('sourceCommit'))}")
+    for n in notes:
+        print(f"::warning title=Carried dependent of a never-sealed package::{n}")
     if problems:
         print(f"::error title=Seal refused — a dependency floor would be unmet::{len(problems)} requirement(s) of a "
               "sealed package are not met by what the SAME listing seals. Sealing them would hand every portal a "
@@ -487,7 +592,7 @@ def self_test() -> int:
                not any(e["package"] in waiting and e["sourceCommit"] == new for e in listing["packages"]))
         expect("the publication commit stays this run's (never-seal-backwards reads it)",
                listing["publicationCommit"] == new)
-        expect("no floor is violated", floor_violations(listing, repo, waiting) == [])
+        expect("no floor is violated", floor_violations(listing, repo, waiting)[0] == [])
 
         print("a carried build keeps its OWN commit across seals (carried twice):")
         seal_previous(listing["packages"], [f"{n}.zip" for n in names])
@@ -507,24 +612,24 @@ def self_test() -> int:
         withhold(bake, ["P50"], state)
         carry_forward(["P50"])
         bad = build_listing(bake, repo, new, ["P50"], state)
-        problems = floor_violations(bad, repo, ["P50"])
+        problems = floor_violations(bad, repo, ["P50"])[0]
         expect("refused, naming the dependent, the requirement and the carried version",
                len(problems) == 1 and "P00" in problems[0] and "P50@^1.1.0" in problems[0] and "1.0.0" in problems[0],
                str(problems))
         write("P00", "1.1.0", ["P50@^1.0.0"])  # the same shape, with a floor the carried build meets
         good = build_listing(bake, repo, new, ["P50"], state)
-        expect("NEGATIVE CONTROL: a floor the carried build meets is sealed", floor_violations(good, repo, ["P50"]) == [])
+        expect("NEGATIVE CONTROL: a floor the carried build meets is sealed", floor_violations(good, repo, ["P50"])[0] == [])
         write("P00", "1.1.0", ["P77@^1.0.0"])
-        bake_all(names[:77])
+        bake_all(names)  # P77 bakes a bundle this time, and the publication never sealed it
         seal_previous(None, [f"{n}.zip" for n in names[:77]])
-        withhold(bake, ["P77"], state)
+        withhold(bake, ["P77"], state)  # no --content: no closure, so P00 stays fresh
         never = build_listing(bake, repo, new, ["P77"], state)
-        problems = floor_violations(never, repo, ["P77"])
-        expect("a dependency that waits and was NEVER sealed is refused too",
+        problems = floor_violations(never, repo, *settled_waiting(["P77"], state))[0]
+        expect("without the closure, a fresh dependent of a NEVER-sealed waiting package is still refused",
                len(problems) == 1 and "seals NO build" in problems[0], str(problems))
         write("P00", "1.1.0", ["External@^9.0.0"])
         expect("NEGATIVE CONTROL: another repository's package is not this listing's to check",
-               floor_violations(build_listing(bake, repo, new, [], None), repo, []) == [])
+               floor_violations(build_listing(bake, repo, new, [], None), repo, [])[0] == [])
         write("P00", "1.1.0")
 
         print("a publication sealed before the listing existed (legacy):")
@@ -602,6 +707,135 @@ def self_test() -> int:
                green.returncode == 0 and written is not None
                and any(e["package"] == "P50" and e["carried"] for e in written["packages"]), green.stdout + green.stderr)
 
+    print("Plugins run 38527548962: waiting content-only packages (AI, Mail) under carried dependents:")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        repo, bake, state = root / "repo", root / "bake", root / "state"
+        for d in (repo, bake, state):
+            d.mkdir()
+
+        def put(package: str, version: str, requires: list[str] | None = None) -> None:
+            (repo / package).mkdir(exist_ok=True)
+            (repo / package / "index.json").write_text(json.dumps(
+                {"id": package, "content": {"version": version, **({"requires": requires} if requires else {})}}))
+            (repo / package / "manifest.lock").write_text(json.dumps({"version": version}))
+
+        # AI ships a module package and NO NodeType bundle; Mail ships neither (content only).
+        put("AI", "1.27.0")
+        put("Mail", "1.0.0")
+        put("Hosting", "1.68.0", ["AI@^1.24.0"])
+        put("Essentials", "1.14.0", ["AI@^1.0.0", "Mail@^1.0.0"])
+        put("Chess", "1.1.0")
+
+        def shape(sealed_modules: list[str]) -> None:
+            for d in (bake, state):
+                shutil.rmtree(d)
+                d.mkdir()
+            for p in ("Hosting", "Essentials", "Chess"):
+                (bake / f"{p}.zip").write_text(f"fresh {p}")
+            (bake / MODULES_DIR).mkdir()
+            (bake / MODULES_DIR / "ai.module.nupkg").write_text("fresh ai")
+            (state / STATE_PUBLICATION).write_text("sealed\n")
+            (state / STATE_BUNDLES).write_text("Hosting.zip\nEssentials.zip\nChess.zip\n")
+            (state / STATE_MODULES).write_text("".join(f"{m}\n" for m in sealed_modules))
+            (state / STATE_COMMIT).write_text("e" * 40 + "\n")
+            (state / STATE_PACKAGES).write_text(json.dumps({"schema": SCHEMA, "publicationCommit": "e" * 40, "packages": [
+                {"package": "Hosting", "bundle": "Hosting.zip", "sourceCommit": "e" * 40, "version": "1.67.18",
+                 "requires": ["AI@^1.24.0"], "carried": False},
+                {"package": "Essentials", "bundle": "Essentials.zip", "sourceCommit": "e" * 40, "version": "1.13.8",
+                 "requires": ["AI@^1.0.0", "Mail@^1.0.0"], "carried": False},
+                {"package": "Chess", "bundle": "Chess.zip", "sourceCommit": "e" * 40, "version": "1.0.0",
+                 "requires": [], "carried": False}]}))
+
+        def carry(packages: list[str], modules: list[str] = ()) -> None:
+            for p in packages:
+                if not (bake / f"{p}.zip").exists():
+                    (bake / f"{p}.zip").write_text(f"sealed {p}")
+            for m in modules:
+                (bake / MODULES_DIR / m).write_text(f"sealed {m}")
+
+        me = str(Path(__file__).resolve())
+
+        def cli(*args: str) -> subprocess.CompletedProcess:
+            return subprocess.run([sys.executable, me, *args], capture_output=True, text=True)
+
+        waiting = ["AI", "Essentials", "Hosting", "Mail"]
+        shape(["ai.module.nupkg"])
+        out = cli("withhold", "--bake", str(bake), "--withhold", " ".join(waiting), "--state", str(state),
+                  "--content", str(repo))
+        expect("withhold succeeds", out.returncode == 0, out.stdout + out.stderr)
+        expect("AI and Mail are NOT read as never sealed (they bake no bundle)",
+               _lines(state / STATE_NEVER_SEALED) == [], _read(state / STATE_NEVER_SEALED) or "")
+        expect("AI's module package is carried; Hosting and Essentials carried at their sealed bundles",
+               _lines(state / STATE_CARRY_MODULES) == ["ai.module.nupkg"]
+               and not (bake / "Hosting.zip").exists() and not (bake / "Essentials.zip").exists())
+        carry(["Hosting", "Essentials"], ["ai.module.nupkg"])
+        out = cli("listing", "--bake", str(bake), "--content", str(repo), "--commit", "f" * 40,
+                  "--withhold", " ".join(waiting), "--state", str(state))
+        written = _json(_read(bake / LISTING))
+        by = {e["package"]: e for e in (written or {}).get("packages", [])}
+        expect("the seal is GREEN: Hosting and Essentials carried at their sealed build, Chess fresh",
+               out.returncode == 0 and by.get("Hosting", {}).get("carried") is True
+               and by.get("Hosting", {}).get("version") == "1.67.18" and by.get("Chess", {}).get("carried") is False,
+               out.stdout + out.stderr)
+        expect("…and the carried build is what the listing SEES (the run's 18 refusals are gone)",
+               "requirement(s)" not in out.stdout and "seals NO build" not in out.stdout, out.stdout)
+        legacy = floor_violations(build_listing(bake, repo, "f" * 40, waiting, state), repo, waiting, None)[0]
+        expect("NEGATIVE CONTROL: the pre-fix reading (no never-sealed record) refuses this very listing",
+               any("Hosting" in p and "AI@^1.24.0" in p and "seals NO build" in p for p in legacy)
+               and any("Mail@^1.0.0" in p for p in legacy), str(legacy))
+
+        print("a waiting package with bytes but NO sealed build: its dependents wait too, the seal stays green:")
+        put("Chess", "1.1.0", ["AI@^1.27.0"])  # a fresh dependent of AI
+        shape([])  # AI's module was never sealed
+        out = cli("withhold", "--bake", str(bake), "--withhold", "AI", "--state", str(state), "--content", str(repo))
+        expect("AI is never sealed (fresh module, none sealed) and named so",
+               _lines(state / STATE_NEVER_SEALED) == ["AI"] and "AI: never sealed" in out.stdout, out.stdout)
+        expect("Hosting, Essentials and Chess are pulled into waiting, each naming AI as the reason",
+               sorted(_lines(state / STATE_WITHHELD)) == ["AI", "Chess", "Essentials", "Hosting"]
+               and all(f"{p}: waits too — it requires AI" in out.stdout for p in ("Chess", "Essentials", "Hosting")),
+               out.stdout)
+        carry(["Hosting", "Essentials", "Chess"])
+        out = cli("listing", "--bake", str(bake), "--content", str(repo), "--commit", "f" * 40,
+                  "--withhold", "AI", "--state", str(state))
+        by = {e["package"]: e for e in (_json(_read(bake / LISTING)) or {}).get("packages", [])}
+        expect("GREEN, every dependent at its previously sealed build, a warning names the absent AI",
+               out.returncode == 0 and all(by.get(p, {}).get("carried") for p in ("Hosting", "Essentials", "Chess"))
+               and "has never been sealed" in out.stdout, out.stdout + out.stderr)
+        (bake / LISTING).unlink()
+        shape([])
+        cli("withhold", "--bake", str(bake), "--withhold", "AI", "--state", str(state))  # no --content: no closure
+        carry([])
+        out = cli("listing", "--bake", str(bake), "--content", str(repo), "--commit", "f" * 40,
+                  "--withhold", "AI", "--state", str(state))
+        expect("NEGATIVE CONTROL: without the closure the fresh Chess requiring a never-sealed AI is REFUSED",
+               out.returncode == 1 and "Chess (sealed at ffffffffff) requires AI@^1.27.0" in out.stdout
+               and not (bake / LISTING).exists(), out.stdout)
+
+        print("the closure is transitive, and a dependent never sealed itself stays out:")
+        put("Chess", "1.1.0", ["AI@^1.27.0"])
+        put("Games", "1.0.0", ["Chess@^1.0.0"])
+        shape([])
+        (bake / "Games.zip").write_text("fresh Games")  # Games was never sealed either
+        out = cli("withhold", "--bake", str(bake), "--withhold", "AI", "--state", str(state), "--content", str(repo))
+        expect("NEGATIVE CONTROL: a dependent of a CARRIED dependent (Games on Chess, sealed before) stays fresh",
+               "Games" not in _lines(state / STATE_WITHHELD), out.stdout)
+        (state / STATE_BUNDLES).write_text("Hosting.zip\nEssentials.zip\n")  # now Chess was never sealed
+        shape_bundles = ["Hosting.zip", "Essentials.zip"]
+        for d in (bake,):
+            shutil.rmtree(d)
+            d.mkdir()
+        for p in ("Hosting", "Essentials", "Chess", "Games"):
+            (bake / f"{p}.zip").write_text(f"fresh {p}")
+        (bake / MODULES_DIR).mkdir()
+        (bake / MODULES_DIR / "ai.module.nupkg").write_text("fresh ai")
+        (state / STATE_BUNDLES).write_text("".join(f"{b}\n" for b in shape_bundles))
+        out = cli("withhold", "--bake", str(bake), "--withhold", "AI", "--state", str(state), "--content", str(repo))
+        expect("Chess (never sealed) waits on AI and stays out; Games waits on Chess and stays out",
+               sorted(_lines(state / STATE_NEVER_SEALED)) == ["AI", "Chess", "Games"]
+               and "Games: waits too — it requires Chess" in out.stdout
+               and not (bake / "Chess.zip").exists() and not (bake / "Games.zip").exists(), out.stdout)
+
     if failures:
         print(f"\nseal-packages self-test: {len(failures)} FAILED")
         return 1
@@ -618,6 +852,7 @@ def main(argv: list[str]) -> int:
     w.add_argument("--bake", required=True)
     w.add_argument("--withhold", default="")
     w.add_argument("--state", required=True)
+    w.add_argument("--content", help="the content checkout: a fresh package requiring a never-sealed one waits too")
     w.add_argument("--github-output")
     l = sub.add_parser("listing")
     l.add_argument("--bake", required=True)

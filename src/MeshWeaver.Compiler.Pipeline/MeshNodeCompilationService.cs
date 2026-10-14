@@ -684,9 +684,18 @@ internal class MeshNodeCompilationService(
     {
         var bound = _cacheOptions.SourceSnapshotTimeout;
 
-        // A caller-supplied override is already an authoritative point-in-time snapshot.
+        // 🚨 #6631 — every answer, from every leg and from a caller's override, is held against the
+        // type's OWN source-version record: a set carrying an earlier version of a path the record
+        // already names is a view behind the store, and is reported UNESTABLISHED (refused as "not
+        // evaluated", never a verdict). In the race this is what lets the authoritative direct read
+        // win over a cached synced query that missed an update — the cached leg replays
+        // synchronously and used to win instantly, stale or not.
+        var record = ntDef?.CurrentSourceVersions;
+
+        // A caller-supplied override is a point-in-time snapshot — held to the same record.
         if (sourcesOverride is not null)
-            return Observable.Return(SourceSnapshot.Established(sourcesOverride));
+            return Observable.Return(SourceSetFreshness.RefuseIfOlderThanRecord(
+                SourceSnapshot.Established(sourcesOverride), record));
 
         // 🚨 DIRECT READ FIRST — measured, not assumed.
         //
@@ -735,7 +744,8 @@ internal class MeshNodeCompilationService(
         // set (compiling against no sources is worse than the stall this exists to dodge). That
         // filter is also the likeliest reason #682's probe "never fired" — not the delay alone.
         return NodeCompileShaping.RaceSourceSnapshot(
-                DirectSourceProbe(ntDef, selfPath, TimeSpan.Zero),
+                DirectSourceProbe(ntDef, selfPath, TimeSpan.Zero)
+                    .Select(s => SourceSetFreshness.RefuseIfOlderThanRecord(s, record)),
                 // 🚨 The cached leg's FAULT is unestablishment, not emptiness. A synced query
                 // that errors used to propagate straight out of the snapshot as a raw exception
                 // → terminal CompilationStatus.Error → a gating "regression" for a mesh read
@@ -743,6 +753,7 @@ internal class MeshNodeCompilationService(
                 // failed probe leg, and the race decides.
                 Observable.Defer(() => ResolveSources(ntDef, selfPath, null).Take(1))
                     .Select(SourceSnapshot.Established)
+                    .Select(s => SourceSetFreshness.RefuseIfOlderThanRecord(s, record))
                     .Catch((Exception ex) => Observable.Return(SourceSnapshot.Unavailable(
                         $"the synced source query '{NodeSources.CacheId(selfPath)}' faulted "
                         + $"({ex.GetType().Name}: {ex.Message})"))))
