@@ -381,8 +381,8 @@ public static class InboxRows
     /// <param name="rows">The merged rows.</param>
     /// <param name="filter">What the viewer asked for.</param>
     /// <param name="culture">
-    /// The viewer's culture — "by title" and "by source" are alphabetical in the VIEWER's language
-    /// (in German, Ä sorts with A, not after Z). Invariant when omitted.
+    /// Not read. The list is always newest first, so no alphabetical order depends on the viewer's
+    /// language any more; the parameter stays only so released callers keep compiling.
     /// </param>
     public static ImmutableList<InboxRow> Apply(IEnumerable<InboxRow> rows, InboxFilter filter, CultureInfo? culture = null)
         => Apply(rows, filter, filter.Category);
@@ -397,7 +397,12 @@ public static class InboxRows
     /// <param name="rows">The merged rows.</param>
     /// <param name="filter">The search and the source switches.</param>
     /// <param name="category">The side-menu category, or null/empty for all.</param>
-    public static ImmutableList<InboxRow> Apply(IEnumerable<InboxRow> rows, InboxFilter filter, string? category)
+    /// <remarks>
+    /// Internal on purpose (issue #6740): public beside the culture overload, a call passing a literal
+    /// <c>null</c> third argument would be ambiguous (CS0121). Public callers name the category on
+    /// <see cref="InboxFilter.Category"/> and call the culture overload.
+    /// </remarks>
+    internal static ImmutableList<InboxRow> Apply(IEnumerable<InboxRow> rows, InboxFilter filter, string? category)
     {
         var (_, before, after) = SplitDates(filter.Search);
         var shown = string.IsNullOrEmpty(category)
