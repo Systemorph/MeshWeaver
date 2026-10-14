@@ -2205,8 +2205,25 @@ public sealed class InstanceAutoRegistrationService(
                 .SelectMany(summary => !installable.Any(c => !string.IsNullOrWhiteSpace(c.Package.Module))
                     ? Observable.Return(summary)
                     : ProposeCheckedForTheSelection(
-                            installable.Select(c => c.Package).ToImmutableList(), phase1.Blocked)
+                            installable.Select(c => c.Package).ToImmutableList(),
+                            BlockedAfterPhase2(phase1.Blocked, summary))
                         .Select(_ => summary)));
+
+        // Phase 2's own verdicts are NEWER than phase 1's: a package it HELD (ownership re-read) or
+        // SKIPPED (a refusal visible only at install time) blocks its module too. A FAILED package
+        // does not — a node install that fails before its landed module loads is the bootstrap's
+        // expected first pass, and blocking it would keep the modules from ever loading.
+        IReadOnlySet<string> BlockedAfterPhase2(IReadOnlySet<string> phase1Blocked, DefaultInstallSummary summary)
+        {
+            var refusedNow = (summary.Held ?? []).Select(h => h.Package)
+                .Concat((summary.Skipped ?? []).Select(s => s.Package))
+                .ToImmutableHashSet(StringComparer.Ordinal);
+            return phase1Blocked
+                .Concat(installable
+                    .Where(c => refusedNow.Contains(c.Package.Id) && !string.IsNullOrWhiteSpace(c.Package.Module))
+                    .Select(c => c.Package.Module!))
+                .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+        }
     }
 
     /// <summary>
