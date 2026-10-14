@@ -128,7 +128,7 @@ public static class InboxLayoutArea
             host.RegisterForDisposal(acts);
         }
         // ONE feed, owner-computed: the grid binds it, and Delete re-reads it at the click.
-        var rows = Rows(host, sections, owner, access.ViewerZoneId());
+        var rows = Rows(host, sections, owner, access.ViewerZoneId(), acts.Rereads);
 
         var filterContext = LayoutAreaReference.GetDataPointer(InboxRows.FilterId);
         // One icon toggle per source, always in view: a source is switched on or off with one click,
@@ -252,7 +252,8 @@ public static class InboxLayoutArea
     /// rows and is LOGGED — one provider's failure must not blank the list the others feed.
     /// </summary>
     internal static IObservable<ImmutableList<InboxRow>> Rows(
-        LayoutAreaHost host, ImmutableArray<InboxSection> sections, string owner, string? zone)
+        LayoutAreaHost host, ImmutableArray<InboxSection> sections, string owner, string? zone,
+        IObservable<long>? rereads = null)
     {
         var hub = host.Hub;
         var handlers = hub.ServiceProvider.GetServices<IInboxItemHandler>().ToImmutableArray();
@@ -319,6 +320,9 @@ public static class InboxLayoutArea
             // and Switch drops the read a newer keystroke superseded.
             .Select(term => term.Length == 0 ? Observable.Return(term) : Observable.Return(term).Delay(SearchQuiet))
             .Switch()
+            // Every leg is read again after a Delete or an Undo: a LIVE source (a mailbox read from
+            // its provider) has no change feed, so the put-away row would otherwise stay listed.
+            .CombineLatest(rereads ?? Observable.Return(0L), (term, _) => term)
             .Select(Merged)
             .Switch()
             .CombineLatest(filter, (rows, asked) =>
@@ -533,6 +537,7 @@ public static class InboxLayoutArea
                         // The rows are gone from the grid; so are their ticks.
                         host.UpdateData(InboxRows.SelectionId, new DataGridSelectionState());
                         ctx.ReportSummary(Summary(host, "inbox.summary.deleted", outcomes));
+                        acts.Reread();
                     })
                     .Select(_ => Unit.Default)));
     }
@@ -606,6 +611,7 @@ public static class InboxLayoutArea
                 .Do(outcomes =>
                 {
                     ctx.ReportSummary(Summary(host, "inbox.summary.restored", outcomes));
+                    acts.Reread();
                 })
                 .Select(_ => Unit.Default);
         }));
@@ -765,10 +771,19 @@ internal sealed class InboxActs : IDisposable
     private readonly Subject<Func<State, State>> changes = new();
     private readonly BehaviorSubject<State> state = new(Initial);
     private readonly IDisposable fold;
+    private readonly BehaviorSubject<long> rereads = new(0);
 
     /// <summary>Opens the page's channel.</summary>
     public InboxActs()
         => fold = changes.Synchronize().Scan(Initial, (current, change) => change(current)).Subscribe(state);
+
+    /// <summary>Ticks whenever the page should read every leg again — after a Delete or an Undo.</summary>
+    public IObservable<long> Rereads => rereads;
+
+    /// <summary>Asks the page to read every leg again; ignored once the page is closed.</summary>
+    public void Reread()
+        // A completed subject ignores what arrives after it, so a late call is dropped, never thrown.
+        => rereads.OnNext(DateTime.UtcNow.Ticks);
 
     /// <summary>What the last Delete put away and Undo has not yet brought back.</summary>
     public ImmutableList<InboxUndoItem> Batch => state.Value.Batch;
@@ -825,6 +840,7 @@ internal sealed class InboxActs : IDisposable
     public void Dispose()
     {
         changes.OnCompleted();
+        rereads.OnCompleted();
         fold.Dispose();
     }
 }
