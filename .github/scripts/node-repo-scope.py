@@ -327,12 +327,12 @@ def changed_files(root: Path, diff_range: str, say) -> list[str] | None:
     even though its build changed. Under-selection is the failure mode this whole script is biased
     against; decomposing the rename makes both ends appear.
     """
-    proc = subprocess.run(["git", "diff", "--no-renames", "--name-only", diff_range],
+    proc = subprocess.run(["git", "diff", "-z", "--no-renames", "--name-only", diff_range],
                           cwd=root, capture_output=True, text=True, timeout=120)
     if proc.returncode != 0:
         say("    " + proc.stderr.strip()[-2000:])
         return None
-    return [line for line in proc.stdout.splitlines() if line.strip()]
+    return [p for p in proc.stdout.split("\0") if p]
 
 
 # ── the decision ─────────────────────────────────────────────────────────────────────────────
@@ -401,10 +401,10 @@ def decide(root: Path, lane: str, entries: list[dict], event: str, diff_range: s
         if publication_diff:
             # A failed run may have published SOME bundles. Include every intervening change,
             # even one later reverted, so HEAD repairs those partial publications too.
-            history = subprocess.run(["git", "log", "--format=", "--name-only", "--no-renames",
+            history = subprocess.run(["git", "log", "-z", "--format=", "--name-only", "--no-renames",
                                       "-m", diff_range], cwd=root, capture_output=True,
                                      text=True, timeout=120)
-            got = sorted(set(history.stdout.splitlines()) - {""}) if history.returncode == 0 else None
+            got = sorted(set(history.stdout.split("\0")) - {""}) if history.returncode == 0 else None
         else:
             got = changed_files(root, diff_range or "", say)
         if got is None:
