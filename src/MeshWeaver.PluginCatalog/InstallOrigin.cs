@@ -106,6 +106,12 @@ internal static class InstallOrigin
         public IObservable<IReadOnlyList<PackageFile>> FetchPackageFiles(
             PackageManifest package, string gitRef, IReadOnlyCollection<string>? paths) =>
             inner.FetchPackageFiles(package, gitRef, paths);
+
+        // Forwarded, never left to the interface default: the default answers no commit, so a
+        // decorator that did not forward would erase the one the inner source served (#3848).
+        public IObservable<PackageFetch> FetchPackage(
+            PackageManifest package, string gitRef, IReadOnlyCollection<string>? paths) =>
+            inner.FetchPackage(package, gitRef, paths);
     }
 }
 

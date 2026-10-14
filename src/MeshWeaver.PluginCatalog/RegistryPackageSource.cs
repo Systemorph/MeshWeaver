@@ -69,8 +69,6 @@ public sealed class RegistryPackageSource : IPackageSource, IOriginatedPackageSo
     /// </summary>
     public PluginBundleClient? Bundles { get; init; }
 
-    private sealed record FilesResponse(IReadOnlyList<PackageFile>? Files);
-
     // Per-REQUEST auth header — never on the client: _http can be the process-wide SharedHttp, and
     // mutating its DefaultRequestHeaders would leak this registry's token to every other registry.
     private HttpRequestMessage Request(HttpMethod method, string url, HttpContent? content = null)
@@ -134,6 +132,14 @@ public sealed class RegistryPackageSource : IPackageSource, IOriginatedPackageSo
     /// <inheritdoc />
     public IObservable<IReadOnlyList<PackageFile>> FetchPackageFiles(
         PackageManifest package, string gitRef, IReadOnlyCollection<string>? paths) =>
+        FetchPackage(package, gitRef, paths).Select(fetched => fetched.Files);
+
+    /// <inheritdoc />
+    /// <remarks>The commit is the one the REGISTRY reports it served (<c>commit</c> on the
+    /// <c>/api/plugins/files</c> answer, MeshWeaver#3848). A registry that predates it answers
+    /// none, and the install then records the requested ref, as before.</remarks>
+    public IObservable<PackageFetch> FetchPackage(
+        PackageManifest package, string gitRef, IReadOnlyCollection<string>? paths) =>
         _httpPool.Invoke(async ct =>
         {
             // Only the package id is authoritative — the registry resolves the folder from its own
@@ -149,14 +155,16 @@ public sealed class RegistryPackageSource : IPackageSource, IOriginatedPackageSo
             if (!resp.IsSuccessStatusCode)
                 throw new RegistryResponseException(resp.StatusCode,
                     $"Registry file fetch for '{package.Id}' failed ({(int)resp.StatusCode}): {json}");
-            var parsed = JsonSerializer.Deserialize<FilesResponse>(json, Json);
-            var files = (IReadOnlyList<PackageFile>)(parsed?.Files ?? []);
+            var parsed = PluginRegistryPayloads.ParseFiles(json);
             if (paths is null)
-                return files;
+                return parsed;
             // Filter locally as well: an OLD registry ignores the `paths` field and returns the
             // whole package — the subset contract must hold regardless of the server's version.
             var wanted = paths as ISet<string> ?? new HashSet<string>(paths, StringComparer.Ordinal);
-            return (IReadOnlyList<PackageFile>)files.Where(f => wanted.Contains(f.RelativePath)).ToList();
+            return parsed with
+            {
+                Files = parsed.Files.Where(f => wanted.Contains(f.RelativePath)).ToList(),
+            };
         });
 }
 
@@ -196,6 +204,34 @@ public static class PluginRegistryPayloads
     /// <summary>Serializes the fetch-files response: <c>{ files: [PackageFile…] }</c>.</summary>
     public static string Files(IReadOnlyList<PackageFile> files) =>
         JsonSerializer.Serialize(new { files }, Json);
+
+    /// <summary>
+    /// Serializes the fetch-files response with the commit the registry served the files at:
+    /// <c>{ files: [PackageFile…], commit: "&lt;sha&gt;" }</c> (MeshWeaver#3848 — the install
+    /// record stores it, and the combo verifier checks the installed content against it). A
+    /// commit that is not a full sha is not written, so the answer is the pre-#3848 bytes exactly;
+    /// an old consumer ignores the sibling — additive both ways.
+    /// </summary>
+    /// <param name="fetched">The files and the commit they were read at.</param>
+    /// <returns>The response body.</returns>
+    public static string Files(PackageFetch fetched) =>
+        PackageFetch.IsCommitSha(fetched.Commit)
+            ? JsonSerializer.Serialize(new { files = fetched.Files, commit = fetched.Commit }, Json)
+            : Files(fetched.Files);
+
+    /// <summary>Parses the fetch-files response <see cref="Files(PackageFetch)"/> wrote. A commit
+    /// that is absent (an old registry) or not a full sha parses as <c>null</c>.</summary>
+    /// <param name="json">The response body.</param>
+    /// <returns>The files and the served commit, when named.</returns>
+    public static PackageFetch ParseFiles(string json)
+    {
+        var parsed = JsonSerializer.Deserialize<FilesResponse>(json, Json);
+        return new PackageFetch(
+            parsed?.Files ?? [],
+            PackageFetch.IsCommitSha(parsed?.Commit) ? parsed!.Commit : null);
+    }
+
+    private sealed record FilesResponse(IReadOnlyList<PackageFile>? Files, string? Commit);
 }
 
 /// <summary>
