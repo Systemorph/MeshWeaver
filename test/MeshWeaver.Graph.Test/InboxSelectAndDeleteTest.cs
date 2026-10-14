@@ -202,6 +202,13 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
         var grid = (DataGridControl)(await stream.GetControlStream(GridArea).Should().Within(TestTimeouts.Convergence)
             .Match(c => c is DataGridControl, "the grid", ct))!;
         grid.RowClassProperty.Should().Be(InboxRows.RowClassProperty, "the grid applies each row's own class");
+        grid.ItemsPerPage?.ToString().Should().Be("50", "the inbox is paged");
+        grid.IsClickable.Should().BeTrue("a click on a row opens it");
+
+        var menu = (RadioGroupControl)(await stream.GetControlStream($"{InboxLayoutArea.AreaName}/Categories")
+            .Should().Within(TestTimeouts.Convergence).Match(c => c is RadioGroupControl, "the side menu", ct))!;
+        menu.Type?.ToString().Should().Be(nameof(String),
+            "the client resolves the CLR type name — \"string\" failed live with 'Type not found: string'");
 
         var delete = (ButtonControl)(await stream.GetControlStream(DeleteArea).Should().Within(TestTimeouts.Convergence)
             .Match(c => c is ButtonControl, "the Delete button", ct))!;
@@ -565,17 +572,65 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
     }
 
     /// <summary>
-    /// A source without a symbol is toggled by its initial — one whole text element, never half an
-    /// emoji — and a contributed leg with an empty name still renders.
+    /// A click on a row opens it: a mail at its https link in its provider's own client (a full page
+    /// load), a mesh item at its page. A link that is not https never leaves the portal, and the row
+    /// arrives typed or as JSON.
     /// </summary>
-    [Theory]
-    [InlineData("Approvals", "A")]
-    [InlineData("\U0001F4E5 Inbox", "\U0001F4E5")]
-    [InlineData("Ärger", "Ä")]
-    [InlineData("", "•")]
-    [InlineData("   ", "•")]
-    public void ASourceWithoutASymbol_IsToggledByItsInitial(string label, string expected)
-        => InboxLayoutArea.Initial(label).Should().Be(expected);
+    [Fact]
+    public void AClickedRow_OpensItsLink_ElseItsPage()
+    {
+        var options = Mesh.JsonSerializerOptions;
+        var mail = new InboxRow { Path = "alice/_Mailbox/outlook/m1", Link = "https://outlook.office.com/mail/id/m1" };
+        InboxLayoutArea.OpenTarget(mail, options).Should().Be(("https://outlook.office.com/mail/id/m1", true));
+        InboxLayoutArea.OpenTarget(JsonSerializer.SerializeToElement(mail, options), options)
+            .Should().Be(("https://outlook.office.com/mail/id/m1", true), "the row as it comes back over the wire");
+        InboxLayoutArea.OpenTarget(new InboxRow { Path = "alice/_Thread/t1" }, options).Should().Be(("/alice/_Thread/t1", false));
+        InboxLayoutArea.OpenTarget(new InboxRow { Path = "alice/_Thread/t1", Link = "javascript:alert(1)" }, options)
+            .Should().Be(("/alice/_Thread/t1", false), "only an https link leaves the portal");
+        InboxLayoutArea.OpenTarget(new InboxRow(), options).Should().BeNull();
+        InboxLayoutArea.OpenTarget(null, options).Should().BeNull();
+    }
+
+    /// <summary>
+    /// A row says who sent it and whether it is read when its source does (a live mailbox answers read
+    /// and unread in one leg); otherwise the source's name and the leg's own unread flag.
+    /// </summary>
+    [Fact]
+    public void ARow_ReadsSenderLinkAndReadStateFromItsContent()
+    {
+        var section = new InboxSection(InboxBand.NeedsYou, "Outlook", 10, "q") { TimeField = "receivedAt", Unread = false };
+        var node = new MeshNode("m1", "alice/_Mailbox/outlook")
+        {
+            Content = JsonSerializer.SerializeToElement(new
+            {
+                receivedAt = "2026-10-14T07:00:00Z", from = "Max Muster", isRead = false,
+                webLink = "https://outlook.office.com/mail/id/m1",
+            }),
+        };
+        var row = InboxRows.Of(node, section, null, null, sourceLabel: "Outlook");
+        row.From.Should().Be("Max Muster");
+        row.Unread.Should().BeTrue("isRead:false on the item wins over the leg");
+        row.RowClass.Should().Be(InboxRows.UnreadClass);
+        row.Link.Should().Be("https://outlook.office.com/mail/id/m1");
+
+        var plain = InboxRows.Of(node with { Content = null }, section with { Unread = true }, null, null, sourceLabel: "Outlook");
+        plain.From.Should().Be("Outlook", "no sender: the source's name");
+        plain.Unread.Should().BeTrue("no read state on the item: the leg's");
+        plain.Link.Should().BeEmpty();
+
+        InboxRows.Of(node with { Content = JsonSerializer.SerializeToElement(new { webLink = "http://x.example/m" }) },
+            section, null, null).Link.Should().BeEmpty("a link that is not https is not kept");
+
+        // TYPED content through the hub's own options, which omit a default false when they serialize:
+        // the unread item must still read as unread.
+        var typed = node with { Content = new Notification { IsRead = false, CreatedAt = DateTimeOffset.UtcNow } };
+        InboxRows.Of(typed, section with { TimeField = "createdAt" }, null, null, null, 0, null, null, Mesh.JsonSerializerOptions)
+            .Unread.Should().BeTrue("typed isRead:false is an unread item, not a missing read state");
+        InboxRows.Of(typed with { Content = new Notification { IsRead = true, CreatedAt = DateTimeOffset.UtcNow } },
+                section with { TimeField = "createdAt", Unread = true }, null, null, null, 0, null, null, Mesh.JsonSerializerOptions)
+            .Unread.Should().BeFalse("typed isRead:true wins over the leg");
+    }
+
 
 
     /// <summary>Only an inbound mail that is New or Read may be filed from the inbox.</summary>
