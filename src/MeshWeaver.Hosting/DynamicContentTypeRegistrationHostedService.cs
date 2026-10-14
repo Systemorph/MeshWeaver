@@ -138,7 +138,8 @@ public sealed class DynamicContentTypeRegistrationHostedService(
     /// <summary>
     /// Closes the boot registration window (Plugins#2799) and writes, ONCE per NodeType, the
     /// "stayed an untyped JsonElement" warning the read seams deferred — for exactly the types that
-    /// are still untyped now that the pass has had its chance. Same wording and the same
+    /// are still untyped now that the pass has had its chance, and for every type whose content
+    /// degraded although it WAS registered (its JSON does not bind; no registration cures that, #6674). Same wording and the same
     /// <see cref="Mesh.MeshNodeContentDegradedException"/> marker as the read seams, so a log query or the
     /// CI trace sink that counts them counts these too; the count and the window of the reads it
     /// covers are in the line, because one line now stands for every deferred read of the type.
@@ -154,15 +155,29 @@ public sealed class DynamicContentTypeRegistrationHostedService(
         foreach (var d in _degradations.SettleDeferredWarnings(contentTypes))
         {
             var seam = d.LastSeam ?? d.Seam;
-            logger.LogWarning(
-                new Mesh.MeshNodeContentDegradedException(seam, d.LastPath, d.NodeType, rawJson: null),
-                "{Seam}: Content for {Path} stayed an untyped JsonElement after deserialization "
-                + "(TypeRegistry lacks the $type discriminator) — the latest of {Count} read(s) of NodeType "
-                + "{NodeType} that degraded between {First:o} and {Last:o}, during the boot registration "
-                + "window (first through {FirstSeam}); the registration pass did not register it on this "
-                + "replica: downstream 'Content is X'/'as X' consumers will fail (renders empty) until an "
-                + "instance activates here",
-                seam, d.LastPath, d.Count, d.NodeType, d.WindowStart, d.LastAt, d.Seam);
+            // #6674 — the entry carries its cause. A registered type whose JSON did not bind is
+            // reported as that (no registration pass cures it); the rest are still unregistered.
+            var marker = new Mesh.MeshNodeContentDegradedException(seam, d.LastPath, d.NodeType, rawJson: null)
+            {
+                Cause = d.Cause,
+            };
+            if (d.UnboundContentType is not null)
+                logger.LogWarning(marker,
+                    "{Seam}: Content for {Path} stayed an untyped JsonElement after deserialization "
+                    + "({Cause}) — the latest of {Count} read(s) of NodeType {NodeType} that degraded between "
+                    + "{First:o} and {Last:o}, during the boot registration window (first through {FirstSeam}); "
+                    + "the type was registered, so no registration cures it: downstream 'Content is X'/'as X' "
+                    + "consumers will fail (renders empty) until the stored content binds",
+                    seam, d.LastPath, d.Cause, d.Count, d.NodeType, d.WindowStart, d.LastAt, d.Seam);
+            else
+                logger.LogWarning(marker,
+                    "{Seam}: Content for {Path} stayed an untyped JsonElement after deserialization "
+                    + "({Cause}) — the latest of {Count} read(s) of NodeType "
+                    + "{NodeType} that degraded between {First:o} and {Last:o}, during the boot registration "
+                    + "window (first through {FirstSeam}); the registration pass did not register it on this "
+                    + "replica: downstream 'Content is X'/'as X' consumers will fail (renders empty) until an "
+                    + "instance activates here",
+                    seam, d.LastPath, d.Cause, d.Count, d.NodeType, d.WindowStart, d.LastAt, d.Seam);
         }
     }
 

@@ -92,14 +92,58 @@ surface is a `UiContribution` with **`Context: PersonApp`**:
 - A contributed tab **never shadows a tab already on the page**: one whose id equals a built-in
   person-app tab (`Sharing`, `Preferences`, …) is dropped, and seed validation reports it.
 
+For a **node-native host app** (Examples at `Developer/Home`, Games at `Games/Home` — compiled from
+mesh content, so they cannot reach a compiled tab registry either) the surface is a `UiContribution`
+with **`Context: AppTab`** and **`Host`** naming the host app — the person-app lane generalised to any
+host. The package ships it in its own partition:
+
+```json
+{
+  "$type": "UiContribution",
+  "context": "AppTab",
+  "host": "Developer/Home",
+  "address": "GoogleMaps/Examples",
+  "area": "Gallery",
+  "label": "Google Maps",
+  "icon": "Map",
+  "group": "examples",
+  "order": 70
+}
+```
+
+- The host renders its page through the Store's `AppTabs` (MeshWeaver.Plugins
+  `Store/Core/Source/AppTabs.cs`): a side navigation grouped by section (`group` is the old
+  `extensionSlot`), the selected tab's `area` of `address` in the content pane, and the tab id — the
+  package id — in the URL (`/Developer/Home/Overview/GoogleMaps`). Only the selected tab renders.
+- A tab shows only where its package is **installed** (`Plugins/{id}` exists) and only to a viewer who
+  can **read** the contribution — the query runs as the viewer, and a gated package hides its children
+  from anyone who has not acquired it. `address` must lie inside the contribution's own partition.
+- The context is the Store's, not the shell's, so core's seed validation does not list it
+  (`UiContributionSeedValidation.PlatformContexts` is what core itself projects); MeshWeaver.Plugins'
+  `check-menu-contexts.py` holds the AppTab rules.
+
 For a **compiled host** (Threads, in `MeshWeaver.AI`) the host renders its extensions' settings
 itself, as it always could — the harness option links to `{user}/Harness/{id}`; a model provider opens
 its own entry point.
 
+### 4. A hosted package is never a launcher tile
+
+The launcher's app directory (`AppDirectory`, `{user}/_Apps`) lists an app root only when it is a
+TILE on this instance (`AppDirectory.IsTile`):
+
+- its package is **installed here** — its install record `Plugins/{id}` exists, or, for a package
+  provisioned by a git import (which writes no record), its `{id}/_GitSync` exists and no package
+  uninstall request (`Admin/_PackageUninstall`) names it. An uninstall's phase 1 removes the record
+  and keeps the data — root and `app: true` included — so without this the tile outlived the package;
+- it declares **no `hostedIn`**, except the person app (`{user}/Settings`): a package hosted there
+  only contributes a settings tab and may still be an app (Electronic Signature). Any other host makes
+  the package a section of that app — a tab of Examples, a game of Games — never a tile.
+
 ## The rules
 
 - **An extension is a PACKAGE, never a second copy of the host.** It does not fork the host's page; it
-  contributes to it through the shelf and (for the person app) a `PersonApp` tab.
+  contributes to it through the shelf and a contributed tab — `PersonApp` for the person app, `AppTab`
+  for a node-native host app.
 - **The purchase is the package's own `CoverCta`.** No host re-implements Get, checkout or install.
 - **The tab is gated on holding the extension, not on its existence.** Without `requireAddressAccess`
   an un-entitled viewer would get a tab whose body is an access-denied page.
@@ -110,6 +154,8 @@ its own entry point.
 
 | Part | Code |
 |---|---|
+| Launcher tiles: installed and not hosted elsewhere | `AppDirectory.IsTile` / `InstallEvidence` (`MeshWeaver.Graph/Apps`); tests `AppDirectoryTest` |
+| `AppTab` context — tabs of a node-native host app | Store package (`Store/Core/Source/AppTabs.cs`), hosts `Developer/DeveloperApp`, `Games/GamesApp`, each pack's `AppTab` node — MeshWeaver.Plugins |
 | `PersonApp` context, `RequireAddressAccess` gate | `UiContribution` / `UiContributionGates` (`MeshWeaver.Graph`), `UiContributionProjection.ProjectPersonAppTabs`, `SettingsMenuItemsExtensions.ContributedPersonAppTabs` / `ApplyAddressAccess`; tests `PersonAppContributionTest` |
 | `hostedIn`, `extensionSlot`, the Extensions shelf, the person app's Extensions tab | Store package (`Store/Core/Source/PluginContent.cs`, `Store/Catalog/Source/ExtensionShelf.cs`, `Store/PersonAppTabs/Extensions`) — MeshWeaver.Plugins |
 | Threads app sections | `AiThreadsApplication` (MeshWeaver.Plugins `src/MeshWeaver.AI`) |

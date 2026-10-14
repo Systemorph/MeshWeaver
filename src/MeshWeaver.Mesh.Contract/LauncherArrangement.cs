@@ -26,11 +26,34 @@ public sealed record LauncherArrangement
         Entries.TryGetValue(appId, out var entry) ? entry : null;
 
     /// <summary>This arrangement with <paramref name="appId"/> placed in <paramref name="group"/>
-    /// at <paramref name="order"/> — flagged as the viewer's own choice. Pure.</summary>
+    /// at <paramref name="order"/> — flagged as the viewer's own choice. A tile's
+    /// <see cref="LauncherEntry.Hidden"/> flag survives the move. Pure.</summary>
     public LauncherArrangement Place(string appId, string group, int order) =>
         this with
         {
-            Entries = Entries.SetItem(appId, new LauncherEntry { Group = group, Order = order, CustomGroup = true }),
+            Entries = Entries.SetItem(appId, new LauncherEntry
+            {
+                Group = group,
+                Order = order,
+                CustomGroup = true,
+                Hidden = For(appId)?.Hidden ?? false,
+            }),
+        };
+
+    /// <summary>Whether the viewer hid <paramref name="appId"/> from their launcher. Pure.</summary>
+    public bool IsHidden(string appId) => For(appId)?.Hidden ?? false;
+
+    /// <summary>
+    /// This arrangement with <paramref name="appId"/> hidden from (or shown again on) the viewer's
+    /// launcher. The tile's placement is KEPT, so showing it again puts it back where it was; an app
+    /// the viewer never placed gets an entry that carries only the flag (its category still
+    /// applies). Hiding is a launcher preference and nothing else — it touches no grant, no
+    /// entitlement and no install. Pure.
+    /// </summary>
+    public LauncherArrangement SetHidden(string appId, bool hidden) =>
+        this with
+        {
+            Entries = Entries.SetItem(appId, (For(appId) ?? new LauncherEntry()) with { Hidden = hidden }),
         };
 }
 
@@ -49,6 +72,12 @@ public sealed record LauncherEntry
     /// <summary>Whether the group is the viewer's own choice rather than a copied category.</summary>
     [Browsable(false)]
     public bool CustomGroup { get; init; }
+
+    /// <summary>Whether the viewer HID this tile from their launcher. Absent (every arrangement
+    /// written before the flag existed) = visible. A hidden app stays installed and accessible —
+    /// the launcher lists it under its Hidden filter, where it can be shown again.</summary>
+    [Browsable(false)]
+    public bool Hidden { get; init; }
 }
 
 /// <summary>
@@ -158,6 +187,26 @@ public static class LauncherArrangementPaths
         return cache.Update(path, current => current with
         {
             Content = Current(current, path, options).Place(appId, group, order),
+        }, options);
+    }
+
+    /// <summary>
+    /// Hides a directory tile from its owner's launcher (<paramref name="hidden"/> = <c>true</c>) or
+    /// shows it again (<c>false</c>): the flag is written onto the viewer's arrangement node
+    /// (through the one mutation API, a merge patch touching only that entry), never onto the
+    /// virtual row. Touches no access, entitlement or install. Cold — the write happens on
+    /// Subscribe. Errors when <paramref name="rowPath"/> is not a directory row.
+    /// </summary>
+    public static IObservable<MeshNode> SetHidden(
+        IMeshNodeStreamCache cache, string rowPath, bool hidden, JsonSerializerOptions options)
+    {
+        if (!TryParseRow(rowPath, out var owner, out var appId))
+            return System.Reactive.Linq.Observable.Throw<MeshNode>(
+                new ArgumentException($"'{rowPath}' is not an app directory row", nameof(rowPath)));
+        var path = PathFor(owner);
+        return cache.Update(path, current => current with
+        {
+            Content = Current(current, path, options).SetHidden(appId, hidden),
         }, options);
     }
 }

@@ -126,7 +126,9 @@ import re
 import sys
 import tempfile
 import textwrap
+import time
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlsplit
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -720,6 +722,75 @@ def scan_overlays_local(root: str, gh_repo: str, registry: str) -> OverlayScan:
     return scan
 
 
+# ── Concurrency and progress: why the nightly apply run did not fit its cap (Memex#219) ────────
+#
+# 🚨 EVERY REGISTRY AND GITHUB READ USED TO BE SERIAL, AND EACH ONE IS A WHOLE PROCESS. One `az`
+# invocation on a hosted runner costs ~6 s (interpreter start plus an AAD → ACR token exchange) and
+# moves one item. Measured on the 2026-10-10/11 runs: the report-only scan alone took 15 minutes with
+# ZERO writes — 38 GitHub repositories read file by file, 21 ACR repositories listed (11,522
+# manifests), ~108 image indexes expanded one `az acr manifest show` at a time, the tag listings —
+# and the apply run then spent ~12.5 s per manifest (the write AND its own read-back) and was CUT at
+# the 30-minute job cap after 72 of a 297-manifest + 113-tag backlog. Three scheduled runs in a row
+# ended `cancelled`, and the purge re-enable is gated on this lane's green.
+#
+# None of those reads depends on another, so they run on a BOUNDED pool (`MW_ACR_LOCK_WORKERS`,
+# default 8). Raising the job's `timeout-minutes` was not the fix and is not allowed: 30 is this
+# lane's honest cap and 45 the fleet's, and a job that does not fit is doing serial work that should
+# not be serial. What did NOT change: every answer is still classified exactly as before (an
+# INDETERMINATE is never a success, a write is proven by reading it back, nothing is skipped) — the
+# pool changes WHEN a call runs, never what its answer means. Results are consumed in input order on
+# the calling thread, so the plan is built deterministically and nothing mutates it concurrently.
+
+WORKERS_DEFAULT = 8
+STARTED = time.monotonic()
+
+
+def worker_count() -> int:
+    """The pool bound. A value that is not a positive integer is a RED, never a silent default."""
+    raw = os.environ.get("MW_ACR_LOCK_WORKERS", "").strip()
+    if not raw:
+        return WORKERS_DEFAULT
+    if not raw.isdigit() or int(raw) < 1:
+        raise SystemExit(f"::error::MW_ACR_LOCK_WORKERS is {raw!r}; expected a positive integer.")
+    return int(raw)
+
+
+def progress(text: str) -> None:
+    """A progress line, FLUSHED, stamped with the seconds since start.
+
+    🚨 The three cancelled runs left logs with no timing and no count in them, because stdout was a
+    pipe and Python buffered all of it until exit — which a cancellation never reaches. A cut run
+    must still say what it did and where the time went."""
+    print(f"[{time.monotonic() - STARTED:7.1f}s] {text}", flush=True)
+
+
+def pmap(function, items, label: str = "", workers: int | None = None) -> list:
+    """`[function(item) for item in items]`, on a bounded pool, results IN INPUT ORDER.
+
+    An exception raised by `function` propagates to the caller — it is never swallowed into an
+    absent result. With `label`, progress is printed about every tenth of the work."""
+    items = list(items)
+    bound = workers if workers is not None else worker_count()
+    if not items:
+        return []
+    step = max(1, len(items) // 10)
+    if bound <= 1 or len(items) == 1:
+        results = []
+        for done, item in enumerate(items, 1):
+            results.append(function(item))
+            if label and (done % step == 0 or done == len(items)):
+                progress(f"{label}: {done}/{len(items)}")
+        return results
+    results: list = [None] * len(items)
+    with ThreadPoolExecutor(max_workers=min(bound, len(items))) as pool:
+        futures = {pool.submit(function, item): index for index, item in enumerate(items)}
+        for done, future in enumerate(as_completed(futures), 1):
+            results[futures[future]] = future.result()
+            if label and (done % step == 0 or done == len(items)):
+                progress(f"{label}: {done}/{len(items)}")
+    return results
+
+
 # ── The registry, behind one seam so the self-test can drive it offline ─────────────────────────
 
 
@@ -853,6 +924,12 @@ class Registry:
         same registry read says 1,396 tags in that repository and ZERO of them locked."""
         if acr_repo in self._tag_detail_cache:
             return self._tag_detail_cache[acr_repo]
+        result = self._list_tags(acr_repo)
+        self._tag_detail_cache[acr_repo] = result
+        return result
+
+    def _list_tags(self, acr_repo: str) -> tuple[list["Tag"] | None, str]:
+        """One UNCACHED `show-tags --detail` — the plan's read and the batched read-back share it."""
         rc, out, err = consistency.az(
             ["acr", "repository", "show-tags", "--name", self.name,
              "--repository", acr_repo, "--detail", "-o", "json"]
@@ -873,8 +950,23 @@ class Registry:
                                delete_enabled=(raw.get("changeableAttributes") or {}).get(
                                    "deleteEnabled", True))
                            for raw in raw_list], "")
-        self._tag_detail_cache[acr_repo] = result
         return result
+
+    # -- the batched read-backs -----------------------------------------------------------------
+    #
+    # 🚨 ONE FRESH LISTING PER REPOSITORY, READ AFTER EVERY WRITE TO IT HAS RETURNED, IN PLACE OF ONE
+    # `az` PROCESS PER ITEM. It reads the SAME attribute (`changeableAttributes.deleteEnabled`) off
+    # the registry, after the write, so it proves the same postcondition. It only ever CONFIRMS: an
+    # item the listing reports `false` is locked; an item it reports anything else for, omits, or
+    # could not be listed at all is asked again on its own through `read_delete_enabled` /
+    # `read_tag_delete_enabled`, whose answer decides — exactly the verdicts of the per-item path.
+    # Never the plan's cached copy: that was read BEFORE the writes and would confirm nothing.
+
+    def read_back_manifests(self, acr_repo: str) -> tuple[list["Manifest"] | None, str]:
+        return self.manifests(acr_repo)
+
+    def read_back_tags(self, acr_repo: str) -> tuple[list["Tag"] | None, str]:
+        return self._list_tags(acr_repo)
 
     def read_tag_delete_enabled(self, acr_repo: str, tag: str) -> tuple[bool | None, str]:
         """The TAG's current `deleteEnabled`, read back after a write. `None` is INDETERMINATE."""
@@ -2039,8 +2131,9 @@ def want_tag(plan: Plan, acr_repo: str, tag: str, source: str) -> None:
 
 def classify_tags(plan: Plan, registry: Registry) -> None:
     """Split the wanted tags into already-protected and to-lock, reading each tag's OWN attribute."""
-    for acr_repo in sorted({t.acr_repo for t in plan.wanted_tags}):
-        detail, error = registry.tags(acr_repo)
+    names = sorted({t.acr_repo for t in plan.wanted_tags})
+    for acr_repo, (detail, error) in zip(names, pmap(registry.tags, names,
+                                                      label="tag listings")):
         if detail is None:
             plan.blockers.append(
                 f"could not read the TAGS of `{acr_repo}` — {error}. Their lock state is the "
@@ -2108,50 +2201,64 @@ def expand_platform_closure(plan: Plan, registry: Registry,
     by_digest = {(m.acr_repo, m.digest): m for group in inventory.values() for m in group}
     pending = [entry for entry in plan.wanted if entry.digest and not entry.problem]
     seen: set[tuple[str, str]] = set()
+    # 🚨 LEVEL BY LEVEL, so the indexes of one level are expanded on the pool together: ~108 of
+    # them on 2026-10-10, one `az acr manifest show` each, which serially was most of the scan.
     while pending:
-        entry = pending.pop()
-        key = (entry.acr_repo, entry.digest or "")
-        if key in seen:
-            continue
-        seen.add(key)
-        manifest = by_digest.get(key)
-        if manifest is None:
-            continue          # absent, or an unreadable repository — already handled downstream
-        if manifest.media_type not in INDEX_MEDIA_TYPES:
-            continue
-        children, error = registry.index_children(entry.acr_repo, entry.digest or "")
-        if children is None:
-            plan.blockers.append(
-                f"could not enumerate the platform manifests of {entry.acr_repo}@{entry.digest} — "
-                f"{error}. A locked index does NOT protect its children (acr-cli skips a locked "
-                "manifest BEFORE it walks the index), so a closure that could not be read is not an "
-                "empty closure.")
-            continue
-        if not children:
-            plan.blockers.append(
-                f"{entry.acr_repo}@{entry.digest} is an image index and lists NO platform "
-                "manifests. An index with nothing under it is a malformed reference set, not a "
-                "single-architecture image.")
-            continue
-        for child in children:
-            existing = next((w for w in plan.wanted
-                             if w.acr_repo == entry.acr_repo and w.digest == child), None)
-            if existing is None:
-                existing = Wanted(acr_repo=entry.acr_repo, digest=child)
-                plan.wanted.append(existing)
-                plan.platform_manifests += 1
-                pending.append(existing)
-            existing.sources.append(
-                f"platform manifest of {entry.acr_repo}@{(entry.digest or '')[:19]}…, which a "
-                "LOCKED index does not protect")
+        level: list[Wanted] = []
+        for entry in pending:
+            key = (entry.acr_repo, entry.digest or "")
+            if key in seen:
+                continue
+            seen.add(key)
+            manifest = by_digest.get(key)
+            if manifest is None:
+                continue      # absent, or an unreadable repository — already handled downstream
+            if manifest.media_type not in INDEX_MEDIA_TYPES:
+                continue
+            level.append(entry)
+        pending = []
+        answers = pmap(lambda e: registry.index_children(e.acr_repo, e.digest or ""), level,
+                       label="index expansions")
+        for entry, (children, error) in zip(level, answers):
+            _expand_one(plan, entry, children, error, pending)
+
+
+def _expand_one(plan: Plan, entry: "Wanted", children: list[str] | None, error: str,
+                pending: list["Wanted"]) -> None:
+    """Record one index's answer: a blocker for an unreadable or empty one, else its children."""
+    if children is None:
+        plan.blockers.append(
+            f"could not enumerate the platform manifests of {entry.acr_repo}@{entry.digest} — "
+            f"{error}. A locked index does NOT protect its children (acr-cli skips a locked "
+            "manifest BEFORE it walks the index), so a closure that could not be read is not an "
+            "empty closure.")
+        return
+    if not children:
+        plan.blockers.append(
+            f"{entry.acr_repo}@{entry.digest} is an image index and lists NO platform "
+            "manifests. An index with nothing under it is a malformed reference set, not a "
+            "single-architecture image.")
+        return
+    for child in children:
+        existing = next((w for w in plan.wanted
+                         if w.acr_repo == entry.acr_repo and w.digest == child), None)
+        if existing is None:
+            existing = Wanted(acr_repo=entry.acr_repo, digest=child)
+            plan.wanted.append(existing)
+            plan.platform_manifests += 1
+            pending.append(existing)
+        existing.sources.append(
+            f"platform manifest of {entry.acr_repo}@{(entry.digest or '')[:19]}…, which a "
+            "LOCKED index does not protect")
 
 
 def resolve_and_classify(plan: Plan, registry: Registry,
                          inventory: dict[str, list[Manifest]],
                          inventory_errors: dict[str, str]) -> None:
     """Turn axis-2 tags into digests, then split the union into already-protected / to-lock."""
-    for (acr_repo, tag), wheres in sorted(plan.axis2_pairs.items()):
-        digest, detail = registry.resolve_tag(acr_repo, tag)
+    pairs = sorted(plan.axis2_pairs.items())
+    resolved = pmap(lambda pair: registry.resolve_tag(*pair[0]), pairs, label="tag resolutions")
+    for ((acr_repo, tag), wheres), (digest, detail) in zip(pairs, resolved):
         if digest is None:
             entry = Wanted(acr_repo=acr_repo, digest=None, sources=wheres, tag=tag)
             if detail.startswith("INDETERMINATE"):
@@ -2562,13 +2669,80 @@ GRANT_HELP = [
 ]
 
 
+def _write_then_read_back(entries: list, write, listing, read_one, key_of, noun: str
+                          ) -> tuple[list[tuple[bool, str]], dict[int, tuple[bool | None, str]]]:
+    """Write every lock, then PROVE each one — the engine `apply_locks` and `apply_tag_locks` share.
+
+    Returns the write answers (aligned with `entries`) and, for every entry whose write returned
+    success, the read-back answer: `False` locked, `True` still deletable, `None` INDETERMINATE.
+
+    🚨 THE FIRST WRITE GOES ALONE. A credential that may not lock refuses every write the same way,
+    and the caller stops at the first refusal so the ONE line naming the role to grant is not buried
+    under N identical errors. Probing with one write keeps that a single refusal rather than a pool's
+    worth of them; the rest then go on the bounded pool.
+
+    🚨 THE READ-BACK IS BATCHED, NOT DROPPED. After every write has returned, ONE fresh listing per
+    affected repository confirms each item it reports `deleteEnabled: false`. Anything else — the
+    listing said `true`, did not mention the item, or could not be read — is asked again on its own,
+    and that per-item answer is the verdict. So the listing can only ever save calls; it can never
+    turn an unconfirmed lock into a confirmed one."""
+    if not entries:
+        return [], {}
+    progress(f"writing {len(entries)} {noun} lock(s)")
+    first = write(entries[0])
+    written = [first]
+    if first[0] or not any(marker in first[1].lower() for marker in DENIED_MARKERS):
+        written += pmap(write, entries[1:], label=f"{noun} lock writes")
+    else:
+        written += [(False, first[1])] * (len(entries) - 1)
+
+    to_confirm = [index for index, (ok, _detail) in enumerate(written) if ok]
+    repositories = sorted({entries[index].acr_repo for index in to_confirm})
+    progress(f"reading back {len(to_confirm)} {noun} lock(s) from {len(repositories)} fresh "
+             "repository listing(s)")
+    listings = dict(zip(repositories, pmap(listing, repositories, label=f"{noun} read-back listings")))
+    answers: dict[int, tuple[bool | None, str]] = {}
+    unconfirmed: list[int] = []
+    for index in to_confirm:
+        listed, _error = listings[entries[index].acr_repo]
+        state = {key: delete_enabled for key, delete_enabled in (listed or [])}
+        if state.get(key_of(entries[index])) is False:
+            answers[index] = (False, "")
+        else:
+            unconfirmed.append(index)
+    if unconfirmed:
+        progress(f"{len(unconfirmed)} {noun} lock(s) not confirmed by a listing — reading each back "
+                 "on its own")
+        for index, answer in zip(unconfirmed, pmap(lambda i: read_one(entries[i]), unconfirmed,
+                                                    label=f"{noun} per-item read-backs")):
+            answers[index] = answer
+    return written, answers
+
+
 def apply_locks(plan: Plan, registry: Registry) -> list[str]:
     """Lock every manifest that needs it. Locks are applied even on a degraded run — a lock cannot
     destroy anything, and protecting what WAS found is strictly better than protecting nothing."""
     failures: list[str] = []
-    for index, entry in enumerate(plan.to_lock):
+    entries = list(plan.to_lock)
+    for entry in entries:
         assert entry.digest is not None
-        ok, detail = registry.set_delete_enabled(entry.acr_repo, entry.digest, False)
+
+    def listing(acr_repo: str):
+        manifests, error = registry.read_back_manifests(acr_repo)
+        return (None if manifests is None
+                else [(m.digest, m.delete_enabled) for m in manifests]), error
+
+    written, answers = _write_then_read_back(
+        entries,
+        write=lambda e: registry.set_delete_enabled(e.acr_repo, e.digest or "", False),
+        listing=listing,
+        read_one=lambda e: registry.read_delete_enabled(e.acr_repo, e.digest or ""),
+        key_of=lambda e: e.digest,
+        noun="manifest")
+    denied = [index for index, (ok, detail) in enumerate(written)
+              if not ok and any(marker in detail.lower() for marker in DENIED_MARKERS)]
+    for index, entry in enumerate(entries):
+        ok, detail = written[index]
         if ok:
             # 🚨 THE WRITE'S EXIT CODE IS NOT THE POSTCONDITION. Read the attribute back and require
             # it to actually be `false`; an INDETERMINATE read (`None`) is not a confirmation
@@ -2579,7 +2753,7 @@ def apply_locks(plan: Plan, registry: Registry) -> list[str]:
             # is `delete_enabled is False`, and a local called `protected` holding the opposite
             # polarity is how a future reader talks themselves into `== True` being success.
             # `None` is INDETERMINATE and is neither.
-            delete_enabled, why = registry.read_delete_enabled(entry.acr_repo, entry.digest)
+            delete_enabled, why = answers[index]
             if delete_enabled is False:
                 plan.locked_now += 1
                 print(f"locked {entry.acr_repo}@{entry.digest}")
@@ -2593,25 +2767,26 @@ def apply_locks(plan: Plan, registry: Registry) -> list[str]:
                 "that returns 0 without taking is exactly what this read-back exists to catch."
             )
             continue
-        if any(marker in detail.lower() for marker in DENIED_MARKERS):
-            # 🚨 STOP ON THE FIRST REFUSAL. Every remaining lock fails the same way for the same
-            # reason, and N identical errors bury the ONE line that says which role to grant.
-            remaining = plan.to_lock[index:]
-            failures.append(
-                "the credential is not allowed to lock a manifest. "
-                f"{plan.locked_now} of {len(plan.to_lock)} were locked before the refusal. "
-                f"az said: {detail}"
-            )
-            failures.extend(GRANT_HELP)
-            failures.append(
-                f"{len(remaining)} manifest(s) left unprotected: "
-                + ", ".join(f"{w.acr_repo}@{(w.digest or '')[:19]}…" for w in remaining)
-            )
-            break
+        if index in denied:
+            continue          # reported ONCE below, with the role to grant
         failures.append(
             f"could not lock {entry.acr_repo}@{entry.digest}: {detail}. It is pinned by "
             f"{', '.join(entry.sources[:3])} and the 03:00 purge can still delete it."
         )
+    if denied:
+        # 🚨 ONE REFUSAL LINE, NOT N. Every refused lock fails the same way for the same reason, and
+        # N identical errors bury the ONE line that says which role to grant.
+        failures.append(
+            "the credential is not allowed to lock a manifest. "
+            f"{plan.locked_now} of {len(entries)} were locked. "
+            f"az said: {written[denied[0]][1]}"
+        )
+        failures.extend(GRANT_HELP)
+        failures.append(
+            f"{len(denied)} manifest(s) left unprotected: "
+            + ", ".join(f"{entries[i].acr_repo}@{(entries[i].digest or '')[:19]}…" for i in denied)
+        )
+    progress(f"manifest locks: {plan.locked_now} of {len(entries)} written and confirmed")
     return failures
 
 
@@ -2621,10 +2796,25 @@ def apply_tag_locks(plan: Plan, registry: Registry) -> list[str]:
     Same asymmetry as `apply_locks`: applied on a degraded run, because a lock destroys nothing and
     protecting what WAS found beats protecting nothing."""
     failures: list[str] = []
-    for index, entry in enumerate(plan.tags_to_lock):
-        ok, detail = registry.set_tag_delete_enabled(entry.acr_repo, entry.tag, False)
+    entries = list(plan.tags_to_lock)
+
+    def listing(acr_repo: str):
+        tags, error = registry.read_back_tags(acr_repo)
+        return (None if tags is None else [(t.name, t.delete_enabled) for t in tags]), error
+
+    written, answers = _write_then_read_back(
+        entries,
+        write=lambda e: registry.set_tag_delete_enabled(e.acr_repo, e.tag, False),
+        listing=listing,
+        read_one=lambda e: registry.read_tag_delete_enabled(e.acr_repo, e.tag),
+        key_of=lambda e: e.tag,
+        noun="tag")
+    denied = [index for index, (ok, detail) in enumerate(written)
+              if not ok and any(marker in detail.lower() for marker in DENIED_MARKERS)]
+    for index, entry in enumerate(entries):
+        ok, detail = written[index]
         if ok:
-            delete_enabled, why = registry.read_tag_delete_enabled(entry.acr_repo, entry.tag)
+            delete_enabled, why = answers[index]
             if delete_enabled is False:
                 plan.tags_locked_now += 1
                 print(f"locked tag {entry.acr_repo}:{entry.tag}")
@@ -2636,18 +2826,19 @@ def apply_tag_locks(plan: Plan, registry: Registry) -> list[str]:
                 + ". It is depended on by " + f"{', '.join(entry.sources[:3])}, and the 03:00 purge "
                 "can still delete the REFERENCE even where the manifest is locked.")
             continue
-        if any(marker in detail.lower() for marker in DENIED_MARKERS):
-            remaining = plan.tags_to_lock[index:]
-            failures.append(
-                "the credential is not allowed to lock a TAG. "
-                f"{plan.tags_locked_now} of {len(plan.tags_to_lock)} were locked before the "
-                f"refusal. az said: {detail}")
-            failures.extend(GRANT_HELP)
-            failures.append(f"{len(remaining)} tag reference(s) left unprotected: "
-                            + ", ".join(f"{t.acr_repo}:{t.tag}" for t in remaining))
-            break
+        if index in denied:
+            continue
         failures.append(f"could not lock tag {entry.acr_repo}:{entry.tag}: {detail}. It is "
                         f"depended on by {', '.join(entry.sources[:3])}.")
+    if denied:
+        failures.append(
+            "the credential is not allowed to lock a TAG. "
+            f"{plan.tags_locked_now} of {len(entries)} were locked. "
+            f"az said: {written[denied[0]][1]}")
+        failures.extend(GRANT_HELP)
+        failures.append(f"{len(denied)} tag reference(s) left unprotected: "
+                        + ", ".join(f"{entries[i].acr_repo}:{entries[i].tag}" for i in denied))
+    progress(f"tag locks: {plan.tags_locked_now} of {len(entries)} written and confirmed")
     return failures
 
 
@@ -2696,8 +2887,9 @@ def read_inventory(registry: Registry) -> tuple[dict[str, list[Manifest]], dict[
     if repos is None:
         errors["*"] = error
         return inventory, errors
-    for acr_repo in sorted(repos):
-        manifests, error = registry.manifests(acr_repo)
+    names = sorted(repos)
+    for acr_repo, (manifests, error) in zip(names, pmap(registry.manifests, names,
+                                                         label="manifest listings")):
         if manifests is None:
             errors[acr_repo] = error
             continue
@@ -2708,22 +2900,36 @@ def read_inventory(registry: Registry) -> tuple[dict[str, list[Manifest]], dict[
 # ── Entry point ────────────────────────────────────────────────────────────────────────────────
 
 
+def scan_fleet(repos: list[str], registry_name: str, local_root: str | None
+               ) -> tuple[list, list[OverlayScan]]:
+    """Both committed axes for every repository, on the pool, IN THE ORDER GIVEN.
+
+    Each repository's scan is independent of every other's (38 of them on 2026-10-10, each a
+    workflow listing, a recursive tree and one read per file), so they need not wait in line."""
+    def one(gh_repo: str):
+        if local_root:
+            return (consistency.scan_local(local_root, gh_repo),
+                    scan_overlays_local(local_root, gh_repo, registry_name))
+        return consistency.scan_remote(gh_repo), scan_overlays_remote(gh_repo, registry_name)
+
+    scans = pmap(one, repos, label="repositories scanned")
+    return [axis1 for axis1, _ in scans], [axis2 for _, axis2 in scans]
+
+
+
 def run(repos: list[str], registry_name: str, apply: bool, release_enabled: bool,
         local_root: str | None, fleet_is_complete: bool = True) -> int:
     registry = Registry(registry_name)
     registry.control_probe()          # dies red if the registry does not answer
 
-    axis1 = []
-    axis2: list[OverlayScan] = []
-    for gh_repo in repos:
-        if local_root:
-            axis1.append(consistency.scan_local(local_root, gh_repo))
-            axis2.append(scan_overlays_local(local_root, gh_repo, registry_name))
-        else:
-            axis1.append(consistency.scan_remote(gh_repo))
-            axis2.append(scan_overlays_remote(gh_repo, registry_name))
+    progress(f"concurrency: {worker_count()} worker(s) (MW_ACR_LOCK_WORKERS)")
+    axis1, axis2 = scan_fleet(repos, registry_name, local_root)
+    progress(f"fleet scanned: {len(repos)} repository(ies) on both pin axes")
 
     inventory, inventory_errors = read_inventory(registry)
+    progress(f"inventory read: {len(inventory)} repository(ies), "
+             f"{sum(len(group) for group in inventory.values())} manifest(s), "
+             f"{len(inventory_errors)} unreadable")
     plan = build_plan(axis1, axis2)
 
     # 🚨 THE INSTRUMENT BEFORE THE MEASUREMENT. Every "no pins here" answer below is only worth the
@@ -2806,6 +3012,8 @@ def run(repos: list[str], registry_name: str, apply: bool, release_enabled: bool
     resolve_and_classify(plan, registry, inventory, inventory_errors)
     classify_tags(plan, registry)
     plan.inventory_complete = not plan.blockers
+    progress(f"plan: {len(plan.to_lock)} manifest(s) and {len(plan.tags_to_lock)} tag(s) to lock, "
+             f"{len(plan.blockers)} blocker(s)")
 
     failures: list[str] = []
     if apply:
@@ -4438,7 +4646,19 @@ class FakeRegistry(Registry):
         # sets it false to drive the "exit 0, nothing changed" case the read-back must catch.
         self.writes_take = True
         # Set to a message to make the read-back INDETERMINATE — which must not confirm a lock.
+        # It silences BOTH read-back paths, the batched listing and the per-item read.
         self.read_back_error: str | None = None
+        # Make ONLY the batched read-back listing fail, leaving the per-item read healthy — the
+        # fallback the listing must fall through to rather than read as a verdict (ARM 37).
+        self.listing_read_back_error: str | None = None
+        # Make the batched listing OMIT these keys (digest or tag name) — the shape of a listing
+        # that answered and did not mention the item, which is not a confirmation either.
+        self.listing_omits: set[str] = set()
+        # Call counters, so ARM 37 can assert which read-back path decided.
+        self.listing_reads: list[str] = []
+        self.item_reads: list[str] = []
+        # Set to make every lock WRITE refused with this message (the missing-role case).
+        self.write_refusal: str | None = None
 
     def control_probe(self) -> None:
         return None
@@ -4456,6 +4676,8 @@ class FakeRegistry(Registry):
 
     def set_delete_enabled(self, acr_repo: str, digest: str, enabled: bool):
         self.writes.append((acr_repo, digest, enabled))
+        if self.write_refusal:
+            return False, self.write_refusal
         if not self.writes_take:
             # The sabotage this fixture exists to express: `az` exits 0 and the attribute does not
             # move. Nothing about the WRITE distinguishes it from a real one.
@@ -4466,7 +4688,24 @@ class FakeRegistry(Registry):
                     manifest.delete_enabled = enabled
         return True, ""
 
+    def read_back_manifests(self, acr_repo: str):
+        self.listing_reads.append(acr_repo)
+        if self.read_back_error or self.listing_read_back_error:
+            return None, self.read_back_error or self.listing_read_back_error
+        return [m for m in self._manifests.get(acr_repo, [])
+                if m.digest not in self.listing_omits], ""
+
+    def read_back_tags(self, acr_repo: str):
+        self.listing_reads.append(acr_repo)
+        if self.read_back_error or self.listing_read_back_error:
+            return None, self.read_back_error or self.listing_read_back_error
+        listed, error = self.tags(acr_repo)
+        if listed is None:
+            return None, error
+        return [t for t in listed if t.name not in self.listing_omits], ""
+
     def read_delete_enabled(self, acr_repo: str, digest: str):
+        self.item_reads.append(digest)
         if self.read_back_error:
             return None, self.read_back_error
         for manifests in self._manifests.values():
@@ -4491,6 +4730,8 @@ class FakeRegistry(Registry):
 
     def set_tag_delete_enabled(self, acr_repo: str, tag: str, enabled: bool):
         self.tag_writes.append((acr_repo, tag, enabled))
+        if self.write_refusal:
+            return False, self.write_refusal
         if not self.writes_take:
             return True, ""
         if enabled:
@@ -4500,6 +4741,7 @@ class FakeRegistry(Registry):
         return True, ""
 
     def read_tag_delete_enabled(self, acr_repo: str, tag: str):
+        self.item_reads.append(tag)
         if self.read_back_error:
             return None, self.read_back_error
         if not any(name == tag for manifest in self._manifests.get(acr_repo, [])
@@ -7115,6 +7357,147 @@ env:
     check(any("lists NO platform manifests" in b for b in plan.blockers),
           f"ARM 30c: an index with no children read as an ordinary image: {plan.blockers}")
 
+    # ══ FITTING THE CAP — Memex#219: three scheduled apply runs CANCELLED at the 30-minute cap ══
+
+    # ── ARM 37: the read-back is BATCHED — one listing per repository decides, per item only as
+    # a fallback, and the fallback is the verdict ───────────────────────────────────────────────
+    registry = FakeRegistry(_inventory(), FAKE_TAGS)
+    plan, fails, registry = _drive(clean1, clean2, registry)
+    locked_repos = {e.acr_repo for e in plan.to_lock} | {t.acr_repo for t in plan.tags_to_lock}
+    check(not fails and plan.locked_now == len(plan.to_lock) > 0
+          and plan.tags_locked_now == len(plan.tags_to_lock) > 0,
+          f"ARM 37: the clean batched read-back did not confirm every lock: {fails}")
+    check(registry.item_reads == [],
+          f"ARM 37: a lock the fresh listing CONFIRMED was still read back one `az` at a time "
+          f"({len(registry.item_reads)} per-item read(s)) — the serial cost that cut the nightly "
+          "run at its cap")
+    check(sorted(set(registry.listing_reads)) == sorted(locked_repos)
+          and len(registry.listing_reads) <= 2 * len(locked_repos),
+          f"ARM 37: the read-back did not list each locked repository once per kind: "
+          f"{registry.listing_reads} for {sorted(locked_repos)}")
+    # 37b — a listing that could not be read is NOT a verdict: every item falls through to its own
+    # read, and a healthy per-item read still confirms it.
+    registry = FakeRegistry(_inventory(), FAKE_TAGS)
+    registry.listing_read_back_error = "INDETERMINATE: the listing timed out"
+    plan, fails, registry = _drive(clean1, clean2, registry)
+    check(not fails and plan.locked_now == len(plan.to_lock)
+          and len(registry.item_reads) == len(plan.to_lock) + len(plan.tags_to_lock),
+          f"ARM 37b: an unreadable read-back listing did not fall through to the per-item read "
+          f"({len(registry.item_reads)} read(s), failures {fails})")
+    # 37c — a listing that answered and OMITTED the item has not confirmed it either.
+    registry = FakeRegistry(_inventory(), FAKE_TAGS)
+    omitted = OVERLAY_PORTAL
+    registry.listing_omits = {omitted}
+    plan, fails, registry = _drive(clean1, clean2, registry)
+    check(registry.item_reads == [omitted] and not fails,
+          f"ARM 37c: an item the listing omitted was not re-read on its own: {registry.item_reads}")
+    # 37d — NEGATIVE CONTROL for the batching: a write that does not take must still be RED with
+    # nothing counted, decided by the per-item read (ARM 11b's case, through the new path).
+    registry = FakeRegistry(_inventory(), FAKE_TAGS)
+    registry.writes_take = False
+    plan, fails, registry = _drive(clean1, clean2, registry)
+    check(plan.locked_now == 0 and plan.tags_locked_now == 0
+          and any("still reads deleteEnabled=true" in f for f in fails)
+          and len(registry.item_reads) == len(plan.to_lock) + len(plan.tags_to_lock),
+          f"ARM 37d: a lock that did not take was confirmed by the batched read-back: "
+          f"locked {plan.locked_now}/{plan.tags_locked_now}, failures {fails}")
+    # 37e — a refused credential is ONE refusal line naming the grant, after ONE write — not a
+    # pool's worth of identical refusals burying it.
+    registry = FakeRegistry(_inventory(), FAKE_TAGS)
+    registry.write_refusal = "AuthorizationFailed: the client does not have authorization"
+    plan, fails, registry = _drive(clean1, clean2, registry)
+    check(len(registry.writes) == 1 and len(registry.tag_writes) == 1,
+          f"ARM 37e: a refused credential was asked {len(registry.writes)} manifest and "
+          f"{len(registry.tag_writes)} tag write(s); the first refusal must stop the pool")
+    check(sum("not allowed to lock" in f for f in fails) == 2
+          and not any(f.startswith("could not lock") for f in fails),
+          f"ARM 37e: the refusal was not reported once per kind with the grant: {fails}")
+    check(any(f"{len(plan.to_lock)} manifest(s) left unprotected" in f for f in fails),
+          f"ARM 37e: the refusal does not count what was left unprotected: {fails}")
+
+    # ── ARM 38: the pool really runs concurrently, and the PLAN does not depend on it ───────────
+    import threading as _threading
+
+    class _Gauge(FakeRegistry):
+        """The fake, with a measured in-flight count on every registry call the pool makes."""
+
+        def __init__(self, *args, **kwargs) -> None:
+            super().__init__(*args, **kwargs)
+            self._guard = _threading.Lock()
+            self.in_flight = 0
+            self.peak = 0
+
+        def _hold(self, function, *args):
+            with self._guard:
+                self.in_flight += 1
+                self.peak = max(self.peak, self.in_flight)
+            try:
+                time.sleep(0.02)
+                return function(*args)
+            finally:
+                with self._guard:
+                    self.in_flight -= 1
+
+        def manifests(self, acr_repo):
+            return self._hold(super().manifests, acr_repo)
+
+        def set_delete_enabled(self, acr_repo, digest, enabled):
+            return self._hold(super().set_delete_enabled, acr_repo, digest, enabled)
+
+        def set_tag_delete_enabled(self, acr_repo, tag, enabled):
+            return self._hold(super().set_tag_delete_enabled, acr_repo, tag, enabled)
+
+    def _with_workers(count: str):
+        previous = os.environ.get("MW_ACR_LOCK_WORKERS")
+        os.environ["MW_ACR_LOCK_WORKERS"] = count
+        try:
+            return _drive(clean1, clean2, _Gauge(_inventory(), FAKE_TAGS))
+        finally:
+            if previous is None:
+                os.environ.pop("MW_ACR_LOCK_WORKERS", None)
+            else:
+                os.environ["MW_ACR_LOCK_WORKERS"] = previous
+
+    pooled_plan, pooled_fails, pooled = _with_workers("4")
+    serial_plan, serial_fails, serial = _with_workers("1")
+    check(pooled.peak > 1,
+          f"ARM 38: with 4 workers the registry never saw more than {pooled.peak} call in flight — "
+          "the work is still serial, which is what did not fit the 30-minute cap")
+    check(serial.peak == 1,
+          f"ARM 38 (negative control): with ONE worker the gauge read {serial.peak} in flight, so "
+          "it cannot tell concurrent from serial and the arm above proves nothing")
+    check([(w.acr_repo, w.digest) for w in pooled_plan.to_lock]
+          == [(w.acr_repo, w.digest) for w in serial_plan.to_lock]
+          and sorted(pooled.writes) == sorted(serial.writes)
+          and pooled_plan.blockers == serial_plan.blockers
+          and pooled_fails == serial_fails
+          and pooled_plan.locked_now == serial_plan.locked_now,
+          "ARM 38: the plan or its verdict depends on the pool — concurrency may change WHEN a "
+          "call runs, never what the run decides")
+    check(pmap(lambda n: (time.sleep(0.001 * (5 - n)), n)[1], range(5), workers=5)
+          == [0, 1, 2, 3, 4],
+          "ARM 38: pmap returned results out of input order")
+    try:
+        pmap(lambda n: 1 // (n - 2), range(4), workers=4)
+        check(False, "ARM 38: an exception inside a pooled call was swallowed")
+    except ZeroDivisionError:
+        pass
+
+    # ── ARM 39: progress is FLUSHED, so a run cut at its cap still says how far it got ──────────
+    class _Flushes(io.StringIO):
+        flushed = 0
+
+        def flush(self) -> None:
+            type(self).flushed += 1
+            super().flush()
+
+    sink = _Flushes()
+    with contextlib.redirect_stdout(sink):
+        progress("probe")
+    check("probe" in sink.getvalue() and _Flushes.flushed >= 1,
+          "ARM 39: a progress line was not flushed — the three cancelled runs left logs with no "
+          "count and no timing in them for exactly this reason")
+
     # ── ARM 29: the harness drives the SAME path as run(), or it guards nothing ─────────────────
     # A self-test whose subject moved and whose roots did not keeps passing about code that is no
     # longer what runs. Compare the calls, mechanically.
@@ -7130,12 +7513,15 @@ env:
     # builtins, and the three inputs the harness takes as PARAMETERS rather than reading — the two
     # scanners and the roster file.
     run_calls = _calls(run) - {"report", "emit", "print", "Registry", "len", "bool", "sorted",
-                               "set", "any", "all", "read_instance_roster",
+                               "set", "any", "all", "sum", "read_instance_roster",
                                "read_registry_dispositions", "read_repository_roster",
                                # …and the derived push-target set, for the same reason: it is a
                                # repository-tree read the harness takes as a parameter.
                                "publish_targets",
-                               "scan_overlays_local", "scan_overlays_remote"}
+                               "scan_overlays_local", "scan_overlays_remote",
+                               # the scanners' pool wrapper, and the progress lines (reporting,
+                               # like `print`), and the pool bound they print
+                               "scan_fleet", "progress", "worker_count"}
     missing = run_calls - _calls(_drive)
     check(not missing,
           f"ARM 29: run() calls {sorted(missing)} and the self-test harness does not, so those "
@@ -7204,6 +7590,9 @@ def main() -> int:
                         help="prove every arm fires and stays silent; no network")
     args = parser.parse_args()
 
+    # 🚨 LINE-BUFFERED, so a run cut at its job cap still shows what it did. Piped stdout is
+    # block-buffered by default, and the three cancelled nightly runs flushed nothing at all.
+    sys.stdout.reconfigure(line_buffering=True)
     if args.self_test:
         return self_test()
     if args.describe_purge_file:

@@ -264,16 +264,49 @@ same `MeshNodeContentDegradedException` marker, and the count and window of the 
 A type the pass registered is never warned, because its readers were cured. A type it did not
 register is warned once, at the moment that is known. Nothing is dropped and nothing is doubled: a
 seam records a read and learns whether its warning is deferred in one step
-(`RecordDeferringWarning`), under the same gate as the settle's close-and-snapshot. A read that races
-the close is therefore either in the snapshot or warned by the seam, never both and never neither.
-The settled line names the seam that read the path it names (`ContentDegradation.LastSeam`), and the
-first seam beside it.
+(`RecordClassifiedDeferringWarning`), under the same gate as the settle's close-and-snapshot. A read
+that races the close is therefore either in the snapshot or warned by the seam, never both and never
+neither. The settled line names the seam that read the path it names (`ContentDegradation.LastSeam`),
+and the first seam beside it.
+
+**Two causes, kept apart on the record
+([#6674](https://github.com/Systemorph/MeshWeaver/issues/6674)).** Content stays untyped for one of
+two reasons, and the window can re-decide only the first. Either nothing in the process resolves the
+type (a missing registration, which the pass may still cure), or the type IS registered and the
+stored JSON does not bind to it (a missing `required` member, a value that contradicts its declared
+type), which no registration changes. The seam classifies the cause once, before it records the
+read. A bind failure is carried on the entry as `ContentDegradation.UnboundContentType`, and the
+settle reports such an entry whatever the registry answers by then. Re-asking the registry alone
+would find the type and drop exactly the case
+[#6639](https://github.com/Systemorph/MeshWeaver/issues/6639) reported after a roll. The settled
+line says "registered, but the stored JSON does not bind" for it, and "TypeRegistry lacks the $type
+discriminator" for a type that is still unregistered.
+
+**One cause per record.** The read seams and the settle attach the classified cause to the
+`MeshNodeContentDegradedException` marker (`Cause`), and the marker's message is composed from it.
+Sinks append `exception.ToString()` after the formatted line, so the line and the marker name the
+same cause. A site that does not classify (the `GetQuery` deserialization fault, whose inner
+exception carries the reason) gets a cause-neutral marker, never a guessed one. The wording of both
+causes lives in one place, `ContentDegradationCauses`.
+
+**Which key decides.** A stored `$type` decides the classification when it is present. The node's
+NodeType mapping is taken only where that `$type` admits the mapped type (the same
+`ContentDiscriminator.Admits` rule recovery applies), and it is the whole answer only when the
+content carries no `$type`. A `$type` that contradicts the NodeType's type is therefore reported as
+an unresolved discriminator, not as a bind failure of the NodeType's type.
+
+The serializer's own `could not be deserialized` warning (`ObjectPolymorphicConverter`) names the
+type and the failing member but cannot see what the value is nested in. Its promise of a
+path-bearing line is conditional: for a mesh node's content the read seam that holds the node logs
+the path, while for any other `object` payload, such as a message, that warning is the only record.
 
 A host that does not run the pass never opens the window, and every read there warns at the read, as
 before. That includes every test host, so the CI untyped-content gate is unaffected.
 
 **Pinned by** `BootRegistrationWindowDefersUntypedWarningsTest` (MeshWeaver.Hosting.Test). Its
-negative control is the same read with no window, which warns at the read.
+negative control is the same read with no window, which warns at the read. The two causes and their
+precedence are pinned by `MarkdownContentWithoutBodyTest` (MeshWeaver.Hosting.Test), and the
+converter's conditional wording by `TypeRegistryTest` (MeshWeaver.Messaging.Hub.Test).
 
 **Acceptance on a portal:** after the roll that carries this, the boot-window count of
 `|~ "(?i)stayed an untyped JsonElement"` per replica drops to the types the pass could not register,
