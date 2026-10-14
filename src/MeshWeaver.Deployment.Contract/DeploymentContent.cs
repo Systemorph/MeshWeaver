@@ -207,8 +207,8 @@ public record DeploymentContent
     /// seeds once per package. 🚨 A list that names packages only (no <c>Source/*</c>) is an
     /// EXPLICIT set: the instance installs exactly those and what they declare in <c>requires</c>,
     /// and the registry's <c>preInstalled</c> baseline is NOT added on top unless
-    /// <c>PluginCatalog:InstallPreInstalledPackages=true</c> says so (the platform bootstrap,
-    /// 2026-10-14). An empty list, or one with a whole-source pattern, keeps the baseline.
+    /// <c>PluginCatalog:InstallPreInstalledPackages=true</c> says so (policy
+    /// <c>declared-package-set-is-exact</c>). An empty list, or one with a whole-source pattern, keeps the baseline.
     /// </summary>
     public ImmutableList<string> PreInstall { get; init; } = ImmutableList<string>.Empty;
 

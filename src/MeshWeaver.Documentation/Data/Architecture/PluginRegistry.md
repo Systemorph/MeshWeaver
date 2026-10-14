@@ -98,8 +98,8 @@ and they are independent:
   **explicit set** — every entry `Source/Package`, none a whole source `Source/*`. A deployment that
   names its packages gets exactly those and what they declare in `requires`; set the key `true` to
   keep the baseline beside the set, `false` to suppress it everywhere (an explicit value always
-  wins). Until 2026-10-14 the baseline was added on top of any set: a fresh control instance naming
-  five packages selected **48** — every `preInstalled` package of the registry — and on its closed
+  wins) — policy `declared-package-set-is-exact`. Before that policy the baseline was added on top
+  of any set: a fresh control instance naming five packages selected **48** (measured 2026-10-13) — every `preInstalled` package of the registry — and on its closed
   type set each one's in-mesh NodeTypes parked. See
   [The bootstrap: modules first, then nodes](#the-bootstrap-modules-first-then-nodes).
 - **`PluginCatalog:InstallByDefault`** (default empty) *seeds* each matching package once. The pass
@@ -134,8 +134,8 @@ and they are independent:
 
 ### The bootstrap: modules first, then nodes
 
-**A mixed package's MODULE lands before ANY package's nodes are written** — phase 1 of the default
-install (`InstanceAutoRegistrationService.LandModulesFirst`), for every selected package that has no
+**A mixed package's MODULE lands before ANY package's nodes are written** (policy
+`default-install-modules-first`) — phase 1 of the default install (`InstanceAutoRegistrationService.LandModulesFirst`), for every selected package that has no
 install record yet. Phase 2, the node install in dependency order, starts only once every module of
 the selection has been decided.
 

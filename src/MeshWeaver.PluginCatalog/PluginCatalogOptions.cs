@@ -147,8 +147,8 @@ public sealed class PluginCatalogOptions
     /// an instance whose baseline partition was lost (#902 — the platform's agent catalog vanished
     /// from the production portal and nothing could bring it back).</para>
     ///
-    /// <para>🚨 <b>Unset it follows <see cref="InstallByDefault"/></b> (the
-    /// platform bootstrap, 2026-10-14): the baseline applies unless <see cref="InstallByDefault"/>
+    /// <para>🚨 <b>Unset it follows <see cref="InstallByDefault"/></b> (policy
+    /// <c>declared-package-set-is-exact</c>): the baseline applies unless <see cref="InstallByDefault"/>
     /// declares an EXPLICIT set — every entry naming a package (<c>Source/Package</c>), none a whole
     /// source (<c>Source/*</c>). A deployment that names its packages gets exactly those plus their
     /// declared <c>requires</c>; until this, the baseline added every <c>preInstalled</c> package of

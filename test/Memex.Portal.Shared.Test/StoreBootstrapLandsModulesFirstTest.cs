@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.IO;
@@ -25,7 +26,7 @@ namespace Memex.Portal.Shared.Test;
 
 /// <summary>
 /// The store's own bootstrap on an image that ships NONE of the modules the store delivers
-/// (the platform bootstrap, 2026-10-14) — the shape of a fresh control instance after
+/// (policies <c>default-install-modules-first</c> and <c>declared-package-set-is-exact</c>) — the shape of a fresh control instance after
 /// MeshWeaver.Plugins#2970 took the modules out of the images.
 ///
 /// <para>Measured there, 2026-10-13: <c>Install of 'Store' failed: NodeType(s) not registered: Skill</c>,
@@ -98,6 +99,10 @@ public abstract class StoreBootstrapTestBase(ITestOutputHelper output) : Monolit
         new($"{id}/Guide.json",
             $$"""{"$type":"MeshNode","id":"Guide","namespace":"{{id}}","path":"{{id}}/Guide","mainNode":"{{id}}/Guide","name":"Guide","nodeType":"Markdown","state":"Active","content":"# {{id}}"}""");
 
+    /// <summary>Every content-file fetch and module-bundle download the registry served, in order
+    /// (<c>files:{package}</c> / <c>bundle:{package}</c>).</summary>
+    protected ConcurrentQueue<string> Requests { get; } = new();
+
     /// <summary>What every derived fixture adds to the mesh — the stand-in for "the module loaded".</summary>
     protected virtual MeshBuilder Arrange(MeshBuilder builder) => builder;
 
@@ -105,7 +110,7 @@ public abstract class StoreBootstrapTestBase(ITestOutputHelper output) : Monolit
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
         Directory.CreateDirectory(LandingRoot);
-        var registry = new BootstrapRegistry();
+        var registry = new BootstrapRegistry(Requests);
         return Arrange(base.ConfigureMesh(builder))
             .AddPluginCatalog()
             .ConfigureServices(services => services
@@ -146,7 +151,7 @@ public abstract class StoreBootstrapTestBase(ITestOutputHelper output) : Monolit
     /// <c>GET /api/plugins/bundles/{plugin}/{version}</c> — the listing stamped with the source name
     /// the registry stamps, the files exactly as a node-repo source serves them (repo-relative paths).
     /// </summary>
-    private sealed class BootstrapRegistry : HttpMessageHandler
+    private sealed class BootstrapRegistry(ConcurrentQueue<string> requests) : HttpMessageHandler
     {
         private static readonly ImmutableDictionary<string, string> Modules = ImmutableDictionary.CreateRange(
             StringComparer.Ordinal,
@@ -188,7 +193,9 @@ public abstract class StoreBootstrapTestBase(ITestOutputHelper output) : Monolit
             if (request.Method == HttpMethod.Post && path == RegistryPackageSource.RoutePrefix + "/files")
             {
                 using var body = JsonDocument.Parse(request.Content!.ReadAsStream(cancellationToken));
-                var prefix = body.RootElement.GetProperty("id").GetString() + "/";
+                var id = body.RootElement.GetProperty("id").GetString();
+                requests.Enqueue($"files:{id}");
+                var prefix = id + "/";
                 return Task.FromResult(Json(PluginRegistryPayloads.Files(Repo
                     .Where(f => f.Path.StartsWith(prefix, StringComparison.Ordinal))
                     .Select(f => new PackageFile(f.Path, f.Content))
@@ -204,6 +211,7 @@ public abstract class StoreBootstrapTestBase(ITestOutputHelper output) : Monolit
             if (request.Method == HttpMethod.Get && path.StartsWith(PluginBundleClient.RoutePrefix + "/", StringComparison.Ordinal))
             {
                 var plugin = path[(PluginBundleClient.RoutePrefix.Length + 1)..].Split('/')[0];
+                requests.Enqueue($"bundle:{plugin}");
                 if (Modules.TryGetValue(plugin, out var module))
                     return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
                     {
@@ -282,6 +290,16 @@ public class StoreBootstrapLandsModulesFirstTest(ITestOutputHelper output) : Sto
         activation.Entries.Select(e => e.Name).Order(StringComparer.Ordinal).Should().Equal(new[] { AiModule, ViewsModule, ChatModule }.Order(StringComparer.Ordinal));
         activation.Entries.Should().OnlyContain(e => e.Enabled);
         activation.PendingRestart.Should().BeTrue("restart-as-activation — the self-updater takes the marker");
+        // 🚨 The ORDER is the fix, not just the end state: every module of the selection was
+        // downloaded before the FIRST package content was fetched. Module-after-its-own-content would
+        // land the same end state on a later pass and never break the cycle.
+        var log = Requests.ToList();
+        Output.WriteLine($"registry requests: {string.Join(" → ", log)}");
+        var firstFiles = log.FindIndex(r => r.StartsWith("files:", StringComparison.Ordinal));
+        firstFiles.Should().BeGreaterThan(-1, "the content phase ran");
+        foreach (var plugin in new[] { "AI", "EntityViews", "Chat" })
+            log.FindIndex(r => r == $"bundle:{plugin}").Should().BeInRange(0, firstFiles - 1,
+                $"{plugin}'s module must be downloaded before any package content is fetched");
         pass.ModulesLanded.Order(StringComparer.Ordinal).Should().Equal(new[] { AiModule, ViewsModule, ChatModule }.Order(StringComparer.Ordinal));
         pass.ToString().Should().Contain("MODULES LANDED ahead of content");
     }
@@ -322,8 +340,7 @@ public class StoreBootstrapCompletesAfterTheRestartTest(ITestOutputHelper output
 /// <summary>The selection rule, pure.</summary>
 public class PreInstalledBaselineSelectionTest
 {
-    private static IReadOnlyList<PluginGrantEntry> Parse(params string[] patterns) =>
-        patterns.Select(PluginGrantEntry.TryParse).Select(e => e!).ToList();
+    private static IReadOnlyList<string> Parse(params string[] patterns) => patterns;
 
     [Fact]
     public void AnExplicitSet_DropsTheBaseline_UnlessConfiguredOtherwise()
@@ -346,5 +363,16 @@ public class PreInstalledBaselineSelectionTest
         InstanceAutoRegistrationService.BaselineApplies(null, Parse("Plugins/Essentials", "Education/*"))
             .Should().BeTrue("one whole-source pattern means the deployment did not name its set");
         InstanceAutoRegistrationService.BaselineApplies(false, Parse()).Should().BeFalse();
+    }
+
+    [Fact]
+    public void AMalformedEntry_IsNotAnExplicitSet_SoTheBaselineStays()
+    {
+        var mixed = Parse("Plugins/Store", "Education/");
+        InstanceAutoRegistrationService.DeclaresExplicitSet(mixed).Should().BeFalse(
+            "one entry that is not a Source/Package means the operator did not state a set");
+        InstanceAutoRegistrationService.BaselineApplies(null, mixed).Should().BeTrue();
+        InstanceAutoRegistrationService.BaselineApplies(null, Parse("Plugins/Store", "  "))
+            .Should().BeFalse("a blank entry is not an entry");
     }
 }

@@ -835,7 +835,16 @@ public sealed class InstanceAutoRegistrationService(
             .Where(e => e is not null)
             .Select(e => e!)
             .ToList();
-        var baseline = BaselineApplies(options.InstallPreInstalledPackagesConfigured, wanted);
+        var malformed = options.InstallByDefault
+            .Where(p => !string.IsNullOrWhiteSpace(p) && PluginGrantEntry.TryParse(p) is null)
+            .ToList();
+        if (malformed.Count > 0)
+            logger.LogWarning(
+                "[DefaultInstall] {Count} PluginCatalog:InstallByDefault entr(y/ies) are not a Source/Package or "
+                + "Source/* pattern and match nothing: [{Malformed}]. The list is therefore not an explicit "
+                + "package set, and the preInstalled baseline is kept.",
+                malformed.Count, string.Join(", ", malformed));
+        var baseline = BaselineApplies(options.InstallPreInstalledPackagesConfigured, options.InstallByDefault);
         if (options.InstallPreInstalledPackagesConfigured is null && !baseline)
             logger.LogInformation(
                 "[DefaultInstall] PluginCatalog:InstallByDefault declares an EXPLICIT package set [{Wanted}] — "
@@ -872,8 +881,8 @@ public sealed class InstanceAutoRegistrationService(
     /// Whether the packages declaring <c>preInstalled</c> are selected — the platform baseline lane.
     /// Pure.
     ///
-    /// <para>🚨 <b>An instance that DECLARES its set gets that set</b> (the platform bootstrap,
-    /// 2026-10-14). <see cref="PluginCatalogOptions.InstallByDefault"/> naming packages EXACTLY
+    /// <para>🚨 <b>An instance that DECLARES its set gets that set</b> (policy
+    /// <c>declared-package-set-is-exact</c>). <see cref="PluginCatalogOptions.InstallByDefault"/> naming packages EXACTLY
     /// (<c>Source/Package</c>, no whole-source <c>Source/*</c>) is a deployment record saying
     /// "these" — and the baseline lane used to add every <c>preInstalled</c> package of every source
     /// on top of it, unasked. Measured on a fresh control instance that named five packages: the
@@ -888,17 +897,25 @@ public sealed class InstanceAutoRegistrationService(
     /// any whole-source pattern (the chart default <c>Plugins/*</c>) — exactly as before.</para>
     /// </summary>
     /// <param name="configured">The configured switch; null when not set.</param>
-    /// <param name="wanted">The parsed <see cref="PluginCatalogOptions.InstallByDefault"/> entries.</param>
+    /// <param name="patterns">The CONFIGURED <see cref="PluginCatalogOptions.InstallByDefault"/>
+    /// entries, unparsed — a malformed one must be seen, not silently dropped.</param>
     /// <returns>Whether the <c>preInstalled</c> baseline is selected this pass.</returns>
-    internal static bool BaselineApplies(bool? configured, IReadOnlyList<PluginGrantEntry> wanted) =>
-        configured ?? !DeclaresExplicitSet(wanted);
+    internal static bool BaselineApplies(bool? configured, IReadOnlyList<string> patterns) =>
+        configured ?? !DeclaresExplicitSet(patterns);
 
     /// <summary>Whether the operator's patterns name an explicit package set: at least one entry,
-    /// and every entry names a package (never a whole source). Pure.</summary>
-    /// <param name="wanted">The parsed <see cref="PluginCatalogOptions.InstallByDefault"/> entries.</param>
+    /// and EVERY configured entry is a well-formed <c>Source/Package</c> (never a whole source, never
+    /// an entry that does not parse — a malformed entry keeps the baseline rather than letting the
+    /// valid rest stand for a set the operator did not state). Blank entries are not entries. Pure.</summary>
+    /// <param name="patterns">The configured <see cref="PluginCatalogOptions.InstallByDefault"/> entries.</param>
     /// <returns>True for an explicit set.</returns>
-    internal static bool DeclaresExplicitSet(IReadOnlyList<PluginGrantEntry> wanted) =>
-        wanted.Count > 0 && wanted.All(w => w.PackageId != PluginGrantEntry.AllPackages);
+    internal static bool DeclaresExplicitSet(IReadOnlyList<string> patterns)
+    {
+        var entries = patterns.Where(p => !string.IsNullOrWhiteSpace(p)).ToList();
+        return entries.Count > 0
+               && entries.All(p => PluginGrantEntry.TryParse(p) is { } entry
+                                   && entry.PackageId != PluginGrantEntry.AllPackages);
+    }
 
     /// <summary>The decision, once the three selection signals are known: list the sources, select,
     /// close over dependencies, drop what the seed already delivered, install in order.</summary>
@@ -2184,8 +2201,8 @@ public sealed class InstanceAutoRegistrationService(
 
     /// <summary>
     /// 🚨 <b>PHASE 1 of the default install: land the compiled MODULE of every selected package that
-    /// is not installed yet, BEFORE any package's nodes are written</b> (the platform bootstrap,
-    /// 2026-10-14).
+    /// is not installed yet, BEFORE any package's nodes are written</b> (policy
+    /// <c>default-install-modules-first</c>).
     ///
     /// <para><b>Why the order is the fix.</b> A mixed package's module used to land only AFTER its
     /// content (<c>CatalogLayoutAreas.InstallOrUpdateCore</c>'s <c>WithModule</c> runs on the
@@ -2295,11 +2312,15 @@ public sealed class InstanceAutoRegistrationService(
                         // carrier steps aside, so the remaining carriers still run.
                         .Catch((Exception ex) =>
                         {
-                            if (ex is not (PackageAuthorizationException or LicenseAcceptanceRequiredException))
-                                logger.LogWarning(ex,
-                                    "[DefaultInstall] module phase: {Module} of {Id} did not land — {Cause}. "
-                                    + "The content phase decides the package as before.",
-                                    package.Module, package.Id, ex.Message);
+                            // 🚨 A gate refusal is NOT a decided fresh carrier: it must not trigger
+                            // the module-set proposal, or an entry an earlier pass landed would be
+                            // proposed — and activated — against the current refusal.
+                            if (ex is PackageAuthorizationException or LicenseAcceptanceRequiredException)
+                                return Observable.Return((Fresh: false, Landed: (string?)null));
+                            logger.LogWarning(ex,
+                                "[DefaultInstall] module phase: {Module} of {Id} did not land — {Cause}. "
+                                + "The content phase decides the package as before.",
+                                package.Module, package.Id, ex.Message);
                             return Observable.Return((Fresh: true, Landed: (string?)null));
                         });
                 });
