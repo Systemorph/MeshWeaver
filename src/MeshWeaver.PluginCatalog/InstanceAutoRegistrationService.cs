@@ -2202,7 +2202,10 @@ public sealed class InstanceAutoRegistrationService(
                 // clear. Phase 2's per-package installs propose nothing (proposeModuleSet: false) —
                 // each would be checked against the records written so far and could publish a
                 // module phase 1 pre-landed for a package whose floor a LATER package refuses.
-                .SelectMany(summary => !installable.Any(c => !string.IsNullOrWhiteSpace(c.Package.Module))
+                // Only a pass that ran a module wave proposes: a module-declaring package from a source
+                // that serves no bundles (a git or registered source) lands nothing on either phase, and
+                // a proposal without a wave would publish whatever the record holds, cleared by nobody.
+                .SelectMany(summary => !phase1.HadWave
                     ? Observable.Return(summary)
                     : ProposeCheckedForTheSelection(
                             installable.Select(c => c.Package).ToImmutableList(),
@@ -2270,7 +2273,7 @@ public sealed class InstanceAutoRegistrationService(
     /// </summary>
     /// <param name="installable">The pass's installable candidates, in dependency order.</param>
     /// <returns>Cold; emits the entry-assembly names of the modules this phase LANDED, once.</returns>
-    private IObservable<(ImmutableList<string> Landed, IReadOnlySet<string> Blocked)> LandModulesFirst(
+    private IObservable<(ImmutableList<string> Landed, IReadOnlySet<string> Blocked, bool HadWave)> LandModulesFirst(
         IReadOnlyList<InstallCandidate> installable)
     {
         var carriers = installable
@@ -2281,7 +2284,7 @@ public sealed class InstanceAutoRegistrationService(
         var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
         IReadOnlySet<string> none = ImmutableHashSet<string>.Empty;
         if (carriers.Count == 0 || persistence is null)
-            return Observable.Return((ImmutableList<string>.Empty, none));
+            return Observable.Return((ImmutableList<string>.Empty, none, false));
 
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
         var configuration = hub.ServiceProvider.GetService<IConfiguration>();
@@ -2400,7 +2403,7 @@ public sealed class InstanceAutoRegistrationService(
                             + "is proposed (once, at the end of this pass); a package whose nodes need its NodeTypes "
                             + "fails validation in this pass and is installed by a pass after that restart.",
                             landed.Count, string.Join(", ", landed));
-                    return (landed, blocked);
+                    return (landed, blocked, true);
                 }))
             .Catch((Exception ex) =>
             {
@@ -2412,7 +2415,7 @@ public sealed class InstanceAutoRegistrationService(
                 // carriers, so every carrier's module blocks the pass's one proposal.
                 IReadOnlySet<string> allCarriers = carriers.Select(x => x.Candidate.Package.Module!)
                     .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
-                return Observable.Return((ImmutableList<string>.Empty, allCarriers));
+                return Observable.Return((ImmutableList<string>.Empty, allCarriers, true));
             });
     }
 
@@ -2438,8 +2441,28 @@ public sealed class InstanceAutoRegistrationService(
                     .Where(e => e.Enabled && blocked.Contains(e.Name))
                     .Select(e => e.Name)
                     .ToList();
-                if (carried.Count == 0)
+                // 🚨 …and an ABSENT blocked module another selected package REQUIRES: the floor check
+                // skips a dependency with no landed entry, so without this a wave whose AI failed to
+                // land while Chat (requiring AI) landed would publish the half set.
+                var blockedIds = selection
+                    .Where(p => !string.IsNullOrWhiteSpace(p.Module) && blocked.Contains(p.Module!))
+                    .Select(p => p.Id)
+                    .ToImmutableHashSet(StringComparer.Ordinal);
+                var requiredButBlocked = selection
+                    .SelectMany(p => p.Requires.Select(PackageDependencyGraph.DependencyId))
+                    .Where(blockedIds.Contains)
+                    .Distinct(StringComparer.Ordinal)
+                    .ToList();
+                if (carried.Count == 0 && requiredButBlocked.Count == 0)
                     return Propose();
+                if (carried.Count == 0)
+                {
+                    logger.LogWarning(
+                        "[DefaultInstall] module phase: proposing NO module set — package(s) [{Packages}] are "
+                        + "required by this selection but their modules could not be cleared this pass; a set "
+                        + "without them would load their dependents alone.", string.Join(", ", requiredButBlocked));
+                    return Observable.Return<ModuleSet?>(null);
+                }
                 logger.LogWarning(
                     "[DefaultInstall] module phase: proposing NO module set — the activation record carries "
                     + "[{Modules}] for package(s) this pass could not clear (a gate refusal, an ownership hold, "

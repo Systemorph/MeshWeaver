@@ -120,6 +120,9 @@ public abstract class StoreBootstrapTestBase(ITestOutputHelper output) : Monolit
     /// <summary>What the registry's <c>Chat</c> declares it needs of <c>AI</c>.</summary>
     protected virtual string ChatRequiresAi => "AI@^1.0.0";
 
+    /// <summary>Whether the registry serves the AI module's bytes (it always advertises them).</summary>
+    protected virtual bool ServesAiBytes => true;
+
     /// <summary>What the boot pass is configured to install — the control instance's explicit set.</summary>
     protected virtual IReadOnlyList<string> BootSet => [$"{SourceName}/EntityViews", $"{SourceName}/Chat"];
 
@@ -131,7 +134,7 @@ public abstract class StoreBootstrapTestBase(ITestOutputHelper output) : Monolit
     {
         Directory.CreateDirectory(LandingRoot);
         Options.InstallByDefault = [.. BootSet];
-        var registry = new BootstrapRegistry(Requests, ChatRequiresAi);
+        var registry = new BootstrapRegistry(Requests, ChatRequiresAi, ServesAiBytes);
         return Arrange(base.ConfigureMesh(builder))
             .AddPluginCatalog()
             .ConfigureServices(services => services
@@ -166,7 +169,8 @@ public abstract class StoreBootstrapTestBase(ITestOutputHelper output) : Monolit
     /// <c>GET /api/plugins/bundles/{plugin}/{version}</c> — the listing stamped with the source name
     /// the registry stamps, the files exactly as a node-repo source serves them (repo-relative paths).
     /// </summary>
-    private sealed class BootstrapRegistry(ConcurrentQueue<string> requests, string chatRequiresAi) : HttpMessageHandler
+    private sealed class BootstrapRegistry(ConcurrentQueue<string> requests, string chatRequiresAi, bool servesAiBytes)
+        : HttpMessageHandler
     {
         private static readonly ImmutableDictionary<string, string> Modules = ImmutableDictionary.CreateRange(
             StringComparer.Ordinal,
@@ -227,7 +231,7 @@ public abstract class StoreBootstrapTestBase(ITestOutputHelper output) : Monolit
             {
                 var plugin = path[(PluginBundleClient.RoutePrefix.Length + 1)..].Split('/')[0];
                 requests.Enqueue($"bundle:{plugin}");
-                if (Modules.TryGetValue(plugin, out var module))
+                if (Modules.TryGetValue(plugin, out var module) && (servesAiBytes || plugin != "AI"))
                     return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
                     {
                         Content = new ByteArrayContent(ModuleBundle(plugin, module)),
@@ -386,6 +390,28 @@ public class AnUnmetSelectionFloorProposesNoSetTest(ITestOutputHelper output) : 
         ModuleActivationSidecar.Read(LandingRoot).Entries.Select(e => e.Name).Should().Contain(new[] { AiModule, ChatModule });
         ModuleSetStore.Read(LandingRoot).Proposed.Should().BeNull(
             "Chat's floor AI@^2 is not met by the landed AI 1.0.0, so no set may be written");
+    }
+}
+
+/// <summary>
+/// 🚨 A module the wave could not land, REQUIRED by one that did, withholds the set: the floor check
+/// skips a dependency with no landed entry, so without this the AI-less Chat set would be published.
+/// </summary>
+public class ARequiredModuleThatDidNotLandProposesNoSetTest(ITestOutputHelper output) : StoreBootstrapTestBase(output)
+{
+    /// <inheritdoc />
+    protected override bool ServesAiBytes => false;
+
+    [Fact(Timeout = 180_000)]
+    public async Task AiNotLanded_ChatLanded_ProposesNoSet()
+    {
+        var pass = await FirstPass(TestContext.Current.CancellationToken);
+        Output.WriteLine($"pass: {pass}");
+        var landed = ModuleActivationSidecar.Read(LandingRoot).Entries.Select(e => e.Name).ToList();
+        landed.Should().Contain(ChatModule);
+        landed.Should().NotContain(AiModule, "the registry served no AI bytes");
+        ModuleSetStore.Read(LandingRoot).Proposed.Should().BeNull(
+            "Chat requires AI, whose module did not land — a Chat-only set must not be proposed");
     }
 }
 
