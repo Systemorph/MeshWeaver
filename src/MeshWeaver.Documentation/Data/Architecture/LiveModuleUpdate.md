@@ -360,6 +360,32 @@ builds an index over a platform interface a module can register should apply the
 succeeds. On the base, both failed with the exception above. Its published twin is the negative control:
 there the rule governs its type.
 
+**A module service is LEASED, never checked and then called (MeshWeaver#6715).** "Does its module still
+serve?" followed by a call through the proxy can be split by a retirement: `ModuleContexts.Retire` removes
+the generation and disposes its services between the two, and the call throws `Module … holds no service
+scope`. Consumers that must not fault use one atomic operation instead.
+`ModuleServiceProxy.TryLease(service)` reads the module's current generation ONCE. It leases that
+generation's load context (`AlcLeaseRegistry`, as `ResolveDependency` does) and its services, re-checks
+that the generation is still current, and hands back the generation's own instance. It returns null when
+the module is gone or already retiring. `ModuleServices` counts its leases in one word changed only by
+compare-and-swap. A `Dispose` that arrives while a lease is held only marks the services retiring: no new
+lease is granted, and the LAST release disposes the scope. Nothing waits and nothing blocks, and the
+retirement's unload already waits for the context lease. `ModuleServiceProxy.Leased(service, use, what)`
+holds one lease across the subscription of an observable call, and fails with a named
+`ModuleRetiredException` when the module is already gone.
+
+`NodeTypeAccessRuleSet` reads every rule's metadata under a lease: `NodeType` when it builds, and the
+supported operations or permissions in `Find` and `FindPermissionRule`. A rule whose module cannot be
+leased is skipped for the registration before it. For a module's rule, the set hands out a rule whose
+`HasAccess`/`HasPermission` run under a lease for their whole evaluation, so an uninstall that lands
+mid-decision is deferred to the end of the decision. The two steps are still two leases. A retirement
+that falls BETWEEN the selection and the evaluation gives a named `ModuleRetiredException`, which
+`NodeTypeAccessRuleGate.Evaluate` reports as `Undetermined` (fail closed, with the type named). Asking
+again decides without the retired rule. `ModuleRuleLeasedAcrossRetirementTest` retires the generation
+from inside the rule, through a controlled switch, at each of the three points: under a lease, inside
+the evaluation, and inside `Find`'s metadata read. On the base, the first two fault on the disposed
+generation and the third throws out of `Find`.
+
 **Why.** Autofac holds a scope's shared-instance lock for the whole build of a shared instance, and
 that one lock covers every shared instance of the scope; an instance that exists is answered without
 the lock. The root reaches a module's services from inside its own builds — `ModuleOwnedRootSource`'s
