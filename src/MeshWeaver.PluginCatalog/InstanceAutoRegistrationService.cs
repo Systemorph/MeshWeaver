@@ -2213,7 +2213,8 @@ public sealed class InstanceAutoRegistrationService(
                         .Select(_ => summary)));
 
         // Phase 2's own verdicts are NEWER than phase 1's: a package it HELD (ownership re-read) or
-        // SKIPPED (a refusal visible only at install time) blocks its module too. A FAILED package
+        // SKIPPED (a terminal refusal before the pass, or one visible only at install time) blocks its
+        // module too. A FAILED package
         // does not — a node install that fails before its landed module loads is the bootstrap's
         // expected first pass, and blocking it would keep the modules from ever loading.
         IReadOnlySet<string> BlockedAfterPhase2(IReadOnlySet<string> phase1Blocked, DefaultInstallSummary summary)
@@ -2221,8 +2222,11 @@ public sealed class InstanceAutoRegistrationService(
             var refusedNow = (summary.Held ?? []).Select(h => h.Package)
                 .Concat((summary.Skipped ?? []).Select(s => s.Package))
                 .ToImmutableHashSet(StringComparer.Ordinal);
+            // Through ALL candidates, not just the installable ones: a TERMINAL skip (entitlement,
+            // licence, plan tier) left `installable` before phase 1, and an entry an earlier pass
+            // landed for it must block this proposal all the same.
             return phase1Blocked
-                .Concat(installable
+                .Concat(candidates
                     .Where(c => refusedNow.Contains(c.Package.Id) && !string.IsNullOrWhiteSpace(c.Package.Module))
                     .Select(c => c.Package.Module!))
                 .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
