@@ -277,6 +277,31 @@ reopening #5718, partition roots recycled by a live module update while a NodeTy
 (`GetDataRequest { MeshNodeReference }`) was parked, move to Debug. Stamp it only from code that
 really re-asks: a stamped producer that takes the NACK as final would silence a real loss.
 
+**A reply never inherits the stamp.** `PostOptions.ResponseFor` and `WithRequestIdFrom` copy the
+request's property bag onto the reply, and they drop `ReasksOnShutdown` while doing it (#6717). The
+stamp is one producer's claim about its own request. A reply discarded by a teardown has no producer
+that asks again, so it keeps the level its own type and answer policy give it.
+
+## Node writes: `PatchDataRequest`
+
+A node write has one producer: `UpdateRemote`, behind `GetMeshNodeStream(path).Update(...)`. It
+rides a `ShuttingDown` answer out on both arms. On the early arm it logs
+`OWNER_SHUTTING_DOWN_REENQUEUE`, and on the late watch it logs `LATE_SHUTTING_DOWN_REENQUEUE`. Each
+re-runs the caller's original update function against the address's next activation, up to
+`MaxOwnerDisposingReenqueues` attempts. When the budget is spent, the caller gets a failure, never a
+silent success. A write parked behind a young activation's gates is therefore **not lost** when that
+activation is torn down mid-bring-up. The discard answers it `ShuttingDown`, the write is re-asked,
+and it lands on the next activation.
+
+The producer did not say so, though. The patch carried neither the attribute nor the property, so
+that routine roll-time discard was reported at Error as stranded work. One measured case was #6733:
+an Orleans deactivation (`DirectoryFailure`, the directory owner's silo stopping) took down an
+`Admin/Threads` activation while a cache client's patch was parked behind
+`[DataContextInit,MeshNodeInit]`. `UpdateRemote` now stamps `ReaskingOnShutdown()` on its patch, so
+the discard reports at Debug. It does not stamp the last attempt: once the re-enqueue budget is
+spent, a `ShuttingDown` answer fails the caller, so that discard stays an Error. The type stays
+unmarked, because producers outside this repository may post it too.
+
 ## Where this is pinned
 
 | Test | What it fails on |
@@ -290,6 +315,8 @@ really re-asks: a stamped producer that takes the NACK as final would silence a 
 | `ADrainingSiloDoesNotSilenceItsSubscribersTest` (`MeshWeaver.Hosting.Orleans.Test`) | a grain on a stopping silo accepting a subscribe it can only answer into the void (#5256) |
 | `DeferredDeliveryNackedOnDisposeTest.ADiscardError_NamesTheRequest_SoItsProducerCanBeTold` (`MeshWeaver.Messaging.Hub.Test`) | a bring-up discard Error that names the request type but not its declared description (#5718), or that prints an undeclared payload |
 | `DeferredDeliveryNackedOnDisposeTest.ARequestWhoseProducerDeclaresTheReask_IsTeardownNormal_NotAnError` (`MeshWeaver.Messaging.Hub.Test`) | a delivery stamped `ReasksOnShutdown` still reported at Error when a teardown discards it, or no longer answered `ShuttingDown` (#5718) |
+| `PatchDiscardedByABringUpTeardownIsReaskedTest` (`MeshWeaver.Graph.Test`) | a node write parked behind a young activation's gates that does not land on the next activation after a direct teardown, or whose discard is reported at Error (#6733) |
+| `PostOptionsReaskStampTest` (`MeshWeaver.Messaging.Hub.Test`) | a reply built with `ResponseFor` / `WithRequestIdFrom` that inherits the request's `ReasksOnShutdown` stamp (#6717) |
 
 ## See also
 
