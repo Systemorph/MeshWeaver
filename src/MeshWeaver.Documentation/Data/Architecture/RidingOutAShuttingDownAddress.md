@@ -106,7 +106,10 @@ apart from the message they already receive.
 
 ```text
 rejection arrives (a ShuttingDown NACK, or the owner's StreamEndedEvent)
-  ├─ activation not yet seen since the last answer (or unknown)
+  ├─ NO activation tag AND no owner banner — the ROUTING LAYER refused, not the owner (#6729)
+  │     → charge the TIME budget under the "(route)" key (MaxSameActivationReAsks = 16)
+  │     → REST first (RecycleReAskPace), then re-ask
+  ├─ activation not yet seen since the last answer (or unknown, from the owner)
   │     → charge the ACTIVATION budget (MaxRecycleReArms = 3)
   │     → join on the rejecting instance's DisposalCompleted, then re-ask
   ├─ activation already refused us since the last answer
@@ -237,6 +240,31 @@ were run by hand. With the terminal removed, the distinct-activations case never
 With the announcement's activation ignored, the one-activation case gives up on a teardown that was
 only settling.
 
+### A routing refusal is not an owner activation (#6729)
+
+Measured on memex-cloud on 2026-10-13: pods `…-m2jn9` (19:52:18Z) and `…-54lxb` (20:01:57Z) each
+logged `Drain: GIVING UP … 5 circuit(s) are STILL OPEN` and `Application is shutting down...`, and in
+that same second every open circuit's sync streams ended with *"4 DISTINCT owner activations have
+refused this stream (budget 3)"* — for owners that had nothing to do with one another (a user home,
+`Admin`, threads, a payment record). Some twenty incidents were filed against "an owner recycling in a
+loop". No owner had recycled. The subscriber's OWN router answered every re-ask *"Host is shutting
+down, cannot route to …"* (`OrleansRoutingService.DeliverMessage`), a `ShuttingDown` NACK with no
+activation tag. Untagged meant "a distinct activation", there was no local teardown to join, so the
+re-ask went out at once, and four router refusals inside a millisecond spent the activation budget.
+
+The latch now asks who spoke, with the predicate that already exists for that question,
+`ShutdownNack.IsAnsweredByOwner`: a refusal with neither an activation tag nor the owner's banner came
+from the routing layer — this host stopping, the silo directory in flux during a roll, a pod hub not
+yet claimed. That is ONE condition, the route being unavailable, so it is charged on the TIME axis
+under its own `(route)` key, paced like a teardown ride-out, and its give-up names the ROUTE and says
+no owner recycle loop is implied. An untagged refusal that does carry the owner's banner keeps the old
+accounting (one distinct activation each), because the owner did speak.
+
+Pinned by three cases in `ASyncStreamThatGivesUpOnItsOwnerEndsTest`: six router refusals are ridden
+out and the stream recovers (red before the fix: it ended on the fourth); a route that never serves
+again still ends the stream, naming the route; and untagged OWNER refusals still give up on the
+activation budget (the control that the discrimination is by speaker, not by tag alone).
+
 ## One request type, several producers: `GetDataRequest`
 
 `[ReaskedOnShutdown]` makes a claim about every producer of a type. `GetDataRequest` cannot carry it
@@ -286,7 +314,7 @@ really re-asks: a stamped producer that takes the NACK as final would silence a 
 | `SubscribeDuringRecycleTest` (`MeshWeaver.Layout.Test`) | a layout area subscribing into the recycle window rendering an error instead of a "coming back" state |
 | `RecyclingShapeDiagnosticTest` (`MeshWeaver.Graph.Test`) | the diagnostic naming both shapes at once, or inventing one from zero observations |
 | `ChangeFeedResubscribeCoalesceTest` (`MeshWeaver.Data.Test`) | a burst of owner change events producing one resubscribe per event |
-| `ASyncStreamThatGivesUpOnItsOwnerEndsTest` (`MeshWeaver.Data.Test`) | a give-up that leaves the stream alive on its last value, or one activation's NACK and announcement charged as two activations (#6602) |
+| `ASyncStreamThatGivesUpOnItsOwnerEndsTest` (`MeshWeaver.Data.Test`) | a give-up that leaves the stream alive on its last value, or one activation's NACK and announcement charged as two activations (#6602), or routing-layer refusals charged as owner activations (#6729) |
 | `ADrainingSiloDoesNotSilenceItsSubscribersTest` (`MeshWeaver.Hosting.Orleans.Test`) | a grain on a stopping silo accepting a subscribe it can only answer into the void (#5256) |
 | `DeferredDeliveryNackedOnDisposeTest.ADiscardError_NamesTheRequest_SoItsProducerCanBeTold` (`MeshWeaver.Messaging.Hub.Test`) | a bring-up discard Error that names the request type but not its declared description (#5718), or that prints an undeclared payload |
 | `DeferredDeliveryNackedOnDisposeTest.ARequestWhoseProducerDeclaresTheReask_IsTeardownNormal_NotAnError` (`MeshWeaver.Messaging.Hub.Test`) | a delivery stamped `ReasksOnShutdown` still reported at Error when a teardown discards it, or no longer answered `ShuttingDown` (#5718) |
