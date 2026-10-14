@@ -206,6 +206,32 @@ did not add, a keyed registration, a class-typed platform service the module imp
 implementation that also implements another platform interface (a proxy would hide it), an open generic
 the module implements.
 
+### A module's health check follows the swap (MeshWeaver#6766)
+
+A module's `AddHealthChecks().AddCheck<TCheck>()` reaches the root as `ModuleHealthCheckOptionsForwarder`,
+and the root's `DefaultHealthCheckService` activates the check. The root reads
+`IOptions<HealthCheckServiceOptions>` ONCE per process. The forwarder used to copy the registration that
+the boot generation's configuration added, and to rebind only its PROVIDER to the module's current
+scope. The factory it kept was therefore generation N's `GetServiceOrCreateInstance<TCheck>`: `TCheck`,
+and every type its constructor takes, were N's types. After a live swap, N+1's container was asked for N's
+dependency type, which it does not hold. Measured on a portal: every `/health` threw `Unable to resolve
+service for type 'MeshWeaver.AI.ProviderCatalogConvergence' while attempting to activate
+'MeshWeaver.AI.ProviderCatalogHealthCheck'` out of the health middleware. The kept factory also pinned
+generation N's collectible context.
+
+The root's registration now names no module type. It keeps the check's name, tags, failure status,
+timeout, delay and period. At every activation its factory takes ONE snapshot of the module's current
+generation, runs that generation's own factory for the check of that name, and activates it in that
+generation's container. Each generation's checks are read once, from its own configuration run against an
+empty options instance, and are held in a table keyed weakly by the generation, so a retired generation is
+never pinned. A module that is no longer held (retired by an uninstall, or withdrawn at boot), or a current
+generation that no longer declares the check, gives a NAMED `Degraded` result for that check, never an
+exception: the feature is absent, and the probe says which feature and why.
+`ModuleHealthCheckActivatesInModuleScopeTest` swaps a module live and retires it, running the check
+through the root's `HealthCheckService` each time. On the base, the swap case throws the measured shape
+(`Unable to resolve service for type '…Beat' while attempting to activate '…ProbeCheck'`) and the
+retire case throws `Module … holds no service scope`.
+
 ### Built before published (MeshWeaver#6542)
 
 🚨 **The root only ever READS a module's instances.** Every PROCESS-LIFETIME instance the root can
