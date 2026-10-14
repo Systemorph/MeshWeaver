@@ -4046,6 +4046,27 @@ public static class MeshExtensions
                                     return Observable.Empty<System.Reactive.Unit>();
                                 }
 
+                                // 2c. 🚨 A row-only delete (KeepDescendants) is refused unless the
+                                //     loaded target is a NodeType definition (#6751). It skips the
+                                //     has-children refusal and drains only the root, while every
+                                //     post-deletion handler still runs — so on a partition root the
+                                //     partition-drop handler would drop the store the request asked
+                                //     to keep, and on an ordinary parent the children would be left
+                                //     orphaned under a path with no node. A NodeType row is the one
+                                //     shape whose path prefixes records (its Source/, a leaf type's
+                                //     instances) that are not its children in the lifecycle sense.
+                                //     Refused here, before any scope or side effect.
+                                if (capturedRequest.KeepDescendants
+                                    && RowOnlyDeleteRefusal(path, rootNode, capturedRequest) is { } refusal)
+                                {
+                                    logger.LogWarning(
+                                        "[DeleteNode] row-only-refused path={Path} nodeType={NodeType} recursive={Recursive}",
+                                        path, rootNode.NodeType, capturedRequest.Recursive);
+                                    PostFailed(refusal.Message,NodeDeletionRejectionReason.ValidationFailed,
+                                        [refusal], ImmutableList.Create(path));
+                                    return Observable.Empty<System.Reactive.Unit>();
+                                }
+
                                 return RunDeletionValidatorsWithWarningsObs(hub, rootNode, capturedRequest, request.AccessContext)
                             .TimeoutAtStage(budget, () => DeleteStageTimeout(
                                 DeleteStage.ValidateRoot,
@@ -4135,22 +4156,10 @@ public static class MeshExtensions
                                                 ImmutableList.Create(path));
                                         },
                                         onAbsent: PostAlreadyAbsent)
-                                    .SelectMany(_ => CollectPathsForDelete(hub, path, capturedRequest.Recursive, budget, logger))
+                                    .SelectMany(_ => CollectPathsForDelete(
+                                        hub, path, capturedRequest.Recursive, capturedRequest.KeepDescendants, budget, logger))
                                     .SelectMany(collected =>
                                     {
-                                        if (capturedRequest.Recursive && capturedRequest.KeepDescendants)
-                                        {
-                                            const string why = "a delete cannot both remove the subtree "
-                                                + "(Recursive) and keep it (KeepDescendants)";
-                                            var msg = $"Cannot delete '{path}': {why}";
-                                            logger.LogWarning("[DeleteNode] contradictory-request path={Path}", path);
-                                            PostFailed(msg, NodeDeletionRejectionReason.ValidationFailed,
-                                                [new LogMessage(msg, LogLevel.Error)
-                                                    .WithKey("activity.delete.validatorRejected",
-                                                        ("path", path), ("error", why))]);
-                                            return Observable.Empty<System.Reactive.Unit>();
-                                        }
-
                                         if (!capturedRequest.Recursive && !capturedRequest.KeepDescendants
                                             && collected.HasUnlistedChildren)
                                         {
@@ -4823,11 +4832,17 @@ public static class MeshExtensions
             IMessageHub hub,
             string path,
             bool recursive,
+            bool keepDescendants,
             TimeSpan timeout,
             ILogger logger)
     {
         var storage = hub.ServiceProvider.GetRequiredService<IStorageAdapter>();
         var empty = ImmutableHashSet<string>.Empty.WithComparer(StringComparer.OrdinalIgnoreCase);
+
+        if (keepDescendants)
+            // Row-only (DeleteNodeRequest.KeepDescendants): the plan is the root and nothing else,
+            // and the has-children refusal does not apply — so nothing under it is enumerated (#6751).
+            return Observable.Return((RootExists: true, empty.Add(path), HasUnlistedChildren: false));
 
         if (!recursive)
         {
@@ -4858,6 +4873,37 @@ public static class MeshExtensions
                 DeleteStage.CollectPaths,
                 $"the storage enumeration of the subtree under '{path}' did not answer within "
                 + $"{timeout.TotalSeconds:0}s"));
+    }
+
+    /// <summary>
+    /// Why a row-only delete (<see cref="DeleteNodeRequest.KeepDescendants"/>) of
+    /// <paramref name="rootNode"/> is refused, or <c>null</c> when it may proceed (#6751). It may
+    /// proceed only for a NodeType definition row (<c>nodeType: NodeType</c>) and never together
+    /// with <see cref="DeleteNodeRequest.Recursive"/>. Deliberately the strict node-type test, not
+    /// a "carries type content" one: a <c>Space</c> partition ROOT can carry type content, and a
+    /// row-only delete of it would run the partition-drop handler over a subtree the request asked
+    /// to keep.
+    /// </summary>
+    /// <param name="path">The delete's target path.</param>
+    /// <param name="rootNode">The target as read from storage.</param>
+    /// <param name="request">The delete request.</param>
+    internal static LogMessage? RowOnlyDeleteRefusal(string path, MeshNode rootNode, DeleteNodeRequest request)
+    {
+        if (!request.KeepDescendants)
+            return null;
+        if (request.Recursive)
+            return new LogMessage(
+                    $"Cannot delete '{path}': a delete cannot both remove the subtree (Recursive) and keep it "
+                    + "(KeepDescendants). Nothing was deleted.", LogLevel.Error)
+                .WithKey("activity.delete.keepDescendantsContradiction", ("path", path));
+        if (string.Equals(rootNode.NodeType, MeshNode.NodeTypePath, StringComparison.OrdinalIgnoreCase))
+            return null;
+        var nodeType = rootNode.NodeType ?? string.Empty;
+        return new LogMessage(
+                $"Cannot delete '{path}' alone (KeepDescendants): only a NodeType definition may be removed "
+                + $"without the nodes under it, and this node is of type '{nodeType}'. Nothing was deleted.",
+                LogLevel.Error)
+            .WithKey("activity.delete.keepDescendantsNotNodeType", ("path", path), ("nodeType", nodeType));
     }
 
     /// <summary>
@@ -5068,8 +5114,15 @@ public static class MeshExtensions
                 // seven Spaces logged `deleted` and found with one node left. Success now requires
                 // BOTH halves — no descendants AND no root — and a surviving root is fed straight
                 // back into the next pass, where the root branch's DeleteIfExists removes it.
-                return storage.ListDescendantPaths(rootPath)
-                    .Take(1)
+                // A row-only delete (KeepDescendants) owes the root and nothing else: what lives
+                // under it is kept by request, so it is never a survivor to drain — and is never
+                // ENUMERATED either (#6751): listing a subtree only to discard it costs a full
+                // descendant scan on exactly the rows (NodeType definitions with their Source/ and
+                // instances) this mode exists for.
+                var descendants = baseRequest.KeepDescendants
+                    ? Observable.Return<IReadOnlyCollection<string>>(Array.Empty<string>())
+                    : storage.ListDescendantPaths(rootPath).Take(1);
+                return descendants
                     .SelectMany(survivors => storage
                         // Writable-only: a path a READ-ONLY provider still serves is not a
                         // survivor of a delete that was never allowed to touch it.
@@ -5078,14 +5131,10 @@ public static class MeshExtensions
                         .Select(rootSurvives => (survivors, rootSurvives)))
                     .SelectMany(verified =>
                     {
-                        // A row-only delete (KeepDescendants) owes the root and nothing else: what
-                        // lives under it is kept by request, so it is never a survivor to drain.
-                        var survivorSet = baseRequest.KeepDescendants
-                            ? ImmutableHashSet<string>.Empty.WithComparer(StringComparer.OrdinalIgnoreCase)
-                            : verified.survivors
-                                .Where(p => !string.IsNullOrEmpty(p))
-                                .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase)
-                                .Remove(rootPath);
+                        var survivorSet = verified.survivors
+                            .Where(p => !string.IsNullOrEmpty(p))
+                            .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase)
+                            .Remove(rootPath);
                         if (survivorSet.IsEmpty && !verified.rootSurvives)
                             return Observable.Return((IReadOnlyList<string>)acc);
 

@@ -200,6 +200,19 @@ public static class PackageInstaller
     internal const string CodeDefaultPartition = "type";
 
     /// <summary>
+    /// The NodeType row <see cref="InstallCode"/> SYNTHESIZES for a <see cref="PackageKind.Code"/>
+    /// package (<c>{install root}/{id}</c>), or <c>null</c> for every other kind. No installed file
+    /// maps to it, so a pass that derives node paths from <see cref="PackageManifest.InstalledFiles"/>
+    /// cannot name it; the boot repair derives it here instead (#6751), from the same definition the
+    /// install writes it under.
+    /// </summary>
+    /// <param name="manifest">The package (an install record's manifest).</param>
+    internal static string? SynthesizedNodeTypePathOf(PackageManifest manifest) =>
+        manifest.Kind == PackageKind.Code && !string.IsNullOrWhiteSpace(manifest.Id)
+            ? $"{InstallRootOf(manifest)}/{manifest.Id}"
+            : null;
+
+    /// <summary>
     /// 🚨 <b>Holds the package's root for exactly as long as the install runs (#3510) — so nothing
     /// else recycles it out from under the writes in flight beneath it.</b>
     ///
@@ -3179,7 +3192,7 @@ public static class PackageInstaller
         var partition = string.IsNullOrWhiteSpace(manifest.TargetPartition)
             ? CodeDefaultPartition
             : manifest.TargetPartition!;
-        var nodeTypePath = $"{partition}/{manifest.Id}";
+        var nodeTypePath = SynthesizedNodeTypePathOf(manifest)!;
         var sourceFolder = manifest.SourceFolder ?? manifest.Id;
         var parsers = new FileFormatParserRegistry(hub.JsonSerializerOptions, hub.ServiceProvider.GetServices<IFileFormatParser>());
 
@@ -3256,6 +3269,10 @@ public static class PackageInstaller
                         hub, written,
                         result.Written > 0 && writesType ? [nodeTypePath] : Array.Empty<string>(),
                         manifest.Id, logger))
+                    // The outcome is not stamped on the record: the synthesized row has no installed
+                    // file, so the completeness sweep never owes it and there is no file to record
+                    // as withheld. The boot repair DERIVES the row from the record instead
+                    // (SynthesizedNodeTypePathOf, #6751).
                     .SelectMany(_ => ClosedTypeSetPackageRows.Reconcile(
                         hub, manifest.Id, Array.Empty<string>(), codeSplit.WithheldPaths, logger))
                     .SelectMany(_ => WriteInstalledRecord(

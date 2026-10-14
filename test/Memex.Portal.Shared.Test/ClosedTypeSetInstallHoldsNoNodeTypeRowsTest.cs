@@ -289,6 +289,119 @@ public class ClosedTypeSetInstallHoldsNoNodeTypeRowsTest(ITestOutputHelper outpu
             "the boot repair pass removes a NodeType row a closed type set does not hold");
         (await Stored(Mesh, InstancePath, ct)).Should().BeTrue("records are never touched");
     }
+
+    /// <summary>
+    /// #6751 — two packages installed into the SAME target partition. The per-partition passes walk
+    /// one record per partition, but each package declares its own NodeType rows, so the row
+    /// reconciliation must walk EVERY record. Narrowing it back to one record per partition leaves
+    /// one of the two rows (whichever record the grouping drops) and reddens this test.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task TheBootRepairPass_ReconcilesEveryRecord_InASharedPartition()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await Install(Mesh, Logger(), ct);
+        const string second = "ClosedPkgSecond";
+        const string gadgetFile = $"{Package}/Gadget.json";
+        const string gadgetPath = $"{Package}/Gadget";
+        var candidate = new PackageManifest
+        {
+            Id = second,
+            Name = second,
+            Kind = PackageKind.Content,
+            TargetPartition = Package,
+            SourceFolder = Package,
+            Version = "1.0.0",
+            InstalledFiles = ImmutableSortedDictionary.CreateRange(StringComparer.Ordinal,
+            [
+                new KeyValuePair<string, string>(gadgetFile, "ggg"),
+                new KeyValuePair<string, string>($"{Package}/Manual.md", "mmm"),
+            ]),
+        };
+        PackageFile[] files =
+        [
+            new(gadgetFile, $$"""
+                { "id": "Gadget", "nodeType": "NodeType", "name": "Gadget", "state": "Active", "content": { "configuration": "config => config" } }
+                """),
+            new($"{Package}/Manual.md", "# Manual"),
+        ];
+        await PackageInstaller.Install(Mesh, candidate, files, "HEAD", Logger())
+            .Should().Within(180.Seconds())
+            .Emit("the second package's install must complete before the repair pass reads its record", ct);
+
+        // Both packages' rows, as an earlier install on this host left them.
+        await SeedLeftRow(ct);
+        await Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>()
+            .Write(new MeshNode("Gadget", Package)
+            {
+                NodeType = MeshNode.NodeTypePath,
+                Name = "Gadget",
+                State = MeshNodeState.Active,
+            }, Mesh.JsonSerializerOptions)
+            .Should().Within(TestTimeouts.WriteConvergence)
+            .Emit("the second package's left-behind row must be stored before the repair pass", ct);
+        (await Stored(Mesh, TypePath, ct)).Should().BeTrue("the first package's left row is a subject");
+        (await Stored(Mesh, gadgetPath, ct)).Should().BeTrue("the second package's left row is a subject");
+
+        await new InstalledPackageRepairService(Mesh).RunRepair()
+            .Should().Within(180.Seconds())
+            .Emit("the boot repair pass must complete", ct);
+
+        (await Stored(Mesh, TypePath, ct)).Should().BeFalse(
+            "the first package's NodeType row is removed by the boot repair pass");
+        (await Stored(Mesh, gadgetPath, ct)).Should().BeFalse(
+            "the second package in the same partition is reconciled too — every record, not the "
+            + "first one per partition");
+    }
+
+    /// <summary>
+    /// #6751 — a CODE package's NodeType row is synthesized by the install, so no installed file
+    /// maps to it. The boot repair pass derives it from the record; deriving the candidates from the
+    /// declared files alone leaves the row and reddens this test.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task TheBootRepairPass_RemovesACodePackagesSynthesizedRowLeftBehind()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string code = "ClosedCode";
+        var candidate = new PackageManifest
+        {
+            Id = code,
+            Name = code,
+            Kind = PackageKind.Code,
+            TargetPartition = code,
+            SourceFolder = code,
+            Version = "1.0.0",
+            NodeTypeConfiguration = "config => config",
+        };
+        PackageFile[] files = [new($"{code}/Thing.cs", "public class Thing { }")];
+        await PackageInstaller.Install(Mesh, candidate, files, "HEAD", Logger())
+            .Should().Within(180.Seconds())
+            .Emit("the code install must complete before the repair pass reads its record", ct);
+        var synthesized = PackageInstaller.SynthesizedNodeTypePathOf(candidate);
+        synthesized.Should().Be($"{code}/{code}", "the row InstallCode synthesizes");
+        (await Stored(Mesh, synthesized!, ct)).Should().BeFalse(
+            "the premise: a closed type set's code install writes no synthesized row");
+
+        // The synthesized row, as an install before this host withheld them left it.
+        await Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>()
+            .Write(new MeshNode(code, code)
+            {
+                NodeType = MeshNode.NodeTypePath,
+                Name = code,
+                State = MeshNodeState.Active,
+            }, Mesh.JsonSerializerOptions)
+            .Should().Within(TestTimeouts.WriteConvergence)
+            .Emit("the left-behind synthesized row must be stored before the repair pass", ct);
+        (await Stored(Mesh, synthesized!, ct)).Should().BeTrue("the left-behind row is the subject");
+
+        await new InstalledPackageRepairService(Mesh).RunRepair()
+            .Should().Within(180.Seconds())
+            .Emit("the boot repair pass must complete", ct);
+
+        (await Stored(Mesh, synthesized!, ct)).Should().BeFalse(
+            "the boot repair pass derives a code package's synthesized NodeType row and removes it");
+    }
 }
 
 /// <summary>The open-mesh control for <see cref="ClosedTypeSetInstallHoldsNoNodeTypeRowsTest"/>.</summary>

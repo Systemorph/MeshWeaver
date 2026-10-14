@@ -97,7 +97,16 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
                     return Observable.Return(Unit.Default);
                 }))
             .SelectMany(_ => InstalledRecords(logger))
-            .SelectMany(records => (records.Count == 0
+            .Select(all => (All: all, PerPartition: OnePerPartition(all)))
+            .SelectMany(listed => RepairRecords(listed.All, listed.PerPartition, logger));
+
+    /// <summary>The repair over the listed records: <paramref name="records"/> is one per
+    /// partition (what the access re-assert, the sweep and the heal walk), <paramref name="all"/>
+    /// every install record (what the closed-type-set row reconciliation walks — #6751: a second
+    /// package installed into the same target partition declares its own NodeType rows).</summary>
+    private IObservable<Unit> RepairRecords(
+        IReadOnlyList<InstalledRecord> all, IReadOnlyList<InstalledRecord> records, ILogger? logger) =>
+            (records.Count == 0
                     ? Observable.Return(Unit.Default)
                     : records
                         .Select(record => Reconcile(record, logger))
@@ -112,12 +121,34 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
                 // 🚨 On a CLOSED type set, BEFORE the sweep: remove the NodeType rows earlier
                 // installs left and record them as withheld (#6627), so a host whose packages never
                 // update converges too and the sweep does not count those rows as owed.
-                .SelectMany(_ => WithholdNodeTypeRows(records, logger))
+                .SelectMany(_ => WithholdNodeTypeRows(all, logger))
+                .Select(stamped => SameRecords(records, stamped))
                 .SelectMany(current => VerifyCompleteness(current, logger))
                 // The module half reports before the heal WAITS (on the default install), so a
                 // long boot install cannot delay what the module sweep has to say.
                 .SelectMany(verdicts => VerifyModules(records, logger).Select(_ => verdicts))
-                .SelectMany(verdicts => Heal(records, verdicts, logger)));
+                .SelectMany(verdicts => Heal(records, verdicts, logger));
+
+    /// <summary>The first record per target partition — the population every per-partition pass
+    /// walks (one access re-assert, one completeness verdict, one heal per partition).</summary>
+    /// <param name="all">Every install record.</param>
+    private static IReadOnlyList<InstalledRecord> OnePerPartition(IReadOnlyList<InstalledRecord> all) =>
+        all.GroupBy(r => r.Partition, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.First())
+            .ToList();
+
+    /// <summary><paramref name="records"/> with each entry replaced by its counterpart in
+    /// <paramref name="stamped"/> (matched by package id), so the sweep reads the withheld answer
+    /// the reconciliation just recorded.</summary>
+    /// <param name="records">The per-partition records.</param>
+    /// <param name="stamped">Every record, as the reconciliation left it.</param>
+    private static IReadOnlyList<InstalledRecord> SameRecords(
+        IReadOnlyList<InstalledRecord> records, IReadOnlyList<InstalledRecord> stamped)
+    {
+        var byId = stamped.GroupBy(r => r.PackageId, StringComparer.Ordinal)
+            .ToImmutableDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
+        return records.Select(r => byId.TryGetValue(r.PackageId, out var s) ? s : r).ToList();
+    }
 
     /// <summary>
     /// 🚨 <b>The sweep's verdict gets a consumer that ACTS</b> — MeshWeaver#4812.
@@ -722,9 +753,13 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
             .Select(record =>
             {
                 var files = record.Manifest.InstalledFiles?.Keys.ToArray();
+                // A Code package's NodeType row is SYNTHESIZED by the install, not shipped as a
+                // file, so the declared files can never name it — derive it (#6751).
+                var candidates = ClosedTypeSetPackageRows.NodePathsOf(files, parsers);
+                if (PackageInstaller.SynthesizedNodeTypePathOf(record.Manifest) is { } synthesized)
+                    candidates = candidates.Add(synthesized);
                 return ClosedTypeSetPackageRows.Reconcile(
-                        hub, record.PackageId, ClosedTypeSetPackageRows.NodePathsOf(files, parsers),
-                        Array.Empty<string>(), logger)
+                        hub, record.PackageId, candidates, Array.Empty<string>(), logger)
                     .SelectMany(outcome =>
                     {
                         var (examined, withheldNow) =
@@ -777,7 +812,8 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
     }
 
     /// <summary>
-    /// Every recorded install, one entry per partition. Reads the <c>Package</c> records the
+    /// Every recorded install — ALL of them, several per partition when packages share one
+    /// (<see cref="OnePerPartition"/> narrows it for the per-partition passes). Reads the <c>Package</c> records the
     /// installer writes, so the repair covers exactly what is installed — no hard-coded package
     /// list. The record's content IS the manifest as installed (id, partition, price, declared
     /// public segments), which is what drives the access re-assert.
@@ -798,8 +834,6 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
                     InstallCompleteness.DescribeRecord(
                         x.Node.Path, x.Node.Version, x.Node.LastModified, x.Manifest)))
                 .Where(r => !string.IsNullOrWhiteSpace(r.Partition))
-                .GroupBy(r => r.Partition, StringComparer.OrdinalIgnoreCase)
-                .Select(g => g.First())
                 .ToList())
             .Catch((Exception ex) =>
             {

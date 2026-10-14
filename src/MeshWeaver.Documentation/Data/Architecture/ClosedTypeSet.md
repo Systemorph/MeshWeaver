@@ -90,8 +90,21 @@ container environment variable, next to the module that registers its types.
    (every lane, content packages included), which the completeness sweep and — on a closed host —
    the update lane's restore widening subtract; otherwise every withheld row would read as an
    absent node and be handed to the heal, which would reinstall the package to restore a row it
-   never writes. The boot repair pass runs the same removal over every install record before the
-   sweep, so a host whose packages never update converges too. On an **open** host the same pass
+   never writes. The boot repair pass runs the same removal over **every** install record before
+   the sweep — all of them, not one per partition, because two packages installed into the same
+   target partition each declare their own rows — so a host whose packages never update converges
+   too. A **code** package's NodeType row is synthesized by the install (`{install root}/{id}`) and
+   maps to no installed file, so the pass derives it from the record
+   (`PackageInstaller.SynthesizedNodeTypePathOf`) rather than from the declared files (#6751).
+
+   `KeepDescendants` is **refused unless the stored target is a NodeType definition**, and refused
+   together with `Recursive`, each with its own localized message and before any side effect: on
+   any other node the post-deletion handlers would still run (a partition root's would drop the
+   store the request asked to keep) and an ordinary parent's children would be orphaned. A row-only
+   delete enumerates nothing under its path — neither for the plan nor for the drain's
+   verification, which asks only whether the root is still in writable storage (#6751).
+
+   On an **open** host the same pass
    CLEARS a withheld set an earlier closed run recorded: there the rows are owed again, and a
    stale set would keep the sweep from ever restoring them.
 

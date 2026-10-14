@@ -471,6 +471,11 @@ public record DeleteNodeRequest(string Path)
     /// type, its instances (#6627: the closed-type-set installer removes such a row and must keep
     /// the records under it). Contradicts <see cref="Recursive"/>; a request carrying both is
     /// refused.</para>
+    ///
+    /// <para>🚨 <b>Only for a NodeType definition</b> (#6751): the handler refuses it, before any
+    /// side effect, unless the stored target's <c>NodeType</c> is <c>NodeType</c>. On any other node
+    /// the post-deletion handlers would still run — a partition root's would drop the store the
+    /// request asked to keep — and an ordinary parent's children would be orphaned.</para>
     /// </summary>
     public bool KeepDescendants { get; init; }
 
