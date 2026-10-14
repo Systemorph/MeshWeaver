@@ -48,6 +48,22 @@ public sealed class GitPackageSource(GitCli git, string repoPath, string subdir 
             });
 
     /// <inheritdoc />
+    /// <remarks>Resolves <paramref name="gitRef"/> to its commit FIRST and reads the files at that
+    /// commit, so the files and the commit an install records cannot straddle a ref that moved
+    /// between two reads (MeshWeaver#3848). A ref git cannot resolve reads as before, with no
+    /// commit named.</remarks>
+    IObservable<PackageFetch> IPackageSource.FetchPackage(
+        PackageManifest package, string gitRef, IReadOnlyCollection<string>? paths) =>
+        git.Run(repoPath, ["rev-parse", "--verify", $"{gitRef}^{{commit}}"])
+            .SelectMany(res =>
+            {
+                var sha = res.ExitCode == 0 ? res.StdOut.Trim() : null;
+                var commit = PackageFetch.IsCommitSha(sha) ? sha : null;
+                return ((IPackageSource)this).FetchPackageFiles(package, commit ?? gitRef, paths)
+                    .Select(files => new PackageFetch(files, commit));
+            });
+
+    /// <inheritdoc />
     public IObservable<IReadOnlyList<PackageFile>> FetchPackageFiles(PackageManifest package, string gitRef)
     {
         var folder = package.SourceFolder ?? package.Id;

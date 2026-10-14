@@ -858,10 +858,14 @@ public static partial class CatalogLayoutAreas
                         : Observable.Return<ModuleSet?>(null))
                     .Select(_ => result));
 
+        // 🚨 MeshWeaver#3848 (decision "Record commit on install"): the record states the EXACT
+        // commit the source served (PackageFetch.InstalledFromRef), never the moving ref it was
+        // asked for — the combo verifier fetches the installed content at that commit. A source
+        // that names no commit records the requested ref, as before.
         IObservable<InstallResult> Full() =>
-            Verified(WithModule(source.FetchPackageFiles(pkg, sourceRef)
-                .SelectMany(files => PackageInstaller.Install(
-                    hub, pkg, files, sourceRef, logger,
+            Verified(WithModule(source.FetchPackage(pkg, sourceRef, null)
+                .SelectMany(fetched => PackageInstaller.Install(
+                    hub, pkg, fetched.Files, fetched.InstalledFromRef(sourceRef), logger,
                     authorizingUserId: authorizingUserId))));
 
         // 🚨 #2387 — EVERY WRITING EXIT IS READ BACK. The verdict that decides the severity is the
@@ -1347,13 +1351,15 @@ public static partial class CatalogLayoutAreas
                             pkg.Id, changedContent.Count, restore.Count,
                             delta.RemovedFiles.Count, changedModuleSources, newManifest.ModuleVersion);
 
-                        return (wanted.Count == 0
-                                ? Observable.Return((IReadOnlyList<PackageFile>)[])
-                                : source.FetchPackageFiles(pkg, sourceRef, wanted))
-                            .Do(fetched => EnsureFetchComplete(pkg.Id, wanted, fetched, logger))
-                            .SelectMany(changedFiles => PackageInstaller.InstallNodeRepoDelta(
-                                hub, pkg, newManifest, changedFiles, removedNodePaths, sourceRef,
-                                logger, authorizingUserId));
+                        // 🚨 Fetched even when nothing but removals travel (an empty `wanted`):
+                        // the read is what names the commit the updated record states
+                        // (MeshWeaver#3848); restamped without it, the record would state only the
+                        // moving ref again. An empty path set moves no file blobs.
+                        return source.FetchPackage(pkg, sourceRef, wanted)
+                            .Do(fetched => EnsureFetchComplete(pkg.Id, wanted, fetched.Files, logger))
+                            .SelectMany(fetched => PackageInstaller.InstallNodeRepoDelta(
+                                hub, pkg, newManifest, fetched.Files, removedNodePaths,
+                                fetched.InstalledFromRef(sourceRef), logger, authorizingUserId));
                     });
             });
     }

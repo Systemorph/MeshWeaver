@@ -79,7 +79,9 @@ public sealed class InstanceComboVerifier
             .SelectMany(assembly =>
             {
                 var undiscoverable = assembly.Success
-                    ? assembly.Modules.Where(m => !m.DeclaresRoot).Select(m => m.ModuleId).ToImmutableList()
+                    ? assembly.Modules
+                        .Where(m => m.Status == ModuleAssemblyStatus.Materialized && !m.DeclaresRoot)
+                        .Select(m => m.ModuleId).ToImmutableList()
                     : ImmutableList<string>.Empty;
                 if (!assembly.Success || undiscoverable.Count > 0)
                 {
@@ -153,11 +155,29 @@ public sealed class InstanceComboVerifier
                 + $"the install: recorded {diverged.RecordedModuleVersion}, fetched "
                 + $"{diverged.FetchedModuleVersion}).");
 
-        var modules = gate?.Report is { FatalError: null } report && gate.Error is null
-            ? FoldModulesFromGate(assembly, report, caveats)
-            : FoldModulesWithoutGateEvidence(assembly, undiscoverable);
+        // 🚨 Retired modules (MeshWeaver#3848, decided by the maintainer) are reported on their own
+        // list and folded NOWHERE else: their source folder is gone, so they can be neither
+        // verified nor failed — counting them as NotVerified would hold every verdict of an
+        // instance that ever installed one at NotVerifiable forever.
+        var retired = assembly.RetiredModules
+            .Select(m => new RetiredModule
+            {
+                ModuleId = m.ModuleId,
+                Status = m.Status,
+                RepositoryUrl = m.RepositoryUrl,
+                Reason = m.Error,
+            })
+            .ToImmutableList();
+        var live = assembly with
+        {
+            Modules = [.. assembly.Modules.Where(m => m.Status != ModuleAssemblyStatus.Retired)],
+        };
 
-        var verdict = DecideVerdict(assembly, gate, modules, caveats);
+        var modules = gate?.Report is { FatalError: null } report && gate.Error is null
+            ? FoldModulesFromGate(live, report, caveats)
+            : FoldModulesWithoutGateEvidence(live, undiscoverable);
+
+        var verdict = DecideVerdict(live, gate, modules, caveats);
 
         return new ComboVerification
         {
@@ -173,6 +193,7 @@ public sealed class InstanceComboVerifier
             Verdict = verdict,
             Modules = modules,
             Caveats = caveats.ToImmutable(),
+            RetiredModules = retired,
         };
     }
 
@@ -419,12 +440,15 @@ public sealed record ComboVerificationRun
             foreach (var failure in module.Failures)
                 output.WriteLine($"        {failure.ReplaceLineEndings("\n").Replace("\n", "\n        ")}");
         }
+        foreach (var retired in Verdict.RetiredModules)
+            output.WriteLine($"  --  {retired.ModuleId} [{retired.Status}] {retired.Reason}");
         foreach (var caveat in Verdict.Caveats)
             output.WriteLine($"  caveat: {caveat}");
         output.WriteLine($"verdict: {Verdict.Verdict} — {Verdict.Modules.Count} module(s), "
                          + $"{Verdict.Modules.Count(m => m.Outcome == ModuleVerificationOutcome.Passed)} passed, "
                          + $"{Verdict.FailedModules.Count} failed, "
-                         + $"{Verdict.Modules.Count(m => m.Outcome == ModuleVerificationOutcome.NotVerified)} not verified.");
+                         + $"{Verdict.Modules.Count(m => m.Outcome == ModuleVerificationOutcome.NotVerified)} not verified"
+                         + $", {Verdict.RetiredModules.Count} retired (not verifiable, not failing).");
     }
 
     private static string Shorten(string value) => value.Length > 12 ? value[..12] : value;
