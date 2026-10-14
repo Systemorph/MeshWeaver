@@ -900,6 +900,7 @@ jobs:
           # irrelevant files, so the reconcile branch skips it too instead of "healing" it back
           # into a build every tick.
           relevant=true
+          superseded=false
           # `--detail` is load-bearing: WITHOUT it show-tags returns an array of plain STRINGS,
           # so `[].name` matches nothing and newest_short is ALWAYS empty. Every gate log has read
           # `Newest published set: <none>` for as long as this step has existed. It fails open
@@ -924,15 +925,29 @@ jobs:
                   relevant=false
                 fi
               fi
+              # 🚨 NEVER PUBLISH A COMMIT OLDER THAN THE NEWEST PUBLISHED SET. The same compare
+              # says whether this target is strictly BEHIND that set; the Decide step declines
+              # it, because the version is this RUN's number and every consumer takes the
+              # highest one. Measured 2026-10-14: CD #10796 published 6b9944c (the parent) as
+              # 3.1.10796 right after #10795 had published 04d56c7, and every
+              # MeshWeaver.Plugins main run resolved the older code. `cd-superseded.py` holds
+              # the rule and its self-test; an unreadable compare is `superseded=false`.
+              sverdict=$(python3 .github/scripts/cd-superseded.py --target "$SHA" --newest "$base" --compare "$cmp" || echo "superseded=false")
+              printf '%s\n' "$sverdict"
+              if [ "$(printf '%s\n' "$sverdict" | tail -1)" = "superseded=true" ]; then
+                superseded=true
+              fi
             fi
           fi
-          echo "Newest published set: ${newest_short:-<none>}; image-relevant changes since: $relevant"
-          echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
+          echo "Newest published set: ${newest_short:-<none>}; image-relevant changes since: $relevant; target superseded by it: $superseded"
+          { echo "relevant=$relevant"; echo "superseded=$superseded"; echo "newest_short=${newest_short:-}"; } >> "$GITHUB_OUTPUT"
       - name: "Decide"
         id: decide
         env:
           GH_TOKEN: ${{ github.token }}
           RELEVANT: ${{ steps.relevance.outputs.relevant }}
+          SUPERSEDED: ${{ steps.relevance.outputs.superseded }}
+          NEWEST_SHORT: ${{ steps.relevance.outputs.newest_short }}
           SHORT: ${{ steps.target.outputs.short_sha }}
           REASON: ${{ steps.target.outputs.reason }}
           GREEN: ${{ steps.required.outputs.green }}
@@ -1007,6 +1022,20 @@ jobs:
             # dispatches one if not. Say that, because a reader acting on the old sentence would
             # wait an hour for a heal that was never coming.
             decision false "⏳ An older run of this workflow is still publishing \`$SHORT\`: $INFLIGHT — deferring, so one commit yields ONE image set (MeshWeaver#3376). That run may instead be DISCARDED by the one-pending-slot rule without executing anything; either way the run that ends up holding the lane hands HEAD on when it releases it (\`handoff\`, MeshWeaver#4652), so this deferral does not rest on the queued run surviving."
+            exit 0
+          fi
+
+          # ── NEVER BEHIND THE NEWEST PUBLISHED SET ─────────────────────────────────────────────
+          # Both paths, before every other verdict: a target strictly behind the newest published
+          # set would be published under THIS run's higher number, and every consumer — each
+          # install's self-updater and every satellite lane resolving "the newest sealed platform"
+          # — would roll onto older code. `workflow_run` delivers in BUILD-COMPLETION order, which
+          # is not commit order: on 2026-10-14 CD #10796 published 6b9944c, the parent of the set
+          # #10795 had just published, and MeshWeaver.Plugins main resolved the older code
+          # (NU1109 on every portal-hosts unit) until a later set superseded it. Nothing is lost by
+          # declining: the newer set already contains every change of this commit.
+          if [ "${SUPERSEDED:-false}" = "true" ]; then
+            decision false "⏭️ \`$SHORT\` is OLDER than the newest published set \`${NEWEST_SHORT}\` (an ancestor of it) — not publishing: this run's number is higher, so every consumer would roll back onto older code. The newer set already carries every change in \`$SHORT\`."
             exit 0
           fi
 
