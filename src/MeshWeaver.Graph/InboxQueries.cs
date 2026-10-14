@@ -165,6 +165,8 @@ public static class InboxQueries
     internal static readonly ImmutableArray<string> TerminalActivityStatuses =
         [nameof(ActivityStatus.Succeeded), nameof(ActivityStatus.Warning), nameof(ActivityStatus.Failed), nameof(ActivityStatus.Cancelled)];
 
+
+
     /// <summary>
     /// The legs core itself brings. Packages add their own; these are not a registry of what may exist.
     ///
@@ -187,6 +189,9 @@ public static class InboxQueries
         // "not Read", read is "Read".
         Mail(unread: true),
         Mail(unread: false),
+        // Policy inbox-activities-need-someone: only the runs MARKED for the inbox
+        // (ActivityLog.ShowInInbox — background runs never are). Still going: Running. FAILED: it
+        // needs you, and is dealt with on its own page. A run that finished well is never listed.
         new()
         {
             Source = "Activities",
@@ -194,8 +199,8 @@ public static class InboxQueries
             SourceIcon = ActivitiesIcon,
             Band = InboxBand.Running,
             Order = 10,
-            // Not terminal — every stamped terminal state negated (Running itself is omitted).
-            Query = $"namespace:{ViewerToken}/_Activity nodeType:Activity "
+            // Running itself is the omitted default, so every stamped terminal state is negated.
+            Query = $"namespace:{ViewerToken}/_Activity nodeType:Activity content.showInInbox:true "
                     + string.Join(" ", TerminalActivityStatuses.Select(s => $"-content.status:{s}"))
                     + $" sort:LastModified-desc {RowProjection}",
         },
@@ -204,11 +209,10 @@ public static class InboxQueries
             Source = "Activities",
             SourceLabelKey = "inbox.source.Activities",
             SourceIcon = ActivitiesIcon,
-            Band = InboxBand.Recent,
-            Order = 20,
-            // Terminal — any stamped terminal state.
-            Query = $"namespace:{ViewerToken}/_Activity nodeType:Activity "
-                    + $"content.status:{string.Join("|", TerminalActivityStatuses)}"
+            Band = InboxBand.NeedsYou,
+            Order = 50,
+            Query = $"namespace:{ViewerToken}/_Activity nodeType:Activity content.showInInbox:true "
+                    + $"content.status:{nameof(ActivityStatus.Failed)}"
                     + $" sort:LastModified-desc {RowProjection}",
         },
     ];

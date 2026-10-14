@@ -84,6 +84,11 @@ public class OrleansUnresolvableNodeNoWedgeTest(ITestOutputHelper output) : Orle
         thrown.Which.Should().BeOfType<DeliveryFailureException>(
             "the routing must deliver NotFound back to the GetDataRequest caller as a "
             + "DeliveryFailureException, exactly as it already does for SubscribeRequest");
+        // The Orleans router's own NotFound branch stamps the absence it established (#6626) — the
+        // typed fact a writer maps to MeshNodeErrorCode.NotFound. The Monolith twin is pinned in
+        // UpdateOfAnAbsentNodeIsClassifiedNotFoundTest; this is the RoutingGrain path.
+        ((DeliveryFailureException)thrown.Which).Failure.NodeAbsent.Should().BeTrue(
+            "RoutingGrain resolved only an ancestor of the target path, so it must stamp NodeAbsent");
         Output.WriteLine($"[test] GetDataRequest failed fast: {thrown.Which.GetType().Name}: {thrown.Which.Message}");
 
         // 4. The hub must stay RESPONSIVE — a follow-up read of the EXISTING parent

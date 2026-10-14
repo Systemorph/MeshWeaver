@@ -246,8 +246,11 @@ boot-built one threw `'RemoteNavigationManager' has not been initialized`. So a 
 left to its first resolve, and so is a singleton whose constructor graph reaches a scoped registration
 — read STRUCTURALLY off the registrations (`ScopedDependencyWalk`: every public constructor's
 parameters of a reflection-activated registration, through transients and the module's own
-singletons, into the root's registrations for every type that names no collectible assembly; a root
-singleton ends the walk). Neither is a path the lock order needs: a root singleton that takes a scoped
+singletons, into the root's registrations for every type that names no collectible assembly, and —
+for a type a module DECLARES — into the other module containers that register it, the same
+registrations `ModuleFallbackSource` resolves it from; a root singleton ends the walk). Without that
+last leg a singleton taking another module's scoped type looked like it took nothing, was built at boot
+with no caller, and withdrew its module (`ASingletonOverAnotherModulesScopedTypeIsNotBuiltAtBootTest`). Neither is a path the lock order needs: a root singleton that takes a scoped
 service is a captive dependency, not a way the root reaches a module. A module's PRIVATE registration
 is built only when a built one takes it. A delegate-activated singleton names no dependencies and is
 built. `AModuleWithCircuitBoundServicesLoadsAtBootTest` and
@@ -362,6 +365,20 @@ The same registry closes the two neighbouring gaps of that class, again on both 
 
 `AWithdrawnModuleLeavesNoForwarderBehindTest` (Autofac) and `AWithdrawnModuleOnAPlainMsDiHostTest`
 (plain MS DI, no hook called by the test) pin both, with published twins as negative controls.
+
+**A withdrawn module's security rule leaves the rule set.** A module that registers an
+`INodeTypeAccessRule` (a platform interface) is forwarded to the root as a `ModuleServiceProxy`, and that
+registration stays in the root's `IEnumerable<INodeTypeAccessRule>` after the module is withdrawn.
+`NodeTypeAccessRuleSet` read each rule's `NodeType` while it built the security rules, and the dead proxy
+threw `Module … holds no service scope in this mesh`. Every write's `RlsNodeValidator` takes that set, so
+one withdrawn module made every node write fail, and with it every package install. The set now holds
+only members for which `ModuleServiceProxy.Serves` is true: an ordinary instance, or a proxy whose module
+the registry still holds. A lookup also skips a rule whose module is retired later. A type whose rule left
+falls back to the caller's standard permission check, which is closed by default. Any other consumer that
+builds an index over a platform interface a module can register should apply the same predicate.
+`AWithdrawnModulesAccessRuleLeavesTheSecurityRulesTest` pins this: the rule set builds, and a node write
+succeeds. On the base, both failed with the exception above. Its published twin is the negative control:
+there the rule governs its type.
 
 **Why.** Autofac holds a scope's shared-instance lock for the whole build of a shared instance, and
 that one lock covers every shared instance of the scope; an instance that exists is answered without

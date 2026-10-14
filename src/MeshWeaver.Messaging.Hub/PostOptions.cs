@@ -47,6 +47,29 @@ public record PostOptions(Address Sender)
     /// <returns>A new <see cref="PostOptions"/> declaring that the sender understands progress.</returns>
     public PostOptions AcceptingProgress() => WithProperty(AcceptsProgress, "true");
 
+    /// <summary>
+    /// Well-known property key a PRODUCER stamps on a request it re-asks on a transient
+    /// <c>ShuttingDown</c> answer: it observes the reply and, on the refusal an activation gives
+    /// while it goes down, sends the request again to the address's next activation.
+    ///
+    /// <para>The per-delivery form of <c>[ReaskedOnShutdown]</c>. That attribute is a claim about
+    /// EVERY producer of a type, so it cannot be put on a type with several producers of which only
+    /// some re-ask: <c>GetDataRequest</c> is sent by the node point read, which re-asks, and by the
+    /// content-collection reads and the MCP <c>get</c>, which do not (MeshWeaver#5718). This key is
+    /// the claim of ONE producer about ONE request. It is read in one place, the discard report of
+    /// a hub disposed while the delivery was parked behind its initialization gates
+    /// (<c>MessageService</c>, event 7301): a delivery that carries it is teardown-normal (Debug),
+    /// not an Error, exactly as a marked type is.</para>
+    /// </summary>
+    public const string ReasksOnShutdown = nameof(ReasksOnShutdown);
+
+    /// <summary>
+    /// Returns a copy of these options stamped <see cref="ReasksOnShutdown"/>. Stamp it only from a
+    /// producer that really asks the next activation on a <c>ShuttingDown</c> answer.
+    /// </summary>
+    /// <returns>A new <see cref="PostOptions"/> declaring that this sender re-asks on shutdown.</returns>
+    public PostOptions ReaskingOnShutdown() => WithProperty(ReasksOnShutdown, "true");
+
     internal Address Target { get; init; } = null!;
 
     /// <summary>
@@ -89,7 +112,7 @@ public record PostOptions(Address Sender)
         this with
         {
             Target = requestDelivery.Sender,
-            PropertiesInternal = requestDelivery.Properties.ToImmutableDictionary().SetItem(RequestId, requestDelivery.Id),
+            PropertiesInternal = CorrelatedReplyProperties(requestDelivery),
             // 🚨 Auto-propagate the request's AccessContext to the response.
             // A response IS attributed to the caller who made the request —
             // not to the hub that's now generating it. Without this, every
@@ -111,9 +134,21 @@ public record PostOptions(Address Sender)
     /// <returns>A new <see cref="PostOptions"/> carrying the request id correlation.</returns>
     public PostOptions WithRequestIdFrom(IMessageDelivery requestDelivery) => this with
     {
-        PropertiesInternal = requestDelivery.Properties.ToImmutableDictionary()
-                                                                                                              .SetItem(RequestId, requestDelivery.Id)
+        PropertiesInternal = CorrelatedReplyProperties(requestDelivery)
     };
+
+    /// <summary>
+    /// The property bag of a message correlated to <paramref name="requestDelivery"/>: the
+    /// request's properties, its id under <see cref="RequestId"/>, and WITHOUT
+    /// <see cref="ReasksOnShutdown"/>. That key is one producer's claim about its own request — that
+    /// it asks the next activation again on a <c>ShuttingDown</c> answer. A reply has no such
+    /// producer, so carrying the claim forward would let a teardown discard of the reply report as
+    /// teardown-normal when nobody re-asks for it (MeshWeaver#6717).
+    /// </summary>
+    private static ImmutableDictionary<string, object> CorrelatedReplyProperties(IMessageDelivery requestDelivery)
+        => requestDelivery.Properties.ToImmutableDictionary()
+            .Remove(ReasksOnShutdown)
+            .SetItem(RequestId, requestDelivery.Id);
 
 
     /// <summary>

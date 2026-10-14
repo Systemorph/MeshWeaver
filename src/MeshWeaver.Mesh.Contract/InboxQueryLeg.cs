@@ -118,4 +118,15 @@ public record InboxQueryLeg
     /// bound. Otherwise keep <c>sort:LastModified-desc</c> — the rows are still SHOWN and ordered by the field.</para>
     /// </summary>
     public string? TimeField { get; init; }
+
+    /// <summary>
+    /// The category the leg's rows are filed under in the inbox's side menu — a KIND of item, as a mail
+    /// client's folders: <c>Approvals</c>, <c>Mail</c>, <c>Conversations</c>, <c>Notifications</c>,
+    /// <c>Activities</c>. Several sources may share one (WhatsApp, Teams and a portal chat are all
+    /// conversations). Left empty, the leg's <see cref="Source"/> is its category.
+    /// </summary>
+    public string? Category { get; init; }
+
+    /// <summary>The catalog key of the category's display name; when empty, the source's label is used.</summary>
+    public string? CategoryLabelKey { get; init; }
 }
