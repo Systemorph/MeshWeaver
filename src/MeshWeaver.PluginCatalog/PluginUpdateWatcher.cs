@@ -288,8 +288,8 @@ public sealed class PluginUpdateWatcher : Microsoft.Extensions.Hosting.IHostedSe
     /// build was recorded hours after boot and the watcher never saw it. So this follows the
     /// optional-node pattern: wait for the record to be PRESENT on the path-scoped live query over
     /// the build records (<see cref="BuildCompletion.WatchQuery"/>, a wake-up only), and only then
-    /// open the authoritative point stream. A stream that faults anyway is re-opened the same way,
-    /// after a pause rather than in a tight loop.</para>
+    /// open the authoritative point stream. A stream that faults anyway is reported and ends — the
+    /// safety net still reads the record every interval; a retry loop here would be unbounded work.</para>
     /// </summary>
     private IObservable<BuildCompletion> Builds(string buildPath)
         => BuildRecordPresent(buildPath)
@@ -300,15 +300,14 @@ public sealed class PluginUpdateWatcher : Microsoft.Extensions.Hosting.IHostedSe
             .Select(b => b!)
             .Catch((Exception ex) =>
             {
+                // An UNEXPECTED fault on a record that exists: surfaced, and the live watch ends — no
+                // retry loop. The safety net still reads this record every interval, so nothing it
+                // records is lost; only the reaction's latency falls back to the interval.
                 logger?.LogWarning(ex,
-                    "Plugin update watcher: the build stream for {BuildPath} faulted — watching it again "
-                    + "once the record is present.", buildPath);
-                return Observable.Timer(RearmPause).SelectMany(_ => Builds(buildPath));
+                    "Plugin update watcher: the build stream for {BuildPath} faulted — its live watch ends; "
+                    + "the safety net still reconciles it every interval.", buildPath);
+                return Observable.Empty<BuildCompletion>();
             });
-
-    /// <summary>A pause before re-opening a build stream that faulted, so a node that exists but
-    /// keeps faulting is retried at a bounded rate rather than in a tight loop.</summary>
-    private static readonly TimeSpan RearmPause = TimeSpan.FromSeconds(2);
 
     /// <summary>Emits once the build record at <paramref name="buildPath"/> is present — read on
     /// the live, path-scoped query over every build record, as System (a hosted service has no
