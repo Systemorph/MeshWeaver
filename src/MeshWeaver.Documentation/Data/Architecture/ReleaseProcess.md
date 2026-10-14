@@ -353,7 +353,7 @@ The lane **promotes**; it compiles nothing. In order:
 2. **Resolves the build** for the commit from its `<major>.<minor>.<run>` tag (or a retired `3.0.0-ci.<n>` one) on the manifest
    that carries its identity (`<short-sha>`, or the build's `staging-<short-sha>-<run id>` when a
    rebuild moved the bare tag; the retired `<core>-p<plugins>` pair tag is no longer required), and
-   refuses a commit `main-cd` never promoted — *"wait for CD, confirm `Plugins: bake + seal`, push the tag again"*.
+   refuses a commit `main-cd` never promoted — *"wait for CD, confirm `Bake platform content in the shipped image + publish`, push the tag again"*. (Core CD has had no `Plugins: bake + seal` job since #6143; the `plugins` publication is sealed by MeshWeaver.Plugins' own lane, and step 3 asserts it.)
 3. **Asserts the set is complete** (`check-image-set.sh`) **and sealed** for both the platform
    content and the Plugins modules (`check-release-availability.sh`).
 4. **Records the release marker** `_releases/3.1.0` on every artifact store, holding the same
@@ -382,7 +382,7 @@ Everything the lane needs is asserted RED by a `preflight` job — no `continue-
    > MAJOR-bump exception. The recommended setup, end to end:
    > `Hosting/BuildAndReleaseProcess` (MeshWeaver.Plugins; `get Hosting/BuildAndReleaseProcess` over the mesh MCP).
 2. **Pick the build to release.** A commit whose CD run has `Promote`, `Verify every image
-   shipped` **and** `Plugins: bake + seal` green — read the seal JOB, never the run's conclusion
+   shipped` **and** `Bake platform content in the shipped image + publish` green — read the JOBS, never the run's conclusion (the `plugins` publication is MeshWeaver.Plugins' to seal since #6143; `release.yml` asserts it)
    ([ContinuousDeliveryContract](/Doc/Architecture/ContinuousDeliveryContract)). Commit its notes
    page, `Doc/ReleaseNotes/3_1_0`, first: the lane will not release without it.
 3. **Scan it.** Run the two OWASP ZAP scans — public active, authenticated passive — against the

@@ -341,7 +341,37 @@ Specifies sort order. Default is ascending; append `-desc` for descending:
 sort:name               # Name ascending
 sort:name-desc          # Name descending
 sort:lastModified-desc  # Most recently modified first
+sort:content.inception  # A content field, earliest first
+sort:content.terms.renewal-desc   # A nested content field, latest first
 ```
+
+#### Sorting on a content field
+
+`sort:content.<field>` (and `content.a.b` for a nested one) orders by the field's **typed** value,
+on every backend, and before `limit:` / paging is applied — the backend's own `ORDER BY` decides
+which rows survive the cap, and the merge across partitions (`namespace:(A/X OR B/X)`) orders the
+union by the same rule:
+
+| Value | Compares as |
+|---|---|
+| Number | Numerically — `9 < 10 < 100`, never as text |
+| Date, date-time | Its ISO-8601 text (`2027-07-01`, `2027-07-01T09:30:00.0000000Z`) — chronological, and the same key whether the content is a compiled type or as-written JSON |
+| Text, boolean, anything else | Text, case-insensitively |
+| Null or absent | **Last, in both directions** |
+
+Numbers rank before text when a field holds both. Nulls go last for `sort:x` *and* `sort:x-desc`
+so that a row without the field is never the first answer either way (Postgres's own default would
+put them first in a descending sort; the generator says `NULLS LAST` explicitly). The same rules
+apply to every `sort:` selector, node fields included; an enum node field (`state`, `syncBehavior`)
+orders by its number, as its column does. Date-times are reduced to one fixed-width form before
+they compare — the serializer trims fractional seconds, so `…08:30:00Z` and `…08:30:00.1Z` sit in
+one field, and raw text would put the later one first. Postgres does the same rewrite with string
+functions only, for `Z`/`+00:00` and zoneless values, so a value that merely looks like a date
+cannot fail the query. The one residual: a non-UTC offset (`+02:00`) is compared as the instant in
+memory but as text on Postgres, so in a field that mixes offsets the pre-`limit:` window can
+differ. A sort function (`length`, `lower`, `upper`) runs on the value as written. The in-memory
+contract is `QuerySortKey`; the Postgres one is `PostgreSqlSqlGenerator.OrderByTerms`
+(MeshWeaver.Plugins).
 
 #### The default when you write no `sort:`
 

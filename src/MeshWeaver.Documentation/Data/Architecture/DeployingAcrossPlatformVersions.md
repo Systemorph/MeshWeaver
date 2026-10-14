@@ -45,11 +45,11 @@ newer than the one running. Only a DECLARED break (an epoch or major bump) inter
 and pointer, `publish-bake` (line 2310) bakes the platform's own content and writes
 `_releases/<version>` naming the set's key, and `notify-platform-update` (line 2890) posts the build
 fact to the control instance. `delivery-verdict` (line 3716) judges THOSE jobs and nothing else —
-`PlatformDeliveryNeverWaitsOnPluginsGuard` holds that, transitively. The Plugins re-seal for the new
-build (`plugins-modules` / `plugins-bake`, line 3240) is an independent follow-up judged by
-`report-plugins-seal` (line 4247); its failure is recorded on the `cd-plugins-seal` issue and the
-reconcile's seal probe (`gate`, step `seal`, line 1386) re-attempts it — it never fails, holds or
-re-publishes the platform. (Line numbers are `main-cd.yml` as of the ladder change,
+`PlatformDeliveryNeverWaitsOnPluginsGuard` holds that, transitively. Core CD bakes and seals no
+module: the Plugins re-seal legs (`plugins-modules` / `plugins-bake` / `report-plugins-seal`) and the
+reconcile's seal probe were removed by #6143, and the `plugins` publication is written only by
+MeshWeaver.Plugins' own lane (`node-repo-publish-bake.yml`); core CD's `published-modules` reads it as
+compatibility evidence and never fails, holds or re-publishes the platform over it. (Line numbers are `main-cd.yml` as of the ladder change,
 [Continuous Delivery Contract](../ContinuousDeliveryContract) → "The ladder".)
 
 **2. Which platform image a portal rolls to.** The self-updater

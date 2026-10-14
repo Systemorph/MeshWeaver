@@ -331,7 +331,7 @@ internal class ApiTokenService(
                     return indexObs.SelectMany(_ =>
                         ConfirmReadable(indexNode.Path)
                             .SelectMany(__ => ConfirmReadable(created.Path))
-                            .Select(___ => new TokenCreationResult(rawToken, created)));
+                            .Select(___ => new TokenCreationResult(rawToken, created, apiToken.CreatedAt)));
                 });
         }
     }
@@ -1228,8 +1228,10 @@ internal class ApiTokenService(
 /// <summary>
 /// Returned by the reactive <see cref="ApiTokenService.CreateToken"/> method
 /// once both the user-scoped token node and the index pointer have been created.
+/// <paramref name="CreatedAt"/> is the creation stamp of the minted record, carried from the value
+/// the mint wrote — never re-read off <see cref="MeshNode.Content"/>, which can arrive untyped (#6636).
 /// </summary>
-public record TokenCreationResult(string RawToken, MeshNode Node);
+public record TokenCreationResult(string RawToken, MeshNode Node, DateTimeOffset CreatedAt);
 
 /// <summary>
 /// Tri-state outcome of an API-token validation (issue #637). The whole point of the

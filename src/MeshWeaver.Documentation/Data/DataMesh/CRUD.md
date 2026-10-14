@@ -225,6 +225,12 @@ var request = DataChangeRequest.Update([updatedTodo], changedBy: "user-123");
 workspace.RequestChange(request, delivery);
 ```
 
+**An instance with no key value is skipped, not fatal.** When a batch carries an instance whose key
+resolves to `null`, that instance is reported in the activity log under
+`activity.dataUpdate.nullKeyInstancesSkipped` (with its count and collection) and skipped, while every
+keyed instance of the same batch still applies and the data stream stays live for later writes. A
+type with no key MAPPING at all is a configuration error and still fails the change.
+
 ## Update Options
 
 Control whether a change merges or replaces the entire collection:
@@ -294,6 +300,42 @@ workspace.Delete([todo1, todo2], delivery);
 ```
 
 Deleting a **node** (as opposed to an entity in a collection) is a lifecycle operation: `hub.Observe<DeleteNodeResponse>(new DeleteNodeRequest(path)).Subscribe(...)` — see [Node Operations](/Doc/DataMesh/NodeOperations).
+
+## Delete only if unchanged — `ExpectedVersion`
+
+A caller that reads a node, decides from what it read that the node may go, and then deletes it has
+a race: another writer can change the node between that read and the delete, and the delete removes
+the change. You cannot close that race from the caller's side. Checking again just before deleting
+leaves the same window. So name the version you read, and let the owner check it:
+
+```csharp
+var request = new DeleteNodeRequest(path) { ExpectedVersion = node.Version };
+hub.Observe(request, o => o.WithTarget(hub.NodeOperationTarget()))
+    .Subscribe(d =>
+    {
+        if (d.Message.RejectionReason == NodeDeletionRejectionReason.Conflict)
+        {
+            // It changed after we read it. Nothing was deleted: re-read and decide again.
+        }
+    });
+```
+
+- **Where it is checked.** The owner compares `ExpectedVersion` with the node's durable `Version`
+  inside the delete, after it has opened the subtree-deletion scope. From that point every in-process
+  write at or under the path is refused until the delete completes. A version that matches at the
+  check therefore still matches at the commit. A write that loses the race is refused (`NotFound`,
+  "Node being deleted") and does not vanish silently.
+- **A mismatch** answers `Success = false` with `RejectionReason = Conflict`, the same
+  optimistic-concurrency fact as `MeshNodeErrorCode.Conflict` on an update. Nothing is deleted.
+- **An absent node** still answers the idempotent success `AlreadyAbsent`
+  ([Deleting What Is Already Gone](/Doc/Architecture/IdempotentDelete)). The postcondition holds,
+  whatever version the node last had.
+- **Root only.** For a recursive delete, only the node at `Path` is checked. The cascade's
+  per-descendant requests never carry the value.
+- **The durable version.** An update's ack is issued after its durable flush, so the version you read
+  from an acked write is the one stored. A version you read from a live stream before its flush can
+  answer one spurious `Conflict`. Re-reading resolves it.
+- **Omitted** (`null`, the default), the delete removes whatever version is there, exactly as before.
 
 ---
 

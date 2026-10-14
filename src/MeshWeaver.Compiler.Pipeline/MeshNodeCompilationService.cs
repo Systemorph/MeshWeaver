@@ -684,9 +684,18 @@ internal class MeshNodeCompilationService(
     {
         var bound = _cacheOptions.SourceSnapshotTimeout;
 
-        // A caller-supplied override is already an authoritative point-in-time snapshot.
+        // 🚨 #6631 — every answer, from every leg and from a caller's override, is held against the
+        // type's OWN source-version record: a set carrying an earlier version of a path the record
+        // already names is a view behind the store, and is reported UNESTABLISHED (refused as "not
+        // evaluated", never a verdict). In the race this is what lets the authoritative direct read
+        // win over a cached synced query that missed an update — the cached leg replays
+        // synchronously and used to win instantly, stale or not.
+        var record = ntDef?.CurrentSourceVersions;
+
+        // A caller-supplied override is a point-in-time snapshot — held to the same record.
         if (sourcesOverride is not null)
-            return Observable.Return(SourceSnapshot.Established(sourcesOverride));
+            return Observable.Return(SourceSetFreshness.RefuseIfOlderThanRecord(
+                SourceSnapshot.Established(sourcesOverride), record));
 
         // 🚨 DIRECT READ FIRST — measured, not assumed.
         //
@@ -735,7 +744,8 @@ internal class MeshNodeCompilationService(
         // set (compiling against no sources is worse than the stall this exists to dodge). That
         // filter is also the likeliest reason #682's probe "never fired" — not the delay alone.
         return NodeCompileShaping.RaceSourceSnapshot(
-                DirectSourceProbe(ntDef, selfPath, TimeSpan.Zero),
+                DirectSourceProbe(ntDef, selfPath, TimeSpan.Zero)
+                    .Select(s => SourceSetFreshness.RefuseIfOlderThanRecord(s, record)),
                 // 🚨 The cached leg's FAULT is unestablishment, not emptiness. A synced query
                 // that errors used to propagate straight out of the snapshot as a raw exception
                 // → terminal CompilationStatus.Error → a gating "regression" for a mesh read
@@ -743,6 +753,7 @@ internal class MeshNodeCompilationService(
                 // failed probe leg, and the race decides.
                 Observable.Defer(() => ResolveSources(ntDef, selfPath, null).Take(1))
                     .Select(SourceSnapshot.Established)
+                    .Select(s => SourceSetFreshness.RefuseIfOlderThanRecord(s, record))
                     .Catch((Exception ex) => Observable.Return(SourceSnapshot.Unavailable(
                         $"the synced source query '{NodeSources.CacheId(selfPath)}' faulted "
                         + $"({ex.GetType().Name}: {ex.Message})"))))
@@ -2150,18 +2161,22 @@ internal class MeshNodeCompilationService(
             references,
             parsePath: cacheService.IsDiskCacheEnabled && _cacheOptions.EnableSourceDebugging ? sourcePath : "",
             ct);
-        // Option C (Doc/Architecture/InMeshImpersonation): the AUTHORED source's references to
-        // impersonation APIs, judged before generators run (their output is the platform's, not the
-        // author's) and before anything is emitted. LogOnly logs; Enforce refuses an untrusted
-        // NodeType here, which parks it at compilationStatus Error naming the reference.
+        var compilation = GeneratorPipeline.RunSourceGeneratorsWithNodeOutput(
+            authored, nugetAssemblyPaths, logger, ct, out var nodeGeneratedTrees);
+        // Option C (Doc/Architecture/InMeshImpersonation): references to impersonation APIs in the
+        // AUTHORED source AND in what a NODE-SUPPLIED generator (one the node #r'd) emitted — judged
+        // after generation, because such a generator's output is the author's code (#6619 review);
+        // only the platform's built-in generators' output is left out. Before anything is emitted.
+        // LogOnly logs; Enforce refuses an untrusted NodeType here, which parks it at
+        // compilationStatus Error naming the reference.
         // GetRequiredService, not GetService: every hub registers an AccessService
         // (MessageHubConfiguration.ConfigureServices), so a provider without one is a misbuilt host —
         // and a security check that an absent dependency switches off in silence is no check.
         if (hub.ServiceProvider.GetRequiredService<AccessService>().ImpersonationGuard is
             { Mode: not InMeshImpersonationMode.Off } guard)
             guard.CheckCompiled(InMeshImpersonationGuard.NodeTypeLoadContextPrefix + nodeName, node.Path,
-                InMeshImpersonationReferences.Find(authored, ct).Select(r => r.ToString()).ToList());
-        var compilation = GeneratorPipeline.RunSourceGenerators(authored, nugetAssemblyPaths, logger, ct);
+                InMeshImpersonationReferences.Find(compilation, authored.SyntaxTrees.Concat(nodeGeneratedTrees), ct)
+                    .Select(r => r.ToString()).ToList());
         OnEmitStarting?.Invoke(compilation);
 
         string? actualPath;

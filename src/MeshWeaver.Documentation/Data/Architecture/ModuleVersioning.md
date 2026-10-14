@@ -560,6 +560,14 @@ none of the merge's modules would ever publish. Such a run uploads a marker arti
 passes `--withheld-marker <name>`; a marked run is walked past like a failed one, and the history
 union from the older baseline carries its changes into the run that does publish.
 
+🚨 **The SEAL is per package too.** A main run that withholds some packages still seals the rest:
+it passes its `withheld` list to `node-repo-publish-bake.yml` as `withhold-packages`, every other
+package is sealed at its commit, and each withheld package keeps its previously sealed build
+(carried, verified, named in the publication's `sealed-packages.json`). A package is therefore never
+sealed with an unsettled lock or an unstamped floor, and the seal no longer waits for a commit at
+which nothing waits. See [Module Build Architecture](/Doc/Architecture/ModuleBuildArchitecture) →
+"The seal never goes backwards" for the listing and the dependency-floor refusal.
+
 🚨 **The merge commit on `main` carries the locks of the commit before it until the settlement PR
 lands.** Everything in CI reads the materialized lock, so no bundle, seal or key sees the stale one;
 what reads `main`'s committed tree directly — a GitSynced portal importing `main` unsealed — sees the

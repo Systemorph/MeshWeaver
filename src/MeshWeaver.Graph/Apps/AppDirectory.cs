@@ -47,6 +47,11 @@ public sealed record PersonTile(string Name, string? Icon, string? Locale);
 public sealed record AppRoot(
     string Path, string Name, string Icon, string? Description, string? Category, string? EntryPoint)
 {
+    /// <summary>The content's <c>hostedIn</c> — the host app the package is a section of
+    /// (<c>Doc/Architecture/InAppExtensions</c>), when declared. An init property rather than a
+    /// constructor parameter, so the record's constructor keeps its binary shape.</summary>
+    public string? HostedIn { get; init; }
+
     /// <summary>Where the tile opens: the entry point, else the root.</summary>
     public string OpenPath => string.IsNullOrWhiteSpace(EntryPoint) ? Path : EntryPoint!.Trim('/');
 
@@ -67,6 +72,37 @@ public sealed record AppRoot(
 }
 
 /// <summary>
+/// What the instance says about which packages are installed — the inputs of
+/// <see cref="AppDirectory.IsTile"/>.
+/// </summary>
+/// <param name="Records">The partitions with an install record (<c>Plugins/{id}</c>, keyed by its target partition).</param>
+/// <param name="Synced">The partitions with a GitHub sync source (<c>{id}/_GitSync</c>).</param>
+/// <param name="Uninstalled">The packages and partitions an uninstall request names whose phase 1 completed.</param>
+public sealed record InstallEvidence(
+    ImmutableHashSet<string> Records, ImmutableHashSet<string> Synced, ImmutableHashSet<string> Uninstalled)
+{
+    /// <summary>Nothing installed.</summary>
+    public static readonly InstallEvidence None = new([], [], []);
+
+    /// <summary>
+    /// Whether the package <paramref name="id"/> is installed here: its install record exists — or,
+    /// for a package provisioned by a git import (which writes no record), its sync source exists and
+    /// no uninstall request that got past phase 1 names it. A package uninstalled with its data retained has lost its
+    /// record (and, if git-provisioned, is named by its uninstall request), so it is not. Pure.
+    /// </summary>
+    public bool IsInstalled(string id) =>
+        Records.Contains(id) || (Synced.Contains(id) && !Uninstalled.Contains(id));
+
+    /// <inheritdoc />
+    public bool Equals(InstallEvidence? other) =>
+        other is not null && Records.SetEquals(other.Records) && Synced.SetEquals(other.Synced)
+        && Uninstalled.SetEquals(other.Uninstalled);
+
+    /// <inheritdoc />
+    public override int GetHashCode() => HashCode.Combine(Records.Count, Synced.Count, Uninstalled.Count);
+}
+
+/// <summary>
 /// The <b>app directory</b>: the apps a viewer can see, computed from the instance's app roots and
 /// the access check — no per-user records. Design of record: MeshWeaver.Plugins
 /// <c>Store/AppsOnTheInstance</c> §3–§4.
@@ -74,6 +110,11 @@ public sealed record AppRoot(
 /// <item><b>The app roots</b> — ONE process-wide query (<see cref="RootsQuery"/>), shared by every
 /// viewer through <see cref="IMeshNodeStreamCache"/> and read as System, so every root is seen
 /// whatever the viewer may read.</item>
+/// <item><b>Installed, and not a section of another app</b> — the root's package is installed on
+/// THIS instance (<see cref="InstallEvidence.IsInstalled"/>: its <c>Plugins/{id}</c> record, or a
+/// git-provisioned sync source no uninstall names) and declares no <c>hostedIn</c> other than the
+/// person app (<see cref="IsTile"/>). A package uninstalled with its data retained keeps its root and
+/// its <c>app: true</c>, so without this step it kept its tile.</item>
 /// <item><b>Visible</b> — per root, Read on its <see cref="AppRoot.ProbePath"/> for the viewer.
 /// The check is the live security fold, so a grant or a revoke re-emits.</item>
 /// <item><b>Built-ins</b> — Settings and Inbox for everyone, Administration for a global admin.</item>
@@ -98,6 +139,60 @@ public sealed class AppDirectory
     /// </summary>
     public static readonly string RootsQuery = SecurityQueries.Enumeration(
         $"namespace: nodeType:(Space OR Store/Plugin) is:main content.app:true {ParsedQuery.CrossPartitionQualifier}");
+
+    /// <summary>The stable id of the process-wide install-records query.</summary>
+    public const string InstallRecordsQueryId = "$app-install-records";
+
+    /// <summary>
+    /// Every INSTALL RECORD on the instance — one <c>Package</c> node per installed package at
+    /// <c>Plugins/{id}</c>, written by the platform's installer (registry, mount and provisioning
+    /// installs alike) and removed by the package uninstall's phase 1. An enumeration: a truncated
+    /// page would silently drop an installed app from every launcher.
+    /// </summary>
+    public static readonly string InstallRecordsQuery = SecurityQueries.Enumeration(
+        $"path:{InstallRecordsPartition} scope:children nodeType:Package");
+
+    /// <summary>The partition that holds the install records.</summary>
+    public const string InstallRecordsPartition = "Plugins";
+
+    /// <summary>The stable id of the process-wide sync-sources query.</summary>
+    public const string SyncSourcesQueryId = "$app-sync-sources";
+
+    /// <summary>
+    /// Every GitHub sync source (<c>{partition}/_GitSync…</c>) — the evidence that a package
+    /// provisioned by a git import is installed, for the provisioning path that writes no install
+    /// record (a root created, its sync wired and imported). Mesh-wide by nature, so declared.
+    /// </summary>
+    public static readonly string SyncSourcesQuery = SecurityQueries.Enumeration(
+        $"nodeType:GitHubSyncConfig {ParsedQuery.CrossPartitionQualifier}");
+
+    /// <summary>The stable id of the process-wide uninstall-requests query.</summary>
+    public const string UninstallRequestsQueryId = "$app-uninstall-requests";
+
+    /// <summary>
+    /// Every package-uninstall request (<see cref="PackageUninstallRequest.Namespace"/>, content
+    /// <c>package</c> + <c>status</c>). Phase 1 removes the install record but keeps the data — the
+    /// sync source included — so a request that got PAST phase 1 (<see cref="UninstalledStatuses"/>)
+    /// naming a package with no record says it was uninstalled here.
+    /// </summary>
+    public static readonly string UninstallRequestsQuery = SecurityQueries.Enumeration(
+        $"namespace:{PackageUninstallRequest.Namespace} nodeType:{PackageUninstallRequest.NodeType}");
+
+    /// <summary>
+    /// The request statuses that mean phase 1 completed — the package is uninstalled here, its data
+    /// retained or being dropped. The same set the executor's own re-install block reads
+    /// (<c>PackageUninstallExecutor.UninstalledHere</c>): a request still <c>Requested</c> or
+    /// <c>Uninstalling</c> has not removed anything yet, and a <c>Failed</c> one — phase 1 refuses a
+    /// package with no install record, a shared partition, user data — removed nothing at all.
+    /// </summary>
+    public static readonly ImmutableHashSet<string> UninstalledStatuses = ImmutableHashSet.Create(
+        StringComparer.Ordinal,
+        PackageUninstallStatus.AwaitingConfirmation, PackageUninstallStatus.TearingDown, PackageUninstallStatus.Done);
+
+    /// <summary>The <c>hostedIn</c> value naming the person app (<c>/{user}/Settings</c>). A package
+    /// hosted THERE contributes a settings tab and may still be an app of its own; any other host
+    /// makes the package a section of that app, never a tile.</summary>
+    public const string PersonAppHost = "{user}/Settings";
 
     /// <summary>The Settings built-in's id (the person app at <c>/{viewer}/Settings</c>).</summary>
     public const string SettingsId = "Settings";
@@ -137,13 +232,114 @@ public sealed class AppDirectory
     }
 
     /// <summary>
+    /// What the instance says is installed — live, shared process-wide and read as System: the
+    /// install records, the sync sources and the uninstall requests (<see cref="InstallEvidence"/>).
+    /// </summary>
+    public IObservable<InstallEvidence> Installed()
+    {
+        // Resolved ONCE, on the caller's thread — never inside a long-lived selector (#2679).
+        var cache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+        var options = hub.JsonSerializerOptions;
+        var records = cache.GetQuery(InstallRecordsQueryId, options, InstallRecordsQuery)
+            .Select(nodes => RecordIds(nodes, options));
+        var synced = cache.GetQuery(SyncSourcesQueryId, options, SyncSourcesQuery)
+            .Select(nodes => PartitionsOf(nodes));
+        // CQRS: the listing names WHICH requests exist; each one's status is read from its own node
+        // stream, because a listing's content can trail the write that moved the request on (the
+        // same split PackageUninstallExecutor.UninstalledHere makes). A request seen in the listing
+        // exists, so its stream answers; a fault reads as "no evidence from that request".
+        var uninstalled = cache.GetQuery(UninstallRequestsQueryId, options, UninstallRequestsQuery)
+            .Select(nodes => nodes.Select(n => n.Path).Where(p => !string.IsNullOrEmpty(p))
+                .Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(p => p, StringComparer.Ordinal).ToImmutableList())
+            .DistinctUntilChanged(PathListComparer.Instance)
+            .Select(paths => paths.Count == 0
+                ? Observable.Return(ImmutableHashSet<string>.Empty.WithComparer(StringComparer.OrdinalIgnoreCase))
+                : Observable.CombineLatest(paths.Select(path => cache.GetStream(path, options)
+                        .Select(node => (MeshNode?)node)
+                        .Catch<MeshNode?, Exception>(exception =>
+                        {
+                            logger?.LogWarning(exception,
+                                "[AppDirectory] uninstall request {Path} unreadable; it counts as no uninstall evidence", path);
+                            return Observable.Return<MeshNode?>(null);
+                        })))
+                    .Select(requests => UninstalledPackages(requests.OfType<MeshNode>(), options)))
+            .Switch();
+        return records.CombineLatest(synced, uninstalled, (r, s, u) => new InstallEvidence(r, s, u))
+            .DistinctUntilChanged();
+    }
+
+    /// <summary>
+    /// The app roots that are TILES on this instance — live: a root that is installed here and is
+    /// not a section of another app (<see cref="IsTile"/>). An uninstalled package whose data was
+    /// retained keeps its root, and with it <c>app: true</c>; only the install evidence tells it
+    /// apart, which is why the directory reads it.
+    /// </summary>
+    public IObservable<ImmutableList<AppRoot>> InstalledRoots() =>
+        Roots()
+            .CombineLatest(Installed(), (roots, installed) => roots.Where(r => IsTile(r, installed)).ToImmutableList())
+            .DistinctUntilChanged(RootListComparer.Instance);
+
+    /// <summary>
+    /// Whether an app root is a launcher tile: it is INSTALLED here (<see cref="InstallEvidence.IsInstalled"/>)
+    /// and it is not hosted in another app — a package declaring <c>hostedIn</c> is a section of its
+    /// host (a tab of the Examples app, a game of the Games app) and gets no tile, except a package
+    /// hosted in the person app (<see cref="PersonAppHost"/>), which only contributes a settings tab
+    /// and may still be an app. Pure.
+    /// </summary>
+    public static bool IsTile(AppRoot root, InstallEvidence installed) =>
+        !IsSectionOfAnotherApp(root) && installed.IsInstalled(root.Path);
+
+    /// <summary>Whether the root declares a host other than the person app. Pure.</summary>
+    public static bool IsSectionOfAnotherApp(AppRoot root) =>
+        root.HostedIn is { Length: > 0 } host
+        && !string.Equals(host.Trim(), PersonAppHost, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The partitions the install records say are installed — keyed like the app roots, by
+    /// PARTITION: a record's <c>targetPartition</c> when it declares one, else its id (the package
+    /// id, which is the partition by default — <c>PackageInstaller.TargetPartitionOf</c>). Content is
+    /// read in whatever shape it arrives. Pure.
+    /// </summary>
+    public static ImmutableHashSet<string> RecordIds(IEnumerable<MeshNode> nodes, JsonSerializerOptions? options = null) =>
+        nodes
+            .Where(n => string.Equals(n.Namespace, InstallRecordsPartition, StringComparison.OrdinalIgnoreCase)
+                        && !string.IsNullOrWhiteSpace(n.Id))
+            .Select(n => options is not null && ElementOf(n, options) is { } c
+                         && Property(c, "targetPartition") is { ValueKind: JsonValueKind.String } t
+                         && t.GetString() is { } target && !string.IsNullOrWhiteSpace(target)
+                ? target.Trim().Trim('/')
+                : n.Id)
+            .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The partitions <paramref name="nodes"/> live in — their first path segment. Pure.</summary>
+    public static ImmutableHashSet<string> PartitionsOf(IEnumerable<MeshNode> nodes) =>
+        nodes
+            .Select(n => (n.Path ?? "").Trim('/').Split('/', 2)[0])
+            .Where(p => p.Length > 0)
+            .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The packages the uninstall requests name whose phase 1 completed (content
+    /// <c>package</c> and <c>status</c> ∈ <see cref="UninstalledStatuses"/>, read in whatever shape
+    /// the content arrives). Pure.</summary>
+    public static ImmutableHashSet<string> UninstalledPackages(IEnumerable<MeshNode> nodes, JsonSerializerOptions options) =>
+        nodes
+            .SelectMany(n => ElementOf(n, options) is { } c
+                             && Property(c, "status") is { ValueKind: JsonValueKind.String } status
+                             && UninstalledStatuses.Contains(status.GetString() ?? "")
+                ? UninstalledNames(c)
+                : [])
+            .Select(p => p.Trim())
+            .Where(p => p.Length > 0)
+            .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
     /// The viewer's visible apps — live: a new root, a grant, a revoke or an admin change
     /// re-emits. Built-ins first, then the app roots by name. Not cached here; the launcher reads
     /// it through <see cref="AppDirectoryCache"/>.
     /// </summary>
     public IObservable<ImmutableList<AppDirectoryEntry>> Compute(string viewer)
     {
-        var visible = Roots()
+        var visible = InstalledRoots()
             .Select(roots => VisibleRoots(roots, viewer))
             .Switch();
         // 🚨 A FAULT is not a verdict: it propagates, so AppDirectoryCache evicts this computation
@@ -324,13 +520,33 @@ public sealed class AppDirectory
         var entryPoint = Property(content, "entryPoint") is { ValueKind: JsonValueKind.String } e
             ? e.GetString()
             : null;
+        var hostedIn = Property(content, "hostedIn") is { ValueKind: JsonValueKind.String } h
+            ? h.GetString()
+            : null;
         return new AppRoot(
             node.Path,
             string.IsNullOrWhiteSpace(node.Name) ? node.Path : node.Name!,
             string.IsNullOrWhiteSpace(node.Icon) ? UserActivityLayoutAreas.GenericAppIcon : node.Icon!,
             node.Description,
             node.Category,
-            string.IsNullOrWhiteSpace(entryPoint) ? null : entryPoint);
+            string.IsNullOrWhiteSpace(entryPoint) ? null : entryPoint)
+        {
+            HostedIn = string.IsNullOrWhiteSpace(hostedIn) ? null : hostedIn.Trim(),
+        };
+    }
+
+    /// <summary>What one completed request says is gone: the package id and every partition it
+    /// recorded (<c>partitions[].partition</c>) — roots and sync sources are keyed by partition.</summary>
+    private static IEnumerable<string> UninstalledNames(JsonElement content)
+    {
+        if (Property(content, "package") is { ValueKind: JsonValueKind.String } p && p.GetString() is { } package)
+            yield return package;
+        if (Property(content, "partitions") is { ValueKind: JsonValueKind.Array } partitions)
+            foreach (var entry in partitions.EnumerateArray())
+                if (entry.ValueKind == JsonValueKind.Object
+                    && Property(entry, "partition") is { ValueKind: JsonValueKind.String } part
+                    && part.GetString() is { } name)
+                    yield return name;
     }
 
     /// <summary>The content as a JSON object, whatever shape it arrived in. Typed content is
@@ -362,6 +578,14 @@ public sealed class AppDirectory
         public bool Equals(ImmutableList<AppRoot>? x, ImmutableList<AppRoot>? y) =>
             ReferenceEquals(x, y) || (x is not null && y is not null && x.SequenceEqual(y));
         public int GetHashCode(ImmutableList<AppRoot> obj) => obj.Count;
+    }
+
+    private sealed class PathListComparer : IEqualityComparer<ImmutableList<string>>
+    {
+        public static readonly PathListComparer Instance = new();
+        public bool Equals(ImmutableList<string>? x, ImmutableList<string>? y) =>
+            ReferenceEquals(x, y) || (x is not null && y is not null && x.SequenceEqual(y, StringComparer.Ordinal));
+        public int GetHashCode(ImmutableList<string> obj) => obj.Count;
     }
 
     private sealed class EntryListComparer : IEqualityComparer<ImmutableList<AppDirectoryEntry>>

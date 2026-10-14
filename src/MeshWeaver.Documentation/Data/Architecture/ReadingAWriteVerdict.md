@@ -28,17 +28,18 @@ public MeshNodeStreamException(MeshNodeError error)
 So a log line has the shape `MeshNode {Code} at '{Path}': {Message}`, and **`Code` alone separates
 the two investigations.**
 
-## The four shapes, and what each one means
+## The shapes, and what each one means
 
 | `Code` | Message shape | What actually happened | Where to look |
 |---|---|---|---|
 | `OwnerUnreachable` | `The owner of '…' returned no verdict for this update within Ns. The patch was posted and may still apply… Request trail: …` | The owner produced **no terminal at all**. The writer's late-response window expired. | The **owner's** activation: is it alive, mid-recycle, pinned dead? |
 | `Unknown` | `{ExceptionTypeName}: {message}` — e.g. `TimeoutException: The operation has timed out.` | The owner **answered**, with a NACK carrying its own internal exception. | The owner's **ack chain**: which of its two internal bounds expired. |
+| `NotFound` | `Node deleted` / `Node being deleted` from the owner, or `No node found at '…'. Closest ancestor is '…'` / `No node found at '…' — the node was deleted…` from the mesh | There is **no node** at the path: the owner refused a patch that met a deleted node, or the patch never reached an owner because the router resolved only an ancestor (or the address carries a delete tombstone). The router's answer is a `DeliveryFailure` stamped `NodeAbsent`, which the writer maps to `NotFound` — it never parses the sentence (#6626). An update racing a delete ends here. | Nowhere — the node is gone, and the verdict is terminal. Do **not** re-read the exact path: a point read of an absent node is answered by another routing NotFound and opens the storm-breaker on that path, which fast-fails a following write too. If the node is expected to come back, establish its existence with a `scope:children` listing of its parent first, then open its stream ([CQRS and content access](/Doc/Architecture/CqrsAndContentAccess)). |
 | `AccessDenied` / `Deserialization` / `Validation` | `Access denied: …` / `Patch deserialization failed: …` / `Validation failed: …` | The owner answered with a classified application-level refusal. | The patch itself. |
 | `OwnerDisposing` | `the owner's stream ended before this patch's commit echo arrived — … the write's fate is UNKNOWN; safe to retry …` | The owner **answered**: the stream its ack watcher was on completed before the echo — mirror eviction **while the hub lives**. The writer auto-retries it (a re-enqueue re-diffs, so a merge that did commit is a no-op). | The owner's **stream lifetime** (`ReclaimIfUnheld`, `SynchronizationStream.Dispose`), not its bounds. |
 | `OwnerDisposing` | `owner activation disposing before the merge turn ran — the patch was NOT applied; safe to retry against the fresh activation` | The owner **answered from its ShutDown phase**: the patch was in flight when the owner hub tore down. This is the disposal NACK (`RegisterOwnerDisposingNack`), handed to the armed late watch directly; the writer's re-enqueue lands on the fresh activation. | The owner's **teardown** (`HubDisposalModel`): why did the activation go down under a live patch? |
 
-Rows two and three come from one classifier on the **owner**:
+The `Unknown` row and the classified owner refusals come from one classifier on the **owner**:
 
 ```csharp
 // src/MeshWeaver.Data/DataExtensions.cs — ClassifyPatchException
@@ -185,6 +186,24 @@ twice over — its initial `stream.Take(1)` read had *neither* an error nor a co
 `Skip(1).Take(1)` echo watcher had no completion arm — and is closed by the same two seams. An empty
 initial read NACKs `OwnerDisposing` with `the patch was NOT applied` (there the write provably never
 ran).
+
+## A tool's "landed" is the verdict, never a read-back (#6635)
+
+The MCP `patch` and `update` verbs (`MeshOperations`) answer `Patched:` / `Updated:` on the owner's
+commit verdict — what `IMeshService.UpdateNode` emits — and nothing else. That verdict is total: the
+owner acks only after its identity-gated commit echo and only when every key merged (a partial or
+total three-way refusal is a `Conflict` NACK), and every refusal, early or late, faults the call.
+The version printed beside the answer is read from the live mirror for display only and can never
+turn a landed write into a failure.
+
+Until #6635 the verbs confirmed instead by re-reading the caller's own fields from the LIVE node.
+That asks a different question — "does the node *still* hold my values?" — and a field another
+writer legitimately consumes answers it "no". Measured on the control instance: a patch carrying a
+review and `requestedAction: PostReview` committed at v279, the item's control plane cleared the
+intent at v281 63 ms later, and the tool answered *"did not land within the confirmation window …
+retry"* after 10 s — inviting a retry of a non-idempotent request that had already been accepted.
+`AConsumedIntentIsNotALostWriteTest` pins it with an owner-side watcher that clears the intent the
+moment it lands; on the read-back confirmation it is red on its first round with that exact message.
 
 ## Procedure
 

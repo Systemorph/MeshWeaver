@@ -29,6 +29,21 @@ public sealed record ModuleLiveActivationResult(
     /// <summary>The modules that still need the restart, with their reasons.</summary>
     public ImmutableList<ModuleSwapOutcome> StillPending => Outcomes.Where(o => o.NeedsRestart).ToImmutableList();
 
+    /// <summary>
+    /// True when the pass ESTABLISHED that nothing landed is pending in this process — so nothing
+    /// went live and nothing was swapped (#6620). Distinct from a pass that swapped something in.
+    /// </summary>
+    public bool NothingWasPending => Undetermined is null && Outcomes.IsEmpty;
+
+    /// <summary>
+    /// When <see cref="NothingWasPending"/>: the per-process activation report's own line
+    /// (<see cref="ModuleActivationReport.Describe"/>) — which names, for instance, a landed
+    /// generation DECLINED in favour of the image's copy, quarantined, or running a previous
+    /// generation. Those are exactly the states in which a landed generation is "not pending" while
+    /// the old code keeps serving, so a verdict must carry them rather than claim a swap.
+    /// </summary>
+    public string? NothingPendingBecause { get; init; }
+
     /// <summary>One sentence naming what went live and what still needs a restart, and why.</summary>
     public string Describe()
     {
@@ -37,9 +52,16 @@ public sealed record ModuleLiveActivationResult(
         var parts = new List<string>();
         if (!WentLive.IsEmpty)
             parts.Add("went live without a restart: " + string.Join(", ", WentLive.Select(o => o.Module)));
+        var upToDate = Outcomes.Where(o => o.Kind == ModuleSwapKind.UpToDate).ToImmutableList();
+        if (!upToDate.IsEmpty)
+            parts.Add("already serving the landed generation, so nothing was swapped in: "
+                + string.Join(", ", upToDate.Select(o => o.Module)));
         if (!StillPending.IsEmpty)
             parts.Add("still needs a restart: " + string.Join("; ", StillPending.Select(o => $"{o.Module} ({o.Kind}: {o.Reason})")));
-        return parts.Count == 0 ? "nothing landed is waiting to be activated here" : string.Join("; ", parts);
+        return parts.Count == 0
+            ? "nothing landed is pending activation in this process, so nothing was swapped in"
+              + (string.IsNullOrWhiteSpace(NothingPendingBecause) ? string.Empty : " — " + NothingPendingBecause)
+            : string.Join("; ", parts);
     }
 }
 
@@ -84,7 +106,10 @@ public sealed class ModuleLiveActivation(
                     return Observable.Return(new ModuleLiveActivationResult([], state.Report.UndeterminedReason));
                 var pending = state.Report.Pending;
                 if (pending.IsEmpty)
-                    return Observable.Return(new ModuleLiveActivationResult([]));
+                    return Observable.Return(new ModuleLiveActivationResult([])
+                    {
+                        NothingPendingBecause = state.Report.Describe(),
+                    });
                 return pending.ToObservable()
                     .Select(row => Activate(row, state.List, state.Root, reason))
                     .Concat()

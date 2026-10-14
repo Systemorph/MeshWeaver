@@ -497,8 +497,9 @@ the defect #2797 removed.
 🚨 **And where a `helm upgrade` genuinely is the sanctioned path, choosing its target is a separate
 problem with its own trap.** A tag whose three platform images are all promoted and all pullable can
 still have no plugin modules for its framework identity — `Promote: tag the full set` and `Verify
-every image shipped` both go green in that state, and the job that discriminates is `Plugins: bake +
-seal the publication for this identity`. Check the seal, the ancestry of the fix you need, and a
+every image shipped` both go green in that state, and what discriminates is whether the `plugins`
+publication is sealed for that identity (until #6143 core CD's `Plugins: bake + seal` job; now
+MeshWeaver.Plugins' own lane — `check-release-availability.sh <version> plugins` asks). Check the seal, the ancestry of the fix you need, and a
 `memex-migration` image at the SAME tag, before naming any build a target:
 [The Self-Update Schema Wall](/Doc/Architecture/SelfUpdateSchemaWall) → "What makes a tag a safe
 target".

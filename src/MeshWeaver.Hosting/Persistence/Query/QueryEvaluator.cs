@@ -162,18 +162,26 @@ public class QueryEvaluator
     /// <c>status</c> and a miss deeper in the walk stays a miss rather than re-entering some
     /// nested object's own <c>Content</c>.</para>
     /// </summary>
-    public object? GetPropertyValue(object obj, string selector)
+    public object? GetPropertyValue(object obj, string selector) => GetPropertyValue(obj, selector, rawJsonNumbers: false);
+
+    /// <summary>
+    /// <see cref="GetPropertyValue(object, string)"/>, optionally leaving a JSON NUMBER as its
+    /// <see cref="JsonElement"/> — the sort path's read, so <see cref="QuerySortKey"/> can take the
+    /// exact decimal (beyond <see cref="long"/>, high-precision fractions) rather than the double
+    /// the filter path converts to.
+    /// </summary>
+    private object? GetPropertyValue(object obj, string selector, bool rawJsonNumbers)
     {
         var parts = selector.Split('.');
 
-        var current = ResolveRootSelector(obj, parts[0]);
+        var current = ResolveRootSelector(obj, parts[0], rawJsonNumbers);
 
         for (var i = 1; i < parts.Length; i++)
         {
             if (current == null)
                 return null;
 
-            current = GetDirectPropertyValue(current, parts[i]);
+            TryGetDirectPropertyValue(current, parts[i], rawJsonNumbers, out current);
         }
 
         return current;
@@ -181,18 +189,21 @@ public class QueryEvaluator
 
     /// <summary>
     /// The first hop of a selector walk: the object's own property, else the same name read out of
-    /// its <c>Content</c>. See <see cref="GetPropertyValue"/> for why the order is this way round
+    /// its <c>Content</c>. See <see cref="GetPropertyValue(object, string)"/> for why the order is this way round
     /// and why absence — not nullness — opens the fallback.
     /// </summary>
-    private object? ResolveRootSelector(object obj, string propertyName)
+    private object? ResolveRootSelector(object obj, string propertyName, bool rawJsonNumbers = false)
     {
-        if (TryGetDirectPropertyValue(obj, propertyName, out var value))
+        if (TryGetDirectPropertyValue(obj, propertyName, rawJsonNumbers, out var value))
             return value;
 
         // The selector names nothing on the object. SQL would read it out of the content JSONB;
         // do the same, so one query means one thing on every backend.
-        if (TryGetDirectPropertyValue(obj, ContentProperty, out var content) && content is not null)
-            return GetDirectPropertyValue(content, propertyName);
+        if (TryGetDirectPropertyValue(obj, ContentProperty, rawJsonNumbers, out var content) && content is not null)
+        {
+            TryGetDirectPropertyValue(content, propertyName, rawJsonNumbers, out var fromContent);
+            return fromContent;
+        }
 
         return null;
     }
@@ -205,7 +216,7 @@ public class QueryEvaluator
     /// </summary>
     private object? GetDirectPropertyValue(object obj, string propertyName)
     {
-        TryGetDirectPropertyValue(obj, propertyName, out var value);
+        TryGetDirectPropertyValue(obj, propertyName, rawJsonNumbers: false, out var value);
         return value;
     }
 
@@ -217,7 +228,7 @@ public class QueryEvaluator
     /// member", which is what opens the content fallback, while <c>true</c> with a
     /// <see langword="null"/> value means "it has one and it is empty", which must NOT.</para>
     /// </summary>
-    private bool TryGetDirectPropertyValue(object obj, string propertyName, out object? value)
+    private bool TryGetDirectPropertyValue(object obj, string propertyName, bool rawJsonNumbers, out object? value)
     {
         // Handle $type as a special case - return the CLR type name
         if (propertyName == "$type")
@@ -227,10 +238,10 @@ public class QueryEvaluator
         }
 
         if (obj is JsonElement jsonElement)
-            return TryGetJsonPropertyValue(jsonElement, propertyName, out value);
+            return TryGetJsonPropertyValue(jsonElement, propertyName, rawJsonNumbers, out value);
 
         if (obj is JsonObject jsonObject)
-            return TryGetJsonPropertyValue(jsonObject, propertyName, out value);
+            return TryGetJsonPropertyValue(jsonObject, propertyName, rawJsonNumbers, out value);
 
         if (obj is JsonNode)
         {
@@ -255,7 +266,7 @@ public class QueryEvaluator
     /// Gets a property value from a JsonElement, reporting presence separately from content — the
     /// JSON counterpart of <see cref="TryGetDirectPropertyValue"/>. A JSON <c>null</c> is PRESENT.
     /// </summary>
-    private static bool TryGetJsonPropertyValue(JsonElement element, string propertyName, out object? value)
+    private static bool TryGetJsonPropertyValue(JsonElement element, string propertyName, bool rawJsonNumbers, out object? value)
     {
         value = null;
 
@@ -265,7 +276,7 @@ public class QueryEvaluator
         // Try exact match first, then case-insensitive
         if (element.TryGetProperty(propertyName, out var prop))
         {
-            value = JsonElementToObject(prop);
+            value = JsonElementToObject(prop, rawJsonNumbers);
             return true;
         }
 
@@ -274,7 +285,7 @@ public class QueryEvaluator
         {
             if (property.Name.Equals(propertyName, StringComparison.OrdinalIgnoreCase))
             {
-                value = JsonElementToObject(property.Value);
+                value = JsonElementToObject(property.Value, rawJsonNumbers);
                 return true;
             }
         }
@@ -286,11 +297,11 @@ public class QueryEvaluator
     /// Reads as-written JSON content with the same exact-then-case-insensitive lookup and scalar
     /// conversion as a deserialized <see cref="JsonElement"/>. A present JSON null remains present.
     /// </summary>
-    private static bool TryGetJsonPropertyValue(JsonObject jsonObject, string propertyName, out object? value)
+    private static bool TryGetJsonPropertyValue(JsonObject jsonObject, string propertyName, bool rawJsonNumbers, out object? value)
     {
         if (jsonObject.TryGetPropertyValue(propertyName, out var propertyValue))
         {
-            value = JsonNodeToObject(propertyValue);
+            value = JsonNodeToObject(propertyValue, rawJsonNumbers);
             return true;
         }
 
@@ -298,7 +309,7 @@ public class QueryEvaluator
         {
             if (property.Key.Equals(propertyName, StringComparison.OrdinalIgnoreCase))
             {
-                value = JsonNodeToObject(property.Value);
+                value = JsonNodeToObject(property.Value, rawJsonNumbers);
                 return true;
             }
         }
@@ -307,18 +318,22 @@ public class QueryEvaluator
         return false;
     }
 
-    private static object? JsonNodeToObject(JsonNode? node) =>
-        node is null ? null : JsonElementToObject(JsonSerializer.SerializeToElement(node));
+    private static object? JsonNodeToObject(JsonNode? node, bool rawJsonNumbers) =>
+        node is null ? null : JsonElementToObject(JsonSerializer.SerializeToElement(node), rawJsonNumbers);
 
     /// <summary>
     /// Converts a JsonElement to a .NET object.
     /// </summary>
-    private static object? JsonElementToObject(JsonElement element)
+    private static object? JsonElementToObject(JsonElement element, bool rawJsonNumbers = false)
     {
+        if (rawJsonNumbers && element.ValueKind == JsonValueKind.Number)
+            return element;
         return element.ValueKind switch
         {
             JsonValueKind.String => element.GetString(),
-            JsonValueKind.Number => element.TryGetInt64(out var l) ? l : element.GetDouble(),
+            // (object) on each arm: a bare `? l : GetDouble()` types the conditional as DOUBLE and
+            // silently widened every integer, so 2^53 + 1 read back as 2^53.
+            JsonValueKind.Number => element.TryGetInt64(out var l) ? (object)l : element.GetDouble(),
             JsonValueKind.True => true,
             JsonValueKind.False => false,
             JsonValueKind.Null => null,
@@ -535,7 +550,9 @@ public class QueryEvaluator
     }
 
     /// <summary>
-    /// Orders results by a property.
+    /// Orders results by a property — TYPED and with nulls last in both directions; the contract is
+    /// <see cref="QuerySortKey"/>'s. Stable, so a caller that pre-orders by path keeps path as the
+    /// tiebreak.
     /// </summary>
     /// <param name="results">The results to order</param>
     /// <param name="orderBy">The ordering clause (null means no ordering)</param>
@@ -545,90 +562,113 @@ public class QueryEvaluator
         if (orderBy == null)
             return results;
 
-        return orderBy.Descending
-            ? results.OrderByDescending(x => GetComparableValue(GetPropertyValue(x!, orderBy.Property)), SelectorValueComparer.Instance)
-            : results.OrderBy(x => GetComparableValue(GetPropertyValue(x!, orderBy.Property)), SelectorValueComparer.Instance);
+        return results.OrderBy(x => GetSortKey(x!, orderBy.Property), QuerySortKey.Comparer(orderBy.Descending));
     }
 
     /// <summary>
-    /// Orders sort keys TOTALLY — <c>Comparer&lt;object&gt;.Default</c> is not, and a sort key
-    /// read out of a node's content is not type-uniform.
-    ///
-    /// <para>🚨 <b>Why this is required rather than defensive.</b> <c>sort:</c> resolves through
-    /// <see cref="GetPropertyValue"/>, so the content fallback widened it from "node fields and
-    /// explicitly dotted <c>content.X</c>" to "any selector". JSON has no schema: the same key is
-    /// a string on one node and a number on another, and <c>Comparer&lt;object&gt;.Default</c>
-    /// answers that pair with <c>InvalidOperationException: Failed to compare two elements in the
-    /// array</c> — so a widened selector would turn a merely differently-ordered query into a
-    /// FAILED one, on the merge path (<c>MeshQuery.ClipMergedInitial</c>) that every backend runs.
-    /// The same latent hole already swallowed <c>int</c> against <c>long</c>. Postgres has no
-    /// equivalent hazard: <c>n.content-&gt;&gt;'X'</c> is always TEXT.</para>
-    ///
-    /// <para><b>Uniform keys keep their existing order exactly</b> — same type and
-    /// <see cref="IComparable"/> is dispatched first and untouched, so strings still sort as
-    /// strings and ticks still sort chronologically. Only pairs the default comparer REFUSED are
-    /// newly decided: mixed numerics numerically, and anything else by its invariant string form.</para>
+    /// The canonical sort key (<see cref="QuerySortKey.Normalize"/>) of <paramref name="obj"/> under a
+    /// <c>sort:</c> selector — a node field, a <c>content.a.b</c> path, a bare content field, or one of
+    /// the allow-listed functions Postgres also accepts (<c>length(x)</c>, <c>lower(x)</c>,
+    /// <c>upper(x)</c>; <c>sort:length(path)-desc</c> is the routing layer's deepest-prefix pick).
     /// </summary>
-    private sealed class SelectorValueComparer : IComparer<object?>
+    /// <param name="obj">The row — usually a <see cref="MeshNode"/>.</param>
+    /// <param name="selector">The selector as the query spelled it.</param>
+    /// <returns>A number, a <see cref="string"/>, or <see langword="null"/>.</returns>
+    public object? GetSortKey(object obj, string selector)
     {
-        public static readonly SelectorValueComparer Instance = new();
-
-        public int Compare(object? x, object? y)
+        var open = selector.IndexOf('(');
+        if (open > 0 && selector.EndsWith(')'))
         {
-            if (ReferenceEquals(x, y))
-                return 0;
-            // Nulls first, matching the default comparer's placement of an absent key.
-            if (x is null)
-                return -1;
-            if (y is null)
-                return 1;
-
-            // Uniform keys: the pre-existing behaviour, unchanged.
-            if (x.GetType() == y.GetType() && x is IComparable sameType)
-                return sameType.CompareTo(y);
-
-            // Mixed numerics (int vs long, long vs double): compare as numbers, not as text.
-            if (IsNumeric(x) && IsNumeric(y))
-                return Convert.ToDouble(x, CultureInfo.InvariantCulture)
-                    .CompareTo(Convert.ToDouble(y, CultureInfo.InvariantCulture));
-
-            // Genuinely different kinds — a string against a number. Ordinal on the invariant
-            // form: deterministic, and never resolved from the ambient culture.
-            return string.CompareOrdinal(
-                Convert.ToString(x, CultureInfo.InvariantCulture),
-                Convert.ToString(y, CultureInfo.InvariantCulture));
+            var function = selector[..open].Trim();
+            var argument = selector[(open + 1)..^1].Trim();
+            // The function runs on the value AS WRITTEN — what Postgres applies it to — and only its
+            // RESULT is normalised: length("…08:30:00Z") is 20 there, not the 28 of the canonical form.
+            var text = AsWrittenText(ResolveSortSelector(obj, argument), SortReadsContent(argument));
+            if (function.Equals("length", StringComparison.OrdinalIgnoreCase))
+                // Postgres counts CHARACTERS (code points), not UTF-16 units: "😀" is 1, not 2.
+                return text is null ? null : (decimal)text.EnumerateRunes().Count();
+            if (function.Equals("lower", StringComparison.OrdinalIgnoreCase))
+                return QuerySortKey.Normalize(text?.ToLowerInvariant());
+            if (function.Equals("upper", StringComparison.OrdinalIgnoreCase))
+                return QuerySortKey.Normalize(text?.ToUpperInvariant());
         }
 
-        private static bool IsNumeric(object value) =>
-            value is int or long or double or decimal or float or short or byte or uint or ulong;
+        var value = ResolveSortSelector(obj, selector);
+        // A node field that is an enum is a SMALLINT column on Postgres (state, sync_behavior), which
+        // orders by the underlying number; inside content an enum is written by name, so it is text.
+        if (value is Enum member && !SortReadsContent(selector))
+            return Convert.ToDecimal(member, CultureInfo.InvariantCulture);
+        return QuerySortKey.Normalize(value);
     }
 
     /// <summary>
-    /// Converts a property value to a comparable form for sorting.
+    /// The text a SQL function would see: a string as written; an enum as its name inside content and
+    /// its number on a node column; anything else in its canonical (ISO / invariant) form.
     /// </summary>
-    private static object? GetComparableValue(object? value)
+    private static string? AsWrittenText(object? value, bool readsContent) => value switch
     {
-        if (value == null)
-            return null;
+        null => null,
+        string s => s,
+        JsonElement { ValueKind: JsonValueKind.String } e => e.GetString(),
+        JsonElement { ValueKind: JsonValueKind.Number } e => e.GetRawText(),
+        Enum member when !readsContent => Convert.ToDecimal(member, CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture),
+        // A typed date/time is stored as the serializer writes it — that text is what the function
+        // sees on Postgres (a whole-second UTC DateTime is "…:00Z", 20 characters, not the 28 of the key).
+        DateTime or DateTimeOffset or DateOnly or TimeOnly => JsonSerializer.SerializeToElement(value).GetString(),
+        _ => QuerySortKey.Normalize(value) switch
+        {
+            null => null,
+            string s => s,
+            var other => Convert.ToString(other, CultureInfo.InvariantCulture),
+        },
+    };
 
-        // Handle DateTimeOffset specially for proper sorting
-        if (value is DateTimeOffset dto)
-            return dto.UtcTicks;
-
-        if (value is DateTime dt)
-            return dt.Ticks;
-
-        // For strings, return as-is for case-insensitive comparison
-        if (value is string)
-            return value;
-
-        // For numbers, return as-is
-        if (value is int or long or double or decimal or float)
-            return value;
-
-        // Default: convert to string
-        return value.ToString();
+    /// <summary>
+    /// Whether a <c>sort:</c> selector reads the node's CONTENT rather than one of its own fields —
+    /// in which case a <c>select:</c> projection that omits <c>content</c> must still carry it, or the
+    /// merge layer's authoritative re-sort finds every key null and falls back to path order.
+    /// </summary>
+    /// <param name="selector">The sort selector, possibly a function call such as <c>lower(x)</c>.</param>
+    /// <returns>True when the selector resolves into <see cref="MeshNode.Content"/>.</returns>
+    public static bool SortReadsContent(string? selector)
+    {
+        if (string.IsNullOrEmpty(selector))
+            return false;
+        var open = selector.IndexOf('(');
+        if (open > 0 && selector.EndsWith(')'))
+            selector = selector[(open + 1)..^1].Trim();
+        // The SAME selector-to-node-field mapping ResolveSortSelector reads with — never a looser one,
+        // or a selector classified as a node field would have its real (content) key elided.
+        var root = NodeFieldAlias(selector.Split('.')[0]);
+        if (root.Equals(ContentProperty, StringComparison.OrdinalIgnoreCase))
+            return true;
+        return typeof(MeshNode).GetProperty(root,
+            BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase) is null;
     }
+
+    /// <summary>
+    /// Resolves a sort selector, accepting the snake_case COLUMN spellings Postgres maps
+    /// (<c>last_modified</c>, <c>display_order</c>, <c>node_type</c>, …) for the node field they name,
+    /// so one <c>sort:</c> means one thing on every backend.
+    /// </summary>
+    private object? ResolveSortSelector(object obj, string selector)
+        => GetPropertyValue(obj, NodeFieldAlias(selector), rawJsonNumbers: true);
+
+    /// <summary>The node field a snake_case column spelling names; any other selector unchanged.</summary>
+    private static string NodeFieldAlias(string selector)
+        => selector.ToLowerInvariant() switch
+        {
+            "last_modified" => "lastModified",
+            "display_order" => "order",
+            "node_type" => "nodeType",
+            "main_node" => "mainNode",
+            "desired_id" => "desiredId",
+            "created_by" => "createdBy",
+            "created_date" => "createdDate",
+            "last_modified_by" => "lastModifiedBy",
+            "sync_behavior" => "syncBehavior",
+            _ => selector,
+        };
 
     /// <summary>
     /// Applies limit to results.

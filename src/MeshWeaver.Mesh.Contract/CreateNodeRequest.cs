@@ -489,6 +489,33 @@ public record DeleteNodeRequest(string Path)
     /// not a security boundary: the leaf's own Delete permission check still applies.
     /// </summary>
     public string? CascadeRootPath { get; init; }
+
+    /// <summary>
+    /// Optional precondition: delete only if the node is STILL at this <see cref="MeshNode.Version"/>
+    /// — the version the caller read when it decided the node may go (#6621). Null (the default)
+    /// deletes whatever version is there, exactly as before.
+    ///
+    /// <para>🚨 <b>Checked by the owning hub INSIDE the delete, not by the caller beforehand.</b>
+    /// A read-then-delete on a shared node cannot be made safe from outside: another writer can add
+    /// to the node after the caller's last read and before the delete lands, and the delete then
+    /// removes what that writer just wrote. The owner compares this value against the node's
+    /// durable version AFTER it has opened the subtree-deletion scope, from which point every
+    /// in-process write at or under the path is refused until the delete completes — so a match
+    /// cannot go stale before the commit, and a write that loses the race is told so
+    /// (<c>NotFound</c>, "Node being deleted") instead of being silently removed.</para>
+    ///
+    /// <para>A mismatch answers <see cref="NodeDeletionRejectionReason.Conflict"/> and removes
+    /// nothing; re-read the node and decide again. A node that is already gone still answers the
+    /// idempotent success <see cref="DeleteNodeResponse.AlreadyAbsent"/> — the postcondition holds
+    /// whatever version it last had. It is compared against the DURABLE version, which an ack
+    /// guarantees, so a caller that read a version from a live stream before its flush may see one
+    /// spurious <c>Conflict</c>; re-reading resolves it.</para>
+    ///
+    /// <para><b>Root only.</b> For a <see cref="Recursive"/> delete the check applies to the node at
+    /// <see cref="DeleteNodeRequest.Path"/>; descendants are not version-checked (the cascade's leaf
+    /// requests never carry it).</para>
+    /// </summary>
+    public long? ExpectedVersion { get; init; }
 }
 
 /// <summary>
@@ -613,7 +640,14 @@ public enum NodeDeletionRejectionReason
     /// The delete was NOT evaluated: a check it depends on could not be established (#1446).
     /// See <see cref="NodeCreationRejectionReason.Unavailable"/>.
     /// </summary>
-    Unavailable
+    Unavailable,
+
+    /// <summary>
+    /// The node is no longer at <see cref="DeleteNodeRequest.ExpectedVersion"/>: someone changed it
+    /// after the caller read it. Nothing was deleted. The same optimistic-concurrency fact as
+    /// <c>MeshNodeErrorCode.Conflict</c> on an update — re-read the node and decide again (#6621).
+    /// </summary>
+    Conflict
 }
 
 /// <summary>

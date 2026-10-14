@@ -360,6 +360,21 @@ Each AccessAssignment node maps **one subject** (User or Group) to **multiple ro
 | `Roles[].Role` | Role to grant or deny (`Admin`, `Editor`, `Viewer`, `Commenter`, or custom) |
 | `Roles[].Denied` | When `true`, denies the role instead of granting it |
 
+## 🚨 Configuration-declared nodes are public to every authenticated caller
+
+A node DECLARED in configuration — `builder.AddMeshNodes(...)`, or yielded by an `IStaticNodeProvider` — is served to queries from memory by `StaticNodeQueryProvider`, and **without the per-user row filter** the storage providers apply to a stored row. That is deliberate: what is declared there is the platform's public vocabulary — NodeType definitions, built-in roles, partition definitions, documentation, templates, read-only `_Policy` nodes — and filtering it per caller would cost a permission fold per row on every type lookup.
+
+The rule that follows: **never declare a sensitive node in configuration.** No credentials, tokens, keys or endpoints in a declared node's content; no user data; nothing a caller who may not read its path must not see. Put such a node in storage (a write as System at boot, or a sync), where the row filter decides it, or keep the secret out of node content altogether.
+
+**The one exception is enforced, not trusted: a declared node on a SATELLITE path** (`_Access`, `_Thread`, `_Comment`, … — `SatelliteTableMapping.IsSatellitePath`) is row-filtered with the same validators, for the same viewer, as a stored one. The case that needed it is the platform-admin seed — `Auth:GlobalAdmins` → `GlobalAdminSeed` declares an `AccessAssignment` per listed user under `Admin/_Access`, and before the filter any authenticated caller could list who holds platform admin. Pinned by `DeclaredAccessAssignmentIsRowFilteredTest` (a stranger finds no declared grant through `search` or `query-nodes`; the seeded admin still does). A System read is unfiltered, so the permission evaluator's own reads of the static grants are unchanged.
+
+## 🚨 Caller-facing verbs: a refusal looks like absence, and a write is authorized as one
+
+Two rules every transport verb (`MeshOperations`, behind the MCP tools and `/api/mesh/*`) holds:
+
+- **A refused read answers exactly what an absent path answers.** The owner's refusal names the path (`Access denied: user '…' lacks Read permission on '…'`); handing it on tells a caller who may not read a node that one exists there. `get` answers a refusal with its not-found answer (#6571); `render_area` (and the `get {path}/area/…` route) answers `Not found: {path}`, and `content/list` answers `Error: no matching node for path '…'` — the same strings a path that resolves to nothing gets. A refusal is still logged at Information on the server. Pinned by `RefusedReadLooksAbsentTest`, which compares a refused node with an absent sibling and an absent root, path masked, and keeps the grant holder as the positive control.
+- **An upload is a write, and it is decided where its bytes are committed.** `upload` (MCP and `POST /api/mesh/upload`) posts the bytes to the node that owns the collection as a `SaveContentFileRequest`, as the caller captured at entry, and that node writes them (`hub.SaveContentFile(node).To(collection, path).WithAccessContext(caller).Post(bytes)`). The request carries `[RequiresPermission(Update)]`, so the owner's inbound gate — the same one every node write passes, consulting the node type's rule through `NodeTypeAccessRuleGate` — decides Update for that identity on the delivery that carries the bytes. A grant revoked after any earlier check is therefore refused here, and no path can store bytes in a node's content without passing it (#6585). The collection, its editability and the path are decided off the owner's own configuration, and only a collection the node DECLARES is written: a name the node merely inherits from its hosting hub (through the host's content service or the host's registrations) is the host's store, shared by every node it hosts, so Update on the node is refused as authority over it and nothing is written — and a large upload is refused before it stages, so not even a staged blob lands in the host's store. The Update pre-flight on the calling hub (the one `recycle` and `patch` use) stays as the early answer: a reader without Update is told which permission is missing, a caller who may not read the node gets the absent answer, and nobody stages bytes for a write that will be refused. A file larger than one delivery stages its bytes in the collection's reserved staging folder first ([Out-of-Band Content Transfer](../OutOfBandContentTransfer)); the staged blob is framework state, never served as content, and is reclaimed when the write answers, and it is this upload's alone (content hash plus a per-transfer nonce), so a concurrent upload of identical bytes never reclaims it mid-read; a blob a dead upload left behind (older than the staging window) is swept before the next upload stages, as a content sync does. Pinned by `UploadRequiresUpdateTest` (a reader is refused and nothing is stored; an editor uploads) and `UploadIsDecidedWhereItIsWrittenTest` (a grant revoked between the pre-flight and the write stores nothing; a reader posting straight to the owner is refused; an editor's direct write and a staged large upload are stored; an editor cannot write into a collection the node inherits from its host, inline or staged; a staged upload never reclaims another transfer's blob; a staged upload sweeps a stale blob).
+
 ## Built-in roles
 
 Defined as static properties on `Role` (`src/MeshWeaver.Mesh.Contract/Security/Role.cs`):
@@ -1005,8 +1020,24 @@ both causes it cannot tell apart:
 
 🚨 **It changes no verdict, and must not.** The decision is already taken when this runs; the
 store-side grant is EVIDENCE, never an authorisation. Reading it as one would be a second,
-unreviewed permission path that bypasses roles, denies, policies and group expansion entirely — the
-probe reads PATHS, not content, and cannot know what the grant it found actually confers.
+unreviewed permission path that bypasses roles, denies, policies and group expansion entirely.
+
+**A grant at that path is not yet a disagreement — its roles decide (#6637).** The note used to
+fire on the path match alone, and so it fired on a create refused for a principal whose grant was a
+readable `AccessAssignment` with roles Viewer + Commenter: neither carries Create, the denial was
+settled and correct, and the note told the caller the opposite and invited a retry that could never
+succeed. `RlsNodeValidator` now passes the refused permission, and the probe reads that ONE grant
+(still only on a denial path). A typed `AccessAssignment` whose `AccessObject` names exactly that
+principal, whose held roles are all BUILT-IN, and whose held roles do not authorize the write yields
+a plain, localized note naming the roles held (`access.denial.rolesLackPermission`). "Held" and
+"authorize" mirror the fold and the write authorizer: a role granted and denied in the same grant is
+not held, and Sync authorizes Create/Update/Delete while Update or Sync authorizes Comment. The
+disagreement note stays for every case the evidence still supports: the held roles DO authorize the
+write, the grant names another principal, the node is not a readable `AccessAssignment` (untyped
+content), a held role is a custom role (its definition is read from a cached role stream and may lag
+the edit that gave it the permission), or the refused permission is unknown. `_Policy` caps and
+inheritance are not re-derived here — the note says what the grant holds, not the fold's verdict.
+Pinned in `DenialTheStoreDisagreesWithSaysSoTest`.
 
 **What this does NOT do is fix the race**, and the residue is stated rather than implied. Two
 in-memory controls stay green on `main`: the full delete→recreate→child-create shape

@@ -609,7 +609,7 @@ def _trunk_commit(root: Path, remote: str, fetch: bool) -> tuple[str | None, lis
     # A tree with uncommitted or untracked changes is NOT a committed trunk state, whatever
     # commit it sits on — see below. `git()` answers None when the command itself failed, and
     # an unreadable status must read as "not clean", never as clean.
-    clean = git(root, ["status", "--porcelain", "--untracked-files=all"]) == ""
+    clean = git(root, ["status", "--porcelain", "-z", "--untracked-files=all"]) == ""
     if head and head != oid and clean \
             and git(root, ["merge-base", "--is-ancestor", head, oid]) is not None:
         # 🚨 #1426: this checkout IS a committed state of the trunk, older than the tip. That is
@@ -1019,10 +1019,10 @@ def is_manifest_lock_settlement_pr() -> bool:
 
 def check_generated_lock_settlement(root: Path, base: str) -> list[str]:
     """Verify the CI-owned lock PR is only the exact settlement the current main tree requires."""
-    changed = git(root, ["diff", "--name-only", base, "HEAD"])
+    changed = git(root, ["diff", "-z", "--name-only", base, "HEAD"])
     if changed is None:
         return [f"cannot read the settlement PR diff against {base[:12]} — refusing to accept it"]
-    paths = sorted(p.strip() for p in changed.splitlines() if p.strip())
+    paths = sorted(p for p in changed.split("\0") if p)
     expected = {f"{plugin.name}/manifest.lock" for plugin in plugin_dirs(root)}
     unexpected = [path for path in paths if path not in expected]
     if not paths or unexpected:
@@ -1049,12 +1049,13 @@ def check_generated_lock_settlement(root: Path, base: str) -> list[str]:
     try:
         if settle(root, fetch=True) != 0:
             return ["the generated settlement does not pass gen-manifests.py --settle against current main"]
-        remaining = git(root, ["status", "--porcelain", "--untracked-files=all", "--", "*/manifest.lock"])
+        remaining = git(root, ["status", "--porcelain", "-z", "--untracked-files=all", "--", "*/manifest.lock"],
+                        preserve_output=True)  # unstripped: " M <path>" keeps its first column
         if remaining is None:
             return ["cannot verify the generated settlement output against the PR head"]
-        if remaining.strip():
+        if remaining.strip("\0"):
             return ["the PR's manifest.lock files differ from the locks generated for its tree: "
-                    + ", ".join(line[3:].strip() for line in remaining.splitlines()[:12])]
+                    + ", ".join(entry[3:] for entry in [e for e in remaining.split("\0") if e][:12])]
         return []
     finally:
         # Validation is read-only from the PR's point of view, even when a bad lock fails the
@@ -1072,13 +1073,13 @@ def check_untouched(root: Path, base: str) -> list[str]:
     if is_manifest_lock_settlement_pr():
         return check_generated_lock_settlement(root, base)
     generated = {f"{d.name}/manifest.lock" for d in plugin_dirs(root)}
-    out = git(root, ["diff", "--name-only", base, "HEAD", "--", "*/manifest.lock"])
+    out = git(root, ["diff", "-z", "--name-only", base, "HEAD", "--", "*/manifest.lock"])
     if out is None:
         return [f"cannot diff the locks against the base {base[:9]} — refusing to report them untouched"]
     # A package's lock, or the lock of a package this diff DELETED (its folder is gone, so it is no
     # longer enumerated — but deleting a main-owned lock is main's to do, too).
-    touched = sorted(p.strip() for p in out.splitlines()
-                     if p.strip() in generated
+    touched = sorted(p for p in out.split("\0")
+                     if p in generated
                      or (p.strip().count("/") == 1 and not (root / p.strip().split("/")[0]).is_dir()))
     if not touched:
         return []
@@ -1434,10 +1435,10 @@ def _unmerged_paths(root: Path) -> list[str] | None:
     failing, over the single question `--resolve` exists to answer (Copilot's review of
     MeshWeaver.Reinsurance#225).
     """
-    out = git(root, ["diff", "--name-only", "--diff-filter=U"])
+    out = git(root, ["diff", "-z", "--name-only", "--diff-filter=U"])
     if out is None:
         return None
-    return sorted({p.strip() for p in out.splitlines() if p.strip()})
+    return sorted({p for p in out.split("\0") if p})
 
 
 def resolve_conflicts(root: Path, fetch: bool = True, regenerate=None, unmerged_paths=None) -> int:
@@ -1606,14 +1607,16 @@ def _dirty_locks(root: Path, generated: set[str]) -> list[str] | None:
     this file — the caller must not read "git could not run" as "nothing moved", which is the
     #1023 miss again with no message.
     """
-    out = git(root, ["status", "--porcelain", "--", "*/manifest.lock"])
+    out = git(root, ["status", "--porcelain", "-z", "--", "*/manifest.lock"],
+              preserve_output=True)  # unstripped: " M <path>" keeps its first column
     if out is None:
         return None
     found: list[str] = []
-    for line in out.splitlines():
-        # "XY <path>" — the status codes are the first two columns; a rename would carry " -> ",
-        # which a generated lock never does (the generator only rewrites in place).
-        path = line[3:].strip().strip('"')
+    for entry in out.split("\0"):
+        # "XY <path>" — the status codes are the first two columns, and `-z` leaves the path
+        # unquoted. A rename would add its source as a separate entry, which a generated lock never
+        # does (the generator only rewrites in place).
+        path = entry[3:]
         if path in generated:
             found.append(path)
     return found
@@ -1631,14 +1634,14 @@ def _loose_worktree_paths(root: Path, locks: list[str]) -> list[str] | None:
     Copilot's review of MeshWeaver.Reinsurance#225 / MeshWeaver.SocialMedia#208.
     """
     conflicted = set(locks)
-    unstaged = git(root, ["diff", "--name-only"])
-    untracked = git(root, ["ls-files", "--others", "--exclude-standard"])
-    ignored = git(root, ["ls-files", "--others", "--ignored", "--exclude-standard"])
+    unstaged = git(root, ["diff", "-z", "--name-only"])
+    untracked = git(root, ["ls-files", "-z", "--others", "--exclude-standard"])
+    ignored = git(root, ["ls-files", "-z", "--others", "--ignored", "--exclude-standard"])
     if unstaged is None or untracked is None or ignored is None:
         return None
     hashed = hashed_paths(root)
-    loose = {p.strip() for p in unstaged.splitlines() + untracked.splitlines() if p.strip()}
-    loose |= {p.strip() for p in ignored.splitlines() if p.strip() and p.strip() in hashed}
+    loose = {p for p in unstaged.split("\0") + untracked.split("\0") if p}
+    loose |= {p for p in ignored.split("\0") if p and p in hashed}
     return sorted(loose - conflicted)
 
 

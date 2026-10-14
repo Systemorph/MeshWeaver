@@ -200,14 +200,51 @@ public record DeploymentContent
     public ImmutableList<PluginRepoMount> PluginRepos { get; init; } = ImmutableList<PluginRepoMount>.Empty;
 
     /// <summary>
-    /// Packages a FRESH instance seeds itself with, beyond the platform baseline every
-    /// installation gets. Package ids (<c>Edu</c>) or explicit <c>Source/Package</c> patterns
-    /// (<c>Plugins/Edu</c>, <c>Plugins/*</c>); a bare id is qualified against
-    /// <see cref="PluginRepos"/>, because the catalog matches source-scoped and FAILS CLOSED on an
-    /// unqualified one. Rendered into <c>PluginCatalog:InstallByDefault</c>, which the portal
-    /// applies once, on an installation with no install records.
+    /// Packages a FRESH instance seeds itself with. Package ids (<c>Edu</c>) or explicit
+    /// <c>Source/Package</c> patterns (<c>Plugins/Edu</c>, <c>Plugins/*</c>); a bare id is qualified
+    /// against <see cref="PluginRepos"/>, because the catalog matches source-scoped and FAILS CLOSED
+    /// on an unqualified one. Rendered into <c>PluginCatalog:InstallByDefault</c>, which the portal
+    /// seeds once per package. 🚨 A list that names packages only (no <c>Source/*</c>) is an
+    /// EXPLICIT set: the instance installs exactly those and what they declare in <c>requires</c>,
+    /// and the registry's <c>preInstalled</c> baseline is NOT added on top unless
+    /// <c>PluginCatalog:InstallPreInstalledPackages=true</c> says so (policy
+    /// <c>declared-package-set-is-exact</c>). An empty list, or one with a whole-source pattern, keeps the baseline.
     /// </summary>
     public ImmutableList<string> PreInstall { get; init; } = ImmutableList<string>.Empty;
+
+    /// <summary>
+    /// The grants a plugin REGISTRY seeds into every new instance registration — package patterns
+    /// (<c>Plugins/*</c>, <c>Education/Edu</c>), the portal's <c>PluginCatalog:DefaultGrants:N</c>.
+    /// Read only by a registry (<see cref="IsPluginRegistry"/>): a consumer registers AT a registry
+    /// and never mints grants itself. Empty renders nothing, so the chart's default (no seed) stands
+    /// and a newly registered instance is granted only what its registration key or an admin adds.
+    ///
+    /// <para>Rendered on every route from this one declaration (Memex#116): the Helm values'
+    /// <c>pluginCatalog.defaultGrants</c>, and <see cref="DeploymentPortalConfig.BootConfigurationEntries"/>
+    /// plus the Aspire route's portal keys through <see cref="DeploymentPortalConfig.DefaultGrantEntries"/>.
+    /// Before it existed the seed lived only in a hand-edited overlay, and a re-render from the record
+    /// silently dropped it.</para>
+    /// </summary>
+    [Description("Grants a plugin registry seeds into every new instance registration (e.g. Plugins/*)")]
+    public ImmutableList<string> DefaultGrants { get; init; } = ImmutableList<string>.Empty;
+
+    /// <summary>
+    /// The single-registry catalog URL (<c>PluginCatalog:RegistryUrl</c>) — the registry whose
+    /// <c>/api/plugins</c> this instance consumes when it declares no named consumer mount
+    /// (<see cref="PluginRepos"/> without <see cref="PluginRepoMount.IsRegistrySource"/>).
+    /// A registry MAY name itself here, and that is not dead configuration: it makes the registry a
+    /// consumer of its own catalog (<c>PluginCatalogOptions.EffectiveRegistries</c> — the update
+    /// reconciler, the Store's registry section, module refresh and pin audit). Its token half is a
+    /// credential and comes from the vault only, never from the record.
+    ///
+    /// <para>Rendered on every route from this one declaration (Memex#116): the Helm values'
+    /// <c>pluginCatalog.registryUrl</c>, and <see cref="DeploymentPortalConfig.BootConfigurationEntries"/>
+    /// plus the Aspire route's portal keys through <see cref="DeploymentPortalConfig.RegistryUrlEntries"/>.
+    /// Blank renders nothing. Before it existed the URL lived only in a hand-edited overlay, and a
+    /// re-render from the record silently dropped it.</para>
+    /// </summary>
+    [Description("Single-registry catalog URL this instance consumes (PluginCatalog:RegistryUrl); a registry may name itself")]
+    public string? RegistryUrl { get; init; }
 
     /// <summary>
     /// Key Vault secret NAME holding the MAIN database connection string. Blank → the convention

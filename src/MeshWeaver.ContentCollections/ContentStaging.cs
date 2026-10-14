@@ -107,11 +107,21 @@ internal static class OutOfBandContentTransfer
     /// <param name="node">The owning node's address.</param>
     /// <param name="collectionName">The destination collection's name on that node.</param>
     /// <param name="configurePost">Applies target + the caller's pinned identity to the config read.</param>
+    /// <param name="declaredByNodeOnly">
+    /// When set, a collection the node only INHERITS — its config names another hub as its owner
+    /// (<see cref="ContentCollectionConfig.Address"/>) — errors with
+    /// <see cref="CollectionNotDeclaredByNodeException"/> instead of resolving. A writer whose owner
+    /// refuses inherited collections (<c>SaveContentFileRequest</c>) asks for this so that nothing is
+    /// staged into the HOST's store before that refusal: staging runs on the producer, where no owner
+    /// gate sees it. A config that names no owner cannot be told apart here and resolves; the owner's
+    /// write still refuses it, and the post's reclaim removes the blob.
+    /// </param>
     internal static IObservable<ContentCollection?> ResolveDestination(
         IMessageHub hub,
         Address node,
         string collectionName,
-        Func<PostOptions, PostOptions> configurePost)
+        Func<PostOptions, PostOptions> configurePost,
+        bool declaredByNodeOnly = false)
     {
         var contentService = hub.ServiceProvider.GetService<IContentService>();
         if (contentService is null)
@@ -142,6 +152,11 @@ internal static class OutOfBandContentTransfer
                     string.Equals(c.Name, collectionName, StringComparison.OrdinalIgnoreCase));
                 if (config is null)
                     return Observable.Return<ContentCollection?>(null);
+                if (declaredByNodeOnly
+                    && config.Address is { } owner
+                    && !string.Equals(owner.Path, node.Path, StringComparison.OrdinalIgnoreCase))
+                    return Observable.Throw<ContentCollection?>(
+                        new CollectionNotDeclaredByNodeException(collectionName, node, owner));
 
                 contentService.AddConfiguration(config with { Name = qualifiedName, Address = node });
                 return contentService.GetCollection(qualifiedName)
@@ -169,9 +184,16 @@ internal static class OutOfBandContentTransfer
     /// <param name="destination">The destination collection, resolved on the producer.</param>
     /// <param name="pool">The pool the hash runs on (CPU, off the subscriber's thread).</param>
     /// <param name="file">The file to stage.</param>
+    /// <param name="transferNonce">
+    /// Hex appended to the content hash so the blob belongs to ONE transfer. A content sync leaves
+    /// it null — two identical files of one sync stage once, by design. An independent writer whose
+    /// post reclaims its own blob when it answers (<c>SaveContentFileBuilder</c>) passes one: two
+    /// concurrent uploads of identical bytes would otherwise share one blob, and the first to answer
+    /// would delete it under the second's read.
+    /// </param>
     internal static IObservable<StagedContentFile> Stage(
-        ContentCollection destination, IIoPool pool, InlineContentFile file)
-        => pool.InvokeBlocking(_ => ContentStaging.ComputeHandle(file.Content))
+        ContentCollection destination, IIoPool pool, InlineContentFile file, string? transferNonce = null)
+        => pool.InvokeBlocking(_ => ContentStaging.ComputeHandle(file.Content) + transferNonce)
             .SelectMany(handle =>
             {
                 var blob = ContentStaging.BlobPath(handle);
@@ -257,4 +279,17 @@ internal static class OutOfBandContentTransfer
             .Concat()
             .DefaultIfEmpty(Unit.Default)
             .LastAsync();
+}
+
+/// <summary>
+/// The out-of-band transfer was asked for a collection the node does not declare itself: its config
+/// names another hub (<see cref="Owner"/>) as its owner. Nothing was staged.
+/// </summary>
+internal sealed class CollectionNotDeclaredByNodeException(string collection, Address node, Address owner)
+    : InvalidOperationException(
+        $"collection '{collection}' is not declared by this node (it is inherited from '{owner}'); a write "
+        + $"into it is not '{node}''s to admit. Nothing was staged or written.")
+{
+    /// <summary>The hub the collection's config names as its owner.</summary>
+    public Address Owner { get; } = owner;
 }
