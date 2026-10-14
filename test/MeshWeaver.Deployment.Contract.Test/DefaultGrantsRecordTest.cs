@@ -70,6 +70,40 @@ public class DefaultGrantsRecordTest
             k => k.StartsWith("PluginCatalog__DefaultGrants", StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// The seed is read only by a REGISTRY (issue #6744): a consumer registers AT one and never mints
+    /// grants, so a consumer record that happens to carry the list renders it on no route.
+    /// </summary>
+    [Fact]
+    public void AConsumerRecordWithDefaultGrants_RendersNoSeed_OnAnyRoute()
+    {
+        var consumer = DeploymentRecordJson.Read(RegistryJson.Replace("\"isPluginRegistry\": true", "\"isPluginRegistry\": false"))!;
+        Assert.Equal(["Plugins/*"], consumer.DefaultGrants);
+
+        Assert.DoesNotContain(DeploymentPortalConfig.BootConfigurationEntries(consumer),
+            e => e.StartsWith("PluginCatalog:DefaultGrants", StringComparison.Ordinal));
+        Assert.DoesNotContain(DeploymentPortalConfig.PortalConfig(consumer, PortalConfigOptions.Aspire("http://localhost:8080")).Keys,
+            k => k.StartsWith("PluginCatalog__DefaultGrants", StringComparison.Ordinal));
+        Assert.Empty(DeploymentPortalConfig.RegistrySeedPatterns(consumer));
+
+        // Positive control: the same record as a registry renders its seed.
+        Assert.Equal(["Plugins/*"], DeploymentPortalConfig.RegistrySeedPatterns(consumer.AsPluginRegistry()));
+    }
+
+    /// <summary>
+    /// Duplicates are judged by what the grant GRANTS (issue #6744): the source and the plan compare
+    /// case-insensitively, the package id ordinally — as <c>PluginGrantEntry.Matches</c> does — so two
+    /// package ids that differ only in case are two grants and both are kept.
+    /// </summary>
+    [Fact]
+    public void Patterns_KeepPackageIdsThatDifferOnlyInCase_AndCollapseOnlyTrueDuplicates()
+    {
+        Assert.Equal(
+            ["Plugins/Foo", "Plugins/foo", "Plugins/*@pro"],
+            DeploymentPortalConfig.DefaultGrantPatterns(["Plugins/Foo", "Plugins/foo", "plugins/Foo", "Plugins/*@pro", "PLUGINS/*@PRO"]));
+        Assert.Equal(["Plugins"], DeploymentPortalConfig.DefaultGrantPatterns(["Plugins", "plugins/*"]));
+    }
+
     [Fact]
     public void Patterns_AreTrimmed_BlanksDropped_DuplicatesKeptOnce_InDeclaredOrder()
     {
