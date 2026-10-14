@@ -11,7 +11,9 @@ By default the Memex portal is **open** — anyone who authenticates may self-pr
 through `/onboarding` (see [Memex Cloud Deployment → Onboarding](/Doc/Architecture/MemexCloudDeployment)).
 **Invitation-only mode** narrows this: an admin invites an email address, the system emails that
 person from the M365 mailbox the portal sends and receives as, and only an invited email may complete
-onboarding. Every other email is refused at the gate.
+onboarding. Every other email is refused at the gate — except on an instance whose own Entra directory
+demonstrably gates sign-in, which is exempt (see
+[Exempt where the instance's own directory gates sign-in](#exempt-where-the-instances-own-directory-gates-sign-in)).
 
 Turn it on with one flag (see [Feature Flags](/Doc/Architecture/FeatureFlags)):
 
@@ -23,7 +25,10 @@ Features__Onboarding__InvitationOnly=true
 > (Entra, Google, …) proves the user owns the email; a **Pending** invitation matching that verified
 > email unlocks onboarding, after which the invitation flips to **Accepted**. The first-user
 > bootstrap exception still applies — a brand-new deployment with zero User nodes always lets the
-> very first user in, so it can never lock itself out.
+> very first user in, so it can never lock itself out. The one other way in is the
+> **own-directory exemption**: where Microsoft is the only sign-in route, the tenant names one
+> directory and Microsoft Graph confirms the instance's Entra application requires user assignment,
+> the directory's assignment list is the allowlist and no invitation is needed.
 
 ---
 
@@ -41,7 +46,9 @@ Features__Onboarding__InvitationOnly=true
    email and redirects to `/onboarding`.
 4. The onboarding gate looks up a Pending invitation for the verified email. If found, the profile
    form is shown; on submit the user is created **and the invitation flips to Accepted**. If not
-   found, the page shows **"Invitation Required"** and `CreateUser` is refused.
+   found, the page shows **"Invitation Required"** and `CreateUser` is refused — unless the
+   own-directory exemption holds for this sign-in (below), in which case the form is shown and the
+   user is created without an invitation.
 
 ---
 
@@ -91,9 +98,59 @@ The **security boundary** is the `CreateUser` call in
 `Onboarding.razor`, not the UI. The
 gate adds an invitation synced query alongside the existing first-user / username / email checks and,
 when `InvitationOnly` is on and this is not the first user, refuses unless a Pending invitation
-matches the email. On success it chains `InvitationService.MarkAccepted`. The page renders the form
-for invited users and an **"Invitation Required"** message for everyone else (messaging only — the
-real gate is at `CreateUser`).
+matches the email or the own-directory exemption holds. On success it chains
+`InvitationService.MarkAccepted` when an invitation was used. The page renders the form for admitted
+visitors and an **"Invitation Required"** message for everyone else (messaging only — the real gate
+is at `CreateUser`, which re-reads the same decision).
+
+### Exempt where the instance's own directory gates sign-in
+
+Invitation-only is **exempt** on an instance whose own Entra directory decides who may use it. Three
+conditions, all required, all re-checked **at every sign-in**:
+
+1. **Microsoft is the only sign-in route.** Any second route (Google, LinkedIn, Apple, GitHub, the
+   developer login) admits identities no directory issued, so it voids the exemption.
+2. **`Authentication:Microsoft:TenantId` names one directory** — not unset, `common`,
+   `organizations` or `consumers`. The handler then signs in with the authorization-code flow
+   against that tenant's authority, so every identity reaching the portal was authenticated by that
+   directory.
+3. **Microsoft Graph confirms the instance's Entra application requires user assignment**
+   (`appRoleAssignmentRequired = true` on its service principal). A named tenant alone proves only
+   which directory AUTHENTICATES a visitor; without assignment required, every member of the tenant
+   can sign in, and the exemption would open an invitation-only portal to all of them.
+
+**How condition 3 is read.** The portal asks Graph with the instance's OWN credential
+(`Authentication:Microsoft:ClientId` / `ClientSecret`, an app-only token from the tenant's token
+endpoint): `GET /v1.0/servicePrincipals(appId='{clientId}')?$select=appRoleAssignmentRequired`. The
+call runs on the HTTP I/O pool. A successful reading is reused for at most two minutes, so turning
+assignment off closes the exemption within that window; a failed reading is never cached.
+
+**It fails closed.** No client secret, a refused token, a 403, a missing service principal or an
+unparseable answer each mean *not exempt*: invitation-only applies, and the portal logs a Warning
+starting `[InvitationOnly] The own-directory exemption does NOT apply` that names the cause.
+
+🚨 **The Graph read needs a permission the sign-in app does not have by default:** the
+`Application.Read.All` **application** permission on the instance's Entra app registration, with
+admin consent granted in that tenant. Until the tenant's administrator grants it, Graph answers 403
+and the exemption stays off — invitations remain the way in. Granting it is an act of the tenant's
+owner, never of the platform.
+
+**Sessions are bound to the sign-in configuration.** The auth cookie lives fourteen days and slides,
+so a session opened through a route that has since been turned off — or against a tenant that has
+since changed — would otherwise outlive the change. At sign-in the portal stamps a fingerprint of
+the sign-in configuration (which routes are on, their client ids, the Microsoft tenant; never a
+secret) into the cookie, and on every request it rejects and deletes a cookie whose fingerprint no
+longer matches, or that carries none. The visitor signs in again under the current routes. Rotating
+a client secret does not change the fingerprint. A cookie issued before the stamp existed carries no
+fingerprint and is rejected, so each user signs in once more after the change ships.
+
+The exemption never opens a closed registration (`InvitationOnly` and `AllowSelfOnboarding` both
+off) and never promotes anybody: the first-user rule is unchanged.
+
+The decision lives in the portal's onboarding gate (MeshWeaver.Plugins: `OnboardingGate.Decide`, fed
+by `EntraAppAssignmentProbe`; the cookie binding is `SignInConfigurationStamp`). The deployment-record
+pre-flight checks the configuration shape (conditions 1 and 2); only the running portal can read
+condition 3. Decided on Systemorph/Memex#633.
 
 ### A request that died while its identity was being resolved
 

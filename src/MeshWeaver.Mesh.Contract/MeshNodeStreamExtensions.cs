@@ -2344,7 +2344,19 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                             };
                             Func<PostOptions, PostOptions> patchPostOptions = o =>
                             {
+                                // This write rides a ShuttingDown answer out — both arms below
+                                // (OWNER_SHUTTING_DOWN_REENQUEUE, LATE_SHUTTING_DOWN_REENQUEUE)
+                                // re-run the update against the next activation — so it says so on
+                                // the request. A teardown that discards it parked behind a young
+                                // activation's gates is then teardown-normal, not an Error naming
+                                // lost work (MeshWeaver#6733). The TYPE stays unmarked: other
+                                // producers of PatchDataRequest may not re-ask. Nor does the LAST
+                                // attempt: once MaxOwnerDisposingReenqueues is spent, a ShuttingDown
+                                // answer is the caller's terminal failure, so that discard stays an
+                                // Error and the claim is never made for it.
                                 o = o.WithTarget(new Address(_path!));
+                                if (attempt < MaxOwnerDisposingReenqueues)
+                                    o = o.ReaskingOnShutdown();
                                 return capturedContext is null
                                     ? o
                                     : o.WithAccessContext(capturedContext);
@@ -2647,8 +2659,8 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                 diagLogger?.LogWarning(
                                     "[UpdateRemote] LATE_DELIVERY_FAILURE hub={Hub} target={Path} errorType={ErrorType} msg={Msg}",
                                     _workspace.Hub.Address, _path, failure.ErrorType, failure.Message);
-                                FailTerminal(new MeshNodeStreamException(new MeshNodeError(
-                                    MeshNodeErrorCode.Unknown, _path!,
+                                FailTerminal(new MeshNodeStreamException(ClassifyPatchDeliveryFailure(
+                                    failure, _path!,
                                     failure.Message ?? $"Update of '{_path}' failed: {failure.ErrorType}")));
                             });
 
@@ -2998,7 +3010,8 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                                 ? (d2.Failure?.Message ?? ex.Message)
                                                 : ex.Message;
                                             FailTerminal(new MeshNodeStreamException(
-                                                new MeshNodeError(MeshNodeErrorCode.Unknown, _path!, msg)));
+                                                ClassifyPatchDeliveryFailure(
+                                                    (ex as DeliveryFailureException)?.Failure, _path!, msg)));
                                         }
                                     });
                             composite.Add(responseSub);
@@ -3038,6 +3051,32 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
             composite.Add(initialSub);
             return composite;
         });
+    /// <summary>
+    /// Classifies a <see cref="DeliveryFailure"/> that answered an update's
+    /// <c>PatchDataRequest</c> instead of the owner's <c>PatchDataResponse</c> — the failure
+    /// the early and the late response arms of <c>UpdateRemote</c> both fall through to once
+    /// RLS denials and shutting-down refusals have been handled.
+    ///
+    /// <para>A failure the sender stamped <see cref="DeliveryFailure.NodeAbsent"/> — the
+    /// router found no node at the exact path, or the address carries a delete tombstone —
+    /// is the node-level <see cref="MeshNodeErrorCode.NotFound"/>, the same verdict the
+    /// owner gives for a patch that reaches a deleted node. That is the update-racing-a-delete
+    /// shape of #6626: the delete wins before the patch is routed, so the router — not the
+    /// owner — answers, and the writer used to mint <see cref="MeshNodeErrorCode.Unknown"/>
+    /// around the router's "No node found" sentence. The classification reads the typed stamp,
+    /// never the message text. Everything else stays <see cref="MeshNodeErrorCode.Unknown"/>.</para>
+    /// </summary>
+    /// <param name="failure">The failure, or null when the error was not a delivery failure.</param>
+    /// <param name="path">The path the update targeted.</param>
+    /// <param name="message">The human-readable message the error carries.</param>
+    /// <returns>The structured error the caller's <see cref="MeshNodeStreamException"/> carries.</returns>
+    internal static MeshNodeError ClassifyPatchDeliveryFailure(
+        DeliveryFailure? failure, string path, string message) =>
+        new(failure is { NodeAbsent: true }
+                ? MeshNodeErrorCode.NotFound
+                : MeshNodeErrorCode.Unknown,
+            path, message);
+
     /// <summary>
     /// 🚨 <b>THE AUDIT STAMP, IN ONE PLACE.</b> <c>LastModified</c> and <c>LastModifiedBy</c> are
     /// stamped here for EVERY <c>stream.Update</c> write, whoever owns the node.

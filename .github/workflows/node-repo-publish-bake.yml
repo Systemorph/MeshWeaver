@@ -2055,8 +2055,10 @@ jobs:
       # must never be sealed from THIS tree — and must not drop out of the publication either. So its
       # fresh bundle and module package are deleted here, and the carry below fetches the build the
       # sealed publication already holds for it, with the same verification a narrowed bake's carry
-      # has. One the publication never sealed stays out. An unreadable publication is RED, nothing
-      # written. Runs whenever the bake ran; with nothing withheld it says so and changes nothing.
+      # has. One the publication never sealed stays out, and every package requiring it waits with it
+      # (`--content` reads their `requires`); a waiting package that bakes no bundle at all is sealed
+      # by no publication and blocks nothing (Plugins run 38527548962). An unreadable publication is
+      # RED, nothing written. Runs whenever the bake ran; with nothing withheld it says so.
       - name: "Per-package seal: replace every withheld package's fresh bytes by its sealed build"
         id: withhold
         if: steps.scope.outputs.scope != 'none'
@@ -2064,7 +2066,7 @@ jobs:
           WITHHOLD_PACKAGES: ${{ inputs.withhold-packages }}
         run: >
           python3 mw-platform-gate/.github/scripts/seal-packages.py withhold
-          --bake "$BAKE_DIR" --withhold "$WITHHOLD_PACKAGES"
+          --bake "$BAKE_DIR" --withhold "$WITHHOLD_PACKAGES" --content "$GITHUB_WORKSPACE"
           --state "${{ runner.temp }}/bake-scope" --github-output "$GITHUB_OUTPUT"
       # Both carries are BOUND to the publication bake-scope.sh read (its `_complete` stamp,
       # published-publication.txt): each re-resolves the pointer, and without the binding a seal

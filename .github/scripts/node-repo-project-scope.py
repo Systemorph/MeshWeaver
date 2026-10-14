@@ -265,10 +265,10 @@ def main():
     root = Path(a.root).resolve()
     files = None
     if a.range:
-        diff = subprocess.run(["git", "diff", "--no-renames", "--name-only", a.range], cwd=root,
+        diff = subprocess.run(["git", "diff", "-z", "--no-renames", "--name-only", a.range], cwd=root,
                               capture_output=True, text=True, timeout=120)
         if diff.returncode == 0:
-            files = diff.stdout.splitlines()
+            files = [p for p in diff.stdout.split("\0") if p]
     result = select(root, json.loads(Path(a.policy).read_text()), files)
     print(json.dumps(result))
     if os.environ.get("GITHUB_OUTPUT"):
