@@ -80,6 +80,18 @@ public sealed record InboxRow
     /// <summary>Whether the item is unread — the row is shown bold.</summary>
     public bool Unread { get; init; }
 
+    /// <summary>
+    /// Who sent the item, when its source says (the content's <c>from</c>) — else the source's display
+    /// name, so the column is never empty.
+    /// </summary>
+    public string From { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Where the item lives OUTSIDE the mesh, when its source says (the content's <c>webLink</c> — a
+    /// mail opened in its provider's own client); empty for a mesh item, which opens at its path.
+    /// </summary>
+    public string Link { get; init; } = string.Empty;
+
     /// <summary>The side-menu category the row is filed under (<see cref="InboxSection.Category"/>).</summary>
     public string Category { get; init; } = string.Empty;
 
@@ -235,9 +247,13 @@ public static class InboxRows
     public static InboxRow Of(MeshNode node, InboxSection section, string? zone, string? blockedReason,
         string? band, int rank, string? sourceLabel, CultureInfo? culture, JsonSerializerOptions? options)
     {
-        // ONE read of the row's time: a timed row's content is converted to find it, and that cost is
-        // paid per row on every render.
-        var at = TimeOf(node, section.TimeField, options);
+        // ONE read of the row's content — its time, sender, link and read state all come from it, and
+        // that conversion is paid per row on every render.
+        var content = string.IsNullOrWhiteSpace(section.TimeField) ? null : ContentOf(node, options);
+        var at = TimeFrom(node, section.TimeField, content);
+        var from = StringOf(content, "from");
+        // Per row when the source says (a live mailbox answers read and unread in one leg), else the leg's.
+        var unread = BoolOf(content, "isRead") is { } read ? !read : section.Unread;
         return new()
         {
             Path = node.Path,
@@ -255,8 +271,11 @@ public static class InboxRows
             BlockedReason = blockedReason ?? string.Empty,
             SourceIcon = section.SourceIcon,
             Category = section.Category.Length > 0 ? section.Category : section.Source,
-            Unread = section.Unread,
-            RowClass = section.Unread ? UnreadClass : string.Empty,
+            Unread = unread,
+            RowClass = unread ? UnreadClass : string.Empty,
+            From = string.IsNullOrWhiteSpace(from) ? sourceLabel ?? section.Source : from,
+            Link = StringOf(content, "webLink") is { } link && Uri.TryCreate(link, UriKind.Absolute, out var uri)
+                   && uri.Scheme == Uri.UriSchemeHttps ? link : string.Empty,
         };
     }
 
@@ -272,26 +291,11 @@ public static class InboxRows
     /// <param name="options">The hub's serializer options — typed content may need a converter only
     /// the mesh registers; Web defaults when omitted.</param>
     public static DateTimeOffset TimeOf(MeshNode node, string? timeField, JsonSerializerOptions? options = null)
+        => TimeFrom(node, timeField, string.IsNullOrWhiteSpace(timeField) ? null : ContentOf(node, options));
+
+    private static DateTimeOffset TimeFrom(MeshNode node, string? timeField, JsonElement? read)
     {
-        if (string.IsNullOrWhiteSpace(timeField))
-            return node.LastModified;
-        JsonElement? element;
-        try
-        {
-            element = node.Content switch
-            {
-                null => null,
-                JsonElement je => je,
-                System.Text.Json.Nodes.JsonNode jn => JsonSerializer.SerializeToElement(jn, options ?? ContentOptions),
-                var typed => JsonSerializer.SerializeToElement(typed, typed.GetType(), options ?? ContentOptions),
-            };
-        }
-        catch (Exception ex) when (ex is NotSupportedException or JsonException or InvalidOperationException)
-        {
-            // Unreadable content is the documented fallback, never a fault of the whole inbox.
-            return node.LastModified;
-        }
-        if (element is not { ValueKind: JsonValueKind.Object } content)
+        if (string.IsNullOrWhiteSpace(timeField) || read is not { } content)
             return node.LastModified;
         foreach (var property in content.EnumerateObject())
             if (string.Equals(property.Name, timeField, StringComparison.OrdinalIgnoreCase)
@@ -301,6 +305,45 @@ public static class InboxRows
                 return at;
         return node.LastModified;
     }
+
+    /// <summary>
+    /// <paramref name="node"/>'s content as a JSON object, in whatever shape it arrived, or null when it
+    /// has none or cannot be read — unreadable content is never a fault of the whole inbox.
+    /// </summary>
+    internal static JsonElement? ContentOf(MeshNode node, JsonSerializerOptions? options)
+    {
+        try
+        {
+            JsonElement? element = node.Content switch
+            {
+                null => null,
+                JsonElement je => je,
+                System.Text.Json.Nodes.JsonNode jn => JsonSerializer.SerializeToElement(jn, options ?? ContentOptions),
+                var typed => JsonSerializer.SerializeToElement(typed, typed.GetType(), options ?? ContentOptions),
+            };
+            return element is { ValueKind: JsonValueKind.Object } ? element : null;
+        }
+        catch (Exception ex) when (ex is NotSupportedException or JsonException or InvalidOperationException)
+        {
+            return null;
+        }
+    }
+
+    private static JsonElement? PropertyOf(JsonElement? content, string name)
+    {
+        if (content is not { } c)
+            return null;
+        foreach (var property in c.EnumerateObject())
+            if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
+                return property.Value;
+        return null;
+    }
+
+    private static string? StringOf(JsonElement? content, string name)
+        => PropertyOf(content, name) is { ValueKind: JsonValueKind.String } v ? v.GetString() : null;
+
+    private static bool? BoolOf(JsonElement? content, string name)
+        => PropertyOf(content, name) is { ValueKind: JsonValueKind.True or JsonValueKind.False } v ? v.GetBoolean() : null;
 
     /// <summary>
     /// Every leg's rows as one list: each path once — the first leg that brought it wins, and legs
