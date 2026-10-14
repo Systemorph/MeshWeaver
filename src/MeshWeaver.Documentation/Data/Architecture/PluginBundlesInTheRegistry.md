@@ -192,12 +192,23 @@ moment it runs** (`RegistryLivePublications`), and that is the sealed set it jud
 1. the sources are the `<root>/<identity>/<source>` directories the root materialises — the
    chart's `bundles.sources` that held a publication when the pod started
    (`PublishedBundleCatalogue.SourcesOnRoot`);
-2. for each source, every registry mount in order is asked for the artifact host its bundle index
-   declares, and that host for the manifest `plugins/<source>:<identity>` — one GET per source,
-   with the mount's durable key and no other;
-3. a package counts as sealed exactly when a bundle entry of that index (`artifactType`
+2. for each source, the registry mounts are asked in order for the artifact host their bundle
+   index declares, and that host for the manifest `plugins/<source>:<identity>`, with the mount's
+   durable key and no other. The FIRST mount that answers Published ends the reading: no later
+   mount can change that verdict, so asking it would only let a slow mount run the gate's answer
+   budget out and turn a decided Published into Indeterminate (#6743);
+3. the index is read bounded: a body larger than a publication index (`MaxIndexBytes`) is refused
+   as it arrives, never after it has been held whole;
+4. the publication counts only if `bundle-fetch` would materialise it: EVERY index entry is a valid
+   OCI descriptor (media type, sha256 digest, positive size), there is exactly one sidecar entry
+   (`io.meshweaver.role=sidecars`), and that sidecar manifest — one more GET, by digest — carries a
+   non-empty layer titled `_complete`, the sentinel `bundle-fetch` dies without;
+5. a package counts as sealed exactly when a bundle entry of that index (`artifactType`
    `application/vnd.meshweaver.bundle.v1+json`) names it in its `io.meshweaver.package`
    annotation — the entry `push-bundle-publication.sh` writes for every bundle.
+
+Not checked from the index, and so still `bundle-fetch`'s own refusal: that every bundle `_complete`
+LISTS actually lands (that needs the bundle manifests and their blobs, which is the pull itself).
 
 The snapshot still supplies what only bytes can — dependency records, the sealed module set, the
 declared ranges — for the packages it holds. The release record `plugins/releases:<version>` is
@@ -208,7 +219,7 @@ read where they live.
 |---|---|
 | the tag resolves to a publication index | its bundle entries are that source's sealed packages |
 | every declared host answers `404 MANIFEST_UNKNOWN` | established absent: nothing is sealed for that source — a verdict, by package |
-| no mount declares a host, a host refuses the key or fails, the tag names something that is not a publication index, or a bundle entry names no package | *could not look* — the observation is unreadable and the verdict Indeterminate; the snapshot is never used instead |
+| no mount declares a host, a host refuses the key or fails, the tag names something that is not a publication index or is larger than one, an entry is not a valid descriptor, a bundle entry names no package, or the sidecar manifest or its `_complete` is missing | *could not look* — the observation is unreadable and the verdict Indeterminate; the snapshot is never used instead |
 
 Unreadable is never read as "absent", and never as "the snapshot is current": either reading would
 be a guess about the publication the next pod pulls. On a platform roll an Indeterminate package

@@ -27,8 +27,10 @@ namespace MeshWeaver.PluginCatalog;
 /// tag resolves to a publication index; its bundle entries are the sealed set), Absent (every
 /// declared artifact host answered <c>404 MANIFEST_UNKNOWN</c> for the tag — an established
 /// absence, so nothing is sealed for that source), and Unreadable (no mount declares an artifact
-/// host, a host refused the key, the tag names something that is not a publication index, a
-/// bundle entry names no package, or the read failed). Unreadable is never Absent: "I could not
+/// host, a host refused the key, the tag names something that is not a publication index, an
+/// entry is not a valid descriptor, a bundle entry names no package, the sidecar manifest or its
+/// <c>_complete</c> is missing, the index is larger than one, or the read failed). The mounts are
+/// asked in order and the first Published ends the reading. Unreadable is never Absent: "I could not
 /// look" holds as Indeterminate, it is never read as "nothing is published".</para>
 ///
 /// <para>The key goes only to the artifact host the registry mount itself declares — the rule
@@ -47,6 +49,18 @@ public sealed class RegistryLivePublications
 
     /// <summary>The index-entry annotation naming the package a bundle entry carries.</summary>
     public const string PackageAnnotation = "io.meshweaver.package";
+
+    /// <summary>The index-entry annotation marking the publication's sidecar manifest.</summary>
+    public const string RoleAnnotation = "io.meshweaver.role";
+
+    /// <summary>The <see cref="RoleAnnotation"/> value of the sidecar manifest's entry.</summary>
+    public const string SidecarsRole = "sidecars";
+
+    /// <summary>The layer annotation carrying a file's publication-relative name.</summary>
+    public const string TitleAnnotation = "org.opencontainers.image.title";
+
+    /// <summary>The sidecar that makes a publication whole; <c>bundle-fetch</c> refuses one without it.</summary>
+    public const string CompletionSentinel = "_complete";
 
     /// <summary>A publication index names one manifest per bundle; anything larger is not one.</summary>
     internal const int MaxIndexBytes = 4 * 1024 * 1024;
@@ -98,24 +112,55 @@ public sealed class RegistryLivePublications
                 return Observable.Return(LiveSourcePublication.Unreadable(source,
                     "no plugin registry is configured, so the live publication cannot be read"));
 
-            return RegistryTokenResolver.WithLegacyTokens(options, options.EffectiveRegistries)
-                .Select(mount => FromMount(resolver, mount, repository, identity, source))
-                .Concat()
-                .Aggregate(ImmutableArray<LiveSourcePublication?>.Empty, (answers, one) => answers.Add(one))
+            var mounts = RegistryTokenResolver.WithLegacyTokens(options, options.EffectiveRegistries);
+            return AskInOrder(resolver, mounts, 0, repository, identity, source, [])
                 .Select(answers => Decide(source, repository, identity, answers));
         })
         .Catch((Exception ex) => Observable.Return(LiveSourcePublication.Unreadable(source,
             $"reading the live publication failed ({ex.Message})")));
 
+    /// <summary>
+    /// The mounts asked ONE AT A TIME in configuration order, and the reading STOPS at the first
+    /// that answers Published (MeshWeaver#6743): a later mount can no longer change that verdict
+    /// (<see cref="Decide"/> prefers a publication), so asking it only lets a slow mount run the
+    /// gate's answer budget out and turn a decided Published into Indeterminate.
+    /// </summary>
+    private IObservable<ImmutableArray<LiveSourcePublication?>> AskInOrder(
+        RegistryTokenResolver resolver, IReadOnlyList<PluginRegistryReference> mounts, int next,
+        string repository, string identity, string source, ImmutableArray<LiveSourcePublication?> answers) =>
+        next >= mounts.Count
+            ? Observable.Return(answers)
+            : FromMount(resolver, mounts[next], repository, identity, source)
+                .DefaultIfEmpty(null)
+                .SelectMany(answer => answer?.IndexDigest is not null
+                    ? Observable.Return(answers.Add(answer))
+                    : AskInOrder(resolver, mounts, next + 1, repository, identity, source, answers.Add(answer)));
+
     /// <summary>One mount's answer: Published, Absent (404 on the tag), Unreadable, or null when
-    /// the mount declares no artifact host and so has nothing to say.</summary>
+    /// the mount declares no artifact host and so has nothing to say. A publication counts only
+    /// once its sidecar manifest — the one carrying <c>_complete</c> — has been read and holds
+    /// that sentinel, which is what <c>bundle-fetch</c> refuses to materialise without.</summary>
     private IObservable<LiveSourcePublication?> FromMount(
         RegistryTokenResolver resolver, PluginRegistryReference mount, string repository, string identity, string source) =>
         RegistryReleaseIdentities.ArtifactHostOf(hub, resolver, mount, logger)
-            .SelectMany(oci => oci is null
-                ? Observable.Return<LiveSourcePublication?>(null)
-                : oci.GetManifest(repository, identity)
-                    .Select(manifest => (LiveSourcePublication?)FromIndex(source, $"{oci.Registry}/{repository}:{identity}", manifest)))
+            .SelectMany(oci =>
+            {
+                if (oci is null)
+                    return Observable.Return<LiveSourcePublication?>(null);
+                var reference = $"{oci.Registry}/{repository}:{identity}";
+                return oci.GetManifest(repository, identity, MaxIndexBytes)
+                    .SelectMany(manifest =>
+                    {
+                        var index = FromIndex(source, reference, manifest);
+                        if (index.Reading.IndexDigest is null || index.SidecarDigest is not { } sidecar)
+                            return Observable.Return<LiveSourcePublication?>(index.Reading);
+                        return oci.GetManifest(repository, sidecar, MaxIndexBytes)
+                            .Select(sidecarManifest => (LiveSourcePublication?)(
+                                SidecarRefusal($"{oci.Registry}/{repository}@{sidecar}", sidecarManifest) is { } refusal
+                                    ? LiveSourcePublication.Unreadable(source, refusal)
+                                    : index.Reading));
+                    });
+            })
             .Catch((RegistryManifestUnknownException _) =>
                 Observable.Return<LiveSourcePublication?>(LiveSourcePublication.Absent(source)))
             .Catch((Exception ex) => Observable.Return<LiveSourcePublication?>(LiveSourcePublication.Unreadable(source,
@@ -141,17 +186,24 @@ public sealed class RegistryLivePublications
 
     /// <summary>
     /// The packages a publication index names: every entry whose <c>artifactType</c> is a bundle's,
-    /// by its <see cref="PackageAnnotation"/>. Pure. A manifest that is not a publication index (not
-    /// an OCI image index by media type and <c>schemaVersion</c> 2, or not the publication
-    /// <c>artifactType</c>), a bundle entry that is not a valid descriptor (no media type, no
-    /// well-formed sha256 digest, no positive size) or one naming no package, is Unreadable — never
-    /// a smaller set, because a smaller set is the direction that reads a package as withdrawn, and
-    /// never a sealed package, because <c>bundle-fetch</c> could not pull an invalid descriptor.
+    /// by its <see cref="PackageAnnotation"/>, plus the digest of its ONE sidecar manifest (the
+    /// entry of the publication <c>artifactType</c> annotated <c>io.meshweaver.role=sidecars</c>),
+    /// which the caller reads for <c>_complete</c>. Pure. Unreadable — never a smaller set, because
+    /// a smaller set is the direction that reads a package as withdrawn, and never a sealed package,
+    /// because <c>bundle-fetch</c> pulls the WHOLE index and could not materialise it — when the
+    /// manifest is not a publication index (not an OCI image index by media type and
+    /// <c>schemaVersion</c> 2, or not the publication <c>artifactType</c>), when ANY entry, bundle,
+    /// sidecar or other, is not a valid descriptor (no media type, no well-formed sha256 digest, no
+    /// positive size), when there is not exactly one sidecar entry, or when a bundle entry names no
+    /// package (MeshWeaver#6743).
     /// </summary>
-    internal static LiveSourcePublication FromIndex(string source, string reference, OciManifest manifest)
+    internal static PublicationIndex FromIndex(string source, string reference, OciManifest manifest)
     {
+        static PublicationIndex Refused(string source, string reason) =>
+            new(LiveSourcePublication.Unreadable(source, reason), null);
+
         if (manifest.Bytes.Length > MaxIndexBytes)
-            return LiveSourcePublication.Unreadable(source, $"{reference} is larger than a publication index");
+            return Refused(source, $"{reference} is larger than a publication index");
         try
         {
             using var document = JsonDocument.Parse(manifest.Bytes);
@@ -164,43 +216,105 @@ public sealed class RegistryLivePublications
                 || schema.ValueKind != JsonValueKind.Number || !schema.TryGetInt32(out var version) || version != 2
                 || !string.Equals(StringOf(root, "artifactType"), PublicationArtifactType, StringComparison.OrdinalIgnoreCase)
                 || !root.TryGetProperty("manifests", out var entries) || entries.ValueKind != JsonValueKind.Array)
-                return LiveSourcePublication.Unreadable(source, $"{reference} is not a publication index");
+                return Refused(source, $"{reference} is not a publication index");
 
             var packages = ImmutableArray.CreateBuilder<string>();
+            var sidecars = ImmutableArray.CreateBuilder<string>();
             foreach (var entry in entries.EnumerateArray())
             {
-                if (!string.Equals(StringOf(entry, "artifactType"), BundleArtifactType, StringComparison.OrdinalIgnoreCase))
-                    continue;
-                if (string.IsNullOrWhiteSpace(StringOf(entry, "mediaType"))
-                    || StringOf(entry, "digest") is not { } digest || !OciDigest.IsWellFormed(digest)
-                    || !entry.TryGetProperty("size", out var size)
-                    || size.ValueKind != JsonValueKind.Number || !size.TryGetInt64(out var bytes) || bytes <= 0)
-                    return LiveSourcePublication.Unreadable(source,
-                        $"{reference} names a bundle entry that is not a valid OCI descriptor (media type, "
-                        + "sha256 digest and positive size required), so it cannot be pulled");
-                var package = entry.TryGetProperty("annotations", out var annotations)
-                              && annotations.ValueKind == JsonValueKind.Object
-                    ? StringOf(annotations, PackageAnnotation)
+                if (!IsDescriptor(entry, requirePositiveSize: true))
+                    return Refused(source,
+                        $"{reference} names an entry that is not a valid OCI descriptor (media type, sha256 "
+                        + "digest and positive size required), so the publication cannot be pulled");
+                var artifactType = StringOf(entry, "artifactType");
+                JsonElement? annotations = entry.TryGetProperty("annotations", out var a) && a.ValueKind == JsonValueKind.Object
+                    ? a
                     : null;
+                if (string.Equals(artifactType, PublicationArtifactType, StringComparison.OrdinalIgnoreCase)
+                    && annotations is { } sidecarAnnotations
+                    && string.Equals(StringOf(sidecarAnnotations, RoleAnnotation), SidecarsRole, StringComparison.Ordinal))
+                {
+                    sidecars.Add(StringOf(entry, "digest")!);
+                    continue;
+                }
+                if (!string.Equals(artifactType, BundleArtifactType, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                var package = annotations is { } bundleAnnotations ? StringOf(bundleAnnotations, PackageAnnotation) : null;
                 if (string.IsNullOrWhiteSpace(package))
-                    return LiveSourcePublication.Unreadable(source,
+                    return Refused(source,
                         $"{reference} names a bundle entry with no '{PackageAnnotation}' annotation, so the "
                         + "packages it publishes cannot be named");
                 packages.Add(package.Trim());
             }
-            return new LiveSourcePublication(source, manifest.Digest, packages.ToImmutable(), null);
+            if (sidecars.Count != 1)
+                return Refused(source,
+                    $"{reference} names {sidecars.Count} sidecar manifest(s) ('{RoleAnnotation}={SidecarsRole}'), "
+                    + $"not one, so its '{CompletionSentinel}' cannot be found");
+            return new(new LiveSourcePublication(source, manifest.Digest, packages.ToImmutable(), null), sidecars[0]);
         }
         catch (JsonException ex)
         {
-            return LiveSourcePublication.Unreadable(source, $"{reference} is not JSON ({ex.Message})");
+            return Refused(source, $"{reference} is not JSON ({ex.Message})");
         }
     }
+
+    /// <summary>
+    /// Why the sidecar manifest of a publication would make <c>bundle-fetch</c> refuse it, or null
+    /// when it would not: it must be an image manifest whose config and every layer are valid
+    /// descriptors, with one layer titled <c>_complete</c> of positive size — the sentinel
+    /// <c>bundle-fetch</c> dies without. Pure.
+    /// </summary>
+    internal static string? SidecarRefusal(string reference, OciManifest manifest)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(manifest.Bytes);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object
+                || !root.TryGetProperty("config", out var config) || !IsDescriptor(config, requirePositiveSize: false)
+                || !root.TryGetProperty("layers", out var layers) || layers.ValueKind != JsonValueKind.Array)
+                return $"{reference} is not a sidecar manifest (config and layers required)";
+            var complete = false;
+            foreach (var layer in layers.EnumerateArray())
+            {
+                if (!IsDescriptor(layer, requirePositiveSize: false))
+                    return $"{reference} names a layer that is not a valid OCI descriptor, so the publication cannot be pulled";
+                if (layer.TryGetProperty("annotations", out var annotations) && annotations.ValueKind == JsonValueKind.Object
+                    && string.Equals(StringOf(annotations, TitleAnnotation), CompletionSentinel, StringComparison.Ordinal)
+                    && layer.GetProperty("size").GetInt64() > 0)
+                    complete = true;
+            }
+            return complete
+                ? null
+                : $"{reference} carries no non-empty '{CompletionSentinel}', so bundle-fetch would refuse to materialise it";
+        }
+        catch (JsonException ex)
+        {
+            return $"{reference} is not JSON ({ex.Message})";
+        }
+    }
+
+    /// <summary>An OCI descriptor as <c>oras pull</c> needs it: a media type, a well-formed sha256
+    /// digest and a numeric size (positive where an empty blob cannot be what is named).</summary>
+    private static bool IsDescriptor(JsonElement element, bool requirePositiveSize) =>
+        element.ValueKind == JsonValueKind.Object
+        && !string.IsNullOrWhiteSpace(StringOf(element, "mediaType"))
+        && StringOf(element, "digest") is { } digest && OciDigest.IsWellFormed(digest)
+        && element.TryGetProperty("size", out var size)
+        && size.ValueKind == JsonValueKind.Number && size.TryGetInt64(out var bytes)
+        && (requirePositiveSize ? bytes > 0 : bytes >= 0);
 
     private static string? StringOf(JsonElement element, string property) =>
         element.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String
             ? value.GetString()
             : null;
 }
+
+/// <summary>A publication index as read: the reading it supports, and its sidecar manifest's
+/// digest (null unless the index is a readable publication).</summary>
+/// <param name="Reading">Published (pending the sidecar check) or Unreadable.</param>
+/// <param name="SidecarDigest">The one sidecar entry's digest.</param>
+internal sealed record PublicationIndex(LiveSourcePublication Reading, string? SidecarDigest);
 
 /// <summary>One source's live publication under one identity.</summary>
 /// <param name="Source">The source, as the publisher named it.</param>

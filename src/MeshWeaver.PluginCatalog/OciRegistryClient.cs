@@ -196,7 +196,20 @@ public sealed class OciRegistryClient
     /// </summary>
     public IObservable<OciManifest> GetManifest(string repository, string reference) =>
         credential.Take(1)
-            .SelectMany(key => httpPool.Invoke(ct => GetManifestAsync(repository, reference, key, ct)));
+            .SelectMany(key => httpPool.Invoke(ct => GetManifestAsync(repository, reference, key, null, ct)));
+
+    /// <summary>
+    /// <see cref="GetManifest(string, string)"/>, refusing a body larger than
+    /// <paramref name="maxBytes"/> WHILE it is read: a stated <c>Content-Length</c> over the bound
+    /// is refused before a byte is read, and the body is copied into a bounded buffer, so an
+    /// oversized answer faults (<see cref="InvalidDataException"/>) without ever being held whole.
+    /// </summary>
+    /// <param name="repository">The repository.</param>
+    /// <param name="reference">A tag or a <c>sha256:…</c> digest.</param>
+    /// <param name="maxBytes">The most manifest bytes the caller accepts.</param>
+    public IObservable<OciManifest> GetManifest(string repository, string reference, long maxBytes) =>
+        credential.Take(1)
+            .SelectMany(key => httpPool.Invoke(ct => GetManifestAsync(repository, reference, key, maxBytes, ct)));
 
     /// <summary>
     /// Streams the blob <paramref name="digest"/> into the destination <paramref name="openDestination"/>
@@ -243,7 +256,7 @@ public sealed class OciRegistryClient
     }
 
     private async Task<OciManifest> GetManifestAsync(
-        string repository, string reference, string key, CancellationToken ct)
+        string repository, string reference, string key, long? maxBytes, CancellationToken ct)
     {
         var uri = new Uri(baseUri, $"/v2/{repository}/manifests/{reference}");
         using var response = await SendAuthenticatedAsync(uri, repository, key, request =>
@@ -274,7 +287,9 @@ public sealed class OciRegistryClient
                 $"{registry} answered {(int)response.StatusCode} for manifest {reference} in {repository}.",
                 null, response.StatusCode);
 
-        var bytes = await response.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
+        var bytes = maxBytes is { } bound
+            ? await ReadBoundedAsync(response.Content, bound, $"the manifest {reference} in {repository}", ct).ConfigureAwait(false)
+            : await response.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
         var digest = OciDigest.Of(bytes);
 
         // 🚨 Verified against what was ASKED for first, and against what the registry STATES
@@ -288,6 +303,18 @@ public sealed class OciRegistryClient
 
         var mediaType = response.Content.Headers.ContentType?.MediaType;
         return OciManifest.Parse(bytes, mediaType, digest);
+    }
+
+    /// <summary>The body, copied into a <see cref="BoundedBuffer"/>: refused on a stated length
+    /// over <paramref name="bound"/>, and otherwise the moment the bytes read exceed it.</summary>
+    private static async Task<byte[]> ReadBoundedAsync(HttpContent content, long bound, string what, CancellationToken ct)
+    {
+        if (content.Headers.ContentLength is > 0 and var stated && stated > bound)
+            throw new InvalidDataException($"{what} states {stated} byte(s), more than the {bound} accepted");
+        using var buffer = new BoundedBuffer(bound, what);
+        await using (var body = await content.ReadAsStreamAsync(ct).ConfigureAwait(false))
+            await body.CopyToAsync(buffer, ct).ConfigureAwait(false);
+        return buffer.ToArray();
     }
 
     private async Task<OciBlobReceipt> GetBlobAsync(
