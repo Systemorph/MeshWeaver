@@ -128,7 +128,7 @@ public static class InboxLayoutArea
             host.RegisterForDisposal(acts);
         }
         // ONE feed, owner-computed: the grid binds it, and Delete re-reads it at the click.
-        var rows = Rows(host, sections, owner, access.ViewerZoneId());
+        var rows = Rows(host, sections, owner, access.ViewerZoneId(), acts.Rereads);
 
         var filterContext = LayoutAreaReference.GetDataPointer(InboxRows.FilterId);
         // One icon toggle per source, always in view: a source is switched on or off with one click,
@@ -143,7 +143,9 @@ public static class InboxLayoutArea
                 Controls.ToggleButton(new JsonPointerReference($"sources/{key}")) with
                 {
                     DataContext = filterContext, Label = source.Label,
-                    Icon = source.Icon.Length > 0 ? source.Icon : Initial(source.Label),
+                    // A source without a symbol shows its NAME: a single letter was read as an icon
+                    // name, found no icon and rendered an empty button.
+                    Icon = source.Icon.Length > 0 ? source.Icon : null,
                 }, "Toggle" + key);
             switches = switches.WithView(
                 Controls.Switch(new JsonPointerReference($"sources/{key}")) with
@@ -163,7 +165,10 @@ public static class InboxLayoutArea
         // The side menu: the platform's one-choice control, its value bound to the filter's
         // category (two-way, like the search) and its options fed with the live counts.
         var menu = (Controls.RadioGroup(new JsonPointerReference("category"),
-                new JsonPointerReference(LayoutAreaReference.GetDataPointer(CategoryOptionsId)), "string")
+                new JsonPointerReference(LayoutAreaReference.GetDataPointer(CategoryOptionsId)),
+                // The CLR type NAME the client resolves through its registry — "String", never the
+                // C# keyword: "string" is not a type name, and the menu failed with "Type not found".
+                typeof(string).Name)
             with { DataContext = filterContext })
             .WithOrientation(Orientation.Vertical)
             .WithStyle("width: 200px; flex: none;");
@@ -238,14 +243,6 @@ public static class InboxLayoutArea
         ];
     }
 
-    /// <summary>
-    /// The glyph a source without a symbol is toggled by: the first user-perceived character of its
-    /// name — one text element, so an emoji or an accented letter is never split — or a bullet when the
-    /// name is empty (a contributed leg may leave it so; the page must still render).
-    /// </summary>
-    internal static string Initial(string label)
-        => string.IsNullOrWhiteSpace(label) ? "•" : StringInfo.GetNextTextElement(label.Trim());
-
     /// <summary>The keys that press Delete — as a mail client: Backspace or Delete, with the rows ticked.</summary>
     internal const string DeleteShortcut = "Backspace|Delete";
 
@@ -255,7 +252,8 @@ public static class InboxLayoutArea
     /// rows and is LOGGED — one provider's failure must not blank the list the others feed.
     /// </summary>
     internal static IObservable<ImmutableList<InboxRow>> Rows(
-        LayoutAreaHost host, ImmutableArray<InboxSection> sections, string owner, string? zone)
+        LayoutAreaHost host, ImmutableArray<InboxSection> sections, string owner, string? zone,
+        IObservable<long>? rereads = null)
     {
         var hub = host.Hub;
         var handlers = hub.ServiceProvider.GetServices<IInboxItemHandler>().ToImmutableArray();
@@ -322,6 +320,9 @@ public static class InboxLayoutArea
             // and Switch drops the read a newer keystroke superseded.
             .Select(term => term.Length == 0 ? Observable.Return(term) : Observable.Return(term).Delay(SearchQuiet))
             .Switch()
+            // Every leg is read again after a Delete or an Undo: a LIVE source (a mailbox read from
+            // its provider) has no change feed, so the put-away row would otherwise stay listed.
+            .CombineLatest(rereads ?? Observable.Return(0L), (term, _) => term)
             .Select(Merged)
             .Switch()
             .CombineLatest(filter, (rows, asked) =>
@@ -453,28 +454,50 @@ public static class InboxLayoutArea
             // The source's symbol first, so a glance tells mail from a message from an approval.
             .WithColumn(new TemplateColumnControl(Controls.Icon(new ContextProperty(InboxRows.SourceIconProperty)))
                 .WithTitle(string.Empty).WithWidth("40px").WithSortable(false));
-        // Outlook's columns: what, from whom, when. (The band still decides the "what needs you
-        // first" order in the settings menu; it is no longer a column of its own.)
+        // Outlook's columns: what, from whom, when. Ordered by date always: a header sort would be a
+        // second, unbound ordering.
         foreach (var (property, key) in new[]
                  {
                      (nameof(InboxRow.Title), "inbox.column.item"),
-                     (nameof(InboxRow.Source), "inbox.column.source"),
+                     (nameof(InboxRow.From), "inbox.column.source"),
                      (nameof(InboxRow.When), "inbox.column.when"),
                  })
-            // The order is the select's: a header sort would be a second, unbound ordering.
             grid = grid.WithColumn(new PropertyColumnControl<string> { Property = property.ToCamelCase() }
                 .WithTitle(host.Localize(key)).WithSortable(false));
         return grid
-            .WithColumn(new TemplateColumnControl(
-                    Controls.Button(host.Localize("inbox.open")).WithAppearance(Appearance.Lightweight)
-                        .WithReactiveClickAction(ctx =>
-                        {
-                            if (ctx.RowPath() is { Length: > 0 } path)
-                                ctx.NavigateTo("/" + path.TrimStart('/'));
-                            return Observable.Return(Unit.Default);
-                        }))
-                .WithTitle(host.Localize("inbox.column.open")).WithSortable(false))
+            // A click on a row OPENS it, as in a mail client: a mail in its provider's own client, a
+            // mesh item at its page. (Ticking a box and shift/cmd-clicks are selection gestures the
+            // grid keeps to itself.) Paged, newest first.
+            .WithClickAction(OpenRow)
+            .WithShowHover()
+            .WithItemsPerPage(50)
+            .WithShowPageSizeSelector()
             .Resizable();
+    }
+
+    /// <summary>Opens the clicked row: its external link when it has one, else its node's page.</summary>
+    private static void OpenRow(UiActionContext ctx)
+    {
+        var options = ctx.Hub.JsonSerializerOptions;
+        // The payload is an object boundary: it may arrive typed or as JSON, so it is read through
+        // the shared accessor, never a CLR pattern that drops the JSON envelope.
+        if (OpenTarget(ctx.Payload.As<DataGridCellClick>(options)?.Item, options) is { } target)
+            ctx.NavigateTo(target.Url, forceLoad: target.External);
+    }
+
+    /// <summary>
+    /// Where a clicked row goes: its https <see cref="InboxRow.Link"/> (a full page load — it leaves the
+    /// portal), else <c>/{path}</c>; null for a row without either, or one that cannot be read as a row.
+    /// The row arrives typed or as JSON (read with the shared <c>As</c> accessor). Pure.
+    /// </summary>
+    internal static (string Url, bool External)? OpenTarget(object? item, System.Text.Json.JsonSerializerOptions options)
+    {
+        var row = item.As<InboxRow>(options);
+        if (row is null)
+            return null;
+        if (Uri.TryCreate(row.Link, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps)
+            return (row.Link, true);
+        return row.Path is { Length: > 0 } path ? ("/" + path.TrimStart('/'), false) : null;
     }
 
     /// <summary>
@@ -514,6 +537,7 @@ public static class InboxLayoutArea
                         // The rows are gone from the grid; so are their ticks.
                         host.UpdateData(InboxRows.SelectionId, new DataGridSelectionState());
                         ctx.ReportSummary(Summary(host, "inbox.summary.deleted", outcomes));
+                        acts.Reread();
                     })
                     .Select(_ => Unit.Default)));
     }
@@ -587,6 +611,7 @@ public static class InboxLayoutArea
                 .Do(outcomes =>
                 {
                     ctx.ReportSummary(Summary(host, "inbox.summary.restored", outcomes));
+                    acts.Reread();
                 })
                 .Select(_ => Unit.Default);
         }));
@@ -746,10 +771,19 @@ internal sealed class InboxActs : IDisposable
     private readonly Subject<Func<State, State>> changes = new();
     private readonly BehaviorSubject<State> state = new(Initial);
     private readonly IDisposable fold;
+    private readonly BehaviorSubject<long> rereads = new(0);
 
     /// <summary>Opens the page's channel.</summary>
     public InboxActs()
         => fold = changes.Synchronize().Scan(Initial, (current, change) => change(current)).Subscribe(state);
+
+    /// <summary>Ticks whenever the page should read every leg again — after a Delete or an Undo.</summary>
+    public IObservable<long> Rereads => rereads;
+
+    /// <summary>Asks the page to read every leg again; ignored once the page is closed.</summary>
+    public void Reread()
+        // A completed subject ignores what arrives after it, so a late call is dropped, never thrown.
+        => rereads.OnNext(DateTime.UtcNow.Ticks);
 
     /// <summary>What the last Delete put away and Undo has not yet brought back.</summary>
     public ImmutableList<InboxUndoItem> Batch => state.Value.Batch;
@@ -806,6 +840,7 @@ internal sealed class InboxActs : IDisposable
     public void Dispose()
     {
         changes.OnCompleted();
+        rereads.OnCompleted();
         fold.Dispose();
     }
 }

@@ -414,7 +414,17 @@ are what, from whom and when. A source with read state brings TWO legs — one s
 items (`InboxQueryLeg.Unread`), one the rest — so "unread" is decided by the query, never by
 reading content on the page: unread mail is "not `Read`", an unread notification is "not
 `isRead`". An unread row carries `rowClass: inbox-unread` and the grid applies it per row
-(`DataGridControl.WithRowClassProperty`), so it renders bold.
+(`DataGridControl.WithRowClassProperty`), so it renders bold. A LIVE source that answers read and
+unread items in one leg (a mailbox read from its provider) says so per item instead: a timed row
+reads `isRead`, `from` (the sender, shown in the From column — else the source's name) and
+`webLink` (an https address in the provider's own client) from its content.
+
+**A click on a row opens it** (`DataGridControl.WithClickAction` → `InboxLayoutArea.OpenTarget`):
+an item with a `webLink` opens there (a full page load — it leaves the portal), any other at its
+node's page. Ticking a box, and shift/cmd-clicks, are selection gestures the grid keeps to itself.
+The grid is paged (50 a page, the size selectable). A source without a symbol is toggled by a
+button that shows its NAME — never a single letter, which the icon renderer read as an icon name
+and drew as an empty button.
 
 **Reading never reorders.** A row is timed by its node's `LastModified` unless its source names a
 content property instead (`InboxQueryLeg.TimeField`, e.g. a conversation's last reply). Name one
