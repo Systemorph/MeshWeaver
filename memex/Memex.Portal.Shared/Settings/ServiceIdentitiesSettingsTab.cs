@@ -174,6 +174,9 @@ public static class ServiceIdentitiesSettingsTab
         => rows
             .BindGrid(TokensDataId, host.Localize("serviceIdentities.noTokens"),
                 message => $"{host.Localize("serviceIdentities.error")} {message}")
+            // Each row is its own click: rotating or revoking one token never holds up — or is refused
+            // behind — the same action on the next (Doc/GUI/ButtonPendingState → "Idempotence").
+            .WithRowKey("nodePath")
             .WithColumn(new PropertyColumnControl<string> { Property = nameof(TokenRow.ServiceId).ToCamelCase() }
                 .WithTitle(host.Localize("serviceIdentities.column.id")))
             .WithColumn(new PropertyColumnControl<string> { Property = nameof(TokenRow.Label).ToCamelCase() }

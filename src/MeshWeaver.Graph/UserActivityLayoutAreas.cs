@@ -1031,17 +1031,46 @@ public static class UserActivityLayoutAreas
                         SortByAccess = true,
                         Sortable = false,
                     },
+                    // 🚨 A THIRD scope, directory only: the apps the viewer HID (LauncherEntry.Hidden).
+                    // The apps scope above excludes them; this one lists exactly them, so a hidden
+                    // tile is always one filter away from its "Show on launcher" menu entry. Hiding
+                    // is a launcher preference — the app stays installed and accessible.
+                    .. (fromDirectory
+                        ? new[]
+                        {
+                            new MeshSearchScopeTab(LocalizationCatalog.Get("home.hiddenApps", locale), HiddenAppsQuery(nodeOwnerId))
+                            {
+                                RenderMode = nameof(MeshSearchRenderMode.Icons),
+                                NavigateToMainNode = true,
+                                SortByAccess = false,
+                                Sortable = false,
+                            },
+                        }
+                        : []),
                 ],
             };
     }
 
     /// <summary>
     /// The Apps band's query: the viewer's <c>{owner}/_App</c> records, or — from the directory —
-    /// the virtual <c>{owner}/_Apps</c> rows. Both are one partition's children of one type. Pure.
+    /// the virtual <c>{owner}/_Apps</c> rows minus the ones the viewer hid
+    /// (<c>-content.hidden:true</c>, evaluated in memory by the directory provider, where an absent
+    /// flag is visible). Both are one partition's children of one type. Pure.
     /// </summary>
     internal static string AppsQuery(string ownerId, bool fromDirectory) =>
-        $"path:{ownerId}/{(fromDirectory ? LauncherArrangementPaths.DirectoryNamespace : AppNodeType.UserNamespace)} " +
-        $"scope:children nodeType:{AppNodeType.NodeType} {SortSuffixAlphabetical}";
+        fromDirectory
+            ? $"{DirectoryRowsQuery(ownerId)} -{HiddenSelector}:true {SortSuffixAlphabetical}"
+            : $"path:{ownerId}/{AppNodeType.UserNamespace} scope:children nodeType:{AppNodeType.NodeType} {SortSuffixAlphabetical}";
+
+    /// <summary>The launcher's <b>Hidden</b> scope: exactly the directory rows the viewer hid. Pure.</summary>
+    internal static string HiddenAppsQuery(string ownerId) =>
+        $"{DirectoryRowsQuery(ownerId)} {HiddenSelector}:true {SortSuffixAlphabetical}";
+
+    /// <summary>The selector of a directory row's hidden flag (<see cref="App.Hidden"/>).</summary>
+    private const string HiddenSelector = "content.hidden";
+
+    private static string DirectoryRowsQuery(string ownerId) =>
+        $"path:{ownerId}/{LauncherArrangementPaths.DirectoryNamespace} scope:children nodeType:{AppNodeType.NodeType}";
 
     /// <summary>
     /// The launcher's <b>Spaces</b> scope query: the partition roots the reader can see (the

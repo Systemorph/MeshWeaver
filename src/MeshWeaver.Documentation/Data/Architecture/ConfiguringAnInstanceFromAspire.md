@@ -188,6 +188,8 @@ resolves this column against `DeploymentRecordExtensions` alone — it asserts n
 | `ClearPluginRepos()` | `PluginRepos` | `pluginCatalog.sources` | — |
 | `PreInstall(packageIds)` | `PreInstall` | `pluginCatalog.installByDefault` | `PluginCatalog__*` (Aspire only) |
 | `ClearPreInstall()` | `PreInstall` | `pluginCatalog.installByDefault` | — |
+| `DefaultGrants(patterns)` | `DefaultGrants` | `pluginCatalog.defaultGrants` (a registry's registration seed) | `PluginCatalog__DefaultGrants__*` (Aspire only) |
+| `WithRegistryUrl(url)` | `RegistryUrl` | `pluginCatalog.registryUrl` (the single registry consumed; a registry may name itself) | `PluginCatalog__RegistryUrl` (Aspire only) |
 | `AsPluginRegistry(isRegistry)` | `IsPluginRegistry` | `registry` (with `WithRegistry`) | — |
 | `WithRegistryInstanceId(instanceId)` | `RegistryInstanceId` | — (the instance's key at the registry) | — |
 | `WithRequiredModules(assemblies)` | `RequiredModules` | `config.memex_portal.Modules__Required__N` | `Modules__Required__0` |
