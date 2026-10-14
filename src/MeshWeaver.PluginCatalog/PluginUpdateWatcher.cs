@@ -270,7 +270,7 @@ public sealed class PluginUpdateWatcher : Microsoft.Extensions.Hosting.IHostedSe
             .Subscribe(
                 build => OnGreenBuild(target, build),
                 ex => logger?.LogWarning(ex,
-                    "Plugin update watcher: build stream for {BuildPath} faulted; the safety net still "
+                    "Plugin update watcher: build stream for {BuildPath} ended; the safety net still "
                     + "reads it every interval.", buildPath));
         subscriptions.Add(sub);
     }
@@ -281,29 +281,29 @@ public sealed class PluginUpdateWatcher : Microsoft.Extensions.Hosting.IHostedSe
     /// QueryAsync — that index lags a write by design).
     ///
     /// <para>🚨 <b>A build node that does not exist YET is the normal first state, not a fault.</b>
-    /// A repository whose content CI has never been recorded has no node, and the node stream then
-    /// FAULTS ("No node found at 'Admin/_Build/…'"). Before, that fault ended the watch for the life
-    /// of the process: measured on an enterprise client's test instance (2026-10-13), the
-    /// repository's first green build was recorded hours after boot and the watcher never saw it.
-    /// So a faulted stream waits for the node to APPEAR — on the path-scoped live query over the
-    /// build records (<see cref="BuildCompletion.WatchQuery"/>, a wake-up only) — and then re-opens
-    /// the node's own stream. A fault on a node that does exist re-opens after a pause rather than
-    /// in a tight loop.</para>
+    /// A repository whose content CI has never been recorded has no node. Opening the point stream
+    /// on an absent path faults ("No node found at 'Admin/_Build/…'") and records a process-wide
+    /// not-found entry; before, that fault also ended the watch for the life of the process —
+    /// measured on an enterprise client's test instance (2026-10-13), the repository's first green
+    /// build was recorded hours after boot and the watcher never saw it. So this follows the
+    /// optional-node pattern: wait for the record to be PRESENT on the path-scoped live query over
+    /// the build records (<see cref="BuildCompletion.WatchQuery"/>, a wake-up only), and only then
+    /// open the authoritative point stream. A stream that faults anyway is re-opened the same way,
+    /// after a pause rather than in a tight loop.</para>
     /// </summary>
     private IObservable<BuildCompletion> Builds(string buildPath)
-        => hub.GetMeshNodeStream(buildPath)
+        => BuildRecordPresent(buildPath)
+            .Take(1)
+            .SelectMany(_ => hub.GetMeshNodeStream(buildPath))
             .Select(n => n?.ContentAs<BuildCompletion>(hub.JsonSerializerOptions, logger))
             .Where(b => b is not null && b.HeadSha.Length > 0)
             .Select(b => b!)
             .Catch((Exception ex) =>
             {
-                logger?.LogInformation(
-                    "Plugin update watcher: the build stream for {BuildPath} ended ({Reason}) — waiting for the "
-                    + "build record to appear, then watching it again.", buildPath, ex.Message);
-                return BuildRecordPresent(buildPath)
-                    .Take(1)
-                    .SelectMany(_ => Observable.Timer(RearmPause))
-                    .SelectMany(_ => Builds(buildPath));
+                logger?.LogWarning(ex,
+                    "Plugin update watcher: the build stream for {BuildPath} faulted — watching it again "
+                    + "once the record is present.", buildPath);
+                return Observable.Timer(RearmPause).SelectMany(_ => Builds(buildPath));
             });
 
     /// <summary>A pause before re-opening a build stream that faulted, so a node that exists but
@@ -346,8 +346,8 @@ public sealed class PluginUpdateWatcher : Microsoft.Extensions.Hosting.IHostedSe
     /// 🚨 The safety net (default every <see cref="PluginCatalogOptions.ReconcileSafetyNetInterval"/>,
     /// 30 min; ≤ 0 disables): a full pass over every watched origin against its build node AS
     /// STORED. The live subscription delivers a build once — a pass that failed (an unreachable
-    /// repository, a transient install fault), a build stream that faulted because the node did not
-    /// exist yet at boot, or a pod that was down when the node was written all leave an install
+    /// repository, a transient install fault), a wake-up the live query never delivered, or a pod
+    /// that was down when the node was written all leave an install
     /// record behind with nothing that would ever look again. The durable build fact is re-read
     /// here and the same reconcile runs at its sha; the content-identity gate makes a pass with
     /// nothing to do silent and fetch-free beyond the (cached) listing. The same role, and the same
@@ -368,11 +368,15 @@ public sealed class PluginUpdateWatcher : Microsoft.Extensions.Hosting.IHostedSe
                 PluginCatalogOptions.SectionName, nameof(PluginCatalogOptions.ReconcileSafetyNetInterval));
             return;
         }
-        // ReconcileNow only enqueues (each pass reports its own fault and never faults the lane), so
+        // The next interval starts only once the previous pass has COMPLETED — a stalled or
+        // longer-than-interval pass must not let ticks pile up on the lane ahead of later green
+        // builds (the shape of RegistryUpdateReconciler.SafetyNet). ReconcileNow never faults, so
         // nothing reaches the error arm short of the timer itself failing.
-        subscriptions.Add(Observable.Interval(interval)
+        subscriptions.Add(Observable.Defer(() => Observable.Timer(interval))
+            .SelectMany(_ => ReconcileNow())
+            .Repeat()
             .Subscribe(
-                _ => ReconcileNow(),
+                _ => { },
                 ex => logger?.LogError(ex,
                     "Plugin update watcher: the safety-net timer faulted — no further safety-net pass runs "
                     + "in this process; green builds still reconcile.")));

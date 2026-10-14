@@ -126,10 +126,16 @@ origins and each reconciles its own packages, and the listing cache is evicted o
 pass — green build or safety net — runs on one serialized lane, so two passes never write the same
 install record at once.
 
+🚨 A build record that does not exist **yet** is the normal first state of a repository whose content
+CI has never been recorded. The watcher waits for it to be present on the path-scoped live query over
+the build records (`BuildCompletion.WatchQuery`, a wake-up only) and only then opens the node's own
+stream. Opening the point stream on an absent path faults — and before this change that fault ended
+the watch for the life of the process, so a first green build recorded after boot was never seen.
+
 The **safety net** (`PluginCatalog:ReconcileSafetyNetInterval`, default 30 min, `≤ 0` disables)
 re-reads each watched origin's build node from storage and runs the same reconcile at its sha. It
 heals a reaction that was lost — a pass that failed transiently, a pod that was down when the fact
-was written, a build stream that faulted because the node did not exist yet at boot. It does not
+was written, a wake-up the live query never delivered. It does not
 replace the webhook: a build fact that never arrived is `MissedBuildFact`'s business.
 
 🚨 The content-identity gate still applies: a module whose repository commits **no
