@@ -2345,6 +2345,14 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/core-image-relevance.py --self-test
 
+    # main-cd's push path delivers in BUILD-COMPLETION order, not commit order, so a parent can be
+    # handed to delivery after its child already published (CD #10796 → 6b9944c after #10795 →
+    # 04d56c7, 2026-10-14) and mint a higher version for older code. Proven both ways here: strictly
+    # behind ⇒ declined; ahead, same commit, diverged, identical, no set, unreadable compare ⇒ publish.
+    - name: "CD never publishes a commit older than the newest published set (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/cd-superseded.py --self-test
+
     # main-cd's tester leg stages the Razor generator per RID from the SDK FEED (not an MCR image
     # that lags a new SDK by hours and withheld the seal on the 10.0.402 release day). It runs on
     # main only, so it is proven here, offline: each RID must hold the compiler built FOR it
