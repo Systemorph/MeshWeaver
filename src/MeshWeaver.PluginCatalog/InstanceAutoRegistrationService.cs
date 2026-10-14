@@ -2209,18 +2209,29 @@ public sealed class InstanceAutoRegistrationService(
                     ? Observable.Return(summary)
                     : ProposeCheckedForTheSelection(
                             installable.Select(c => c.Package).ToImmutableList(),
-                            BlockedAfterPhase2(phase1.Blocked, summary))
+                            BlockedAfterPhase2(phase1.Blocked, phase1.Cleared, summary))
                         .Select(verdict => summary with { ModuleSetVerdict = verdict })));
 
-        // Phase 2's own verdicts are NEWER than phase 1's: a package it HELD (ownership re-read) or
-        // SKIPPED (a terminal refusal before the pass, or one visible only at install time) blocks its
-        // module too. A FAILED package
-        // does not — a node install that fails before its landed module loads is the bootstrap's
-        // expected first pass, and blocking it would keep the modules from ever loading.
-        IReadOnlySet<string> BlockedAfterPhase2(IReadOnlySet<string> phase1Blocked, DefaultInstallSummary summary)
+        // Phase 2's own verdicts are NEWER than phase 1's: a package it HELD (ownership re-read),
+        // SKIPPED (a terminal refusal before the pass, or one visible only at install time) or FAILED
+        // without phase 1 having cleared it blocks its module too. A fresh carrier phase 1 cleared
+        // does not block on failing — that is the bootstrap's expected first pass, and blocking it
+        // would keep the modules from ever loading.
+        IReadOnlySet<string> BlockedAfterPhase2(
+            IReadOnlySet<string> phase1Blocked, IReadOnlySet<string> phase1Cleared, DefaultInstallSummary summary)
         {
+            // A FAILED package blocks too — unless it is a fresh carrier phase 1 CLEARED (its module
+            // landed or was proven up to date, every gate passed): that failure is the node
+            // validation the bootstrap's first pass expects. An already-installed carrier that fails
+            // (a fetch, a parameter) never reached WithModule, so nothing cleared its module here.
+            var failedUncleared = candidates
+                .Where(c => (summary.Failures ?? []).Contains(c.Package.Id)
+                            && !string.IsNullOrWhiteSpace(c.Package.Module)
+                            && !phase1Cleared.Contains(c.Package.Module!))
+                .Select(c => c.Package.Id);
             var refusedNow = (summary.Held ?? []).Select(h => h.Package)
                 .Concat((summary.Skipped ?? []).Select(s => s.Package))
+                .Concat(failedUncleared)
                 .ToImmutableHashSet(StringComparer.Ordinal);
             // Through ALL candidates, not just the installable ones: a TERMINAL skip (entitlement,
             // licence, plan tier) left `installable` before phase 1, and an entry an earlier pass
@@ -2277,7 +2288,7 @@ public sealed class InstanceAutoRegistrationService(
     /// </summary>
     /// <param name="installable">The pass's installable candidates, in dependency order.</param>
     /// <returns>Cold; emits the entry-assembly names of the modules this phase LANDED, once.</returns>
-    private IObservable<(ImmutableList<string> Landed, IReadOnlySet<string> Blocked, bool HadWave)> LandModulesFirst(
+    private IObservable<(ImmutableList<string> Landed, IReadOnlySet<string> Blocked, IReadOnlySet<string> Cleared, bool HadWave)> LandModulesFirst(
         IReadOnlyList<InstallCandidate> installable)
     {
         var carriers = installable
@@ -2288,7 +2299,7 @@ public sealed class InstanceAutoRegistrationService(
         var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
         IReadOnlySet<string> none = ImmutableHashSet<string>.Empty;
         if (carriers.Count == 0 || persistence is null)
-            return Observable.Return((ImmutableList<string>.Empty, none, false));
+            return Observable.Return((ImmutableList<string>.Empty, none, none, false));
 
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
         var configuration = hub.ServiceProvider.GetService<IConfiguration>();
@@ -2384,7 +2395,8 @@ public sealed class InstanceAutoRegistrationService(
         }
 
         return accessService.RunAsSystem(() => carriers
-                .Select(x => One(x.Candidate, x.Bundles!))
+                .Select(x => One(x.Candidate, x.Bundles!)
+                    .Select(o => (o.Fresh, o.Landed, o.Blocked, Module: x.Candidate.Package.Module!)))
                 .ToObservable()
                 .Concat()
                 .ToList()
@@ -2407,7 +2419,14 @@ public sealed class InstanceAutoRegistrationService(
                             + "is proposed (once, at the end of this pass); a package whose nodes need its NodeTypes "
                             + "fails validation in this pass and is installed by a pass after that restart.",
                             landed.Count, string.Join(", ", landed));
-                    return (landed, blocked, true);
+                    // Cleared: a FRESH carrier that passed every gate and whose module landed now or was
+                    // proven up to date — the one kind whose phase-2 failure (node validation before
+                    // the module loads) is expected and must not block the proposal.
+                    IReadOnlySet<string> cleared = outcomes
+                        .Where(o => o.Fresh && o.Blocked is null)
+                        .Select(o => o.Module)
+                        .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+                    return (landed, blocked, cleared, true);
                 }))
             .Catch((Exception ex) =>
             {
@@ -2419,7 +2438,7 @@ public sealed class InstanceAutoRegistrationService(
                 // carriers, so every carrier's module blocks the pass's one proposal.
                 IReadOnlySet<string> allCarriers = carriers.Select(x => x.Candidate.Package.Module!)
                     .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
-                return Observable.Return((ImmutableList<string>.Empty, allCarriers, true));
+                return Observable.Return((ImmutableList<string>.Empty, allCarriers, none, true));
             });
     }
 
