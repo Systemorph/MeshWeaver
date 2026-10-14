@@ -804,7 +804,7 @@ public static partial class CatalogLayoutAreas
     /// auto-update wave, so both lanes move the mesh's set the one way. A deployment with no
     /// landing service (a consumer with no module store) proposes nothing, silently.
     /// </summary>
-    private static IObservable<ModuleSet?> ProposeMeshModuleSet(IMessageHub hub, ILogger? logger)
+    internal static IObservable<ModuleSet?> ProposeMeshModuleSet(IMessageHub hub, ILogger? logger)
     {
         var landing = hub.ServiceProvider.GetService<ModuleLandingService>();
         if (landing is null)

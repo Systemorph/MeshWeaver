@@ -835,7 +835,14 @@ public sealed class InstanceAutoRegistrationService(
             .Where(e => e is not null)
             .Select(e => e!)
             .ToList();
-        var baseline = options.InstallPreInstalledPackages;
+        var baseline = BaselineApplies(options.InstallPreInstalledPackages, wanted);
+        if (options.InstallPreInstalledPackages is null && !baseline)
+            logger.LogInformation(
+                "[DefaultInstall] PluginCatalog:InstallByDefault declares an EXPLICIT package set [{Wanted}] — "
+                + "exactly those packages and what they declare in `requires` are selected; the "
+                + "registry's preInstalled baseline is not. Set PluginCatalog:InstallPreInstalledPackages=true "
+                + "to keep the baseline beside the set.",
+                string.Join(", ", wanted));
         // The environment's own composition, read ONCE per boot pass off the live flag surface. The
         // reader is reactive (configuration reloads push a new value), but a boot pass is a single
         // decision taken at a point in time — re-deciding mid-install would mean two passes writing
@@ -860,6 +867,38 @@ public sealed class InstanceAutoRegistrationService(
 
         return composition.SelectMany(composed => InstallSelection(options, wanted, baseline, composed));
     }
+
+    /// <summary>
+    /// Whether the packages declaring <c>preInstalled</c> are selected — the platform baseline lane.
+    /// Pure.
+    ///
+    /// <para>🚨 <b>An instance that DECLARES its set gets that set</b> (the platform bootstrap,
+    /// 2026-10-14). <see cref="PluginCatalogOptions.InstallByDefault"/> naming packages EXACTLY
+    /// (<c>Source/Package</c>, no whole-source <c>Source/*</c>) is a deployment record saying
+    /// "these" — and the baseline lane used to add every <c>preInstalled</c> package of every source
+    /// on top of it, unasked. Measured on a fresh control instance that named five packages: the
+    /// pass selected 48 (47 <c>preInstalled</c> packages plus <c>Store</c> by closure), and on a
+    /// closed type set every one of their in-mesh NodeTypes parks. The declared set's own
+    /// <c>requires</c> are still installed (the dependency closure runs over the full catalog), so
+    /// "exactly what was named, and what that needs" is what lands.</para>
+    ///
+    /// <para>An EXPLICIT <see cref="PluginCatalogOptions.InstallPreInstalledPackages"/> wins either
+    /// way: <c>true</c> keeps the baseline beside a declared set, <c>false</c> suppresses it
+    /// everywhere. Unset, the baseline applies wherever nothing is named exactly — no patterns, or
+    /// any whole-source pattern (the chart default <c>Plugins/*</c>) — exactly as before.</para>
+    /// </summary>
+    /// <param name="configured">The configured switch; null when not set.</param>
+    /// <param name="wanted">The parsed <see cref="PluginCatalogOptions.InstallByDefault"/> entries.</param>
+    /// <returns>Whether the <c>preInstalled</c> baseline is selected this pass.</returns>
+    internal static bool BaselineApplies(bool? configured, IReadOnlyList<PluginGrantEntry> wanted) =>
+        configured ?? !DeclaresExplicitSet(wanted);
+
+    /// <summary>Whether the operator's patterns name an explicit package set: at least one entry,
+    /// and every entry names a package (never a whole source). Pure.</summary>
+    /// <param name="wanted">The parsed <see cref="PluginCatalogOptions.InstallByDefault"/> entries.</param>
+    /// <returns>True for an explicit set.</returns>
+    internal static bool DeclaresExplicitSet(IReadOnlyList<PluginGrantEntry> wanted) =>
+        wanted.Count > 0 && wanted.All(w => w.PackageId != PluginGrantEntry.AllPackages);
 
     /// <summary>The decision, once the three selection signals are known: list the sources, select,
     /// close over dependencies, drop what the seed already delivered, install in order.</summary>
@@ -2133,12 +2172,159 @@ public sealed class InstanceAutoRegistrationService(
         logger.LogInformation(
             "[DefaultInstall] {Count} package(s), in dependency order — {Packages}",
             installable.Count, string.Join(", ", installable.Select(c => c.Package.Id)));
-        return installable
-            .Select(Install)
-            .ToObservable()
-            .Concat()
-            .Aggregate(seed, (acc, one) => acc.Add(one));
+        // 🚨 PHASE 1 — MODULES, THEN PHASE 2 — NODES (see LandModulesFirst). Strictly sequential:
+        // the content phase is subscribed only once every module of the selection has been decided.
+        return LandModulesFirst(installable)
+            .SelectMany(landed => installable
+                .Select(Install)
+                .ToObservable()
+                .Concat()
+                .Aggregate(seed with { ModulesLanded = landed }, (acc, one) => acc.Add(one)));
     }
+
+    /// <summary>
+    /// 🚨 <b>PHASE 1 of the default install: land the compiled MODULE of every selected package that
+    /// is not installed yet, BEFORE any package's nodes are written</b> (the platform bootstrap,
+    /// 2026-10-14).
+    ///
+    /// <para><b>Why the order is the fix.</b> A mixed package's module used to land only AFTER its
+    /// content (<c>CatalogLayoutAreas.InstallOrUpdateCore</c>'s <c>WithModule</c> runs on the
+    /// content's success), and content is validated against the NodeTypes this process has
+    /// registered (<c>PackageInstaller.ValidateBulkTypes</c> — "NodeType(s) not registered"). So
+    /// on an image that does not ship the modules the packages deliver, the store's own bootstrap
+    /// is a cycle with no entry point: <c>Store</c>'s nodes include <c>Skill</c> (registered by the
+    /// <c>MeshWeaver.AI</c> module the <c>AI</c> package delivers), <c>AI</c>'s root is typed
+    /// <c>Store/Plugin</c> (declared by the <c>Store</c> package), and every other package's root
+    /// is <c>Store/Plugin</c> too. Each install failed validation, so no module ever landed, so no
+    /// restart could ever register the types — measured on a fresh control instance whose image
+    /// carries none of them (2026-10-13: <c>0 installed, 0 up to date, 48 failed</c>, <c>/data/modules</c>
+    /// empty).</para>
+    ///
+    /// <para><b>What breaks the cycle.</b> A module's bytes do not depend on any node: they are
+    /// fetched from the registry, link-probed against the running platform and landed
+    /// (<see cref="PluginBundleClient.AdoptModuleOutcome"/>). Landing them first, for the whole
+    /// selection, means the NEXT process start registers every NodeType those modules contribute
+    /// (restart-as-activation — a brand-new module is <c>NotHeld</c> and cannot go live in this
+    /// process, <c>Doc/Architecture/LiveModuleUpdate</c>), and the landing raises the pending-restart
+    /// marker that the self-updater takes. That boot's pass then finds <c>Skill</c>/<c>Agent</c>
+    /// registered, installs <c>Store</c> first (the dependency order already puts it before every
+    /// package that requires it) and everything rooted on <c>Store/Plugin</c> after it. The
+    /// "NodeType must be registered" validation is untouched: this pass's content failures are
+    /// recorded as FAILED with their cause, and the next pass is their retry.</para>
+    ///
+    /// <para><b>Scope — fresh installs only.</b> A package that already has an install record keeps
+    /// its module on the funnel it always used (module after content, inside the floor and
+    /// update-policy holds), so this phase never lands drift those holds exist to gate. A package
+    /// whose install record cannot be READ is not treated as fresh either. The same refusals the
+    /// install funnel applies before a file travels apply here before a byte lands: the entitlement
+    /// (with the same deployment-config principal) and the declared parameters — a package the
+    /// funnel would refuse lands no module ahead of that refusal. The platform floor is the
+    /// adoption's own <c>floorHold</c>.</para>
+    ///
+    /// <para>Never fails the pass: the adoption absorbs every failure into its outcome (logged by
+    /// the client), and the content phase runs whatever this phase answered.</para>
+    /// </summary>
+    /// <param name="installable">The pass's installable candidates, in dependency order.</param>
+    /// <returns>Cold; emits the entry-assembly names of the modules this phase LANDED, once.</returns>
+    private IObservable<ImmutableList<string>> LandModulesFirst(IReadOnlyList<InstallCandidate> installable)
+    {
+        var carriers = installable
+            .Select(c => (Candidate: c,
+                Bundles: (c.Source.Source as RegistryPackageSource)?.Bundles ?? c.Source.Bundles))
+            .Where(x => !string.IsNullOrWhiteSpace(x.Candidate.Package.Module) && x.Bundles is not null)
+            .ToList();
+        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
+        if (carriers.Count == 0 || persistence is null)
+            return Observable.Return(ImmutableList<string>.Empty);
+
+        var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
+        var configuration = hub.ServiceProvider.GetService<IConfiguration>();
+
+        IObservable<string?> One(InstallCandidate candidate, PluginBundleClient bundles)
+        {
+            var package = candidate.Package;
+            return persistence.Read($"{PackageInstaller.InstalledPartition}/{package.Id}", hub.JsonSerializerOptions)
+                .Take(1)
+                .DefaultIfEmpty()
+                .Select(record => (Fresh: record is null, Unreadable: (string?)null))
+                .Catch((Exception ex) => Observable.Return((Fresh: false, Unreadable: (string?)ex.Message)))
+                .SelectMany(state =>
+                {
+                    if (state.Unreadable is { } cause)
+                    {
+                        logger.LogWarning(
+                            "[DefaultInstall] module phase: the install record of {Id} could not be read "
+                            + "({Cause}) — its module {Module} is not landed ahead of its content; the "
+                            + "install funnel decides it as before.", package.Id, cause, package.Module);
+                        return Observable.Return<string?>(null);
+                    }
+                    if (!state.Fresh)
+                        return Observable.Return<string?>(null);
+                    if (PackageParameters.Missing(configuration, package) is { Count: > 0 })
+                        // The content phase refuses it by name (PackageParameters.Require, at Error);
+                        // saying it twice adds nothing, landing its module ahead would add a module
+                        // for a package this environment cannot run.
+                        return Observable.Return<string?>(null);
+                    return PackageEntitlement.Authorize(hub, package, AuthorizingPrincipal(candidate), logger)
+                        .SelectMany(_ => bundles.AdoptModuleOutcome(package.Id, package.Module!,
+                            $"{PackageInstaller.InstalledPartition}/{package.Id}"))
+                        .Select(outcome =>
+                        {
+                            if (outcome.FilesLanded > 0)
+                                return package.Module;
+                            if (outcome.Failure is { } failure)
+                                logger.LogWarning(
+                                    "[DefaultInstall] module phase: {Module} of {Id} did not land — {Failure}. "
+                                    + "Packages whose nodes need its NodeTypes fail validation this pass "
+                                    + "and are retried by the next.", package.Module, package.Id, failure);
+                            return null;
+                        })
+                        // A refusal is the content phase's to report (it applies the same gate and
+                        // records it as a skip or a failure); here it only means "no module ahead".
+                        .Catch((Exception ex) => ex is PackageAuthorizationException or LicenseAcceptanceRequiredException
+                            ? Observable.Return<string?>(null)
+                            : Observable.Throw<string?>(ex));
+                });
+        }
+
+        return accessService.RunAsSystem(() => carriers
+                .Select(x => One(x.Candidate, x.Bundles!))
+                .ToObservable()
+                .Concat()
+                .Where(module => module is not null)
+                .Select(module => module!)
+                .ToList()
+                .SelectMany(landed =>
+                {
+                    if (landed.Count == 0)
+                        return Observable.Return(ImmutableList<string>.Empty);
+                    logger.LogInformation(
+                        "[DefaultInstall] module phase: landed {Count} module(s) BEFORE any package content — "
+                        + "[{Modules}]. A newly landed module loads at the next restart (restart-as-activation); "
+                        + "a package whose nodes need its NodeTypes fails validation in this pass and is "
+                        + "installed by the pass that follows that restart.",
+                        landed.Count, string.Join(", ", landed));
+                    // One landing wave → one proposal of the module set it describes (#3395), the
+                    // same close the install funnel and the reconciler take.
+                    return CatalogLayoutAreas.ProposeMeshModuleSet(hub, logger)
+                        .Select(_ => landed.ToImmutableList());
+                }))
+            .Catch((Exception ex) =>
+            {
+                logger.LogError(ex,
+                    "[DefaultInstall] module phase faulted: {Cause}. The content phase runs as before — "
+                    + "each package's module still follows its content on the install funnel.", ex.Message);
+                return Observable.Return(ImmutableList<string>.Empty);
+            });
+    }
+
+    /// <summary>The principal a candidate is installed on the authority of — the deployment
+    /// configuration's, for a commercial package it authorizes; null for every other (a free package
+    /// needs none, and System authorizes nothing).</summary>
+    private string? AuthorizingPrincipal(InstallCandidate candidate) =>
+        candidate.ConfigAuthority is not null && candidate.Package.IsCommercial()
+            ? hub.ServiceProvider.GetService<DeploymentConfigAuthority>()?.Principal
+            : null;
 
     /// <summary>
     /// Installs (or re-reconciles) ONE package and re-asserts its public read — unless this lane
@@ -2318,10 +2504,7 @@ public sealed class InstanceAutoRegistrationService(
         // verifies it against the current configuration; it is stamped on the install record
         // (AuthorizedBy, re-verified by every unattended update) and on the ledger. A free package
         // needs no principal and gets none — nothing changes for it.
-        var authority = hub.ServiceProvider.GetService<DeploymentConfigAuthority>();
-        var principal = candidate.ConfigAuthority is not null && package.IsCommercial()
-            ? authority?.Principal
-            : null;
+        var principal = AuthorizingPrincipal(candidate);
         if (principal is not null)
             logger.LogInformation(
                 "[DefaultInstall] commercial package {Id} is installed on the authority of {Principal} "
@@ -2968,6 +3151,14 @@ public readonly record struct DefaultInstallSummary(
         ImmutableList<DefaultInstallAuthorization>.Empty;
 
     /// <summary>
+    /// The modules this pass's MODULE PHASE landed ahead of any package content (the platform
+    /// bootstrap — <c>InstanceAutoRegistrationService.LandModulesFirst</c>), by entry-assembly name.
+    /// A newly landed module loads at the next restart, so a package whose nodes need its NodeTypes
+    /// is in <see cref="Failures"/> of THIS pass and is delivered by the pass after that restart.
+    /// </summary>
+    public ImmutableList<string> ModulesLanded { get; init; } = ImmutableList<string>.Empty;
+
+    /// <summary>
     /// 🚨 True when at least one source's listing FAILED this pass (#4097), so what the pass did
     /// not see is unknown rather than absent. <see cref="TierRefused"/> is then a partial answer:
     /// the ledger keeps its previous refusals and the activation markers are left standing,
@@ -3040,6 +3231,8 @@ public readonly record struct DefaultInstallSummary(
             .AddRange(other.TierRefused ?? ImmutableList<PlanTierRefusal>.Empty),
         Authorized = (Authorized ?? ImmutableList<DefaultInstallAuthorization>.Empty)
             .AddRange(other.Authorized ?? ImmutableList<DefaultInstallAuthorization>.Empty),
+        ModulesLanded = (ModulesLanded ?? ImmutableList<string>.Empty)
+            .AddRange(other.ModulesLanded ?? ImmutableList<string>.Empty),
         ListingIncomplete = ListingIncomplete || other.ListingIncomplete,
         SourceUnreachable = SourceUnreachable || other.SourceUnreachable,
     };
@@ -3062,6 +3255,9 @@ public readonly record struct DefaultInstallSummary(
         + (Held is { Count: > 0 } h
             ? " — HELD (another writer owns the partition; re-derived next boot): "
               + $"[{string.Join(", ", h.Select(x => x.Package))}]"
+            : "")
+        + (ModulesLanded is { Count: > 0 } m
+            ? $" — MODULES LANDED ahead of content (load at the next restart): [{string.Join(", ", m)}]"
             : "");
 }
 
