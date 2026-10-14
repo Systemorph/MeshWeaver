@@ -303,16 +303,30 @@ public sealed class ContentDegradationRegistry
     public ImmutableList<ContentDegradation> Unresolved(IMeshContentTypeRegistry? contentTypes) =>
         Snapshot().Where(d => !IsResolvable(d, contentTypes)).ToImmutableList();
 
-    /// <summary>Whether one recorded degradation's type resolves NOW. Pure given the registry.</summary>
+    /// <summary>
+    /// Whether one recorded degradation's type resolves NOW. Pure given the registry.
+    ///
+    /// <para>🚨 <b>A present <c>$type</c> decides; the NodeType mapping is the fallback (#6716).</b>
+    /// The same precedence the read seam classifies with (<c>MeshNodeStreamCache.UnboundContentType</c>,
+    /// #6674): the NodeType's mapped type counts only where the stored <c>$type</c> ADMITS it
+    /// (<see cref="ContentDiscriminator.AdmitsDiscriminator"/>), and it is the whole answer only
+    /// when the content carried no <c>$type</c>. Treating a resolving NodeType as decisive dropped,
+    /// at settle and on <c>/health</c>, a node whose NodeType resolves but whose present,
+    /// contradictory <c>$type</c> does not — the seam had recorded it as unresolved
+    /// (<see cref="ContentDegradation.UnboundContentType"/> <c>null</c>), and no registration of the
+    /// NodeType's type makes that content readable.</para>
+    /// </summary>
     private static bool IsResolvable(ContentDegradation degradation, IMeshContentTypeRegistry? contentTypes)
     {
         if (contentTypes is null)
             return false;
+        var discriminator = string.IsNullOrEmpty(degradation.Discriminator) ? null : degradation.Discriminator;
         if (!string.IsNullOrEmpty(degradation.NodeType)
-            && contentTypes.TryResolveByNodeType(degradation.NodeType, out _))
+            && contentTypes.TryResolveByNodeType(degradation.NodeType, out var mapped)
+            && ContentDiscriminator.AdmitsDiscriminator(discriminator, mapped))
             return true;
-        return !string.IsNullOrEmpty(degradation.Discriminator)
-               && contentTypes.TryResolveByDiscriminator(degradation.Discriminator!, out _);
+        return discriminator is not null
+               && contentTypes.TryResolveByDiscriminator(discriminator, out _);
     }
 
     /// <summary>Every node type currently degraded, most recent first.</summary>
