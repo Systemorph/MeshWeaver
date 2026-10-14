@@ -385,12 +385,23 @@ public sealed class InstanceComboAssembler
         return SelectModuleFiles(spec, snapshot)
             .SelectMany(files =>
             {
+                // 🚨 An empty selection is ABSENCE only when the snapshot's listing is complete
+                // (MeshWeaver#6742). A truncated tree omits files it never names, so a folder
+                // missing from it is INDETERMINATE: the module stays failed and is never handed
+                // to ConfirmRetirement, which would otherwise retire a package that may still
+                // exist and let the verdict go Green on a partial listing.
                 if (files.Count == 0)
-                    return Observable.Return(new ModuleOutcome(plan, baseline with
-                    {
-                        Status = ModuleAssemblyStatus.Failed,
-                        Error = AbsentError(spec, spec.GitRef),
-                    }, Absent: true));
+                    return Observable.Return(snapshot.ListingIsComplete
+                        ? new ModuleOutcome(plan, baseline with
+                        {
+                            Status = ModuleAssemblyStatus.Failed,
+                            Error = AbsentError(spec, spec.GitRef),
+                        }, Absent: true)
+                        : new ModuleOutcome(plan, baseline with
+                        {
+                            Status = ModuleAssemblyStatus.Failed,
+                            Error = IndeterminateListingError(spec, spec.GitRef, snapshot.CommitSha),
+                        }, Absent: false));
 
                 if (files.Select(f => InvalidPathReason(f.Path)).FirstOrDefault(r => r is not null)
                     is { } pathReason)
@@ -438,6 +449,18 @@ public sealed class InstanceComboAssembler
             : $"folder '{spec.FolderFilter}/' does not exist in "
               + $"'{spec.RepositoryUrl}' at '{gitRef}'.";
 
+    /// <summary>Why an empty selection from a TRUNCATED listing proves nothing
+    /// (<see cref="RepoSnapshot.ListingIsComplete"/> false, MeshWeaver#6742).</summary>
+    private static string IndeterminateListingError(FetchSpec spec, string gitRef, string? commit) =>
+        "indeterminate listing: the tree of "
+        + $"'{spec.RepositoryUrl}' at '{gitRef}'" + (commit is null ? "" : $" ({commit})")
+        + " was TRUNCATED, and "
+        + (spec.FolderFilter is null
+            ? (spec.Subdirectory is null ? "the fetch" : $"subdirectory '{spec.Subdirectory}'")
+            : $"folder '{spec.FolderFilter}/'")
+        + " is not in the part that was listed. A partial listing cannot show that it is absent, "
+        + "so it is neither materialised nor retired.";
+
     /// <summary>The source repository's default branch, as every git transport resolves it.</summary>
     private const string HeadRef = "HEAD";
 
@@ -450,6 +473,10 @@ public sealed class InstanceComboAssembler
     /// <see cref="ModuleAssemblyStatus.Failed"/>: the record is wrong, the package is not gone.
     /// A <c>HEAD</c> read that fails proves nothing either way, so the module stays failed and the
     /// line says why. ONE <c>HEAD</c> read per group, and only when a member was absent.
+    /// 🚨 Absence counts only from a COMPLETE listing (<see cref="RepoSnapshot.ListingIsComplete"/>,
+    /// MeshWeaver#6742): an outcome is marked absent only when the snapshot at its own ref was
+    /// complete, and the <c>HEAD</c> snapshot must be complete too — a folder missing from a
+    /// truncated tree is indeterminate, and the module stays failed saying so.
     /// </summary>
     private IObservable<ImmutableList<ModuleAssembly>> ConfirmRetirement(
         string repositoryUrl, string gitRef, string? subdirectory,
@@ -464,7 +491,15 @@ public sealed class InstanceComboAssembler
                     ? Observable.Return(outcome.Entry)
                     : SelectModuleFiles(outcome.Plan.Fetch! with { GitRef = HeadRef }, head)
                         .Select(files => files.Count == 0
-                            ? Retire(outcome, head.CommitSha)
+                            ? head.ListingIsComplete
+                                ? Retire(outcome, head.CommitSha)
+                                : outcome.Entry with
+                                {
+                                    Error = outcome.Entry.Error + " Whether it was retired could "
+                                            + "not be checked: "
+                                            + IndeterminateListingError(outcome.Plan.Fetch!,
+                                                HeadRef, head.CommitSha),
+                                }
                             : outcome.Entry with
                             {
                                 Error = outcome.Entry.Error + $" It still exists at '{HeadRef}' "

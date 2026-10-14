@@ -776,6 +776,14 @@ wire spelling is unchanged. The decision adds `Retired`:
   member was absent. A folder absent at the recorded ref but **present at `HEAD`** stays `Failed`:
   the record is wrong, and the package is not gone. A `HEAD` read that fails proves nothing, so
   the module stays `Failed` and the line says so.
+- 🚨 **Absence is read only from a COMPLETE listing (#6742).** GitHub truncates a large recursive
+  tree read and still answers HTTP 200; the snapshot then carries `ListingIsComplete: false`, and
+  a folder missing from it may simply be in the part that was not listed. So a module is retired
+  only when BOTH snapshots — at its fetch ref and at `HEAD` — are complete. A folder missing from a
+  truncated tree at either ref stays `Failed` with an `indeterminate listing` reason, so the
+  verdict cannot go Green on a partial listing. The same rule holds when the fetch ref already was
+  `HEAD`: that one snapshot must be complete. This is the rule the importer's prune already
+  follows ([Prune Requires a Complete Listing](../PruneRequiresACompleteListing)).
 - `ComboAssemblyReport.Success` counts a retired module as not failing. A combo whose every module
   is retired is still **not** a success, because the gate would otherwise run over an empty root.
 - The verdict carries retired modules on their own list, `ComboVerification.RetiredModules`. They

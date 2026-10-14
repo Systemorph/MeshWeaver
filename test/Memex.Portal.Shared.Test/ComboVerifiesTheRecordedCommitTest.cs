@@ -174,6 +174,73 @@ public class ComboVerifiesTheRecordedCommitTest : IDisposable
         run.Verdict.Verdict.Should().Be(ComboVerdictKind.NotVerifiable);
     }
 
+    // ── A truncated listing proves no absence (MeshWeaver#6742) ─────────────────────────────────
+
+    /// <summary>
+    /// 🚨 A folder missing from a TRUNCATED tree at the recorded commit is INDETERMINATE, not
+    /// absent — even when a complete <c>HEAD</c> lacks it too. The package stays failed, is never
+    /// reported retired, and the verdict cannot go Green on a partial listing.
+    /// </summary>
+    [Fact]
+    public async Task AFolderMissingFromATruncatedTreeAtItsCommit_IsNotRetired()
+    {
+        var run = await Verify(
+            Combo(
+                Package("Widget", InstalledCommit, InstalledVersion),
+                Package("DeepSign", InstalledCommit, InstalledVersion)),
+            Repository(
+                TruncatedAt(InstalledCommit, Module("Widget", InstalledVersion)),
+                At("HEAD", Module("Widget", InstalledVersion))));
+
+        var deepSign = run.Assembly.Modules.Single(m => m.ModuleId == "DeepSign");
+        deepSign.Status.Should().Be(ModuleAssemblyStatus.Failed, deepSign.Error ?? "");
+        deepSign.Error.Should().Contain("indeterminate listing");
+        run.Verdict.RetiredModules.Should().BeEmpty();
+        run.Verdict.Verdict.Should().Be(ComboVerdictKind.NotVerifiable);
+    }
+
+    /// <summary>🚨 Absent at a complete recorded commit, but the <c>HEAD</c> read that would
+    /// confirm the retirement was TRUNCATED: whether the package left its source is unknown, so
+    /// it stays failed and says so.</summary>
+    [Fact]
+    public async Task AFolderMissingAtItsCommit_AndFromATruncatedHead_IsNotRetired()
+    {
+        var run = await Verify(
+            Combo(
+                Package("Widget", InstalledCommit, InstalledVersion),
+                Package("DeepSign", InstalledCommit, InstalledVersion)),
+            Repository(
+                At(InstalledCommit, Module("Widget", InstalledVersion)),
+                TruncatedAt("HEAD", Module("Widget", InstalledVersion))));
+
+        var deepSign = run.Assembly.Modules.Single(m => m.ModuleId == "DeepSign");
+        deepSign.Status.Should().Be(ModuleAssemblyStatus.Failed, deepSign.Error ?? "");
+        deepSign.Error.Should().Contain("could not be checked");
+        deepSign.Error.Should().Contain("indeterminate listing");
+        run.Verdict.RetiredModules.Should().BeEmpty();
+        run.Verdict.Verdict.Should().Be(ComboVerdictKind.NotVerifiable);
+    }
+
+    /// <summary>🚨 A record with no commit is fetched at <c>HEAD</c>, where the absence used to
+    /// BE the retirement fact with no second read. A truncated <c>HEAD</c> proves no absence.</summary>
+    [Fact]
+    public async Task ARecordReadAtATruncatedHead_IsNotRetired()
+    {
+        var run = await Verify(
+            Combo(
+                Package("Widget", InstalledCommit, InstalledVersion),
+                Package("PlatformUI", null, InstalledVersion)),
+            Repository(
+                At(InstalledCommit, Module("Widget", InstalledVersion)),
+                TruncatedAt("HEAD", Module("Widget", MovedVersion))));
+
+        var platformUi = run.Assembly.Modules.Single(m => m.ModuleId == "PlatformUI");
+        platformUi.Status.Should().Be(ModuleAssemblyStatus.Failed, platformUi.Error ?? "");
+        platformUi.Error.Should().Contain("indeterminate listing");
+        run.Verdict.RetiredModules.Should().BeEmpty();
+        run.Verdict.Verdict.Should().Be(ComboVerdictKind.NotVerifiable);
+    }
+
     // ── Harness ──────────────────────────────────────────────────────────────────────────────────
 
     private Task<ComboVerificationRun> Verify(InstanceCombo combo, Func<string, RepoSnapshot> repository)
@@ -227,18 +294,27 @@ public class ComboVerifiesTheRecordedCommitTest : IDisposable
             """),
     ];
 
-    private static (string Ref, IReadOnlyList<RepoFile> Files) At(
+    private static (string Ref, IReadOnlyList<RepoFile> Files, bool Complete) At(
         string gitRef, params IReadOnlyList<RepoFile>[] modules) =>
-        (gitRef, [.. modules.SelectMany(m => m)]);
+        (gitRef, [.. modules.SelectMany(m => m)], true);
+
+    /// <summary>A tree whose listing was TRUNCATED (GitHub's <c>truncated: true</c> on a recursive
+    /// tree read): it names only the files given, and omits others it never lists.</summary>
+    private static (string Ref, IReadOnlyList<RepoFile> Files, bool Complete) TruncatedAt(
+        string gitRef, params IReadOnlyList<RepoFile>[] modules) =>
+        (gitRef, [.. modules.SelectMany(m => m)], false);
 
     /// <summary>An in-memory repository: one tree per ref. A ref the fixture does not name is an
-    /// empty tree — the repository simply does not carry anything there.</summary>
+    /// empty, COMPLETE tree — the repository simply does not carry anything there.</summary>
     private static Func<string, RepoSnapshot> Repository(
-        params (string Ref, IReadOnlyList<RepoFile> Files)[] trees) =>
+        params (string Ref, IReadOnlyList<RepoFile> Files, bool Complete)[] trees) =>
         gitRef =>
         {
             var tree = trees.FirstOrDefault(t => string.Equals(t.Ref, gitRef, StringComparison.Ordinal));
             var commit = gitRef.Length == 40 ? gitRef : HeadCommit;
-            return new RepoSnapshot(commit, (tree.Files ?? []).ToImmutableList());
+            return new RepoSnapshot(commit, (tree.Files ?? []).ToImmutableList())
+            {
+                ListingIsComplete = tree.Ref is null || tree.Complete,
+            };
         };
 }
