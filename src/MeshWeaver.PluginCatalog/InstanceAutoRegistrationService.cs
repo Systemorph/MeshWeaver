@@ -2389,8 +2389,13 @@ public sealed class InstanceAutoRegistrationService(
             {
                 logger.LogError(ex,
                     "[DefaultInstall] module phase faulted: {Cause}. The content phase runs as before — "
-                    + "each package's module still follows its content on the install funnel.", ex.Message);
-                return Observable.Return((ImmutableList<string>.Empty, none));
+                    + "each package's module still follows its content on the install funnel. No module of "
+                    + "this selection is cleared for the pass's proposal.", ex.Message);
+                // Fail CLOSED for activation: a wave that aborted established nothing about its
+                // carriers, so every carrier's module blocks the pass's one proposal.
+                IReadOnlySet<string> allCarriers = carriers.Select(x => x.Candidate.Package.Module!)
+                    .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+                return Observable.Return((ImmutableList<string>.Empty, allCarriers));
             });
     }
 
