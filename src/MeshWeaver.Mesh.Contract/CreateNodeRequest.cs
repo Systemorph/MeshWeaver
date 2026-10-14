@@ -459,6 +459,27 @@ public record DeleteNodeRequest(string Path)
     public bool Recursive { get; init; }
 
     /// <summary>
+    /// If true, delete the node at <see cref="Path"/> ALONE and leave everything under it in place:
+    /// the has-children refusal is skipped, no subtree-deletion scope is opened, and the drain
+    /// verifies the root's removal only — never deleting a descendant. The node still goes through
+    /// the full lifecycle: the Delete permission check, the delete-validator chain, the
+    /// <c>Deleted</c> change event, the stream-cache invalidation and the disposal of the per-node
+    /// hub hosted at the path.
+    ///
+    /// <para>For a row whose path prefixes nodes that are not its children in the lifecycle sense —
+    /// a NodeType definition, whose path prefixes its own <c>Source/</c> and, for a leaf-shaped
+    /// type, its instances (#6627: the closed-type-set installer removes such a row and must keep
+    /// the records under it). Contradicts <see cref="Recursive"/>; a request carrying both is
+    /// refused.</para>
+    ///
+    /// <para>🚨 <b>Only for a NodeType definition</b> (#6751): the handler refuses it, before any
+    /// side effect, unless the stored target's <c>NodeType</c> is <c>NodeType</c>. On any other node
+    /// the post-deletion handlers would still run — a partition root's would drop the store the
+    /// request asked to keep — and an ordinary parent's children would be orphaned.</para>
+    /// </summary>
+    public bool KeepDescendants { get; init; }
+
+    /// <summary>
     /// If true, also delete satellite nodes (e.g. _Comment, _Activity, _Thread). By default
     /// satellites are preserved so an undo / restore can find prior activity. Set to <c>true</c>
     /// for hard-delete operations such as the Delete step inside a Move.

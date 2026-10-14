@@ -1169,11 +1169,14 @@ internal static class NodeTypeCompilationHelpers
         // succeeds), and it is bounded the same way: the flip stamps FailedPlatformVersion with the
         // live build, and an older replica never retries a newer build's verdict.
         var livePlatformVersion = LivePlatformVersion;
+        // 🚨 A closed type set's refusal is not a build verdict — the older-platform trigger skips
+        // it (#6627); see HasFailureFromOlderPlatform.
+        var redriveClosedTypeSet = hub.ServiceProvider.IsClosedTypeSet();
         var redriveGivenUp = false;
         var failedVerdictKickoffSub = ownStream
             .Where(node => node?.Content is NodeTypeDefinition def
                 && (HasStaleFailureVerdict(def, guards.ModulesHash, hubPath)
-                    || HasFailureFromOlderPlatform(def, livePlatformVersion, hubPath))
+                    || HasFailureFromOlderPlatform(def, livePlatformVersion, hubPath, redriveClosedTypeSet))
                 && !IsStaticOnlyNodeType(node, def))
             // Cheap dedupe so an unrelated field edit does not re-enter the body while the flip is
             // still in flight; correctness is the re-check inside the Update lambda, not this.
@@ -1237,7 +1240,8 @@ internal static class NodeTypeCompilationHelpers
                     // and they commit together, inside the lambda — see ApplyFailedVerdictRedrive.
                     workspace.GetMeshNodeStream()
                         .Update(curr => ApplyFailedVerdictRedrive(
-                            curr, hubPath, guards.ModulesHash, parkRegistry, livePlatformVersion))
+                            curr, hubPath, guards.ModulesHash, parkRegistry, livePlatformVersion,
+                            redriveClosedTypeSet))
                         .Subscribe(_ => { },
                             ex => logger?.LogWarning(ex,
                                 "Failed-verdict re-drive: Update failed for {HubPath}", hubPath));
@@ -1264,7 +1268,7 @@ internal static class NodeTypeCompilationHelpers
                 // "stuck" would cry wolf on every cold activation of a broken type.
                 && def.CurrentSourceVersions is not null
                 && !HasStaleFailureVerdict(def, guards.ModulesHash, hubPath)
-                && !HasFailureFromOlderPlatform(def, livePlatformVersion, hubPath))
+                && !HasFailureFromOlderPlatform(def, livePlatformVersion, hubPath, redriveClosedTypeSet))
             .Take(1)
             .Subscribe(
                 node =>
@@ -3787,9 +3791,17 @@ internal static class NodeTypeCompilationHelpers
     /// <param name="livePlatformVersion">This process's platform build, or <c>null</c> when unknown
     /// (then the answer is NO — an unknown build cannot claim to be newer).</param>
     /// <param name="nodeTypePath">The type's path, for <see cref="IsUnconvergableSourceFailure"/>.</param>
+    /// <param name="closedTypeSet">Whether THIS process serves a closed type set
+    /// (<see cref="ClosedTypeSetExtensions.IsClosedTypeSet"/>). There, a failure that IS the
+    /// closed-set refusal (<see cref="ClosedTypeSet.IsRefusal"/>) is never retried: it records this
+    /// process's switch, not the type's source, so a newer platform build cannot answer it
+    /// differently — the retry would only flip the row to Pending to be refused again, once per
+    /// build, on every such row (#6627).</param>
     internal static bool HasFailureFromOlderPlatform(
-        NodeTypeDefinition def, string? livePlatformVersion, string? nodeTypePath = null) =>
+        NodeTypeDefinition def, string? livePlatformVersion, string? nodeTypePath = null,
+        bool closedTypeSet = false) =>
         def.CompilationStatus is CompilationStatus.Error
+        && !(closedTypeSet && ClosedTypeSet.IsRefusal(def.CompilationError))
         // The live build must be ORDERED (a CI run number) before it can claim to be newer than
         // anything — including an absent stamp, which would otherwise bypass the ordering.
         && IsOrderedPlatformBuild(livePlatformVersion)
@@ -3904,9 +3916,12 @@ internal static class NodeTypeCompilationHelpers
     /// (<see cref="LivePlatformVersion"/>), or <c>null</c> when it is not known — then only the
     /// input-token trigger (<see cref="HasStaleFailureVerdict"/>) is consulted and the
     /// older-platform one (<see cref="HasFailureFromOlderPlatform"/>) never fires.</param>
+    /// <param name="closedTypeSet">Whether this process serves a closed type set — handed to
+    /// <see cref="HasFailureFromOlderPlatform"/>, which then never retries a closed-set refusal (#6627).</param>
     internal static MeshNode ApplyFailedVerdictRedrive(
         MeshNode curr, string hubPath, string? modulesHash,
-        NodeTypeCompileParkRegistry? parkRegistry, string? livePlatformVersion = null)
+        NodeTypeCompileParkRegistry? parkRegistry, string? livePlatformVersion = null,
+        bool closedTypeSet = false)
     {
         if (curr?.Content is not NodeTypeDefinition d) return curr!;
         // Never clobber an in-flight compile (a concurrent release request or
@@ -3917,7 +3932,7 @@ internal static class NodeTypeCompilationHelpers
         // Re-check against the state being committed — a genuine compile may have settled, or a
         // fresh terminal failure may have re-parked, between the outer Where and this write.
         if (!HasStaleFailureVerdict(d, modulesHash, hubPath)
-            && !HasFailureFromOlderPlatform(d, livePlatformVersion, hubPath))
+            && !HasFailureFromOlderPlatform(d, livePlatformVersion, hubPath, closedTypeSet))
             return curr;
         // 🅿️ Committing the flip — and ONLY now — claim the one-shot admission, so the compile
         // watcher's parked short-circuit lets this Pending emission through. The park itself is
