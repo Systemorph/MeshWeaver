@@ -78,23 +78,25 @@ public abstract class StoreBootstrapTestBase(ITestOutputHelper output) : Monolit
             """{"$type":"MeshNode","id":"Plugin","namespace":"Store","path":"Store/Plugin","mainNode":"Store/Plugin","name":"Plugin","nodeType":"NodeType","state":"Active"}"""),
         new("Store/Guide.json",
             """{"$type":"MeshNode","id":"Guide","namespace":"Store","path":"Store/Guide","mainNode":"Store/Guide","name":"Guide","nodeType":"Skill","state":"Active"}"""),
-        Root("AI", AiModule, """["Store@^1.0.0"]""", preInstalled: true),
+        Root("AI"),
         Page("AI"),
-        Root("EntityViews", ViewsModule, """["Store@^1.0.0"]""", preInstalled: true),
+        Root("EntityViews"),
         Page("EntityViews"),
-        Root("Chat", ChatModule, """["Store@^1.0.0","AI@^1.0.0"]""", preInstalled: true),
+        Root("Chat"),
         Page("Chat"),
         new("Games/index.json",
             """{"$type":"MeshNode","id":"Games","namespace":"","path":"Games","mainNode":"Games","name":"Games","nodeType":"Space","state":"Active"}"""),
         Page("Games"),
     ];
 
-    private static RepoFile Root(string id, string module, string requires, bool preInstalled) =>
+    // The root carries NO content: the registry's listing (BootstrapRegistry) is what declares the
+    // module and the requirements, and core registers no `PluginContent` type — an unresolvable
+    // `$type` here would be content nothing can read (the untyped-content gate).
+    private static RepoFile Root(string id) =>
         new($"{id}/index.json",
             "{\"$type\":\"MeshNode\",\"id\":\"" + id + "\",\"namespace\":\"\",\"path\":\"" + id
             + "\",\"mainNode\":\"" + id + "\",\"name\":\"" + id
-            + "\",\"nodeType\":\"Store/Plugin\",\"state\":\"Active\",\"content\":{\"$type\":\"PluginContent\",\"module\":\""
-            + module + "\",\"requires\":" + requires + ",\"preInstalled\":" + (preInstalled ? "true" : "false") + "}}");
+            + "\",\"nodeType\":\"Store/Plugin\",\"state\":\"Active\"}");
 
     private static RepoFile Page(string id) =>
         new($"{id}/Guide.json",
