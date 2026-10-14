@@ -157,8 +157,9 @@ failed`, `/data/modules` empty.
 
 A module's bytes depend on no node, so phase 1 lands them all (fetched from the registry, link-probed,
 written to `modules/`). A brand-new module is `NotHeld` in the running process and activates at the
-next restart ([Live Module Update](/Doc/Architecture/LiveModuleUpdate)); the landing raises the
-pending-restart marker the self-updater takes. The pass after that restart finds `Skill`/`Agent`
+next restart after a proposed module set names it ([Live Module Update](/Doc/Architecture/LiveModuleUpdate));
+phase 1 proposes that set (checked, see below) and the landing raises the pending-restart marker the
+self-updater takes. The pass after that restart finds `Skill`/`Agent`
 registered and installs `Store` first — the declared `requires` already put it ahead of every package
 rooted on `Store/Plugin` — and the rest after it. The validation itself is unchanged: phase 2's
 failures in the first pass are recorded as FAILED with their cause and retried by the next pass.
@@ -170,7 +171,8 @@ already-installed package keeps its module on the funnel (after its content, ins
 update-policy holds), so phase 1 never lands drift those holds gate. The module set phase 1 proposes is checked
 against the install records AND the selection about to install (`ModuleDependencyFloor.ProposeChecked`
 with the fresh manifests) — a fresh package's declared floor binds the set before its record exists. The pass's summary line names
-what phase 1 landed: `MODULES LANDED ahead of content (load at the next restart): […]`.
+what phase 1 landed: `MODULES LANDED ahead of content: […]`; a landed module loads at a restart only
+once a proposed module set names it, and the phase logs whether its proposal was written or refused.
 
 Pinned by `StoreBootstrapLandsModulesFirstTest` (a fresh mesh: the store's packages fail validation
 exactly as production did, every module of the selection lands, the selection is the declared set and

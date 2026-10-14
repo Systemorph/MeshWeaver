@@ -97,7 +97,9 @@ public static class ModuleDependencyFloor
         static bool Usable(ModuleActivationEntry e) => e.Enabled && !string.IsNullOrWhiteSpace(e.Version);
 
         var module = installed.FirstOrDefault(p =>
-            string.Equals(p.Id, dependencyId, StringComparison.OrdinalIgnoreCase))?.Module;
+            // Package ids are ordinal (PluginGrantEntry.Matches, PackageDependencyGraph); module
+            // (assembly) names below stay case-insensitive like every other assembly-name match.
+            string.Equals(p.Id, dependencyId, StringComparison.Ordinal))?.Module;
         if (!string.IsNullOrWhiteSpace(module)
             && landed.Entries.FirstOrDefault(e =>
                 string.Equals(e.Name, module, StringComparison.OrdinalIgnoreCase)) is { } byModule
@@ -106,7 +108,7 @@ public static class ModuleDependencyFloor
         return landed.Entries.FirstOrDefault(e =>
             Usable(e)
             && e.PackagePath?.Split('/') is { Length: 2 } segments
-            && string.Equals(segments[1], dependencyId, StringComparison.OrdinalIgnoreCase));
+            && string.Equals(segments[1], dependencyId, StringComparison.Ordinal));
     }
 
     /// <summary>

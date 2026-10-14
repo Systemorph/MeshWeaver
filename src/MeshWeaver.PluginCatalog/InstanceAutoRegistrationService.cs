@@ -2358,9 +2358,9 @@ public sealed class InstanceAutoRegistrationService(
                     if (landed.Count > 0)
                         logger.LogInformation(
                         "[DefaultInstall] module phase: landed {Count} module(s) BEFORE any package content — "
-                        + "[{Modules}]. A newly landed module loads at the next restart (restart-as-activation); "
-                        + "a package whose nodes need its NodeTypes fails validation in this pass and is "
-                        + "installed by the pass that follows that restart.",
+                        + "[{Modules}]. A newly landed module loads at a restart once the module set naming it is "
+                        + "proposed (restart-as-activation; the proposal follows); a package whose nodes need its "
+                        + "NodeTypes fails validation in this pass and is installed by a pass after that restart.",
                             landed.Count, string.Join(", ", landed));
                     // One landing wave → one proposal of the module set it describes (#3395), the
                     // same close the install funnel and the reconciler take.
@@ -2391,6 +2391,11 @@ public sealed class InstanceAutoRegistrationService(
         if (landing is null)
             return Observable.Return<ModuleSet?>(null);
         return ModuleDependencyFloor.ProposeChecked(hub, landing, selection)
+            .Do(set => logger.LogInformation(
+                "[DefaultInstall] module phase: {Outcome}",
+                set is null
+                    ? "the module set is unchanged by this wave (nothing new to propose)"
+                    : "the module set naming the landed modules is proposed — they load at the next restart"))
             .Catch((Exception ex) =>
             {
                 logger.LogWarning(ex,
@@ -3235,7 +3240,7 @@ public readonly record struct DefaultInstallSummary(
     /// <summary>
     /// The modules this pass's MODULE PHASE landed ahead of any package content (the platform
     /// bootstrap — <c>InstanceAutoRegistrationService.LandModulesFirst</c>), by entry-assembly name.
-    /// A newly landed module loads at the next restart, so a package whose nodes need its NodeTypes
+    /// A newly landed module loads at a restart once a proposed module set names it, so a package whose nodes need its NodeTypes
     /// is in <see cref="Failures"/> of THIS pass and is delivered by the pass after that restart.
     /// </summary>
     public ImmutableList<string> ModulesLanded { get; init; } = ImmutableList<string>.Empty;
@@ -3339,7 +3344,7 @@ public readonly record struct DefaultInstallSummary(
               + $"[{string.Join(", ", h.Select(x => x.Package))}]"
             : "")
         + (ModulesLanded is { Count: > 0 } m
-            ? $" — MODULES LANDED ahead of content (load at the next restart): [{string.Join(", ", m)}]"
+            ? $" — MODULES LANDED ahead of content: [{string.Join(", ", m)}]"
             : "");
 }
 
