@@ -2234,7 +2234,7 @@ public sealed class InstanceAutoRegistrationService(
     /// update-policy holds), so this phase never lands drift those holds exist to gate. A package
     /// whose install record cannot be READ is not treated as fresh either. The same refusals the
     /// install funnel applies before a file travels apply here before a byte lands: the entitlement
-    /// (with the same deployment-config principal) and the declared parameters — a package the
+    /// (with the same deployment-config principal), licence acceptance and the declared parameters — a package the
     /// funnel would refuse lands no module ahead of that refusal. The platform floor is the
     /// adoption's own <c>floorHold</c>.</para>
     ///

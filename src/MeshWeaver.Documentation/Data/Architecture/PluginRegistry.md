@@ -164,7 +164,7 @@ rooted on `Store/Plugin` — and the rest after it. The validation itself is unc
 failures in the first pass are recorded as FAILED with their cause and retried by the next pass.
 
 Phase 1 applies the gates the install funnel applies before a file travels — the entitlement (with
-the same deployment-config principal) and the declared parameters — so a package the funnel would
+the same deployment-config principal), licence acceptance and the declared parameters — so a package the funnel would
 refuse lands no module ahead of that refusal; the platform floor is the adoption's own hold. An
 already-installed package keeps its module on the funnel (after its content, inside the floor and
 update-policy holds), so phase 1 never lands drift those holds gate. The pass's summary line names
