@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "Godos Cocina T\u00edpica - Sevilla, Spain",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "GODOS",

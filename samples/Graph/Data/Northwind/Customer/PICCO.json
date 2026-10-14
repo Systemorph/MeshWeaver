@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "Piccolo und mehr - Salzburg, Austria",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "PICCO",

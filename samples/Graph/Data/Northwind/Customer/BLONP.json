@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "Blondesddsl p\u00e8re et fils - Strasbourg, France",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "BLONP",

@@ -6,7 +6,6 @@
   "category": "Employees",
   "description": "Andrew Fuller - Vice President, Sales",
   "icon": "/static/NodeTypeIcons/person.svg",
-  "isPersistent": true,
   "content": {
     "$type": "EmployeeContent",
     "employeeId": 2,

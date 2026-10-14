@@ -46,6 +46,7 @@ public sealed class GitHubSyncService
     private readonly ILogger? logger;
     private readonly FileFormatParserRegistry parsers;
     private readonly FileFormatParserRegistry strictImportParsers;
+    private readonly JsonSerializerOptions strictImportOptions;
 
     private sealed class SyncSnapshotParseException(string message, string commitSha)
         : InvalidOperationException(message)
@@ -113,6 +114,7 @@ public sealed class GitHubSyncService
         };
         strictOptions.TypeInfoResolver = new StrictImportTypeInfoResolver(
             strictOptions.TypeInfoResolver ?? new DefaultJsonTypeInfoResolver());
+        strictImportOptions = strictOptions;
         strictImportParsers = new FileFormatParserRegistry(strictOptions, contributedParsers);
     }
 
@@ -1358,7 +1360,9 @@ public sealed class GitHubSyncService
         var parsed = strictImportParsers.TryParse(ext, file.Path, file.Content, parseRelativePath, (path, ex) =>
         {
             logger?.LogWarning(ex, "Failed to parse {Path} — GitSync snapshot refused.", path);
-            problem = $"Failed to parse '{path}': {ex.Message} — snapshot refused.";
+            // #6638 — the refusal names the FILE and the FIELD (a member MeshNode no longer has),
+            // so the fix — removing it from the file — is readable from the sync node alone.
+            problem = UnmappedNodeMembers.DescribeRefusal(path, file.Content, ex, strictImportOptions);
         });
         if (parsed is null) return Observable.Return(((MeshNode?)null, false, problem));
         // #3474 — the repo→mesh half of the NodeType content ownership rule, at the seam where a

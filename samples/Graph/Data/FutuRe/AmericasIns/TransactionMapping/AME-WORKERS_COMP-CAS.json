@@ -3,7 +3,6 @@
   "namespace": "FutuRe/AmericasIns/TransactionMapping",
   "name": "AmericasIns: Workers Compensation → Casualty (100%)",
   "nodeType": "FutuRe/TransactionMapping",
-  "isPersistent": true,
   "content": {
     "$type": "TransactionMapping",
     "id": "AME-WORKERS_COMP-CAS",

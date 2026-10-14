@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "Cactus Comidas para llevar - Buenos Aires, Argentina",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "CACTU",

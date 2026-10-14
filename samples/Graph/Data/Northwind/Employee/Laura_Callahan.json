@@ -6,7 +6,6 @@
   "category": "Employees",
   "description": "Laura Callahan - Inside Sales Coordinator",
   "icon": "/static/NodeTypeIcons/person.svg",
-  "isPersistent": true,
   "content": {
     "$type": "EmployeeContent",
     "employeeId": 8,

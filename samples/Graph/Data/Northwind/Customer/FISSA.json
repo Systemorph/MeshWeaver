@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "FISSA Fabrica Inter. Salchichas S.A. - Madrid, Spain",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "FISSA",

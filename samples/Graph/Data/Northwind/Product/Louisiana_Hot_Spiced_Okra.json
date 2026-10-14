@@ -6,7 +6,6 @@
   "category": "Products",
   "description": "Louisiana Hot Spiced Okra - 24 - 8 oz jars",
   "icon": "/static/NodeTypeIcons/shopping-bag.svg",
-  "isPersistent": true,
   "content": {
     "$type": "ProductContent",
     "productId": 66,

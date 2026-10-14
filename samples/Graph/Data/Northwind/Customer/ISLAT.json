@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "Island Trading - Cowes, UK",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "ISLAT",

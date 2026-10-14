@@ -6,7 +6,6 @@
   "category": "Suppliers",
   "description": "Leka Trading - Singapore, Singapore",
   "icon": "/static/NodeTypeIcons/truck.svg",
-  "isPersistent": true,
   "content": {
     "$type": "SupplierContent",
     "supplierId": 20,

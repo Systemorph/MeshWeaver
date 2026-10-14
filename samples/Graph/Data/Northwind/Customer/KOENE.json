@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "K\u00f6niglich Essen - Brandenburg, Germany",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "KOENE",

@@ -3,7 +3,6 @@
   "namespace": "FutuRe/EuropeRe/TransactionMapping",
   "name": "EuropeRe: Transport → Marine (100%)",
   "nodeType": "FutuRe/TransactionMapping",
-  "isPersistent": true,
   "content": {
     "$type": "TransactionMapping",
     "id": "EUR-TRANSPORT-MARINE",

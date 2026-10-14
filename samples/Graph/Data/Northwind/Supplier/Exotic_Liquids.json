@@ -6,7 +6,6 @@
   "category": "Suppliers",
   "description": "Exotic Liquids - London, UK",
   "icon": "/static/NodeTypeIcons/truck.svg",
-  "isPersistent": true,
   "content": {
     "$type": "SupplierContent",
     "supplierId": 1,

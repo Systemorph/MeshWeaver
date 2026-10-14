@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "Bottom-Dollar Markets - Tsawassen, Canada",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "BOTTM",
