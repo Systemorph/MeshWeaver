@@ -474,24 +474,21 @@ public static class InboxLayoutArea
     /// <summary>Opens the clicked row: its external link when it has one, else its node's page.</summary>
     private static void OpenRow(UiActionContext ctx)
     {
-        if (OpenTarget(ctx.Payload is DataGridCellClick { Item: { } item } ? item : null, ctx.Hub.JsonSerializerOptions) is { } target)
+        var options = ctx.Hub.JsonSerializerOptions;
+        // The payload is an object boundary: it may arrive typed or as JSON, so it is read through
+        // the shared accessor, never a CLR pattern that drops the JSON envelope.
+        if (OpenTarget(ctx.Payload.As<DataGridCellClick>(options)?.Item, options) is { } target)
             ctx.NavigateTo(target.Url, forceLoad: target.External);
     }
 
     /// <summary>
     /// Where a clicked row goes: its https <see cref="InboxRow.Link"/> (a full page load — it leaves the
-    /// portal), else <c>/{path}</c>; null for a row without either. The row arrives typed or as JSON. Pure.
+    /// portal), else <c>/{path}</c>; null for a row without either, or one that cannot be read as a row.
+    /// The row arrives typed or as JSON (read with the shared <c>As</c> accessor). Pure.
     /// </summary>
     internal static (string Url, bool External)? OpenTarget(object? item, System.Text.Json.JsonSerializerOptions options)
     {
-        var row = item switch
-        {
-            null => null,
-            InboxRow typed => typed,
-            System.Text.Json.JsonElement je => System.Text.Json.JsonSerializer.Deserialize<InboxRow>(je, options),
-            System.Text.Json.Nodes.JsonNode jn => System.Text.Json.JsonSerializer.Deserialize<InboxRow>(jn, options),
-            _ => null,
-        };
+        var row = item.As<InboxRow>(options);
         if (row is null)
             return null;
         if (Uri.TryCreate(row.Link, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps)

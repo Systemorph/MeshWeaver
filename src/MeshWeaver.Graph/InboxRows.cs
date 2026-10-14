@@ -252,8 +252,11 @@ public static class InboxRows
         var content = string.IsNullOrWhiteSpace(section.TimeField) ? null : ContentOf(node, options);
         var at = TimeFrom(node, section.TimeField, content);
         var from = StringOf(content, "from");
-        // Per row when the source says (a live mailbox answers read and unread in one leg), else the leg's.
-        var unread = BoolOf(content, "isRead") is { } read ? !read : section.Unread;
+        // Per row when the source says (a live mailbox answers read and unread in one leg), else the
+        // leg's. 🚨 Typed content is read off the instance itself: serializing it with the hub's
+        // options OMITS a default `false`, and an unread item would then read as "no read state".
+        var unread = (section.TimeField is null ? null : TypedBool(node.Content, "isRead") ?? BoolOf(content, "isRead"))
+            is { } read ? !read : section.Unread;
         return new()
         {
             Path = node.Path,
@@ -337,6 +340,21 @@ public static class InboxRows
             if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
                 return property.Value;
         return null;
+    }
+
+    /// <summary>
+    /// A boolean property of TYPED content (any CLR object that is not JSON), read off the instance by
+    /// name, case-insensitively; null for JSON content or when the type has no such boolean.
+    /// </summary>
+    internal static bool? TypedBool(object? content, string name)
+    {
+        if (content is null or JsonElement or System.Text.Json.Nodes.JsonNode)
+            return null;
+        var property = content.GetType().GetProperty(name,
+            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.IgnoreCase);
+        return property?.PropertyType == typeof(bool) || property?.PropertyType == typeof(bool?)
+            ? (bool?)property.GetValue(content)
+            : null;
     }
 
     private static string? StringOf(JsonElement? content, string name)

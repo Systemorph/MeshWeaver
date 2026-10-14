@@ -620,6 +620,15 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
 
         InboxRows.Of(node with { Content = JsonSerializer.SerializeToElement(new { webLink = "http://x.example/m" }) },
             section, null, null).Link.Should().BeEmpty("a link that is not https is not kept");
+
+        // TYPED content through the hub's own options, which omit a default false when they serialize:
+        // the unread item must still read as unread.
+        var typed = node with { Content = new Notification { IsRead = false, CreatedAt = DateTimeOffset.UtcNow } };
+        InboxRows.Of(typed, section with { TimeField = "createdAt" }, null, null, null, 0, null, null, Mesh.JsonSerializerOptions)
+            .Unread.Should().BeTrue("typed isRead:false is an unread item, not a missing read state");
+        InboxRows.Of(typed with { Content = new Notification { IsRead = true, CreatedAt = DateTimeOffset.UtcNow } },
+                section with { TimeField = "createdAt", Unread = true }, null, null, null, 0, null, null, Mesh.JsonSerializerOptions)
+            .Unread.Should().BeFalse("typed isRead:true wins over the leg");
     }
 
 
