@@ -306,6 +306,44 @@ public class StoreBootstrapLandsModulesFirstTest(ITestOutputHelper output) : Sto
 }
 
 /// <summary>
+/// 🚨 The module phase proposes its set BEFORE phase 2 writes any install record, so the selection's
+/// own declared floors must bind that proposal: a fresh package requiring <c>AI@^2</c> must not let a
+/// set loading AI 1.0.0 be written just because its record does not exist yet.
+/// </summary>
+public class ModulePhaseProposalHonoursTheSelectionsFloorsTest(ITestOutputHelper output) : StoreBootstrapTestBase(output)
+{
+    private static PackageManifest Fresh(string id, string? module, params string[] requires) => new()
+    {
+        Id = id,
+        Source = SourceName,
+        Kind = PackageKind.NodeRepo,
+        Module = module,
+        Requires = [.. requires],
+    };
+
+    [Fact(Timeout = 180_000)]
+    public async Task ASelectedPackagesUnmetFloor_RefusesTheSet_AndAMetOneDoesNot()
+    {
+        await FirstPass(TestContext.Current.CancellationToken);
+        var landing = Mesh.ServiceProvider.GetRequiredService<ModuleLandingService>();
+
+        var refused = await ModuleDependencyFloor
+            .ProposeChecked(Mesh, landing, [Fresh("AI", AiModule), Fresh("Chat", ChatModule, "AI@^2.0.0")])
+            .Select(_ => (Exception?)null)
+            .Catch((Exception ex) => Observable.Return<Exception?>(ex))
+            .LastAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
+        refused.Should().NotBeNull("Chat requires AI@^2 and the landed AI is 1.0.0 — that set must not be written");
+
+        var accepted = await ModuleDependencyFloor
+            .ProposeChecked(Mesh, landing, [Fresh("AI", AiModule), Fresh("Chat", ChatModule, "AI@^1.0.0")])
+            .Select(_ => (Exception?)null)
+            .Catch((Exception ex) => Observable.Return<Exception?>(ex))
+            .LastOrDefaultAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
+        accepted.Should().BeNull("a met floor proposes (or finds nothing changed) without a fault");
+    }
+}
+
+/// <summary>
 /// The boot AFTER that restart: the landed <c>MeshWeaver.AI</c> module now registers <c>Skill</c>
 /// (stood in for by a code-registered NodeType), so one pass installs the whole store — <c>Store</c>
 /// first, everything rooted on <c>Store/Plugin</c> after it — with the order derived from the declared

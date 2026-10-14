@@ -149,6 +149,32 @@ public static class ModuleDependencyFloor
         ArgumentNullException.ThrowIfNull(landing);
         return ReadInstalled(hub).SelectMany(landing.ProposeCheckedModuleSet);
     }
+
+    /// <summary>
+    /// <see cref="ProposeChecked(IMessageHub, ModuleLandingService)"/>, checked against the install
+    /// records AND <paramref name="aboutToInstall"/> — packages a wave lands modules for BEFORE their
+    /// install records exist (the default install's module phase, policy
+    /// <c>default-install-modules-first</c>). Their requirements bind the set exactly as a record's
+    /// would: a selected package requiring <c>AI@^2</c> must not let a set loading AI 1.x be written
+    /// just because its own record is not there yet. A manifest whose id already has a record is
+    /// represented by the record.
+    /// </summary>
+    /// <param name="hub">The mesh hub.</param>
+    /// <param name="landing">The landing service.</param>
+    /// <param name="aboutToInstall">The manifests the caller is about to install.</param>
+    public static IObservable<ModuleSet?> ProposeChecked(
+        IMessageHub hub, ModuleLandingService landing, IReadOnlyList<PackageManifest> aboutToInstall)
+    {
+        ArgumentNullException.ThrowIfNull(landing);
+        ArgumentNullException.ThrowIfNull(aboutToInstall);
+        return ReadInstalled(hub).SelectMany(installed =>
+        {
+            var recorded = installed.Select(p => p.Id).ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+            return landing.ProposeCheckedModuleSet(installed
+                .Concat(aboutToInstall.Where(p => !string.IsNullOrWhiteSpace(p.Id) && !recorded.Contains(p.Id)))
+                .ToImmutableList());
+        });
+    }
 }
 
 /// <summary>

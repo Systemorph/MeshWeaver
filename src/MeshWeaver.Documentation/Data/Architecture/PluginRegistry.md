@@ -167,7 +167,9 @@ Phase 1 applies the gates the install funnel applies before a file travels — t
 the same deployment-config principal), licence acceptance and the declared parameters — so a package the funnel would
 refuse lands no module ahead of that refusal; the platform floor is the adoption's own hold. An
 already-installed package keeps its module on the funnel (after its content, inside the floor and
-update-policy holds), so phase 1 never lands drift those holds gate. The pass's summary line names
+update-policy holds), so phase 1 never lands drift those holds gate. The module set phase 1 proposes is checked
+against the install records AND the selection about to install (`ModuleDependencyFloor.ProposeChecked`
+with the fresh manifests) — a fresh package's declared floor binds the set before its record exists. The pass's summary line names
 what phase 1 landed: `MODULES LANDED ahead of content (load at the next restart): […]`.
 
 Pinned by `StoreBootstrapLandsModulesFirstTest` (a fresh mesh: the store's packages fail validation

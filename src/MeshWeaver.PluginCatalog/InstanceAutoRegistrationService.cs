@@ -2349,7 +2349,9 @@ public sealed class InstanceAutoRegistrationService(
                             landed.Count, string.Join(", ", landed));
                     // One landing wave → one proposal of the module set it describes (#3395), the
                     // same close the install funnel and the reconciler take.
-                    return CatalogLayoutAreas.ProposeMeshModuleSet(hub, logger)
+                    // 🚨 CHECKED against the records AND the selection about to install: the fresh
+                    // packages have no record yet, and their declared floors bind the set too.
+                    return ProposeCheckedForTheSelection(installable.Select(c => c.Package).ToImmutableList())
                         .Select(_ => landed.ToImmutableList());
                 }))
             .Catch((Exception ex) =>
@@ -2358,6 +2360,28 @@ public sealed class InstanceAutoRegistrationService(
                     "[DefaultInstall] module phase faulted: {Cause}. The content phase runs as before — "
                     + "each package's module still follows its content on the install funnel.", ex.Message);
                 return Observable.Return(ImmutableList<string>.Empty);
+            });
+    }
+
+    /// <summary>
+    /// The module-phase close: propose the set the activation record describes, checked against the
+    /// install records AND <paramref name="selection"/> (<see cref="ModuleDependencyFloor.ProposeChecked(IMessageHub, ModuleLandingService, IReadOnlyList{PackageManifest})"/>).
+    /// A refused or unreadable proposal leaves the mesh on its current set and is said at Warning —
+    /// the same answer <c>CatalogLayoutAreas.ProposeMeshModuleSet</c> gives.
+    /// </summary>
+    /// <param name="selection">The manifests this pass is about to install.</param>
+    private IObservable<ModuleSet?> ProposeCheckedForTheSelection(IReadOnlyList<PackageManifest> selection)
+    {
+        var landing = hub.ServiceProvider.GetService<ModuleLandingService>();
+        if (landing is null)
+            return Observable.Return<ModuleSet?>(null);
+        return ModuleDependencyFloor.ProposeChecked(hub, landing, selection)
+            .Catch((Exception ex) =>
+            {
+                logger.LogWarning(ex,
+                    "[DefaultInstall] module phase: the landed module set could not be proposed — the mesh "
+                    + "stays on its current set and the next wave proposes again. Cause: {Cause}", ex.Message);
+                return Observable.Return<ModuleSet?>(null);
             });
     }
 
