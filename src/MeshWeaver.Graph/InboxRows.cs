@@ -96,6 +96,22 @@ public sealed record InboxRow
     public string Category { get; init; } = string.Empty;
 
     /// <summary>
+    /// How much the item matters to the viewer, when a triage said (the content's <c>importance</c>):
+    /// an <see cref="InboxImportance"/> constant, or empty when nothing has judged it yet.
+    /// </summary>
+    public string Importance { get; init; } = string.Empty;
+
+    /// <summary>
+    /// The item's tags (the content's <c>tags</c>) — OPEN strings, several per item, as labels on a
+    /// GitHub issue: what to do (<c>reply</c>, <c>act</c>, <c>decide</c>, …), what it is
+    /// (<c>promo</c>, <c>spam</c>) or what it is about. Lower-cased, each once.
+    /// </summary>
+    public ImmutableList<string> Tags { get; init; } = ImmutableList<string>.Empty;
+
+    /// <summary>The tags as the Tags column shows them — <c>#reply #act</c>; empty without tags.</summary>
+    public string TagText { get; init; } = string.Empty;
+
+    /// <summary>
     /// The row's CSS class — <see cref="InboxRows.UnreadClass"/> for an unread item, else empty. The
     /// grid applies it per row (<c>DataGridControl.WithRowClassProperty</c>).
     /// </summary>
@@ -106,6 +122,19 @@ public sealed record InboxRow
     /// with this as its tooltip.
     /// </summary>
     public string BlockedReason { get; init; } = string.Empty;
+}
+
+/// <summary>
+/// How much an item matters to its viewer, as a triage judged it — OPEN string constants, never an
+/// enum: a source or a later triage may add its own. An item nobody judged has none and is shown.
+/// </summary>
+public static class InboxImportance
+{
+    /// <summary>Worth the viewer's attention — listed under the side menu's Important entry.</summary>
+    public const string Important = "important";
+
+    /// <summary>Safe to ignore — spam, promotions, noise. Hidden until the viewer asks to see it.</summary>
+    public const string Ignorable = "ignorable";
 }
 
 /// <summary>What Delete put away — what Undo brings back.</summary>
@@ -169,6 +198,18 @@ public sealed record InboxFilter
     /// its switch is off — and clearing it gives the switches back exactly as they were.
     /// </summary>
     public string Only { get; init; } = string.Empty;
+
+    /// <summary>
+    /// The side-menu tag picked (<see cref="InboxRow.Tags"/>, or <see cref="InboxImportance.Important"/>
+    /// for the items judged important), or empty for all. It narrows whatever else is shown.
+    /// </summary>
+    public string Tag { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Whether the items judged <see cref="InboxImportance.Ignorable"/> are listed. Off by default: the
+    /// noise is a switch away, and the notice above the grid counts what it hides.
+    /// </summary>
+    public bool ShowIgnorable { get; init; }
 }
 
 /// <summary>The rows of the inbox, as pure functions of the nodes the legs returned.</summary>
@@ -218,7 +259,7 @@ public static class InboxRows
     /// </summary>
     /// <param name="filter">The filter.</param>
     public static string Fingerprint(InboxFilter filter)
-        => string.Join('\n', new[] { filter.Search, filter.Order, filter.Category, filter.Only }
+        => string.Join('\n', new[] { filter.Search, filter.Order, filter.Category, filter.Only, filter.Tag, filter.ShowIgnorable ? "ignorable" : "" }
             .Concat(filter.Sources.OrderBy(s => s.Key, StringComparer.Ordinal).Select(s => $"{s.Key}={s.Value}")));
 
     /// <summary>
@@ -259,6 +300,7 @@ public static class InboxRows
         var content = string.IsNullOrWhiteSpace(section.TimeField) ? null : ContentOf(node, options);
         var at = TimeFrom(node, section.TimeField, content);
         var from = StringOf(content, "from");
+        var tags = TagsOf(content);
         // Per row when the source says (a live mailbox answers read and unread in one leg), else the
         // leg's. 🚨 Typed content is read off the instance itself: serializing it with the hub's
         // options OMITS a default `false`, and an unread item would then read as "no read state".
@@ -281,6 +323,9 @@ public static class InboxRows
             BlockedReason = blockedReason ?? string.Empty,
             SourceIcon = section.SourceIcon,
             Category = section.Category.Length > 0 ? section.Category : section.Source,
+            Importance = StringOf(content, "importance")?.Trim().ToLowerInvariant() ?? string.Empty,
+            Tags = tags,
+            TagText = string.Join(' ', tags.Select(t => "#" + t)),
             Unread = unread,
             RowClass = unread ? UnreadClass : string.Empty,
             From = string.IsNullOrWhiteSpace(from) ? sourceLabel ?? section.Source : from,
@@ -367,6 +412,17 @@ public static class InboxRows
     private static string? StringOf(JsonElement? content, string name)
         => PropertyOf(content, name) is { ValueKind: JsonValueKind.String } v ? v.GetString() : null;
 
+    /// <summary>The content's <c>tags</c>: its strings, trimmed, lower-cased, each once, in order. Pure.</summary>
+    internal static ImmutableList<string> TagsOf(JsonElement? content)
+        => PropertyOf(content, "tags") is { ValueKind: JsonValueKind.Array } array
+            ? array.EnumerateArray()
+                .Where(t => t.ValueKind == JsonValueKind.String)
+                .Select(t => t.GetString()!.Trim().ToLowerInvariant())
+                .Where(t => t.Length > 0)
+                .Distinct(StringComparer.Ordinal)
+                .ToImmutableList()
+            : ImmutableList<string>.Empty;
+
     private static bool? BoolOf(JsonElement? content, string name)
         => PropertyOf(content, name) is { ValueKind: JsonValueKind.True or JsonValueKind.False } v ? v.GetBoolean() : null;
 
@@ -416,10 +472,51 @@ public static class InboxRows
             ? rows.Where(row => Shown(row, filter))
             : rows.Where(row => string.Equals(row.Category, category, StringComparison.Ordinal));
         return shown.Where(row => InRange(row.Stamp, before, after))
+            .Where(row => filter.Tag.Length == 0 ? filter.ShowIgnorable || !IsIgnorable(row) : HasTag(row, filter.Tag))
             .OrderByDescending(r => r.Stamp, StringComparer.Ordinal)
             .ThenBy(r => r.Path, StringComparer.Ordinal)
             .ToImmutableList();
     }
+
+    /// <summary>Whether a triage judged <paramref name="row"/> safe to ignore. Pure.</summary>
+    internal static bool IsIgnorable(InboxRow row)
+        => string.Equals(row.Importance, InboxImportance.Ignorable, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Whether <paramref name="row"/> carries <paramref name="tag"/> — or, for
+    /// <see cref="InboxImportance.Important"/>, was judged important. A picked tag shows its rows even
+    /// when they are ignorable: the viewer who picks <c>promo</c> asked for the promotions. Pure.
+    /// </summary>
+    internal static bool HasTag(InboxRow row, string tag)
+        => row.Tags.Contains(tag)
+           || (string.Equals(tag, InboxImportance.Important, StringComparison.Ordinal)
+               && string.Equals(row.Importance, InboxImportance.Important, StringComparison.Ordinal));
+
+    /// <summary>
+    /// The side menu's tag counts, read off the merged rows BEFORE any filter applies: the items judged
+    /// important first (under <see cref="InboxImportance.Important"/>), then each tag, most used first
+    /// and alphabetically among equals. Pure.
+    /// </summary>
+    public static ImmutableList<(string Tag, int Count)> TagCounts(IEnumerable<InboxRow> rows)
+    {
+        var list = rows as IReadOnlyCollection<InboxRow> ?? rows.ToImmutableList();
+        var important = list.Count(r => string.Equals(r.Importance, InboxImportance.Important, StringComparison.Ordinal));
+        var tags = list.SelectMany(r => r.Tags)
+            .Where(t => !string.Equals(t, InboxImportance.Important, StringComparison.Ordinal))
+            .GroupBy(t => t, StringComparer.Ordinal)
+            .Select(g => (Tag: g.Key, Count: g.Count()))
+            .OrderByDescending(t => t.Count).ThenBy(t => t.Tag, StringComparer.Ordinal);
+        return [.. (important > 0 ? [(InboxImportance.Important, important)] : Array.Empty<(string, int)>()), .. tags];
+    }
+
+    /// <summary>
+    /// How many items the ignorable switch hides from what the other filters show — so "nothing here"
+    /// is never the switch's silent doing. Zero while the switch is on or a tag is picked. Pure.
+    /// </summary>
+    public static int HiddenIgnorable(IEnumerable<InboxRow> rows, InboxFilter filter)
+        => filter.ShowIgnorable || filter.Tag.Length > 0
+            ? 0
+            : Apply(rows, filter with { ShowIgnorable = true }, filter.Category).Count(IsIgnorable);
 
     /// <summary>
     /// Whether the source of <paramref name="row"/> is shown: the one source picked under Only when
