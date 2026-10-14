@@ -2258,8 +2258,9 @@ public sealed class InstanceAutoRegistrationService(
         var configuration = hub.ServiceProvider.GetService<IConfiguration>();
 
         // (Fresh: a not-yet-installed carrier this phase decided; Landed: the module it newly landed;
-        // Refused: an entitlement or licence gate refused it).
-        IObservable<(bool Fresh, string? Landed, bool Refused)> One(InstallCandidate candidate, PluginBundleClient bundles)
+        // Blocked: the module of a carrier this phase could NOT clear — an unreadable install record,
+        // missing parameters, an ownership hold, an entitlement or licence refusal).
+        IObservable<(bool Fresh, string? Landed, string? Blocked)> One(InstallCandidate candidate, PluginBundleClient bundles)
         {
             var package = candidate.Package;
             return persistence.Read($"{PackageInstaller.InstalledPartition}/{package.Id}", hub.JsonSerializerOptions)
@@ -2275,15 +2276,15 @@ public sealed class InstanceAutoRegistrationService(
                             "[DefaultInstall] module phase: the install record of {Id} could not be read "
                             + "({Cause}) — its module {Module} is not landed ahead of its content; the "
                             + "install funnel decides it as before.", package.Id, cause, package.Module);
-                        return Observable.Return((Fresh: false, Landed: (string?)null, Refused: false));
+                        return Observable.Return((Fresh: false, Landed: (string?)null, Blocked: package.Module));
                     }
                     if (!state.Fresh)
-                        return Observable.Return((Fresh: false, Landed: (string?)null, Refused: false));
+                        return Observable.Return((Fresh: false, Landed: (string?)null, Blocked: (string?)null));
                     if (PackageParameters.Missing(configuration, package) is { Count: > 0 })
                         // The content phase refuses it by name (PackageParameters.Require, at Error);
                         // saying it twice adds nothing, landing its module ahead would add a module
                         // for a package this environment cannot run.
-                        return Observable.Return((Fresh: false, Landed: (string?)null, Refused: false));
+                        return Observable.Return((Fresh: false, Landed: (string?)null, Blocked: package.Module));
                     var principal = AuthorizingPrincipal(candidate);
                     // 🚨 The SAME ownership decision the node install takes (OwnershipHold): a
                     // candidate whose partition another writer keeps current is HELD and adopts
@@ -2294,9 +2295,9 @@ public sealed class InstanceAutoRegistrationService(
                         // ahead; the node install asks it again and reports what it finds.
                         .Catch((Exception ex) => Observable.Return<string?>($"the partition's ownership could not be read: {ex.Message}"))
                         .SelectMany(hold => hold is not null
-                            ? Observable.Return((Fresh: false, Landed: (string?)null, Refused: false))
+                            ? Observable.Return((Fresh: false, Landed: (string?)null, Blocked: package.Module))
                             : Gated(principal));
-                    IObservable<(bool Fresh, string? Landed, bool Refused)> Gated(string? principal) =>
+                    IObservable<(bool Fresh, string? Landed, string? Blocked)> Gated(string? principal) =>
                         PackageEntitlement.Authorize(hub, package, principal, logger)
                         // The licence gate the installer applies after the entitlement
                         // (PackageInstaller.Install): no licensed byte lands before its terms are
@@ -2311,13 +2312,13 @@ public sealed class InstanceAutoRegistrationService(
                         .Select(outcome =>
                         {
                             if (outcome.FilesLanded > 0)
-                                return (Fresh: true, Landed: package.Module, Refused: false);
+                                return (Fresh: true, Landed: package.Module, Blocked: (string?)null);
                             if (outcome.Failure is { } failure)
                                 logger.LogWarning(
                                     "[DefaultInstall] module phase: {Module} of {Id} did not land — {Failure}. "
                                     + "Packages whose nodes need its NodeTypes fail validation this pass "
                                     + "and are retried by the next.", package.Module, package.Id, failure);
-                            return (Fresh: true, Landed: (string?)null, Refused: false);
+                            return (Fresh: true, Landed: (string?)null, Blocked: (string?)null);
                         })
                         // A refusal is the content phase's to report (it applies the same gate and
                         // records it as a skip or a failure); here it only means "no module ahead".
@@ -2329,12 +2330,12 @@ public sealed class InstanceAutoRegistrationService(
                             // the module-set proposal, or an entry an earlier pass landed would be
                             // proposed — and activated — against the current refusal.
                             if (ex is PackageAuthorizationException or LicenseAcceptanceRequiredException)
-                                return Observable.Return((Fresh: false, Landed: (string?)null, Refused: true));
+                                return Observable.Return((Fresh: false, Landed: (string?)null, Blocked: package.Module));
                             logger.LogWarning(ex,
                                 "[DefaultInstall] module phase: {Module} of {Id} did not land — {Cause}. "
                                 + "The content phase decides the package as before.",
                                 package.Module, package.Id, ex.Message);
-                            return Observable.Return((Fresh: true, Landed: (string?)null, Refused: false));
+                            return Observable.Return((Fresh: true, Landed: (string?)null, Blocked: (string?)null));
                         });
                 });
         }
@@ -2354,19 +2355,13 @@ public sealed class InstanceAutoRegistrationService(
                     if (!outcomes.Any(o => o.Fresh))
                         return Observable.Return(ImmutableList<string>.Empty);
                     // 🚨 The set is derived from the WHOLE activation record, so a proposal here would
-                    // also carry a module an earlier pass landed for a package a gate refuses NOW.
-                    // A wave with a refusal therefore proposes nothing; the modules it landed load
-                    // once a wave without a refusal (or the install funnel, after the package's own
-                    // gates pass) proposes.
-                    if (outcomes.Any(o => o.Refused))
-                    {
-                        logger.LogWarning(
-                            "[DefaultInstall] module phase: a selected package was refused by its entitlement or "
-                            + "licence gate, so this wave proposes NO module set (the record it would derive from "
-                            + "may carry that package's module). Landed this wave: [{Modules}].",
-                            string.Join(", ", landed));
-                        return Observable.Return(landed.ToImmutableList());
-                    }
+                    // also carry a module an earlier pass landed for a package this phase could not
+                    // clear NOW (a gate refusal, an ownership hold, missing parameters, or an install
+                    // record it could not read — fail closed). An ENABLED activation entry for such a
+                    // module blocks the proposal (ProposeCheckedForTheSelection); a module that was
+                    // never landed cannot be activated by it, so it blocks nothing.
+                    var blocked = outcomes.Where(o => o.Blocked is not null).Select(o => o.Blocked!)
+                        .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
                     if (landed.Count > 0)
                         logger.LogInformation(
                         "[DefaultInstall] module phase: landed {Count} module(s) BEFORE any package content — "
@@ -2378,7 +2373,7 @@ public sealed class InstanceAutoRegistrationService(
                     // same close the install funnel and the reconciler take.
                     // 🚨 CHECKED against the records AND the selection about to install: the fresh
                     // packages have no record yet, and their declared floors bind the set too.
-                    return ProposeCheckedForTheSelection(installable.Select(c => c.Package).ToImmutableList())
+                    return ProposeCheckedForTheSelection(installable.Select(c => c.Package).ToImmutableList(), blocked)
                         .Select(_ => landed.ToImmutableList());
                 }))
             .Catch((Exception ex) =>
@@ -2397,12 +2392,32 @@ public sealed class InstanceAutoRegistrationService(
     /// the same answer <c>CatalogLayoutAreas.ProposeMeshModuleSet</c> gives.
     /// </summary>
     /// <param name="selection">The manifests this pass is about to install.</param>
-    private IObservable<ModuleSet?> ProposeCheckedForTheSelection(IReadOnlyList<PackageManifest> selection)
+    /// <param name="blocked">The modules of carriers this pass could not clear — an enabled
+    /// activation entry for any of them blocks the proposal.</param>
+    private IObservable<ModuleSet?> ProposeCheckedForTheSelection(
+        IReadOnlyList<PackageManifest> selection, IReadOnlySet<string> blocked)
     {
         var landing = hub.ServiceProvider.GetService<ModuleLandingService>();
         if (landing is null)
             return Observable.Return<ModuleSet?>(null);
-        return ModuleDependencyFloor.ProposeChecked(hub, landing, selection)
+        return landing.GetActivation().Take(1)
+            .SelectMany(activation =>
+            {
+                var carried = activation.Entries
+                    .Where(e => e.Enabled && blocked.Contains(e.Name))
+                    .Select(e => e.Name)
+                    .ToList();
+                if (carried.Count == 0)
+                    return Propose();
+                logger.LogWarning(
+                    "[DefaultInstall] module phase: proposing NO module set — the activation record carries "
+                    + "[{Modules}] for package(s) this pass could not clear (a gate refusal, an ownership hold, "
+                    + "missing parameters or an unreadable install record), and a proposal would activate them.",
+                    string.Join(", ", carried));
+                return Observable.Return<ModuleSet?>(null);
+            });
+
+        IObservable<ModuleSet?> Propose() => ModuleDependencyFloor.ProposeChecked(hub, landing, selection)
             .Do(set => logger.LogInformation(
                 "[DefaultInstall] module phase: {Outcome}",
                 set is null
