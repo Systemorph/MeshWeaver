@@ -174,8 +174,9 @@ public static class LauncherArrangementPaths
     /// <summary>
     /// Rearranges one directory tile: the placement is written onto the viewer's arrangement node
     /// (through the one mutation API), never onto the virtual row, which has no store behind it.
-    /// Cold — the write happens on Subscribe. Errors when <paramref name="rowPath"/> is not a
-    /// directory row.
+    /// NOT cold: <see cref="IMeshNodeStreamCache.Update"/> enqueues the write on the path's serial
+    /// queue when this is CALLED, and subscribing only observes the outcome. Errors (at subscribe,
+    /// before anything is enqueued) when <paramref name="rowPath"/> is not a directory row.
     /// </summary>
     public static IObservable<MeshNode> Place(
         IMeshNodeStreamCache cache, string rowPath, string group, int order, JsonSerializerOptions options)
@@ -194,8 +195,9 @@ public static class LauncherArrangementPaths
     /// Hides a directory tile from its owner's launcher (<paramref name="hidden"/> = <c>true</c>) or
     /// shows it again (<c>false</c>): the flag is written onto the viewer's arrangement node
     /// (through the one mutation API, a merge patch touching only that entry), never onto the
-    /// virtual row. Touches no access, entitlement or install. Cold — the write happens on
-    /// Subscribe. Errors when <paramref name="rowPath"/> is not a directory row.
+    /// virtual row. Touches no access, entitlement or install. NOT cold — enqueued when CALLED, like
+    /// <see cref="Place"/>; subscribing observes the outcome. Errors (at subscribe, before anything
+    /// is enqueued) when <paramref name="rowPath"/> is not a directory row.
     /// </summary>
     public static IObservable<MeshNode> SetHidden(
         IMeshNodeStreamCache cache, string rowPath, bool hidden, JsonSerializerOptions options)
