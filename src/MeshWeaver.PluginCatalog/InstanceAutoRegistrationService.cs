@@ -2285,7 +2285,19 @@ public sealed class InstanceAutoRegistrationService(
                         // for a package this environment cannot run.
                         return Observable.Return((Fresh: false, Landed: (string?)null, Refused: false));
                     var principal = AuthorizingPrincipal(candidate);
-                    return PackageEntitlement.Authorize(hub, package, principal, logger)
+                    // 🚨 The SAME ownership decision the node install takes (OwnershipHold): a
+                    // candidate whose partition another writer keeps current is HELD and adopts
+                    // nothing — so no module of it lands ahead either. The node install reports the
+                    // hold; here it only means "no module ahead".
+                    return OwnershipHold(candidate, PartitionOf(candidate))
+                        // Fail closed: an ownership question that could not be answered lands nothing
+                        // ahead; the node install asks it again and reports what it finds.
+                        .Catch((Exception ex) => Observable.Return<string?>($"the partition's ownership could not be read: {ex.Message}"))
+                        .SelectMany(hold => hold is not null
+                            ? Observable.Return((Fresh: false, Landed: (string?)null, Refused: false))
+                            : Gated(principal));
+                    IObservable<(bool Fresh, string? Landed, bool Refused)> Gated(string? principal) =>
+                        PackageEntitlement.Authorize(hub, package, principal, logger)
                         // The licence gate the installer applies after the entitlement
                         // (PackageInstaller.Install): no licensed byte lands before its terms are
                         // accepted, and a deployment-config principal cannot accept on anyone's behalf.
@@ -2453,7 +2465,26 @@ public sealed class InstanceAutoRegistrationService(
         // hold every proven install on the fleet's normal shape — which is the stated cost that
         // kept #4625 open rather than folded into #4619. See
         // PartitionContentOwnership.ImportedFromAnotherRepository for the full asymmetry.
-        return candidate.RefIsProven
+        return OwnershipHold(candidate, partition)
+            .SelectMany(reason => reason is not null
+                ? HoldForThePartitionsOwnWriter(candidate, partition, reason)
+                : Land(candidate, partition));
+    }
+
+    /// <summary>The target partition of a candidate — its declared <c>targetPartition</c>, else its id. Pure.</summary>
+    private static string PartitionOf(InstallCandidate candidate) =>
+        string.IsNullOrWhiteSpace(candidate.Package.TargetPartition)
+            ? candidate.Package.Id
+            : candidate.Package.TargetPartition!;
+
+    /// <summary>
+    /// Why this unattended lane may NOT write <paramref name="partition"/> for
+    /// <paramref name="candidate"/> — gate 1c / 1d below (MeshWeaver#4588, #4625) — or null when it
+    /// may. ONE decision for both phases: the node install holds on it, and the module phase lands no
+    /// module for a held candidate (a hold adopts nothing, so neither may the phase before it).
+    /// </summary>
+    private IObservable<string?> OwnershipHold(InstallCandidate candidate, string partition) =>
+        candidate.RefIsProven
             // 🚨 The folder is the SOURCE's configured prefix PLUS the module's own, through the one
             // implementation provisioning uses (review on #4649). A package listing stores
             // `SourceFolder` relative to `Subdir`, so passing it alone would compare `repo#module`
@@ -2470,18 +2501,11 @@ public sealed class InstanceAutoRegistrationService(
                     ModuleDiscoveryService.Subdirectory(
                         candidate.Source.Subdir,
                         candidate.Package.SourceFolder ?? candidate.Package.Id)))
-                .SelectMany(mismatch => mismatch is { } reason
-                    ? HoldForThePartitionsOwnWriter(candidate, partition, reason)
-                    : Land(candidate, partition))
             // The NON-logging overload: HoldForThePartitionsOwnWriter says the whole thing once,
             // with the verdict's reason inside it. The logging overload here would warn a second
             // time about the same hold, and a contract that says "said once" has to mean it.
             : PartitionContentOwnership.Observe(hub, partition)
-                .SelectMany(ownership =>
-                    UnprovenRefHold(ownership, candidate.Source.GitRef) is { } reason
-                        ? HoldForThePartitionsOwnWriter(candidate, partition, reason)
-                        : Land(candidate, partition));
-    }
+                .Select(ownership => UnprovenRefHold(ownership, candidate.Source.GitRef));
 
     /// <summary>
     /// 🚨 <b>An unattended install never lands an UNPROVEN ref in a partition another writer keeps

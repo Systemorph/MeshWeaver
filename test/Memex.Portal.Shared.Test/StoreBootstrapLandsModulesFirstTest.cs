@@ -16,6 +16,7 @@ using MeshWeaver.GitSync;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Plugin.Packaging;
 using MeshWeaver.PluginCatalog;
 using Microsoft.Extensions.DependencyInjection;
@@ -103,6 +104,20 @@ public abstract class StoreBootstrapTestBase(ITestOutputHelper output) : Monolit
     /// (<c>files:{package}</c> / <c>bundle:{package}</c>).</summary>
     protected ConcurrentQueue<string> Requests { get; } = new();
 
+    /// <summary>
+    /// The catalog options — the control instance's shape by default: an EXPLICIT set, and nothing
+    /// said about the preInstalled baseline. One instance, read by every pass, so a fixture can
+    /// change the declared set between passes.
+    /// </summary>
+    protected PluginCatalogOptions Options { get; } = new()
+    {
+        Registries = [new PluginRegistryReference { Name = SourceName, Url = RegistryUrl, Token = "mwi_bootstrap" }],
+        InstallByDefault = [$"{SourceName}/EntityViews", $"{SourceName}/Chat"],
+    };
+
+    /// <summary>What the boot pass is configured to install — the control instance's explicit set.</summary>
+    protected virtual IReadOnlyList<string> BootSet => [$"{SourceName}/EntityViews", $"{SourceName}/Chat"];
+
     /// <summary>What every derived fixture adds to the mesh — the stand-in for "the module loaded".</summary>
     protected virtual MeshBuilder Arrange(MeshBuilder builder) => builder;
 
@@ -110,19 +125,14 @@ public abstract class StoreBootstrapTestBase(ITestOutputHelper output) : Monolit
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
         Directory.CreateDirectory(LandingRoot);
+        Options.InstallByDefault = [.. BootSet];
         var registry = new BootstrapRegistry(Requests);
         return Arrange(base.ConfigureMesh(builder))
             .AddPluginCatalog()
             .ConfigureServices(services => services
                 .AddSingleton(new ModuleLandingService(baseDirectory: LandingRoot))
                 .AddSingleton<IHttpClientFactory>(new HandlerClientFactory(registry))
-                .AddSingleton(new PluginCatalogOptions
-                {
-                    Registries = [new PluginRegistryReference { Name = SourceName, Url = RegistryUrl, Token = "mwi_bootstrap" }],
-                    // The control instance's shape: an EXPLICIT set, and nothing said about the
-                    // preInstalled baseline.
-                    InstallByDefault = [$"{SourceName}/EntityViews", $"{SourceName}/Chat"],
-                }));
+                .AddSingleton(Options));
     }
 
     /// <inheritdoc />
@@ -340,6 +350,53 @@ public class ModulePhaseProposalHonoursTheSelectionsFloorsTest(ITestOutputHelper
             .Catch((Exception ex) => Observable.Return<Exception?>(ex))
             .LastOrDefaultAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
         accepted.Should().BeNull("a met floor proposes (or finds nothing changed) without a fault");
+    }
+}
+
+/// <summary>
+/// 🚨 A candidate the node install HOLDS (its partition is kept current by another writer — a
+/// <c>_GitSync</c> entry; MeshWeaver#4588) adopts nothing, so the module phase lands no module for it
+/// either: the ownership decision is the same one for both phases.
+/// </summary>
+public class ModulePhaseLandsNothingForAHeldCandidateTest(ITestOutputHelper output) : StoreBootstrapTestBase(output)
+{
+    /// <inheritdoc />
+    protected override IReadOnlyList<string> BootSet => [$"{SourceName}/Store"];
+
+    /// <inheritdoc />
+    protected override MeshBuilder Arrange(MeshBuilder builder) =>
+        builder.AddGitHubSyncTypes().ConfigureServices(services => services.AddGitHubSyncServices());
+
+    [Fact(Timeout = 300_000)]
+    public async Task AHeldCarrier_LandsNoModule_AndIsReportedHeld()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        // Booted with a set that carries no module (BootSet); EntityViews' partition is made
+        // somebody else's before it is ever selected.
+        await FirstPass(ct);
+        await Mesh.ServiceProvider.GetRequiredService<IMeshService>()
+            .CreateNode(new MeshNode(GitHubSyncService.ConfigId, "EntityViews")
+            {
+                Name = "GitHub Sync",
+                NodeType = GitHubSyncService.ConfigNodeType,
+                State = MeshNodeState.Active,
+                Content = new GitHubSyncConfig { RepositoryUrl = "https://github.com/acme/example", Branch = "main" },
+            })
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("connecting the partition to a repository is the precondition of the hold", cancellationToken: ct);
+        await Observable.Interval(TestTimeouts.Quick / 20).StartWith(0L)
+            .SelectMany(_ => PartitionContentOwnership.Observe(Mesh, "EntityViews"))
+            .Where(v => !v.InstallerOwnsTheContent)
+            .FirstAsync().Timeout(TestTimeouts.CrossSilo).Await(ct);
+
+        Options.InstallByDefault = [$"{SourceName}/Store", $"{SourceName}/EntityViews"];
+        var pass = await Mesh.ServiceProvider.GetRequiredService<InstanceAutoRegistrationService>()
+            .RunDefaultInstall().FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        Output.WriteLine($"pass: {pass}");
+
+        pass.Held.Select(h => h.Package).Should().Contain("EntityViews");
+        Requests.Should().NotContain("bundle:EntityViews", "a held candidate's module bytes are never fetched");
+        ModuleActivationSidecar.Read(LandingRoot).Entries.Select(e => e.Name).Should().NotContain(ViewsModule);
     }
 }
 
