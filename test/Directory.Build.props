@@ -41,6 +41,10 @@
          per the root props' override convention. Remove when Testcontainers' floor reaches
          2026.0.0. -->
     <PackageReference Include="SSH.NET" PrivateAssets="all" />
+    <!-- Same convention for the crypto advisories (Pkcs/Xml 10.0.13): this tree does not import the
+         root props, so it carries its own copy. Advisories and paths: Directory.Packages.props. -->
+    <PackageReference Include="System.Security.Cryptography.Pkcs" PrivateAssets="all" />
+    <PackageReference Include="System.Security.Cryptography.Xml" PrivateAssets="all" />
   </ItemGroup>
   <PropertyGroup>
     <!-- Required so the global <Using> items below (incl. MeshWeaver.Reactive.Assertions)
