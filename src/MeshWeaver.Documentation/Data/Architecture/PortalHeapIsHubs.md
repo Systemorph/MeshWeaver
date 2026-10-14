@@ -179,8 +179,9 @@ hub.RegisterForDisposal(h => messageHubs.TryRemove(h.Address, out _));
 ```
 
 So the chain is: an entry leaves iff the hub disposes; a grain-hosted node hub disposes iff
-`MessageHubGrain.OnDeactivateAsync` runs (`src/MeshWeaver.Hosting.Orleans/MessageHubGrain.cs:890-892`
-— `hub.CancelCurrentExecution(); hub.Dispose();`); and that method logged its own first line
+`MessageHubGrain.OnDeactivateAsync` runs (it calls `hub.DisposeAbortingCurrentTurn()` — dispose
+first, then abort the current turn; the order is explained in
+[Hub Initialization Failure](../HubInitializationFailure)); and that method logged its own first line
 (`:864`, `LogInformation`, *"Grain {GrainId} deactivating: reason={Reason}"`*) **zero times across
 five replicas and 514 687 log lines in 28 hours**, in a window carrying 2 791 other `info:` lines.
 
