@@ -33,18 +33,42 @@ namespace MeshWeaver.Mesh.Services;
 /// </summary>
 public sealed class NodeTypeAccessRuleSet
 {
-    private readonly ImmutableDictionary<string, INodeTypeAccessRule> rules;
+    // Per node type, every registered rule in registration order — the governing one is the LAST that
+    // still serves (see Governing), so a rule whose module is withdrawn or retired leaves the set.
+    private readonly ImmutableDictionary<string, ImmutableArray<INodeTypeAccessRule>> rules;
 
     /// <summary>
     /// Indexes the mesh's registered access rules by node type.
+    ///
+    /// <para>🚨 <b>A rule whose module is gone is not a member</b> (<see cref="ModuleServiceProxy.Serves"/>).
+    /// A module registers its rule as a platform interface, so the root holds a forwarding proxy for it;
+    /// a module WITHDRAWN at boot (its shared instances could not be built) leaves that proxy behind, and
+    /// reading its <see cref="INodeTypeAccessRule.NodeType"/> threw <c>Module … holds no service scope</c>
+    /// right here. Every write's <c>RlsNodeValidator</c> takes this set, so one withdrawn module broke
+    /// every node write in the mesh — every package install included. Such a rule is left out when the
+    /// set is built, and a rule whose module is retired later is skipped when a type is looked up: its
+    /// node type falls back to the caller's standard check (closed by default), as for a type no module
+    /// ever governed, and the withdrawal is reported where every module that failed to install is.</para>
     /// </summary>
     /// <param name="accessRules">Every <see cref="INodeTypeAccessRule"/> registered on the mesh.</param>
     public NodeTypeAccessRuleSet(IEnumerable<INodeTypeAccessRule> accessRules)
     {
         ArgumentNullException.ThrowIfNull(accessRules);
         rules = accessRules
+            .Where(ModuleServiceProxy.Serves)
             .GroupBy(r => r.NodeType, StringComparer.OrdinalIgnoreCase)
-            .ToImmutableDictionary(g => g.Key, g => g.Last(), StringComparer.OrdinalIgnoreCase);
+            .ToImmutableDictionary(g => g.Key, g => g.ToImmutableArray(), StringComparer.OrdinalIgnoreCase);
+    }
+
+    // LAST registration wins, among the rules that still serve.
+    private INodeTypeAccessRule? Governing(string nodeType)
+    {
+        if (!rules.TryGetValue(nodeType, out var registered))
+            return null;
+        for (var i = registered.Length - 1; i >= 0; i--)
+            if (ModuleServiceProxy.Serves(registered[i]))
+                return registered[i];
+        return null;
     }
 
     /// <summary>
@@ -61,7 +85,7 @@ public sealed class NodeTypeAccessRuleSet
     /// <returns>The governing rule, or null.</returns>
     public INodeTypeAccessRule? Find(string? nodeType, NodeOperation operation)
     {
-        if (string.IsNullOrEmpty(nodeType) || !rules.TryGetValue(nodeType, out var rule))
+        if (string.IsNullOrEmpty(nodeType) || Governing(nodeType) is not { } rule)
             return null;
 
         return rule.SupportedOperations.Count == 0 || rule.SupportedOperations.Contains(operation)
@@ -87,8 +111,7 @@ public sealed class NodeTypeAccessRuleSet
     {
         if (!IsRuleDecidablePermission(permission)
             || string.IsNullOrEmpty(nodeType)
-            || !rules.TryGetValue(nodeType, out var rule)
-            || rule is not INodeTypePermissionRule permissionRule)
+            || Governing(nodeType) is not INodeTypePermissionRule permissionRule)
             return null;
 
         return permissionRule.SupportedPermissions.Contains(permission) ? permissionRule : null;

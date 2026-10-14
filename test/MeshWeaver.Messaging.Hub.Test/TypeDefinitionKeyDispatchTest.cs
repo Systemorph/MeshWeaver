@@ -54,4 +54,22 @@ public class TypeDefinitionKeyDispatchTest
         definition.GetKeyOrNull(new KeyDispatchItem(null)).Should().BeNull();
         Assert.Throws<InvalidOperationException>(() => definition.GetKey(new KeyDispatchItem(null)));
     }
+
+    /// <summary>
+    /// A type with no key mapping (no [Key], no Id, no SystemName) is refused BY NAME on every key
+    /// read — <see cref="TypeDefinition.GetKey"/>, <see cref="TypeDefinition.GetKeyOrNull"/> and
+    /// <see cref="TypeDefinition.GetKeyType"/> — never a NullReferenceException.
+    /// </summary>
+    [Fact]
+    public void AKeylessType_IsRefusedByName_OnEveryKeyRead()
+    {
+        var definition = new TypeDefinition(typeof(object), nameof(Object), new KeyFunctionBuilder());
+
+        Assert.Throws<InvalidOperationException>(() => definition.GetKey(new object()))
+            .Message.Should().Contain("No key mapping");
+        Assert.Throws<InvalidOperationException>(() => definition.GetKeyOrNull(new object()))
+            .Message.Should().Contain("No key mapping");
+        Assert.Throws<InvalidOperationException>(() => definition.GetKeyType())
+            .Message.Should().Contain("No key mapping");
+    }
 }

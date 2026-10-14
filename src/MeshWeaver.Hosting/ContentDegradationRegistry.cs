@@ -48,6 +48,47 @@ public sealed record ContentDegradation(
     /// <c>init</c> property for the same binary-compatibility reason as <see cref="Discriminator"/>.
     /// </summary>
     public string? LastSeam { get; init; }
+
+    /// <summary>
+    /// 🚨 <b>The second cause, kept APART from "no registration" (#6674).</b> The name of a content
+    /// type that WAS registered when a counted read degraded, but whose stored JSON did not bind to
+    /// it (a missing <c>required</c> member, a value contradicting its declared type). <c>null</c>
+    /// when every counted read degraded for want of a registration.
+    ///
+    /// <para>The two need opposite repairs, and the boot registration window can only re-decide the
+    /// first: a registration arriving later re-types a reader that lacked one, while it changes
+    /// nothing about bytes that do not bind. So <see cref="ContentDegradationRegistry.SettleDeferredWarnings"/>
+    /// reports an entry carrying this whatever the registry answers at settle time — re-asking the
+    /// registry would find the type and drop exactly the case #6639 reported. An <c>init</c>
+    /// property for the same binary-compatibility reason as <see cref="Discriminator"/>.</para>
+    /// </summary>
+    public string? UnboundContentType { get; init; }
+
+    /// <summary>The cause this entry stands for, in the words of the read-seam warning.</summary>
+    public string Cause => ContentDegradationCauses.For(UnboundContentType);
+}
+
+/// <summary>
+/// The two causes a node's content stays untyped for, in the ONE wording the read seams, the
+/// boot-window settle and the <see cref="Mesh.MeshNodeContentDegradedException"/> marker share — so
+/// a record never names one cause in its line and another in its attached exception (#6674).
+/// </summary>
+public static class ContentDegradationCauses
+{
+    /// <summary>A <c>$type</c> (or a NodeType) nothing in this process resolves: a missing registration.</summary>
+    public const string Unregistered = "TypeRegistry lacks the $type discriminator";
+
+    /// <summary>A registered type whose stored JSON does not bind to it: the DATA, or the contract, is what to fix.</summary>
+    /// <param name="contentType">The registered type's name.</param>
+    public static string DoesNotBind(string contentType) =>
+        $"its content type '{contentType}' is registered, but the stored JSON does not bind to it — "
+        + "a member it requires is missing or a value contradicts its declared type; the "
+        + "serializer's 'could not be deserialized' warning names the member";
+
+    /// <summary><see cref="DoesNotBind"/> when a bound-to type is named, otherwise <see cref="Unregistered"/>.</summary>
+    /// <param name="unboundContentType">The registered type the JSON did not bind to, or <c>null</c>.</param>
+    public static string For(string? unboundContentType) =>
+        unboundContentType is null ? Unregistered : DoesNotBind(unboundContentType);
 }
 
 /// <summary>
@@ -128,10 +169,28 @@ public sealed class ContentDegradationRegistry
     /// <param name="seam">The read seam that observed it.</param>
     /// <param name="discriminator">The content's stored <c>$type</c>, when it carried one.</param>
     public bool RecordDeferringWarning(string? nodeType, string? nodePath, string seam, string? discriminator = null)
+        => RecordClassifiedDeferringWarning(nodeType, nodePath, seam, discriminator, unboundContentType: null);
+
+    /// <summary>
+    /// <see cref="RecordDeferringWarning"/>, carrying the classified cause:
+    /// <paramref name="unboundContentType"/> names a REGISTERED type whose stored JSON did not bind
+    /// (<see cref="ContentDegradation.UnboundContentType"/>), so the settle reports it although the
+    /// type resolves by then (#6674). A separately NAMED method, deliberately: a new optional
+    /// parameter would replace the signature compiled callers bind to, and an overload would make
+    /// every existing <c>cref</c> to the name ambiguous (CS0419 under <c>-warnaserror</c>).
+    /// </summary>
+    /// <param name="nodeType">The node's NodeType.</param>
+    /// <param name="nodePath">The node path.</param>
+    /// <param name="seam">The read seam that observed it.</param>
+    /// <param name="discriminator">The content's stored <c>$type</c>, when it carried one.</param>
+    /// <param name="unboundContentType">The registered type the JSON did not bind to, or <c>null</c>
+    /// when the cause is a missing registration.</param>
+    public bool RecordClassifiedDeferringWarning(
+        string? nodeType, string? nodePath, string seam, string? discriminator, string? unboundContentType)
     {
         lock (windowGate)
         {
-            Record(nodeType, nodePath, seam, discriminator);
+            RecordClassified(nodeType, nodePath, seam, discriminator, unboundContentType);
             return warningsDeferred != 0;
         }
     }
@@ -139,10 +198,12 @@ public sealed class ContentDegradationRegistry
     /// <summary>
     /// Closes the boot registration window and returns the degradations whose warning must now be
     /// written: every recorded one whose content type is STILL unresolvable
-    /// (<see cref="Unresolved"/>). A type the pass registered is dropped — its readers were re-typed
-    /// — and nothing that stayed untyped is: a deferred warning is re-timed to the moment the
-    /// verdict is decidable, never dropped. Returns empty when the window was not open, so a second
-    /// call cannot repeat the warnings.
+    /// (<see cref="Unresolved"/>), and every one that degraded although its type WAS registered
+    /// (<see cref="ContentDegradation.UnboundContentType"/>, #6674). A type the pass registered is
+    /// dropped only when its reads lacked a registration — those readers were re-typed — while JSON
+    /// that did not bind to a known type is unchanged by any registration and is reported: a deferred
+    /// warning is re-timed to the moment the verdict is decidable, never dropped. Returns empty when
+    /// the window was not open, so a second call cannot repeat the warnings.
     ///
     /// <para>Atomic with <see cref="RecordDeferringWarning"/>: the close and the snapshot happen
     /// under the same gate as a read's record-and-answer, so a read deferred before the close is in
@@ -157,7 +218,9 @@ public sealed class ContentDegradationRegistry
             if (warningsDeferred == 0)
                 return ImmutableList<ContentDegradation>.Empty;
             warningsDeferred = 0;
-            return Unresolved(contentTypes);
+            return Snapshot()
+                .Where(d => d.UnboundContentType is not null || !IsResolvable(d, contentTypes))
+                .ToImmutableList();
         }
     }
 
@@ -169,6 +232,17 @@ public sealed class ContentDegradationRegistry
     /// <see cref="Unresolved"/> can re-ask the registry by NAME as well as by NodeType — the same
     /// two routes <c>TryRecoverForNodeType</c> takes.</param>
     public void Record(string? nodeType, string? nodePath, string seam, string? discriminator = null)
+        => RecordClassified(nodeType, nodePath, seam, discriminator, unboundContentType: null);
+
+    /// <summary>Records one degraded read, carrying its classified cause (see
+    /// <see cref="RecordClassifiedDeferringWarning"/>).</summary>
+    /// <param name="nodeType">The node's NodeType.</param>
+    /// <param name="nodePath">The node path.</param>
+    /// <param name="seam">The read seam that observed it.</param>
+    /// <param name="discriminator">The content's stored <c>$type</c>, when it carried one.</param>
+    /// <param name="unboundContentType">The registered type the JSON did not bind to, or <c>null</c>.</param>
+    public void RecordClassified(
+        string? nodeType, string? nodePath, string seam, string? discriminator, string? unboundContentType)
     {
         var key = string.IsNullOrEmpty(nodeType) ? "(no node type)" : nodeType;
         var now = DateTimeOffset.UtcNow;
@@ -177,6 +251,7 @@ public sealed class ContentDegradationRegistry
             _ => new ContentDegradation(key, seam, 1, nodePath, now)
             {
                 Discriminator = discriminator, FirstAt = now, LastSeam = seam,
+                UnboundContentType = unboundContentType,
             },
             (_, existing) => existing with
             {
@@ -187,6 +262,9 @@ public sealed class ContentDegradationRegistry
                 // First-seen wins: a later read of the same NodeType whose element happens to carry
                 // no $type must not erase the name the FIRST one gave us to re-ask under.
                 Discriminator = existing.Discriminator ?? discriminator,
+                // A bind failure is sticky for the entry's life: a later read that lacked the
+                // registration does not make the bytes an earlier one could not bind any better.
+                UnboundContentType = existing.UnboundContentType ?? unboundContentType,
             });
     }
 

@@ -48,7 +48,13 @@ public record TypeDefinition : ITypeDefinition
         Order = displayMetadata.Display?.GetOrder();
         Icon = displayMetadata.Icon;
 
-        Key = new(() => keyFunctionBuilder.GetKeyFunction(Type)!);
+        // NULLABLE on purpose: a type with no [Key], no Id and no SystemName property has no key
+        // function, and that is a legitimate registration as long as nothing asks it for a key
+        // (most TypeRegistry entries are never a data-source collection). A `!` here used to hide
+        // the null until GetKey dereferenced it — a bare NullReferenceException at every
+        // activation of a hub whose data source registered such a type, naming nothing
+        // (Systemorph/MeshWeaver#6643). GetKey/GetKeyType now refuse it BY NAME.
+        Key = new(() => keyFunctionBuilder.GetKeyFunction(Type));
         getKeyIsOverridden = new(() =>
             GetType().GetMethod(nameof(GetKey), [typeof(object)])!.DeclaringType != typeof(TypeDefinition));
 
@@ -125,12 +131,23 @@ public record TypeDefinition : ITypeDefinition
     /// </summary>
     /// <param name="instance">The instance to extract the key from.</param>
     /// <returns>The key value for the instance.</returns>
-    /// <exception cref="InvalidOperationException">Thrown when no key mapping is defined for the type,
-    /// or when the instance carries no key value.</exception>
-    public virtual object GetKey(object instance) =>
-        KeyMapping.Function(instance)
-        ?? throw new InvalidOperationException(
-            $"An instance of type {CollectionName} has no key value; every instance of a keyed collection needs one.");
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when no key mapping is defined for the type, or when the instance's key is null.
+    /// Both messages name the CLR type and the collection.
+    /// </exception>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="instance"/> is null.</exception>
+    public virtual object GetKey(object instance)
+    {
+        var key = Key.Value ?? throw NoKeyMapping();
+        if (instance is null)
+            throw new ArgumentNullException(nameof(instance),
+                $"Cannot compute the key of a null instance of type {Type.FullName} (collection '{CollectionName}'): "
+                + "the instance sequence handed to this collection contains a null element.");
+        return key.Function(instance)
+               ?? throw new InvalidOperationException(
+                   $"An instance of type {Type.FullName} (collection '{CollectionName}') has a null key. "
+                   + "Every instance of a data-source collection needs a non-null key value.");
+    }
 
     /// <summary>
     /// Returns the key identifying the given instance, or <c>null</c> when the instance carries no key value.
@@ -146,7 +163,7 @@ public record TypeDefinition : ITypeDefinition
     /// <returns>The key value, or <c>null</c> when the instance has none.</returns>
     /// <exception cref="InvalidOperationException">Thrown when no key mapping is defined for the type.</exception>
     public virtual object? GetKeyOrNull(object instance) =>
-        getKeyIsOverridden.Value ? GetKey(instance) : KeyMapping.Function(instance);
+        getKeyIsOverridden.Value ? GetKey(instance) : (Key.Value ?? throw NoKeyMapping()).Function(instance);
 
     // Whether the runtime type overrides GetKey(object). Per instance and lazy — a reflection read
     // once, on first use, never on the hub-construction path (see the description note above).
@@ -157,13 +174,12 @@ public record TypeDefinition : ITypeDefinition
     /// </summary>
     /// <returns>The key's CLR type.</returns>
     /// <exception cref="InvalidOperationException">Thrown when no key mapping is defined for the type.</exception>
-    public Type GetKeyType() => KeyMapping.KeyType;
+    public Type GetKeyType() => (Key.Value ?? throw NoKeyMapping()).KeyType;
 
-    // The key function resolves to null when the type has neither a [Key] property nor an
-    // Id / SystemName one. Name that here instead of dereferencing it into a NullReferenceException.
-    private KeyFunction KeyMapping =>
-        Key.Value
-        ?? throw new InvalidOperationException(
-            $"No key mapping is defined for type {CollectionName}. Please specify in the configuration of the data sources source.");
-    internal Lazy<KeyFunction> Key { get; init; }
+    private InvalidOperationException NoKeyMapping() =>
+        new($"No key mapping is defined for type {Type.FullName} (collection '{CollectionName}'). "
+            + "A type served as a data-source collection needs a key: mark one property [Key], "
+            + "name it Id or SystemName, or configure WithKey(...) on its type source.");
+
+    internal Lazy<KeyFunction?> Key { get; init; }
 }

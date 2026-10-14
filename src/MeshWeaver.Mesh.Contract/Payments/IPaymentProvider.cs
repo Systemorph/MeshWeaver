@@ -119,7 +119,10 @@ public interface IPaymentProvider
     /// <para>🚨 The portal is the PROCESSOR's surface, and so is what happens on it. A subscriber
     /// who cancels there is not cancelled HERE by this call: the processor reports the actual
     /// ending as a delivery (<see cref="PaymentSubscriptionChange.Ended"/>), and that is what ends
-    /// the plan — exactly the rule <see cref="CancelAtPeriodEnd"/> follows.</para>
+    /// the plan — exactly the rule <see cref="CancelAtPeriodEnd"/> follows. The REQUEST made there
+    /// is reported before that, as a delivery whose <see cref="PaymentSubscriptionEvent.Renewal"/>
+    /// says the subscription will not renew (or renews again, when it is withdrawn), so the plan can
+    /// say "ends on" from the moment it was asked.</para>
     ///
     /// <para>The subscriber is named by <see cref="PaymentBillingPortalRequest.CustomerId"/> when
     /// the caller has it, else by <see cref="PaymentBillingPortalRequest.SubscriptionId"/>, which
