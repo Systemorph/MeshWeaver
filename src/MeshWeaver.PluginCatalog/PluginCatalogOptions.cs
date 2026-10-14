@@ -152,9 +152,14 @@ public sealed class PluginCatalogOptions
     /// declares an EXPLICIT set — every entry naming a package (<c>Source/Package</c>), none a whole
     /// source (<c>Source/*</c>). A deployment that names its packages gets exactly those plus their
     /// declared <c>requires</c>; until this, the baseline added every <c>preInstalled</c> package of
-    /// every source on top (a fresh control instance naming five packages selected 48). Set it
-    /// <c>true</c> to keep the baseline beside a declared set, <c>false</c> to suppress it
-    /// everywhere — an explicit value always wins. This property keeps its surface and default
+    /// every source on top (a fresh control instance naming five packages selected 48). Configure the
+    /// key <c>true</c> to keep the baseline beside a declared set, <c>false</c> to suppress it
+    /// everywhere — an explicit configured value always wins. 🚨 In CODE, assigning this property
+    /// <c>true</c> is indistinguishable from its default (the configuration binder writes the
+    /// default back through the setter on every bind, so "set to true" cannot be told from "not
+    /// set"); code that wants the baseline beside an explicit set assigns
+    /// <see cref="InstallPreInstalledPackagesConfigured"/> = <c>true</c>. Assigning <c>false</c>
+    /// here still suppresses it. This property keeps its surface and default
     /// (<c>true</c>); "unset" is read from <see cref="InstallPreInstalledPackagesConfigured"/>, which
     /// the configuration binds from the SAME key.</para>
     /// </summary>
