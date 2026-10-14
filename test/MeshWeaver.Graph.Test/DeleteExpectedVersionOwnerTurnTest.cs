@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
@@ -14,6 +15,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace MeshWeaver.Graph.Test;
@@ -69,15 +71,48 @@ internal sealed class HeldWriteStorageAdapter(InMemoryStorageAdapter inner) : IS
             ? _release.SelectMany(_ => inner.WriteIfVersion(node, expectedVersion, options))
             : inner.WriteIfVersion(node, expectedVersion, options));
 
-    /// <inheritdoc />
-    public IObservable<string> Delete(string path) => inner.Delete(path);
+    private string? _holdDeletePath;
+    private readonly AsyncSubject<Unit> _releaseDelete = new();
+    private readonly AsyncSubject<Unit> _deleteHeld = new();
+
+    /// <summary>
+    /// Arms the delete hold: a delete of <paramref name="path"/> that reaches the store waits until
+    /// <see cref="ReleaseDelete"/>. It pauses a delete AFTER every check it makes (the owner's
+    /// verdict included) and before its commit lands.
+    /// </summary>
+    public void HoldDeletesOf(string path) => Volatile.Write(ref _holdDeletePath, path);
+
+    /// <summary>Completes when a delete of the held path has reached the store and is being held.</summary>
+    public IObservable<Unit> DeleteHeld => _deleteHeld;
+
+    /// <summary>Lets every held delete through. Idempotent.</summary>
+    public void ReleaseDelete()
+    {
+        Volatile.Write(ref _holdDeletePath, null);
+        _releaseDelete.OnNext(Unit.Default);
+        _releaseDelete.OnCompleted();
+    }
+
+    private IObservable<T> HoldDelete<T>(IEnumerable<string> paths, Func<IObservable<T>> delete)
+        => Observable.Defer(() =>
+        {
+            var held = Volatile.Read(ref _holdDeletePath);
+            if (held is null || !paths.Any(p => string.Equals(p, held, StringComparison.OrdinalIgnoreCase)))
+                return delete();
+            _deleteHeld.OnNext(Unit.Default);
+            _deleteHeld.OnCompleted();
+            return _releaseDelete.SelectMany(_ => delete());
+        });
 
     /// <inheritdoc />
-    public IObservable<bool> DeleteIfExists(string path) => inner.DeleteIfExists(path);
+    public IObservable<string> Delete(string path) => HoldDelete([path], () => inner.Delete(path));
+
+    /// <inheritdoc />
+    public IObservable<bool> DeleteIfExists(string path) => HoldDelete([path], () => inner.DeleteIfExists(path));
 
     /// <inheritdoc />
     public IObservable<IReadOnlyList<string>> DeleteMany(IReadOnlyCollection<string> paths)
-        => ((IStorageAdapter)inner).DeleteMany(paths);
+        => HoldDelete(paths, () => ((IStorageAdapter)inner).DeleteMany(paths));
 
     /// <inheritdoc />
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options) => inner.Read(path, options);
@@ -288,5 +323,113 @@ public class DeleteExpectedVersionOwnerTurnTest(ITestOutputHelper output) : Mono
         await owner.GetWorkspace().GetMeshNodeStream()
             .Update(n => n with { Name = "after the delete gave up" })
             .Should().Within(TestTimeouts.Convergence).Emit("no seal, no refusal", cancellationToken: Ct);
+    }
+
+    /// <summary>
+    /// THE SEAL'S WIRING (#6750): a REAL guarded <see cref="DeleteNodeRequest"/>, paused at the store
+    /// after the owner's verdict, keeps the owner's own writes refused until it completes. Removing
+    /// the <c>BeginVersionGuardedDeletion</c> half of the delete handler's scope turns this red: the
+    /// write is then acknowledged by the owner and removed by the delete that already passed its check.
+    /// </summary>
+    [Fact]
+    public async Task AGuardedDelete_RefusesTheOwnersOwnWrites_FromItsVerdictUntilItCompletes()
+    {
+        var node = await Seed("owner-turn-wired-seal");
+        var owner = await OwnerOf(node.Path);
+        var read = (await Stored(node.Path))!.Version;
+        _storage.HoldDeletesOf(node.Path);
+        var delete = ObserveNodeOperation(new DeleteNodeRequest(node.Path) { ExpectedVersion = read }).Replay(1);
+        using var connection = delete.Connect();
+        try
+        {
+            await _storage.DeleteHeld.Should().Within(TestTimeouts.Convergence)
+                .Emit("the guarded delete passed the owner's verdict and reached the store", cancellationToken: Ct);
+
+            var refused = await owner.GetWorkspace().GetMeshNodeStream()
+                .Update(n => n with { Name = "written after the verdict" })
+                .Materialize()
+                .Where(n => n.Kind != System.Reactive.NotificationKind.OnCompleted)
+                .Should().Within(TestTimeouts.Convergence).Emit("the write answers", cancellationToken: Ct);
+            Output.WriteLine($"[own write] {refused.Kind} {refused.Exception?.GetType().Name}: {refused.Exception?.Message}");
+            refused.Kind.Should().Be(System.Reactive.NotificationKind.OnError,
+                "the guarded delete in flight has already decided; a write it would remove is refused");
+            refused.Exception.Should().BeOfType<SubtreeDeletionInFlightException>();
+        }
+        finally
+        {
+            _storage.ReleaseDelete();
+        }
+
+        var response = (await delete.Should().Within(TestTimeouts.Convergence).Emit("a delete always answers", Ct)).Message;
+        response.Success.Should().BeTrue(response.Error ?? "the deleter named the version the owner holds");
+    }
+
+    /// <summary>
+    /// MIXED-VERSION ROLL (#6750): an owner on an image that predates the version-guarded check skips
+    /// the unknown <see cref="ValidateDeleteRequest.ExpectedVersion"/>, runs its validators and answers
+    /// a plain Ok. That is no verdict about the version, so it is Unavailable — never a match. Control:
+    /// the same Ok carrying the echo IS the match.
+    /// </summary>
+    [Fact]
+    public async Task AnOwnerAnsweringOkWithoutTheVersionEcho_IsNoVerdict_NeverAMatch()
+    {
+        var unconfirmed = await MeshExtensions.OwnerVersionVerdict(
+                () => Observable.Return(ValidateDeleteResponse.Ok()),
+                () => Observable.Return<MeshNode?>(null), "p/old-owner", 3)
+            .Should().Within(TestTimeouts.Convergence).Emit("a verdict always emits", cancellationToken: Ct);
+        unconfirmed.IsValid.Should().BeFalse("an owner that never compared cannot pass for one that did");
+        unconfirmed.Reason.Should().Be(NodeDeletionRejectionReason.Unavailable);
+
+        var confirmed = await MeshExtensions.OwnerVersionVerdict(
+                () => Observable.Return(ValidateDeleteResponse.Ok() with { ConfirmedVersion = 3 }),
+                () => Observable.Return<MeshNode?>(null), "p/new-owner", 3)
+            .Should().Within(TestTimeouts.Convergence).Emit("a verdict always emits", cancellationToken: Ct);
+        confirmed.IsValid.Should().BeTrue("the owner confirmed the expected version");
+    }
+
+    /// <summary>
+    /// FALLBACK READ FAULT (#6750): the owner could not be asked, and the storage read that would tell
+    /// "gone" from "unreachable" faulted too. That is no verdict — Unavailable — never an escaping
+    /// fault the handler files as Unknown or ValidationFailed.
+    /// </summary>
+    [Fact]
+    public async Task AFaultingFallbackRead_IsUnavailable()
+    {
+        var verdict = await MeshExtensions.OwnerVersionVerdict(
+                () => Observable.Throw<ValidateDeleteResponse>(new InvalidOperationException("routing refused the owner")),
+                () => Observable.Throw<MeshNode?>(new InvalidOperationException("the store faulted")),
+                "p/unreachable", 3)
+            .Materialize()
+            .Where(n => n.Kind != System.Reactive.NotificationKind.OnCompleted)
+            .Should().Within(TestTimeouts.Convergence).Emit("a verdict always emits", cancellationToken: Ct);
+        verdict.Kind.Should().Be(System.Reactive.NotificationKind.OnNext, verdict.Exception?.Message ?? "");
+        verdict.Value.IsValid.Should().BeFalse();
+        verdict.Value.Reason.Should().Be(NodeDeletionRejectionReason.Unavailable);
+    }
+
+    /// <summary>
+    /// OWNER TEARDOWN (#6750): a live-version check that faults because THIS activation is going away
+    /// answers ShuttingDown — the retryable nack the asker re-asks the fresh activation on — exactly as
+    /// the validator branch does. Control: an unrelated fault is Unavailable.
+    /// </summary>
+    [Fact]
+    public async Task AnOwnerTurnTeardown_AnswersShuttingDown_AndAnyOtherFault_Unavailable()
+    {
+        var node = await Seed("owner-turn-teardown");
+        var owner = await OwnerOf(node.Path);
+        var delivery = new MessageDelivery<ValidateDeleteRequest>(
+            Mesh.Address, owner.Address, new ValidateDeleteRequest(node.Path) { ExpectedVersion = 1 },
+            Mesh.JsonSerializerOptions);
+
+        var teardown = MeshExtensions.OwnerTurnFaultAnswer(
+            owner, delivery, node.Path, new HubDisposingException(owner.Address, "the live-version check"),
+            NullLogger.Instance);
+        teardown.Should().BeOfType<DeliveryFailure>()
+            .Which.ErrorType.Should().Be(ErrorType.ShuttingDown, "a recycle is not a verdict about the delete");
+
+        var other = MeshExtensions.OwnerTurnFaultAnswer(
+            owner, delivery, node.Path, new InvalidOperationException("unrelated"), NullLogger.Instance);
+        other.Should().BeOfType<ValidateDeleteResponse>()
+            .Which.Reason.Should().Be(NodeDeletionRejectionReason.Unavailable);
     }
 }

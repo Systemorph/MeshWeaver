@@ -345,7 +345,16 @@ hub.Observe(request, o => o.WithTarget(hub.NodeOperationTarget()))
   write. It is compared with what the owner holds, so a version that is acknowledged but not yet
   stored matches.
 - **No verdict is a refusal.** If the owner cannot be asked and the node is still stored, the delete
-  answers `Unavailable` and removes nothing. It never treats an unanswered check as a match.
+  answers `Unavailable` and removes nothing. It never treats an unanswered check as a match. The
+  same holds when the storage read that would tell "gone" from "unreachable" fails as well.
+- **A match must be confirmed.** The owner's "matches" answer echoes the version it compared
+  (`ValidateDeleteResponse.ConfirmedVersion`). During a rolling update, an owner on an older image
+  does not know `ExpectedVersion`: it ignores the field, runs the ordinary delete validators and
+  answers a plain "valid". That answer carries no echo, so the delete reads it as `Unavailable`, not
+  as a match.
+- **A recycling owner is asked again.** If the owner's activation is torn down while it compares,
+  it answers `ShuttingDown`, as it does for an ordinary delete check. The delete then asks the next
+  activation, within the same time budget.
 - **Not covered yet** (tracked on #6673): the seal is held in the deleting process. When the owning
   activation runs on another silo, an own write there after the comparison is not sealed. The final
   storage delete is also not yet a compare-and-delete.
