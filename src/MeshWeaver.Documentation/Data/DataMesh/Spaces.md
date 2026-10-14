@@ -124,7 +124,7 @@ admins can also reach it from **Admin app (`/Admin`) → Partitions**.
 When someone opens `Acme`, the Space's **Overview** renders, in order: a header
 (logo + name + description + links), then your **body markdown** — and nothing after it.
 The Space's contents are listed in the **index on the left** (the side rail), which the
-platform derives for every page in the Space. All of it is driven by fields on the
+platform derives for the Space page, markdown pages and typed pages on their default Overview. All of it is driven by fields on the
 **Space node's content** — you never create a second node for it.
 
 ### The fields you set
@@ -163,9 +163,11 @@ Treat `content.body` as the front door. A strong one usually has:
 
 ### The index is the side rail — not a catalog in the body
 
-Every page in a Space carries the index on the left, derived from the Space's children.
-That is where readers navigate the Space's contents, so a body never needs a "children
-section". The default welcome page ships none.
+The Space page, markdown pages and typed pages on their default Overview carry the index on
+the left, derived from the Space's children. That is where readers navigate the Space's
+contents, so such a body never needs a "children section"; the default welcome page ships
+none. (A page a node type supplies itself through `WithNodePage` has no rail yet — see
+[The Supplied Navigation Rail](/Doc/Architecture/SuppliedNavigationRail).)
 
 Embed a catalog (the `Search` layout area, `@@/Acme/area/Search`) **only when the listing
 IS the content** — a log or register, a store or catalog page, a filtered or grouped view

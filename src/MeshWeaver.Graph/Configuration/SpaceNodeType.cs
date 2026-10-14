@@ -138,16 +138,21 @@ public static class SpaceNodeType
     /// Per-Space overrides live in each Space's own <c>index.md</c>
     /// (set on <see cref="MeshNode.PreRenderedHtml"/>).
     /// <para>🚨 <b>No "Contents" catalog, deliberately.</b> The children index is the SIDE RAIL,
-    /// which <see cref="DefaultNodeNavigation"/> derives for every markdown page — one index per
-    /// space, the same on every page, the reader's position marked, nested, and live off a change
-    /// feed. This template used to end in <c>@@("area/Search")</c>, which put a second and worse
-    /// copy of that index below the content, and taught every author who copied it to do the same
-    /// (maintainer directive, 2026-09-17: "we prefer index on side"). A catalog embed is still
+    /// which <see cref="DefaultNodeNavigation"/> derives for markdown pages, the typed default
+    /// Overview and the Space Overview — one index per space, the same on every page, the reader's
+    /// position marked, nested, and live off a change feed. This template used to end in
+    /// <c>@@("area/Search")</c>, which put a second and worse copy of that index below the content,
+    /// and taught every author who copied it to do the same (policy <c>explorer-navigation</c>,
+    /// Doc/Architecture/PolicyNotProse). A catalog embed is still
     /// right where the LISTING IS THE CONTENT — a log, a register, a store page, or a filtered
     /// view the rail cannot express (<c>?groupBy=type|category|flat</c>, <c>?subtree=true</c> —
     /// see the "Mesh Search &amp; Catalogs" doc) — and an author may add one to their own Body.</para>
+    /// <para>A <c>static readonly</c> field, not a <c>const</c>: a const is inlined into every
+    /// consuming assembly (MeshWeaver.Plugins' <c>SpaceLayoutAreas</c> falls back to it), so a change
+    /// to this text would reach those only when they are rebuilt. Read at run time, it reaches them
+    /// with the core assembly.</para>
     /// </summary>
-    public const string WelcomeMarkdown = """
+    public static readonly string WelcomeMarkdown = """
         # Welcome
 
         This is your space's home page.
