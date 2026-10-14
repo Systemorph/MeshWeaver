@@ -83,6 +83,15 @@ public record App
     /// </summary>
     [Browsable(false)]
     public string? LabelKey { get; init; }
+
+    /// <summary>
+    /// Whether the viewer HID this tile from their launcher. Set on the app directory's synthetic
+    /// rows from the viewer's <see cref="LauncherArrangement"/> (<see cref="LauncherEntry.Hidden"/>);
+    /// the Apps band's main scope excludes such rows (<c>-content.hidden:true</c>) and its Hidden
+    /// scope lists exactly them. Wire name <c>hidden</c>; absent = visible.
+    /// </summary>
+    [Browsable(false)]
+    public bool Hidden { get; init; }
 }
 
 /// <summary>

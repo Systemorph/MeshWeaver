@@ -55,6 +55,8 @@ public record TypeDefinition : ITypeDefinition
         // activation of a hub whose data source registered such a type, naming nothing
         // (Systemorph/MeshWeaver#6643). GetKey/GetKeyType now refuse it BY NAME.
         Key = new(() => keyFunctionBuilder.GetKeyFunction(Type));
+        getKeyIsOverridden = new(() =>
+            GetType().GetMethod(nameof(GetKey), [typeof(object)])!.DeclaringType != typeof(TypeDefinition));
 
         // 🚨 LAZY, and it must stay lazy — this is the FutuRe.Test teardown SIGSEGV (exit=139).
         // XmlDocs.Summary reflects into the type's assembly XML documentation. Constructing a
@@ -146,6 +148,26 @@ public record TypeDefinition : ITypeDefinition
                    $"An instance of type {Type.FullName} (collection '{CollectionName}') has a null key. "
                    + "Every instance of a data-source collection needs a non-null key value.");
     }
+
+    /// <summary>
+    /// Returns the key identifying the given instance, or <c>null</c> when the instance carries no key value.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="GetKey"/> was the only key hook before this member existed, so a subclass may
+    /// override it alone. Such a subclass keeps its key: this base implementation then DISPATCHES to
+    /// that override (and inherits its behaviour for a missing key — return <c>null</c> or throw)
+    /// instead of reading the configured key mapping behind its back. The base <see cref="GetKey"/>
+    /// never calls this member, so overriding both, or either, cannot recurse.
+    /// </remarks>
+    /// <param name="instance">The instance to extract the key from.</param>
+    /// <returns>The key value, or <c>null</c> when the instance has none.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when no key mapping is defined for the type.</exception>
+    public virtual object? GetKeyOrNull(object instance) =>
+        getKeyIsOverridden.Value ? GetKey(instance) : (Key.Value ?? throw NoKeyMapping()).Function(instance);
+
+    // Whether the runtime type overrides GetKey(object). Per instance and lazy — a reflection read
+    // once, on first use, never on the hub-construction path (see the description note above).
+    private readonly Lazy<bool> getKeyIsOverridden;
 
     /// <summary>
     /// Returns the CLR type of the key produced by the type's configured key function.
