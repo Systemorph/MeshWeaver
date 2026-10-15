@@ -9,12 +9,11 @@ name: Publish the surviving NuGet packages
 #   MeshWeaver.Aspire.Hosting.Memex   memex/aspire/Memex.Aspire.Hosting  (THIS repo)  ← published here, on a release tag
 #   MeshWeaver.MemexTemplate          tools/MeshWeaver.MemexTemplate.Pack (MeshWeaver.Plugins)
 #
-# 🆕 A THIRD, RESTORED 2026-10-15 — the `memex` CLI, following `3-latest`:
+# 🆕 A THIRD, RESTORED — the `memex` CLI, following `3-latest` (policy `cli-on-nuget-follows-3-latest`):
 #
 #   MeshWeaver.Cli                    src/MeshWeaver.Cli                  (THIS repo)  ← published here, on every ARMING
 #
-# Maintainer, 2026-10-15 ("is our cli published on nuget" → "can you publish with correct version?"
-# → "and 3latest?" → follow 3-latest): a customer's dedicated build server installs the CLI with
+# policy `cli-on-nuget-follows-3-latest` (Doc/Architecture/PolicyNotProse): a customer's dedicated build server installs the CLI with
 # `dotnet tool install` and has no MeshWeaver checkout. main-cd's `arm` dispatches THIS lane with
 # packages=cli, version=<the armed 3.<minor>.<run>> and ref=<the armed core commit> whenever it arms
 # a set, so the highest stable MeshWeaver.Cli on nuget.org is always the CLI of the build `3-latest`
@@ -253,7 +252,7 @@ jobs:
       # because PlatformVersionSchemeGuard holds it to a clean line; the armed run number is the
       # package version, which is all `dotnet tool install` reads.
       # 🚨 The TOOL properties are passed too (#6843 review): `ref` may be an armed commit from
-      # BEFORE the CLI was packable again (2026-10-15), whose csproj inherits IsPackable=false and
+      # BEFORE the CLI was packable again (policy `cli-on-nuget-follows-3-latest`), whose csproj inherits IsPackable=false and
       # would pack nothing. Passing them makes any armed commit publishable; on a current commit
       # they equal what MeshWeaver.Cli.csproj declares.
       - name: Pack the CLI

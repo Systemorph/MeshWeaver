@@ -8,9 +8,9 @@
     <RootNamespace>MeshWeaver.Cli</RootNamespace>
     <AssemblyName>memex</AssemblyName>
 
-    <!-- 🚨 A NuGet TOOL AGAIN, following `3-latest` (maintainer, 2026-10-15: "publish with the correct
-         version" / "and 3latest?" — Doc/Architecture/NuGetPackageRetirement §"The CLI follows
-         3-latest"). Retired 2026-09-07; restored because a customer's dedicated build server needs
+    <!-- 🚨 A NuGet TOOL AGAIN, following `3-latest` (policy `cli-on-nuget-follows-3-latest`,
+         Doc/Architecture/PolicyNotProse; Doc/Architecture/NuGetPackageRetirement §1a). Retired with
+         the other packages, restored because a customer's dedicated build server needs
          `dotnet tool install -g MeshWeaver.Cli` without a MeshWeaver checkout. Every time main-cd's
          `arm` arms a set it dispatches publish-packages.yml with packages=cli, the ARMED version
          (3.<minor>.<run>) and the armed core commit, so nuget.org's highest stable MeshWeaver.Cli is

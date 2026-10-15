@@ -1,6 +1,6 @@
 ---
 Name: "NuGet Package Retirement"
-Abstract: "Three packages survive — the Aspire integration, the dotnet new template and (restored 2026-10-15, following 3-latest) the memex CLI. Everything else under the MeshWeaver prefix is retired and unlisted. Why, what unlisting does and does not do, where the retirement tool lives, and the ground rule that keeps the survivor count at two."
+Abstract: "Three packages survive — the Aspire integration, the dotnet new template and the memex CLI (restored, following 3-latest). Everything else under the MeshWeaver prefix is retired and unlisted. Why, what unlisting does and does not do, where the retirement tool lives, and the ground rule that keeps the survivor count at two."
 Icon: "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><rect width='24' height='24' rx='4' fill='#455a64'/><path d='M12 5l5 2.75v5.5L12 16l-5-2.75v-5.5z' fill='none' stroke='white' stroke-width='1.5' stroke-linejoin='round'/><path d='M7 7.75L12 10.5l5-2.75M12 10.5V16' stroke='white' stroke-width='1.5' fill='none' stroke-linejoin='round'/><path d='M5 19h14' stroke='#ef5350' stroke-width='2' stroke-linecap='round'/></svg>"
 Authors:
   - "Roland Buergi"
@@ -85,10 +85,9 @@ offering consumers packages nobody builds against and nobody patches.
 
 ---
 
-### 1a. The `memex` CLI is published again, and it follows `3-latest` (2026-10-15)
+### 1a. The `memex` CLI is published again, and it follows `3-latest`
 
-> *"is our cli published on nuget"* — *"can you publish with correct version?"* — *"and 3latest?"*
-> — maintainer, 2026-10-15
+Policy [`cli-on-nuget-follows-3-latest`](../PolicyNotProse) — the register carries its date and who set it.
 
 `MeshWeaver.Cli` was retired with the rest on 2026-09-07 (its `3.0.0-rc1`…`rc13` stay unlisted).
 It comes back because a customer's **dedicated build server** needs the `memex` verbs without a
@@ -201,8 +200,8 @@ safe to automate at all:
 
 The two consumption paths that unlisting *does* end are both deliberate:
 
-- `dotnet tool install -g MeshWeaver.Compiler.Cli` (`mw-compiler`) — and, until 2026-10-15,
-  `-g MeshWeaver.Cli` (the `memex` CLI, published again since: §1a). No lane in this repository or any satellite installed either: CI reaches those
+- `dotnet tool install -g MeshWeaver.Compiler.Cli` (`mw-compiler`) — `-g MeshWeaver.Cli` (the `memex` CLI) was in this list
+  too, and is published again (§1a). No lane in this repository or any satellite installed either: CI reaches those
   verbs through the `mw-plugin-test` **image**, and `MeshWeaver.Plugin.Build` is built from source
   at the pinned platform ref on purpose, because it encodes how a given version compiles.
 - Anything resolving `MeshWeaver.*` by a floating version. Nothing in the fleet does.

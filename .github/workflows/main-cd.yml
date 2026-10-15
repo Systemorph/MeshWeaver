@@ -3653,8 +3653,8 @@ jobs:
   # compiles against the IMAGE, never against a package feed (NuGet publication is retired).
 
   # ────────────────── THE `memex` CLI ON nuget.org FOLLOWS `3-latest` ──────────────────
-  # Maintainer, 2026-10-15: the CLI is published again, at the version the fleet runs — "and
-  # 3latest?". So whenever `arm` actually ARMS a set (the one event that moves `3-latest`), the
+  # policy `cli-on-nuget-follows-3-latest` (Doc/Architecture/PolicyNotProse): the CLI is published at the version the fleet
+  # runs. So whenever `arm` actually ARMS a set (the one event that moves `3-latest`), the
   # CLI of that set is published as the armed `3.<minor>.<run>`, packed from the armed core commit.
   # It is a DISPATCH of publish-packages.yml, never a pack here: nuget.org's Trusted Publishing
   # policy names that workflow FILE, and a nupkg built in this job would be pushed under an
