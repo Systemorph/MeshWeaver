@@ -2,6 +2,7 @@ using System.Reactive;
 ﻿using System.Collections.Immutable;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Reflection;
 using System.Text.Json;
 using System.Threading;
@@ -326,6 +327,11 @@ public static class MeshDataSourceExtensions
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Graph.SaveMeshNodeHandler");
         var node = request.Message.Node;
+        // The instance the sampler marked as requested — reference identity is how a FAILED write
+        // un-marks exactly that save (PendingOwnSave.MarkWriteFailed). Resolved here, on the hub's
+        // inbox, because the write's terminal callback may run after the provider is disposed.
+        var sampled = node;
+        var pendingSave = hub.ServiceProvider.GetService<OwnNodeCache>()?.PendingSave;
         // Persist with Version >= 1 — JsonSerializerOptions has
         // DefaultIgnoreCondition=WhenWritingDefault, so Version=0 is omitted on
         // serialisation, which breaks downstream readers that rely on the field
@@ -415,7 +421,7 @@ public static class MeshDataSourceExtensions
                         logger?.LogDebug(
                             "[SaveMeshNode] re-enqueue deferred {Path} at version={Version} — the flush "
                             + "did not persist it", node.Path, node.Version);
-                        hub.Post(new SaveMeshNodeRequest(node));
+                        hub.Post(new SaveMeshNodeRequest(sampled));
                     }
                 },
                 ex => logger?.LogWarning(ex,
@@ -423,7 +429,7 @@ public static class MeshDataSourceExtensions
                     + "flush claim", node.Path, node.Version)));
             return request.Processed();
         }
-        WriteSampledNode(persistence, hub, node, logger);
+        WriteSampledNode(persistence, hub, node, sampled, pendingSave, logger);
         return request.Processed();
     }
 
@@ -540,8 +546,24 @@ public static class MeshDataSourceExtensions
     /// unresolved post-commit flush claim, see <c>PostCommitFlushRegistry</c>) writes through
     /// exactly the same code, including the <c>MonotonicWriteGuard</c> refusal contract below.
     /// </summary>
+    /// <para>🚨 <b>A FAILED WRITE IS NEVER DROPPED.</b> The sampler marks a state "requested" the
+    /// moment the hub accepts its save, and the dispose-time flush (<see cref="FlushPendingOwnSave"/>)
+    /// skips every requested state. So a write that FAILED in the store — a transient outage, a
+    /// connect timeout — used to leave its state marked as saved while the row stayed behind: a
+    /// recycle then reloaded the older row and the change was silently gone (the in-RAM state was
+    /// the only copy). A failure now un-marks that save, so the state reads as unsaved again and is
+    /// durably re-attempted by the next sampled save or, at the latest, by the dispose flush — which
+    /// first waits for this write to SETTLE, so a failure that lands after teardown began is still
+    /// re-attempted. Not a retry loop: one re-attempt per later save or teardown, and a failure of
+    /// that re-attempt surfaces as a dispose-action fault.</para>
+    /// <para>🚨 <b>ONE WRITE AT A TIME, IN ORDER.</b> Every own write — and the dispose flush — is
+    /// queued on <see cref="PendingOwnSave.Enqueue"/>, so a write starts only once the previous one
+    /// has terminated. Without it an older write still in flight (the file-system adapter's pool runs
+    /// writes concurrently, and its backend has no conditional write) could land after a newer write
+    /// or after the flush and roll the row back.</para>
     private static void WriteSampledNode(
-        IStorageAdapter persistence, IMessageHub hub, MeshNode node, ILogger? logger)
+        IStorageAdapter persistence, IMessageHub hub, MeshNode node, MeshNode sampled,
+        PendingOwnSave? pending, ILogger? logger)
     {
         logger?.LogDebug("[SaveMeshNode] start path={Path} version={Version}",
             node.Path, node.Version);
@@ -549,8 +571,8 @@ public static class MeshDataSourceExtensions
         // (see IStorageAdapter.Changes / InMemoryStorageAdapter.Write) — no
         // separate fan-out from the handler.
         var written = node;
-        persistence.Write(node, hub.JsonSerializerOptions)
-            .Subscribe(
+        var write = persistence.Write(node, hub.JsonSerializerOptions)
+            .Do(
                 saved =>
                 {
                     // MonotonicWriteGuard refusal contract: a refused backward write emits the
@@ -579,8 +601,28 @@ public static class MeshDataSourceExtensions
                     logger?.LogDebug("[SaveMeshNode] persisted path={Path} version={Version}",
                         saved?.Path, saved?.Version);
                 },
-                ex => logger?.LogWarning(ex, "SaveMeshNode failed for {Path} (version={Version})",
-                    node.Path, node.Version));
+                ex =>
+                {
+                    // Error, not Warning: an acknowledged own-node state is NOT durable. It stays
+                    // pending (un-marked below) and is re-attempted — see the summary.
+                    var reattempted = pending?.MarkWriteFailed(sampled) == true;
+                    logger?.LogError(ex,
+                        "[SaveMeshNode] the store write of {Path} (version={Version}) FAILED — the state is "
+                        + "not durable. {Disposition}",
+                        node.Path, node.Version,
+                        reattempted
+                            ? "It stays pending: the next save or the hub's dispose flush re-attempts it."
+                            : "A newer save of this node already superseded it.");
+                })
+            .Select(_ => Unit.Default);
+        // 🚨 ONE store write per node at a time, in order. The write is queued behind the previous
+        // one (PendingOwnSave.Enqueue): an older write still in flight can never land AFTER a newer
+        // one — or after the dispose flush, which joins the same queue — and roll the row back. The
+        // outcome was handled above; the queue only carries the settle, so nothing is swallowed.
+        if (pending is not null)
+            pending.Enqueue(() => write);
+        else
+            write.Subscribe(_ => { }, _ => { });
     }
 
     /// <summary>
@@ -849,6 +891,13 @@ public static class MeshDataSourceExtensions
         public volatile bool IsDeleted;
 
         /// <summary>
+        /// The own-node persistence sampler's save tracker for this hub — shared with
+        /// <c>HandleSaveMeshNode</c>, so a FAILED store write can un-mark its save
+        /// (<see cref="PendingOwnSave.MarkWriteFailed"/>) and the dispose flush re-attempts it.
+        /// </summary>
+        internal PendingOwnSave PendingSave { get; } = new();
+
+        /// <summary>
         /// 🚨 The latest own-node instance that is KNOWN to be already persisted — stamped by
         /// <c>MeshNodeTypeSource.BuildInstanceCollection</c> for every state that ARRIVED from
         /// persistence or from the routing-supplied own-node stream (both are, by construction,
@@ -894,7 +943,12 @@ public static class MeshDataSourceExtensions
     internal sealed class PendingOwnSave
     {
         private volatile MeshNode? latest;
-        private volatile MeshNode? requested;
+        // Not volatile: written through Volatile/Interlocked, which a volatile field would refuse
+        // to take by ref (CS0420).
+        private MeshNode? requested;
+        // The settle of the most recently QUEUED store write (one Unit once it terminates, either
+        // way). Swapped with Interlocked.Exchange, so concurrent enqueuers still form one chain.
+        private IObservable<Unit> lastWrite = Observable.Return(Unit.Default);
 
         /// <summary>Latest own-node state that passed the sampler's gates (candidate for save).</summary>
         public void Track(MeshNode node) => latest = node;
@@ -904,7 +958,41 @@ public static class MeshDataSourceExtensions
         /// teardown guard), so the inbox will process it before the FIFO-ordered
         /// phase-advance <c>ShutdownRequest</c>s and the storage write runs on the
         /// mesh IO pool, which outlives the hub.</summary>
-        public void MarkRequested(MeshNode node) => requested = node;
+        public void MarkRequested(MeshNode node) => Volatile.Write(ref requested, node);
+
+        /// <summary>
+        /// The store write of <paramref name="node"/> FAILED: un-mark it, so the latest state reads
+        /// as unsaved again and the dispose flush re-attempts it. A no-op — returning false — when
+        /// a newer save has been requested since, which supersedes this one.
+        /// </summary>
+        /// <param name="node">The exact instance whose save was marked requested.</param>
+        /// <returns>True when the failed save was still the requested one and is now pending again.</returns>
+        public bool MarkWriteFailed(MeshNode node)
+            => ReferenceEquals(Interlocked.CompareExchange(ref requested, null, node), node);
+
+        /// <summary>
+        /// Queues one store write of this node behind every write queued before it: <paramref name="write"/>
+        /// is subscribed only once the previous write has TERMINATED (succeeded or failed), so this
+        /// node's writes reach the store one at a time and in order — an older write can never land
+        /// after a newer one, nor after the dispose flush, which is queued here too. Eager, like
+        /// <c>IoPoolExtensions.Run</c>: the chain feeds a <see cref="ReplaySubject{T}"/> that replays
+        /// the write's own outcome (its error included) to whoever subscribes, now or later. Not a
+        /// retry: a failed write settles the slot and the next one runs.
+        /// </summary>
+        /// <param name="write">The cold write; invoked when its turn comes.</param>
+        /// <returns>The write's outcome, replayed.</returns>
+        public IObservable<Unit> Enqueue(Func<IObservable<Unit>> write)
+        {
+            var outcome = new ReplaySubject<Unit>();
+            var settled = outcome
+                .Materialize()
+                .Where(n => n.Kind != NotificationKind.OnNext)
+                .Select(_ => Unit.Default)
+                .Take(1);
+            var previous = Interlocked.Exchange(ref lastWrite, settled);
+            previous.IgnoreElements().Concat(Observable.Defer(write)).Subscribe(outcome);
+            return outcome;
+        }
 
         /// <summary>The latest gated state whose save was never dispatched — or null when
         /// everything the sampler saw has a dispatched save. Reference identity is exact
@@ -912,7 +1000,7 @@ public static class MeshDataSourceExtensions
         public MeshNode? TakeUnsaved()
         {
             var l = latest;
-            return l is null || ReferenceEquals(l, requested) ? null : l;
+            return l is null || ReferenceEquals(l, Volatile.Read(ref requested)) ? null : l;
         }
     }
 
@@ -1336,7 +1424,7 @@ public static class MeshDataSourceExtensions
             // WithMeshNodes (FindServedStaticNode) so serving and persisting stay in lockstep.
             if (FindServedStaticNode(hub.ServiceProvider, hub.Address.Path) is null)
             {
-                var pending = new PendingOwnSave();
+                var pending = cache.PendingSave;
                 var saveSub = InstallPersistenceSampler(
                     ownStream, cache, new WeakReference<IMessageHub>(hub), SaveSampleInterval, pending);
                 hub.RegisterForDisposal(saveSub);
@@ -1660,6 +1748,27 @@ public static class MeshDataSourceExtensions
     private static IObservable<System.Reactive.Unit> FlushPendingOwnSave(
         IMessageHub hub, OwnNodeCache cache, PendingOwnSave pending)
     {
+        // 🚨 Resolve what the flush needs NOW, while the provider is alive; then wait for the last
+        // store write to SETTLE before deciding. A save dispatched just before teardown is still in
+        // flight here, and if it then FAILS it un-marks itself (MarkWriteFailed) — deciding before
+        // it settled would read "already saved" and the failed state would be lost on recycle.
+        var flushed = hub.ServiceProvider.GetService<PostCommitFlushRegistry>();
+        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
+        var recentlyDeleted = hub.ServiceProvider.GetService<RecentlyDeletedRegistry>();
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.Graph.SaveMeshNodeHandler");
+        var options = hub.JsonSerializerOptions;
+        // Queued behind every own write still in flight (PendingOwnSave.Enqueue), so the flush both
+        // decides after they settled AND can never be overtaken by one of them.
+        return Observable.Defer(() => pending.Enqueue(() =>
+            FlushUnsaved(cache, pending, flushed, persistence, recentlyDeleted, options, logger)));
+    }
+
+    private static IObservable<System.Reactive.Unit> FlushUnsaved(
+        OwnNodeCache cache, PendingOwnSave pending, PostCommitFlushRegistry? flushed,
+        IStorageAdapter? persistence, RecentlyDeletedRegistry? recentlyDeleted,
+        JsonSerializerOptions options, ILogger? logger)
+    {
         var node = pending.TakeUnsaved();
         if (node is null || cache.IsDeleted || ReferenceEquals(node, cache.PersistedSnapshot))
             return Observable.Return(System.Reactive.Unit.Default);
@@ -1675,25 +1784,20 @@ public static class MeshDataSourceExtensions
         // (the post-commit flush wrote it and the caller's ack chained off that write), so flushing
         // it again at teardown is the duplicate #1249 is about. A pending own write that never went
         // through a patch has no mark and still flushes — the DisposalPendingSaveFlushTest case.
-        var flushed = hub.ServiceProvider.GetService<PostCommitFlushRegistry>();
         if (node.Version <= (flushed?.HighWater(node.Path) ?? 0L))
             return Observable.Return(System.Reactive.Unit.Default);
 
-        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
         if (persistence is null)
             return Observable.Return(System.Reactive.Unit.Default);
 
         // "Delete wins" — same tombstone guard as HandleSaveMeshNode: never let the flush
         // resurrect a just-deleted path.
-        var recentlyDeleted = hub.ServiceProvider.GetService<RecentlyDeletedRegistry>();
         if (recentlyDeleted?.IsRecentlyDeleted(node.Path) == true)
             return Observable.Return(System.Reactive.Unit.Default);
 
-        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
-            ?.CreateLogger("MeshWeaver.Graph.SaveMeshNodeHandler");
         logger?.LogDebug("[SaveMeshNode] dispose-flush start path={Path} version={Version}",
             node.Path, node.Version);
-        return persistence.Write(node, hub.JsonSerializerOptions)
+        return persistence.Write(node, options)
             .Do(saved => logger?.LogDebug(
                 "[SaveMeshNode] dispose-flush persisted path={Path} version={Version}",
                 saved?.Path, saved?.Version))
