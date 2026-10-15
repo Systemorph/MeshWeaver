@@ -43,6 +43,8 @@ VALUES="${VALUES:-values.observability.yaml}"
 # service is `loki-grafana`, and the fleet watch reads exactly this release.
 NS=monitoring
 RELEASE=loki
+# 540 s when this script IS the invoke's command. A caller that runs it inside a LONGER invoke
+# (deploy.sh) must pass what is left of ITS cap: SECONDS starts with this shell, not the invoke.
 BUDGET_SECONDS="${OBS_BUDGET_SECONDS:-540}"
 PROMETHEUS_DEPLOY="$RELEASE-prometheus-server"
 PROMETHEUS_CONTAINER=prometheus-server
@@ -79,7 +81,26 @@ stage_seconds() {
 }
 # Kept back while recovering: tearing the recovery down (~40 s), the upgrade's minimum (60 s) and
 # room for the readiness report.
-RECOVERY_KEEP_BACK=150
+RECOVERY_KEEP_BACK=180   # + the rollback's minimum: the TSDB recovery runs BEFORE it (see below)
+ROLLBACK_KEEP_BACK=120
+
+# helm has no request timeout of its own, and its --timeout does not bound every call (status,
+# history, repo, API discovery). `bounded <seconds> cmd…` runs a command under a watchdog that
+# kills it at the bound, so a stalled call fails RED instead of carrying the run past the cap.
+# The watchdog's output goes to /dev/null so `$(bounded …)` never waits on it.
+bounded() {
+  local secs=$1 pid watchdog rc
+  shift
+  [ "$secs" -lt 1 ] && secs=1
+  "$@" &
+  pid=$!
+  ( sleep "$secs"; kill -TERM "$pid" 2>/dev/null ) >/dev/null 2>&1 &
+  watchdog=$!
+  wait "$pid"; rc=$?
+  kill "$watchdog" 2>/dev/null; wait "$watchdog" 2>/dev/null
+  return "$rc"
+}
+hb() { bounded "$(request_seconds 30)" helm "$@"; }    # a helm metadata/repo call
 # A workload's pod selector as `k=v,k=v` (the go-template's `$k`/`$v` are template variables).
 selector_of() {
   local labels
@@ -88,8 +109,8 @@ selector_of() {
   printf '%s' "${labels%,}"
 }
 
-helm repo add grafana https://grafana.github.io/helm-charts >/dev/null 2>&1 || true
-helm repo update >/dev/null 2>&1
+hb repo add grafana https://grafana.github.io/helm-charts >/dev/null 2>&1 || true
+hb repo update >/dev/null 2>&1
 
 # ── 1. A release stuck in pending-* ─────────────────────────────────────────────────────────────
 # helm marks the release pending-install/-upgrade/-rollback BEFORE it touches the cluster and
@@ -101,20 +122,33 @@ helm repo update >/dev/null 2>&1
 # re-apply known-good manifests and record a fresh `deployed` revision), then upgrade as usual.
 recover_pending_release() {
   local status last_deployed
-  status=$(helm status "$RELEASE" -n "$NS" 2>/dev/null | awk -F': ' '$1 == "STATUS" { print $2; exit }')
+  local raw
+  if ! raw=$(hb status "$RELEASE" -n "$NS" 2>&1); then
+    # Not-found is the first install; anything else (a stalled or refused call) is not an answer.
+    case "$raw" in
+      *"not found"*) return 0 ;;
+      *) echo "FATAL: could not read the state of release $RELEASE: $raw" >&2; exit 1 ;;
+    esac
+  fi
+  status=$(printf '%s\n' "$raw" | awk -F': ' '$1 == "STATUS" { print $2; exit }')
   case "$status" in
     pending-install|pending-upgrade|pending-rollback) ;;
     *) return 0 ;;
   esac
-  last_deployed=$(helm history "$RELEASE" -n "$NS" --max 1000 2>/dev/null \
+  local history
+  if ! history=$(hb history "$RELEASE" -n "$NS" --max 1000 2>&1); then
+    echo "FATAL: release $RELEASE is stuck in '$status' and its history could not be read: $history" >&2
+    exit 1
+  fi
+  last_deployed=$(printf '%s\n' "$history" \
     | awk 'NR > 1 { for (i = 2; i <= NF; i++) if ($i == "deployed") print $1 }' | tail -n 1)
   if [ -n "$last_deployed" ]; then
     recovery "release $RELEASE is stuck in '$status' (a run that was killed mid-operation)."
     recovery "rolling back to its last deployed revision $last_deployed, then upgrading as usual."
-    stage_seconds 60 20 "$RECOVERY_KEEP_BACK" "helm rollback" || exit 1
-    if ! helm rollback "$RELEASE" "$last_deployed" -n "$NS" --timeout "${STAGE_SECONDS}s"; then
+    stage_seconds 60 20 "$ROLLBACK_KEEP_BACK" "helm rollback" || exit 1
+    if ! bounded $(( STAGE_SECONDS + 10 )) helm rollback "$RELEASE" "$last_deployed" -n "$NS" --timeout "${STAGE_SECONDS}s"; then
       echo "FATAL: release $RELEASE is stuck in '$status' and 'helm rollback $RELEASE $last_deployed' failed." >&2
-      helm history "$RELEASE" -n "$NS" --max 5 >&2 || true
+      hb history "$RELEASE" -n "$NS" --max 5 >&2 || true
       exit 1
     fi
   elif [ "$status" = pending-install ]; then
@@ -122,17 +156,17 @@ recover_pending_release() {
     # install. Removing it lets the install below start clean. StatefulSet volume claims (Loki's
     # store) survive an uninstall; the chart's own PVCs belonged to an install that never completed.
     recovery "release $RELEASE is stuck in 'pending-install' and was never deployed — uninstalling the half-made first install."
-    stage_seconds 60 20 "$RECOVERY_KEEP_BACK" "helm uninstall" || exit 1
-    if ! helm uninstall "$RELEASE" -n "$NS" --timeout "${STAGE_SECONDS}s"; then
+    stage_seconds 60 20 "$ROLLBACK_KEEP_BACK" "helm uninstall" || exit 1
+    if ! bounded $(( STAGE_SECONDS + 10 )) helm uninstall "$RELEASE" -n "$NS" --timeout "${STAGE_SECONDS}s"; then
       echo "FATAL: release $RELEASE is stuck in 'pending-install' and could not be uninstalled." >&2
       exit 1
     fi
   else
     echo "FATAL: release $RELEASE is stuck in '$status' and has no deployed revision to roll back to." >&2
-    helm history "$RELEASE" -n "$NS" --max 10 >&2 || true
+    hb history "$RELEASE" -n "$NS" --max 10 >&2 || true
     exit 1
   fi
-  recovery "release $RELEASE is $(helm status "$RELEASE" -n "$NS" 2>/dev/null | awk -F': ' '$1 == "STATUS" { print $2; exit }' || echo unknown) again."
+  recovery "release $RELEASE is $(hb status "$RELEASE" -n "$NS" 2>/dev/null | awk -F': ' '$1 == "STATUS" { print $2; exit }' || echo unknown) again."
 }
 
 # ── 2. A Prometheus whose TSDB volume is full ───────────────────────────────────────────────────
@@ -158,14 +192,24 @@ tsdb_recovery_script() {
 set -eu
 dir="${TSDB_DIR:-/data}"
 target="${TARGET_PERCENT:-60}"
-used() { df -P "$dir" | awk 'NR == 2 { sub("%", "", $5); print $5 }'; }
-echo "tsdb-recovery: before: $(used)% of $dir used"
+# Every decision to delete rests on a usage reading, so a reading that is not a number STOPS the
+# script before it deletes anything more — an empty one would otherwise fail every comparison and
+# prune every block.
+measure() {
+  used=$(df -P "$dir" 2>/dev/null | awk 'NR == 2 { sub("%", "", $5); print $5 }') || used=""
+  case "$used" in
+    ''|*[!0-9]*) echo "tsdb-recovery: cannot read the volume's usage (got '$used') — stopping, nothing more is deleted"; exit 1 ;;
+  esac
+}
+measure
+echo "tsdb-recovery: before: $used% of $dir used"
 cd "$dir"
 rm -rf wal chunks_head lock
 for leftover in *.tmp*; do
   if [ -e "$leftover" ]; then echo "tsdb-recovery: removing temporary $leftover"; rm -rf "$leftover"; fi
 done
-echo "tsdb-recovery: removed the WAL and head chunks; now $(used)% used"
+measure
+echo "tsdb-recovery: removed the WAL and head chunks; now $used% used"
 # Oldest SAMPLES first, never oldest ULID: compaction mints a NEW ULID for an OLD time range, so
 # the ULID orders creation, not age. Each block's meta.json carries its range; its first "minTime"
 # is the block's own (the ones under compaction.parents come later). A directory without a
@@ -174,12 +218,14 @@ for block in $(for b in $(ls -1 | grep -E '^[0-9A-HJKMNP-TV-Z]{26}$'); do
                  min=$(sed -n 's/.*"minTime": *\(-\{0,1\}[0-9][0-9]*\).*/\1/p' "$b/meta.json" 2>/dev/null | head -n 1)
                  echo "${min:--9223372036854775808} $b"
                done | sort -n | awk '{ print $2 }'); do
-  if [ "$(used)" -le "$target" ]; then break; fi
+  measure
+  if [ "$used" -le "$target" ]; then break; fi
   echo "tsdb-recovery: removing oldest block $block"
   rm -rf "$block"
 done
-echo "tsdb-recovery: after: $(used)% of $dir used (target <= $target%)"
-[ "$(used)" -le "$target" ] || { echo "tsdb-recovery: still above target — no block left to remove"; exit 1; }
+measure
+echo "tsdb-recovery: after: $used% of $dir used (target <= $target%)"
+[ "$used" -le "$target" ] || { echo "tsdb-recovery: still above target — no block left to remove"; exit 1; }
 RECOVER
 }
 
@@ -354,9 +400,12 @@ ensure_no_leftover_cleaner() {
   fi
 }
 
+# The full-volume recovery runs BEFORE the pending-release rollback: a rollback that changes the
+# server's pod template replaces the crash-looping pod with a fresh one — zero restarts, no
+# previous log — and the evidence the recovery acts on would be gone while the disk stays full.
 ensure_no_leftover_cleaner
-recover_pending_release
 recover_full_tsdb
+recover_pending_release
 
 # 🚨 FIRST TIME ONLY, on a cluster that already runs the emptyDir Loki: enabling persistence adds a
 # volumeClaimTemplate, and a StatefulSet's volumeClaimTemplates are IMMUTABLE — `helm upgrade` fails
@@ -390,7 +439,7 @@ CHART_VERSION="${LOKI_STACK_VERSION:-2.10.3}"
 # recorded `deployed` as soon as the manifests are applied. Readiness is the next block's job.
 stage_seconds 120 60 60 "helm upgrade" || exit 1
 UPGRADE_SECONDS=$STAGE_SECONDS
-if ! helm upgrade --install "$RELEASE" grafana/loki-stack --version "$CHART_VERSION" -n "$NS" --create-namespace \
+if ! bounded $(( UPGRADE_SECONDS + 15 )) helm upgrade --install "$RELEASE" grafana/loki-stack --version "$CHART_VERSION" -n "$NS" --create-namespace \
   -f "$VALUES" \
   --set grafana.enabled=true --set prometheus.enabled=true \
   --set grafana.adminPassword="$GRAFANA_PW" --set grafana.service.type=ClusterIP \

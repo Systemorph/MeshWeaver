@@ -37,6 +37,8 @@ with open(os.environ['CALLS'], 'a') as f:
     f.write(tool + ' ' + line + '\n')
 def out(text): sys.stdout.write(text)
 if tool == 'helm':
+    if args[:1] == ['status'] and 'slow-helm' in scenario:
+        import time; time.sleep(60)                  # a stalled metadata query
     if args[:1] == ['status']:
         status = 'deployed'
         for s in ('pending-upgrade', 'pending-install', 'pending-rollback'):
@@ -79,7 +81,9 @@ if 'get pods -l' in line:
     out('loki-prometheus-server-abc')
     sys.exit(0)
 if 'get pod loki-prometheus-server-abc' in line:
+    rolled_back = 'helm rollback' in open(os.environ['CALLS']).read()
     if 'recovered' in scenario: out('253 true')          # crashed once, Ready now
+    elif 'rollback-replaces-pod' in scenario and rolled_back: out('0 false')   # fresh pod, no evidence
     elif 'out-of-space' in scenario or 'other-crash' in scenario: out('253 false')
     else: out('0 true')
     sys.exit(0)
@@ -181,6 +185,27 @@ class StuckReleaseTest(unittest.TestCase):
         self.assertEqual(run.code, 0, run.stderr)
         self.assertEqual(run.index('helm rollback'), -1, run.calls)
         self.assertNotIn('RECOVERY:', run.stdout)
+
+
+class OrderAndDeadlineTest(unittest.TestCase):
+    def test_full_volume_is_recovered_before_a_rollback_can_replace_the_pod(self):
+        # The stub hands out a FRESH pod (no restarts, no previous log) once a rollback ran — so
+        # the recovery only happens at all if it runs first.
+        run = run_installer('pending-upgrade', 'out-of-space', 'rollback-replaces-pod')
+        self.assertEqual(run.code, 0, run.stderr)
+        apply_, rollback = run.index('apply -f -'), run.index('helm rollback loki 8')
+        self.assertGreaterEqual(apply_, 0, run.calls)
+        self.assertLess(apply_, rollback, run.calls)
+        self.assertLess(rollback, run.index('helm upgrade --install'), run.calls)
+
+    def test_a_stalled_helm_query_is_cut_off_and_red(self):
+        started = time.monotonic()
+        run = run_installer('slow-helm', budget=20)     # → a 10 s bound on the status query
+        elapsed = time.monotonic() - started
+        self.assertEqual(run.code, 1, run.stdout)
+        self.assertIn('could not read the state of release', run.stderr)
+        self.assertLess(elapsed, 25, elapsed)
+        self.assertEqual(run.index('helm upgrade'), -1, run.calls)
 
 
 class LeftoverCleanerTest(unittest.TestCase):
@@ -298,17 +323,17 @@ class FullTsdbTest(unittest.TestCase):
         # Still listed, or the listing itself failed: neither proves the server stopped.
         for scenario in ('termination-timeout', 'list-error'):
             with self.subTest(scenario=scenario):
-                run = run_installer('out-of-space', scenario, budget=185)   # a ~35 s stop deadline
+                run = run_installer('out-of-space', scenario, budget=215)   # a ~35 s stop deadline
                 self.assertEqual(run.code, 1, run.stdout)
                 self.assertIn('NOT touched', run.stderr)
                 self.assertEqual(run.index('apply -f -'), -1, run.calls)
                 self.assertGreater(run.index('--replicas=1'), run.index('--replicas=0'), run.calls)
 
     def test_slow_listings_are_held_to_the_absolute_stop_deadline(self):
-        # Budget 185 s leaves a ~35 s stop deadline (150 s kept back). Each listing takes 3 s; the
+        # Budget 215 s leaves a ~35 s stop deadline (180 s kept back). Each listing takes 3 s; the
         # loop must end on wall-clock time, not on a count of its sleeps, and restore the server.
         started = time.monotonic()
-        run = run_installer('out-of-space', 'slow-list', budget=185)
+        run = run_installer('out-of-space', 'slow-list', budget=215)
         elapsed = time.monotonic() - started
         self.assertEqual(run.code, 1, run.stdout)
         self.assertRegex(run.stderr, r'stopped within 3[0-5]s')
@@ -357,12 +382,12 @@ class TsdbCleanupScriptTest(unittest.TestCase):
         body = manifest.split('        - |\n', 1)[1].split('      volumeMounts:', 1)[0]
         return textwrap.dedent(body)
 
-    def run_cleanup(self, blocks, target, min_times=None):
+    def run_cleanup(self, blocks, target, min_times=None, df=None):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             tsdb, bin_ = root / 'data', root / 'bin'
             tsdb.mkdir(); bin_.mkdir()
-            (bin_ / 'df').write_text(self.DF); (bin_ / 'df').chmod(0o755)
+            (bin_ / 'df').write_text(df or self.DF); (bin_ / 'df').chmod(0o755)
             for name in ['wal', 'chunks_head', '01K0000000000000000000000F.tmp-for-creation', *blocks]:
                 (tsdb / name).mkdir()
             for i, block in enumerate(blocks):
@@ -376,29 +401,42 @@ class TsdbCleanupScriptTest(unittest.TestCase):
                        TSDB_DIR=str(tsdb), TARGET_PERCENT=str(target))
             result = subprocess.run(['sh', '-c', self.cleanup_script()], env=env,
                                     capture_output=True, text=True, timeout=30)
-            return result, sorted(p.name for p in tsdb.iterdir())
+            return result, sorted(p.name for p in tsdb.iterdir() if p.is_dir())
 
     def test_wal_goes_then_oldest_blocks_until_under_target(self):
         result, left = self.run_cleanup(self.BLOCKS, 60)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         # 5 blocks = 75% after the WAL is gone; dropping the oldest one reaches 60%.
-        self.assertEqual(left, [*self.BLOCKS[1:], 'queries.active'])
+        self.assertEqual(left, self.BLOCKS[1:])
 
     def test_order_is_by_sample_age_not_ulid(self):
         # Compaction minted the NEWEST ULID (E) for the OLDEST range: it goes first, A survives.
         result, left = self.run_cleanup(self.BLOCKS, 60, min_times={self.BLOCKS[4]: 1_600_000_000_000})
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(left, [*self.BLOCKS[:4], 'queries.active'])
+        self.assertEqual(left, self.BLOCKS[:4])
+
+    def test_an_unreadable_usage_deletes_nothing(self):
+        broken = {'fails': '#!/bin/sh\necho "df: boom" >&2\nexit 1\n',
+                  'empty': '#!/bin/sh\nexit 0\n',
+                  'header-only': '#!/bin/sh\necho "Filesystem 1024-blocks Used Available Capacity Mounted on"\n',
+                  'not-a-number': '#!/bin/sh\necho "h"\necho "/dev/sdx 1 1 1 -% /data"\n'}
+        for name, df in broken.items():
+            with self.subTest(df=name):
+                result, left = self.run_cleanup(self.BLOCKS, 60, df=df)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn('cannot read the volume', result.stdout)
+                self.assertEqual(left, sorted([*self.BLOCKS, 'chunks_head', 'wal',
+                                               '01K0000000000000000000000F.tmp-for-creation']))
 
     def test_already_under_target_keeps_every_block(self):
         result, left = self.run_cleanup(self.BLOCKS[:2], 60)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(left, [*self.BLOCKS[:2], 'queries.active'])
+        self.assertEqual(left, self.BLOCKS[:2])
 
     def test_unreachable_target_is_red(self):
         result, left = self.run_cleanup(self.BLOCKS, -1)
         self.assertNotEqual(result.returncode, 0, result.stdout)
-        self.assertEqual(left, ['queries.active'])
+        self.assertEqual(left, [])
 
 
 if __name__ == '__main__':
