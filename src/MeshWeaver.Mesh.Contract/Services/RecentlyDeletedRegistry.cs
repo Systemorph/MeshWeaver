@@ -232,11 +232,35 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
     /// <param name="body">The work the scope protects. Subscribed once, inside the scope.</param>
     /// <returns>The body's notifications, delivered after the scope is released.</returns>
     public IObservable<T> WithinSubtreeDeletion<T>(string rootPath, Func<IObservable<T>> body) =>
+        WithinSubtreeDeletion(rootPath, new MeshOperationOptions().Timeout, body);
+
+    /// <summary>
+    /// <see cref="WithinSubtreeDeletion{T}(string, Func{IObservable{T}})"/> with an explicit bound on
+    /// the wait for writes admitted under <paramref name="rootPath"/> before the scope opened (#6719).
+    /// 🚨 The wait holds the scope open, and the scope refuses EVERY write under the root — so an
+    /// admitted write that never terminates must not hold it forever. Past
+    /// <paramref name="settleWithin"/> the operation fails with a <see cref="TimeoutException"/> naming
+    /// the pending paths, the body never runs (nothing is torn down or moved), and the scope is
+    /// released before the error is delivered.
+    /// </summary>
+    /// <typeparam name="T">The body's element type.</typeparam>
+    /// <param name="rootPath">The subtree being deleted (or moved away, or torn down).</param>
+    /// <param name="settleWithin">How long the admitted writes may take to settle.</param>
+    /// <param name="body">The work the scope protects. Subscribed once, inside the scope.</param>
+    /// <returns>The body's notifications, delivered after the scope is released.</returns>
+    public IObservable<T> WithinSubtreeDeletion<T>(
+        string rootPath, TimeSpan settleWithin, Func<IObservable<T>> body) =>
         Observable.Using(
             () => BeginSubtreeDeletion(rootPath),
             // The body runs only once every write ADMITTED under the root before the scope opened
-            // has settled (#6719) — see AdmittedWritesSettled.
+            // has settled (#6719) — see AdmittedWritesSettled — and not at all if they do not.
             scope => AdmittedWritesSettled(rootPath)
+                .Timeout(settleWithin, Observable.Defer(() => Observable.Throw<System.Reactive.Unit>(
+                    new TimeoutException(
+                        $"write(s) admitted under '{rootPath}' before its deletion scope opened did not "
+                        + $"settle within {settleWithin.TotalSeconds:0}s: "
+                        + $"{string.Join(", ", AdmittedWritesUnder(rootPath).Take(10))}. Nothing was done "
+                        + "under the scope."))))
                 .SelectMany(_ => Observable.Defer(body))
                 .Materialize()
                 .ToList()

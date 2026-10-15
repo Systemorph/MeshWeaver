@@ -231,6 +231,52 @@ public class DeleteExpectedVersionOwnerTurnTest(ITestOutputHelper output) : Mono
     }
 
     /// <summary>
+    /// #6673's comparison SOURCE, pinned in the state it is about — the owner holds V+1 while the
+    /// store still holds V — at the owner-turn ask itself. The end-to-end tests below can no longer
+    /// observe that state at the comparison: the delete now waits for the held (already ADMITTED)
+    /// store write to settle first (#6719), so by the time it compares, store and owner agree, and a
+    /// comparison against the STORED version would pass them too. Asked directly, with the store write
+    /// still held, the owner must refuse V naming V+1 and confirm V+1 — a stored-version comparison
+    /// answers the opposite of both.
+    /// </summary>
+    [Fact]
+    public async Task TheOwnerTurnCompares_TheOwnersLiveVersion_NotTheStoredOne()
+    {
+        var node = await Seed("owner-turn-source");
+        var owner = await OwnerOf(node.Path);
+        var read = (await Stored(node.Path))!.Version;
+        try
+        {
+            var acked = await AcknowledgedButNotStored(owner, node.Path, read);
+
+            var stale = (await RequestHub
+                .Observe(new ValidateDeleteRequest(node.Path) { ExpectedVersion = read },
+                    o => o.WithTarget(new Address(node.Path)))
+                .Should().Within(TestTimeouts.Convergence).Emit("the owner answers", Ct)).Message;
+            Output.WriteLine($"[ask V={read}] valid={stale.IsValid} reason={stale.Reason} actual={stale.ActualVersion}");
+            stale.IsValid.Should().BeFalse($"the owner holds {acked}, not the stored {read}");
+            stale.Reason.Should().Be(NodeDeletionRejectionReason.Conflict);
+            stale.ActualVersion.Should().Be(acked);
+
+            // Control: the same ask naming the owner's version is confirmed — so the refusal above is
+            // a comparison, not a refusal of every ask while a write is pending.
+            var live = (await RequestHub
+                .Observe(new ValidateDeleteRequest(node.Path) { ExpectedVersion = acked },
+                    o => o.WithTarget(new Address(node.Path)))
+                .Should().Within(TestTimeouts.Convergence).Emit("the owner answers", Ct)).Message;
+            Output.WriteLine($"[ask V={acked}] valid={live.IsValid} confirmed={live.ConfirmedVersion}");
+            live.IsValid.Should().BeTrue(string.Join("; ", live.Errors));
+            live.ConfirmedVersion.Should().Be(acked);
+            (await Stored(node.Path))!.Version.Should().Be(read,
+                "the premise held throughout: the store still had the old version while the owner was asked");
+        }
+        finally
+        {
+            _storage.Release();
+        }
+    }
+
+    /// <summary>
     /// THE FALSIFIER. The deleter read version V. The owner acknowledges V+1, and its store write is
     /// held. The delete naming V arrives: it must be refused, and once the store write is released
     /// the acknowledged change is stored. Before #6673 the check read V from the store, matched, and

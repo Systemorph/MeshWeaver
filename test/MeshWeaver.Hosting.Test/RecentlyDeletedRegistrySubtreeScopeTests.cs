@@ -1,5 +1,6 @@
 using System;
 using System.Reactive.Linq;
+using System.Threading;
 using MeshWeaver.Mesh.Services;
 using Xunit;
 
@@ -170,5 +171,38 @@ public class RecentlyDeletedRegistrySubtreeScopeTests
         bodyRan.Should().BeFalse("a write admitted under the root is still in flight");
         admitted.Dispose();
         bodyRan.Should().BeTrue("the admitted write settled, so the scope's body runs");
+    }
+
+    /// <summary>
+    /// #6719 review: an admitted write that NEVER settles must not hold the scope — which refuses every
+    /// write under the root — for ever. The wait is bounded: the operation fails naming the pending
+    /// path, the body never runs, and the scope is released before the error is delivered.
+    /// </summary>
+    [Fact]
+    public void WithinSubtreeDeletion_fails_by_name_when_an_admitted_write_never_settles()
+    {
+        var registry = new RecentlyDeletedRegistry();
+        using var neverSettles = registry.AdmitWrite(["h/stuck"]);
+        var bodyRan = false;
+        Exception? error = null;
+        var heldWhenDelivered = true;
+        var terminated = 0;
+
+        using var subscription = registry.WithinSubtreeDeletion("h", TimeSpan.FromMilliseconds(50), () =>
+        {
+            bodyRan = true;
+            return Observable.Return(1);
+        }).Subscribe(_ => { }, ex =>
+        {
+            error = ex;
+            heldWhenDelivered = registry.IsUnderActiveDeletion("h/x", out _);
+            Volatile.Write(ref terminated, 1);
+        });
+
+        SpinWait.SpinUntil(() => Volatile.Read(ref terminated) == 1, TimeSpan.FromSeconds(10))
+            .Should().BeTrue("the settlement wait is bounded");
+        error.Should().BeOfType<TimeoutException>().Which.Message.Should().Contain("h/stuck");
+        bodyRan.Should().BeFalse("nothing may be torn down or moved while an admitted write is pending");
+        heldWhenDelivered.Should().BeFalse("the scope is released before the failure is delivered");
     }
 }
