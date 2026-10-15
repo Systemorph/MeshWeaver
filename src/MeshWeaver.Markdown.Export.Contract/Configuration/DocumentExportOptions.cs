@@ -1,5 +1,7 @@
 using System.Collections.Immutable;
+using System.ComponentModel;
 using System.Text.Json.Serialization;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Markdown.Export.Configuration;
 
@@ -75,6 +77,32 @@ public record DocumentExportOptions
 
     /// <summary>Max descendant depth when <see cref="IncludeChildren"/> is true (0 = unlimited).</summary>
     public int MaxDepth { get; init; }
+
+    /// <summary>The link depth <see cref="LinkedDocumentsMaxDepth"/> starts at: documents linked directly.</summary>
+    public const int DefaultLinkedDocumentsMaxDepth = 1;
+
+    /// <summary>
+    /// Append each mesh document the exported content LINKS to as an appendix chapter, so a
+    /// recipient who cannot open the portal still gets the content (MeshWeaver.Plugins#3707). The
+    /// links are followed to <see cref="LinkedDocumentsMaxDepth"/> levels. Each target is read as
+    /// the person exporting. A link to a target that is denied or missing is marked visibly, both
+    /// where it stands and in the appendix list, and the target's title is never printed.
+    /// </summary>
+    [Description("Include linked documents as an appendix")]
+    [Translation("de", "Verlinkte Dokumente als Anhang aufnehmen")]
+    public bool IncludeLinkedDocuments { get; init; }
+
+    /// <summary>
+    /// How many levels of links <see cref="IncludeLinkedDocuments"/> follows: 1 = the documents the
+    /// export links to directly, 2 = also the documents THOSE link to, and so on. Values below 1
+    /// read as 1. Ignored when <see cref="IncludeLinkedDocuments"/> is false.
+    /// </summary>
+    // [JsonIgnore(Never)]: the default is not default(int), so a 0 dropped by WhenWritingDefault
+    // would come back as the initializer — the same trap the `= true` flags above document.
+    [Description("Link levels to follow for the appendix")]
+    [Translation("de", "Zu verfolgende Verweisebenen für den Anhang")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
+    public int LinkedDocumentsMaxDepth { get; init; } = DefaultLinkedDocumentsMaxDepth;
 
     /// <summary>
     /// Render pages in landscape (wide) orientation instead of portrait. Off by default

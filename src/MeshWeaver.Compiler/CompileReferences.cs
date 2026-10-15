@@ -52,7 +52,7 @@ public static class CompileReferences
                     continue;
                 try
                 {
-                    references.Add(MetadataReference.CreateFromFile(path));
+                    references.Add(HostReference(path));
                 }
                 catch
                 {
@@ -89,6 +89,210 @@ public static class CompileReferences
         }
 
         return references;
+    }
+
+    /// <summary>
+    /// The metadata reference a compile uses for the host assembly at <paramref name="path"/>:
+    /// the file itself — unless this toolchain carries the package's REFERENCE assembly for the
+    /// same identity (simple name, version, public key token), which is then compiled against in
+    /// its place. A package can keep members in its implementation for binary compatibility that
+    /// its reference assembly hides from every compile (System.Interactive's
+    /// <c>EnumerableEx.MaxBy</c>, which made the BCL's <c>Enumerable.MaxBy</c> ambiguous — CS0121);
+    /// <c>src/</c> never sees them, and in-mesh C# must not either. The reference assembly is
+    /// materialised as a FILE holding exactly those bytes (content-addressed under the temp
+    /// directory), so every reader of <see cref="PortableExecutableReference.FilePath"/> — the
+    /// emit-failure capture, the identity reads of <see cref="WithPackageAssemblies"/> — sees the
+    /// image Roslyn compiled against. A host carrying a different build of the package, or a
+    /// surface that cannot be written, gets the host file.
+    /// </summary>
+    /// <param name="path">A host (TPA or container) assembly path.</param>
+    public static MetadataReference HostReference(string path)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(path);
+        var fileName = Path.GetFileName(path);
+        using var surface = typeof(CompileReferences).Assembly.GetManifestResourceStream(
+            CompileSurfacePrefix + fileName);
+        if (surface is null)
+            return MetadataReference.CreateFromFile(path);
+        var image = new byte[surface.Length];
+        surface.ReadExactly(image);
+        return SameIdentity(image, path) && MaterializeSurface(image, fileName) is { } surfacePath
+            ? MetadataReference.CreateFromFile(surfacePath)
+            : MetadataReference.CreateFromFile(path);
+    }
+
+    /// <summary>Writes <paramref name="image"/> to <c>{temp}/meshweaver-compile-surfaces/{sha256}/{fileName}</c>
+    /// once (content-addressed, published by a no-replace rename) and returns the path; <c>null</c> when
+    /// it cannot be written.</summary>
+    private static string? MaterializeSurface(byte[] image, string fileName)
+    {
+        try
+        {
+            var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(image)).ToLowerInvariant();
+            var directory = Path.Combine(Path.GetTempPath(), "meshweaver-compile-surfaces", hash);
+            var target = Path.Combine(directory, fileName);
+            if (File.Exists(target) && new FileInfo(target).Length == image.Length)
+                return target;
+            Directory.CreateDirectory(directory);
+            var temporary = Path.Combine(directory, fileName + "." + Guid.NewGuid().ToString("N") + ".tmp");
+            File.WriteAllBytes(temporary, image);
+            if (!MeshWeaver.Utils.NoReplaceMove.TryMove(temporary, target))
+                File.Delete(temporary);
+            return File.Exists(target) && new FileInfo(target).Length == image.Length ? target : null;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    private const string CompileSurfacePrefix = "MeshWeaver.Compiler.CompileSurface.";
+
+    private static bool SameIdentity(byte[] referenceImage, string hostPath)
+    {
+        try
+        {
+            using var pe = new System.Reflection.PortableExecutable.PEReader(
+                System.Collections.Immutable.ImmutableArray.Create(referenceImage));
+            var surface = System.Reflection.Metadata.PEReaderExtensions.GetMetadataReader(pe)
+                .GetAssemblyDefinition().GetAssemblyName();
+            var host = System.Reflection.AssemblyName.GetAssemblyName(hostPath);
+            return string.Equals(surface.Name, host.Name, StringComparison.OrdinalIgnoreCase)
+                && surface.Version == host.Version
+                && (surface.GetPublicKeyToken() ?? []).AsSpan().SequenceEqual(host.GetPublicKeyToken() ?? []);
+        }
+        catch (Exception e) when (e is IOException or BadImageFormatException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 🚨 <b>ONE ASSEMBLY PER NAME — the copy that will RUN.</b> Composes <paramref name="host"/>
+    /// with a <c>#r "nuget:…"</c> resolution, which is the package's whole transitive closure and
+    /// routinely carries assemblies the host ships too: Microsoft.Data.SqlClient 6.1.1 brings
+    /// System.Text.Json 9 and Microsoft.Extensions.DependencyInjection.Abstractions 9 beside the
+    /// shared framework's 10. Appended as-is, Roslyn sees two <c>JsonElement</c>s (CS0433) and two
+    /// <c>GetRequiredService&lt;T&gt;</c>s (CS0121), and the NodeType never compiles (an enterprise
+    /// client portal, 2026-10-15).
+    ///
+    /// <para>For a package assembly whose simple name the host set already holds, the compile takes
+    /// exactly the copy the NodeType load context will BIND at run time
+    /// (<see cref="MeshWeaver.NuGet.PackageAssemblyProbe.TryUnifyWithHost"/>), so compile and run
+    /// cannot disagree:</para>
+    /// <list type="bullet">
+    ///   <item><b>Same identity, host equal or newer</b> → the host's reference; the package copy is
+    ///     dropped (it unifies with the host at run time).</item>
+    ///   <item><b>Same identity, package newer</b> → the package's copy REPLACES the host's reference
+    ///     (the load context refuses an older host and loads the package's copy in isolation, so code
+    ///     needing the newer API compiles against it).</item>
+    ///   <item><b>Different identity</b> (another publisher's public key, another culture) → both are
+    ///     kept: a same-named assembly of another publisher is a different assembly, at compile time
+    ///     as at run time.</item>
+    /// </list>
+    /// <para>A package name appearing twice in the closure keeps its first path; a name the host does
+    /// not hold is added. Pure and order-preserving, so the bake and the runtime compose the same set
+    /// for the same host. Applied to the METADATA REFERENCES only: generator candidates and the
+    /// stage-1 content key (<c>GeneratedInputDigestOf</c>) keep the full resolution.</para>
+    /// </summary>
+    /// <param name="host">The reference set the compile is built against (TPA or container set, plus
+    /// modules) — WITHOUT any package closure.</param>
+    /// <param name="packageAssemblyPaths">The resolved package closure's compile assemblies.</param>
+    /// <param name="createReference">Makes a reference for a package path (default
+    /// <see cref="MetadataReference.CreateFromFile(string, MetadataReferenceProperties, DocumentationProvider)"/>);
+    /// a <c>null</c> answer skips the path.</param>
+    /// <param name="packagesLoadInIsolation">True (the NodeType compile) when the code runs in a load
+    /// context that binds a NEWER package copy in isolation (<c>PackageAssemblyProbe.Resolve</c>).
+    /// False for code that binds through the DEFAULT context (the interactive kernel, the node-config
+    /// script), which can never load a second version of an assembly the host already loaded: there
+    /// the host's reference is kept even when the package's is newer, so nothing compiles against an
+    /// API the run cannot bind.</param>
+    public static IReadOnlyList<MetadataReference> WithPackageAssemblies(
+        IReadOnlyList<MetadataReference> host,
+        IEnumerable<string> packageAssemblyPaths,
+        Func<string, MetadataReference?>? createReference = null,
+        bool packagesLoadInIsolation = true)
+    {
+        ArgumentNullException.ThrowIfNull(host);
+        ArgumentNullException.ThrowIfNull(packageAssemblyPaths);
+        createReference ??= path => MetadataReference.CreateFromFile(path);
+
+        var hostIndex = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        for (var i = 0; i < host.Count; i++)
+            if (SimpleNameOf(host[i]) is { } name)
+                hostIndex.TryAdd(name, i);
+
+        var decided = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var replaced = new Dictionary<int, MetadataReference>();
+        var added = new List<MetadataReference>();
+        foreach (var path in packageAssemblyPaths)
+        {
+            if (string.IsNullOrEmpty(path)) continue;
+            var name = Path.GetFileNameWithoutExtension(path);
+            if (!decided.Add(name)) continue;
+            var choice = hostIndex.TryGetValue(name, out var index)
+                ? Choose(host[index], path, packagesLoadInIsolation)
+                : PackageChoice.Add;
+            if (choice == PackageChoice.HostWins || createReference(path) is not { } reference)
+                continue;
+            if (choice == PackageChoice.ReplaceHost)
+                replaced[index] = reference;
+            else
+                added.Add(reference);
+        }
+
+        if (replaced.Count == 0 && added.Count == 0)
+            return host;
+        var composed = new List<MetadataReference>(host.Count + added.Count);
+        for (var i = 0; i < host.Count; i++)
+            composed.Add(replaced.TryGetValue(i, out var swap) ? swap : host[i]);
+        composed.AddRange(added);
+        return composed;
+    }
+
+    private enum PackageChoice { Add, HostWins, ReplaceHost }
+
+    /// <summary>The run-time binding rule (<c>PackageAssemblyProbe.TryUnifyWithHost</c>) applied to a
+    /// name both sides hold. An identity that cannot be read on either side keeps the host's.</summary>
+    private static PackageChoice Choose(MetadataReference hostReference, string packagePath, bool packagesLoadInIsolation)
+    {
+        var hostPath = hostReference is PortableExecutableReference { FilePath: { Length: > 0 } file }
+            ? file
+            : null;
+        if (hostPath is null || AssemblyNameOf(hostPath) is not { } host || AssemblyNameOf(packagePath) is not { } package)
+            return PackageChoice.HostWins;
+        if (!MeshWeaver.NuGet.PackageAssemblyProbe.SameIdentityModuloVersion(package, host)
+            || !MeshWeaver.NuGet.PackageAssemblyProbe.SameIdentityModuloVersion(host, package))
+            return PackageChoice.Add;
+        return packagesLoadInIsolation && package.Version is { } wanted && host.Version is { } have && have < wanted
+            ? PackageChoice.ReplaceHost
+            : PackageChoice.HostWins;
+    }
+
+    private static System.Reflection.AssemblyName? AssemblyNameOf(string path)
+    {
+        try
+        {
+            return System.Reflection.AssemblyName.GetAssemblyName(path);
+        }
+        catch (Exception e) when (e is IOException or BadImageFormatException or UnauthorizedAccessException
+                                      or ArgumentException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// The assembly simple name a host reference provides: its file name without extension (a
+    /// TPA, module or NuGet assembly is named after its assembly, which is also how the run-time
+    /// probe finds it — <c>{dir}/{name}.dll</c>); <c>null</c> for an in-memory reference.
+    /// </summary>
+    private static string? SimpleNameOf(MetadataReference reference)
+    {
+        var path = reference is PortableExecutableReference { FilePath: { Length: > 0 } file }
+            ? file
+            : reference.Display;
+        return string.IsNullOrEmpty(path) ? null : Path.GetFileNameWithoutExtension(path);
     }
 
     /// <summary>

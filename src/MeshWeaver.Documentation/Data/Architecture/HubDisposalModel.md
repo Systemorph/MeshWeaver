@@ -820,19 +820,37 @@ The cascade stays on `HandleDispose` because it needs the REQUEST — `DisposeRe
 what stops a cascade fanning out again — while the announcement needs only the hub, which is why the
 two now sit in different places.
 
-`NodeTypeNodeType` installs the one real `RecycleCascade` (`NodeTypeRecycleCascade`). It derives the
-**dependency network** from the index — the NodeTypes whose sources reach into this type's tree
-(`shared=@Type/Source/…`, transitively, the reverse of `NodeTypeDependencyGraph.Build`) and every
-instance of the type and of each dependent — and posts one `DisposeRequest { CascadedFrom = type }`
-per address **from the mesh's node-operation issuing hub**, a survivor. The definition hub computes;
-it never delivers: a dying hub cannot deliver its own last frame.
+`NodeTypeNodeType` installs the one real `RecycleCascade` (`NodeTypeRecycleCascade`). Its
+**dependency network** is the type plus the NodeTypes whose sources reach into its tree
+(`shared=@Type/Source/…`, transitively, the reverse of `NodeTypeDependencyGraph.Build`), and every
+LIVE activation of each. The cascade reads ONE thing — the mesh's NodeType definitions, for the
+dependents (`NodeTypeRecycleCascade.DependentTypes`, shared by a wave through `RecycleCascadeReads`) —
+and then, from the mesh hub, a survivor:
+
+1. posts `DisposeRequest { CascadedFrom = type }` to each **dependent definition's own hub** (a
+   handful of addresses; a cold one is a no-op at the router), and
+2. writes **ONE `ActivationRecycle` request** naming the type and its dependents, with the dispose's
+   reason ([Stale State Until Recycle](../StaleStateUntilRecycle) → "Recycling a type"). Every process
+   hears it on its invalidation feed and disposes only the per-node hubs IT hosts whose bound NodeType
+   is in the request — paced, off the router, each with `CascadedFrom` = the request — and writes an
+   audit row.
+
+The definition hub computes; it never delivers: a dying hub cannot deliver its own last frame.
+
+🚨 **No index of stored instances (#6520).** The cascade used to ask every partition for each network
+type's STORED instances and post a dispose to every address it got back, most of them cold. On a portal
+pod one wave of that issued ~200 concurrent cross-partition reads and logged 289 "recycle is
+INCOMPLETE" lines in 52 s, stalling the PostgreSQL query provider for every other reader. Which
+activations exist is a fact of each PROCESS, so each process answers it from its own
+`HostedHubsCollection`. `NodeTypeRecycleCascade.DependencyNetwork` — the address enumeration a governed
+recycle plan binds its blast radius to — still exists for that purpose; the cascade no longer runs it.
 
 Three properties, each load-bearing:
 
 | Property | Why |
 |---|---|
-| **Derived ONCE, at the main node** | Every fanned-out request carries `CascadedFrom`, and `HandleDispose` never cascades a request that carries it. A cycle among NodeTypes (`A` shares from `B`, `B` from `A`) is therefore one wave, not a storm. |
-| **Only what was instantiated is recycled** | The set comes from the index — every instance the mesh knows — but WHICH of them is live is a fact of the routing layer, and it is answered there: `MonolithRoutingService.RouteImpl` returns a `DisposeRequest` to an address with no registered stream `Ignored` without creating a hub, and `MessageHubGrain.DeliverMessage` answers one that reaches an activation which never built its hub `Ignored` and releases the activation. So a type with ten thousand instances and three open pages recycles three hubs. |
+| **Derived ONCE, at the main node** | The dependent definitions' disposes carry `CascadedFrom`, so do the disposes `ActivationRecycle` posts, and `HandleDispose` never cascades a request that carries it. A cycle among NodeTypes (`A` shares from `B`, `B` from `A`) is therefore one wave, not a storm. |
+| **Only what was instantiated is recycled** | Instances are found where they live: each process selects from the hubs it hosts, so a type with ten thousand instances and three open pages recycles three hubs, on whichever silos host them, and a cold address is never addressed at all. The router's own rule still holds for the dependent definitions' disposes: `MonolithRoutingService.RouteImpl` returns a `DisposeRequest` to an address with no registered stream `Ignored` without creating a hub, and `MessageHubGrain.DeliverMessage` answers one that reaches an activation which never built its hub `Ignored` and releases the activation. |
 | **The check reads the ENVELOPE, not the type** | A delivery that crossed a hub boundary is still `RawJson` at the router and at the grain — it is deserialised only inside the target's `MessageService` — so `delivery.Message is DisposeRequest` matches an in-process post and nothing else (measured: the typed test never fired on Orleans and a cold grain built its hub for a dispose after all). Both sites go through `DisposeRequestEnvelope.TryRead`, which reads `$type`, `reason` and `cascadedFrom` off the packaged frame. 🚨 It matches the discriminator EXACTLY — see below. |
 | **The hub build is deferred to the first non-dispose delivery** | Orleans activates a grain for ANY call; until this change that call also built the hub (node resolution, NodeType binding, assembly load). `OnActivateAsync` now COMPOSES the build and `EnsureActivationStarted` RUNS it on the first delivery that needs a hub. The self-routed own-address read the build issues arrives at `DeliverMessage` after the build has started, so it parks on `HubReady` exactly as before. |
 
@@ -852,29 +870,32 @@ the type rather than written out: the **canonical** one it emits (`typeByName` i
 `Type.Name`) and the dot-joined **full name** it accepts on the way in
 (`TypeRegistry.IndexFullNameAlias`). Suffix-matching a type name is not authentication.
 
-### 🚨 An enumeration leg that failed is not a leg that answered "none"
+### 🚨 A read that failed is not a read that answered "none"
 
-The network is read from the index in legs — one for the NodeType definitions, one per type for its
-instances. A leg that times out or errors used to be caught into an **empty list**, which made
-"this type has no live instances" and "nobody could find out" the same value: the cascade reported
-success while every live hub for that type stayed on the old assembly, and a partial failure was
-indistinguishable from a clean pass — the one outcome nobody re-checks.
+A read that times out or errors used to be caught into an **empty list**, which made "this type has
+no dependents" and "nobody could find out" the same value: the cascade reported success while every
+live hub of a dependent stayed on the old assembly — the one outcome nobody re-checks.
 
-Each leg now answers an `EnumerationLeg` that carries its `Failure`, and `NodeTypeRecycleCascade.Compose`
-folds them into a `DependencyNetworkResult` with an `Incomplete` list beside the addresses. The cascade
-still fans out to what it DID derive — those activations are genuinely stale, and a partial recycle
-beats none — but an incomplete one logs at **`Error`**, naming every leg it lost and saying that an
-unknown number of live hubs must be recycled by hand. An empty `Incomplete` is the only value that
-means "this was the whole network".
+The definitions read answers a `NetworkTypes` that carries its `Failure`. A failed read still
+recycles the type's OWN live activations (that half needs no read), and the cascade logs at
+**`Error`** that the recycle is INCOMPLETE and its dependents must be recycled by hand. An
+`ActivationRecycle` request that is REFUSED (an unknown type, say) is an `Error` too: nothing below
+the definition was recycled. `DependencyNetwork` keeps the same rule per leg (`EnumerationLeg`,
+`DependencyNetworkResult.Incomplete`) for the plans that bind to its addresses.
 
 What this does NOT do, deliberately: it recompiles nothing (the Recycle tool's forced release stamp on
 the definition still does that, for the definition alone — a dependent recompiles through
-`ReleaseAffectedNodeTypes` when its shared sources change), it clears no data, and it touches
-neither other replicas nor any process-wide cache — the same limits every recycle has.
+`ReleaseAffectedNodeTypes` when its shared sources change), it clears no data, and it touches no
+process-wide cache. Unlike a single-address recycle it DOES reach every replica: each one disposes the
+live activations of the network that it hosts.
 
 Repros: `RecycleCascadeTest` (Messaging.Hub.Test — once, with the request, before the teardown; a
 cascaded request never cascades; a direct `Dispose()` never cascades), `NodeTypeRecycleCascadeTest`
-(Graph.Test — the network: transitive dependents, instances, deterministic order, a cycle),
+(Graph.Test — the network: transitive dependents, deterministic order, a cycle, the one request),
+`ANodeTypeRecycleIsOneActivationRecycleTest` (Graph.Test — a routed definition recycle disposes the
+live network through one request while every instance enumeration is held unanswered, a cold instance
+stays cold, the dependent definition's dispose does not cascade), `TwoSiloNodeTypeRecycleTest`
+(Hosting.Orleans.Test — the same, with the live instances spread over two silos),
 `ADisposeRequestNeverInstantiatesAHubTest` (Hosting.Test, Monolith — a cold address stays cold; a
 live one is recycled and reactivates) and `AColdGrainAnswersADisposeWithoutBuildingItsHubTest`
 (Hosting.Orleans.Test — the grain answers `Ignored` and registers no stream).

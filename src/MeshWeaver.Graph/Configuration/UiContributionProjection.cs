@@ -23,7 +23,10 @@ internal static class UiContributionProjection
     /// <see cref="Permission.Read"/> — an anonymous viewer arrives with
     /// <see cref="Permission.None"/> and gets nothing), and the whole node-shape vocabulary via
     /// <see cref="PassesNodeGates"/> (<c>AdminOnly</c>, <c>ExcludePartitionRoot</c>,
-    /// <c>ExcludeViewerHome</c>, <c>SyncedOnly</c>, suffix-aware <c>NodeTypes</c>).
+    /// <c>ExcludeViewerHome</c>, <c>SyncedOnly</c>, suffix-aware <c>NodeTypes</c>). An
+    /// <see cref="UiContribution.AppSettingsContext"/> entry additionally passes only on its
+    /// <see cref="UiContribution.Host"/> (<see cref="IsHost"/>) and links to its area on
+    /// <see cref="AppSettingsAddress"/> — the hub its settings tab embeds (#6814).
     /// </summary>
     public static IReadOnlyCollection<NodeMenuItemDefinition> ProjectMenu(
         IReadOnlyList<(MeshNode Node, UiContribution Content)> contributions,
@@ -35,12 +38,26 @@ internal static class UiContributionProjection
         string? viewerId = null)
     {
         List<NodeMenuItemDefinition>? items = null;
-        foreach (var (_, contribution) in contributions)
+        foreach (var (node, contribution) in contributions)
         {
             if ((contribution.Context ?? UiContribution.NodeContext) != context)
                 continue;
             if (contribution.Area is not { Length: > 0 } area)
                 continue;
+            // 🚨 An AppSettings entry belongs to ONE host app (#6814): it surfaces only when the
+            // anchoring node IS that host — the same rule ProjectNodeSettingsTabs applies — and it
+            // opens its area on the declared Address (the module's own hub, inside the
+            // contribution's partition), never on whatever node the menu happens to render for.
+            // Without this every node in the mesh listed every app's settings, rebased onto itself.
+            string? target = null;
+            if (contribution.Context == UiContribution.AppSettingsContext)
+            {
+                if (!IsHost(contribution.Host, menuPath))
+                    continue;
+                target = AppSettingsAddress(contribution, node.Path, menuPath);
+                if (target is null)
+                    continue;
+            }
             var required = RequiredPermissionFloor(contribution);
             if (!perms.HasFlag(required))
                 continue;
@@ -57,9 +74,10 @@ internal static class UiContributionProjection
                 // the {node} token is substituted with the anchoring node and the result must be
                 // portal-INTERNAL, else the entry falls back to the derived area URL — narrowing,
                 // never widening (#1645). Otherwise the entry opens its area on the anchoring
-                // node, like every built-in node-menu item.
+                // node, like every built-in node-menu item — or, for an AppSettings entry, on the
+                // hub its tab embeds (the declared Address, else the host itself).
                 Href: ResolveHref(contribution.Href, menuPath)
-                      ?? MeshNodeLayoutAreas.BuildUrl(menuPath, area),
+                      ?? MeshNodeLayoutAreas.BuildUrl(target ?? menuPath, area),
                 Tooltip: contribution.Tooltip)
                 { LabelKey = contribution.LabelKey, TooltipKey = contribution.TooltipKey });
         }

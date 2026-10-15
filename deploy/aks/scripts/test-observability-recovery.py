@@ -19,6 +19,8 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import shutil
+import sys
 import tempfile
 import time
 import textwrap
@@ -80,6 +82,10 @@ if 'configmap' in line or 'replace' in args:
 if 'delete pod loki-prometheus-tsdb-recovery' in line and 'slow-delete' in scenario:
     import time; time.sleep(25)                       # a pod that takes 25 s to terminate
     with open(os.environ['CALLS'], 'a') as f: f.write('delete-done\n')
+    sys.exit(0)
+if 'logs loki-prometheus-tsdb-recovery' in line:
+    if 'empty-cleaner' not in scenario:
+        out('tsdb-recovery: before: 100% of /data used\ntsdb-recovery: after: 40% of /data used (target <= 60%)\n')
     sys.exit(0)
 if 'apply' in args:
     with open(os.environ['MANIFEST'], 'w') as f: f.write(sys.stdin.read())
@@ -156,15 +162,39 @@ class Run:
         return -1
 
 
+# The tools the `az aks command invoke` pod ACTUALLY has (distroless; measured 2026-10-15 with
+# `ls /bin /usr/bin /k8stools`). The installer runs on exactly these plus the helm/kubectl stubs,
+# so a tool it needs and the pod lacks — sed was the one that bit — fails HERE, not on an estate.
+INVOKE_TOOLS = '''bash cat chgrp chmod chown cp dash date dd df dir echo egrep false fgrep grep ln ls mkdir
+    mknod mktemp mv pwd readlink rm rmdir sh sleep stty sync tar touch true uname vdir [ arch awk
+    base32 base64 basename cksum cmp comm csplit curl cut diff diff3 dirname du env expand expr
+    factor find fmt fold gawk groups head hostid id install join link logname md5sum mkfifo nice nl
+    nohup nproc numfmt od openssl paste pathchk pr printenv printf realpath sdiff seq sha1sum
+    sha256sum sha512sum shuf sort split stat stdbuf sum tac tail tee test timeout tr truncate tsort
+    tty unexpand uniq unlink unxz unzip wc who whoami xargs xz yes jq'''.split()
+NOT_IN_INVOKE_POD = {'sed'}          # the measured absentee — never let a host copy leak in
+
+
+def invoke_toolset(directory):
+    for tool in INVOKE_TOOLS:
+        found = shutil.which(tool)
+        if found and tool not in NOT_IN_INVOKE_POD:
+            (directory / tool).symlink_to(found)
+    (directory / 'python3').symlink_to(sys.executable)     # the stubs' interpreter, not the script's
+    return directory
+
+
 def run_installer(*scenario, budget=None, target=None, env_drop=()):
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
+        (root / 'invoke-bin').mkdir()
+        tools = invoke_toolset(root / 'invoke-bin')
         for name in ('helm', 'kubectl'):
             (root / name).write_text(STUB)
             (root / name).chmod(0o755)
         (root / 'values.yaml').write_text('loki: {}\n')
         calls, manifest = root / 'calls', root / 'manifest'
-        env = dict(os.environ, PATH=str(root) + os.pathsep + os.environ['PATH'],
+        env = dict(os.environ, PATH=str(root) + os.pathsep + str(tools),
                    GRAFANA_PW='synthetic-test-only', VALUES=str(root / 'values.yaml'),
                    SCENARIO=','.join(scenario), CALLS=str(calls), MANIFEST=str(manifest),
                    OBS_LOCK_HOLDER='this-run',
@@ -175,7 +205,7 @@ def run_installer(*scenario, budget=None, target=None, env_drop=()):
             env['TSDB_RECOVERY_TARGET_PERCENT'] = target
         for name in env_drop:
             env.pop(name, None)
-        result = subprocess.run(['bash', str(SCRIPT)], env=env, capture_output=True, text=True,
+        result = subprocess.run([shutil.which('bash'), str(SCRIPT)], env=env, capture_output=True, text=True,
                                 timeout=90)
         return Run(result,
                    calls.read_text().splitlines() if calls.exists() else [],
@@ -239,6 +269,37 @@ class OrderAndDeadlineTest(unittest.TestCase):
         self.assertEqual(run.code, 1, run.stdout)
         self.assertIn('could not read the state of release', run.stderr)
         self.assertLess(elapsed, 25, elapsed)
+        self.assertEqual(run.index('helm upgrade'), -1, run.calls)
+
+
+class InvokeToolsetTest(unittest.TestCase):
+    """The installer runs on the invoke pod's distroless toolset (see INVOKE_TOOLS)."""
+
+    def test_the_toolset_really_lacks_sed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tools = invoke_toolset(Path(directory))
+            self.assertFalse((tools / 'sed').exists())
+            self.assertTrue((tools / 'awk').exists())
+
+    def test_workloads_present_and_release_deployed_is_not_fatal(self):
+        # The 2026-10-15 run: recovery worked, upgrade deployed, workloads exist — and the
+        # workload list came back empty because `sed` is not in the pod.
+        run = run_installer('out-of-space')
+        self.assertEqual(run.code, 0, run.stderr)
+        self.assertNotIn('command not found', run.stderr)
+        self.assertNotIn('no workload of release', run.stderr)
+        self.assertIn('All workloads of release loki are Ready.', run.stdout)
+
+    def test_the_recovery_manifest_carries_the_clean_up_script(self):
+        # Same run, same cause: the pod was rendered with an EMPTY script, exited 0, deleted nothing.
+        run = run_installer('out-of-space')
+        self.assertIn('rm -rf wal chunks_head', run.manifest)
+        self.assertIn('RECOVERY: tsdb-recovery: after:', run.stdout)
+
+    def test_a_cleaner_that_exits_0_without_cleaning_is_red(self):
+        run = run_installer('out-of-space', 'empty-cleaner')
+        self.assertEqual(run.code, 1, run.stdout)
+        self.assertIn('did NOT run', run.stderr)
         self.assertEqual(run.index('helm upgrade'), -1, run.calls)
 
 

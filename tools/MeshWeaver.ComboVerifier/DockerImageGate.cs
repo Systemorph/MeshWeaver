@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
@@ -8,14 +9,20 @@ namespace MeshWeaver.ComboVerifier;
 
 /// <summary>
 /// The production gate seam for <see cref="InstanceComboVerifier"/>: runs <c>mw-plugin-test</c>
-/// over the assembled work root INSIDE the candidate image, via docker.
+/// over the assembled work root AS THE CANDIDATE PORTAL HOST, via docker.
 ///
-/// <para>The contract mirrors the plugins repo's <c>test-repos</c> CI job exactly — <c>docker run</c>
-/// with the root mounted and <c>--entrypoint /app/mw-plugin-test</c> (a <c>container:</c> job does
-/// NOT work: the tool is not on PATH, the published user is non-root, and the base image may go
-/// chiseled — see <c>MeshWeaver.PluginTester.csproj</c>). The tester writes its structured report to
-/// the mount (<see cref="GateRunReport.FileName"/>); the image's non-root user needs write access
-/// there, so the work root is made world-writable before the run.</para>
+/// <para>The contract is the one every node-repo lane has run since MeshWeaver#3022: the COMPOSED
+/// GATE HOST — the candidate portal image's <c>/app</c> with the tester CLI laid beside it
+/// (<c>.github/scripts/compose-gate-host.sh</c>) — started by the PORTAL image's own <c>dotnet</c>,
+/// with <c>--app /app</c> so the gate resolves the portal's framework identity. Not the tester image
+/// alone: its <c>/app</c> is a strict subset of the portal's, so content binding a portal-only
+/// assembly would fail there as a content error on source nobody changed. Not the portal image
+/// alone: it ships no tester — <c>--entrypoint /app/mw-plugin-test</c> in it dies in tini with exit
+/// 127 and writes no report, which is how every combo verdict became NotVerifiable (MeshWeaver#3848,
+/// run 38688576426). The composed host is mounted read-only at <c>/host</c>; the tester writes its
+/// structured report to the work mount (<see cref="GateRunReport.FileName"/>), and the image's
+/// non-root user needs write access there, so the work root is made world-writable before the
+/// run.</para>
 ///
 /// <para>🚨 EVERY docker call is PINNED to <see cref="Platform"/>, and that is not tidiness. A
 /// candidate reference is a multi-arch manifest list whose amd64 and arm64 variants carry
@@ -37,7 +44,7 @@ namespace MeshWeaver.ComboVerifier;
 /// public surface is <see cref="IObservable{T}"/>.</para>
 /// </summary>
 public sealed class DockerImageGate(
-    IoPoolRegistry pools, TimeSpan runBudget, TextWriter output, string platform)
+    IoPoolRegistry pools, TimeSpan runBudget, TextWriter output, string platform, string hostDir)
 {
     /// <summary>How many trailing characters of the combined docker output the run keeps for
     /// diagnostics.</summary>
@@ -47,6 +54,22 @@ public sealed class DockerImageGate(
     /// bake's arm64 leg is opt-in behind <c>BAKE_ARM64</c>), so a verdict that does not say
     /// otherwise must be about THIS.</summary>
     public const string FleetPlatform = "linux/amd64";
+
+    /// <summary>The files a composed gate host must carry for the gate to be RUNNABLE AS the portal:
+    /// the tester CLI and its runtimeconfig (what <c>dotnet</c> starts), and the portal's surface
+    /// manifest (what makes the process resolve the portal's identity rather than a fallback). The
+    /// same three <c>compose-gate-host.sh</c> asserts as its postcondition.</summary>
+    public static readonly ImmutableArray<string> RequiredHostFiles =
+        ["mw-plugin-test.dll", "mw-plugin-test.runtimeconfig.json", "meshweaver-surface.manifest"];
+
+    /// <summary>
+    /// The process exit code <c>mw-combo-verify</c> returns when its gate host is not runnable
+    /// (<see cref="ProbeHost"/>). Distinct from 0 (Green), 1 (Red / NotVerifiable) and 2 (usage),
+    /// because it is a different statement: the INSTRUMENT is broken, and nothing about the candidate
+    /// was asked. No verdict file is written for it, so nothing is landed on an instance as though
+    /// the candidate had been examined.
+    /// </summary>
+    public const int TesterMissingExitCode = 3;
 
     /// <summary>The docker platform this gate pins every call to.</summary>
     public string Platform { get; } = platform;
@@ -58,6 +81,77 @@ public sealed class DockerImageGate(
     /// client process so a pool slot is never leaked.</summary>
     public IObservable<CandidateGateRun> Run(string imageRef, string workRoot) =>
         Pool.InvokeBlocking(ct => Execute(imageRef, workRoot, ct));
+
+    /// <summary>
+    /// Asserts the INSTRUMENT before anything is assembled: the gate host directory must carry every
+    /// one of <see cref="RequiredHostFiles"/>. Emits null when it does, else a message naming the
+    /// directory and every missing file.
+    ///
+    /// <para>🚨 Why a probe, and not a reading of the run's exit code afterwards. A gate with no
+    /// tester to start exits 127 and writes no report, which the verifier folds — correctly, for a
+    /// TESTER that crashed — into NotVerifiable. That verdict was then LANDED on every live instance
+    /// as though the candidate had been examined, and the lane read as "the candidate could not be
+    /// verified" when the truth was "the instrument was never there" (MeshWeaver#3848).</para>
+    /// </summary>
+    public IObservable<string?> ProbeHost() =>
+        Pool.InvokeBlocking(_ => MissingHostFiles(hostDir) is { Length: > 0 } missing
+            ? $"the gate host '{Path.GetFullPath(hostDir)}' is missing {string.Join(", ", missing)}, "
+              + "so the combo gate has no runnable tester — the INSTRUMENT is missing, nothing "
+              + "about the candidate was asked, and no verdict is written. Compose it from the "
+              + "candidate's release set with .github/scripts/compose-gate-host.sh <portal /app> "
+              + "<mw-plugin-test /app> <out> — the portal image ships no tester, and the tester "
+              + "image alone is not the platform host."
+            : null);
+
+    /// <summary>The <see cref="RequiredHostFiles"/> absent from <paramref name="directory"/>, in
+    /// declaration order; empty when the host is runnable.</summary>
+    internal static string[] MissingHostFiles(string directory) =>
+        [.. RequiredHostFiles.Where(f => !File.Exists(Path.Combine(directory, f)))];
+
+    /// <summary>
+    /// Ensures the image is present FOR THE REQUESTED PLATFORM. Null when it is (or the pull
+    /// succeeded); otherwise the failed run to report.
+    ///
+    /// <para>🚨 The presence question is per-PLATFORM, not per-reference. <c>docker image
+    /// inspect</c> answers about whichever variant the local store holds, so asking "is it
+    /// present?" would report the arm64 copy an earlier run pulled and SKIP the pull of the amd64
+    /// bytes we are about to be asked to run. Asking for the architecture instead makes the check
+    /// answer the question the run actually depends on. (docker run would pull too, but a separate
+    /// pull keeps its output out of the gate log and makes an auth failure a SPEAKING error.)</para>
+    /// </summary>
+    private CandidateGateRun? EnsurePulled(string imageRef, CancellationToken ct)
+    {
+        var present = Docker(
+            ["image", "inspect", "--format", "{{.Os}}/{{.Architecture}}", imageRef], ct,
+            TimeSpan.FromMinutes(1));
+        var localPlatform = present.ExitCode == 0 ? present.Output.Trim() : null;
+        if (string.Equals(localPlatform, Platform, StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        output.WriteLine(localPlatform is null
+            ? $"pulling {imageRef} ({Platform}) …"
+            : $"pulling {imageRef} ({Platform}) — the local copy is {localPlatform} …");
+        var pull = Docker(PullArgs(imageRef, Platform), ct, runBudget);
+        if (pull.TimedOut)
+            return new CandidateGateRun
+            {
+                Platform = Platform,
+                Error = $"docker pull '{imageRef}' ({Platform}) exceeded the {runBudget} budget.",
+                LogTail = Tail(pull.Output),
+            };
+        // 🚨 A pull that fails is NOT recoverable by running whatever happens to be local: that is
+        // precisely how a run for one architecture gets served another. Report it.
+        if (pull.ExitCode != 0)
+            return new CandidateGateRun
+            {
+                Platform = Platform,
+                Error = $"docker pull '{imageRef}' for {Platform} failed (exit "
+                        + $"{pull.ExitCode}) — the candidate's {Platform} bytes are not "
+                        + "available here, so nothing about them was verified.",
+                LogTail = Tail(pull.Output),
+            };
+        return null;
+    }
 
     private CandidateGateRun Execute(string imageRef, string workRoot, CancellationToken ct)
     {
@@ -74,50 +168,16 @@ public sealed class DockerImageGate(
                 | UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute
                 | UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute);
 
-        // Ensure the image is present FOR THE REQUESTED PLATFORM (docker run would pull too, but a
-        // separate pull keeps its output out of the gate log and makes an auth failure a SPEAKING
-        // error).
-        //
-        // 🚨 The presence question is per-PLATFORM, not per-reference. `docker image inspect`
-        // answers about whichever variant the local store holds, so asking "is it present?" would
-        // report the arm64 copy an earlier run pulled and SKIP the pull of the amd64 bytes we are
-        // about to be asked to run. Asking for the architecture instead makes the check answer the
-        // question the run actually depends on.
-        var present = Docker(
-            ["image", "inspect", "--format", "{{.Os}}/{{.Architecture}}", imageRef], ct,
-            TimeSpan.FromMinutes(1));
-        var localPlatform = present.ExitCode == 0 ? present.Output.Trim() : null;
-        if (!string.Equals(localPlatform, Platform, StringComparison.OrdinalIgnoreCase))
-        {
-            output.WriteLine(localPlatform is null
-                ? $"pulling {imageRef} ({Platform}) …"
-                : $"pulling {imageRef} ({Platform}) — the local copy is {localPlatform} …");
-            var pull = Docker(PullArgs(imageRef, Platform), ct, runBudget);
-            if (pull.TimedOut)
-                return new CandidateGateRun
-                {
-                    Platform = Platform,
-                    Error = $"docker pull '{imageRef}' ({Platform}) exceeded the {runBudget} budget.",
-                    LogTail = Tail(pull.Output),
-                };
-            // 🚨 A pull that fails is NOT recoverable by running whatever happens to be local: that
-            // is precisely how a run for one architecture gets served another. Report it.
-            if (pull.ExitCode != 0)
-                return new CandidateGateRun
-                {
-                    Platform = Platform,
-                    Error = $"docker pull '{imageRef}' for {Platform} failed (exit "
-                            + $"{pull.ExitCode}) — the candidate's {Platform} bytes are not "
-                            + "available here, so nothing about them was verified.",
-                    LogTail = Tail(pull.Output),
-                };
-        }
+        var pullFailure = EnsurePulled(imageRef, ct);
+        if (pullFailure is not null)
+            return pullFailure;
 
         var digest = ResolveDigest(imageRef, ct);
 
         output.WriteLine(
-            $"running mw-plugin-test inside {imageRef} ({Platform}) over '{fullRoot}' …");
-        var run = Docker(RunArgs(imageRef, fullRoot, Platform), ct, runBudget);
+            $"running mw-plugin-test as {imageRef} ({Platform}), gate host "
+            + $"'{Path.GetFullPath(hostDir)}', over '{fullRoot}' …");
+        var run = Docker(RunArgs(imageRef, fullRoot, Path.GetFullPath(hostDir), Platform), ct, runBudget);
         if (run.TimedOut)
             return new CandidateGateRun
             {
@@ -147,29 +207,37 @@ public sealed class DockerImageGate(
         ["pull", "--platform", platform, imageRef];
 
     /// <summary>
-    /// The <c>docker run</c> argv — the same contract as the plugins repo's <c>test-repos</c> job
-    /// and <c>main-cd.yml</c>'s bake: <c>--rm --init --platform … -v root:/work --entrypoint
-    /// /app/mw-plugin-test IMAGE /work --report /work/…</c>.
+    /// The <c>docker run</c> argv — the node-repo gate lane's container-mode contract (MeshWeaver#3022):
+    /// <c>--rm --init --platform … -v host:/host:ro -v root:/work --entrypoint dotnet PORTAL
+    /// /host/mw-plugin-test.dll /work --app /app --report /work/…</c>. The PORTAL image's own
+    /// <c>dotnet</c> starts the composed host, and <c>--app /app</c> makes the gate resolve the
+    /// portal's framework identity — refused before a mesh boots otherwise.
     ///
     /// <para>🚨 ORDER IS THE CONTRACT, not a style choice. Everything before
-    /// <paramref name="imageRef"/> is docker's; everything after it is the TESTER's. Move
-    /// <c>--platform</c> (or any flag) past the image and docker stops seeing it — the tester
-    /// receives it as an unknown argument instead, and the run is no longer pinned to anything.
-    /// Pinned by <c>DockerImageGateArgsTest</c>.</para>
+    /// <paramref name="imageRef"/> is docker's; everything after it is the TESTER's (after the
+    /// dll <c>dotnet</c> starts). Move <c>--platform</c> (or any flag) past the image and docker stops
+    /// seeing it — the run is no longer pinned to anything. Pinned by
+    /// <c>DockerImageGateArgsTest</c>.</para>
     /// </summary>
-    internal static string[] RunArgs(string imageRef, string fullRoot, string platform) =>
+    internal static string[] RunArgs(string imageRef, string fullRoot, string fullHost, string platform) =>
     [
         "run", "--rm",
-        // --init reaps the tester's children; every other invocation of this image in the repo
-        // passes it, and a gate that runs the image differently from CI is not measuring CI.
+        // --init reaps the tester's children and lets a crashed runtime's SIGABRT end the process
+        // (without it the tester is PID 1 and spins instead — #1741); every lane passes it.
         "--init",
         "--platform", platform,
+        "-v", $"{fullHost}:{HostMount}:ro",
         "-v", $"{fullRoot}:/work",
-        "--entrypoint", "/app/mw-plugin-test",
+        "--entrypoint", "dotnet",
         imageRef,
+        $"{HostMount}/mw-plugin-test.dll",
         "/work",
+        "--app", "/app",
         "--report", $"/work/{GateRunReport.FileName}",
     ];
+
+    /// <summary>Where the composed gate host is mounted inside the candidate container.</summary>
+    internal const string HostMount = "/host";
 
     /// <summary>The repo digest the ref resolves to (the identity of what was verified), else the
     /// local image id (a locally built candidate has no repo digest), else null.</summary>

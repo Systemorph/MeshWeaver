@@ -57,7 +57,27 @@ process drives a request.
    the running platform, or a dependency the loaded build does not meet, is declined by name
    (`ModuleSyncDecision`). A source counts as a module source when its config has recorded a
    module-bearing tree. Content-only spaces are not re-imported, and the step lists them as
-   skipped, with the reason.
+   skipped, with the reason. 🚨 Each import is bounded by `ModuleSourceUpdate.ActivityBudget`
+   **from the moment its activity is created** (MeshWeaver#6625). `RunActivity` emits the activity
+   path only when the run is terminal, and the budget used to be composed after that emission, so
+   it bounded nothing: an import that never finished held the Sync step — and the request,
+   non-terminal, which suppresses every pod's self-reboot — indefinitely. Observed: one instance
+   held in `Preparing` at the Sync step; another held a reboot request open for ~21 h, but its step
+   state could not be read, so the Sync stall is the mechanism that FITS it, not one measured
+   there. Now the row reads `Failed` — *"did not finish within … its outcome is NOT established"* —
+   the import's cancellation is requested through the Activity Control Plane (as System, at the
+   write), and the reboot goes on to the next step. Because that import may still be running, no
+   later source's import is started behind it in the same pass: those rows read `Skipped`, naming
+   the import they wait behind, since two sources can target one Space. The same holds for every
+   other way the watch on an import's activity can end without a terminal status once that activity
+   exists (MeshWeaver#6753): a watch that faults (its gate query, or the point read meeting a
+   routing error), throws while it is being built, or ends early proves nothing about the import,
+   so the row reads `Failed` with *"… may still be running … its outcome is NOT established"* and
+   the later sources read `Skipped`. The step's summary therefore counts skipped rows without
+   naming one reason for all of them — each sync line says why its source was skipped. A
+   non-positive budget is refused before any source is listed. Only a failure from before the activity exists lets the pass go on to the next
+   source, because then no import is running. Why an import hangs is the import's own
+   defect and is not answered by this bound (`AHungImportCannotHoldTheRebootTest`).
 2. **Modules.** The executor lands the newest COMPATIBLE published version of every installed
    module through `ModuleReloadExecutor.ResolveAndLand`, which is the module reload's own
    resolve-and-land and is not forked. Compatibility means the declared floor is at or below the

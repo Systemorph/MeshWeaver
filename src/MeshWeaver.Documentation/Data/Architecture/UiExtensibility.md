@@ -231,7 +231,18 @@ its own context key:
 | Global settings | `/_Setting/GlobalSettings/{id}` | `Settings` | `GlobalSettingsMenuItemDefinition` |
 | Per-node settings | `/{nodePath}/Settings/{id}` | `NodeSettings` | `SettingsMenuItemDefinition` |
 
-They are **not one key**, deliberately. A single key would list every tab on both pages — the seven
+A third key, `AppSettings`, adds a tab to the settings page of ONE host app (`Host`, e.g. `Admin`
+or `AI/AiThreads`) and embeds `Area` of `Address` (inside the contribution's own partition; unset ⇒
+the host's hub) — see [Administration](../AdminApp). 🚨 **Every declared context is also projected
+as a node menu (`$Menu:{context}`), and an `AppSettings` entry obeys the same two rules there:** it
+appears only in the host's own `$Menu:AppSettings` (`UiContributionProjection.IsHost`, the check the
+settings tab makes), and its link opens `/{Address}/{Area}` — the hub the tab embeds — never
+`/{viewed node}/{Area}`. Without the host gate every node listed every app's settings rebased onto
+itself, each link landing on an area that node does not serve (#6814). On the host, the entry is
+still narrowed by `RequiredPermission` against the viewer's permission on the HOST node and by the
+gates — an Administration section is hidden from a non-admin by `Gates.AdminOnly`, not by its host.
+
+Global and per-node are **not one key**, deliberately. A single key would list every tab on both pages — the seven
 platform tabs seeded for the global page would appear on every node's settings page, which is a
 visible regression rather than a migration — and it would make the two surfaces impossible to gate
 independently, which is the property the contribution lane exists for. A tab that genuinely belongs

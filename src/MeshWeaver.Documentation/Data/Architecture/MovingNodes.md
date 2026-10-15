@@ -90,10 +90,28 @@ one path at the same seam, which is what makes the sweep expressible:
 2. map it to the distinct **containers**, keeping only those whose owner is a main node this copy is
    actually carrying (so `IncludeDescendants = false` keeps the root's satellites and not a child's,
    and a main node the caller may not read never has its satellites swept in behind it);
-3. one query per container: `path:{owner}/_Segment scope:subtree limit:all`. `scope:subtree` from the
-   container carries whatever is nested beneath it, so a `_Thread`'s `_ThreadMessage` children ride
-   along in the same read;
+3. one query per container: `path:{container} scope:subtree limit:all`. `scope:subtree` from the
+   container carries what is nested beneath it **in the same table**, so a `_Thread`'s
+   `_ThreadMessage` children ride along in the same read;
 4. de-duplicate against what the main query already returned, retarget, create.
+
+### A nested satellite in its own table gets its own container
+
+A satellite query is answered from **one** table, chosen from the query path by the longest mapped
+segment (`PartitionDefinition.ResolveTable`; the Postgres query resolves it the same way). So the
+first-satellite container is not enough for a row whose own table is chosen by a deeper segment. An
+indexed chat transcript is the case that bit: its parts sit at
+`X/_Thread/t/transcripts/_Documents/a.md/_DocumentPart/000000` in `document_parts`, while
+`path:X/_Thread scope:subtree` reads `threads`. The sweep never read the parts, the completeness guard
+found them in storage, and the move was refused with `the copy cannot carry N node(s) … _DocumentPart/…`
+— for every node that had a chat thread with an indexed transcript. (In memory every row sits in one
+store, so the in-memory query returned the parts and no in-memory test could see it.)
+
+The sweep therefore maps each stored path through `SatelliteTableMapping.StorageContainerOf`: the
+shortest prefix that ends at a satellite segment **and resolves to the path's own table**. A row that
+shares its first container's table keeps that container (`X/_Thread/t/_ThreadMessage/m` → `X/_Thread`,
+one read for all of a node's threads); a part gets `…/a.md/_DocumentPart`, which reads
+`document_parts`. Regression guard: `DocumentPartPlacementTest.StorageContainer_ReadsTheTableTheRowIsStoredIn`.
 
 Containers are the unit rather than individual satellite rows because it makes the sweep **one query
 per container that actually exists** — typically none — instead of one per satellite. A container

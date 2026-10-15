@@ -110,4 +110,45 @@ public class DocumentPartPlacementTest
         var doc = DocumentPaths.For(collection, "run.log");
         DocumentPartPaths.PartPlacementProblem(doc).Should().NotBeNull();
     }
+
+    /// <summary>
+    /// The copy leg of a move reads each stored satellite back through
+    /// <c>path:{container} scope:subtree</c>, and that query is answered from ONE table — the one
+    /// the CONTAINER path resolves to. So the container must resolve to the table the row is stored
+    /// in, or the row is never read, the completeness guard finds it in storage and not in the copy,
+    /// and the move is refused (measured: a node with an indexed chat transcript could not be moved,
+    /// "the copy cannot carry 6 node(s) … /_DocumentPart/000000").
+    /// </summary>
+    [Theory]
+    // A thread's own rows — one container for all of a node's threads.
+    [InlineData("rbuergi/Plan/_Thread/t-1", "rbuergi/Plan/_Thread")]
+    [InlineData("rbuergi/Plan/_Thread/t-1/_ThreadMessage/m-1", "rbuergi/Plan/_Thread")]
+    // The transcript document itself lives with the thread.
+    [InlineData("rbuergi/Plan/_Thread/t-1/transcripts/_Documents/a.md", "rbuergi/Plan/_Thread")]
+    // Its parts live in document_parts: their container must read document_parts.
+    [InlineData("rbuergi/Plan/_Thread/t-1/transcripts/_Documents/a.md/_DocumentPart/000000",
+        "rbuergi/Plan/_Thread/t-1/transcripts/_Documents/a.md/_DocumentPart")]
+    // A note on a part lives in its own table again.
+    [InlineData("rbuergi/Plan/_Thread/t-1/transcripts/_Documents/a.md/_DocumentPart/000000/_PartAnnotation/n-1",
+        "rbuergi/Plan/_Thread/t-1/transcripts/_Documents/a.md/_DocumentPart/000000/_PartAnnotation")]
+    // A job log under an activity.
+    [InlineData("Admin/_Activity/build-42/logs/_Documents/run.log/_DocumentPart/000003",
+        "Admin/_Activity/build-42/logs/_Documents/run.log/_DocumentPart")]
+    // A plain comment: unchanged.
+    [InlineData("rbuergi/Plan/_Comment/c-1", "rbuergi/Plan/_Comment")]
+    public void StorageContainer_ReadsTheTableTheRowIsStoredIn(string stored, string expectedContainer)
+    {
+        var container = SatelliteTableMapping.StorageContainerOf(stored);
+
+        container.Should().Be(expectedContainer);
+        Partition.ResolveTable(container!).Should().Be(Partition.ResolveTable(stored),
+            "the container's subtree query is answered from the table its path resolves to, and the row must be in it");
+        // The owner the sweep filters on is still the main node the row belongs to.
+        SatelliteTableMapping.OwnerOfSatellitePath(container)
+            .Should().Be(SatelliteTableMapping.OwnerOfSatellitePath(stored));
+    }
+
+    [Fact]
+    public void StorageContainer_OfAMainNode_IsNone()
+        => SatelliteTableMapping.StorageContainerOf("rbuergi/Plan/Chapter").Should().BeNull();
 }
