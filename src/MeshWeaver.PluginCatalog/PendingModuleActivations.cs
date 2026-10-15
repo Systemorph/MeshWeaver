@@ -830,34 +830,33 @@ public sealed class PendingModuleActivations(string moduleRoot)
     /// <para>🚨 Deliberately NOT the directories' own last-write times: whether a directory's
     /// timestamp moves when a file is renamed into it is a property of the filesystem, and on an
     /// SMB share it need not — which froze this reader's snapshot for the life of the process.</para>
+    ///
+    /// <para>🚨 The per-module RECORD directories (<c>activation.d/&lt;Name&gt;/</c>) are listed too,
+    /// file by file: <c>ModuleActivationSidecar.Read</c> derives a module's state from the records in
+    /// them, and a record lands by a rename INTO that directory, which leaves <c>activation.d/</c>'s own
+    /// listing unchanged. A record-only change — an uninstall tombstone whose projection write then
+    /// failed — would otherwise be served from the old snapshot for the life of the process. The
+    /// module PAYLOAD directories under <c>modules/</c> are deliberately listed by name only: the
+    /// reading does not derive from their contents, and walking them would cost a listing per
+    /// generation of every module.</para>
+    ///
+    /// <para><paramref name="token"/> is observed before every listing, nested ones included, so a
+    /// teardown does not wait out the rest of a slow share's directories.</para>
     /// </summary>
-    internal static string? ListingFingerprint(string baseDirectory)
+    internal static string? ListingFingerprint(string baseDirectory, CancellationToken token = default)
     {
         var key = new System.Text.StringBuilder();
+        var entries = ModuleActivationSidecar.EntriesDirectory(baseDirectory);
         foreach (var directory in new[]
                  {
                      Path.Combine(baseDirectory, "modules"),
-                     ModuleActivationSidecar.EntriesDirectory(baseDirectory),
+                     entries,
                      ModuleSetStore.SetsDirectory(baseDirectory),
                  })
         {
-            key.Append('#').Append(directory).Append('\n');
             try
             {
-                if (!Directory.Exists(directory))
-                {
-                    key.Append("(absent)\n");
-                    continue;
-                }
-                foreach (var info in new DirectoryInfo(directory).EnumerateFileSystemInfos()
-                             .OrderBy(i => i.Name, StringComparer.Ordinal))
-                {
-                    if (info is FileInfo file)
-                        key.Append("f:").Append(file.Name).Append('|').Append(file.Length)
-                            .Append('|').Append(file.LastWriteTimeUtc.Ticks).Append('\n');
-                    else
-                        key.Append("d:").Append(info.Name).Append('\n');
-                }
+                AppendListing(key, directory, listRecordDirectories: ReferenceEquals(directory, entries), token);
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
@@ -867,6 +866,35 @@ public sealed class PendingModuleActivations(string moduleRoot)
             }
         }
         return key.ToString();
+    }
+
+    /// <summary>Appends one directory's listing to <paramref name="key"/> (an absent directory
+    /// appends its own marker); with <paramref name="listRecordDirectories"/>, each subdirectory's
+    /// own files are listed beneath it.</summary>
+    private static void AppendListing(
+        System.Text.StringBuilder key, string directory, bool listRecordDirectories, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        key.Append('#').Append(directory).Append('\n');
+        if (!Directory.Exists(directory))
+        {
+            key.Append("(absent)\n");
+            return;
+        }
+        foreach (var info in new DirectoryInfo(directory).EnumerateFileSystemInfos()
+                     .OrderBy(i => i.Name, StringComparer.Ordinal)
+                     .ToArray())
+        {
+            if (info is FileInfo file)
+                key.Append("f:").Append(file.Name).Append('|').Append(file.Length)
+                    .Append('|').Append(file.LastWriteTimeUtc.Ticks).Append('\n');
+            else
+            {
+                key.Append("d:").Append(info.Name).Append('\n');
+                if (listRecordDirectories)
+                    AppendListing(key, info.FullName, listRecordDirectories: false, token);
+            }
+        }
     }
 
     /// <summary>
@@ -908,7 +936,9 @@ public sealed class PendingModuleActivations(string moduleRoot)
     /// readers that have no pool leaf to cancel.</param>
     private DiskSnapshot ReadDisk(CancellationToken token = default)
     {
-        var fingerprint = ListingFingerprint(ModuleRootPath);
+        // ⓪ The fingerprint is volume work too (one listing per directory and per module record
+        // directory): it observes the token before each listing, so a cancelled refresh starts none.
+        var fingerprint = ListingFingerprint(ModuleRootPath, token);
         var current = snapshot;
         if (current is not null && fingerprint is not null
             && string.Equals(current.Fingerprint, fingerprint, StringComparison.Ordinal))

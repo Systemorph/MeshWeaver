@@ -140,6 +140,61 @@ public class PendingModuleActivationsCostTest : IDisposable
         Assert.Equal(2, pending.DiskReads);
     }
 
+    /// <summary>
+    /// 🚨 MeshWeaver#6829, review of #6833 — a module's state is derived from the RECORDS in its own
+    /// directory (<c>activation.d/&lt;Name&gt;/</c>), and a record lands by a rename into that
+    /// directory, which leaves <c>activation.d/</c>'s own listing as it was. An uninstall tombstone
+    /// written on its own (its projection write failed) is that change: with every directory
+    /// timestamp put back, a fingerprint that lists only the three top directories keeps serving
+    /// "2 pending" while the volume says 1.
+    /// </summary>
+    [Fact]
+    public async Task ARecordOnlyChange_InsideAModulesRecordDirectory_IsSeen()
+    {
+        await LandWave(ModuleA, ModuleB);
+        var pending = new PendingModuleActivations(root);
+        var nothingLoaded = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        Assert.Equal(2, pending.Read(nothingLoaded).Pending.Count);
+        Assert.Equal(1, pending.DiskReads);
+
+        var entries = ModuleActivationSidecar.EntriesDirectory(root);
+        var directories = new[]
+            {
+                Path.Combine(root, "modules"),
+                entries,
+                ModuleSetStore.SetsDirectory(root),
+            }
+            .Concat(Directory.EnumerateDirectories(entries))
+            .ToArray();
+        var before = directories.Select(Directory.GetLastWriteTimeUtc).ToArray();
+
+        // The tombstone alone — no projection rewrite of activation.d/<Name>.json.
+        ModuleActivationSidecar.WriteUninstall(root, ModuleB, after: null);
+        for (var i = 0; i < directories.Length; i++)
+            Directory.SetLastWriteTimeUtc(directories[i], before[i]);
+
+        var after = pending.Read(nothingLoaded);
+
+        Assert.Equal(2, pending.DiskReads);
+        Assert.Equal(ModuleA, Assert.Single(after.Pending).Name, ignoreCase: true);
+    }
+
+    /// <summary>
+    /// The fingerprint is volume work (a listing per directory and per module record directory), so a
+    /// cancelled refresh must not start it: the token is observed before the first listing.
+    /// </summary>
+    [Fact]
+    public async Task ACancelledFingerprint_StartsNoListing()
+    {
+        await LandWave(ModuleA);
+        using var cancelled = new System.Threading.CancellationTokenSource();
+        await cancelled.CancelAsync();
+
+        Assert.ThrowsAny<OperationCanceledException>(
+            () => PendingModuleActivations.ListingFingerprint(root, cancelled.Token));
+        Assert.NotNull(PendingModuleActivations.ListingFingerprint(root));
+    }
+
     /// <summary>A missing modules tree is a fingerprint too — the first landing into it is a change, not an identical "nothing".</summary>
     [Fact]
     public async Task TheFirstLandingIntoAnEmptyRoot_IsAChange()
