@@ -177,10 +177,23 @@ internal static class PackageUpdateReconciler
         // where three packages logged "the install record's moduleVersion is empty" on every
         // green build after their repository started committing locks.
         if (string.IsNullOrEmpty(record.ModuleVersion))
+        {
+            // A pinned legacy record is left alone on EVERY path, bound or not, before the floor
+            // gate: the identity gate used to stop it here, and taking the candidate as a change
+            // must not let an unbound (registry) pass stamp a hold or dispatch a ticket for a
+            // package the administrator pinned (review on #6797).
+            if (record.EffectiveUpdatePolicy == PackageUpdatePolicy.None)
+            {
+                logger?.LogInformation(
+                    "Package update: {Id} is pinned and its install record carries no moduleVersion; the "
+                    + "candidate {Candidate} is not decided. {Provenance}", pkg.Id, pkg.ModuleVersion, provenance);
+                return Observable.Return(Unit.Default);
+            }
             logger?.LogInformation(
                 "Package update: {Id}'s install record carries no moduleVersion (installed before its "
                 + "source emitted a manifest.lock); the listed {Candidate} is taken as a change. {Provenance}",
                 pkg.Id, pkg.ModuleVersion, provenance);
+        }
 
         // 🚨 THE gate: content identity, not the event that woke us. Equal module hashes ⇒ nothing in
         // this module changed ⇒ stay completely silent — no notification, and not one file fetched.
