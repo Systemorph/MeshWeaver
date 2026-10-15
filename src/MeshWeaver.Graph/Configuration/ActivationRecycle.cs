@@ -290,8 +290,10 @@ public static class ActivationRecycle
     /// Recycles this PROCESS's live activations that <paramref name="request"/> selects: one
     /// <see cref="DisposeRequest"/> each, with the request's reason, posted from the mesh's
     /// node-operation issuing hub (a survivor, never the router — #4463), in batches of
-    /// <see cref="BatchSize"/> spaced by <see cref="BatchInterval"/>. Each target goes through its
-    /// own normal quiesce. Cold; emits the report once the last batch is posted.
+    /// <see cref="BatchSize"/> spaced by <see cref="BatchInterval"/>, each carrying
+    /// <see cref="DisposeRequest.CascadedFrom"/> = the request's path so none sets off a cascade of
+    /// its own. Each target goes through its own normal quiesce. Cold; emits the report once the last
+    /// batch is posted.
     /// </summary>
     public static IObservable<ActivationRecycleReport> RecycleLocal(
         IMessageHub meshHub, ActivationRecycleRequest request, string requestPath, IScheduler? scheduler = null)
@@ -316,7 +318,11 @@ public static class ActivationRecycle
                         .Select(h =>
                         {
                             var target = PathOf(h);
-                            issuing.Post(new DisposeRequest { Reason = reason }, o => o.WithTarget(new Address(target)));
+                            // CascadedFrom: one wave of THIS request, which already names every
+                            // type it reaches — a disposal it posts never fans out again
+                            // (MessageHub.HandleDispose), whatever seam the target carries.
+                            issuing.Post(new DisposeRequest { Reason = reason, CascadedFrom = requestPath },
+                                o => o.WithTarget(new Address(target)));
                             return target;
                         })
                         .ToImmutableList()))
