@@ -4083,6 +4083,32 @@ internal static class NodeTypeCompilationHelpers
             : DateTimeOffset.UtcNow;
 
     /// <summary>
+    /// MeshWeaver#6831 — the module version a successful compile's bytes were built at, as
+    /// <see cref="NodeTypeDefinition.BuiltModuleVersion"/> records it: the live
+    /// <see cref="NodeTypeDefinition.CurrentModuleVersion"/> when the record's live source snapshot
+    /// is still exactly the one compiled, null (unknown) when it has moved since. Bytes whose MVID
+    /// the record already carries a version for keep it — a disk-cache reload of the same build —
+    /// and an unreadable MVID keeps the standing pair, whose MVID then still names the old bytes.
+    /// </summary>
+    /// <param name="def">The record the compile is settling onto.</param>
+    /// <param name="compiledSources">The source snapshot the compile recorded.</param>
+    /// <param name="assemblyMvid">The MVID of the bytes the compile produced, or null if unreadable.</param>
+    internal static string? BuiltModuleVersionOfCompile(
+        NodeTypeDefinition def, IReadOnlyDictionary<string, long>? compiledSources, string? assemblyMvid)
+    {
+        if (assemblyMvid is null)
+            return def.BuiltModuleVersion;
+        if (def.BuiltModuleVersion is not null
+            && string.Equals(assemblyMvid, def.BuiltModuleVersionMvid, StringComparison.Ordinal))
+            return def.BuiltModuleVersion;
+        var compiled = def with
+        {
+            CompiledSources = compiledSources ?? System.Collections.Immutable.ImmutableDictionary<string, long>.Empty,
+        };
+        return compiled.IsDirty ? null : def.CurrentModuleVersion;
+    }
+
+    /// <summary>
     /// THE terminal stamp of a SUCCESSFUL compile — the exact field set
     /// <see cref="RunCompile"/>'s write-back has always applied, extracted as a pure function so
     /// the initial-bake batch driver (issue #1207, <c>NodeTypeBatchBake</c> in
@@ -4223,6 +4249,13 @@ internal static class NodeTypeCompilationHelpers
             // alone rather than erasing it, exactly as the other assembly fields do.
             LatestAssemblyMvid =
                 assemblyMvid ?? def.LatestAssemblyMvid,
+            // 🚨 #6831 — the module version THESE bytes were built at, keyed to their MVID, so a
+            // later delivery hold (which relabels the provenance, not the bytes) or a later
+            // include-only edit (which moves CurrentModuleVersion without making the type dirty)
+            // cannot relabel them. Only when the record's live snapshot is still the one compiled:
+            // otherwise the version moved during the compile and the bytes' version is unknown.
+            BuiltModuleVersion = BuiltModuleVersionOfCompile(def, result.CompiledSources, assemblyMvid),
+            BuiltModuleVersionMvid = assemblyMvid ?? def.BuiltModuleVersionMvid,
             // The framework the assembly bound against — HasUsableBuild compares this to the
             // live FrameworkVersion so a MeshWeaver redeploy forces a recompile instead of
             // loading an ABI-stale DLL.

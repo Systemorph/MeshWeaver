@@ -1349,9 +1349,11 @@ public sealed class PluginBundleClient
                         // compilationStatus Ok with matching compiledSources, and last week's code
                         // runs against today's data.
                         a.SourceFingerprint,
-                        // #3583 — the module's released SemVer, for the compatibility rule the
-                        // owner applies when the source later moves past these bytes.
-                        manifest.Version,
+                        // #3583 — the module version THESE bytes were built at, for the
+                        // compatibility rule the owner applies when the source later moves past
+                        // them. 🚨 #6831 — per assembly, never the bundle's label: a registry's
+                        // own-lane serve can carry an older build under a newer package version.
+                        a.ModuleVersion,
                         // #4280 — WHICH sources (and which @@-includes) the bytes were built from,
                         // so the owner can tell a live set still arriving from one that moved.
                         a.SourcePaths,
