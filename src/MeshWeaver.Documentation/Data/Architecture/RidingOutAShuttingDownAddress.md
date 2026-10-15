@@ -345,6 +345,7 @@ unmarked, because producers outside this repository may post it too.
 | `DeferredDeliveryNackedOnDisposeTest.ARequestWhoseProducerDeclaresTheReask_IsTeardownNormal_NotAnError` (`MeshWeaver.Messaging.Hub.Test`) | a delivery stamped `ReasksOnShutdown` still reported at Error when a teardown discards it, or no longer answered `ShuttingDown` (#5718) |
 | `DeferredDeliveryNackedOnDisposeTest.ADeferredReplyToTheDisposingHub_IsTeardownNormal_AndItsReplierIsNotNacked` (`MeshWeaver.Messaging.Hub.Test`) | a reply parked behind a young activation's gates reported at Error, or reported as answering its replier `ShuttingDown`, or a drain that NACKs the replier (#6791) |
 | `PatchDiscardedByABringUpTeardownIsReaskedTest` (`MeshWeaver.Graph.Test`) | a node write parked behind a young activation's gates that does not land on the next activation after a direct teardown, or whose discard is reported at Error (#6733) |
+| `PointReadDiscardedByABringUpTeardownIsReaskedTest` (`MeshWeaver.Graph.Test`) | the PRODUCTION claimant: a `GetMeshNodeOutcome` request — the initial one or the re-probe issued from the `ShuttingDown` NACK — that arrives without the `ReasksOnShutdown` stamp, whose bring-up discard is reported at Error, or a read that does not settle `Present` after two such discards (#6717) |
 | `PostOptionsReaskStampTest` (`MeshWeaver.Messaging.Hub.Test`) | a reply built with `ResponseFor` / `WithRequestIdFrom` that inherits the request's `ReasksOnShutdown` stamp (#6717) |
 
 ## See also
