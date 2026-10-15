@@ -63,11 +63,25 @@ The ordering is closed from the delete's side, in two halves:
   store adapters are eager (`IIoPool.Run` keeps the I/O running whoever unsubscribes), so a write
   whose caller timed out can still commit. The guard therefore connects every admitted write
   itself, releases the registration only on the write's own terminal, and hands the caller a
-  replay; an unsubscribe only stops the caller listening.
+  replay; an unsubscribe only stops the caller listening. Three details make "terminal" mean what
+  it says:
+  - The caller is attached to the replay BEFORE the write is connected. A write completing
+    synchronously inside the connect would otherwise release its registration — and let a waiting
+    delete remove the row and publish `Deleted` — while its result still sat in the buffer, so the
+    caller's own `Created`/`Updated` publish would follow the delete's.
+  - A batch (`WriteMany`) is snapshotted once: the paths registered and tested are the very nodes
+    handed to the store.
+  - A write's secondary writes under its own path settle WITH it. The monotonic guard's
+    write-conflict trace (`{path}/_Activity/write-conflict-{version}`) is written below this guard;
+    it used to be fire-and-forget, so the parent settled, a delete ran, and the trace landed after
+    it. The conflict resolution now completes only once the trace has terminated (still best
+    effort: a failed trace is logged, never a failed write).
 - **The delete, once its scope is open, waits for every write admitted under its root to settle**
   (`AdmittedWritesSettled`, its own bounded stage `settle-admitted-writes`) before it checks the
   expected version, takes the plan, or removes anything. `WithinSubtreeDeletion` — the move and the
-  partition teardown — does the same before its body runs.
+  partition teardown — does the same before its body runs. A **row-only** delete (`KeepDescendants`)
+  waits for writes to the row alone: it guards only that row (`BeginRowDeletion`), so writes to the
+  descendants it keeps stay admitted throughout and would otherwise time it out for nothing.
 
 The scope stops new admissions, so the set it waits on only shrinks, and in the common case it is
 empty and the wait answers at once. 🚨 **Each side acts first and checks second:** the guard

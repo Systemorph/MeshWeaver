@@ -379,11 +379,13 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
     /// yet. Diagnostics for a deletion that is waiting on them.
     /// </summary>
     /// <param name="rootPath">The subtree root.</param>
+    /// <param name="rowOnly">Only writes to <paramref name="rootPath"/> ITSELF — a row-only delete
+    /// (<c>KeepDescendants</c>) removes nothing beneath it, so a descendant write is not its concern.</param>
     /// <returns>The pending paths, possibly empty.</returns>
-    public IReadOnlyList<string> AdmittedWritesUnder(string rootPath)
+    public IReadOnlyList<string> AdmittedWritesUnder(string rootPath, bool rowOnly = false)
         => _admittedWrites.Values
             .SelectMany(paths => paths)
-            .Where(path => IsAtOrUnder(path, rootPath))
+            .Where(path => Covers(path, rootPath, rowOnly))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
@@ -395,8 +397,12 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
     /// synchronously on Subscribe when nothing is pending, which is the overwhelmingly common case.
     /// </summary>
     /// <param name="rootPath">The subtree whose deletion is about to run.</param>
-    /// <returns>One <see cref="System.Reactive.Unit"/> once the subtree has no admitted write pending.</returns>
-    public IObservable<System.Reactive.Unit> AdmittedWritesSettled(string rootPath)
+    /// <param name="rowOnly">Wait only for writes to <paramref name="rootPath"/> ITSELF. A row-only
+    /// delete (<c>KeepDescendants</c>) guards just the row (<see cref="BeginRowDeletion"/>), so writes to
+    /// the descendants it keeps stay admitted throughout and the pending set under the root need not
+    /// shrink: waiting on them would time out a delete that has no pending write to the row it removes.</param>
+    /// <returns>One <see cref="System.Reactive.Unit"/> once the subtree (or the row) has no admitted write pending.</returns>
+    public IObservable<System.Reactive.Unit> AdmittedWritesSettled(string rootPath, bool rowOnly = false)
         => string.IsNullOrEmpty(rootPath)
             ? Observable.Return(System.Reactive.Unit.Default)
             // The settle signal is subscribed BEFORE the first check (Merge subscribes in order and
@@ -404,19 +410,24 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
             // subscription cannot be missed.
             : Observable.Defer(() => _admittedWriteSettled
                 .Merge(Observable.Return(System.Reactive.Unit.Default))
-                .Where(_ => !HasAdmittedWriteUnder(rootPath))
+                .Where(_ => !HasAdmittedWriteUnder(rootPath, rowOnly))
                 .Take(1));
 
-    private bool HasAdmittedWriteUnder(string rootPath)
+    private bool HasAdmittedWriteUnder(string rootPath, bool rowOnly)
     {
         if (_admittedWrites.IsEmpty)
             return false;
         foreach (var kv in _admittedWrites)
             foreach (var path in kv.Value)
-                if (IsAtOrUnder(path, rootPath))
+                if (Covers(path, rootPath, rowOnly))
                     return true;
         return false;
     }
+
+    private static bool Covers(string path, string root, bool rowOnly)
+        => rowOnly
+            ? string.Equals(path, root, StringComparison.OrdinalIgnoreCase)
+            : IsAtOrUnder(path, root);
 
     private static bool IsAtOrUnder(string path, string root)
         => path.Length >= root.Length

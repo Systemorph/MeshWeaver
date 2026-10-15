@@ -3682,16 +3682,20 @@ public static class MeshExtensions
     /// and recreate the node. Emits at once when nothing is pending — the common case. Bounded as its
     /// own stage: a write that never terminates fails the delete BY NAME, listing what it waited on,
     /// instead of being outrun by it.
+    /// <para>A row-only delete (<paramref name="rowOnly"/>, <c>KeepDescendants</c>) waits for writes to
+    /// the ROW alone — it guards and removes only that row, so writes to the descendants it keeps stay
+    /// admitted and must neither hold it up nor time it out.</para>
     /// </summary>
     private static IObservable<System.Reactive.Unit> AdmittedWritesSettled(
-        RecentlyDeletedRegistry? registry, string path, TimeSpan budget)
+        RecentlyDeletedRegistry? registry, string path, bool rowOnly, TimeSpan budget)
         => registry is null
             ? Observable.Return(System.Reactive.Unit.Default)
-            : registry.AdmittedWritesSettled(path)
+            : registry.AdmittedWritesSettled(path, rowOnly)
                 .TimeoutAtStage(budget, () => DeleteStageTimeout(
                     DeleteStage.SettleAdmittedWrites,
-                    $"write(s) admitted under '{path}' before the delete began did not settle within "
-                    + $"{budget.TotalSeconds:0}s: {string.Join(", ", registry.AdmittedWritesUnder(path).Take(10))}. "
+                    $"write(s) admitted {(rowOnly ? "to" : "under")} '{path}' before the delete began did not "
+                    + $"settle within {budget.TotalSeconds:0}s: "
+                    + $"{string.Join(", ", registry.AdmittedWritesUnder(path, rowOnly).Take(10))}. "
                     + "Nothing was deleted."));
 
     /// <summary>
@@ -4287,7 +4291,8 @@ public static class MeshExtensions
                                 //    reports removed (#6719). So the delete first waits for
                                 //    every write admitted under `path` to settle, and only
                                 //    then checks the version, plans and removes — the writes
-                                //    are ordered BEFORE the delete, never after it.
+                                //    are ordered BEFORE the delete, never after it (a row-only
+                                //    delete waits for writes to the row alone — see below).
                                 //    A row-only delete (KeepDescendants) removes nothing under
                                 //    `path`, so it guards the ROW alone (BeginRowDeletion): a
                                 //    subtree scope would refuse writers the operation never
@@ -4307,7 +4312,7 @@ public static class MeshExtensions
                                                 deletionScope,
                                                 recentlyDeleted.BeginVersionGuardedDeletion(path));
                                     },
-                                    subtreeScope => AdmittedWritesSettled(recentlyDeleted, path, budget)
+                                    subtreeScope => AdmittedWritesSettled(recentlyDeleted, path, capturedRequest.KeepDescendants, budget)
                                     .SelectMany(_ => ExpectedVersionHoldsOnTheOwner(
                                         issuingHub, persistence, hub.JsonSerializerOptions, path,
                                         capturedRequest.ExpectedVersion, request.AccessContext, budget, logger,

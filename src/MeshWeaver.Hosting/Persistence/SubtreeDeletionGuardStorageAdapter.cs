@@ -110,7 +110,17 @@ internal sealed class SubtreeDeletionGuardStorageAdapter(
         IReadOnlyCollection<MeshNode> nodes, JsonSerializerOptions options)
         => registry is null
             ? inner.WriteMany(nodes, options)
-            : Admitted(
+            : WriteManyAdmitted(nodes.ToArray(), options);
+
+    /// <summary>
+    /// <see cref="WriteMany"/> over ONE snapshot of the batch: the paths the guard tests and
+    /// registers and the nodes handed to the store are the same array, so a caller mutating its
+    /// collection between the call and the subscription cannot make the guard admit one path while
+    /// the store writes another.
+    /// </summary>
+    private IObservable<IReadOnlyList<MeshNode>> WriteManyAdmitted(
+        MeshNode[] nodes, JsonSerializerOptions options)
+        => Admitted(
                 nodes.Select(n => n.Path).ToArray(),
                 (path, root) =>
                 {
@@ -126,7 +136,7 @@ internal sealed class SubtreeDeletionGuardStorageAdapter(
                     .Do(written =>
                     {
                         foreach (var saved in written)
-                            registry.Supersede(saved.Path, saved.Version);
+                            registry!.Supersede(saved.Path, saved.Version);
                     }));
 
     /// <inheritdoc />
@@ -177,6 +187,15 @@ internal sealed class SubtreeDeletionGuardStorageAdapter(
     /// node after it. So the admitted write is connected here, its registration is released only
     /// by its own completion or error, and the caller observes a replay of it; an unsubscribe only
     /// stops the caller listening.</para>
+    ///
+    /// <para>🚨 <b>The caller is attached BEFORE the write is connected.</b> The registration is
+    /// released in the write's <c>Finally</c>, and a deletion waiting on it resumes right there. A
+    /// write that completes synchronously inside the connect would otherwise settle — and let the
+    /// delete remove the row and publish <c>Deleted</c> — while its result still sat in the replay
+    /// buffer, so the caller's own post-commit publish (<c>Created</c>/<c>Updated</c>) would follow
+    /// the delete's. Attached first, the caller receives the result and the completion before the
+    /// <c>Finally</c> runs, whichever thread completes the write. The connection is still owned
+    /// here, not by the caller's subscription.</para>
     /// </summary>
     /// <param name="paths">Every node path the write commits.</param>
     /// <param name="refuse">Builds the refusal for the first path found under an active deletion.</param>
@@ -185,14 +204,14 @@ internal sealed class SubtreeDeletionGuardStorageAdapter(
         IReadOnlyCollection<string> paths,
         Func<string, string?, IObservable<T>> refuse,
         Func<IObservable<T>> write)
-        => Observable.Defer(() =>
+        => Observable.Create<T>(observer =>
         {
             var admission = registry!.AdmitWrite(paths);
             foreach (var path in paths)
                 if (registry.IsUnderActiveDeletion(path, out var root))
                 {
                     admission.Dispose();
-                    return refuse(path, root);
+                    return refuse(path, root).Subscribe(observer);
                 }
 
             IObservable<T> inner;
@@ -200,16 +219,18 @@ internal sealed class SubtreeDeletionGuardStorageAdapter(
             {
                 inner = write();
             }
-            catch
+            catch (Exception ex)
             {
-                // Not swallowed: the registration is released and the fault propagates.
+                // Not swallowed: the registration is released and the fault reaches the caller.
                 admission.Dispose();
-                throw;
+                observer.OnError(ex);
+                return Disposable.Empty;
             }
 
             var outcome = inner.Finally(admission.Dispose).Replay();
+            var callerSubscription = outcome.Subscribe(observer);
             outcome.ConnectOwnedBy(_admittedConnections);
-            return outcome.AsObservable();
+            return callerSubscription;
         });
 
     /// <inheritdoc />

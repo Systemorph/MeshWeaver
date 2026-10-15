@@ -38,6 +38,12 @@ internal sealed class ParkedWriteStorageAdapter(InMemoryStorageAdapter inner) : 
     /// <summary>Completes once a write to the parked path has reached the store and is parked.</summary>
     public IObservable<Unit> WriteParked => _writeParked;
 
+    /// <summary>
+    /// Runs as every write reaches this store (on Subscribe, before it is parked or committed) — a
+    /// probe for what the decorators above have, or have not, released at that moment.
+    /// </summary>
+    public Action<MeshNode>? OnWrite { get; set; }
+
     /// <summary>Lets every parked write through to the store. Idempotent.</summary>
     public void Release()
     {
@@ -54,6 +60,7 @@ internal sealed class ParkedWriteStorageAdapter(InMemoryStorageAdapter inner) : 
     public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
         => Observable.Defer(() =>
         {
+            OnWrite?.Invoke(node);
             if (!Parked(node.Path))
                 return inner.Write(node, options);
             _writeParked.OnNext(Unit.Default);

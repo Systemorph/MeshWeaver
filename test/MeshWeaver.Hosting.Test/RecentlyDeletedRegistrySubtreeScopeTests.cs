@@ -152,6 +152,38 @@ public class RecentlyDeletedRegistrySubtreeScopeTests
     }
 
     /// <summary>
+    /// #6719 review: a ROW-only delete (<c>KeepDescendants</c>) guards and removes the row alone, so it
+    /// waits for writes to the row and never for writes to the descendants it keeps — those stay
+    /// admitted throughout, and waiting on them would time out a delete with nothing pending on its row.
+    /// </summary>
+    [Fact]
+    public void AdmittedWritesSettled_row_only_waits_for_the_row_and_not_for_retained_descendants()
+    {
+        var registry = new RecentlyDeletedRegistry();
+        using var descendant = registry.AdmitWrite(["r/row/child"]);
+        using var rowScope = registry.BeginRowDeletion("r/row");
+
+        var rowOnlySettled = false;
+        using (registry.AdmittedWritesSettled("r/row", rowOnly: true).Subscribe(_ => rowOnlySettled = true))
+            rowOnlySettled.Should().BeTrue("a parked descendant write is not the row-only delete's concern");
+        registry.AdmittedWritesUnder("r/row", rowOnly: true).Should().BeEmpty();
+
+        // Control: the subtree form over the same state DOES wait for the descendant.
+        var subtreeSettled = false;
+        using (registry.AdmittedWritesSettled("r/row").Subscribe(_ => subtreeSettled = true))
+            subtreeSettled.Should().BeFalse("a subtree delete removes the descendant and must wait for its write");
+
+        // And a parked write to the ROW holds the row-only delete until it settles.
+        var row = registry.AdmitWrite(["r/row"]);
+        var settledAfterRow = false;
+        using var wait = registry.AdmittedWritesSettled("r/row", rowOnly: true).Subscribe(_ => settledAfterRow = true);
+        settledAfterRow.Should().BeFalse("a write admitted to the row itself is still in flight");
+        registry.AdmittedWritesUnder("r/row", rowOnly: true).Should().Equal("r/row");
+        row.Dispose();
+        settledAfterRow.Should().BeTrue("the row's admitted write settled");
+    }
+
+    /// <summary>
     /// #6719: <see cref="RecentlyDeletedRegistry.WithinSubtreeDeletion{T}"/> (move, partition teardown)
     /// runs its body only after the writes admitted under the root have settled.
     /// </summary>
