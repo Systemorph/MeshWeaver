@@ -37,6 +37,13 @@
 set -uo pipefail
 : "${GRAFANA_PW:?set GRAFANA_PW (Grafana admin password)}"
 VALUES="${VALUES:-values.observability.yaml}"
+# 🚨 THE INVOKE POD IS DISTROLESS. `az aks command invoke` runs this in an image with bash, awk,
+# grep, sort, tail, date, sleep, kubectl and helm — and NO sed (measured 2026-10-15; the first real
+# run lost its recovery script and its workload list to "sed: command not found"). Use only what is
+# listed here; test-observability-recovery.py runs the script on exactly that toolset.
+for tool in awk grep sort tail date sleep cat kubectl helm; do
+  command -v "$tool" >/dev/null 2>&1 || { echo "FATAL: '$tool' is not available here — nothing was done." >&2; exit 1; }
+done
 [ -f "$VALUES" ] || { echo "FATAL: $VALUES not found — pass it with --file (see header)." >&2; exit 1; }
 
 # The release and namespace are FIXED: the Loki storage verification reads `loki-0`, the Grafana
@@ -352,7 +359,7 @@ spec:
       args:
         - |
 MANIFEST
-    tsdb_recovery_script | sed 's/^/          /'
+    tsdb_recovery_script | awk '{ print "          " $0 }'
     cat <<MANIFEST
       volumeMounts:
         - {name: storage, mountPath: /data}
@@ -369,7 +376,16 @@ MANIFEST
       ok=false
     fi
   fi
-  kc logs "$recovery_pod" 2>&1 | sed 's/^/RECOVERY: /'
+  local cleaner_log
+  cleaner_log=$(kc logs "$recovery_pod" 2>&1)
+  printf '%s\n' "$cleaner_log" | awk '{ print "RECOVERY: " $0 }'
+  # `Succeeded` proves only that the container exited 0 — an empty script does that too (measured:
+  # a missing tool once rendered the pod with NO script, and it "succeeded" having deleted
+  # nothing). Success is the clean-up's own closing line.
+  if [ "$ok" = true ] && ! printf '%s\n' "$cleaner_log" | grep "tsdb-recovery: after:" >/dev/null; then
+    echo "FATAL: the recovery pod exited 0 but never reported its clean-up — it did NOT run." >&2
+    ok=false
+  fi
   if [ "$ok" = true ]; then
     # Succeeded: its container has exited, so the server may start while the pod object goes.
     restore_prometheus "$replicas" || exit 1
@@ -467,7 +483,7 @@ ensure_no_leftover_cleaner() {
   fi
   [ -n "$present" ] || return 0
   recovery "a TSDB recovery pod from an earlier run is still present — removing it before anything else."
-  kc logs "$pod" 2>&1 | tail -n 20 | sed 's/^/RECOVERY: (earlier run) /'
+  kc logs "$pod" 2>&1 | tail -n 20 | awk '{ print "RECOVERY: (earlier run) " $0 }'
   if ! remove_recovery_pod "$pod"; then
     echo "FATAL: the leftover $pod could not be confirmed gone; nothing was rolled back or upgraded." >&2
     exit 1
@@ -538,7 +554,7 @@ if ! by_instance=$(kc get deploy,sts,ds -l "app.kubernetes.io/instance=$RELEASE"
   echo "FATAL: could not list the workloads of release $RELEASE — readiness was NOT established." >&2
   exit 1
 fi
-workloads=$(printf '%s\n%s\n' "$by_instance" "$by_release" | sed '/^$/d' | sort -u)
+workloads=$(printf '%s\n%s\n' "$by_instance" "$by_release" | awk 'NF' | sort -u)
 if [ -z "$workloads" ]; then
   echo "FATAL: helm reported success but no workload of release $RELEASE exists in $NS." >&2
   exit 1
