@@ -126,6 +126,10 @@ prometheus:
     # its cutoff advances with the newest compacted block, and compaction needs
     # free disk. Keep 25% available for WAL/head growth and temporary compaction
     # files. Prometheus removes the oldest complete blocks when either bound wins.
+    # 🚨 These bounds PREVENT a full volume; they cannot CURE one. A Prometheus whose volume is
+    # already full panics replaying its WAL before retention runs, so raising either value here
+    # does nothing for it. install-observability.sh detects that crash and clears the TSDB
+    # (disposable metrics) before upgrading — see its "full volume" section.
     retention: 15d
     persistentVolume:
       enabled: true
