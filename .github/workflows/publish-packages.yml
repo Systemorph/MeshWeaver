@@ -91,8 +91,10 @@ name: Publish the surviving NuGet packages
 # nuget.org is reached by Trusted Publishing (GitHub OIDC via NuGet/login — no stored NuGet secret), exactly as unlist-orphaned-packages.yml does. The App token replaces
 # the stored GitHub PAT, which is the one this repository could actually stop storing.
 
-# The run-name is how main-cd's `publish-cli` finds the run it dispatched ("Publish cli <version>").
-run-name: "Publish ${{ inputs.packages || 'all' }} ${{ inputs.version || github.ref_name }}"
+# The run-name is how main-cd's `publish-cli` finds the run it dispatched ("Publish cli <version>")
+# and how the CLI alert sees a publication in flight. A dry run says so in its title, so neither can
+# ever take a dry run — which pushes nothing — for a publication (#6843 review).
+run-name: "Publish ${{ inputs.packages || 'all' }} ${{ inputs.version || github.ref_name }}${{ inputs.dry-run && ' (dry run)' || '' }}"
 
 on:
   push:
@@ -374,14 +376,16 @@ jobs:
             echo "decision recorded in Doc/Architecture/NuGetPackageRetirement."
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # ──────────────── THE CLI'S OWN ALERT: opened red, closed only by a LISTED CLI ────────────────
+  # ──────────────── THE CLI'S OWN ALERT, RECONCILED FROM THE TRUTH ────────────────
   # Not CD's `ci-failure`: `verify-images` closes that after any image promotion, which proves
-  # nothing about nuget.org (#6843 review). `cli-publish-failure` is a sentinel of its own
-  # (.github/scripts/cli-publish-alert.sh) — opened when a real CLI publication fails, closed only
-  # when one at that version or newer is LISTED. A dry run never touches it. Serialised across runs,
-  # because the per-version groups above let two publications finish at once.
+  # nothing about nuget.org (#6843 review). The `cli-publish-failure` sentinel is DERIVED, not
+  # reported: .github/scripts/cli-publish-alert.sh reads the version `3-latest` names and whether
+  # nuget.org lists MeshWeaver.Cli at it, and opens or closes the issue from those two facts. So
+  # this job passes no outcome, and a reconcile that is dropped (the group keeps one pending),
+  # late or out of order loses nothing — the next one reads the same truth. One group across both
+  # workflows (main-cd's `cli-alert` too), so no two interleave a lookup with a create.
   cli-alert:
-    name: "CLI publish alert (open on red, close on LISTED)"
+    name: "CLI publish alert (reconciled: 3-latest vs nuget.org)"
     needs: [preflight, publish]
     if: always() && !inputs.dry-run
     runs-on: ubuntu-latest
@@ -391,6 +395,7 @@ jobs:
       cancel-in-progress: false
     permissions:
       issues: write
+      actions: read     # is a publication of the target in flight
       contents: read
     steps:
       - uses: actions/checkout@v7
@@ -399,19 +404,9 @@ jobs:
             .github/scripts
             scripts/check-issue-taxonomy.py
           sparse-checkout-cone-mode: false
-      - name: Open or close the cli-publish-failure sentinel
+      - name: Reconcile the cli-publish-failure sentinel
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          V: ${{ inputs.version || github.ref_name }}
-          RESULT: ${{ needs.publish.result }}
-          PRE: ${{ needs.preflight.result }}
-        run: |
-          set -euo pipefail
-          V="${V#v}"
-          RUN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-          if [ "$PRE" = success ] && [ "$RESULT" = success ]; then
-            bash .github/scripts/cli-publish-alert.sh green "$V" "$RUN_URL"
-          else
-            bash .github/scripts/cli-publish-alert.sh red "$V" "$RUN_URL" "publish-packages.yml ended preflight=$PRE, publish=$RESULT"
-          fi
+          SELF_RUN_ID: ${{ github.run_id }}
+        run: bash .github/scripts/cli-publish-alert.sh "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"

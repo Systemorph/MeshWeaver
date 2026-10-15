@@ -3669,11 +3669,12 @@ jobs:
   # (found by its run-name, `Publish cli <version>`) and is red unless that run is green — a
   # CANCELLED run included: publish-packages.yml keys its concurrency per version, so nothing
   # supersedes a CLI publication (#6843 review). Its alert is NOT CD's `ci-failure` (which
-  # `verify-images` closes on any image promotion) but the `cli-publish-failure` sentinel
-  # (.github/scripts/cli-publish-alert.sh), closed only by a LISTED CLI at that version or newer.
-  # publish-packages.yml files it for a failed publication; the last step here files it when the
-  # dispatch itself fails or the run never completes. Not a `delivery-verdict` need either: the
-  # platform rolled already, and the verdict judges the platform only.
+  # `verify-images` closes on any image promotion) but the `cli-publish-failure` sentinel, which
+  # `cli-alert` below DERIVES from the truth (.github/scripts/cli-publish-alert.sh: the version
+  # `3-latest` names vs. what nuget.org lists) rather than from this job's outcome — so a failed
+  # dispatch, a run that never completed and a failed publication are all caught the same way.
+  # Not a `delivery-verdict` need either: the platform rolled already, and the verdict judges the
+  # platform only.
   publish-cli:
     name: "Publish the memex CLI of the armed set to nuget.org"
     needs: [preflight, arm]
@@ -3681,18 +3682,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
-      actions: write    # `gh workflow run publish-packages.yml`
-      issues: write     # the cli-publish-failure sentinel, when the dispatch or the wait fails
-      contents: read
+      actions: write    # `gh workflow run publish-packages.yml` — nothing else
     steps:
-      - uses: actions/checkout@v7
-        with:
-          sparse-checkout: |
-            .github/scripts
-            scripts/check-issue-taxonomy.py
-          sparse-checkout-cone-mode: false
       - name: Dispatch publish-packages.yml (packages=cli) for the armed version and commit
-        id: dispatch
         env:
           GH_TOKEN: ${{ github.token }}
           V: ${{ needs.arm.outputs.version }}
@@ -3725,24 +3717,40 @@ jobs:
             [ "$status" = completed ] || { echo "publish run $id: $status"; continue; }
             case "$conclusion" in
               success)   echo "- memex CLI: \`MeshWeaver.Cli $V\` published and LISTED ($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$id)" >> "$GITHUB_STEP_SUMMARY"; exit 0 ;;
-              *)         echo "found=1" >> "$GITHUB_OUTPUT"
-                         echo "::error::publishing MeshWeaver.Cli $V FAILED ($conclusion): $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$id — nuget.org does not carry the CLI of the armed set"; exit 1 ;;
+              *)         echo "::error::publishing MeshWeaver.Cli $V FAILED ($conclusion): $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$id — nuget.org does not carry the CLI of the armed set"; exit 1 ;;
             esac
           done
           echo "::error::the publish run \"$title\" ${id:+($id) }did not complete within 40 minutes — nuget.org may not carry the CLI of the armed set"
           exit 1
-      # The publish run files its OWN red (cli-alert). This covers what it cannot: a dispatch that
-      # failed, or a run that never appeared or never completed. `found=1` means the run completed
-      # red, and that run has filed it already.
-      - name: File the cli-publish-failure sentinel (dispatch or wait failed)
-        if: failure() && steps.dispatch.outputs.found != '1'
+
+  # The CLI alert, reconciled after every arming whatever `publish-cli` concluded — the same script
+  # and the same concurrency group as publish-packages.yml's `cli-alert`, NOT inside the polling job
+  # (which must not hold the lock while it waits for the publication's own reconcile).
+  cli-alert:
+    name: "CLI publish alert (reconciled: 3-latest vs nuget.org)"
+    needs: [publish-cli]
+    if: always() && needs.publish-cli.result != 'skipped'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: cli-publish-alert
+      cancel-in-progress: false
+    permissions:
+      issues: write
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            .github/scripts
+            scripts/check-issue-taxonomy.py
+          sparse-checkout-cone-mode: false
+      - name: Reconcile the cli-publish-failure sentinel
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          V: ${{ needs.arm.outputs.version }}
-        run: |
-          bash .github/scripts/cli-publish-alert.sh red "$V" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
-            "main-cd publish-cli could not dispatch publish-packages.yml or the run did not complete"
+        run: bash .github/scripts/cli-publish-alert.sh "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
 
   # ────────────────── NOTIFY THE PLATFORM-UPDATE AGENT (required) ──────────────────
   # After the release is ARMED (`arm`'s phase C — policy `one-promotion-gate`), tell the control instance's mesh that a new
