@@ -95,6 +95,22 @@ Returns a JSON array of direct children, each with `{ path, name, nodeType, icon
 
 These schema prefixes work on **any** address — not just `NodeType` paths. Use them before creating or updating a node to discover the exact fields expected.
 
+### Layout areas
+
+```
+Get('@path/area/Name')
+Get('@path/area/Name/Id')
+```
+
+Renders the area `Name` of the node at `path` and returns the settled control tree as JSON. Everything
+after `Name/` is the area's reference id, taken verbatim — slashes and colons included — so an id like
+`url=https://github.com/x` needs no percent-encoding: `Get('@OgCard/Examples/area/OgCard/url=https://github.com/x')`
+renders area `OgCard` with that id. The route applies whenever its `area` segment lies before the first `:`
+in the path; a colon at or before that segment is the legacy colon form (`@path/area:Name`), which still
+resolves through the unified path but is deprecated. A colon that cuts a legacy keyword (`area:`, `data:`,
+`content:`, …) is always the legacy form, even when the node path itself has an `area` segment before it:
+`@Root/area/Child/area:Name` is area `Name` on node `Root/area/Child`.
+
 For the complete Unified Path reference:
 
 @@../../../DataMesh/UnifiedPath
