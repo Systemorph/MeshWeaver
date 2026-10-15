@@ -103,7 +103,14 @@ public sealed class ModuleLiveUpdater : IDisposable
     private readonly ConcurrentDictionary<Job, byte> unanswered = new();
     private int disposed;
 
-    private sealed record Job(string EntryLocation, string Reason, AsyncSubject<ModuleSwapOutcome> Result);
+    private sealed record Job(ImmutableList<string> EntryLocations, string Reason, AsyncSubject<ImmutableList<ModuleSwapOutcome>> Result);
+
+    /// <summary>
+    /// The prefix of <see cref="DisposeRequest.CascadedFrom"/> on every request of a swap's recycle
+    /// wave: <c>module:{name}[,{name}…]</c>. A request that carries it never runs a
+    /// <see cref="RecycleCascade"/> — see <see cref="RecycleThenRetire"/>.
+    /// </summary>
+    public const string WaveOrigin = "module:";
 
     /// <summary>Creates the updater over the mesh's hub and module registry.</summary>
     public ModuleLiveUpdater(IMessageHub meshHub, ModuleContexts contexts, IoPoolRegistry pools,
@@ -115,12 +122,14 @@ public sealed class ModuleLiveUpdater : IDisposable
         configuration = meshHub.ServiceProvider.GetService<Microsoft.Extensions.Configuration.IConfiguration>();
         pool = pools.Get(IoPoolNames.FileSystem);
         pipeline = jobs
-            .Select(job => Run(job.EntryLocation, job.Reason)
-                .Catch((Exception ex) => Observable.Return(new ModuleSwapOutcome(
-                    ModuleName(job.EntryLocation), ModuleSwapKind.Failed,
-                    $"the live swap of {ModuleName(job.EntryLocation)} faulted: {ex.GetType().Name}: {ex.Message}")))
+            .Select(job => Run(job.EntryLocations, job.Reason)
+                .Catch((Exception ex) => Observable.Return(job.EntryLocations
+                    .Select(location => new ModuleSwapOutcome(
+                        ModuleName(location), ModuleSwapKind.Failed,
+                        $"the live swap of {ModuleName(location)} faulted: {ex.GetType().Name}: {ex.Message}"))
+                    .ToImmutableList()))
                 .Take(1)
-                .Do(outcome => Answer(job, outcome)))
+                .Do(outcomes => Answer(job, outcomes)))
             .Concat()
             .Subscribe(_ => { }, ex => logger?.LogError(ex, "[ModuleLiveUpdate] the swap pipeline faulted"));
     }
@@ -147,63 +156,118 @@ public sealed class ModuleLiveUpdater : IDisposable
     /// <param name="reason">Why the swap is asked for — carried into every recycled hub's
     /// <c>[QUIESCE-START]</c>.</param>
     internal IObservable<ModuleSwapOutcome> Swap(string entryLocation, string reason) =>
+        SwapAll([entryLocation], reason).Select(outcomes => outcomes[0]);
+
+    /// <summary>
+    /// Puts EVERY generation in <paramref name="entryLocations"/> in service in this process, live,
+    /// as ONE swap — one outcome per location, in order. Each module is loaded, refused or committed
+    /// exactly as <see cref="Swap"/> does, one after the other; what is shared is the RECYCLE: every
+    /// hub bound to any committed generation is torn down ONCE, after all of them are in service.
+    ///
+    /// <para>🚨 <b>Why one wave and not one per module (#6729).</b> A recycle wave tears a hub down so
+    /// its next activation binds the current generation. A subscriber re-asks the moment its owner
+    /// goes, so the address is re-activated within milliseconds — on the generations committed SO
+    /// FAR. A second module's wave then tears that successor down, a third the next one: each owner
+    /// address died once per module of one landing, and every live subscriber counted a fresh
+    /// activation refusing it each time. Measured on memex-cloud 2026-10-15 00:49Z: one landing that
+    /// swapped <c>MeshWeaver.OgCard</c> and <c>MeshWeaver.Markdown.Export</c> killed
+    /// <c>Hosting/PlatformBuilds</c> as activations <c>#00AA2EE2</c>, <c>#025E3E68</c> and
+    /// <c>#0045ECAE</c> inside two seconds, and every sync stream on it gave up on "4 DISTINCT owner
+    /// activations". Recycling once, after the last commit, is the recycle the landing actually
+    /// needs.</para>
+    /// </summary>
+    /// <param name="entryLocations">The landed generations' entry DLLs, in the order to commit them.</param>
+    /// <param name="reason">Why the swap is asked for — carried into every recycled hub's
+    /// <c>[QUIESCE-START]</c>.</param>
+    internal IObservable<ImmutableList<ModuleSwapOutcome>> SwapAll(IReadOnlyList<string> entryLocations, string reason) =>
         Observable.Defer(() =>
         {
-            var job = new Job(entryLocation, reason, new AsyncSubject<ModuleSwapOutcome>());
+            var job = new Job([.. entryLocations], reason, new AsyncSubject<ImmutableList<ModuleSwapOutcome>>());
             unanswered[job] = 0;
-            if (Volatile.Read(ref disposed) != 0)
+            if (job.EntryLocations.IsEmpty)
+                Answer(job, []);
+            else if (Volatile.Read(ref disposed) != 0)
                 Answer(job, Disposing(job));
             else
                 jobs.OnNext(job);
             return job.Result.AsObservable();
         });
 
-    private void Answer(Job job, ModuleSwapOutcome outcome)
+    private void Answer(Job job, ImmutableList<ModuleSwapOutcome> outcomes)
     {
         if (!unanswered.TryRemove(job, out _))
             return;
-        job.Result.OnNext(outcome);
+        job.Result.OnNext(outcomes);
         job.Result.OnCompleted();
     }
 
-    private static ModuleSwapOutcome Disposing(Job job) =>
-        new(ModuleName(job.EntryLocation), ModuleSwapKind.Failed,
-            $"the live swap of {ModuleName(job.EntryLocation)} was not applied — the mesh is shutting down; "
-            + "a restart activates the landed generation")
-        { ToLocation = job.EntryLocation };
+    private static ImmutableList<ModuleSwapOutcome> Disposing(Job job) =>
+        job.EntryLocations
+            .Select(location => new ModuleSwapOutcome(ModuleName(location), ModuleSwapKind.Failed,
+                $"the live swap of {ModuleName(location)} was not applied — the mesh is shutting down; "
+                + "a restart activates the landed generation")
+            { ToLocation = location })
+            .ToImmutableList();
 
     private static string ModuleName(string entryLocation) => Path.GetFileNameWithoutExtension(entryLocation);
 
-    private IObservable<ModuleSwapOutcome> Run(string entryLocation, string reason) =>
+    /// <summary>One module of a swap after steps 1–3: refused (with its outcome), or committed and its
+    /// services handed over, waiting for the swap's ONE recycle wave.</summary>
+    private sealed record Prepared(ModuleSwapOutcome? Refused, string Name, SwapPlan? Plan);
+
+    private IObservable<ImmutableList<ModuleSwapOutcome>> Run(ImmutableList<string> entryLocations, string reason) =>
+        // Concat over Defer: module N+1's checks read the registry AFTER module N committed (it may be
+        // N's dependent, re-bound by N's commit), exactly as two queued swaps did.
+        entryLocations.ToObservable()
+            .Select(Prepare)
+            .Concat()
+            .ToList()
+            .SelectMany(prepared =>
+            {
+                var committed = prepared.Where(p => p.Plan is not null).ToImmutableList();
+                var live = committed.IsEmpty
+                    ? Observable.Return(ImmutableList<ModuleSwapOutcome>.Empty)
+                    : RecycleThenRetire(committed, reason);
+                // RecycleThenRetire answers one outcome per COMMITTED module, in commit order.
+                return live.Select(outcomes =>
+                {
+                    var next = 0;
+                    return prepared.Select(p => p.Refused ?? outcomes[next++]).ToImmutableList();
+                });
+            });
+
+    private IObservable<Prepared> Prepare(string entryLocation) =>
         Observable.Defer(() =>
         {
             var name = ModuleName(entryLocation);
             var target = Path.GetFullPath(entryLocation);
             var old = contexts.Current(name);
             if (old is null)
-                return Observable.Return(new ModuleSwapOutcome(name, ModuleSwapKind.NotHeld,
+                return Observable.Return(Refused(new ModuleSwapOutcome(name, ModuleSwapKind.NotHeld,
                     $"{name} does not run in its own load context in this process (the image binds it, or it was not "
                     + "installed at boot) — a restart activates the landed generation")
-                { ToLocation = target });
+                { ToLocation = target }));
             if (string.Equals(old.Location, target, StringComparison.Ordinal))
-                return Observable.Return(new ModuleSwapOutcome(name, ModuleSwapKind.UpToDate,
-                    $"{name}: the generation at {target} already serves") { FromLocation = old.Location, ToLocation = target });
+                return Observable.Return(Refused(new ModuleSwapOutcome(name, ModuleSwapKind.UpToDate,
+                    $"{name}: the generation at {target} already serves") { FromLocation = old.Location, ToLocation = target }));
 
             var running = (old.Contributions?.LiveUpdateBlockers() ?? UnrecordedContributions)
                 .AddRange(old.RootServiceBlockers.Select(b => $"root services: {b}"));
             if (!running.IsEmpty)
-                return Observable.Return(Restart(name, old.Location, target, "the running generation", running));
+                return Observable.Return(Refused(Restart(name, old.Location, target, "the running generation", running)));
             // A dependent is held to the SAME fail-safe as the module itself (#6128 review): unrecorded
             // contributions are a reason to restart, never "no blockers".
             foreach (var dependent in contexts.DependentsOf(name))
                 if ((dependent.Contributions?.LiveUpdateBlockers() ?? UnrecordedContributions) is { IsEmpty: false } blocked)
-                    return Observable.Return(Restart(name, old.Location, target, $"its dependent {dependent.Name}", blocked));
+                    return Observable.Return(Refused(Restart(name, old.Location, target, $"its dependent {dependent.Name}", blocked)));
 
             return pool.InvokeBlocking(_ => LoadAndCommit(name, old, target))
                 .SelectMany(plan => plan.Outcome is { } refused
-                    ? Observable.Return(refused)
-                    : RecycleAndRetire(name, plan, reason));
+                    ? Observable.Return(Refused(refused))
+                    : HandOver(plan).Select(_ => new Prepared(null, name, plan)));
         });
+
+    private static Prepared Refused(ModuleSwapOutcome outcome) => new(outcome, outcome.Module, null);
 
     private static readonly ImmutableList<string> UnrecordedContributions =
         ImmutableList.Create("its running generation's contributions were never recorded");
@@ -346,9 +410,9 @@ public sealed class ModuleLiveUpdater : IDisposable
         new(name, ModuleSwapKind.Failed, $"the live swap of {name} failed and the running generation keeps serving — {why}")
         { FromLocation = from, ToLocation = to };
 
-    /// <summary>Steps 4–5: recycle the hubs bound to the swapped generations, wait for them to die,
-    /// then retire the old generations.</summary>
-    private IObservable<ModuleSwapOutcome> RecycleAndRetire(string name, SwapPlan plan, string reason) =>
+    /// <summary>Step 3½, per committed module: the mesh-level contributions and the hosted services
+    /// move to the new generation, before any hub re-binds.</summary>
+    private IObservable<Unit> HandOver(SwapPlan plan) =>
         // The hosted services move first: the old generation's are STOPPED, the same registrations
         // STARTED from the new one — before any hub re-binds, so nothing runs two generations of one
         // background service at once.
@@ -360,15 +424,42 @@ public sealed class ModuleLiveUpdater : IDisposable
                     contexts.ApplyToRunningMesh(generation, meshHub);
                 return pool.Invoke(ct => Task.WhenAll(plan.Retiring.Zip(plan.Serving, (from, to) => contexts.HandOverHosted(from, to, ct))));
             })
-            .SelectMany(_ => RecycleThenRetire(name, plan, reason));
+            .Select(_ => Unit.Default);
 
-    private IObservable<ModuleSwapOutcome> RecycleThenRetire(string name, SwapPlan plan, string reason)
+    /// <summary>
+    /// Steps 4–5, ONCE per swap: recycle every hub bound to any committed generation, wait for them
+    /// to die, then retire every old generation. Answers one outcome per committed module, in order.
+    ///
+    /// <para>🚨 <b>The wave does not cascade (#6729).</b> <see cref="HubsToRecycle"/> already names
+    /// every live hub of this process bound to the swapped generations — or every per-node hub, when
+    /// a generation reaches them all — so the wave IS the dependency network for this swap. A
+    /// NodeType definition hub in it would otherwise run its <see cref="RecycleCascade"/>: enumerate
+    /// the mesh-wide index (seconds) and then post a second request to every instance of its network
+    /// — addresses this wave had ALREADY torn down and their subscribers had already re-activated. So
+    /// each definition killed the successor of the one before it: measured on memex-cloud
+    /// 2026-10-15 00:49Z, the cascades from <c>Hosting/InstanceAction</c>, <c>Hosting/Build</c> and
+    /// <c>Store/Publishing</c> each tore down a fresh <c>Hosting/PlatformBuilds</c> still in its
+    /// initialisation. Every request of the wave therefore carries <see cref="WaveOrigin"/> in
+    /// <see cref="DisposeRequest.CascadedFrom"/>, which <c>MessageHub.HandleDispose</c> never cascades.
+    /// Hubs of OTHER processes are not this wave's to recycle: each process swaps its own module
+    /// contexts and recycles its own hubs.</para>
+    /// </summary>
+    private IObservable<ImmutableList<ModuleSwapOutcome>> RecycleThenRetire(ImmutableList<Prepared> committed, string reason)
     {
-        var hubs = HubsToRecycle(plan);
+        var plans = committed.Select(p => (p.Name, Plan: p.Plan!)).ToImmutableList();
+        var hubs = plans
+            .SelectMany(p => HubsToRecycle(p.Plan))
+            .Distinct(ReferenceEqualityComparer.Instance)
+            .Cast<IMessageHub>()
+            .ToImmutableList();
         var issuing = meshHub.NodeOperationIssuingHub();
-        var because = $"ModuleLiveUpdate: {name} swapped live to {plan.To} — {reason}";
+        var because = "ModuleLiveUpdate: "
+                      + string.Join("; ", plans.Select(p => $"{p.Name} swapped live to {p.Plan.To}"))
+                      + $" — {reason}";
+        var origin = WaveOrigin + string.Join(",", plans.Select(p => p.Name));
         foreach (var hub in hubs)
-            issuing.Post(new DisposeRequest { Reason = because }, o => o.WithTarget(new Address(ActivationRecycle.PathOf(hub))));
+            issuing.Post(new DisposeRequest { Reason = because, CascadedFrom = origin },
+                o => o.WithTarget(new Address(ActivationRecycle.PathOf(hub))));
 
         var dead = hubs.Count == 0
             ? Observable.Return(Unit.Default)
@@ -377,30 +468,35 @@ public sealed class ModuleLiveUpdater : IDisposable
                 .LastOrDefaultAsync()
                 .Select(_ => Unit.Default);
 
-        var swapped = plan.Serving.Select(g => g.Name).ToImmutableList();
-        var live = new ModuleSwapOutcome(name, ModuleSwapKind.Live,
-            $"{name} swapped live to {plan.To}{(swapped.Count > 1 ? $" with {string.Join(", ", swapped.Skip(1))}" : "")}; "
-            + $"{hubs.Count} hub(s) recycled")
+        var live =plans.Select((p, i) =>
         {
-            FromLocation = plan.From,
-            ToLocation = plan.To,
-            Swapped = swapped,
-            Recycled = hubs.Count,
-        };
+            var swapped = p.Plan.Serving.Select(g => g.Name).ToImmutableList();
+            var others = plans.Where((_, j) => j != i).Select(o => o.Name).ToImmutableList();
+            return new ModuleSwapOutcome(p.Name, ModuleSwapKind.Live,
+                $"{p.Name} swapped live to {p.Plan.To}{(swapped.Count > 1 ? $" with {string.Join(", ", swapped.Skip(1))}" : "")}"
+                + (others.IsEmpty ? "" : $" in one swap with {string.Join(", ", others)}")
+                + $"; {hubs.Count} hub(s) recycled")
+            {
+                FromLocation = p.Plan.From,
+                ToLocation = p.Plan.To,
+                Swapped = swapped,
+                Recycled = hubs.Count,
+            };
+        }).ToImmutableList();
 
         return dead
             .Timeout(RecycleBudget)
-            .SelectMany(_ => plan.Retiring.ToObservable()
+            .SelectMany(_ => plans.SelectMany(p => p.Plan.Retiring).ToObservable()
                 .Select(old => contexts.Retire(old, RetireBudget))
                 .Merge()
                 .ToList()
                 .Select(unloads => unloads.All(u => u)
                     ? live
-                    : live with { Reason = live.Reason + "; a retired generation was KEPT loaded (still in use) — it leaks until the next restart" }))
-            .Catch((TimeoutException _) => Observable.Return(live with
+                    : live.Select(o => o with { Reason = o.Reason + "; a retired generation was KEPT loaded (still in use) — it leaks until the next restart" }).ToImmutableList()))
+            .Catch((TimeoutException _) => Observable.Return(live.Select(o => o with
             {
-                Reason = live.Reason + $"; the recycled hubs did not all die within {RecycleBudget} — the old generation is KEPT loaded rather than unloaded under them",
-            }));
+                Reason = o.Reason + $"; the recycled hubs did not all die within {RecycleBudget} — the old generation is KEPT loaded rather than unloaded under them",
+            }).ToImmutableList()));
     }
 
     /// <summary>

@@ -265,6 +265,15 @@ out and the stream recovers (red before the fix: it ended on the fourth); a rout
 again still ends the stream, naming the route; and untagged OWNER refusals still give up on the
 activation budget (the control that the discrimination is by speaker, not by tag alone).
 
+**The same give-up came back after that fix, and that time it was right.** On 2026-10-15 at 00:49Z the
+pods running the fix logged "4 DISTINCT owner activations" again, for many unrelated owners on both
+pods. This time the owner HAD spoken. Each refusal carried the owner's banner and a different
+activation tag, and named its recycler: a module live swap's recycle wave, plus a `RecycleCascade` from
+every NodeType definition the wave had disposed. Each of them tore down the successor activation that
+the previous one had made room for. The latch counted correctly, and the defect was the recycler's. It
+is fixed there: one landing is one wave, and the wave does not cascade. See
+[Live Module Update](../LiveModuleUpdate) → *One landing, one recycle wave*.
+
 ## One request type, several producers: `GetDataRequest`
 
 `[ReaskedOnShutdown]` makes a claim about every producer of a type. `GetDataRequest` cannot carry it
