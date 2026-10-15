@@ -78,6 +78,25 @@ public static class ContentDiscriminator
     }
 
     /// <summary>
+    /// The same rule as <see cref="Admits(JsonElement, Type)"/>, over a <c>$type</c> already read off
+    /// the content — for a caller that kept the discriminator and not the document (the degradation
+    /// registry re-asks the content-type registry long after the read, #6716). Absent or empty ⇒
+    /// admitted.
+    ///
+    /// <para>A separately NAMED method, deliberately: an <c>Admits(string?, Type)</c> overload would
+    /// capture every existing call that passes a <c>string</c> CONTENT to <see cref="Admits(object, Type)"/>
+    /// and silently change what it answers.</para>
+    /// </summary>
+    /// <param name="discriminator">The stored <c>$type</c>, or <c>null</c> when the content carried none.</param>
+    /// <param name="candidate">The type a caller proposes to read it as.</param>
+    /// <returns><c>true</c> when the discriminator is absent or names the same record.</returns>
+    public static bool AdmitsDiscriminator(string? discriminator, Type candidate)
+    {
+        ArgumentNullException.ThrowIfNull(candidate);
+        return ShortNameMatches(discriminator, candidate);
+    }
+
+    /// <summary>
     /// The record name a <c>$type</c> discriminator names — the segment after the last <c>.</c>, so
     /// a NAMESPACED discriminator compares as the bare record does.
     ///
