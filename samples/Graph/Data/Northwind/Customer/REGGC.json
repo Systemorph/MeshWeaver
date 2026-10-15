@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "Reggiani Caseifici - Reggio Emilia, Italy",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "REGGC",

@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "B\u00f3lido Comidas preparadas - Madrid, Spain",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "BOLID",

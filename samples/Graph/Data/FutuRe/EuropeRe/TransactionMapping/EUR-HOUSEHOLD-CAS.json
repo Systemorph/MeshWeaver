@@ -3,7 +3,6 @@
   "namespace": "FutuRe/EuropeRe/TransactionMapping",
   "name": "EuropeRe: Household → Casualty (10%)",
   "nodeType": "FutuRe/TransactionMapping",
-  "isPersistent": true,
   "content": {
     "$type": "TransactionMapping",
     "id": "EUR-HOUSEHOLD-CAS",

@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "Ana Trujillo Emparedados y helados - M\u00e9xico D.F., Mexico",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "ANATR",

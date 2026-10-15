@@ -23,7 +23,12 @@ nothing to decode and nothing to guess.
 
 WHAT THIS SCANS. Every `.github/scripts/*.py` and `scripts/*.py`, by AST: a list, tuple or call whose literal string elements
 name a path-listing git command (`--name-only`, `--name-status`, `ls-files`, `ls-tree`, `--porcelain`) must also
-carry the literal `"-z"`. Code inside a function whose name contains `self_test` is exempt — its
+carry the literal `"-z"` — and a `-z` listing must not then be parsed by LINE or by WHITESPACE
+(`.splitlines()`, `.split()`, `.split("\\n")`, `.split(" ")`), whether the call is chained onto the
+listing (`run([... "-z" ...]).stdout.splitlines()`) or made on a name the listing was assigned to in
+the same scope (`out = _git(root, "ls-files", "-z")` … `out.split()`): that returns one NUL-joined
+string, or whitespace fragments, never the paths (issue #6746). Splitting on NUL (`.split("\\0")`)
+and consumers that inspect the raw output pass. Code inside a function whose name contains `self_test` is exempt — its
 listings run over fixture repositories whose paths the test itself wrote in ASCII. A file that does
 not parse is a FAILURE, never a skip.
 """
@@ -47,10 +52,93 @@ def _literal_strings(nodes) -> list[str]:
     return [n.value for n in nodes if isinstance(n, ast.Constant) and isinstance(n.value, str)]
 
 
-def violations(source: str, filename: str) -> list[str]:
-    """`file:line: …` for every git path listing in `source` that is not read with `-z`."""
-    tree = ast.parse(source, filename=filename)
+# Separators that split a `-z` listing into lines or whitespace fragments instead of paths.
+LINE_OR_SPACE_SEPARATORS = frozenset({"\n", "\r\n", "\r", " ", "\t"})
+
+
+def _is_z_listing(node: ast.AST) -> bool:
+    """A list, tuple or call whose literal elements name a path-listing git command AND carry `-z`."""
+    if isinstance(node, (ast.List, ast.Tuple)):
+        literals = _literal_strings(node.elts)
+    elif isinstance(node, ast.Call):
+        literals = _literal_strings(node.args)
+    else:
+        return False
+    return bool(LISTING_MARKERS.intersection(literals)) and "-z" in literals
+
+
+def _holds_z_listing(node: ast.AST) -> bool:
+    return any(_is_z_listing(n) for n in ast.walk(node))
+
+
+def _line_or_space_split(node: ast.AST) -> ast.AST | None:
+    """The receiver of a `.splitlines()` / whitespace-or-line `.split(...)` call, else None."""
+    if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+        return None
+    if node.func.attr == "splitlines":
+        return node.func.value
+    if node.func.attr not in ("split", "rsplit"):
+        return None
+    sep = node.args[0] if node.args else next((k.value for k in node.keywords if k.arg == "sep"), None)
+    if sep is None or (isinstance(sep, ast.Constant) and (sep.value is None or sep.value in LINE_OR_SPACE_SEPARATORS)):
+        return node.func.value
+    return None
+
+
+def _base_name(node: ast.AST) -> str | None:
+    """`out` for `out`, `out.stdout`, `out.stdout.strip()` — the name a receiver chain starts from."""
+    while True:
+        if isinstance(node, ast.Name):
+            return node.id
+        if isinstance(node, ast.Attribute):
+            node = node.value
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            node = node.func.value
+        else:
+            return None
+
+
+def _scope_nodes(scope: ast.AST):
+    """Every node of `scope`, not descending into nested functions (each is its own scope)."""
+    stack = list(ast.iter_child_nodes(scope))
+    while stack:
+        node = stack.pop()
+        yield node
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            stack.extend(ast.iter_child_nodes(node))
+
+
+def _z_listing_misparses(tree: ast.AST, filename: str) -> list[str]:
+    """`-z` listings split by line or whitespace — chained, or through a name assigned in the same scope."""
     found: list[str] = []
+    message = ("a `-z` listing is split by line or whitespace — that yields one NUL-joined string "
+               "(or whitespace fragments), never the paths; split it on \"\\0\"")
+
+    def check_scope(scope: ast.AST, in_self_test: bool) -> None:
+        if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef)) and "self_test" in scope.name:
+            in_self_test = True
+        nodes = list(_scope_nodes(scope))
+        if not in_self_test:
+            listed = {t.id for n in nodes if isinstance(n, (ast.Assign, ast.AnnAssign)) and n.value is not None
+                      and _holds_z_listing(n.value)
+                      for t in (n.targets if isinstance(n, ast.Assign) else [n.target]) if isinstance(t, ast.Name)}
+            for n in nodes:
+                receiver = _line_or_space_split(n)
+                if receiver is not None and (_holds_z_listing(receiver) or _base_name(receiver) in listed):
+                    found.append(f"{filename}:{n.lineno}: {message}")
+        for n in nodes:
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                check_scope(n, in_self_test)
+
+    check_scope(tree, False)
+    return found
+
+
+def violations(source: str, filename: str) -> list[str]:
+    """`file:line: …` for every git path listing in `source` that is not read with `-z`, or whose
+    `-z` output is then split by line or whitespace."""
+    tree = ast.parse(source, filename=filename)
+    found: list[str] = _z_listing_misparses(tree, filename)
 
     def visit(node: ast.AST, in_self_test: bool) -> None:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and "self_test" in node.name:
@@ -145,9 +233,35 @@ def e(base):
     got = violations(bad, "fixture.py")
     check("NEGATIVE CONTROL: a list, a call, a multi-line listing and an ls-tree without -z are each reported",
           [v.split(":")[1] for v in got] == ["4", "6", "8", "11", "13"], "\n".join(got))
-    good = bad.replace('"--name-only"', '"-z", "--name-only"').replace('"ls-files"', '"ls-files", "-z"') \
-              .replace('"--porcelain"', '"--porcelain", "-z"').replace('"ls-tree"', '"ls-tree", "-z"')
-    check("the same calls with -z pass", violations(good, "fixture.py") == [], "\n".join(violations(good, "fixture.py")))
+    with_z = bad.replace('"--name-only"', '"-z", "--name-only"').replace('"ls-files"', '"ls-files", "-z"') \
+                .replace('"--porcelain"', '"--porcelain", "-z"').replace('"ls-tree"', '"ls-tree", "-z"')
+    got = violations(with_z, "fixture.py")
+    check("NEGATIVE CONTROL: -z added but the output still split by line/whitespace is reported (#6746)",
+          [v.split(":")[1] for v in got] == ["4", "6", "13"], "\n".join(got))
+    good = with_z.replace(".splitlines()", '.split("\\0")').replace(".split()", '.split("\\0")')
+    check("the same calls with -z, split on NUL, pass", violations(good, "fixture.py") == [],
+          "\n".join(violations(good, "fixture.py")))
+    indirect = '''
+def f(root):
+    out = _git(root, "ls-files", "-z")
+    return out.split()
+def g(root):
+    res = subprocess.run(["git", "diff", "-z", "--name-only"], capture_output=True, text=True)
+    return [p for p in res.stdout.split("\\n") if p]
+def h(root):
+    out = _git(root, "ls-files", "-z")
+    return [p for p in out.split("\\0") if p]
+def raw(root):
+    return bool(_git(root, "status", "--porcelain", "-z").strip())
+def other(root):
+    out = _git(root, "ls-files", "-z")
+    def nested(text):
+        return text.split()
+    return nested
+'''
+    got = violations(indirect, "fixture.py")
+    check("NEGATIVE CONTROL: a -z listing assigned to a name and then split by whitespace or line is reported",
+          [v.split(":")[1] for v in got] == ["4", "7"], "\n".join(got))
     exempt = 'def self_test():\n    git(root, ["diff", "--name-only"])\n    def inner():\n        g("ls-files")\n'
     check("a self-test's fixture listings are exempt, nested helpers included",
           violations(exempt, "fixture.py") == [], "\n".join(violations(exempt, "fixture.py")))

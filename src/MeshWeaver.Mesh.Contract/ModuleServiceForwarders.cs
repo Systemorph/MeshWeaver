@@ -109,6 +109,53 @@ public class ModuleServiceProxy : DispatchProxy
                || proxy.contexts?.Current(proxy.module)?.Services is not null;
     }
 
+    /// <summary>
+    /// 🚨 The ATOMIC "try current service" (MeshWeaver#6715): <paramref name="service"/> pinned for the
+    /// life of the returned lease — or null when it is a forwarding proxy whose module is no longer held
+    /// or is retiring. For an ordinary instance the lease is the instance itself and pins nothing.
+    ///
+    /// <para>For a proxy, <see cref="ModuleServiceLease{T}.Service"/> is the instance of the module's
+    /// generation that was current when the lease was taken, and that generation's services are neither
+    /// disposed nor its context unloaded until the lease is disposed — a retirement that starts in
+    /// between is deferred to the release, never run under the call. This is what a consumer uses
+    /// instead of <see cref="Serves"/> followed by a call through the proxy: the check and the call can
+    /// no longer be separated by a retirement. Hold it for the call only — a lease that is never
+    /// released keeps a retired generation loaded.</para>
+    /// </summary>
+    /// <typeparam name="T">The platform interface.</typeparam>
+    /// <param name="service">A resolved platform service — an instance, or a module's forwarding proxy.</param>
+    public static ModuleServiceLease<T>? TryLease<T>(T service) where T : class
+    {
+        ArgumentNullException.ThrowIfNull(service);
+        if (service is not ModuleServiceProxy proxy)
+            return new ModuleServiceLease<T>(service, null);
+        return proxy.contexts?.TryLeaseModuleService(proxy.module, proxy.index, proxy.caller) is { } leased
+            ? new ModuleServiceLease<T>((T)leased.Instance, leased.Release)
+            : null;
+    }
+
+    /// <summary>
+    /// <paramref name="use"/> run against <paramref name="service"/> under ONE lease (<see cref="TryLease{T}"/>)
+    /// that spans the whole subscription of what it returns, released when that terminates or is
+    /// unsubscribed. Cold: the lease is taken on subscribe. A proxy whose module is no longer held, or is
+    /// retiring, errors with <see cref="ModuleRetiredException"/> naming <paramref name="what"/> — a named
+    /// verdict, never <c>Module … holds no service scope</c> from inside a forwarded call.
+    /// </summary>
+    /// <typeparam name="T">The platform interface.</typeparam>
+    /// <typeparam name="TResult">What the use emits.</typeparam>
+    /// <param name="service">A resolved platform service — an instance, or a module's forwarding proxy.</param>
+    /// <param name="use">The call, against the pinned instance.</param>
+    /// <param name="what">What the service is, for the retirement's message.</param>
+    public static IObservable<TResult> Leased<T, TResult>(T service, Func<T, IObservable<TResult>> use, string what)
+        where T : class
+    {
+        ArgumentNullException.ThrowIfNull(service);
+        ArgumentNullException.ThrowIfNull(use);
+        return System.Reactive.Linq.Observable.Defer(() => TryLease(service) is { } lease
+            ? System.Reactive.Linq.Observable.Using(() => lease, held => use(held.Service))
+            : System.Reactive.Linq.Observable.Throw<TResult>(ModuleRetiredException.For(service, what)));
+    }
+
     /// <inheritdoc />
     protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
     {
@@ -124,6 +171,49 @@ public class ModuleServiceProxy : DispatchProxy
             throw;
         }
     }
+}
+
+/// <summary>
+/// A platform service pinned for the life of this lease (<see cref="ModuleServiceProxy.TryLease{T}"/>):
+/// for a module's forwarding proxy, the instance of the generation that was current when it was taken,
+/// whose services and load context stay alive until <see cref="Dispose"/>. Release it as soon as the
+/// call ends — a retirement waits for it.
+/// </summary>
+/// <typeparam name="T">The platform interface.</typeparam>
+public sealed class ModuleServiceLease<T> : IDisposable where T : class
+{
+    private IDisposable? release;
+
+    internal ModuleServiceLease(T service, IDisposable? release)
+    {
+        Service = service;
+        this.release = release;
+    }
+
+    /// <summary>The pinned instance — call it directly, never through the proxy it was leased from.</summary>
+    public T Service { get; }
+
+    /// <summary>Releases the lease; idempotent.</summary>
+    public void Dispose() => Interlocked.Exchange(ref release, null)?.Dispose();
+}
+
+/// <summary>
+/// A module's service was asked for after its module stopped being held — retired by an uninstall or a
+/// swap, or withdrawn at boot — between the moment a consumer selected it and the moment it was leased
+/// (MeshWeaver#6715). A named, fail-closed verdict: the selection is stale, and asking again decides
+/// without that module.
+/// </summary>
+public sealed class ModuleRetiredException : InvalidOperationException
+{
+    /// <summary>Creates the exception with its message.</summary>
+    /// <param name="message">What was retired, and what that means for the caller.</param>
+    public ModuleRetiredException(string message) : base(message)
+    {
+    }
+
+    internal static ModuleRetiredException For(object service, string what) =>
+        new($"{what} ({ModuleServiceProxy.Label(service)}) is no longer served: its module was retired or withdrawn "
+            + "after it was selected and before it was called — the selection is stale, and asking again decides without it.");
 }
 
 /// <summary>
@@ -172,15 +262,27 @@ internal sealed class ModuleHostedServicesHost(ModuleContexts contexts, ILogger?
 /// registration it added to activate in that module's CURRENT scope — the same scope the check's
 /// dependencies (and the hosted service that feeds them) are served from, read at every activation so a
 /// live swap is followed.</para>
+///
+/// <para>🚨 It is an <see cref="IConfigureNamedOptions{TOptions}"/>, as <see cref="ModuleConfigureOptionsForwarder{TOptions}"/>
+/// is, and applies the module's setup by name exactly as <see cref="OptionsFactory{TOptions}"/> would: a module's
+/// <c>Configure&lt;HealthCheckServiceOptions&gt;("name", …)</c> must reach <c>IOptionsMonitor.Get("name")</c>, and a
+/// setup that is not named reaches the default name only (MeshWeaver#6749).</para>
 /// </summary>
 internal sealed class ModuleHealthCheckOptionsForwarder(ModuleContexts contexts, string module, int index)
-    : IConfigureOptions<HealthCheckServiceOptions>
+    : IConfigureNamedOptions<HealthCheckServiceOptions>
 {
-    public void Configure(HealthCheckServiceOptions options)
+    public void Configure(HealthCheckServiceOptions options) => Configure(Options.DefaultName, options);
+
+    public void Configure(string? name, HealthCheckServiceOptions options)
     {
-        var target = (IConfigureOptions<HealthCheckServiceOptions>)contexts.ResolveModuleService(module, index);
+        var target = contexts.ResolveModuleService(module, index);
         var before = options.Registrations.ToHashSet(ReferenceEqualityComparer.Instance);
-        target.Configure(options);
+        if (target is IConfigureNamedOptions<HealthCheckServiceOptions> named)
+            named.Configure(name, options);
+        else if (name == Options.DefaultName)
+            ((IConfigureOptions<HealthCheckServiceOptions>)target).Configure(options);
+        else
+            return;
         foreach (var registration in options.Registrations.Where(r => !before.Contains(r)).ToArray())
         {
             var activate = registration.Factory;
@@ -191,9 +293,73 @@ internal sealed class ModuleHealthCheckOptionsForwarder(ModuleContexts contexts,
     }
 }
 
+/// <summary>
+/// The root's stand-in for a module's <see cref="IConfigureOptions{TOptions}"/> of a PLATFORM options type —
+/// <c>services.Configure&lt;T&gt;(name, …)</c>, <c>AddOptions&lt;T&gt;(name).Configure(…)</c>, and every
+/// <c>AddHttpClient(name, …)</c> / <c>AddHttpClient&lt;TClient&gt;(…)</c>, which configure the
+/// <c>HttpClientFactoryOptions</c> of their named client exactly that way.
+///
+/// <para>🚨 <b>Why a plain forwarding proxy is not enough.</b> Those registrations are a
+/// <see cref="ConfigureNamedOptions{TOptions}"/>, which ALSO implements <see cref="IConfigureNamedOptions{TOptions}"/>,
+/// and the options factory asks for exactly that: a setup that is not an <see cref="IConfigureNamedOptions{TOptions}"/>
+/// is applied to the DEFAULT name only. A <see cref="DispatchProxy"/> implements the one interface it was
+/// created for, so behind a proxy every NAMED configuration a module made was silently dropped — a module's
+/// typed HttpClient was handed out with none of its base address, headers or timeout, and nothing logged.</para>
+///
+/// <para>So this forwarder implements the named interface and applies the module's CURRENT generation's
+/// setup exactly as <see cref="OptionsFactory{TOptions}"/> would apply the setup itself: by name when it is
+/// named, to the default name otherwise. Resolved on every call, so a live swap is followed (the root's
+/// options CACHE is evicted by <see cref="ModuleContexts.CommitAll"/>).</para>
+/// </summary>
+/// <typeparam name="TOptions">The platform options type.</typeparam>
+internal sealed class ModuleConfigureOptionsForwarder<TOptions>(
+    ModuleContexts contexts, string module, int index, Autofac.ILifetimeScope? caller)
+    : IConfigureNamedOptions<TOptions>
+    where TOptions : class
+{
+    public void Configure(string? name, TOptions options)
+    {
+        var target = contexts.ResolveModuleService(module, index, caller);
+        if (target is IConfigureNamedOptions<TOptions> named)
+            named.Configure(name, options);
+        else if (name == Options.DefaultName)
+            ((IConfigureOptions<TOptions>)target).Configure(options);
+    }
+
+    public void Configure(TOptions options) => Configure(Options.DefaultName, options);
+
+    public override string ToString() => $"IConfigureOptions<{typeof(TOptions).Name}> [module {module}, registration {index}]";
+}
+
 /// <summary>Registers the forwarders for one module's root services.</summary>
 internal static class ModuleServiceForwarding
 {
+    /// <summary>The options type <paramref name="type"/> configures when it is
+    /// <see cref="IConfigureOptions{TOptions}"/>, else null.</summary>
+    internal static Type? ConfiguredOptionsType(Type type) =>
+        type.IsGenericType && type.GetGenericTypeDefinition() == typeof(IConfigureOptions<>)
+            ? type.GetGenericArguments()[0]
+            : null;
+
+    /// <summary>The options type whose root cache a module registration of <paramref name="type"/> feeds —
+    /// every options-pipeline interface (<see cref="IConfigureOptions{TOptions}"/>,
+    /// <see cref="IPostConfigureOptions{TOptions}"/>, <see cref="IValidateOptions{TOptions}"/>) — else null.</summary>
+    internal static Type? OptionsPipelineType(Type type)
+    {
+        if (!type.IsGenericType)
+            return null;
+        var definition = type.GetGenericTypeDefinition();
+        return definition == typeof(IConfigureOptions<>)
+               || definition == typeof(IConfigureNamedOptions<>)
+               || definition == typeof(IPostConfigureOptions<>)
+               || definition == typeof(IValidateOptions<>)
+            ? type.GetGenericArguments()[0]
+            : null;
+    }
+
+    private static object ConfigureOptionsForwarder(Type options, ModuleContexts contexts, string module, int index, Autofac.ILifetimeScope? caller) =>
+        Activator.CreateInstance(typeof(ModuleConfigureOptionsForwarder<>).MakeGenericType(options), contexts, module, index, caller)!;
+
     /// <summary>
     /// Adds to the ROOT collection the forwarder for every platform-typed registration the module made
     /// — exactly the registrations the root would have held — and nothing that names a module type.
@@ -250,6 +416,20 @@ internal static class ModuleServiceForwarding
                     // A module's health check must activate in the MODULE's scope, not the root's.
                     root.Add(ServiceDescriptor.Singleton(type, sp => new ModuleHealthCheckOptionsForwarder(
                         sp.GetRequiredService<ModuleContexts>(), module, index)));
+                    break;
+                case ModuleServiceRoute.Proxy when ConfiguredOptionsType(type) is { } options:
+                    // A NAMED configuration must reach the options factory as a named one — a proxy would
+                    // drop it (ModuleConfigureOptionsForwarder). Singleton: one forwarder, no caller; otherwise
+                    // one per caller scope, as a proxy would be (MeshWeaver#6584).
+                    // 🚨 The lambda captures the LIFETIME, never `registration`: a lambda capturing the loop's
+                    // registration shares its closure with every other forwarder of the iteration, and the
+                    // descriptor names the module's implementation type — pinning generation N for the life
+                    // of the root (measured: ModuleRootServicesSwapTest's retention check).
+                    var lifetime = registration.Descriptor.Lifetime;
+                    root.Add(NotOwnedServiceDescriptor.Forwarder(type, sp => ConfigureOptionsForwarder(
+                        options, sp.GetRequiredService<ModuleContexts>(), module, index,
+                        lifetime == ServiceLifetime.Singleton ? null : ModuleServiceProvider.CallerOfRootScope(sp)),
+                        lifetime));
                     break;
                 case ModuleServiceRoute.Proxy when registration.Descriptor.Lifetime == ServiceLifetime.Singleton:
                     // Singleton: ONE stable proxy, so every consumer holds the same forwarder.

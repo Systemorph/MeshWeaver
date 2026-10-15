@@ -6,6 +6,7 @@ using System.Runtime.Loader;
 using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace MeshWeaver.Mesh;
 
@@ -201,6 +202,49 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
     /// </summary>
     internal object? TryResolveCurrentModuleService(string module, int index) =>
         Current(module)?.Services is { } services ? services.TryResolve(Root, index) : null;
+
+    /// <summary>
+    /// 🚨 The ATOMIC "try current service" (MeshWeaver#6715): the instance behind registration
+    /// <paramref name="index"/> of <paramref name="module"/>'s CURRENT generation, together with a lease
+    /// that keeps that generation's services from being disposed and its context from being unloaded
+    /// until it is released — or null when the module has no current generation, or its generation is
+    /// already retiring. Replaces "is it still current?" followed by a call through the forwarder, which
+    /// a retirement in between turned into <c>Module … holds no service scope</c>.
+    ///
+    /// <para>The generation is read ONCE. Its context is leased BEFORE its currency is re-checked, as in
+    /// <see cref="ResolveDependency"/>: <see cref="Retire"/> removes a generation from the current set
+    /// before it waits for quiescence, so a lease taken while it was still current is one the unload
+    /// waits for. Its services are leased the same way (<see cref="ModuleServices.TryLease"/>): a
+    /// <see cref="ModuleServices.Dispose"/> that comes after the lease is deferred to its release.</para>
+    /// </summary>
+    /// <param name="module">The module's entry-assembly name.</param>
+    /// <param name="index">The registration's index.</param>
+    /// <param name="caller">The root-side scope resolving, or null.</param>
+    internal (object Instance, IDisposable Release)? TryLeaseModuleService(string module, int index, Autofac.ILifetimeScope? caller)
+    {
+        if (Current(module) is not { Services: { } services } generation)
+            return null;
+        var context = Leases.Enter(generation.Context);
+        var held = services.TryLease();
+        if (held is null || !ReferenceEquals(Current(module), generation))
+        {
+            held?.Dispose();
+            context.Dispose();
+            return null;
+        }
+        // Released in this order: the services first — their disposal, when this is the last lease of a
+        // retiring generation, runs module code — and the context lease after it.
+        var release = new System.Reactive.Disposables.CompositeDisposable(held, context);
+        try
+        {
+            return (services.Resolve(Root, index, caller), release);
+        }
+        catch
+        {
+            release.Dispose();
+            throw;
+        }
+    }
 
     /// <summary>The scope of <paramref name="module"/>'s CURRENT generation.</summary>
     public IServiceProvider? ModuleScope(string module) =>
@@ -513,10 +557,46 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
     public void CommitAll(ModuleSwapStage stage)
     {
         ArgumentNullException.ThrowIfNull(stage);
-        foreach (var generation in stage.Seal())
+        var generations = stage.Seal();
+        foreach (var generation in generations)
             current[generation.Name] = generation;
+        // Evict BEFORE announcing: VersionChanged's subscribers run synchronously inside Bump, and one
+        // that resolves a configured client there must already be served N+1's options, not N's cache.
+        EvictRootOptions(generations);
         Bump();
         stage.Release();
+    }
+
+    /// <summary>
+    /// 🚨 Evicts, from the ROOT's options cache, every options type the swapped generations configure
+    /// through a root forwarder. <see cref="IOptionsMonitor{TOptions}"/> builds a named instance ONCE and
+    /// caches it — so without this, after a live swap the root kept serving the options generation N's
+    /// delegates built (a module's typed HttpClient kept N's headers and base address), and the cached
+    /// instance kept N's delegates, and with them N's collectible load context, reachable. Cleared AFTER
+    /// the generations are current, so the next read is built from the new one's — and BEFORE
+    /// <see cref="VersionChanged"/> fires, so a subscriber that resolves during the notification already
+    /// sees N+1.
+    ///
+    /// <para>Not reached by this: <see cref="IOptions{TOptions}"/>.Value, which a singleton caches for the
+    /// life of the container, and a consumer that copied an options instance into its own state.</para>
+    /// </summary>
+    private void EvictRootOptions(IEnumerable<ModuleGeneration> generations)
+    {
+        var provider = root;
+        if (provider is null)
+            return; // nothing was ever resolved through a container that does not exist yet
+        var options = generations
+            .SelectMany(g => g.Services?.Registrations ?? [])
+            .Where(r => r.Route == ModuleServiceRoute.Proxy && !r.Descriptor.IsKeyedService)
+            .Select(r => ModuleServiceForwarding.OptionsPipelineType(r.Descriptor.ServiceType))
+            .OfType<Type>()
+            .Distinct();
+        foreach (var type in options)
+        {
+            var cacheType = typeof(IOptionsMonitorCache<>).MakeGenericType(type);
+            cacheType.GetMethod(nameof(IOptionsMonitorCache<object>.Clear))!
+                .Invoke(provider.GetRequiredService(cacheType), null);
+        }
     }
 
     /// <summary>
@@ -567,7 +647,9 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
         {
             ArgumentNullException.ThrowIfNull(generation);
             current.TryRemove(new KeyValuePair<string, ModuleGeneration>(generation.Name, generation));
-            // Its singletons go first — they are this generation's objects and must not outlive it.
+            // Its singletons go first — they are this generation's objects and must not outlive it. A
+            // caller that leased the generation (TryLeaseModuleService) finishes on live services: the
+            // disposal then runs when the last lease is released (MeshWeaver#6715).
             generation.Services?.Dispose();
             var retirement = RetireCore(generation.Context);
             return Leases.UnloadWhenQuiesced(generation.Context, budget, logger, generation.Context.Name)

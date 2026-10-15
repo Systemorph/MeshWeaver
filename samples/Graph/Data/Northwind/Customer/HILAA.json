@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "HILARION-Abastos - San Crist\u00f3bal, Venezuela",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "HILAA",

@@ -6,7 +6,6 @@
   "category": "Products",
   "description": "Aniseed Syrup - 12 - 550 ml bottles",
   "icon": "/static/NodeTypeIcons/shopping-bag.svg",
-  "isPersistent": true,
   "content": {
     "$type": "ProductContent",
     "productId": 3,

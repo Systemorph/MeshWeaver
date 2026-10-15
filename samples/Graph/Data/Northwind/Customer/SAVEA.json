@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "Save-a-lot Markets - Boise, USA",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "SAVEA",

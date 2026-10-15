@@ -179,6 +179,29 @@ different `Type` from a new load context — was refused, failing the live swap 
 with the root's entries, so a module colliding with a PLATFORM client is still refused exactly as at boot.
 `ALiveSwapReRegistersATypedHttpClientTest` pins the N→N+1 probe and that root-collision control.
 
+🚨 **A module's NAMED options reach the root only through a NAMED forwarder, and a swap evicts the root's
+options cache.** `services.Configure<T>(name, …)`, `AddOptions<T>(name).Configure(…)` and every
+`AddHttpClient(name, …)` / `AddHttpClient<TClient>(…)` register a `ConfigureNamedOptions<T>` as an
+`IConfigureOptions<T>` — and the options factory applies a setup that is not ALSO an
+`IConfigureNamedOptions<T>` to the default name only. Behind the root's `DispatchProxy` (which implements the one
+interface it was created for) every named configuration a module made was therefore silently dropped: the
+root `IHttpClientFactory` handed out a module's typed client with none of its headers, base address or timeout,
+at boot, with nothing logged. The root now holds a `ModuleConfigureOptionsForwarder<T>` for every forwarded
+`IConfigureOptions<T>`; it applies the CURRENT generation's setup exactly as `OptionsFactory<T>` would — by name
+when it is named, to the default name otherwise. `HealthCheckServiceOptions` keeps its own forwarder
+(`ModuleHealthCheckOptionsForwarder`, which also rebinds each added check to activate in the module's scope), and
+that forwarder is named in the same way, so a module's `Configure<HealthCheckServiceOptions>("name", …)` reaches
+`IOptionsMonitor.Get("name")` (MeshWeaver#6749). And because `IOptionsMonitor<T>` builds a named instance once
+and caches it, `ModuleContexts.CommitAll` clears the root's `IOptionsMonitorCache<T>` for every options type the
+swapped generations configure (configure, post-configure or validate), after they are current — otherwise N+1's
+client kept N's configuration, and the cached delegates kept N's collectible context reachable. Not reached:
+`IOptions<T>.Value`, which a root singleton caches for the life of the container, and a consumer that copied an
+options instance into its own state. `ALiveSwapRefreshesATypedHttpClientsConfigurationTest` pins both halves,
+each with its own negative control. A forwarder's factory lambda captures values (the lifetime, the index),
+never the loop's `registration`: the first draft did, which hoisted it into the closure every forwarder of that
+iteration shares, and the descriptor's implementation type pinned generation N in the root —
+`ModuleRootServicesSwapTest`'s retention check caught it.
+
 🚨 **A list is served as a list.** The first images of this slice collapsed every multi-registration
 service to its LAST element in two places — the module container's fallback answered a platform type with
 one `root.GetRequiredService(type)` stand-in, and the per-node forwarders were one per TYPE. Measured on
@@ -359,6 +382,32 @@ builds an index over a platform interface a module can register should apply the
 `AWithdrawnModulesAccessRuleLeavesTheSecurityRulesTest` pins this: the rule set builds, and a node write
 succeeds. On the base, both failed with the exception above. Its published twin is the negative control:
 there the rule governs its type.
+
+**A module service is LEASED, never checked and then called (MeshWeaver#6715).** "Does its module still
+serve?" followed by a call through the proxy can be split by a retirement: `ModuleContexts.Retire` removes
+the generation and disposes its services between the two, and the call throws `Module … holds no service
+scope`. Consumers that must not fault use one atomic operation instead.
+`ModuleServiceProxy.TryLease(service)` reads the module's current generation ONCE. It leases that
+generation's load context (`AlcLeaseRegistry`, as `ResolveDependency` does) and its services, re-checks
+that the generation is still current, and hands back the generation's own instance. It returns null when
+the module is gone or already retiring. `ModuleServices` counts its leases in one word changed only by
+compare-and-swap. A `Dispose` that arrives while a lease is held only marks the services retiring: no new
+lease is granted, and the LAST release disposes the scope. Nothing waits and nothing blocks, and the
+retirement's unload already waits for the context lease. `ModuleServiceProxy.Leased(service, use, what)`
+holds one lease across the subscription of an observable call, and fails with a named
+`ModuleRetiredException` when the module is already gone.
+
+`NodeTypeAccessRuleSet` reads every rule's metadata under a lease: `NodeType` when it builds, and the
+supported operations or permissions in `Find` and `FindPermissionRule`. A rule whose module cannot be
+leased is skipped for the registration before it. For a module's rule, the set hands out a rule whose
+`HasAccess`/`HasPermission` run under a lease for their whole evaluation, so an uninstall that lands
+mid-decision is deferred to the end of the decision. The two steps are still two leases. A retirement
+that falls BETWEEN the selection and the evaluation gives a named `ModuleRetiredException`, which
+`NodeTypeAccessRuleGate.Evaluate` reports as `Undetermined` (fail closed, with the type named). Asking
+again decides without the retired rule. `ModuleRuleLeasedAcrossRetirementTest` retires the generation
+from inside the rule, through a controlled switch, at each of the three points: under a lease, inside
+the evaluation, and inside `Find`'s metadata read. On the base, the first two fault on the disposed
+generation and the third throws out of `Find`.
 
 **Why.** Autofac holds a scope's shared-instance lock for the whole build of a shared instance, and
 that one lock covers every shared instance of the scope; an instance that exists is answered without

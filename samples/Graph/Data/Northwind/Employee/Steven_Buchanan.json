@@ -6,7 +6,6 @@
   "category": "Employees",
   "description": "Steven Buchanan - Sales Manager",
   "icon": "/static/NodeTypeIcons/person.svg",
-  "isPersistent": true,
   "content": {
     "$type": "EmployeeContent",
     "employeeId": 5,

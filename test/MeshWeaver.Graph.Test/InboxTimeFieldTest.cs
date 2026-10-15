@@ -102,6 +102,30 @@ public class InboxTimeFieldTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     /// <summary>
+    /// The public <c>InboxRows.Apply</c> surface is ONE overload (issue #6740): a second public overload
+    /// taking <c>string? category</c> beside <c>CultureInfo? culture</c> made <c>Apply(rows, filter, null)</c>
+    /// ambiguous (CS0121) for every caller outside this assembly. The category travels on the filter.
+    /// </summary>
+    [Fact]
+    public void PublicApply_HasOneOverload_AndReadsTheCategoryOffTheFilter()
+    {
+        typeof(InboxRows).GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)
+            .Where(m => m.Name == nameof(InboxRows.Apply))
+            .Select(m => m.GetParameters()[2].ParameterType)
+            .Should().Equal([typeof(System.Globalization.CultureInfo)], "a literal null third argument must bind to exactly one public overload");
+
+        MeshNode At(string id, int day) => new(id, "alice/_X") { Name = id, LastModified = Earlier.AddDays(day) };
+        var rows = new[]
+        {
+            InboxRows.Of(At("w", 1), new InboxSection(InboxBand.NeedsYou, "WhatsApp", 30, "q1") { Category = "Conversations" }, null, null),
+            InboxRows.Of(At("a", 2), new InboxSection(InboxBand.Running, "Activities", 10, "q3"), null, null),
+        };
+        InboxRows.Apply(rows, new InboxFilter { Category = "Conversations" }).Select(r => r.Title).Should().Equal(["w"],
+            "the public overload narrows by the filter's category");
+        InboxRows.Apply(rows, new InboxFilter()).Should().HaveCount(2, "negative control: no category, nothing narrowed");
+    }
+
+    /// <summary>
     /// The side menu's categories: a category shows every row filed under it — even a source switched
     /// off by default — and All (none) leaves the switches in charge. Counts are read before any of it.
     /// </summary>

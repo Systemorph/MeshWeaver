@@ -6,7 +6,6 @@
   "category": "Products",
   "description": "Gumb\u00e4r Gummib\u00e4rchen - 100 - 250 g bags",
   "icon": "/static/NodeTypeIcons/shopping-bag.svg",
-  "isPersistent": true,
   "content": {
     "$type": "ProductContent",
     "productId": 26,

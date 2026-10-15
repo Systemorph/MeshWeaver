@@ -6,7 +6,6 @@
   "category": "Suppliers",
   "description": "Refrescos Americanas LTDA - Sao Paulo, Brazil",
   "icon": "/static/NodeTypeIcons/truck.svg",
-  "isPersistent": true,
   "content": {
     "$type": "SupplierContent",
     "supplierId": 10,

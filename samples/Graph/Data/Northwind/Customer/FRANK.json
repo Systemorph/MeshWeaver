@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "Frankenversand - M\u00fcnchen, Germany",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "FRANK",

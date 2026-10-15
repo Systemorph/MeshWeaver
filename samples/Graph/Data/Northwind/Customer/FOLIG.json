@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "Folies gourmandes - Lille, France",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "FOLIG",

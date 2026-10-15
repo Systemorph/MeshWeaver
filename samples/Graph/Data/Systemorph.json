@@ -4,8 +4,6 @@
   "nodeType": "Space",
   "description": "The company behind MeshWeaver",
   "icon": "/api/content/Systemorph/logo_t.png",
-  "addressSegments": 0,
-  "isPersistent": true,
   "content": {
     "$type": "Space",
     "name": "Systemorph",

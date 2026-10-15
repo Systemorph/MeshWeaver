@@ -315,6 +315,95 @@ public class BootRegistrationWindowDefersUntypedWarningsTest
         Assert.DoesNotContain("resolved to no registered", marker.ToString());
     }
 
+    private const string ContradictedNodeType = "Probe/BootWindowContradicted";
+
+    // The NodeType maps to BootWindowProbeContent; the stored $type names another record, which
+    // nothing registers unless a test does so on purpose.
+    private static MeshNode ContradictoryTypeNode(string id = "AStaleDiscriminator") =>
+        new(id, "Ops/Status")
+        {
+            NodeType = ContradictedNodeType,
+            Content = JsonSerializer.Deserialize<JsonElement>(
+                """{"$type":"BootWindowOtherPackageRecord","title":"written by another package"}"""),
+        };
+
+    /// <summary>
+    /// 🚨 #6716 — a PRESENT <c>$type</c> decides, at the settle exactly as at the read. The node's
+    /// NodeType resolves during the boot window, but its stored <c>$type</c> contradicts the mapped
+    /// type and resolves to nothing. The seam classifies that as an unresolved discriminator
+    /// (<see cref="ContentDegradation.UnboundContentType"/> <c>null</c>). The settle used to re-ask
+    /// the NodeType first, find it, and drop the record, so the degradation was never warned and
+    /// <c>/health</c> stopped naming it. Negative control: with the NodeType treated as decisive,
+    /// the settle returns empty.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Seams))]
+    public void DuringTheWindow_AContradictoryTypeOnAResolvableNodeType_IsReportedWhenTheWindowSettles(string seam)
+    {
+        var logger = new RecordingLogger();
+        var degradations = new ContentDegradationRegistry();
+        var registry = new MeshContentTypeRegistry();
+        degradations.DeferWarningsUntilRegistrationSettles();
+
+        Read(seam, ContradictoryTypeNode(), logger, registry, degradations);
+        // The pass registers the NodeType's own type before the window settles — it cures nothing
+        // here, because the content does not claim to be that type.
+        registry.Register(typeof(BootWindowProbeContent), ContradictedNodeType);
+        Assert.Empty(logger.Records.Where(ReachesTheTraceSink));
+
+        Assert.Single(degradations.Unresolved(registry));
+        var d = Assert.Single(degradations.SettleDeferredWarnings(registry));
+        Assert.Equal(ContradictedNodeType, d.NodeType);
+        Assert.Equal("BootWindowOtherPackageRecord", d.Discriminator);
+        Assert.Null(d.UnboundContentType);
+        Assert.Equal("Ops/Status/AStaleDiscriminator", d.LastPath);
+        Assert.Equal(ContentDegradationCauses.Unregistered, d.Cause);
+    }
+
+    /// <summary>
+    /// The same contradictory node, with the NodeType ALREADY registered when the read happens. The
+    /// seam must not reshape the content into the NodeType's type, so it degrades, and the settle
+    /// must report it for the same reason.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Seams))]
+    public void DuringTheWindow_AContradictoryTypeOnAnAlreadyRegisteredNodeType_IsReportedWhenTheWindowSettles(string seam)
+    {
+        var logger = new RecordingLogger();
+        var degradations = new ContentDegradationRegistry();
+        var registry = new MeshContentTypeRegistry();
+        registry.Register(typeof(BootWindowProbeContent), ContradictedNodeType);
+        degradations.DeferWarningsUntilRegistrationSettles();
+
+        Read(seam, ContradictoryTypeNode(), logger, registry, degradations);
+        Assert.Empty(logger.Records.Where(ReachesTheTraceSink));
+
+        var d = Assert.Single(degradations.SettleDeferredWarnings(registry));
+        Assert.Equal(ContradictedNodeType, d.NodeType);
+        Assert.Null(d.UnboundContentType);
+    }
+
+    /// <summary>
+    /// The fallback still holds: once the contradictory <c>$type</c> itself registers, the entry
+    /// resolves by NAME and the settle drops it — the discriminator decides in both directions.
+    /// </summary>
+    [Fact]
+    public void AContradictoryTypeThatThenRegistersByName_IsDroppedAtTheSettle()
+    {
+        var degradations = new ContentDegradationRegistry();
+        var registry = new MeshContentTypeRegistry();
+        registry.Register(typeof(BootWindowProbeContent), ContradictedNodeType);
+        degradations.DeferWarningsUntilRegistrationSettles();
+
+        Read("GetStream", ContradictoryTypeNode(), new RecordingLogger(), registry, degradations);
+        registry.Register(typeof(BootWindowOtherPackageRecord));
+
+        Assert.Empty(degradations.SettleDeferredWarnings(registry));
+    }
+
+    /// <summary>The record the contradictory <c>$type</c> names; registered late in one case only.</summary>
+    public record BootWindowOtherPackageRecord(string Title);
+
     /// <summary>The registration pass reaches the types readers are waiting on first.</summary>
     [Fact]
     public void ThePass_RegistersTheTypesAReadDegradedFirst_ThenThePathOrder()

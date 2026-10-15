@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "Wilman Kala - Helsinki, Finland",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "WILMK",

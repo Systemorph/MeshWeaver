@@ -44,12 +44,10 @@ index of the Space, with the page being read marked and only the groups on the r
   page through `WithNodePage` (a redirect, an enriched type's own Overview) renders that page
   without this wrapper. Decorating at the node-page composition boundary, with an opt-out for
   pages that must stay bare, is owed (policy `explorer-navigation`).
-- **Space pages do not have it yet.** A Space's Overview is rendered by `SpaceLayoutAreas` in
-  MeshWeaver.Plugins, which still appends its bottom **Contents** catalog. Wrapping it with the rail
-  and removing that catalog is MeshWeaver.Plugins#3363, which lands after this platform release;
-  until then a Space page has the catalog and no rail.
-- **The default Space welcome text** (`SpaceNodeType.WelcomeMarkdown`) still ends with
-  `## Contents` and an `@@("area/Search")` embed; it is removed once the Space rail is live.
+- **Space pages have it.** A Space's Overview (`SpaceLayoutAreas`, MeshWeaver.Plugins) takes the
+  rail and appends no bottom **Contents** catalog (MeshWeaver.Plugins#3363), and the default Space
+  welcome text (`SpaceNodeType.WelcomeMarkdown`) no longer ends with `## Contents` and an
+  `@@("area/Search")` embed. A body embeds a catalog only where the listing is the content.
 
 ## The seam
 

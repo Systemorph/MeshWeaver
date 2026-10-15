@@ -211,6 +211,68 @@ public class AreaProbeTest
         Assert.DoesNotContain("ManifestPaths_AreTopLevel", verdict.Detail);
     }
 
+    // A verdict grid in which EVERY case passed, but one passing case's OUTPUT carries a nested
+    // report — a ❌ glyph and an "N/M passed" sentence of its own. MeshTestRunner keeps a case's
+    // output in the verdict grid (and neutralises the glyphs only in PROGRESS frames), so this is a
+    // real verdict shape, not a contrived one.
+    private static readonly JsonElement GreenGridWithRedLookingOutput = Frame(
+        """
+        {"areas":{
+          "Tests":{"$type":"MeshWeaver.Layout.StackControl","areas":[{"area":"Tests/Title"},{"area":"Tests/Cases"}]},
+          "Tests/Title":{"$type":"MeshWeaver.Layout.TitleControl","data":"Reporter tests — 2/2 passed","headingLevel":2},
+          "Tests/Cases":{"$type":"MeshWeaver.Layout.DataGrid.DataGridControl",
+            "data":[
+              {"$type":"CaseRow","class":"ReporterTests","case":"RendersAFailingInnerSuite","result":"✅ pass","time":"0.2s",
+               "output":"inner report: ❌ Inner_Fails · 0/1 passed"},
+              {"$type":"CaseRow","class":"ReporterTests","case":"RendersAPassingInnerSuite","result":"✅ pass","time":"0.1s","output":""}]}}}
+        """);
+
+    /// <summary>
+    /// #6714: a PASSING case whose output carries a ❌ (and a nested "0/1 passed") is green. The verdict
+    /// is read by the RESULT column; the gate used to red on a ❌ in ANY cell and then name the green
+    /// case as the failure.
+    /// </summary>
+    [Fact]
+    public async Task GreenGridRow_WithARedGlyphInItsOutput_IsPassed()
+    {
+        var verdict = await AreaProbe.ClassifyTestsFrames(FrameStream(GreenGridWithRedLookingOutput), TimeSpan.FromSeconds(5))
+            .FirstAsync().Await();
+
+        Assert.Equal(CheckOutcome.Passed, verdict.Outcome);
+        Assert.Equal("2/2 passed", verdict.Detail);
+    }
+
+    // The same green-with-❌-output row beside a GENUINELY failing case.
+    private static readonly JsonElement MixedGridVerdict = Frame(
+        """
+        {"areas":{
+          "Tests":{"$type":"MeshWeaver.Layout.StackControl","areas":[{"area":"Tests/Title"},{"area":"Tests/Cases"}]},
+          "Tests/Title":{"$type":"MeshWeaver.Layout.TitleControl","data":"Reporter tests — 1/2 passed","headingLevel":2},
+          "Tests/Cases":{"$type":"MeshWeaver.Layout.DataGrid.DataGridControl",
+            "data":[
+              {"$type":"CaseRow","class":"ReporterTests","case":"RendersAFailingInnerSuite","result":"✅ pass","time":"0.2s",
+               "output":"inner report: ❌ Inner_Fails"},
+              {"$type":"CaseRow","class":"ReporterTests","case":"RealFailure","result":"❌ FAIL","time":"0.3s",
+               "output":"Expected 42 but found 41"}]}}}
+        """);
+
+    /// <summary>
+    /// A red verdict names ONLY the cases whose result is ❌ — never a green row whose output merely
+    /// contains the glyph.
+    /// </summary>
+    [Fact]
+    public async Task RedVerdict_NamesOnlyTheFailingResultRows()
+    {
+        var verdict = await AreaProbe.ClassifyTestsFrames(FrameStream(MixedGridVerdict), TimeSpan.FromSeconds(5))
+            .FirstAsync().Await();
+
+        Assert.Equal(CheckOutcome.Failed, verdict.Outcome);
+        Assert.Contains("RealFailure", verdict.Detail);
+        Assert.Contains("Expected 42 but found 41", verdict.Detail);
+        Assert.Contains("1/2 passed", verdict.Detail);
+        Assert.DoesNotContain("RendersAFailingInnerSuite", verdict.Detail);
+    }
+
     /// <summary>An empty stream (no frames at all) still reports the generic no-verdict red.</summary>
     [Fact]
     public async Task NoFrames_TimesOut_WithTheGenericNoVerdict()

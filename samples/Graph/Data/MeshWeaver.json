@@ -4,7 +4,6 @@
   "nodeType": "Space",
   "description": "Open source platform for building modular, reactive applications",
   "icon": "/api/content/MeshWeaver/logo.svg",
-  "isPersistent": true,
   "content": {
     "$type": "Space",
     "name": "MeshWeaver",

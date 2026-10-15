@@ -1,3 +1,6 @@
+using System.Collections.Immutable;
+using System.Reactive.Linq;
+
 namespace MeshWeaver.Mesh;
 
 /// <summary>
@@ -77,4 +80,55 @@ public interface IEaGraphAuth
     /// </summary>
     /// <param name="userObjectId">The directory object id of the user to check.</param>
     IObservable<EaGraphAccess> GetConnection(string userObjectId);
+
+    // ── Several mailboxes (2026-10-13) ────────────────────────────────────────────────────────
+    // Every member below has a DEFAULT that answers for the primary mailbox only, so an
+    // implementation written before several mailboxes existed (a test fake, an older host) keeps
+    // compiling and keeps serving exactly the one mailbox it always served.
+
+    /// <summary>
+    /// The consent URL for one mailbox: <paramref name="loginHint"/> pre-fills the account Microsoft
+    /// asks for (a reconnect of a known address), and <paramref name="selectAccount"/> sends
+    /// <c>prompt=select_account</c>, so a person adding ANOTHER mailbox can pick a different
+    /// Microsoft account than the one they are signed in with.
+    /// </summary>
+    string BuildConsentUrl(string state, string redirectUri, string? loginHint, bool selectAccount) =>
+        BuildConsentUrl(state, redirectUri);
+
+    /// <summary>
+    /// Exchanges the consent code and stores the grant for <paramref name="account"/>:
+    /// <see cref="EaMailboxes.Primary"/> (or null) for the primary mailbox, an added mailbox's id to
+    /// reconnect it, or <see cref="EaMailboxes.New"/> to add one. A NEW consent whose address is
+    /// already connected rewrites that mailbox instead of adding a duplicate. Cold; emits once.
+    /// </summary>
+    IObservable<bool> ExchangeAndStore(string code, string redirectUri, string userObjectId, string? account) =>
+        EaMailboxes.IsPrimary(account)
+            ? ExchangeAndStore(code, redirectUri, userObjectId)
+            : Observable.Return(false);
+
+    /// <summary>
+    /// Mints a delegated access token for one of the person's mailboxes (null = the primary). Same
+    /// three-state contract as <see cref="GetAccessToken(string)"/>.
+    /// </summary>
+    IObservable<EaGraphAccess> GetAccessToken(string userObjectId, string? account) =>
+        EaMailboxes.IsPrimary(account)
+            ? GetAccessToken(userObjectId)
+            : Observable.Return(EaGraphAccess.NotConnected("this host serves a single mailbox"));
+
+    /// <summary>
+    /// Every mailbox the person has connected, primary first, each with its classified state and
+    /// no token. Cold; emits once. 🚨 A failed read of the LIST is an error on the stream, never an
+    /// empty list — an empty list is the positive answer "nothing is connected".
+    /// </summary>
+    IObservable<ImmutableList<EaMailbox>> GetMailboxes(string userObjectId) =>
+        GetConnection(userObjectId).Select(access => access.Connection == EaConnection.NotConnected
+            ? ImmutableList<EaMailbox>.Empty
+            : ImmutableList.Create(new EaMailbox(EaMailboxes.Primary, null, access)));
+
+    /// <summary>
+    /// Disconnects one mailbox. Emits <c>true</c> when a grant was removed, <c>false</c> when there
+    /// was none. Cold. The primary mailbox's record is emptied rather than deleted (the added
+    /// mailboxes live beneath it); an added mailbox's record is deleted.
+    /// </summary>
+    IObservable<bool> RemoveMailbox(string userObjectId, string account) => Observable.Return(false);
 }

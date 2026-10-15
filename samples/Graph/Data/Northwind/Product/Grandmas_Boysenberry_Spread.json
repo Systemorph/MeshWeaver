@@ -6,7 +6,6 @@
   "category": "Products",
   "description": "Grandma's Boysenberry Spread - 12 - 8 oz jars",
   "icon": "/static/NodeTypeIcons/shopping-bag.svg",
-  "isPersistent": true,
   "content": {
     "$type": "ProductContent",
     "productId": 6,

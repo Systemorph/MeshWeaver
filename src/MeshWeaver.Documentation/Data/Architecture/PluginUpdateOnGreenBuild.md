@@ -102,12 +102,47 @@ There are now two inputs, by deployment shape:
 
 | | learns from | how | when |
 |---|---|---|---|
-| **Registry instance** (holds the GitHub credential) | its plugin repos | `PluginUpdateWatcher` subscribes to `Admin/_Build/{owner}.{repo}` | on every green build |
+| **Registry instance**, or any instance that mounts a GitHub repository as a package source (holds the GitHub credential) | its plugin repos — every `PluginCatalog` node's `SourceRepoPath` AND every configured `PluginCatalog:Sources:N:RepoPath` | `PluginUpdateWatcher` subscribes to `Admin/_Build/{owner}.{repo}` | on every green build; and every **30 minutes** as a safety net that re-reads the stored build fact |
 | **Consumer** (registry token, no GitHub) | its registry | `RegistryUpdateReconciler` **reads** `GET /api/plugins` | at startup; on a **module-published broadcast** from the registry (that one package); and every **30 minutes** as a safety net (#3650) |
 
 Both hand the per-module verdict to the same `PackageUpdateReconciler`, so they can never disagree
 about what "changed" means or about who opted into an unattended install. Both are registered
 unconditionally and each is inert on the deployment shape it does not serve.
+
+### 🚨 A CONFIGURED source reconciles too — not only a catalog node (2026-10-14)
+
+The watcher used to reconcile installed packages only for repositories a `PluginCatalog` **node**
+names. A repository mounted as a configured source (`PluginCatalog:Sources:N:RepoPath` — how the
+fleet registry is wired, and how an instance's `pluginRepos` entry lands) was subscribed to the very
+same build node but only **evicted the listing cache** (#4222). Measured on an enterprise client's
+test instance, 2026-10-13/14: the build fact `Admin/_Build/{owner}.{repo}` arrived, the Auto install
+record stayed on its old commit for 14+ hours, and nothing would ever have looked again —
+`RegistryUpdateReconciler` reads HTTP registries only, so no safety net covered it either.
+
+Now a configured source and a catalog node are watched by one code path, keyed by the install
+**origin** (repository + subdirectory, the same string the install record carries): a repository
+declared both ways reconciles **once** per green build, two subdirectories of one repository are two
+origins and each reconciles its own packages, and the listing cache is evicted once per build. Every
+pass — green build or safety net — runs on one serialized lane, so two passes never write the same
+install record at once.
+
+🚨 A build record that does not exist **yet** is the normal first state of a repository whose content
+CI has never been recorded. The watcher waits for it to be present on the path-scoped live query over
+the build records (`BuildCompletion.WatchQuery`, a wake-up only) and only then opens the node's own
+stream. Opening the point stream on an absent path faults — and before this change that fault ended
+the watch for the life of the process, so a first green build recorded after boot was never seen.
+
+The **safety net** (`PluginCatalog:ReconcileSafetyNetInterval`, default 30 min, `≤ 0` disables)
+re-reads each watched origin's build node from storage and runs the same reconcile at its sha. It
+heals a reaction that was lost — a pass that failed transiently, a pod that was down when the fact
+was written, a wake-up the live query never delivered. It does not
+replace the webhook: a build fact that never arrived is `MissedBuildFact`'s business.
+
+🚨 The content-identity gate still applies: a module whose repository commits **no
+`manifest.lock`** has no `ModuleVersion`, and the reconcile refuses it by name ("has no module
+content identity … will NOT auto-update") — exactly as on the catalog path. A repository mounted as a
+package source must have its content CI maintain `<Module>/manifest.lock`, or its packages update
+only through the catalog card's manual Update.
 
 ### Why the consumer READS instead of waiting to be told
 
@@ -523,10 +558,10 @@ same webhook — same URL, same secret, no new endpoint and no CI credential any
 Signature verification is unchanged — `GitHubWebhookProcessor.VerifySignature` rejects a forged
 request before any work is scheduled.
 
-### 2. Point a catalog at the repo
+### 2. Point a catalog at the repo — or configure it as a source
 
-Nothing new. The catalog node's `SourceRepoPath` (see [Plugin Registry](/Doc/Architecture/PluginRegistry))
-is what associates a repository with a catalog, and the same value resolves the incoming webhook —
+Nothing new. The catalog node's `SourceRepoPath` (see [Plugin Registry](/Doc/Architecture/PluginRegistry)),
+or a configured `PluginCatalog:Sources:N:RepoPath`, is what associates a repository with the watcher, and the same value resolves the incoming webhook —
 a `workflow_run` payload carries the same `repository` object a `push` does. A catalog whose source
 is a **local path** never matches a webhook, by construction.
 

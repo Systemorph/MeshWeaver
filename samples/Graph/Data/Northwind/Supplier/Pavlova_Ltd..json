@@ -6,7 +6,6 @@
   "category": "Suppliers",
   "description": "Pavlova, Ltd. - Melbourne, Australia",
   "icon": "/static/NodeTypeIcons/truck.svg",
-  "isPersistent": true,
   "content": {
     "$type": "SupplierContent",
     "supplierId": 7,
