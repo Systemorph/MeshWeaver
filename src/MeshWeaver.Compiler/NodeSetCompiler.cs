@@ -323,7 +323,7 @@ public static class NodeSetCompiler
             EmitPipeline.OptionsFingerprint,
             GeneratedInputIdentity.CompilerIdentity,
             GeneratedInputIdentity.AssemblyFileIdentities(
-                GeneratorPipeline.EffectiveGeneratorPaths(nugetAssemblyPaths)));
+                GeneratorPipeline.DigestedGeneratorPaths(nugetAssemblyPaths)));
 
     /// <summary>
     /// The include reader the tree bake hands <see cref="NodeCompileShaping.ResolveCodeIncludes"/>:

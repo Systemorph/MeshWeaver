@@ -135,7 +135,10 @@ inference errors and hundreds of `CS1701`s. Three defects, three rules:
    `PlatformNotSupportedException` even with the `runtimes/` asset selected. It now reads the
    metadata first and loads only an assembly that references `Microsoft.CodeAnalysis` — plus that
    generator's own dependency closure among the candidates (a helper package its type derives from),
-   dependencies first, skipping what the host ships.
+   dependencies first, skipping what the host ships, each from its package's RUNTIME asset
+   (`runtimes/<rid>/lib/` where shipped) and recursing over that runtime image's references. The
+   content key hashes those runtime assets too (`GeneratorPipeline.DigestedGeneratorPaths`), so two
+   runtime helpers behind one compile stub never share a key.
    An installed MODULE counts as host-shipped too: the NodeType context binds a module that satisfies
    the requested version AHEAD of a package's copy of the same name, matching the compile's choice.
 3. **A package's reference assembly is the compile surface where the toolchain carries one.** In-mesh

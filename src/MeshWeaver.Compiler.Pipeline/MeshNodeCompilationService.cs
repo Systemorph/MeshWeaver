@@ -1954,7 +1954,7 @@ internal class MeshNodeCompilationService(
             EmitPipeline.OptionsFingerprint,
             GeneratedInputIdentity.CompilerIdentity,
             GeneratedInputIdentity.AssemblyFileIdentities(
-                GeneratorPipeline.EffectiveGeneratorPaths(nugetAssemblyPaths)));
+                GeneratorPipeline.DigestedGeneratorPaths(nugetAssemblyPaths)));
 
     /// <summary>
     /// 🚨 THE RE-EVALUATION LANE's regeneration entry point (#1976): the stage-1 CONTENT-KEY

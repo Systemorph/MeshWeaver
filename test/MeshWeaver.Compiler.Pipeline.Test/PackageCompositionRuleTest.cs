@@ -33,7 +33,8 @@ public sealed class PackageCompositionRuleTest : IDisposable
         catch (UnauthorizedAccessException) { }
     }
 
-    private string Emit(string folder, string name, string version, string body = "public class Marker { }")
+    private string Emit(string folder, string name, string version, string body = "public class Marker { }",
+        params string[] references)
     {
         var dir = Path.Combine(root, folder);
         Directory.CreateDirectory(dir);
@@ -41,7 +42,7 @@ public sealed class PackageCompositionRuleTest : IDisposable
         var compilation = CSharpCompilation.Create(name,
             [CSharpSyntaxTree.ParseText(
                 $"[assembly: System.Reflection.AssemblyVersion(\"{version}\")] " + body)],
-            [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)],
+            [.. CompileReferences.Default, .. references.Select(r => MetadataReference.CreateFromFile(r))],
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
         var result = compilation.Emit(path);
         Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics));
@@ -205,8 +206,11 @@ public sealed class PackageCompositionRuleTest : IDisposable
         var rid = OperatingSystem.IsWindows() ? "win" : "unix";
         var stub = Emit(Path.Combine("riddep", "lib", "net8.0"), depName, "1.0.0.0",
             "public abstract class RidBase" + suffix + " { public static string Where => \"stub\"; }");
+        // The runtime implementation needs B; the stub does not reference it.
+        var bName = "MwRidOnly" + suffix;
+        var b = Emit("ridonly", bName, "1.0.0.0", "public static class OnlyAtRuntime { public static string Where => \"runtime\"; }");
         var runtime = Emit(Path.Combine("riddep", "runtimes", rid, "lib", "net8.0"), depName, "1.0.0.0",
-            "public abstract class RidBase" + suffix + " { public static string Where => \"runtime\"; }");
+            "public abstract class RidBase" + suffix + " { public static string Where => OnlyAtRuntime.Where; }", b);
         var generator = Path.Combine(root, "gen2", "MwRidGen" + suffix + ".dll");
         Directory.CreateDirectory(Path.GetDirectoryName(generator)!);
         var emitted = CSharpCompilation.Create("MwRidGen" + suffix,
@@ -221,9 +225,14 @@ public sealed class PackageCompositionRuleTest : IDisposable
         Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics));
 
         SourceGeneratorLoader.RuntimeAssetOf(stub).Should().Be(runtime);
-        SourceGeneratorLoader.Discover([stub, generator], Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance)
+        SourceGeneratorLoader.Discover([stub, b, generator], Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance)
             .Should().ContainSingle();
         System.Runtime.Loader.AssemblyLoadContext.Default.Assemblies
             .Single(a => a.GetName().Name == depName).Location.Should().Be(runtime);
+        System.Runtime.Loader.AssemblyLoadContext.Default.Assemblies
+            .Should().Contain(a => a.GetName().Name == bName, "the runtime image's own dependency is preloaded");
+
+        // The content key hashes the runtime asset discovery loads, not only the compile stub.
+        GeneratorPipeline.DigestedGeneratorPaths([stub, b, generator]).Should().Contain(runtime);
     }
 }

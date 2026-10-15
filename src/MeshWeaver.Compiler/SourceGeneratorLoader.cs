@@ -57,12 +57,13 @@ internal static class SourceGeneratorLoader
                 continue;
             if (MeshWeaver.NuGet.PackageAssemblyProbe.HostIdentityOf(reference) is not null)
                 continue; // the host binds it
-            PreloadDependencies(dependency, byName, preloaded, logger);
             // The candidates are COMPILE assets; what loads is the package's RUNTIME asset — a
             // RID-specific library's lib/ copy is a stub that, once in the default context, every
-            // NodeType context would unify with as the host's copy.
+            // NodeType context would unify with as the host's copy. Its dependencies are read from
+            // the RUNTIME image too: the stub may not reference what the implementation needs.
             if (RuntimeAssetOf(dependency) is not { } runtimeAsset)
                 continue;
+            PreloadDependencies(runtimeAsset, byName, preloaded, logger);
             try
             {
                 Assembly.LoadFrom(runtimeAsset);
