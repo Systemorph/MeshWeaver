@@ -6,7 +6,6 @@
   "category": "Products",
   "description": "Outback Lager - 24 - 355 ml bottles",
   "icon": "/static/NodeTypeIcons/shopping-bag.svg",
-  "isPersistent": true,
   "content": {
     "$type": "ProductContent",
     "productId": 70,

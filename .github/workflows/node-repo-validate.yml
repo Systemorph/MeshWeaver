@@ -237,6 +237,33 @@ jobs:
       - name: "No two source files import to the same node path"
         if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
         run: python3 "$RUNNER_TEMP/check-node-path-collisions.py" --root .
+      # ── A RETIRED MeshNode FIELD IS A BUILD ERROR (#6638) ──
+      # GitSync reads a repository strictly, so ONE node file still carrying a member MeshNode no
+      # longer has (`isPersistent`, a top-level `requires`, …) refuses the WHOLE snapshot and the
+      # Space stays on its old commit. The platform stays strict; the content is migrated. This
+      # names every such file and field on the PR that adds or keeps one. The guard and its
+      # register (`.github/meshnode-fields.json`, kept equal to MeshNode by a core test) are fetched
+      # at the lane's SCRIPTS ref like every guard here, asserted RED when unavailable, and an
+      # empty scan is RED, never a clean zero.
+      - name: Fetch the platform's retired-node-field guard at the lane's scripts ref
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SCRIPTS_REF: ${{ inputs.scripts-ref || inputs.platform-ref }}
+        run: |
+          set -euo pipefail
+          [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref / platform-ref are both empty — the retired-node-field guard has no ref to be fetched at"; exit 1; }
+          "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/scripts/check-retired-node-fields.py" > "$RUNNER_TEMP/check-retired-node-fields.py" \
+            || { echo "::error::could not fetch .github/scripts/check-retired-node-fields.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — a pin older than the guard needs the older lane"; exit 1; }
+          head -c 400 "$RUNNER_TEMP/check-retired-node-fields.py" | grep -q "check-retired-node-fields" || { echo "::error::the fetched check-retired-node-fields.py at ${SCRIPTS_REF} does not look like the guard"; exit 1; }
+          "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/meshnode-fields.json" > "$RUNNER_TEMP/meshnode-fields.json" \
+            || { echo "::error::could not fetch .github/meshnode-fields.json at ${SCRIPTS_REF} from Systemorph/MeshWeaver — the guard has no register"; exit 1; }
+      - name: "A node file carrying a retired MeshNode field is caught (self-test)"
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+        run: python3 "$RUNNER_TEMP/check-retired-node-fields.py" --self-test
+      - name: "No node file carries a retired MeshNode field"
+        if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+        run: python3 "$RUNNER_TEMP/check-retired-node-fields.py" --root . --register "$RUNNER_TEMP/meshnode-fields.json"
       # ── NO COVER IS A WALL OF TEXT, AND EVERY heroCta PILL IS LEGIBLE ──
       # 🚨 ONE copy of the cover gate, fetched here (MeshWeaver#4027). It used to be hand-copied into
       # five repos as `scripts/check-covers.py`, and measured 2026-09-13 the copies had drifted to

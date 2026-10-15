@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "LINO-Delicateses - I. de Margarita, Venezuela",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "LINOD",

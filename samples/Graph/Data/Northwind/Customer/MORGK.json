@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "Morgenstern Gesundkost - Leipzig, Germany",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "MORGK",

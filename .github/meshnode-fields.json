@@ -1,0 +1,37 @@
+{
+  "$comment": "The JSON members of MeshWeaver.Mesh.MeshNode (`members`) and the members it no longer has (`retired`). A node file carrying a retired member is a GATE ERROR (check-retired-node-fields.py, run on core's trees and in every node repo's validate lane), because GitSync's strict reader refuses the whole snapshot on it (#6638). MeshNodeFieldsRegisterTest keeps `members` equal to the type by reflection, so removing a member from MeshNode fails that test until its name moves into `retired` here. There is no tolerance: the content is migrated, never the reader.",
+  "type": "MeshWeaver.Mesh.MeshNode",
+  "members": [
+    "category",
+    "content",
+    "createdBy",
+    "createdDate",
+    "description",
+    "desiredId",
+    "excludeFromContext",
+    "icon",
+    "id",
+    "isSatelliteType",
+    "lastModified",
+    "lastModifiedBy",
+    "mainNode",
+    "name",
+    "namespace",
+    "nodeType",
+    "order",
+    "path",
+    "preRenderedHtml",
+    "state",
+    "syncBehavior",
+    "version"
+  ],
+  "retired": {
+    "addressSegments": "routing derives the address from the path prefix walk (Doc/Architecture/MeshGraph); remove the field",
+    "displayOrder": "use `order`",
+    "instantiationType": "instantiation is declared by the NodeType, not on the node; remove the field",
+    "isPersistent": "every node is persisted; remove the field",
+    "isVirtual": "virtual instances are served by the NodeType's prefix match; remove the field",
+    "requires": "package dependencies live in the package root's `content.requires`; remove the top-level copy",
+    "routingType": "routing derives from the path; remove the field"
+  }
+}

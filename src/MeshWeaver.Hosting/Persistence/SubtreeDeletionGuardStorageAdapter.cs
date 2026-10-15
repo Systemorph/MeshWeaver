@@ -1,8 +1,10 @@
 using System.Reactive;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.Persistence;
@@ -57,8 +59,19 @@ namespace MeshWeaver.Hosting.Persistence;
 internal sealed class SubtreeDeletionGuardStorageAdapter(
     IStorageAdapter inner,
     RecentlyDeletedRegistry? registry,
-    ILogger<SubtreeDeletionGuardStorageAdapter>? logger = null) : IStorageAdapter
+    ILogger<SubtreeDeletionGuardStorageAdapter>? logger = null) : IStorageAdapter, IDisposable
 {
+    /// <summary>
+    /// Owns the connection of every admitted write still in flight (see <see cref="Admitted{T}"/>).
+    /// A connection leaves it as its write terminates, so it holds LIVE writes only; disposing the
+    /// adapter with its mesh releases whatever is still connected instead of leaving it rooted
+    /// where no teardown can reach it.
+    /// </summary>
+    private readonly CompositeDisposable _admittedConnections = new();
+
+    /// <inheritdoc />
+    public void Dispose() => _admittedConnections.Dispose();
+
     /// <summary>
     /// 🚨 Decorators MUST forward Changes — the interface default is
     /// <c>Observable.Empty</c>, which silently starves every synced-query subscriber.
@@ -195,7 +208,7 @@ internal sealed class SubtreeDeletionGuardStorageAdapter(
             }
 
             var outcome = inner.Finally(admission.Dispose).Replay();
-            outcome.Connect();
+            outcome.ConnectOwnedBy(_admittedConnections);
             return outcome.AsObservable();
         });
 

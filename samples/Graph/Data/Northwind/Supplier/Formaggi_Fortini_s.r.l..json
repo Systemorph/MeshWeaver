@@ -6,7 +6,6 @@
   "category": "Suppliers",
   "description": "Formaggi Fortini s.r.l. - Ravenna, Italy",
   "icon": "/static/NodeTypeIcons/truck.svg",
-  "isPersistent": true,
   "content": {
     "$type": "SupplierContent",
     "supplierId": 14,

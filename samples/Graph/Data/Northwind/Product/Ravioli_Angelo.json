@@ -6,7 +6,6 @@
   "category": "Products",
   "description": "Ravioli Angelo - 24 - 250 g pkgs.",
   "icon": "/static/NodeTypeIcons/shopping-bag.svg",
-  "isPersistent": true,
   "content": {
     "$type": "ProductContent",
     "productId": 57,

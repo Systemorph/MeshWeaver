@@ -6,7 +6,6 @@
   "category": "Suppliers",
   "description": "Bigfoot Breweries - Bend, USA",
   "icon": "/static/NodeTypeIcons/truck.svg",
-  "isPersistent": true,
   "content": {
     "$type": "SupplierContent",
     "supplierId": 16,

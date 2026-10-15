@@ -3,7 +3,6 @@
   "namespace": "FutuRe/ExchangeRate",
   "name": "EUR → CHF (Plan 0.94 / Actual 0.92)",
   "nodeType": "FutuRe/ExchangeRate",
-  "isPersistent": true,
   "content": {
     "$type": "ExchangeRate",
     "systemName": "EUR-CHF",

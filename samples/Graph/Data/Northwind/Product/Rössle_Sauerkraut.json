@@ -6,7 +6,6 @@
   "category": "Products",
   "description": "R\u00f6ssle Sauerkraut - 25 - 825 g cans",
   "icon": "/static/NodeTypeIcons/shopping-bag.svg",
-  "isPersistent": true,
   "content": {
     "$type": "ProductContent",
     "productId": 28,

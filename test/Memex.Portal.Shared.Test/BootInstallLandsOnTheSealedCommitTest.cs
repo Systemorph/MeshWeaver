@@ -69,6 +69,14 @@ public class BootInstallLandsOnTheSealedCommitTest(ITestOutputHelper output) : M
     /// <summary>The commit the seal covers — an OLDER tree than the branch tip, as on memex-cloud.</summary>
     private const string SealedSha = "627fb3cd2f1bc7142226a2ae881c81f9d83cc430";
 
+    /// <summary>
+    /// The commit the configured ref (<c>main</c>) resolves to at the transport. Since the decision
+    /// "Record commit on install" (MeshWeaver#3848) the install record stores the commit the source
+    /// SERVED, not the moving ref it was asked for — so a record listed at the configured ref reads
+    /// THIS sha, and a record stamped from the seal would read <see cref="SealedSha"/> instead.
+    /// </summary>
+    private static readonly string MainTipSha = "f00d" + new string('0', 36);
+
     private const string Package = "Course";
     private const string LessonPath = $"{Package}/Lesson";
     private const string QuizPath = $"{Package}/Quiz";
@@ -137,7 +145,8 @@ public class BootInstallLandsOnTheSealedCommitTest(ITestOutputHelper output) : M
         var first = await Installer.Completed.FirstAsync().Timeout(TimeSpan.FromSeconds(180)).Await(TestContext.Current.CancellationToken);
         first.Packages.Should().Equal(new[] { Package });
         first.Failed.Should().Be(0);
-        (await Record())!.InstalledFromRef.Should().Be("main");
+        (await Record())!.InstalledFromRef.Should().Be(MainTipSha,
+            "the record stores the commit the configured ref served (MeshWeaver#3848)");
         (await Lesson()).Should().Be("# Lesson, as of main");
         (await Read(QuizPath)).Should().NotBeNull("the branch tip carries a node the sealed commit does not");
         repoClient.FetchedRefs.Should().NotBeEmpty().And.OnlyContain(r => r == "main");
@@ -155,8 +164,9 @@ public class BootInstallLandsOnTheSealedCommitTest(ITestOutputHelper output) : M
             pass.Packages.Should().Equal(new[] { Package }, $"{what}: the package is still installed");
             pass.Failed.Should().Be(0);
             pass.ListingIncomplete.Should().BeFalse($"{what}: nothing is held, so the listing is whole");
-            (await Record())!.InstalledFromRef.Should().Be("main",
-                $"{what}: the seal does not choose the ref (policy module-sync-per-manifest-hash)");
+            (await Record())!.InstalledFromRef.Should().Be(MainTipSha,
+                $"{what}: the seal does not choose the ref (policy module-sync-per-manifest-hash) — "
+                + "the record names the commit the CONFIGURED ref served, never the sealed one");
             (await Read(QuizPath)).Should().NotBeNull($"{what}: the configured ref's tree stays");
             repoClient.FetchedRefs.Skip(fetchesBefore).Should().NotContain(SealedSha,
                 $"{what}: the sealed commit is never asked for");
@@ -198,7 +208,8 @@ public class BootInstallLandsOnTheSealedCommitTest(ITestOutputHelper output) : M
         first.Held.Should().BeEmpty(
             "nothing else writes this partition, so there is nothing to hold — a hold here would "
             + "make every assertion below pass for the wrong reason");
-        (await Record())!.InstalledFromRef.Should().Be("main");
+        (await Record())!.InstalledFromRef.Should().Be(MainTipSha,
+            "the record stores the commit the configured ref served (MeshWeaver#3848)");
         (await Lesson()).Should().Be("# Lesson, as of main");
 
         // ── The one fact that changes: a sync source now keeps Course current. ──────────────────
@@ -248,7 +259,7 @@ public class BootInstallLandsOnTheSealedCommitTest(ITestOutputHelper output) : M
         held.Reason.Should().Contain(Package,
             "the reason names the partition it is about, or nobody can act on it");
         held.Reason.Should().Contain("MeshWeaver#4588");
-        (await Record())!.InstalledFromRef.Should().Be("main",
+        (await Record())!.InstalledFromRef.Should().Be(MainTipSha,
             "and the record was NOT re-stamped — a hold that moved the record would leave the next "
             + "delta computed against a claim nothing wrote");
 
@@ -267,7 +278,7 @@ public class BootInstallLandsOnTheSealedCommitTest(ITestOutputHelper output) : M
             "a partition another writer keeps current is not written by the boot install").Subject
             .Reason.Should().Contain("MeshWeaver#4588");
         mismatched.Packages.Should().BeEmpty("a held package is not a package this pass landed");
-        (await Record())!.InstalledFromRef.Should().Be("main", "and the record is still not re-stamped");
+        (await Record())!.InstalledFromRef.Should().Be(MainTipSha, "and the record is still not re-stamped");
 
         await PointTheSyncAt($"https://github.com/{RepoFullName}", Package);
         var third = await Installer.RunDefaultInstall().Timeout(TimeSpan.FromSeconds(120))
@@ -276,7 +287,7 @@ public class BootInstallLandsOnTheSealedCommitTest(ITestOutputHelper output) : M
             "a partition synced from its OWN repository has one writer too — the sync source");
         third.Packages.Should().BeEmpty();
         repoClient.FetchedRefs.Should().NotContain(SealedSha, "the sealed commit is never asked for");
-        (await Record())!.InstalledFromRef.Should().Be("main");
+        (await Record())!.InstalledFromRef.Should().Be(MainTipSha);
     }
 
     /// <summary>
@@ -476,7 +487,7 @@ public class BootInstallLandsOnTheSealedCommitTest(ITestOutputHelper output) : M
                 fetched.Add(commitish);
             return commitish switch
             {
-                "main" => Observable.Return(new RepoSnapshot("f00d" + new string('0', 36), Tree(
+                "main" => Observable.Return(new RepoSnapshot(MainTipSha, Tree(
                     lesson: "# Lesson, as of main", quiz: "# Quiz, only on main",
                     moduleVersion: "tip-0000000000001", lessonHash: "L-main", quizHash: "Q-main"))),
                 SealedSha => Observable.Return(new RepoSnapshot(SealedSha, Tree(

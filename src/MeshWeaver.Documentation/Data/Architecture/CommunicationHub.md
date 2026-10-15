@@ -386,6 +386,9 @@ function of the filter and the legs.
 |---|---|---|
 | search box | `search` | the term goes to the query engine with EVERY leg, as free text (full text and the semantic index), under the owner's identity — never a match over the rows already loaded |
 | one icon toggle per source (`ToggleButtonControl`), beside the search | `sources/{key}` (the id, hex-encoded) | shows or hides what one provider brought, by its symbol (`InboxQueryLeg.SourceIcon`), its name the tooltip; a source with no entry is shown, so a leg a package brings later never arrives switched off — unless its legs say `ShownByDefault: false` (notifications: the feed is long, so it is one click away and the bell still shows it) |
+| the Only select (`SelectControl`), before the toggles | `only` (a source key, empty for all) | Only / Show / Hide per source: picking one source lists that source alone and wins over its switch (so "only Outlook" shows Outlook even while its toggle is off); "All sources" gives the switches back exactly as they were. A side-menu category still wins over both, and what Only hides of the "Needs you" band is counted in the hidden-obligations notice like a switch |
+| the Show ignorable switch (`SwitchControl`) | `showIgnorable` | items a triage judged `ignorable` (`InboxImportance` — spam, promotions, noise) stay out of the list until it is on; the notice above the grid counts what it hides. Items nobody judged are always shown |
+| the side menu's tags (`RadioGroupControl`, below the folders) | `tag` | GitHub's label filter over the triage's tags (`InboxRow.Tags`, read from the content's `tags`): ⭐ Important first (the content's `importance`), then each tag by use, each with its count. A tag narrows the folder and sources shown, and shows its rows even when ignorable — picking `#promo` asks for the promotions. The entries are keyed apart — `importance:important` for what a triage JUDGED important, `tag:<name>` for a tag — so an ordinary tag spelled `important` is its own entry. Importance and tags are read from whatever content a row carries, timed or not; an untimed leg's projection drops content, so a source whose rows carry a triage declares a time field (the timed projection keeps content). The grid's Tags column shows them as `#reply #act` |
 | ⚙︎ settings menu (`MenuItemControl`, icon only) | `order`, `sources/{key}` | the order select — `InboxOrder.Newest` by default, everything by date as a mail client lists it; also oldest, by title, by source, and what needs you first (band rank) — and the same source switches with their names |
 | the grid's checkboxes | `inboxSelection` | the ticked row keys, read by Delete |
 
@@ -414,7 +417,17 @@ are what, from whom and when. A source with read state brings TWO legs — one s
 items (`InboxQueryLeg.Unread`), one the rest — so "unread" is decided by the query, never by
 reading content on the page: unread mail is "not `Read`", an unread notification is "not
 `isRead`". An unread row carries `rowClass: inbox-unread` and the grid applies it per row
-(`DataGridControl.WithRowClassProperty`), so it renders bold.
+(`DataGridControl.WithRowClassProperty`), so it renders bold. A LIVE source that answers read and
+unread items in one leg (a mailbox read from its provider) says so per item instead: a timed row
+reads `isRead`, `from` (the sender, shown in the From column — else the source's name) and
+`webLink` (an https address in the provider's own client) from its content.
+
+**A click on a row opens it** (`DataGridControl.WithClickAction` → `InboxLayoutArea.OpenTarget`):
+an item with a `webLink` opens there (a full page load — it leaves the portal), any other at its
+node's page. Ticking a box, and shift/cmd-clicks, are selection gestures the grid keeps to itself.
+The grid is paged (50 a page, the size selectable). A source without a symbol is toggled by a
+button that shows its NAME — never a single letter, which the icon renderer read as an icon name
+and drew as an empty button.
 
 **Reading never reorders.** A row is timed by its node's `LastModified` unless its source names a
 content property instead (`InboxQueryLeg.TimeField`, e.g. a conversation's last reply). Name one

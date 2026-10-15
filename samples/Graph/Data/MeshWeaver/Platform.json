@@ -6,7 +6,6 @@
   "category": "Planning",
   "description": "Platform roadmap, feature planning, and prioritization for MeshWeaver development",
   "icon": "/static/NodeTypeIcons/rocket.svg",
-  "isPersistent": true,
   "state": "Active",
   "content": {
     "$type": "MarkdownDocument",

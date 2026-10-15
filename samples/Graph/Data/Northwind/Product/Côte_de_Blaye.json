@@ -6,7 +6,6 @@
   "category": "Products",
   "description": "C\u00f4te de Blaye - 12 - 75 cl bottles",
   "icon": "/static/NodeTypeIcons/shopping-bag.svg",
-  "isPersistent": true,
   "content": {
     "$type": "ProductContent",
     "productId": 38,

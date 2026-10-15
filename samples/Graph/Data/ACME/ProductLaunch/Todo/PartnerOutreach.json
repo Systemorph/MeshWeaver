@@ -6,7 +6,6 @@
   "category": "Tasks",
   "description": "Recruit integration and channel partners for launch",
   "icon": "/api/content/ACME/Project/Todo/icon.svg",
-  "isPersistent": true,
   "content": {
     "$type": "Todo",
     "title": "Identify launch partners",

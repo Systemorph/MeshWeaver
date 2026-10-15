@@ -4,7 +4,6 @@
   "name": "First 25 primes",
   "nodeType": "PythonDemo/PrimeReport",
   "description": "Sample instance for the Calling Python documentation walkthrough.",
-  "isPersistent": true,
   "content": {
     "$type": "PrimeReport",
     "name": "First 25 primes",

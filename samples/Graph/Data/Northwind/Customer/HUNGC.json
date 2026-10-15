@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "Hungry Coyote Import Store - Elgin, USA",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "HUNGC",
