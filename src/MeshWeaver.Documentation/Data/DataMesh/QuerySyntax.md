@@ -531,6 +531,14 @@ difference is invisible at the call site:
 | **untyped** (`Query<object>`, the MCP `search` tool) | each row becomes a `Dictionary<string, object>` of exactly the named fields |
 | **typed on `MeshNode`** (`Query<MeshNode>`, and therefore **every `workspace.GetQuery` / `hub.GetQuery`**) | the row stays a **`MeshNode`** — no dictionary — but the SQL projection is still narrowed |
 
+**The untyped projection happens AFTER the merged sort** (#6830). An untyped read runs through
+every provider and the cross-provider merge as nodes, and only the final, sorted and clipped
+window is turned into dictionaries — so `select:path,name sort:<anything> limit:N` returns the
+mesh's top N in the requested order, and the sort key need not be among the selected fields.
+Before #6830 each provider projected its own rows first; the merge could not read a sort key off a
+dictionary and clipped in provider-arrival order, so a query served by two providers (a store plus
+the seeded static nodes, or several partitions) returned one provider's top N.
+
 On the typed path only ONE column is actually conditional: **`content`**. Every other field is
 projected regardless, so naming them is documentation rather than optimisation. But when `content`
 is *not* named, the storage adapter emits `NULL::jsonb AS content` (Postgres) or omits the field
