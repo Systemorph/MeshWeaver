@@ -17,8 +17,9 @@ namespace MeshWeaver.PluginCatalog;
 /// <para>Registration writes the initial plan (the baseline, or the plan a registration key was
 /// minted for); nothing else on the instance's side can raise it. The write is one field on the
 /// <see cref="MeshWeaverInstance"/> record, and because <see cref="InstanceRegistryAuthenticator"/>
-/// reads that record off its live mirror (#3119) the next request — on every replica — already
-/// decides with the new plan.</para>
+/// reads that record off its live mirror (#3119) the next request decides with the new plan: on
+/// THIS replica as soon as <see cref="SetPlan"/> completes, because it completes only once that
+/// mirror carries the write (#6818), and on every other replica once its change feed delivers it.</para>
 ///
 /// <para>In <c>MeshWeaver.PluginCatalog</c> rather than the portal's instance service so the
 /// admin tab (which lives here) can call it, and so the plan has ONE writer wherever the registry
@@ -103,6 +104,7 @@ public sealed class InstancePlanService(IMessageHub hub, ILogger<InstancePlanSer
                             ? instance with { Plan = canonical }
                             : current.Content,
                     }))
+                    .SelectMany(written => MirrorCarries(instancePath, written, canonical, accessService))
                 : Observable.Throw<MeshNode>(new UnauthorizedAccessException(
                     $"setting the plan of '{instancePath}' is a global administrator's act on the registry")))
             .Do(node =>
@@ -110,9 +112,37 @@ public sealed class InstancePlanService(IMessageHub hub, ILogger<InstancePlanSer
                 var instance = node.ContentAs<MeshWeaverInstance>(hub.JsonSerializerOptions);
                 if (instance is null)
                     return;
-                // No verdict to forget: the authenticator reads the instance off its live stream, so
-                // this write is what the next request — on every replica — decides with (#3119).
+                // No verdict to forget: the authenticator reads the instance off its live mirror, and
+                // MirrorCarries has just seen that mirror carry the write — so the next request on
+                // THIS replica decides with the new plan (#6818). Other replicas see it when their
+                // change feed delivers the commit (#3119).
                 logger.LogInformation("Instance {InstanceId} set to plan {Plan}", instance.InstanceId, canonical);
             });
     }
+
+    /// <summary>
+    /// 🚨 READ-YOUR-WRITES on the mirror the registry decides with (#6818). The write's terminal is
+    /// the OWNER's ack, and the ack and the commit echo that advances this process's live mirror are
+    /// two different messages to two different hubs — nothing orders them. So "the promotion
+    /// completed" did not mean "the authenticator will see it": a bundle request issued right after
+    /// <see cref="SetPlan"/> could still read the pre-promotion record off the mirror and be refused
+    /// the package the instance had just been promoted to. The promotion now completes only once the
+    /// same mirror <see cref="InstanceRegistryAuthenticator"/> reads (<c>GetMeshNodeStream</c>, the
+    /// process-wide cache) carries it: a version past the one the write was diffed against, or the
+    /// plan itself (a write that changed nothing mints no version). No timer of its own — the caller's
+    /// bound is the bound, and the echo of a write the owner acked is always delivered.
+    /// </summary>
+    private IObservable<MeshNode> MirrorCarries(
+        string instancePath, MeshNode written, string canonical, AccessService accessService) =>
+        // Its own System scope: this subscribes on the thread that delivered the ack, where the
+        // ambient identity is whatever that thread carried, and the mirror's read gate captures
+        // identity at subscribe time — the same reason InstanceRegistryAuthenticator.ReadLive
+        // re-seals.
+        accessService.RunAsSystem(() => hub.GetMeshNodeStream(instancePath)
+            .Where(node => node is not null
+                && ((written.Version > 0 && node.Version > written.Version)
+                    || string.Equals(
+                        node.ContentAs<MeshWeaverInstance>(hub.JsonSerializerOptions)?.Plan,
+                        canonical, StringComparison.Ordinal)))
+            .Take(1));
 }
