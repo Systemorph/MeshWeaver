@@ -308,10 +308,24 @@ negative control is the same read with no window, which warns at the read. The t
 precedence are pinned by `MarkdownContentWithoutBodyTest` (MeshWeaver.Hosting.Test), and the
 converter's conditional wording by `TypeRegistryTest` (MeshWeaver.Messaging.Hub.Test).
 
+**Which key decides at the settle.** The settle (and `/health`, through `Unresolved`) re-asks the
+registry with the same precedence as the seam
+([#6716](https://github.com/Systemorph/MeshWeaver/issues/6716)). When the record carries a `$type`, the
+NodeType mapping clears it only where that `$type` admits the mapped type
+(`ContentDiscriminator.AdmitsDiscriminator`); otherwise only the `$type` itself resolving clears it.
+A node whose NodeType registers during the window but whose stored `$type` contradicts it and resolves
+to nothing is therefore still reported when the window settles. Treating the NodeType as decisive had
+dropped exactly that record, although no registration of the NodeType's type makes the content
+readable. Pinned by the `…AContradictoryType…` cases in `BootRegistrationWindowDefersUntypedWarningsTest`.
+
 **Acceptance on a portal:** after the roll that carries this, the boot-window count of
-`|~ "(?i)stayed an untyped JsonElement"` per replica drops to the types the pass could not register,
-which are the ones its own Warning names. The pre-change count was ≈130 per boot on memex-cloud and
-the same shape on memex.
+`|~ "(?i)stayed an untyped JsonElement"` per replica drops to the settled lines. Those are of two
+kinds, and only the first is a registration failure. The first is types the pass could not register,
+which are the ones its own Warning names; their line says *"TypeRegistry lacks the $type
+discriminator"*. The second is types that **are** registered but whose stored JSON does not bind to
+them; their line says *"is registered, but the stored JSON does not bind"*. These are expected after
+the change and point at the data or the contract, never at the pass. The pre-change count was ≈130 per
+boot on memex-cloud and the same shape on memex.
 
 ## A read never waits for the pass
 
