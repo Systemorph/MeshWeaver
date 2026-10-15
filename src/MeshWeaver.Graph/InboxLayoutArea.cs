@@ -110,19 +110,13 @@ public static class InboxLayoutArea
             host.Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(InboxLayoutArea))
                 .LogError("Inbox leg {Source} ({Band}) refused: it does not read exactly the viewer's own partition: {Query}",
                     refused.Source, refused.Band, refused.Query);
-        // Resolved HERE, on the render turn: the page is built once the connections are known, on
-        // whatever thread that read answers on, where the ambient zone is no longer the viewer's.
         var zone = access.ViewerZoneId();
-        var all = Sections(legs, owner);
-        // Only the sources the viewer has CONNECTED are listed — a mailbox nobody connected gets no
-        // switch, no menu entry and no read (owner, 2026-10-15: "must get only configured sources").
-        // 🚨 The page is BUILT on whatever turn the connection reads answer on — a query provider's
-        // thread, or the timer of the ConnectionWait fallback — where the ambient identity is not
-        // the viewer's, and host.Localize / host.ViewerLocale read the ambient. So the viewer's
-        // identity is restored around the build, or a German viewer gets an English page.
-        return InViewerContext(Connected(host.Hub, all, owner), host.Hub.ServiceProvider, host.ViewerContext ?? access?.Context,
-            connected => (UiControl?)Page(host, owner, zone,
-                [.. all.Where(section => connected.Contains(section.Source))]));
+        // The TEMPLATE, at once: every source's toggle and switch is declared, each with its style
+        // BOUND to data. Whether a source is connected is DATA the rows feed publishes
+        // (PublishConnected) — a source the viewer has not connected is hidden and never read
+        // (owner, 2026-10-15: "must get only configured sources"). Never wait for the connection
+        // reads before emitting (Doc/GUI/DataBinding → "Templates first, data later").
+        return Observable.Return<UiControl?>(Page(host, owner, zone, Sections(legs, owner)));
     }
 
     /// <summary>
@@ -198,7 +192,25 @@ public static class InboxLayoutArea
     internal static bool FoundConnection(QueryResultChange<MeshNode> change)
         => change.Items.Count > 0 || change.SnapshotIncomplete || change.SilentProviders is { Count: > 0 };
 
-    /// <summary>The page over the connected sources' <paramref name="sections"/>.</summary>
+    /// <summary>The data id of each source's toggle/switch style — hidden while not connected.</summary>
+    public const string SourceStylesId = "inboxSourceStyles";
+
+    /// <summary>The style that hides a source's toggle and switch.</summary>
+    internal const string HiddenStyle = "display: none;";
+
+    /// <summary>The pointer of one source's style in <see cref="SourceStylesId"/>.</summary>
+    internal static string SourceStylePointer(string key) => LayoutAreaReference.GetDataPointer(SourceStylesId) + "/" + key;
+
+    /// <summary>The sources listed without a connection read — a leg of theirs names no <see cref="InboxQueryLeg.ConnectedWhen"/>.</summary>
+    internal static ImmutableHashSet<string> Unprobed(ImmutableArray<InboxSection> sections)
+        => [.. sections.GroupBy(s => s.Source, StringComparer.Ordinal).Where(g => g.Any(s => s.ConnectedWhen is null)).Select(g => g.Key)];
+
+    /// <summary>Each source's style: shown when <paramref name="connected"/> holds it, hidden otherwise. Pure.</summary>
+    internal static ImmutableDictionary<string, string> SourceStyles(ImmutableArray<InboxSection> sections, ImmutableHashSet<string> connected)
+        => sections.Select(s => s.Source).Distinct(StringComparer.Ordinal)
+            .ToImmutableDictionary(InboxRows.SourceKey, source => connected.Contains(source) ? string.Empty : HiddenStyle);
+
+    /// <summary>The page over every source's <paramref name="sections"/>; the rows feed narrows it to the connected ones.</summary>
     private static UiControl Page(LayoutAreaHost host, string owner, string? zone, ImmutableArray<InboxSection> sections)
     {
         var sources = sections.GroupBy(section => section.Source, StringComparer.Ordinal)
@@ -220,11 +232,15 @@ public static class InboxLayoutArea
             host.UpdateData(HiddenId, string.Empty);
             host.UpdateData(IgnorableId, string.Empty);
             host.UpdateData(TagOptionsId, TagOptions(host.Localize("inbox.tag.all"), host.Localize("inbox.tag.important"), []));
-            host.UpdateData(CategoryOptionsId, CategoryOptions(host.Localize("inbox.category.all"), CategoriesOf(host, sections), InboxRows.CategoryCounts([])));
+            // Until the connection reads answer, only the sources that need none are listed.
+            var unprobed = Unprobed(sections);
+            host.UpdateData(CategoryOptionsId, CategoryOptions(host.Localize("inbox.category.all"),
+                CategoriesOf(host, [.. sections.Where(s => unprobed.Contains(s.Source))]), InboxRows.CategoryCounts([])));
+            host.UpdateData(SourceOptionsId, SourceOptions(host.Localize("inbox.only.all"),
+                sources.Where(source => unprobed.Contains(source.Id))
+                    .Select(source => (Key: InboxRows.SourceKey(source.Id), source.Label, source.Icon))));
+            host.UpdateData(SourceStylesId, SourceStyles(sections, unprobed));
         }
-        // The sources are fixed for the page's life, so their options are written on every render.
-        host.UpdateData(SourceOptionsId, SourceOptions(host.Localize("inbox.only.all"),
-            sources.Select(source => (Key: InboxRows.SourceKey(source.Id), source.Label, source.Icon))));
         host.SeedRowSelection(InboxRows.SelectionId);
         // One per page, created on the render turn; the buttons share it.
         if (host.GetVariable<InboxActs>(UndoId) is not { } acts)
@@ -249,6 +265,8 @@ public static class InboxLayoutArea
                 Controls.ToggleButton(new JsonPointerReference($"sources/{key}")) with
                 {
                     DataContext = filterContext, Label = source.Label,
+                    // Hidden until the rows feed says the viewer has connected the source.
+                    Style = new JsonPointerReference(SourceStylePointer(key)),
                     // A source without a symbol shows its NAME: a single letter was read as an icon
                     // name, found no icon and rendered an empty button.
                     Icon = source.Icon.Length > 0 ? source.Icon : null,
@@ -258,6 +276,7 @@ public static class InboxLayoutArea
                 {
                     DataContext = filterContext,
                     Label = source.Icon.Length > 0 ? $"{source.Icon} {source.Label}" : source.Label,
+                    Style = new JsonPointerReference(SourceStylePointer(key)),
                 }, "Show" + key);
         }
 
@@ -407,6 +426,30 @@ public static class InboxLayoutArea
     internal static IObservable<ImmutableList<InboxRow>> Rows(
         LayoutAreaHost host, ImmutableArray<InboxSection> sections, string owner, string? zone,
         IObservable<long>? rereads = null)
+    {
+        // Resolved ONCE, on the render turn — the connection reads answer on another thread.
+        var allSources = host.Localize("inbox.only.all");
+        var sourceOptions = sections.GroupBy(s => s.Source, StringComparer.Ordinal)
+            .Select(source => (Id: source.Key, Key: InboxRows.SourceKey(source.Key), Label: SourceLabel(host, source.First()),
+                Icon: source.Select(s => s.SourceIcon).FirstOrDefault(i => i.Length > 0) ?? string.Empty))
+            .ToImmutableList();
+        // Only the CONNECTED sources are read: their legs feed the rows, their toggles are shown and
+        // they are offered in the Only select. The rest stay hidden and are never asked.
+        return Connected(host.Hub, sections, owner)
+            .Do(connected =>
+            {
+                host.UpdateData(SourceStylesId, SourceStyles(sections, connected));
+                host.UpdateData(SourceOptionsId, SourceOptions(allSources,
+                    sourceOptions.Where(s => connected.Contains(s.Id)).Select(s => (s.Key, s.Label, s.Icon))));
+            })
+            .Select(connected => RowsOf(host, [.. sections.Where(s => connected.Contains(s.Source))], owner, zone, rereads))
+            .Switch();
+    }
+
+    /// <summary>The rows of <paramref name="sections"/> — the connected sources' legs.</summary>
+    private static IObservable<ImmutableList<InboxRow>> RowsOf(
+        LayoutAreaHost host, ImmutableArray<InboxSection> sections, string owner, string? zone,
+        IObservable<long>? rereads)
     {
         var hub = host.Hub;
         var handlers = hub.ServiceProvider.GetServices<IInboxItemHandler>().ToImmutableArray();

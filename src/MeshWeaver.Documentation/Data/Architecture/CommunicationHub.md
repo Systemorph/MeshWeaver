@@ -476,17 +476,19 @@ splitter's own handle hides it and gives the list the width.
 connected for a viewer — `InboxQueryLeg.ConnectedWhen`, a query for its credential, its account
 record or a first message over its channel, anchored on the viewer's partition exactly as the leg
 is (an unanchored one is refused and logged with the leg) and asked for one node
-(`InboxQueries.ConnectionProbe`). The page asks every such query once when it opens
-(`InboxLayoutArea.Connected`) and lists only the sources that answer with a node: a mailbox nobody
-connected gets no switch, no Only entry, no menu entry and no read. A source whose legs name no
+(`InboxQueries.ConnectionProbe`). The page is a TEMPLATE, emitted at once: every source's toggle
+and switch is declared, each with its style BOUND to `InboxLayoutArea.SourceStylesId`. The rows
+feed asks every connection query once (`InboxLayoutArea.Connected`), publishes the styles and the
+Only options, and reads only the connected sources' legs: a mailbox nobody connected is hidden
+(`display: none`), not offered in Only or the side menu, and never read. Until the reads answer,
+only the sources that need none are shown. A source whose legs name no
 connection query (approvals, notifications, portal chats) is listed for everyone. A connection query
 that fails or does not answer within `InboxLayoutArea.ConnectionWait` LISTS its source and is
 logged — an unreadable connection must never hide a mailbox the viewer did connect. So does an
 INCOMPLETE empty answer (a silent provider, an unfinished storage read — `InboxLayoutArea.FoundConnection`):
 only a complete empty answer hides a source. Whatever projection a provider wrote, the query runs for
-the path alone (`InboxQueries.ConnectionQuery`). The page is built on whichever turn those reads
-answer on, so it is built inside the viewer's own identity (`InboxLayoutArea.InViewerContext`) — the
-viewer's language and time zone, never the answering thread's. Core's own
+the path alone (`InboxQueries.ConnectionQuery`). Every text the feed writes is resolved on the render turn, in the viewer's language — never on
+the thread a connection read answers on. Core's own
 stored-mail source is connected once mail is stored for the viewer. Owner, 2026-10-15: *"i see a lot
 of stuff that's not even configured ==> must get only configured sources"*.
 

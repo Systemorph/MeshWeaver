@@ -38,7 +38,7 @@ public class InboxConnectedSourcesTest(ITestOutputHelper output) : MonolithMeshT
     /// the switch: the negative control, so the first half cannot pass on a page that lists nothing.
     /// </summary>
     [Fact(Timeout = 120000)]
-    public async Task AnUnconnectedSource_GetsNoSwitch_AndAConnectedOneDoes()
+    public async Task AnUnconnectedSource_IsHiddenAndNotOffered_AndAConnectedOneIsShown()
     {
         var ct = TestContext.Current.CancellationToken;
         const string without = "inbox-no-mail";
@@ -51,16 +51,24 @@ public class InboxConnectedSourcesTest(ITestOutputHelper output) : MonolithMeshT
             Content = new Email { Id = "m1", Subject = "Hello" },
         }, ct);
 
-        var mail = "Toggle" + InboxRows.SourceKey("Mail");
-        var notifications = "Toggle" + InboxRows.SourceKey("Notifications");
+        var mail = InboxRows.SourceKey("Mail");
+        var notifications = InboxRows.SourceKey("Notifications");
 
-        var bare = await Toggles(without, ct);
-        bare.Should().Contain(notifications, "a source that names no connection is listed for everyone");
-        bare.Should().NotContain(mail, "nobody stored mail for this viewer — the mailbox is not connected");
-        (await OnlyOptions(without, ct)).Should().NotContain(InboxRows.SourceKey("Mail"), "the Only select lists connected sources only");
+        // The page is a TEMPLATE: every source's toggle is declared at once, its style BOUND to the
+        // connection the rows feed publishes — never built after a wait.
+        var toggle = (ToggleButtonControl)(await Open(without).GetControlStream($"{SourcesArea}/Toggle{mail}")
+            .Should().Within(TestTimeouts.Convergence).Match(c => c is ToggleButtonControl, "the Mail toggle is in the template", ct))!;
+        toggle.Style.Should().BeOfType<JsonPointerReference>()
+            .Which.Pointer.Should().Be(InboxLayoutArea.SourceStylePointer(mail), "its visibility is bound, not baked");
 
-        (await Toggles(with, ct)).Should().Contain([notifications, mail], "stored mail connects the Mail source");
-        (await OnlyOptions(with, ct)).Should().Contain(InboxRows.SourceKey("Mail"));
+        var bare = await Answered(without, ct);
+        bare.Styles[notifications].Should().BeEmpty("a source that names no connection is listed for everyone");
+        bare.Styles[mail].Should().Be(InboxLayoutArea.HiddenStyle, "nobody stored mail for this viewer — the mailbox is not connected");
+        bare.Only.Should().Contain(notifications).And.NotContain(mail, "the Only select lists connected sources only");
+
+        var connected = await Answered(with, ct);
+        connected.Styles[mail].Should().BeEmpty("stored mail connects the Mail source — the probe answered and showed it");
+        connected.Only.Should().Contain([notifications, mail]);
     }
 
     /// <summary>
@@ -190,17 +198,23 @@ public class InboxConnectedSourcesTest(ITestOutputHelper output) : MonolithMeshT
         return [.. grid.Columns.OfType<PropertyColumnControl>().Select(c => c.Title?.ToString() ?? string.Empty)];
     }
 
-    private async Task<IReadOnlyList<string>> Toggles(string owner, CancellationToken ct)
+    /// <summary>
+    /// The page's source styles and Only options once the rows feed has answered — the grid no longer
+    /// loading means the connection reads answered first (the rows are read only for connected sources).
+    /// </summary>
+    private async Task<(IReadOnlyDictionary<string, string> Styles, IReadOnlyList<string> Only)> Answered(string owner, CancellationToken ct)
     {
         var stream = Open(owner);
-        var stack = (StackControl)(await stream.GetControlStream(SourcesArea).Should().Within(TestTimeouts.Convergence)
-            .Match(c => c is StackControl, "the source toggles", ct))!;
-        return [.. stack.Areas.Select(a => a.Id?.ToString() ?? string.Empty)];
+        await stream.GetDataStream<JsonElement>(new JsonPointerReference(LayoutAreaReference.GetDataPointer(InboxRows.GridId + "_loading")))
+            .Should().Within(TestTimeouts.Convergence).Match(l => l.ValueKind == JsonValueKind.False, "the rows feed answered", ct);
+        var styles = await stream.GetDataStream<JsonElement>(new JsonPointerReference(LayoutAreaReference.GetDataPointer(InboxLayoutArea.SourceStylesId)))
+            .Should().Within(TestTimeouts.Convergence).Match(o => o.ValueKind == JsonValueKind.Object, "the source styles", ct);
+        return (styles.EnumerateObject().ToDictionary(p => p.Name, p => p.Value.GetString() ?? string.Empty),
+            await OnlyOptions(stream, ct));
     }
 
-    private async Task<IReadOnlyList<string>> OnlyOptions(string owner, CancellationToken ct)
+    private static async Task<IReadOnlyList<string>> OnlyOptions(ISynchronizationStream<JsonElement> stream, CancellationToken ct)
     {
-        var stream = Open(owner);
         var options = await stream.GetDataStream<JsonElement>(
                 new JsonPointerReference(LayoutAreaReference.GetDataPointer(InboxLayoutArea.SourceOptionsId)))
             .Should().Within(TestTimeouts.Convergence).Match(o => o.ValueKind == JsonValueKind.Array, "the Only options", ct);
