@@ -393,6 +393,15 @@ completes or is disposed, the owner refuses it with a transient `ShuttingDown` c
 its parent posts it, the same route as the read and write NACKs above. The subscriber then rides the
 recycle out like any other refusal, and its next re-ask lands on the fresh activation.
 
+When the whole tree is torn down, the owner AND its parent are past `DisposeHostedHubs`, so neither
+route is open. The owner still posts the refusal itself: the post seam hands a correlated NACK to a
+requester in the same process directly (`MessageHub.TryDeliverNackInProcess`, #4072). A sibling
+subscriber is `Quiescing` on exactly that callback. Before this was added, the owner only logged that
+it had no route, and the subscriber's teardown waited out its whole quiesce budget.
+`UnansweredReassertOnRecycleTest.WholeTreeTornDownWhileHoldingAReassert_TheQuiescingSubscriberIsAnswered`
+pins it: with the refusal dropped, the subscriber's teardown does not complete within the convergence
+wait.
+
 ## 🚨 The promise lives in the TEXT, not in the envelope (#4866)
 
 Everything above assumes the rider can *tell* that it was handed the promise. It cannot do that from

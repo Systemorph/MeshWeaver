@@ -194,4 +194,62 @@ public class UnansweredReassertOnRecycleTest(ITestOutputHelper output) : HubTest
         node.Name.Should().Be("loaded");
         Output.WriteLine($"DIAG SubscribeRequests in total: {Volatile.Read(ref subscribeRequests)}");
     }
+
+    /// <summary>
+    /// The whole tree is torn down while the owner holds the answer to a re-ask (#6805 review). The
+    /// owner AND its parent are past <see cref="MessageHubRunLevel.DisposeHostedHubs"/> when the
+    /// owner's stream is disposed, so neither can route the refusal, while the subscriber — a sibling
+    /// in the same process — is <see cref="MessageHubRunLevel.Quiescing"/> on exactly that callback.
+    /// The refusal must still reach it, in-process (<c>MessageHub.TryDeliverNackInProcess</c>, #4072),
+    /// so its teardown completes instead of waiting out its quiesce budget. Before the fix the owner
+    /// only logged that it had no route left.
+    /// </summary>
+    [HubFact]
+    public async Task WholeTreeTornDownWhileHoldingAReassert_TheQuiescingSubscriberIsAnswered()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var hostAddress = CreateHostAddress();
+        var host = GetHost();
+        // A quiesce budget far beyond the convergence wait: the subscriber's teardown completing
+        // inside it is the refusal's arrival, never its own budget expiring.
+        var client = GetClient(c => ConfigureClient(c)
+            .WithPostingIdentity(PostingIdentity.System)
+            .WithQuiesceTimeout(TimeSpan.FromMinutes(5)));
+        var workspace = (Workspace)client.GetWorkspace();
+        var changeFeed = client.ServiceProvider.GetRequiredService<IMeshChangeFeed>();
+
+        // 1. Open the read against an owner whose store is empty, and let it serve the subscribe.
+        var stream = workspace.GetRemoteStreamUnchecked<MeshNode, MeshNodeReference>(
+            hostAddress, new MeshNodeReference());
+        using var reading = stream.Subscribe(_ => { }, _ => { });
+        await Observable.Interval(TimeSpan.FromMilliseconds(20)).StartWith(0L)
+            .Select(_ => Volatile.Read(ref subscribeRequests))
+            .Should().Within(TestTimeouts.Convergence)
+            .Match(n => n >= 1, "the initial SubscribeRequest reaches the owner");
+        await client.Observe<ReassertBarrierResponse>(new ReassertBarrierRequest(), o => o.WithTarget(hostAddress))
+            .Should().Within(TestTimeouts.Convergence).Emit("the owner has served the initial subscribe");
+
+        // 2. The subscriber re-asks; the owner has nothing to re-assert and HOLDS the answer.
+        changeFeed.Publish(new MeshChangeEvent(
+            Namespace: HostType, Id: "1", Path: hostAddress.Path, Kind: MeshChangeKind.Updated,
+            NodeType: null, Version: 5, Timestamp: DateTimeOffset.UtcNow));
+        await Observable.Interval(TimeSpan.FromMilliseconds(20)).StartWith(0L)
+            .Select(_ => Volatile.Read(ref subscribeRequests))
+            .Should().Within(TestTimeouts.Convergence)
+            .Match(n => n >= 2, "the change feed makes the subscriber re-ask the owner");
+        await client.Observe<ReassertBarrierResponse>(new ReassertBarrierRequest(), o => o.WithTarget(hostAddress))
+            .Should().Within(TestTimeouts.Convergence).Emit("the owner has taken the re-ask and holds its answer");
+
+        // 3. Tear the whole tree down: the parent disposes owner and subscriber together.
+        var clientGone = client.DisposalCompleted.FirstAsync().Replay(1);
+        using var clientGoneConnection = clientGone.Connect();
+        Mesh.Dispose();
+
+        // 4. The subscriber's teardown completes because the held re-ask was answered.
+        await clientGone.Should().Within(TestTimeouts.Convergence).Emit(
+            "the owner was torn down together with its parent while it held the answer to a re-ask, and "
+            + "the subscriber is Quiescing on that very callback. The owner must still refuse it, through "
+            + "the in-process NACK carrier; timing out here means the refusal was dropped for want of a route");
+        Output.WriteLine($"DIAG after: owner {host.RunLevel}, parent {Mesh.RunLevel}, subscriber {client.RunLevel}");
+    }
 }

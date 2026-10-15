@@ -1638,6 +1638,12 @@ public static class JsonSynchronizationStream
         // still post, else by the parent captured on the handler's turn — the owner's own Post is
         // gated closed from DisposeHostedHubs on, which is when its sync streams are disposed. Same
         // route as DataExtensions.NackSilentRead and the owner-side patch NACK.
+        //
+        // 🚨 With the parent past DisposeHostedHubs too — a whole-tree teardown — the answer is STILL
+        // posted through the owner (#6805 review). The post seam then hands a correlated NACK to a
+        // requester in this process directly (MessageHub.TryDeliverNackInProcess, #4072): a sibling
+        // subscriber is Quiescing on exactly this callback, and dropping the answer here left it
+        // waiting for its own quiesce budget.
         void RefuseAsTornDown(IMessageHub? parent, string why)
         {
             if (!ClaimTheAnswer())
@@ -1653,15 +1659,12 @@ public static class JsonSynchronizationStream
             };
             try
             {
-                if (hub.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
-                    hub.Post(failure, RespondTo);
-                else if (parent is not null && parent.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
+                if (parent is not null
+                    && hub.RunLevel >= MessageHubRunLevel.DisposeHostedHubs
+                    && parent.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
                     parent.Post(failure, RespondTo);
                 else
-                    logger.LogDebug(
-                        "Owner {Owner} and its parent are both tearing down; the held re-assert of "
-                        + "stream {StreamId} for {Subscriber} has no route left for its refusal",
-                        hub.Address, request.StreamId, request.Subscriber);
+                    hub.Post(failure, RespondTo);
             }
             catch (Exception ex)
             {
