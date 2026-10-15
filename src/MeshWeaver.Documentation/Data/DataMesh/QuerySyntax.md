@@ -539,6 +539,12 @@ Before #6830 each provider projected its own rows first; the merge could not rea
 dictionary and clipped in provider-arrival order, so a query served by two providers (a store plus
 the seeded static nodes, or several partitions) returned one provider's top N.
 
+A **free-text** read with no `sort:` is ordered by relevance, and the relevance travels with the
+rows: the storage-adapter provider ranks its matches by fuzzy score before its load cap AND
+reports that score on its Initial frame (`QueryResultChange.Scores`), so the merge re-sorts by the
+same key (score, then path) instead of scoring every row 0 and answering path order. That held for
+typed and untyped reads alike, and `Skip` pages the relevance order.
+
 On the typed path only ONE column is actually conditional: **`content`**. Every other field is
 projected regardless, so naming them is documentation rather than optimisation. But when `content`
 is *not* named, the storage adapter emits `NULL::jsonb AS content` (Postgres) or omits the field

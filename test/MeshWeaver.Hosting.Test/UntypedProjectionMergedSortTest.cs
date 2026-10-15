@@ -125,4 +125,125 @@ public class UntypedProjectionMergedSortTest
         untyped.Select(r => Field(r, "path")).Should().Equal(typed.Select(n => n.Path));
     }
 
+    // ── free text: the provider's relevance survives the merge (#6830 review) ─────────────────
+
+    /// <summary>
+    /// Matches for <c>needle</c> whose relevance order is the REVERSE of their path order: the
+    /// exact name sits on the last path, the weakest (longest, term buried) on the first.
+    /// </summary>
+    private static readonly (string Id, string Name)[] Needles =
+    [
+        ("n1", "a long haystack title that hides the word needle near its end"),
+        ("n2", "the needle somewhere"),
+        ("n3", "needle"),
+    ];
+
+    private static async Task<MeshQuery> OneStorageProvider(CancellationToken cancellationToken)
+    {
+        var store = new InMemoryStorageAdapter();
+        foreach (var (id, name) in Needles)
+            await store.Write(Node(id, name), Options).Await(cancellationToken);
+        return new MeshQuery([new StorageAdapterMeshQueryProvider(persistence: store)], hub: null!);
+    }
+
+    /// <summary>
+    /// The relevance order, from the very scorer the provider ranks by — never hand-guessed — and
+    /// asserted to DISAGREE with path order, so the test cannot pass by a path-ordered answer.
+    /// </summary>
+    private static string[] RelevanceOrder()
+    {
+        var evaluator = new QueryEvaluator();
+        var ranked = Needles
+            .Select(n => (n.Name, Path: $"Book/{n.Id}", Score: evaluator.GetFuzzyScore(Node(n.Id, n.Name), "needle")))
+            .OrderByDescending(r => r.Score)
+            .ThenBy(r => r.Path, StringComparer.Ordinal)
+            .Select(r => r.Name)
+            .ToArray();
+        ranked.SequenceEqual(Needles.Select(n => n.Name)).Should().BeFalse(
+            "the fixture is built so relevance order and path order disagree");
+        return ranked;
+    }
+
+    public static TheoryData<string> FreeTextQueries => new()
+    {
+        "namespace:Book needle select:path,name limit:3",
+        "namespace:Book needle limit:3",
+    };
+
+    /// <summary>
+    /// The core entry point (<see cref="IMeshQueryCore"/>), typed and untyped, with and without a
+    /// <c>select:</c>: a free-text read with no <c>sort:</c> answers best match first.
+    /// </summary>
+    [Theory(Timeout = 60_000)]
+    [MemberData(nameof(FreeTextQueries))]
+    public async Task AFreeTextReadKeepsTheProvidersRelevanceOrder_Core(string text)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var query = (IMeshQueryCore)await OneStorageProvider(ct);
+        var expected = RelevanceOrder();
+
+        (await Items<MeshNode>(query, text, ct)).Select(n => n.Name).Should().Equal(expected,
+            "a typed free-text read is ranked by relevance, not by path");
+        (await Items<object>(query, text, ct)).Select(r => r is MeshNode n ? n.Name : Field(r, "name"))
+            .Should().Equal(expected, "an untyped free-text read is ranked by relevance, not by path");
+    }
+
+    /// <summary>
+    /// The public entry point (<see cref="MeshQuery.Query{T}(MeshQueryRequest)"/>) merges the SECURED
+    /// provider surface (<see cref="IMeshQueryProvider.Query{T}"/>) through the same
+    /// <c>ClipMergedInitial</c> as the core entry — and resolves its serializer options from a hub,
+    /// so it is pinned here at the frame it consumes: that surface's Initial carries one score per
+    /// row, in relevance order, for typed and untyped reads alike. Without them the merge scores
+    /// every row 0 and answers path order.
+    /// </summary>
+    [Theory(Timeout = 60_000)]
+    [MemberData(nameof(FreeTextQueries))]
+    public async Task AFreeTextReadKeepsTheProvidersRelevanceOrder_Public(string text)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var store = new InMemoryStorageAdapter();
+        foreach (var (id, name) in Needles)
+            await store.Write(Node(id, name), Options).Await(ct);
+        IMeshQueryProvider provider = new StorageAdapterMeshQueryProvider(persistence: store);
+        var expected = RelevanceOrder();
+
+        async Task<QueryResultChange<T>> Initial<T>() =>
+            await provider.Query<T>(new MeshQueryRequest { Query = text }, Options)
+                .Where(c => c.ChangeType == QueryChangeType.Initial)
+                .FirstAsync()
+                .Timeout(TestTimeouts.Convergence)
+                .Await(ct);
+
+        var typed = await Initial<MeshNode>();
+        typed.Items.Select(n => n.Name).Should().Equal(expected, "the provider ranks by relevance");
+        typed.Scores.Should().NotBeNull("the rank the provider clipped by must reach the merge");
+        typed.Scores!.Should().HaveCount(typed.Items.Count).And.BeInDescendingOrder();
+        typed.Scores!.Distinct().Should().HaveCount(typed.Scores!.Count,
+            "the fixture's matches differ in relevance, so path order cannot satisfy the merge");
+
+        var untyped = await Initial<object>();
+        untyped.Scores.Should().NotBeNull("an untyped read reports its rank too");
+        untyped.Scores!.Should().Equal(typed.Scores, "the score is read off the matched node, before any projection");
+    }
+
+    /// <summary>
+    /// <c>Skip</c> pages the RELEVANCE order: the second-best match is page two of size one.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task SkipPagesTheRelevanceOrder()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var query = (IMeshQueryCore)await OneStorageProvider(ct);
+        var expected = RelevanceOrder();
+
+        var change = await query.Query<object>(
+                new MeshQueryRequest { Query = "namespace:Book needle select:path,name", Skip = 1, Limit = 1 }, Options)
+            .Where(c => c.ChangeType == QueryChangeType.Initial)
+            .FirstAsync()
+            .Timeout(TestTimeouts.Convergence)
+            .Await(ct);
+
+        change.Items.Select(r => Field(r, "name")).Should().Equal(new[] { expected[1] },
+            "page two of the relevance order, not of the path order");
+    }
 }
