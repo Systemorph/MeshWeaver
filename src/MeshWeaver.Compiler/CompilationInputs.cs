@@ -35,4 +35,24 @@ internal sealed record CompilationInputs(
     ImmutableArray<MetadataReference> References,
     CSharpParseOptions ParseOptions,
     CSharpCompilationOptions CompilationOptions,
-    ImmutableDictionary<string, long> SourceVersions);
+    ImmutableDictionary<string, long> SourceVersions)
+{
+    /// <summary>
+    /// The HOST reference set alone — <see cref="References"/> before any <c>#r "nuget:…"</c>
+    /// closure was composed in. A speculative compile that changes a directive rebuilds the package
+    /// half from here (<c>CompileReferences.WithPackageAssemblies</c>); composing onto
+    /// <see cref="References"/> would treat the stored sources' package copies as host-owned and
+    /// discard the proposed version. Default: <see cref="References"/> (no package closure known).
+    /// </summary>
+    public ImmutableArray<MetadataReference> HostReferences { get; init; }
+
+    /// <summary>The <c>#r "nuget:…"</c> directives the generated skeleton carried (normally none).</summary>
+    public ImmutableArray<MeshWeaver.NuGet.NuGetPackageReference> SkeletonNuGetReferences { get; init; } = [];
+
+    /// <summary>The <c>#r "nuget:…"</c> directives each source in <see cref="Sources"/> carried
+    /// before they were stripped, by source path — so a speculative compile can rebuild the
+    /// directive set of the EFFECTIVE sources.</summary>
+    public ImmutableDictionary<string, ImmutableArray<MeshWeaver.NuGet.NuGetPackageReference>> SourceNuGetReferences { get; init; }
+        = ImmutableDictionary<string, ImmutableArray<MeshWeaver.NuGet.NuGetPackageReference>>.Empty
+            .WithComparers(StringComparer.OrdinalIgnoreCase);
+}
