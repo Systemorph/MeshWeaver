@@ -191,4 +191,39 @@ public sealed class PackageCompositionRuleTest : IDisposable
         SourceGeneratorLoader.Discover([helper, generator], Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance)
             .Should().ContainSingle();
     }
+
+    /// <summary>
+    /// A generator's dependency that ships a RID-specific runtime group is preloaded from that
+    /// group, never from its <c>lib/</c> compile asset — a stub there would become the "host" copy
+    /// every NodeType context unifies with.
+    /// </summary>
+    [Fact]
+    public void AGeneratorsRidSpecificDependency_LoadsItsRuntimeAsset()
+    {
+        var suffix = Guid.NewGuid().ToString("N");
+        var depName = "MwRidDep" + suffix;
+        var rid = OperatingSystem.IsWindows() ? "win" : "unix";
+        var stub = Emit(Path.Combine("riddep", "lib", "net8.0"), depName, "1.0.0.0",
+            "public abstract class RidBase" + suffix + " { public static string Where => \"stub\"; }");
+        var runtime = Emit(Path.Combine("riddep", "runtimes", rid, "lib", "net8.0"), depName, "1.0.0.0",
+            "public abstract class RidBase" + suffix + " { public static string Where => \"runtime\"; }");
+        var generator = Path.Combine(root, "gen2", "MwRidGen" + suffix + ".dll");
+        Directory.CreateDirectory(Path.GetDirectoryName(generator)!);
+        var emitted = CSharpCompilation.Create("MwRidGen" + suffix,
+            [CSharpSyntaxTree.ParseText(
+                "using Microsoft.CodeAnalysis;\n"
+                + "[Generator] public sealed class Gen" + suffix + " : RidBase" + suffix + ", ISourceGenerator {\n"
+                + "  public void Initialize(GeneratorInitializationContext context) { }\n"
+                + "  public void Execute(GeneratorExecutionContext context) { }\n"
+                + "}")],
+            [.. CompileReferences.Default, MetadataReference.CreateFromFile(stub)],
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)).Emit(generator);
+        Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics));
+
+        SourceGeneratorLoader.RuntimeAssetOf(stub).Should().Be(runtime);
+        SourceGeneratorLoader.Discover([stub, generator], Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance)
+            .Should().ContainSingle();
+        System.Runtime.Loader.AssemblyLoadContext.Default.Assemblies
+            .Single(a => a.GetName().Name == depName).Location.Should().Be(runtime);
+    }
 }

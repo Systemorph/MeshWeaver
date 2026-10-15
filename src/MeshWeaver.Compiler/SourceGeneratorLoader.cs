@@ -58,15 +58,44 @@ internal static class SourceGeneratorLoader
             if (MeshWeaver.NuGet.PackageAssemblyProbe.HostIdentityOf(reference) is not null)
                 continue; // the host binds it
             PreloadDependencies(dependency, byName, preloaded, logger);
+            // The candidates are COMPILE assets; what loads is the package's RUNTIME asset — a
+            // RID-specific library's lib/ copy is a stub that, once in the default context, every
+            // NodeType context would unify with as the host's copy.
+            if (RuntimeAssetOf(dependency) is not { } runtimeAsset)
+                continue;
             try
             {
-                Assembly.LoadFrom(dependency);
+                Assembly.LoadFrom(runtimeAsset);
             }
             catch (Exception ex) when (ex is IOException or BadImageFormatException or FileLoadException)
             {
                 logger.LogDebug(ex, "SourceGeneratorLoader: could not preload generator dependency {Path}", dependency);
             }
         }
+    }
+
+    /// <summary>
+    /// The runtime asset standing for the compile asset at <paramref name="compilePath"/>
+    /// (<c>{package}/lib/{tfm}/{name}.dll</c>): the package's <c>runtimes/{rid}/lib/{tfm}/</c> copy for
+    /// the running RID when it ships a runtime group, else the compile asset itself; <c>null</c> when
+    /// the runtime group for this RID does not carry the assembly (nothing to load here).
+    /// </summary>
+    internal static string? RuntimeAssetOf(string compilePath)
+    {
+        var tfmDir = Path.GetDirectoryName(compilePath);
+        var libDir = tfmDir is null ? null : Path.GetDirectoryName(tfmDir);
+        if (libDir is null || !string.Equals(Path.GetFileName(libDir), "lib", StringComparison.OrdinalIgnoreCase))
+            return compilePath;
+        var packageRoot = Path.GetDirectoryName(libDir);
+        if (packageRoot is null || !Directory.Exists(Path.Combine(packageRoot, "runtimes")))
+            return compilePath;
+        var files = Directory.EnumerateFiles(packageRoot, "*", SearchOption.AllDirectories)
+            .Select(f => Path.GetRelativePath(packageRoot, f));
+        var assets = MeshWeaver.NuGet.RuntimeAssetSelector.Select(
+            packageRoot, files, global::NuGet.Frameworks.NuGetFramework.Parse("net10.0"),
+            MeshWeaver.NuGet.RuntimeAssetSelector.RidFallbackChain());
+        var fileName = Path.GetFileName(compilePath);
+        return assets.Runtime.FirstOrDefault(p => string.Equals(Path.GetFileName(p), fileName, StringComparison.OrdinalIgnoreCase));
     }
 
     private static IEnumerable<string> ReferencedNames(string path)

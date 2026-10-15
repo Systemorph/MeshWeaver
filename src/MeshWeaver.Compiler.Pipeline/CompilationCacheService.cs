@@ -893,7 +893,8 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
         // another publisher is a different assembly here exactly as in the compile's choice.
         var module = string.IsNullOrEmpty(name) ? null : _modules?.Resolve(name);
         if (module is not null
-            && !MeshWeaver.NuGet.PackageAssemblyProbe.SameIdentityModuloVersion(assemblyName, module.GetName()))
+            && !(MeshWeaver.NuGet.PackageAssemblyProbe.SameIdentityModuloVersion(assemblyName, module.GetName())
+                 && MeshWeaver.NuGet.PackageAssemblyProbe.SameIdentityModuloVersion(module.GetName(), assemblyName)))
             module = null;
         if (module is not null
             && (assemblyName.Version is null || module.GetName().Version is not { } moduleVersion
