@@ -1,5 +1,7 @@
+using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using MeshWeaver.ServiceProvider;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
@@ -258,38 +260,101 @@ internal sealed class ModuleHostedServicesHost(ModuleContexts contexts, ILogger?
 /// 'MeshWeaver.SelfUpdate.Aks.FleetWatchHeartbeat' while attempting to activate
 /// 'MeshWeaver.SelfUpdate.Aks.FleetWatchHealthCheck'</c>) and the control image never passed acceptance.</para>
 ///
-/// <para>So this forwarder runs the module's CURRENT generation's configuration and rebinds every
-/// registration it added to activate in that module's CURRENT scope — the same scope the check's
-/// dependencies (and the hosted service that feeds them) are served from, read at every activation so a
-/// live swap is followed.</para>
+/// <para>So the root holds, for every check the module declares, a registration that names NO module
+/// type — its name, tags, failure status, timeout, delay and period — and whose factory, at every
+/// activation, takes ONE snapshot of the module's CURRENT generation and runs THAT generation's own
+/// factory for the check of that name in THAT generation's container.</para>
+///
+/// <para>🚨 <b>Why the factory is the current generation's, not the boot one's</b> (MeshWeaver#6766).
+/// <c>IOptions&lt;HealthCheckServiceOptions&gt;</c> is built once per process, so a factory captured
+/// while it was built is generation N's <c>GetServiceOrCreateInstance&lt;TCheck&gt;</c> — <c>TCheck</c>
+/// is N's type, and so are its constructor's parameter types. Rebinding only the PROVIDER to the
+/// current scope then asked generation N+1's container, after a live swap, for N's dependency type,
+/// which it does not hold: <c>Unable to resolve service for type 'MeshWeaver.AI.ProviderCatalogConvergence'
+/// while attempting to activate 'MeshWeaver.AI.ProviderCatalogHealthCheck'</c> on every <c>/health</c>
+/// until the pod restarted — and the captured factory pinned generation N's collectible context.</para>
+///
+/// <para>A module that is no longer held (retired by an uninstall, or withdrawn at boot), or a current
+/// generation that no longer declares the check, is a NAMED <see cref="HealthStatus.Degraded"/> verdict
+/// for that check — never an exception out of the health middleware: the feature is absent, and the
+/// probe says which and why.</para>
 ///
 /// <para>🚨 It is an <see cref="IConfigureNamedOptions{TOptions}"/>, as <see cref="ModuleConfigureOptionsForwarder{TOptions}"/>
 /// is, and applies the module's setup by name exactly as <see cref="OptionsFactory{TOptions}"/> would: a module's
 /// <c>Configure&lt;HealthCheckServiceOptions&gt;("name", …)</c> must reach <c>IOptionsMonitor.Get("name")</c>, and a
-/// setup that is not named reaches the default name only (MeshWeaver#6749).</para>
+/// setup that is not named reaches the default name only (MeshWeaver#6749). The per-generation snapshot below is
+/// therefore taken PER OPTIONS NAME.</para>
 /// </summary>
 internal sealed class ModuleHealthCheckOptionsForwarder(ModuleContexts contexts, string module, int index)
     : IConfigureNamedOptions<HealthCheckServiceOptions>
 {
+    // The checks each GENERATION declares, per options name, by check name — keyed weakly by that
+    // generation's services, so a retired generation is never pinned by this table (an ephemeron: the
+    // value lives only while the key does). Mesh-scoped instance state on a singleton, never static
+    // (NoStaticState).
+    private readonly ConditionalWeakTable<ModuleServices, ConcurrentDictionary<string, ImmutableDictionary<string, HealthCheckRegistration>>> declared = new();
+
     public void Configure(HealthCheckServiceOptions options) => Configure(Options.DefaultName, options);
 
     public void Configure(string? name, HealthCheckServiceOptions options)
     {
-        var target = contexts.ResolveModuleService(module, index);
-        var before = options.Registrations.ToHashSet(ReferenceEqualityComparer.Instance);
-        if (target is IConfigureNamedOptions<HealthCheckServiceOptions> named)
-            named.Configure(name, options);
-        else if (name == Options.DefaultName)
-            ((IConfigureOptions<HealthCheckServiceOptions>)target).Configure(options);
-        else
-            return;
-        foreach (var registration in options.Registrations.Where(r => !before.Contains(r)).ToArray())
+        var optionsName = name ?? Options.DefaultName;
+        if (contexts.Current(module)?.Services is not { } services)
         {
-            var activate = registration.Factory;
-            registration.Factory = _ => activate(contexts.ModuleScope(module)
-                ?? throw new InvalidOperationException(
-                    $"Module {module} holds no service scope — its health check '{registration.Name}' cannot be activated."));
+            // Withdrawn before the options were first read: its checks cannot even be named. One
+            // named verdict stands for them (the withdrawal itself is an IncompatibleModule record) —
+            // on the default name only, where a setup that cannot say its name lands.
+            if (optionsName == Options.DefaultName)
+                options.Registrations.Add(new HealthCheckRegistration(module,
+                    _ => Absent($"module {module} is not held by this mesh's module registry — it was withdrawn, so its health checks cannot run"),
+                    HealthStatus.Degraded, null));
+            return;
         }
+        foreach (var check in Declared(services, optionsName).Values.OrderBy(r => r.Name, StringComparer.Ordinal))
+        {
+            var checkName = check.Name;
+            options.Registrations.Add(new HealthCheckRegistration(checkName, _ => Activate(optionsName, checkName), check.FailureStatus, check.Tags, check.Timeout)
+            {
+                Delay = check.Delay,
+                Period = check.Period,
+            });
+        }
+    }
+
+    // ONE snapshot of the current generation: the factory and the container are the same generation's.
+    private IHealthCheck Activate(string optionsName, string name)
+    {
+        if (contexts.Current(module)?.Services is not { } services
+            || contexts.TryScopeOf(services) is not { } scope)
+            return Absent($"module {module} is no longer held by this mesh's module registry (retired or withdrawn) — its health check '{name}' cannot run");
+        return Declared(services, optionsName).TryGetValue(name, out var check)
+            ? check.Factory(scope)
+            : Absent($"the current generation of module {module} no longer declares the health check '{name}'");
+    }
+
+    // What `services`' own configuration adds to an EMPTY options instance of `optionsName`: that
+    // generation's checks, with that generation's factories — applied by name exactly as the options
+    // factory would (#6749). Run once per generation and name.
+    private ImmutableDictionary<string, HealthCheckRegistration> Declared(ModuleServices services, string optionsName) =>
+        declared.GetValue(services, _ => new ConcurrentDictionary<string, ImmutableDictionary<string, HealthCheckRegistration>>(StringComparer.Ordinal))
+            .GetOrAdd(optionsName, n =>
+            {
+                var probe = new HealthCheckServiceOptions();
+                var target = contexts.ResolveIn(services, index);
+                if (target is IConfigureNamedOptions<HealthCheckServiceOptions> named)
+                    named.Configure(n, probe);
+                else if (n == Options.DefaultName)
+                    ((IConfigureOptions<HealthCheckServiceOptions>)target).Configure(probe);
+                return probe.Registrations.ToImmutableDictionary(r => r.Name, StringComparer.Ordinal);
+            });
+
+    private static IHealthCheck Absent(string why) => new AbsentModuleHealthCheck(why);
+
+    /// <summary>The verdict for a check whose module (or whose declaration) is gone.</summary>
+    private sealed class AbsentModuleHealthCheck(string why) : IHealthCheck
+    {
+        public Task<HealthCheckResult> CheckHealthAsync(HealthCheckContext context, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new HealthCheckResult(HealthStatus.Degraded, why));
     }
 }
 

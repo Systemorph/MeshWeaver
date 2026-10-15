@@ -354,6 +354,15 @@ public sealed class ModuleServices : IDisposable
         }
     }
 
+    /// <summary>As <see cref="Scope"/>, or null once this generation's services are disposed (a live
+    /// uninstall, a swap's retirement, a boot withdrawal) — the disposal is an answer here, not a fault.</summary>
+    /// <param name="root">The mesh's root provider.</param>
+    internal IServiceProvider? TryScope(IServiceProvider root)
+    {
+        lock (gate)
+            return disposed != 0 ? null : Scope(root);
+    }
+
     /// <summary>The live swap this generation was staged in, or null (a generation loaded at boot).</summary>
     internal ModuleSwapStage? Stage { get; set; }
 
