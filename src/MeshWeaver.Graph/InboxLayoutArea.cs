@@ -280,16 +280,16 @@ public static class InboxLayoutArea
     }
 
     /// <summary>
-    /// The tag menu's options: all tags (empty key), then <see cref="InboxRows.TagCounts"/> — Important
-    /// under its own label, every other tag as <c>#tag</c> — each with its count. Pure.
+    /// The tag menu's options: all tags (empty key), then <see cref="InboxRows.TagCounts"/> — the items
+    /// judged important under their own label, every tag as <c>#tag</c> — each with its count. Pure.
     /// </summary>
     internal static ImmutableList<Option> TagOptions(string allLabel, string importantLabel,
-        IEnumerable<(string Tag, int Count)> counts)
+        IEnumerable<(string Key, string Tag, int Count)> counts)
         =>
         [
             new Option<string>(string.Empty, allLabel),
-            .. counts.Select(c => (Option)new Option<string>(c.Tag,
-                (string.Equals(c.Tag, InboxImportance.Important, StringComparison.Ordinal) ? $"⭐ {importantLabel}" : "#" + c.Tag)
+            .. counts.Select(c => (Option)new Option<string>(c.Key,
+                (string.Equals(c.Key, InboxRows.ImportantKey, StringComparison.Ordinal) ? $"⭐ {importantLabel}" : "#" + c.Tag)
                 + $"  {c.Count}")),
         ];
 

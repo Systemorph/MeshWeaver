@@ -200,8 +200,8 @@ public sealed record InboxFilter
     public string Only { get; init; } = string.Empty;
 
     /// <summary>
-    /// The side-menu tag picked (<see cref="InboxRow.Tags"/>, or <see cref="InboxImportance.Important"/>
-    /// for the items judged important), or empty for all. It narrows whatever else is shown.
+    /// The side-menu tag entry picked — <see cref="InboxRows.TagKey"/> of a tag, or
+    /// <see cref="InboxRows.ImportantKey"/> for the items judged important — or empty for all. It narrows whatever else is shown.
     /// </summary>
     public string Tag { get; init; } = string.Empty;
 
@@ -297,7 +297,9 @@ public static class InboxRows
     {
         // ONE read of the row's content — its time, sender, link and read state all come from it, and
         // that conversion is paid per row on every render.
-        var content = string.IsNullOrWhiteSpace(section.TimeField) ? null : ContentOf(node, options);
+        // Read whenever the node carries content — its importance and tags do not depend on how the
+        // source times its rows. (An untimed leg's projection drops content, so this costs nothing there.)
+        var content = ContentOf(node, options);
         var at = TimeFrom(node, section.TimeField, content);
         var from = StringOf(content, "from");
         var tags = TagsOf(content);
@@ -482,31 +484,41 @@ public static class InboxRows
     internal static bool IsIgnorable(InboxRow row)
         => string.Equals(row.Importance, InboxImportance.Ignorable, StringComparison.Ordinal);
 
-    /// <summary>
-    /// Whether <paramref name="row"/> carries <paramref name="tag"/> — or, for
-    /// <see cref="InboxImportance.Important"/>, was judged important. A picked tag shows its rows even
-    /// when they are ignorable: the viewer who picks <c>promo</c> asked for the promotions. Pure.
-    /// </summary>
-    internal static bool HasTag(InboxRow row, string tag)
-        => row.Tags.Contains(tag)
-           || (string.Equals(tag, InboxImportance.Important, StringComparison.Ordinal)
-               && string.Equals(row.Importance, InboxImportance.Important, StringComparison.Ordinal));
+    /// <summary>The side-menu key of the items judged important — never a tag's key (<see cref="TagKey"/>).</summary>
+    public const string ImportantKey = "importance:" + InboxImportance.Important;
 
     /// <summary>
-    /// The side menu's tag counts, read off the merged rows BEFORE any filter applies: the items judged
-    /// important first (under <see cref="InboxImportance.Important"/>), then each tag, most used first
-    /// and alphabetically among equals. Pure.
+    /// The side-menu key of <paramref name="tag"/>. Prefixed, so an ordinary tag spelled
+    /// <c>important</c> and the items JUDGED important are two entries that count and match apart.
     /// </summary>
-    public static ImmutableList<(string Tag, int Count)> TagCounts(IEnumerable<InboxRow> rows)
+    public static string TagKey(string tag) => "tag:" + tag;
+
+    /// <summary>
+    /// Whether <paramref name="row"/> matches the side-menu <paramref name="key"/>: judged important
+    /// for <see cref="ImportantKey"/>, carrying the tag for a <see cref="TagKey"/>, nothing otherwise.
+    /// A picked key shows its rows even when they are ignorable: the viewer who picks <c>#promo</c>
+    /// asked for the promotions. Pure.
+    /// </summary>
+    internal static bool HasTag(InboxRow row, string key)
+        => string.Equals(key, ImportantKey, StringComparison.Ordinal)
+            ? string.Equals(row.Importance, InboxImportance.Important, StringComparison.Ordinal)
+            : key.StartsWith("tag:", StringComparison.Ordinal) && row.Tags.Contains(key["tag:".Length..]);
+
+    /// <summary>
+    /// The side menu's tag entries, read off the merged rows BEFORE any filter applies, keyed as
+    /// <see cref="HasTag"/> matches them: the items judged important first (<see cref="ImportantKey"/>,
+    /// when any are), then every tag — an ordinary <c>important</c> tag included — most used first and
+    /// alphabetically among equals. Pure.
+    /// </summary>
+    public static ImmutableList<(string Key, string Tag, int Count)> TagCounts(IEnumerable<InboxRow> rows)
     {
         var list = rows as IReadOnlyCollection<InboxRow> ?? rows.ToImmutableList();
         var important = list.Count(r => string.Equals(r.Importance, InboxImportance.Important, StringComparison.Ordinal));
         var tags = list.SelectMany(r => r.Tags)
-            .Where(t => !string.Equals(t, InboxImportance.Important, StringComparison.Ordinal))
             .GroupBy(t => t, StringComparer.Ordinal)
-            .Select(g => (Tag: g.Key, Count: g.Count()))
+            .Select(g => (Key: TagKey(g.Key), Tag: g.Key, Count: g.Count()))
             .OrderByDescending(t => t.Count).ThenBy(t => t.Tag, StringComparer.Ordinal);
-        return [.. (important > 0 ? [(InboxImportance.Important, important)] : Array.Empty<(string, int)>()), .. tags];
+        return [.. (important > 0 ? [(ImportantKey, string.Empty, important)] : Array.Empty<(string, string, int)>()), .. tags];
     }
 
     /// <summary>
