@@ -36,6 +36,18 @@ scenario = set(os.environ.get('SCENARIO', '').split(','))
 with open(os.environ['CALLS'], 'a') as f:
     f.write(tool + ' ' + line + '\n')
 def out(text): sys.stdout.write(text)
+# Emulate the invoke pod: NO kubeconfig, only the in-cluster service account. client-go uses that
+# fallback only while the client config is the default — a connection flag (or a lost
+# environment) sends kubectl to localhost:8080, exactly as measured on 2026-10-15.
+CONNECTION_FLAGS = {'--request-timeout', '--server', '-s', '--token', '--kubeconfig', '--context',
+                    '--cluster', '--user', '--insecure-skip-tls-verify', '--certificate-authority',
+                    '--client-certificate', '--client-key', '--username', '--password',
+                    '--tls-server-name', '--kube-apiserver', '--kube-token', '--kube-context',
+                    '--kubeconfig', '--kube-as-user', '--kube-ca-file'}
+if (not os.environ.get('KUBERNETES_SERVICE_HOST')
+        or any(a.split('=', 1)[0] in CONNECTION_FLAGS for a in args)):
+    sys.stderr.write('The connection to the server localhost:8080 was refused - did you specify the right host or port?\n')
+    sys.exit(1)
 if tool == 'helm':
     if args[:1] == ['status'] and 'slow-helm' in scenario:
         import time; time.sleep(60)                  # a stalled metadata query
@@ -64,6 +76,10 @@ if 'configmap' in line or 'replace' in args:
         if 'stale-lock' in scenario and 'replace' not in open(os.environ['CALLS']).read():
             out('dead-run %d 41' % (time.time() - 10)); sys.exit(0)
         out('this-run'); sys.exit(0)                  # the release check reads only the holder
+    sys.exit(0)
+if 'delete pod loki-prometheus-tsdb-recovery' in line and 'slow-delete' in scenario:
+    import time; time.sleep(25)                       # a pod that takes 25 s to terminate
+    with open(os.environ['CALLS'], 'a') as f: f.write('delete-done\n')
     sys.exit(0)
 if 'apply' in args:
     with open(os.environ['MANIFEST'], 'w') as f: f.write(sys.stdin.read())
@@ -99,7 +115,8 @@ if 'get pod loki-prometheus-server-abc' in line:
     else: out('0 true')
     sys.exit(0)
 if 'get pod loki-prometheus-tsdb-recovery' in line:
-    deleted = 'delete pod loki-prometheus-tsdb-recovery' in open(os.environ['CALLS']).read()
+    marker = 'delete-done' if 'slow-delete' in scenario else 'delete pod loki-prometheus-tsdb-recovery'
+    deleted = marker in open(os.environ['CALLS']).read()
     if 'leftover-stuck' in scenario or ('leftover-cleaner' in scenario and not deleted):
         out('pod/loki-prometheus-tsdb-recovery')
         sys.exit(0)
@@ -139,7 +156,7 @@ class Run:
         return -1
 
 
-def run_installer(*scenario, budget=None, target=None):
+def run_installer(*scenario, budget=None, target=None, env_drop=()):
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         for name in ('helm', 'kubectl'):
@@ -150,11 +167,14 @@ def run_installer(*scenario, budget=None, target=None):
         env = dict(os.environ, PATH=str(root) + os.pathsep + os.environ['PATH'],
                    GRAFANA_PW='synthetic-test-only', VALUES=str(root / 'values.yaml'),
                    SCENARIO=','.join(scenario), CALLS=str(calls), MANIFEST=str(manifest),
-                   OBS_LOCK_HOLDER='this-run')
+                   OBS_LOCK_HOLDER='this-run',
+                   KUBERNETES_SERVICE_HOST='10.43.0.1', KUBERNETES_SERVICE_PORT='443')
         if budget is not None:
             env['OBS_BUDGET_SECONDS'] = str(budget)
         if target is not None:
             env['TSDB_RECOVERY_TARGET_PERCENT'] = target
+        for name in env_drop:
+            env.pop(name, None)
         result = subprocess.run(['bash', str(SCRIPT)], env=env, capture_output=True, text=True,
                                 timeout=90)
         return Run(result,
@@ -222,6 +242,38 @@ class OrderAndDeadlineTest(unittest.TestCase):
         self.assertEqual(run.index('helm upgrade'), -1, run.calls)
 
 
+class InClusterConfigTest(unittest.TestCase):
+    """The invoke pod has no kubeconfig — kubectl and helm must stay on the in-cluster config."""
+
+    def test_no_call_carries_a_connection_flag_and_the_environment_reaches_every_call(self):
+        # The stub refuses a call with a connection flag or without KUBERNETES_SERVICE_HOST, so a
+        # green run here means every one of these calls ran on the in-cluster config.
+        for scenario in ((), ('pending-upgrade', 'out-of-space'), ('prometheus-not-ready',),
+                         ('stale-lock',)):
+            with self.subTest(scenario=scenario):
+                run = run_installer(*scenario)
+                self.assertNotIn('localhost:8080', run.stderr)
+                self.assertIn(run.code, (0, 2), run.stderr)
+                for call in run.calls:
+                    flags = {a.split('=', 1)[0] for a in call.split()[1:]}
+                    self.assertFalse(flags & {'--request-timeout', '--server', '--kubeconfig', '--token',
+                                              '--context', '--kube-apiserver', '--kube-token'}, call)
+
+    def test_the_bounded_wrapper_keeps_stdin_for_piped_manifests(self):
+        # `… | kc apply -f -` runs kubectl as a background job; without an explicit stdin it would
+        # read /dev/null and apply an empty manifest.
+        run = run_installer('out-of-space')
+        self.assertEqual(run.code, 0, run.stderr)
+        self.assertIn('kind: Pod', run.manifest)
+
+    def test_a_lost_in_cluster_environment_is_red_not_silent(self):
+        # Negative control for the stub itself: without the service-account environment kubectl
+        # cannot reach the API, and the installer must fail RED naming the lock it could not take.
+        run = run_installer(env_drop=('KUBERNETES_SERVICE_HOST',))
+        self.assertEqual(run.code, 1, run.stdout)
+        self.assertIn('install lock', run.stderr)
+
+
 class InstallLockTest(unittest.TestCase):
     def test_the_lock_is_taken_first_and_released_last(self):
         run = run_installer('pending-upgrade', 'out-of-space')
@@ -266,6 +318,13 @@ class LeftoverCleanerTest(unittest.TestCase):
         self.assertGreaterEqual(delete, 0, run.calls)
         self.assertLess(delete, run.index('helm rollback'), run.calls)
         self.assertLess(delete, run.index('helm upgrade'), run.calls)
+
+    def test_a_slow_but_successful_delete_is_waited_for(self):
+        # The waiting delete may take up to its own 30 s; a 20-second short-call bound would kill
+        # it at 20 s, see the pod still terminating, and abort a recoverable run.
+        run = run_installer('leftover-cleaner', 'slow-delete')
+        self.assertEqual(run.code, 0, run.stderr)
+        self.assertGreaterEqual(run.index('helm upgrade'), 0, run.calls)
 
     def test_a_leftover_cleaner_that_stays_blocks_rollback_and_upgrade(self):
         # The retry after a failed teardown: the server is at 0, so there is no crash evidence —
@@ -390,9 +449,6 @@ class FullTsdbTest(unittest.TestCase):
         self.assertLess(elapsed, 35 + 12, elapsed)
         self.assertEqual(run.index('apply -f -'), -1, run.calls)
         self.assertGreaterEqual(run.index('--replicas=1'), 0, run.calls)
-        for call in run.calls:
-            if 'get pods -l' in call and '-o name' in call:
-                self.assertLessEqual(int(re.search(r'--request-timeout=(\d+)s', call).group(1)), 35)
 
     def test_cleaner_not_confirmed_gone_leaves_the_server_at_zero(self):
         run = run_installer('out-of-space', 'recovery-fails', 'teardown-stuck')
