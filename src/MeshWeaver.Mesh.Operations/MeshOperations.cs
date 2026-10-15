@@ -1450,14 +1450,50 @@ public partial class MeshOperations
         }
         else
         {
-            var cleanQuery = query.Replace("namespace:", "").Trim();
-            // "Base path to search FROM" is the whole subtree, not one level of it. A bare
-            // `namespace:X` is IMMEDIATE CHILDREN, so `basePath: @Admin` + `nodeType:LogIncident`
-            // answered 0 for nodes at `Admin/_LogIncident/…` — the parameter whose documented
-            // purpose is scoping did not reach what it scoped to (#4274, property 1). A query that
-            // states its own scope keeps it.
-            var scoped = StatesScope(cleanQuery) ? cleanQuery : $"{cleanQuery} scope:descendants".Trim();
-            fullQuery = $"namespace:{resolvedBase} {scoped}".Trim();
+            // 🚨 The query's OWN location is never rewritten (#6828). This used to strip every
+            // `namespace:` out of the text before prefixing the base, so `namespace:acme/Deals …`
+            // under `basePath: @beta` became the FREE-TEXT term `acme/Deals`, read against beta's
+            // partition: a semantic search flooded with whatever mentioned the words, with
+            // `coverage.partitions: ["beta"]` for a query that named acme — and `-namespace:X`, an
+            // exclusion, became a search FOR X. Now a query that states its own location keeps it
+            // when that location lies under the base (it is the narrower statement) and is
+            // refused, naming both, when it does not; only a query that names no location of its
+            // own is scoped by the base.
+            var own = new QueryParser().Parse(query);
+            var ownLocations = OwnLocations(own);
+            if (ownLocations is null)
+            {
+                // "Base path to search FROM" is the whole subtree, not one level of it. A bare
+                // `namespace:X` is IMMEDIATE CHILDREN, so `basePath: @Admin` + `nodeType:LogIncident`
+                // answered 0 for nodes at `Admin/_LogIncident/…` — the parameter whose documented
+                // purpose is scoping did not reach what it scoped to (#4274, property 1). A query that
+                // states its own scope keeps it.
+                // An EMPTY `namespace:`/`path:` names no location (callers write `namespace:` with a
+                // basePath to mean "the children of the base") — drop it, or it would re-anchor the
+                // composed query at the root.
+                var trimmed = string.Join(' ', query.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                    .Where(token => !token.Equals("namespace:", StringComparison.OrdinalIgnoreCase)
+                        && !token.Equals("path:", StringComparison.OrdinalIgnoreCase)));
+                var scoped = StatesScope(trimmed) ? trimmed : $"{trimmed} scope:descendants".Trim();
+                fullQuery = $"namespace:{resolvedBase} {scoped}".Trim();
+            }
+            else
+            {
+                var outside = ownLocations.Where(l => !IsAtOrUnder(l, resolvedBase)).ToList();
+                if (outside.Count > 0)
+                {
+                    logger.LogInformation(
+                        "Search refused: query {Query} names locations {Outside} outside basePath {BasePath}",
+                        query, outside, basePath);
+                    return Observable.Return(
+                        $"Error: basePath '{resolvedBase}' and the query's own location "
+                        + $"({string.Join(", ", outside.Select(l => l.Length == 0 ? "the root" : $"'{l}'"))}) disagree — "
+                        + "the query names a place outside the base, so no answer could honour both. "
+                        + "Drop the basePath to search where the query says, or drop the query's "
+                        + "path:/namespace: to search under the base.");
+                }
+                fullQuery = query;
+            }
         }
 
         var parsed = new QueryParser().Parse(fullQuery);
@@ -1546,6 +1582,32 @@ public partial class MeshOperations
     private static bool StatesScope(string query)
         => query.Split(' ', StringSplitOptions.RemoveEmptyEntries)
             .Any(token => token.StartsWith("scope:", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// The locations a query names on its own — its <c>path:</c>/<c>namespace:</c> anchor(s) and
+    /// any positive namespace filter (membership or wildcard) — or <see langword="null"/> when it
+    /// names none and a <c>basePath</c> must scope it. An exclusion (<c>-namespace:X</c>) is a
+    /// filter, not a location, and is left for the base to scope (#6828).
+    /// </summary>
+    private static IReadOnlyList<string>? OwnLocations(ParsedQuery parsed)
+    {
+        var locations = new List<string>();
+        if (parsed.Paths is { Count: > 0 } paths)
+            locations.AddRange(paths);
+        else if (!string.IsNullOrEmpty(parsed.Path))
+            locations.Add(parsed.Path);
+        locations.AddRange(parsed.ExtractNamespacePatterns());
+        return locations.Count == 0 ? null : locations.Select(l => l.Trim('/')).ToList();
+    }
+
+    /// <summary>Whether <paramref name="location"/> is <paramref name="basePath"/> or lies below it.</summary>
+    private static bool IsAtOrUnder(string location, string basePath)
+    {
+        var root = basePath.Trim('/');
+        return root.Length == 0
+            || location.Equals(root, StringComparison.OrdinalIgnoreCase)
+            || location.StartsWith(root + "/", StringComparison.OrdinalIgnoreCase);
+    }
 
     /// <summary>
     /// The coverage a <see cref="Search"/> can state for <paramref name="parsed"/> from the query
