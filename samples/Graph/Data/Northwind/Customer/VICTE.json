@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "Victuailles en stock - Lyon, France",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "VICTE",

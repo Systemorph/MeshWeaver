@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "Vaffeljernet - \u00c5rhus, Denmark",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "VAFFE",

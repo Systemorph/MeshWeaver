@@ -6,7 +6,6 @@
   "category": "Products",
   "description": "Gustaf's Kn\u00e4ckebr\u00f6d - 24 - 500 g pkgs.",
   "icon": "/static/NodeTypeIcons/shopping-bag.svg",
-  "isPersistent": true,
   "content": {
     "$type": "ProductContent",
     "productId": 22,

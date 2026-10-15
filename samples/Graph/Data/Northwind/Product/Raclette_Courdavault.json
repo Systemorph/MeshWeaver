@@ -6,7 +6,6 @@
   "category": "Products",
   "description": "Raclette Courdavault - 5 kg pkg.",
   "icon": "/static/NodeTypeIcons/shopping-bag.svg",
-  "isPersistent": true,
   "content": {
     "$type": "ProductContent",
     "productId": 59,

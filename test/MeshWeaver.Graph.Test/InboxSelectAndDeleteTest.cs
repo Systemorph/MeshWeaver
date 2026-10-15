@@ -500,6 +500,10 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
             "a category picked in the side menu shows everything filed under it, whatever Only says");
         InboxRows.HiddenObligations(rows, only, needsYouRank: 0).Should().Be(1,
             "the Chat row needs the viewer and Only hides it — counted, never silently hidden");
+        InboxRows.HiddenObligations(rows, only with { Category = "Chat" }, needsYouRank: 0).Should().Be(0,
+            "a picked category shows the Chat row whatever Only says — a visible obligation is not hidden");
+        InboxRows.HiddenObligations(rows, only with { Only = string.Empty, Category = "Outlook" }, needsYouRank: 0).Should().Be(0,
+            "nor is one a switch would hide while a category overrides the switches");
         InboxRows.Fingerprint(only).Should().NotBe(InboxRows.Fingerprint(only with { Only = string.Empty }),
             "picking Only is a change the page must react to");
     }

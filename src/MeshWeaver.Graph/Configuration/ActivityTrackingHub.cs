@@ -50,11 +50,33 @@ namespace MeshWeaver.Graph.Configuration;
 public static class ActivityTrackingHub
 {
     /// <summary>
-    /// The stable id segment of the activity-tracking hub's address. Fixed (NOT a
-    /// per-connection guid) so exactly one tracking hub is hosted under a given
-    /// mesh root; <c>GetHostedHub</c> is idempotent, so repeat calls return it.
+    /// Address-id prefix of the tracking hub. The id is <c>tracking-{meshRootId}</c>: fixed per
+    /// PROCESS (not per connection), so <c>GetHostedHub</c> returns the one hub on every call.
     /// </summary>
-    private const string TrackingHubId = "_tracking";
+    private const string TrackingHubPrefix = "tracking-";
+
+    /// <summary>
+    /// The address of the activity-tracking hub that <paramref name="hub"/>'s process hosts —
+    /// <c>portal/tracking-{meshRootId}</c>. Pure address arithmetic; it does NOT materialise the hub.
+    ///
+    /// <para>🚨 <b>Per process, and therefore addressed per process (#6605).</b> This hub was
+    /// <c>activity/_tracking</c> — the SAME address on every silo, under a type that is neither
+    /// stream-routed nor node-backed. A delivery to it from another silo (a reply, a NACK, a probe)
+    /// went to <c>RoutingGrain</c>, which read it as a node path and found nothing. The NACK for
+    /// that had no carrier either. On a silo that hosted its own tracking hub, the delivery
+    /// short-circuited onto the LOCAL one instead, which is a misdelivery. Every silo also claimed
+    /// the same pod-hub key. The address now follows its siblings <c>portal/nodeops-{meshId}</c>
+    /// and <c>portal/reads-{meshId}</c>: the stream-routed <c>portal</c> type plus the mesh id, so
+    /// a delivery from any silo reaches the process that hosts it, or is refused loudly when that
+    /// process has gone.</para>
+    /// </summary>
+    /// <param name="hub">Any hub in the process; the address is derived from its mesh root.</param>
+    /// <returns>The tracking hub's address.</returns>
+    public static Address ActivityTrackingHubAddress(this IMessageHub hub)
+    {
+        ArgumentNullException.ThrowIfNull(hub);
+        return AddressExtensions.CreatePortalAddress($"{TrackingHubPrefix}{hub.GetMeshHub().Address.Id}");
+    }
 
     /// <summary>
     /// Returns the process-stable activity-tracking hub, creating it once (lazily,
@@ -68,7 +90,7 @@ public static class ActivityTrackingHub
         ArgumentNullException.ThrowIfNull(hub);
         var meshRoot = hub.GetMeshHub();
         return meshRoot.GetHostedHub(
-            new Address(AddressExtensions.ActivityType, TrackingHubId),
+            meshRoot.ActivityTrackingHubAddress(),
             ConfigureTrackingHub,
             HostedHubCreation.Always)!;
     }

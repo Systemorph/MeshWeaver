@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using MeshWeaver.Mesh;        // IEaGraphAuth — the SDK-free seam, now in the mesh contract
 using MeshWeaver.Messaging;   // AccessService, ObserveCompletion
@@ -48,6 +49,38 @@ public sealed class EaConsentController(
     /// <summary>Query-string parameter carrying where to return after consent.</summary>
     public const string ReturnUrlParameter = "returnUrl";
 
+    /// <summary>
+    /// The prefix of an OAuth <c>state</c> that carries a mailbox account as well as the return URL:
+    /// <c>acct:{account}:{escaped return URL}</c>. An escaped URL contains no <c>:</c> and an
+    /// account id contains none either, so the split is unambiguous; a state WITHOUT the prefix is the
+    /// pre-existing shape (the escaped return URL alone) and means the primary mailbox, so a consent
+    /// in flight across a deploy still completes.
+    /// </summary>
+    internal const string AccountStatePrefix = "acct:";
+
+    /// <summary>Builds the OAuth state for <paramref name="account"/> and an already-sanitised return URL.</summary>
+    internal static string StateFor(string account, string safeReturnUrl) =>
+        EaMailboxes.IsPrimary(account)
+            ? Uri.EscapeDataString(safeReturnUrl)
+            : AccountStatePrefix + account + ":" + Uri.EscapeDataString(safeReturnUrl);
+
+    /// <summary>
+    /// Splits a state that came back from the IdP into its account and its (still UNTRUSTED) return
+    /// URL. An account that is not exactly <see cref="EaMailboxes.New"/> or a well-formed added id
+    /// reads as the primary — the state left our process, so it is never trusted to name a path.
+    /// </summary>
+    internal static (string Account, string? ReturnUrl) ParseState(string? state)
+    {
+        if (string.IsNullOrEmpty(state)) return (EaMailboxes.Primary, null);
+        if (!state.StartsWith(AccountStatePrefix, StringComparison.Ordinal))
+            return (EaMailboxes.Primary, Uri.UnescapeDataString(state));
+        var rest = state[AccountStatePrefix.Length..];
+        var colon = rest.IndexOf(':');
+        var account = colon < 0 ? rest : rest[..colon];
+        var url = colon < 0 ? null : Uri.UnescapeDataString(rest[(colon + 1)..]);
+        return (EaMailboxes.IsValidRequest(account) && !EaMailboxes.IsPrimary(account) ? account : EaMailboxes.Primary, url);
+    }
+
     private string CallbackUri => $"{Request.Scheme}://{Request.Host}/{BasePath}/{CallbackAction}";
 
     /// <summary>
@@ -80,14 +113,21 @@ public sealed class EaConsentController(
     /// </summary>
     /// <param name="returnUrl">Where to send the user afterwards; sanitised before either use.</param>
     /// <param name="force">Runs the full consent even for a connected user (scope additions, rotation).</param>
+    /// <param name="account">Which mailbox: absent for the primary, <c>new</c> to add ANOTHER mailbox
+    /// (always runs the consent, with Microsoft's account picker), or an added mailbox's id to
+    /// reconnect it (with its address as the login hint).</param>
     /// <param name="ct">Cancels the wait on the connection read, not the read itself.</param>
     [HttpGet(ConnectAction)]
     public async Task<IActionResult> Connect(
-        [FromQuery] string? returnUrl = null, [FromQuery] bool force = false, CancellationToken ct = default)
+        [FromQuery] string? returnUrl = null, [FromQuery] bool force = false,
+        [FromQuery(Name = EaMailboxes.AccountParameter)] string? account = null, CancellationToken ct = default)
     {
         if (!ea.IsConfigured) return BadRequest("The Executive Assistant Graph integration is not configured.");
         var userId = access.Context?.ObjectId;
         if (string.IsNullOrEmpty(userId)) return Unauthorized();
+        if (!EaMailboxes.IsValidRequest(account)) return BadRequest("Unknown mailbox account.");
+        if (!EaMailboxes.IsPrimary(account))
+            return await ConnectMailbox(account!, SafeReturnUrl(returnUrl), userId, ct);
         // Already connected → nothing to consent: bounce straight back to the caller instead of
         // sending a user whose grant is stored through Microsoft again — visiting the connect link
         // twice used to re-prompt every time and read as "my consent is not saved". ?force=true
@@ -119,6 +159,36 @@ public sealed class EaConsentController(
     }
 
     /// <summary>
+    /// Starts the consent for a mailbox other than the primary. Adding one ALWAYS runs the dialog,
+    /// with <c>prompt=select_account</c> so the person can pick a different Microsoft account; a
+    /// reconnect of an added mailbox runs it with that mailbox's address as the login hint.
+    /// </summary>
+    private async Task<IActionResult> ConnectMailbox(string account, string safeReturnUrl, string userId, CancellationToken ct)
+    {
+        var adding = string.Equals(account, EaMailboxes.New, StringComparison.OrdinalIgnoreCase);
+        string? hint = null;
+        if (!adding)
+        {
+            // The hint is a convenience: a list that cannot be read only means Microsoft asks which
+            // account, never that the reconnect is refused.
+            var mailboxes = await ea.GetMailboxes(userId)
+                .Catch((Exception ex) =>
+                {
+                    logger.LogWarning(ex, "EA connect: could not list {User}'s mailboxes for the login hint", userId);
+                    return Observable.Return(ImmutableList<EaMailbox>.Empty);
+                })
+                .ObserveCompletion(
+                    ex => logger.LogWarning(ex, "EA connect: the mailbox list for {User} faulted after the answer had settled", userId),
+                    ct);
+            hint = mailboxes?.FirstOrDefault(m => string.Equals(m.AccountId, account, StringComparison.Ordinal))?.Address;
+        }
+        // Sanitised again at the sink (idempotent): the policy is applied where the value is used,
+        // so this redirect is checkable on its own (RedirectSinksUseOnePolicyGuard).
+        var state = StateFor(adding ? EaMailboxes.New : account, SafeReturnUrl(safeReturnUrl));
+        return Redirect(ea.BuildConsentUrl(state, CallbackUri, hint, selectAccount: adding));
+    }
+
+    /// <summary>
     /// Completes the consent and tells the caller how it ended: the return URL carries
     /// <c>eaConnect=connected</c>, or <c>eaConnect=failed&amp;reason=microsoft|exchange</c>.
     /// A silent redirect made a refused consent look exactly like success (#6082).
@@ -131,7 +201,8 @@ public sealed class EaConsentController(
         // `state` is whatever came back from the IdP — treated as untrusted input, exactly like
         // the query parameter it originated from. Re-sanitised here rather than trusted because
         // it left our process in between.
-        var returnUrl = SafeReturnUrl(string.IsNullOrEmpty(state) ? null : Uri.UnescapeDataString(state));
+        var (account, untrustedReturn) = ParseState(state);
+        var returnUrl = SafeReturnUrl(untrustedReturn);
         var userId = access.Context?.ObjectId;
         if (string.IsNullOrEmpty(userId)) return Unauthorized();
 
@@ -144,7 +215,9 @@ public sealed class EaConsentController(
         }
 
         // Same single bridge as Connect: the Task is the MVC action's, not the seam's.
-        var ok = await ea.ExchangeAndStore(code, CallbackUri, userId)
+        var ok = await (EaMailboxes.IsPrimary(account)
+                ? ea.ExchangeAndStore(code, CallbackUri, userId)
+                : ea.ExchangeAndStore(code, CallbackUri, userId, account))
             .ObserveCompletion(
                 ex => logger.LogWarning(ex,
                     "EA consent callback: the code exchange for {User} faulted after the result had "

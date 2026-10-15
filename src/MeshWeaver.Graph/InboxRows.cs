@@ -579,7 +579,9 @@ public static class InboxRows
     /// <param name="filter">What the viewer asked for.</param>
     /// <param name="needsYouRank">The rank of the "Needs you" band, or null when no leg feeds it.</param>
     public static int HiddenObligations(IEnumerable<InboxRow> rows, InboxFilter filter, int? needsYouRank)
-        => needsYouRank is not { } rank
+        // A picked category shows every row filed under it whatever the source filter says, so the
+        // source filter hides nothing then — counting would report a visible obligation as hidden.
+        => needsYouRank is not { } rank || filter.Category.Length > 0
             ? 0
             : rows.Count(row => row.Rank == rank && !Shown(row, filter));
 

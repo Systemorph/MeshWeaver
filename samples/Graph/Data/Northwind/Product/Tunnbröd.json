@@ -6,7 +6,6 @@
   "category": "Products",
   "description": "Tunnbr\u00f6d - 12 - 250 g pkgs.",
   "icon": "/static/NodeTypeIcons/shopping-bag.svg",
-  "isPersistent": true,
   "content": {
     "$type": "ProductContent",
     "productId": 23,

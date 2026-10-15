@@ -3,7 +3,6 @@
   "namespace": "FutuRe/EuropeRe/TransactionMapping",
   "name": "EuropeRe: Technology Risk → Professional Liability (40%)",
   "nodeType": "FutuRe/TransactionMapping",
-  "isPersistent": true,
   "content": {
     "$type": "TransactionMapping",
     "id": "EUR-TECH_RISK-PROF",

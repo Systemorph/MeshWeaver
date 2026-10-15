@@ -44,7 +44,7 @@ Registered once, `silo.AddMemoryStreams(StreamProviders.Memory)` in
 |---|---|---|---|
 | `RoutingGrain.BuildPodHubRoute` → `FallBackToStream` | a delivery to a stream-routed address (`portal`, `client`, `cache`, `mesh`, `import`) **only after** the directed `IPodHubGrain.Deliver` threw `PodHubNotHereException` | the owner's `SubscribeWhenStreamingReadyAsync` subscription | the requester waits out its budget (#2320, #2322, #2406) |
 | `RoutingGrain.PostFailure` → `PublishFailureOverStream` | a `DeliveryFailure` to a stream-routed sender, when the directed NACK failed for any reason | same | the sender waits out its budget |
-| `OrleansMeshChangeFeed.BroadcastAsync` | every `MeshChangeEvent` (Created / Updated / Deleted), one stream per kind | intended: `PathCacheInvalidatorGrain` → process-local cache invalidation; actual default composition selects the local feed before the wrapper, and the grain key would activate once per cluster rather than once per silo | **permanent, silent, per-node staleness** on replicas that never receive it — the path-resolution cache, the remote-stream cache, `NodeTypeRebindWatcher`, activation-failure registry and `SyncedQueryMeshNodes` all miss it for the life of the process |
+| ~~`OrleansMeshChangeFeed.BroadcastAsync`~~ — **deleted (#4802)** | every `MeshChangeEvent` (Created / Updated / Deleted), one stream per kind | intended: `PathCacheInvalidatorGrain` → process-local cache invalidation; actual default composition selects the local feed before the wrapper, and the grain key would activate once per cluster rather than once per silo | **permanent, silent, per-node staleness** on replicas that never receive it — the path-resolution cache, the remote-stream cache, `NodeTypeRebindWatcher`, activation-failure registry and `SyncedQueryMeshNodes` all miss it for the life of the process |
 | `RootMeshHubReplyStreamService` | the `mesh/{id}` root hub's *subscription* (not a publisher) | the root hub | cross-silo replies to the root hub — served by the directed call since the swap; the stream is its fallback |
 
 Two facts that change the shape of the design, both verified from source:
@@ -244,10 +244,12 @@ Orleans broadcast during the additive rollout:
    `IStorageAdapter.Changes` and relays each notification into
    the process-local `IMeshInvalidationFeed`. Each process therefore receives its own database
    listener's copy directly. A monolith or `LocalMesh` process that shares a database with another
-   process gains cross-process invalidation too. The old Orleans broadcast classes remain
-   binary-compatible during the additive rollout; their `PublishLocal` entry point now feeds only
-   invalidators. After the PostgreSQL payload upgrade ships, the dead wrapper registration and
-   `PathCacheInvalidatorGrain` can be deleted without a mixed-version gap.
+   process gains cross-process invalidation too. The old Orleans broadcast classes
+   (`OrleansMeshChangeFeed`, `PathCacheInvalidatorGrain`) are **deleted** (#4802) — the payload
+   upgrade shipped (`node_type` since V55, `prior_node_type` since V60), and the wrapper had been
+   shadowed by the process-local registration all along, so no silo of any generation was still
+   publishing on it. `InProcessMeshChangeFeed.PublishLocal` keeps its signature for
+   already-compiled callers and feeds only invalidators.
 3. **Cache invalidation and logical delivery are separate.** A direct
    `IMeshChangeFeed.Publish` reaches both logical subscribers and the writer's local invalidators.
    A storage or Orleans echo reaches only `IMeshInvalidationFeed`. This boundary is load-bearing:
@@ -331,10 +333,32 @@ checked against it:
 | routing: transient NACK on `PodHubNotHere`; fallback gated on declared client-hosted types | **landed** — #2745 | closed #2320, #2322, #2406 as *made unreachable*. Shipped with slice 1 rather than after a clean roll — see *The N+2 gate* above for why the two together satisfy it by construction |
 | owner-side eviction re-gated on the `TargetUnserved` STAMP alone | **landed with the slice above** | required by it: gating on `NotFound` would have made the new verdict inert and re-opened #2426/#2546 |
 | `DataChangeNotification.NodeType/Version` + `StorageChangeFeedRelay` | **implemented in the first core slice**; the compatibility read coalesced per path and overtaken by anything newer in the second (#4139) | relay owns the mixed-version reread through `ReReadCoalescing`; tests pin the logical/invalidation boundary, old-payload recovery, per-event failure isolation, two independent replica feeds, one read per burst, no read for a burst that ends self-contained, overtaking by a hinted update / a delete / a newer burst, and reads that never overlap on a path |
-| `notify_mesh_node_changes()` emits `nodeType`, `version` | after the core slice | PostgreSql adapter (MeshWeaver.Plugins); a schema-initializer revision, re-applied by the existing DROP-then-CREATE |
-| delete `OrleansMeshChangeFeed` broadcast + `PathCacheInvalidatorGrain` | after both | the memory stream then carries routing fallback only |
+| `notify_mesh_node_changes()` emits `nodeType`, `version` | **landed** — `node_type` since V55, `prior_node_type` since V60 | PostgreSql adapter (MeshWeaver.Plugins) |
+| delete `OrleansMeshChangeFeed` broadcast + `PathCacheInvalidatorGrain` | **landed** — #4802 slice 1 | the memory stream now carries routing fallback only; pinned by `ACommitReachesTheOtherSiloAfterItsWriterDiesTest` (three silos, the writer KILLED with its commit in flight, and a negative control whose carrier dies with the writer) |
+| multi-silo is PostgreSQL-only, DECLARED: `CrossProcessChangeDelivery` | type **landed** — #4802 slice 1; the PostgreSQL registration declares it next (MeshWeaver.Plugins); then a silo that declares more than one process (a durable `PubSubStore`) refuses to start without it | see *Multi-silo is PostgreSQL-only* below |
+| NACK and client-hosted fallback get a non-stream carrier | open — #4802 | `RoutingGrain.PostFailure` still publishes a NACK over the stream when the sender does not resolve to a node, or as the fallback when the directed call faults |
 | `StreamMessageSizeGuard` retarget onto `MaxMessageBodySize` | optional, not blocking | the directed call already THROWS at that wall, which is the outcome the guard produces — see the bullet above |
-| test rig hosts hubs on a silo → `AddMemoryStreams` deleted | last | the only remaining user |
+| test rig hosts hubs on a silo → `AddMemoryStreams` deleted from multi-silo hosts | last | single-process hosts (Monolith, tests) may keep it |
+
+## Multi-silo is PostgreSQL-only
+
+With the stream relay gone, the storage layer's feed is the ONLY carrier of a commit from the
+process that made it to every other process. PostgreSQL has one (`LISTEN/NOTIFY`); an in-memory or
+file-system store announces a commit only inside the process that made it. So a host that runs more
+than one silo over one store needs a backend with a cross-process feed, and the platform makes that
+a **declaration**, not an inference: the backend that has the property calls
+`services.DeclareCrossProcessChangeDelivery("<what delivers it>")`, which registers a
+`CrossProcessChangeDelivery` (`MeshWeaver.Mesh.Contract`). Test rigs that model `LISTEN/NOTIFY` —
+`FaultInjectionCluster`'s relay, the shared change feed of `TwoSiloCacheUpdateFixture` — declare it
+too. A host that runs as one process (the Monolith, a localhost silo, the bake silo, an in-process
+test cluster without a shared feed) needs nothing.
+
+The boot check is the last of three steps, because each one needs the previous one merged: the
+declaration type (core), the PostgreSQL registration declaring it (MeshWeaver.Plugins), and then the
+silo refusing to start when it was configured as more than one process — a durable `PubSubStore`,
+which is the existing declaration of a multi-silo host — and nothing declared cross-process delivery.
+Enforcing before the PostgreSQL registration declares would stop every portal roll, so the order is
+not optional.
 
 ## How to check a live cluster
 

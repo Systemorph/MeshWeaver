@@ -6,7 +6,6 @@
   "category": "Products",
   "description": "Sirop d'\u00e9rable - 24 - 500 ml bottles",
   "icon": "/static/NodeTypeIcons/shopping-bag.svg",
-  "isPersistent": true,
   "content": {
     "$type": "ProductContent",
     "productId": 61,

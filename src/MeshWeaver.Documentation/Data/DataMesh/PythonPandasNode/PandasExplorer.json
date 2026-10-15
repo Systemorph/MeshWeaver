@@ -5,7 +5,6 @@
   "nodeType": "NodeType",
   "category": "Types",
   "description": "An interactive frontend (buttons + input) that drives a live pandas DataFrame held in the Python py/pandas mesh participant and renders its current state as a real DataGrid.",
-  "isPersistent": true,
   "content": {
     "$type": "NodeTypeDefinition",
     "namespace": "Doc/DataMesh/PythonPandasNode",

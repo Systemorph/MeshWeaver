@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "Laughing Bacchus Wine Cellars - Vancouver, Canada",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "LAUGB",

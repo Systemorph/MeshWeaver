@@ -6,7 +6,6 @@
   "category": "Lines of Business",
   "description": "Life & Health insurance covering mortality, morbidity, disability, and longevity risks",
   "icon": "/api/content/FutuRe/LineOfBusiness/icon.svg",
-  "isPersistent": true,
   "content": {
     "$type": "LineOfBusiness",
     "systemName": "LH",
