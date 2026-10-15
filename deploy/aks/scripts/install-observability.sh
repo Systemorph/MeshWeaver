@@ -39,8 +39,10 @@ set -uo pipefail
 VALUES="${VALUES:-values.observability.yaml}"
 [ -f "$VALUES" ] || { echo "FATAL: $VALUES not found — pass it with --file (see header)." >&2; exit 1; }
 
-NS="${OBS_NAMESPACE:-monitoring}"
-RELEASE="${OBS_RELEASE:-loki}"
+# The release and namespace are FIXED: the Loki storage verification reads `loki-0`, the Grafana
+# service is `loki-grafana`, and the fleet watch reads exactly this release.
+NS=monitoring
+RELEASE=loki
 BUDGET_SECONDS="${OBS_BUDGET_SECONDS:-540}"
 PROMETHEUS_DEPLOY="$RELEASE-prometheus-server"
 PROMETHEUS_CONTAINER=prometheus-server
@@ -50,11 +52,31 @@ TSDB_RECOVERY_TARGET_PERCENT="${TSDB_RECOVERY_TARGET_PERCENT:-60}"
 
 remaining() { echo $(( BUDGET_SECONDS - SECONDS )); }
 recovery() { echo "RECOVERY: $*"; }
+# Short API calls are bounded per request; waits are bounded by their own --timeout (below).
+kc() { kubectl --request-timeout=20s -n "$NS" "$@"; }
+
+# ONE deadline for the whole run. Every stage that can wait takes its bound from what is left of
+# OBS_BUDGET_SECONDS, minus what must stay in hand for what comes after it, and a stage whose
+# minimum no longer fits is not started: the run fails RED with its log intact instead of being
+# cut off by the invoke, mid-operation, with neither.
+#   stage_seconds <ceiling> <minimum> <keep-back> <stage name>   → sets STAGE_SECONDS, or returns 1
+stage_seconds() {
+  local left=$(( $(remaining) - $3 ))
+  [ "$left" -gt "$1" ] && left=$1
+  if [ "$left" -lt "$2" ]; then
+    echo "FATAL: the ${BUDGET_SECONDS}s budget is spent — not starting '$4' (needs ${2}s, ${left}s left after keeping ${3}s back)." >&2
+    return 1
+  fi
+  STAGE_SECONDS=$left
+}
+# Kept back while recovering: tearing the recovery down (~40 s), the upgrade's minimum (60 s) and
+# room for the readiness report.
+RECOVERY_KEEP_BACK=150
 # A workload's pod selector as `k=v,k=v` (the go-template's `$k`/`$v` are template variables).
 selector_of() {
   local labels
   # shellcheck disable=SC2016
-  labels=$(kubectl -n "$NS" get "$1" -o go-template='{{range $k, $v := .spec.selector.matchLabels}}{{$k}}={{$v}},{{end}}' 2>/dev/null)
+  labels=$(kc get "$1" -o go-template='{{range $k, $v := .spec.selector.matchLabels}}{{$k}}={{$v}},{{end}}' 2>/dev/null)
   printf '%s' "${labels%,}"
 }
 
@@ -81,7 +103,8 @@ recover_pending_release() {
   if [ -n "$last_deployed" ]; then
     recovery "release $RELEASE is stuck in '$status' (a run that was killed mid-operation)."
     recovery "rolling back to its last deployed revision $last_deployed, then upgrading as usual."
-    if ! helm rollback "$RELEASE" "$last_deployed" -n "$NS" --timeout 2m; then
+    stage_seconds 60 20 "$RECOVERY_KEEP_BACK" "helm rollback" || exit 1
+    if ! helm rollback "$RELEASE" "$last_deployed" -n "$NS" --timeout "${STAGE_SECONDS}s"; then
       echo "FATAL: release $RELEASE is stuck in '$status' and 'helm rollback $RELEASE $last_deployed' failed." >&2
       helm history "$RELEASE" -n "$NS" --max 5 >&2 || true
       exit 1
@@ -91,7 +114,8 @@ recover_pending_release() {
     # install. Removing it lets the install below start clean. StatefulSet volume claims (Loki's
     # store) survive an uninstall; the chart's own PVCs belonged to an install that never completed.
     recovery "release $RELEASE is stuck in 'pending-install' and was never deployed — uninstalling the half-made first install."
-    if ! helm uninstall "$RELEASE" -n "$NS" --timeout 2m; then
+    stage_seconds 60 20 "$RECOVERY_KEEP_BACK" "helm uninstall" || exit 1
+    if ! helm uninstall "$RELEASE" -n "$NS" --timeout "${STAGE_SECONDS}s"; then
       echo "FATAL: release $RELEASE is stuck in 'pending-install' and could not be uninstalled." >&2
       exit 1
     fi
@@ -119,8 +143,8 @@ recover_pending_release() {
 # says "no space left on device" — so a healthy Prometheus, or one failing for any other reason, is
 # never touched. It scales the server to 0 (RWO disk: it must detach), runs a one-shot pod from the
 # server's OWN image (no new pull source) on the server's own volume that deletes the WAL, the
-# head chunks, leftover temporary blocks and, oldest first, whole blocks until the volume is at
-# most TSDB_RECOVERY_TARGET_PERCENT full, and scales the server back.
+# head chunks, leftover temporary blocks and, oldest samples first, whole blocks until the volume
+# is at most TSDB_RECOVERY_TARGET_PERCENT full, and scales the server back.
 tsdb_recovery_script() {
   cat <<'RECOVER'
 set -eu
@@ -134,7 +158,14 @@ for leftover in *.tmp*; do
   if [ -e "$leftover" ]; then echo "tsdb-recovery: removing temporary $leftover"; rm -rf "$leftover"; fi
 done
 echo "tsdb-recovery: removed the WAL and head chunks; now $(used)% used"
-for block in $(ls -1 | grep -E '^[0-9A-HJKMNP-TV-Z]{26}$' | sort); do
+# Oldest SAMPLES first, never oldest ULID: compaction mints a NEW ULID for an OLD time range, so
+# the ULID orders creation, not age. Each block's meta.json carries its range; its first "minTime"
+# is the block's own (the ones under compaction.parents come later). A directory without a
+# meta.json is not a complete block (Prometheus discards it at startup) and goes first.
+for block in $(for b in $(ls -1 | grep -E '^[0-9A-HJKMNP-TV-Z]{26}$'); do
+                 min=$(sed -n 's/.*"minTime": *\(-\{0,1\}[0-9][0-9]*\).*/\1/p' "$b/meta.json" 2>/dev/null | head -n 1)
+                 echo "${min:--9223372036854775808} $b"
+               done | sort -n | awk '{ print $2 }'); do
   if [ "$(used)" -le "$target" ]; then break; fi
   echo "tsdb-recovery: removing oldest block $block"
   rm -rf "$block"
@@ -145,32 +176,40 @@ RECOVER
 }
 
 recover_full_tsdb() {
-  local selector pods pod restarts previous_log out_of_space=false image node_selector tolerations claim replicas
-  kubectl -n "$NS" get deploy "$PROMETHEUS_DEPLOY" >/dev/null 2>&1 || return 0
+  local selector pods pod state restarts ready previous_log out_of_space=false image node_selector tolerations claim replicas
+  kc get deploy "$PROMETHEUS_DEPLOY" >/dev/null 2>&1 || return 0
   selector=$(selector_of "deploy/$PROMETHEUS_DEPLOY")
   [ -n "$selector" ] || return 0
-  pods=$(kubectl -n "$NS" get pods -l "$selector" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null)
+  if ! pods=$(kc get pods -l "$selector" -o jsonpath='{.items[*].metadata.name}'); then
+    echo "WARN: could not list the Prometheus server pods — no evidence, so no TSDB recovery attempted." >&2
+    return 0
+  fi
   for pod in $pods; do
-    restarts=$(kubectl -n "$NS" get pod "$pod" \
-      -o "jsonpath={.status.containerStatuses[?(@.name==\"$PROMETHEUS_CONTAINER\")].restartCount}" 2>/dev/null)
+    # CURRENT failure, not a historical one: a server that crashed once and has since recovered is
+    # Ready, still carries the restart count and the old previous log, and must not be touched.
+    state=$(kc get pod "$pod" \
+      -o "jsonpath={.status.containerStatuses[?(@.name==\"$PROMETHEUS_CONTAINER\")].restartCount} {.status.containerStatuses[?(@.name==\"$PROMETHEUS_CONTAINER\")].ready}" 2>/dev/null) || continue
+    read -r restarts ready <<<"$state"
     [ "${restarts:-0}" -gt 0 ] 2>/dev/null || continue
+    [ "$ready" = false ] || continue
     # Captured, not piped into `grep -q`: under pipefail an early-exiting grep SIGPIPEs kubectl and
     # the pipeline reads as "no match" exactly when it matched.
-    previous_log=$(kubectl -n "$NS" logs "$pod" -c "$PROMETHEUS_CONTAINER" --previous 2>/dev/null || true)
+    previous_log=$(kc logs "$pod" -c "$PROMETHEUS_CONTAINER" --previous 2>/dev/null || true)
     if printf '%s\n' "$previous_log" | grep "no space left on device" >/dev/null; then
       out_of_space=true
-      recovery "$pod has restarted $restarts times; its previous run died with 'no space left on device'."
+      recovery "$pod is not Ready, has restarted $restarts times, and its previous run died with 'no space left on device'."
     fi
   done
   [ "$out_of_space" = true ] || return 0
 
-  image=$(kubectl -n "$NS" get deploy "$PROMETHEUS_DEPLOY" \
+  image=$(kc get deploy "$PROMETHEUS_DEPLOY" \
     -o "jsonpath={.spec.template.spec.containers[?(@.name==\"$PROMETHEUS_CONTAINER\")].image}")
-  node_selector=$(kubectl -n "$NS" get deploy "$PROMETHEUS_DEPLOY" -o jsonpath='{.spec.template.spec.nodeSelector}')
-  tolerations=$(kubectl -n "$NS" get deploy "$PROMETHEUS_DEPLOY" -o jsonpath='{.spec.template.spec.tolerations}')
-  claim=$(kubectl -n "$NS" get deploy "$PROMETHEUS_DEPLOY" \
+  node_selector=$(kc get deploy "$PROMETHEUS_DEPLOY" -o jsonpath='{.spec.template.spec.nodeSelector}')
+  tolerations=$(kc get deploy "$PROMETHEUS_DEPLOY" -o jsonpath='{.spec.template.spec.tolerations}')
+  claim=$(kc get deploy "$PROMETHEUS_DEPLOY" \
     -o jsonpath='{.spec.template.spec.volumes[?(@.name=="storage-volume")].persistentVolumeClaim.claimName}')
-  replicas=$(kubectl -n "$NS" get deploy "$PROMETHEUS_DEPLOY" -o jsonpath='{.spec.replicas}')
+  replicas=$(kc get deploy "$PROMETHEUS_DEPLOY" -o jsonpath='{.spec.replicas}')
+  [ -n "$replicas" ] && [ "$replicas" -gt 0 ] 2>/dev/null || replicas=1
   if [ -z "$image" ] || [ -z "$claim" ]; then
     echo "FATAL: Prometheus is out of space but its image or TSDB claim could not be read — not recovering blind." >&2
     exit 1
@@ -183,18 +222,28 @@ recover_full_tsdb() {
   [ -n "$tolerations" ] || tolerations='[]'
   # If this run is cut off between here and the scale-back below, the chart renders `replicas: 1`
   # for the server and the next run's helm upgrade restores it (three-way merge against live).
-  kubectl -n "$NS" scale deploy "$PROMETHEUS_DEPLOY" --replicas=0 || { echo "FATAL: could not scale $PROMETHEUS_DEPLOY to 0." >&2; exit 1; }
-  local waited=0
-  while [ -n "$(kubectl -n "$NS" get pods -l "$selector" -o name 2>/dev/null)" ]; do
-    if [ "$waited" -ge 180 ]; then
-      echo "FATAL: the Prometheus server pod did not terminate in 180s; its disk cannot be attached elsewhere." >&2
+  stage_seconds 120 30 "$RECOVERY_KEEP_BACK" "wait for the Prometheus server to stop" || exit 1
+  local stop_limit=$STAGE_SECONDS waited=0 listed
+  kc scale deploy "$PROMETHEUS_DEPLOY" --replicas=0 || { echo "FATAL: could not scale $PROMETHEUS_DEPLOY to 0." >&2; exit 1; }
+  # Only a SUCCESSFUL, EMPTY listing proves the server stopped. A failed request also prints
+  # nothing, and RWO lets a second pod mount the disk on the same node — cleaning under a live
+  # Prometheus is exactly what must not happen.
+  while :; do
+    if listed=$(kc get pods -l "$selector" -o name 2>/dev/null) && [ -z "$listed" ]; then break; fi
+    if [ "$waited" -ge "$stop_limit" ]; then
+      echo "FATAL: could not confirm the Prometheus server stopped within ${stop_limit}s; the TSDB was NOT touched." >&2
+      restore_prometheus "$replicas"
       exit 1
     fi
     sleep 5; waited=$(( waited + 5 ))
   done
 
   local recovery_pod="$RELEASE-prometheus-tsdb-recovery" ok=true
-  kubectl -n "$NS" delete pod "$recovery_pod" --ignore-not-found --wait=true >/dev/null 2>&1 || true
+  if ! remove_recovery_pod "$recovery_pod"; then
+    echo "FATAL: a previous $recovery_pod is still present; the TSDB was NOT touched." >&2
+    restore_prometheus "$replicas"
+    exit 1
+  fi
   {
     cat <<MANIFEST
 apiVersion: v1
@@ -224,20 +273,50 @@ MANIFEST
     - name: storage
       persistentVolumeClaim: {claimName: $claim}
 MANIFEST
-  } | kubectl apply -f - || ok=false
+  } | kc apply -f - || ok=false
   if [ "$ok" = true ]; then
-    kubectl -n "$NS" wait --for=jsonpath='{.status.phase}'=Succeeded pod/"$recovery_pod" --timeout=240s || ok=false
+    if stage_seconds 180 30 "$RECOVERY_KEEP_BACK" "the TSDB recovery pod"; then
+      kubectl -n "$NS" wait --for=jsonpath='{.status.phase}'=Succeeded pod/"$recovery_pod" --timeout="${STAGE_SECONDS}s" || ok=false
+    else
+      ok=false
+    fi
   fi
-  kubectl -n "$NS" logs "$recovery_pod" 2>&1 | sed 's/^/RECOVERY: /'
-  kubectl -n "$NS" delete pod "$recovery_pod" --ignore-not-found --wait=false >/dev/null 2>&1 || true
-  kubectl -n "$NS" scale deploy "$PROMETHEUS_DEPLOY" --replicas="${replicas:-1}" \
-    || { echo "FATAL: could not scale $PROMETHEUS_DEPLOY back to ${replicas:-1}." >&2; exit 1; }
-  if [ "$ok" != true ]; then
-    echo "FATAL: the Prometheus TSDB recovery pod did not succeed — the volume is still full (log above)." >&2
-    kubectl -n "$NS" describe pod "$recovery_pod" >&2 2>/dev/null || true
-    exit 1
+  kc logs "$recovery_pod" 2>&1 | sed 's/^/RECOVERY: /'
+  if [ "$ok" = true ]; then
+    # Succeeded: its container has exited, so the server may start while the pod object goes.
+    restore_prometheus "$replicas" || exit 1
+    kc delete pod "$recovery_pod" --ignore-not-found --wait=false >/dev/null 2>&1 || true
+    recovery "the Prometheus TSDB has room again; $PROMETHEUS_DEPLOY scaled back to $replicas."
+    return 0
   fi
-  recovery "the Prometheus TSDB has room again; $PROMETHEUS_DEPLOY scaled back to ${replicas:-1}."
+  # Failed or still running: diagnostics FIRST, then make sure the cleaner is gone before a server
+  # is allowed back onto the same disk. If that cannot be confirmed, leave the server at 0 — the
+  # chart's `replicas: 1` brings it back on the next run's upgrade.
+  echo "FATAL: the Prometheus TSDB recovery pod did not succeed — the volume is still full (log above)." >&2
+  kc describe pod "$recovery_pod" 2>&1 | tail -n 25 >&2
+  if remove_recovery_pod "$recovery_pod"; then
+    restore_prometheus "$replicas"
+  else
+    echo "FATAL: could not confirm $recovery_pod is gone; $PROMETHEUS_DEPLOY is LEFT AT 0 so no second writer" >&2
+    echo "       shares the disk with it. The next run's helm upgrade restores the chart's replicas." >&2
+  fi
+  exit 1
+}
+
+# Deletes the recovery pod and returns 0 only on a successful listing that no longer shows it.
+remove_recovery_pod() {
+  local left
+  kc delete pod "$1" --ignore-not-found --wait=true --timeout=30s >/dev/null 2>&1 || true
+  left=$(kc get pod "$1" --ignore-not-found -o name 2>/dev/null) && [ -z "$left" ]
+}
+
+restore_prometheus() {
+  if kc scale deploy "$PROMETHEUS_DEPLOY" --replicas="$1"; then
+    recovery "$PROMETHEUS_DEPLOY scaled back to $1."
+  else
+    echo "FATAL: could not scale $PROMETHEUS_DEPLOY back to $1 — the next run's helm upgrade restores it." >&2
+    return 1
+  fi
 }
 
 recover_pending_release
@@ -273,11 +352,13 @@ CHART_VERSION="${LOKI_STACK_VERSION:-2.10.3}"
 
 # No --wait (see the header): --timeout bounds helm's own API calls and hooks, and the release is
 # recorded `deployed` as soon as the manifests are applied. Readiness is the next block's job.
+stage_seconds 120 60 60 "helm upgrade" || exit 1
+UPGRADE_SECONDS=$STAGE_SECONDS
 if ! helm upgrade --install "$RELEASE" grafana/loki-stack --version "$CHART_VERSION" -n "$NS" --create-namespace \
   -f "$VALUES" \
   --set grafana.enabled=true --set prometheus.enabled=true \
   --set grafana.adminPassword="$GRAFANA_PW" --set grafana.service.type=ClusterIP \
-  --timeout 3m
+  --timeout "${UPGRADE_SECONDS}s"
 then
   echo "FATAL: helm upgrade failed — the stack was NOT installed/updated." >&2
   echo "If it complains about immutable StatefulSet fields, that is the persistence change:" >&2
@@ -290,16 +371,25 @@ fi
 # become Ready is NAMED, with its pods, events and previous log tail, and the script exits 2 — the
 # release itself is `deployed` either way, so the next run starts from a clean helm state.
 not_ready=()
-workloads=$(kubectl -n "$NS" get deploy,sts,ds -l "app.kubernetes.io/instance=$RELEASE" -o name 2>/dev/null
-            kubectl -n "$NS" get deploy,sts,ds -l "release=$RELEASE" -o name 2>/dev/null)
-workloads=$(printf '%s\n' "$workloads" | sed '/^$/d' | sort -u)
+# The chart's sub-charts label by two conventions; BOTH listings must succeed, or the readiness
+# verdict would silently cover only part of the release.
+if ! by_instance=$(kc get deploy,sts,ds -l "app.kubernetes.io/instance=$RELEASE" -o name) \
+  || ! by_release=$(kc get deploy,sts,ds -l "release=$RELEASE" -o name); then
+  echo "FATAL: could not list the workloads of release $RELEASE — readiness was NOT established." >&2
+  exit 1
+fi
+workloads=$(printf '%s\n%s\n' "$by_instance" "$by_release" | sed '/^$/d' | sort -u)
 if [ -z "$workloads" ]; then
   echo "FATAL: helm reported success but no workload of release $RELEASE exists in $NS." >&2
   exit 1
 fi
 for workload in $workloads; do
-  left=$(( $(remaining) - 30 ))
-  [ "$left" -lt 10 ] && left=10
+  left=$(( $(remaining) - 45 ))      # 45 s stay in hand for the storage check and the diagnostics
+  if [ "$left" -lt 5 ]; then
+    echo "budget spent — $workload not checked" >&2
+    not_ready+=("$workload")
+    continue
+  fi
   if ! kubectl -n "$NS" rollout status "$workload" --timeout="${left}s"; then
     not_ready+=("$workload")
   fi
@@ -307,17 +397,17 @@ done
 
 # Verify the RUNNING pod, not just the desired StatefulSet: an orphan left over from
 # the immutable-volume transition can still be serving from emptyDir (#3773).
-if ! storage_volume=$(kubectl -n "$NS" get pod loki-0 -o jsonpath='{.spec.containers[?(@.name=="loki")].volumeMounts[?(@.mountPath=="/data")].name}') \
+if ! storage_volume=$(kc get pod loki-0 -o jsonpath='{.spec.containers[?(@.name=="loki")].volumeMounts[?(@.mountPath=="/data")].name}') \
   || [ -z "$storage_volume" ]; then
   echo "FATAL: cannot identify Loki's running /data volume." >&2
   exit 1
 fi
-if ! storage_claim=$(kubectl -n "$NS" get pod loki-0 -o "jsonpath={.spec.volumes[?(@.name==\"$storage_volume\")].persistentVolumeClaim.claimName}") \
+if ! storage_claim=$(kc get pod loki-0 -o "jsonpath={.spec.volumes[?(@.name==\"$storage_volume\")].persistentVolumeClaim.claimName}") \
   || [ -z "$storage_claim" ]; then
   echo "FATAL: Loki's running /data volume is not backed by a PVC; log durability is NOT established." >&2
   exit 1
 fi
-if ! storage_phase=$(kubectl -n "$NS" get pvc "$storage_claim" -o jsonpath='{.status.phase}') \
+if ! storage_phase=$(kc get pvc "$storage_claim" -o jsonpath='{.status.phase}') \
   || [ "$storage_phase" != Bound ]; then
   echo "FATAL: Loki's storage PVC is not Bound; log durability is NOT established." >&2
   exit 1
@@ -325,20 +415,20 @@ fi
 
 echo
 echo "Verified: Loki's running /data volume uses Bound PVC $storage_claim."
-kubectl -n "$NS" get pods
+kc get pods
 
 if [ ${#not_ready[@]} -gt 0 ]; then
   echo
   echo "NOT READY within the ${BUDGET_SECONDS}s budget: ${not_ready[*]}" >&2
   for workload in "${not_ready[@]}"; do
     echo "── $workload ──" >&2
-    kubectl -n "$NS" describe "$workload" 2>&1 | tail -n 25 >&2
+    kc describe "$workload" 2>&1 | tail -n 25 >&2
     selector=$(selector_of "$workload")
-    for pod in $(kubectl -n "$NS" get pods -l "$selector" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
+    for pod in $(kc get pods -l "$selector" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
       echo "── pod $pod: events ──" >&2
-      kubectl -n "$NS" get events --field-selector "involvedObject.name=$pod" 2>&1 | tail -n 10 >&2
+      kc get events --field-selector "involvedObject.name=$pod" 2>&1 | tail -n 10 >&2
       echo "── pod $pod: previous log (tail) ──" >&2
-      kubectl -n "$NS" logs "$pod" --all-containers --previous --tail=20 >&2 2>&1 || true
+      kc logs "$pod" --all-containers --previous --tail=20 >&2 2>&1 || true
     done
   done
   echo "FATAL: the release is deployed, but ${#not_ready[@]} workload(s) are not Ready (above)." >&2

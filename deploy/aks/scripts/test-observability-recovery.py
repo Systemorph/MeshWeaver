@@ -52,7 +52,7 @@ if tool == 'helm':
         sys.exit(1)
     sys.exit(0)
 # kubectl
-if args[:1] == ['apply']:
+if 'apply' in args:
     with open(os.environ['MANIFEST'], 'w') as f: f.write(sys.stdin.read())
     sys.exit(0)
 if 'wait' in args:
@@ -69,19 +69,30 @@ if 'get deploy loki-prometheus-server' in line or 'get deploy/loki-prometheus-se
     elif 'replicas' in line: out('1')
     sys.exit(0)
 if 'get pods -l' in line:
-    if '-o name' in line: sys.exit(0)          # terminated once scaled to 0
+    if '-o name' in line:
+        if 'list-error' in scenario: sys.exit(1)
+        if 'termination-timeout' in scenario: out('pod/loki-prometheus-server-abc')
+        sys.exit(0)                            # terminated once scaled to 0
     out('loki-prometheus-server-abc')
     sys.exit(0)
 if 'get pod loki-prometheus-server-abc' in line:
-    out('253' if ('out-of-space' in scenario or 'other-crash' in scenario) else '0'); sys.exit(0)
+    if 'recovered' in scenario: out('253 true')          # crashed once, Ready now
+    elif 'out-of-space' in scenario or 'other-crash' in scenario: out('253 false')
+    else: out('0 true')
+    sys.exit(0)
+if 'get pod loki-prometheus-tsdb-recovery' in line:
+    if 'teardown-stuck' in scenario and os.path.exists(os.environ['MANIFEST']):
+        out('pod/loki-prometheus-tsdb-recovery')   # present only once it was created
+    sys.exit(0)
 if 'logs loki-prometheus-server-abc' in line:
-    if 'out-of-space' in scenario:
+    if 'out-of-space' in scenario or 'recovered' in scenario:
         out('ts=2026-10-15 msg="Replaying WAL" segment=175 maxSegment=432\n'
             'panic: preallocate: no space left on device\n' + 'goroutine trace\n' * 2000)
     elif 'other-crash' in scenario:
         out('panic: something else entirely\n')
     sys.exit(0)
 if 'get deploy,sts,ds' in line:
+    if 'workload-list-fails' in scenario and 'release=' in line: sys.exit(1)
     if 'app.kubernetes.io/instance' in line:
         out('deployment.apps/loki-grafana\nstatefulset.apps/loki\n')
     else:
@@ -106,7 +117,7 @@ class Run:
         return -1
 
 
-def run_installer(*scenario):
+def run_installer(*scenario, budget=None):
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         for name in ('helm', 'kubectl'):
@@ -119,6 +130,8 @@ def run_installer(*scenario):
         env = dict(os.environ, PATH=str(root) + os.pathsep + os.environ['PATH'],
                    GRAFANA_PW='synthetic-test-only', VALUES=str(root / 'values.yaml'),
                    SCENARIO=','.join(scenario), CALLS=str(calls), MANIFEST=str(manifest))
+        if budget is not None:
+            env['OBS_BUDGET_SECONDS'] = str(budget)
         result = subprocess.run(['bash', str(SCRIPT)], env=env, capture_output=True, text=True,
                                 timeout=30)
         return Run(result,
@@ -166,12 +179,36 @@ class StuckReleaseTest(unittest.TestCase):
 
 
 class BoundedUpgradeTest(unittest.TestCase):
+    def test_every_stage_shares_one_deadline(self):
+        # The worst case: a stuck release AND a full volume. The bounds of every waiting stage,
+        # added up, stay inside the budget — so the invoke cap never cuts a stage off.
+        run = run_installer('pending-upgrade', 'out-of-space')
+        self.assertEqual(run.code, 0, run.stderr)
+        waits = [int(m.group(1)) for c in run.calls
+                 for m in [re.search(r'--timeout[= ](\d+)s', c)] if m and 'rollout status' not in c
+                 and 'delete pod' not in c]
+        self.assertGreaterEqual(len(waits), 3, run.calls)    # rollback, recovery pod, upgrade
+        # + up to 120 s waiting for the server to stop (a polled loop, not a call) + 60 s kept back.
+        self.assertLessEqual(sum(waits) + 120, 540 - 60, (waits, run.calls))
+
+    def test_a_spent_budget_starts_nothing_and_is_red(self):
+        run = run_installer('pending-upgrade', budget=100)
+        self.assertEqual(run.code, 1, run.stdout)
+        self.assertIn('budget is spent', run.stderr)
+        self.assertEqual(run.index('helm rollback'), -1, run.calls)
+        self.assertEqual(run.index('helm upgrade'), -1, run.calls)
+
+    def test_a_failed_workload_listing_is_red(self):
+        run = run_installer('workload-list-fails')
+        self.assertEqual(run.code, 1, run.stdout)
+        self.assertIn('readiness was NOT established', run.stderr)
+
     def test_upgrade_never_waits_inside_helm_and_is_bounded(self):
         run = run_installer()
         upgrade = run.calls[run.index('helm upgrade --install')]
         self.assertNotIn('--wait', upgrade)
         self.assertNotIn('--atomic', upgrade)
-        self.assertRegex(upgrade, r'--timeout [1-5]m')
+        self.assertRegex(upgrade, r'--timeout \d+s')
 
     def test_readiness_is_checked_per_workload_after_the_upgrade(self):
         run = run_installer()
@@ -200,7 +237,7 @@ class FullTsdbTest(unittest.TestCase):
         self.assertEqual(run.code, 0, run.stderr)
         self.assertIn('DISPOSABLE METRICS', run.stdout)
         down = run.index('scale deploy loki-prometheus-server --replicas=0')
-        apply_ = run.index('kubectl apply -f -')
+        apply_ = run.index('apply -f -')
         up = run.index('scale deploy loki-prometheus-server --replicas=1')
         upgrade = run.index('helm upgrade --install')
         self.assertTrue(0 <= down < apply_ < up < upgrade, run.calls)
@@ -220,14 +257,34 @@ class FullTsdbTest(unittest.TestCase):
         run = run_installer('other-crash')
         self.assertEqual(run.code, 0, run.stderr)
         self.assertEqual(run.index('scale deploy'), -1, run.calls)
-        self.assertEqual(run.index('kubectl apply'), -1, run.calls)
+        self.assertEqual(run.index(' apply '), -1, run.calls)
 
-    def test_healthy_or_absent_prometheus_is_not_touched(self):
-        for scenario in ((), ('no-prometheus',)):
+    def test_healthy_recovered_or_absent_prometheus_is_not_touched(self):
+        # 'recovered': restarts and an out-of-space previous log, but Ready NOW — history only.
+        for scenario in ((), ('no-prometheus',), ('recovered',)):
             with self.subTest(scenario=scenario):
                 run = run_installer(*scenario)
                 self.assertEqual(run.code, 0, run.stderr)
                 self.assertEqual(run.index('scale deploy'), -1, run.calls)
+
+    def test_unconfirmed_termination_restores_the_server_and_never_cleans(self):
+        # Still listed, or the listing itself failed: neither proves the server stopped.
+        for scenario in ('termination-timeout', 'list-error'):
+            with self.subTest(scenario=scenario):
+                run = run_installer('out-of-space', scenario)
+                self.assertEqual(run.code, 1, run.stdout)
+                self.assertIn('NOT touched', run.stderr)
+                self.assertEqual(run.index('apply -f -'), -1, run.calls)
+                self.assertGreater(run.index('--replicas=1'), run.index('--replicas=0'), run.calls)
+
+    def test_cleaner_not_confirmed_gone_leaves_the_server_at_zero(self):
+        run = run_installer('out-of-space', 'recovery-fails', 'teardown-stuck')
+        self.assertEqual(run.code, 1, run.stdout)
+        self.assertIn('LEFT AT 0', run.stderr)
+        self.assertEqual(run.index('--replicas=1'), -1, run.calls)
+        # diagnostics were collected before the delete
+        self.assertLess(run.index('describe pod loki-prometheus-tsdb-recovery'),
+                        max(i for i, c in enumerate(run.calls) if 'delete pod loki-prometheus-tsdb-recovery' in c))
 
     def test_failed_recovery_is_red_and_scales_back(self):
         run = run_installer('out-of-space', 'recovery-fails')
@@ -258,7 +315,7 @@ class TsdbCleanupScriptTest(unittest.TestCase):
         body = manifest.split('        - |\n', 1)[1].split('      volumeMounts:', 1)[0]
         return textwrap.dedent(body)
 
-    def run_cleanup(self, blocks, target):
+    def run_cleanup(self, blocks, target, min_times=None):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             tsdb, bin_ = root / 'data', root / 'bin'
@@ -266,6 +323,11 @@ class TsdbCleanupScriptTest(unittest.TestCase):
             (bin_ / 'df').write_text(self.DF); (bin_ / 'df').chmod(0o755)
             for name in ['wal', 'chunks_head', '01K0000000000000000000000F.tmp-for-creation', *blocks]:
                 (tsdb / name).mkdir()
+            for i, block in enumerate(blocks):
+                start = (min_times or {}).get(block, 1_700_000_000_000 + i * 7_200_000)
+                (tsdb / block / 'meta.json').write_text(
+                    '{\n\t"ulid": "%s",\n\t"minTime": %d,\n\t"maxTime": %d,\n\t"compaction": {"parents": '
+                    '[{"ulid": "X", "minTime": 1, "maxTime": 2}]}\n}\n' % (block, start, start + 7_200_000))
             (tsdb / 'lock').write_text('')
             (tsdb / 'queries.active').write_text('')
             env = dict(os.environ, PATH=str(bin_) + os.pathsep + os.environ['PATH'],
@@ -279,6 +341,12 @@ class TsdbCleanupScriptTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         # 5 blocks = 75% after the WAL is gone; dropping the oldest one reaches 60%.
         self.assertEqual(left, [*self.BLOCKS[1:], 'queries.active'])
+
+    def test_order_is_by_sample_age_not_ulid(self):
+        # Compaction minted the NEWEST ULID (E) for the OLDEST range: it goes first, A survives.
+        result, left = self.run_cleanup(self.BLOCKS, 60, min_times={self.BLOCKS[4]: 1_600_000_000_000})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(left, [*self.BLOCKS[:4], 'queries.active'])
 
     def test_already_under_target_keeps_every_block(self):
         result, left = self.run_cleanup(self.BLOCKS[:2], 60)
