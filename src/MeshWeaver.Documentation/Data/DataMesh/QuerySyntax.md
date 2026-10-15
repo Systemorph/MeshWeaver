@@ -368,7 +368,10 @@ Numbers rank before text when a field holds both. Nulls go last for `sort:x` *an
 so that a row without the field is never the first answer either way (Postgres's own default would
 put them first in a descending sort; the generator says `NULLS LAST` explicitly). The same rules
 apply to every `sort:` selector, node fields included; an enum node field (`state`, `syncBehavior`)
-orders by its number, as its column does. Date-times are reduced to one fixed-width form before
+orders by its number, as its column does. An enum inside content keys on its wire value, as JSON
+stores it: a declared member's `[EnumMember]` spelling, even one that starts with a digit (`1st`)
+or is empty. Only a value with no member name (undefined, or an unnamable flags combination) keys
+as its number. Date-times are reduced to one fixed-width form before
 they compare — the serializer trims fractional seconds, so `…08:30:00Z` and `…08:30:00.1Z` sit in
 one field, and raw text would put the later one first. Postgres does the same rewrite with string
 functions only, for `Z`/`+00:00` and zoneless values, so a value that merely looks like a date

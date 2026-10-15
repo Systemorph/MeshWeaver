@@ -296,12 +296,16 @@ public static class CodeQueryResolver
     /// (<c>"Country/Name"</c>) is free text the author asked for and stays a query, and an entry
     /// the lexer splits (on any <see cref="char.IsWhiteSpace(char)"/>, Unicode included) is several
     /// terms and stays a query.
+    /// <para>🚨 Whitespace is refused BEFORE the parser is asked (#6747): the parser re-joins its
+    /// free-text terms with one ASCII space, so <c>Shared/Utils Country</c> round-trips to a
+    /// <c>TextSearch</c> identical to the entry, and the equality check alone would read two terms
+    /// as one path.</para>
     /// </summary>
     /// <param name="expanded">The entry after <c>name=</c> and <c>$self</c> expansion.</param>
     /// <returns><c>true</c> when the entry is a bare path.</returns>
     private static bool IsBarePath(string expanded)
     {
-        if (!expanded.Contains('/'))
+        if (!expanded.Contains('/') || expanded.Any(char.IsWhiteSpace))
             return false;
         var parsed = new QueryParser().Parse(expanded);
         return parsed.Filter is null

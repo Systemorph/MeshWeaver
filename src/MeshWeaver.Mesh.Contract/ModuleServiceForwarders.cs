@@ -109,6 +109,53 @@ public class ModuleServiceProxy : DispatchProxy
                || proxy.contexts?.Current(proxy.module)?.Services is not null;
     }
 
+    /// <summary>
+    /// 🚨 The ATOMIC "try current service" (MeshWeaver#6715): <paramref name="service"/> pinned for the
+    /// life of the returned lease — or null when it is a forwarding proxy whose module is no longer held
+    /// or is retiring. For an ordinary instance the lease is the instance itself and pins nothing.
+    ///
+    /// <para>For a proxy, <see cref="ModuleServiceLease{T}.Service"/> is the instance of the module's
+    /// generation that was current when the lease was taken, and that generation's services are neither
+    /// disposed nor its context unloaded until the lease is disposed — a retirement that starts in
+    /// between is deferred to the release, never run under the call. This is what a consumer uses
+    /// instead of <see cref="Serves"/> followed by a call through the proxy: the check and the call can
+    /// no longer be separated by a retirement. Hold it for the call only — a lease that is never
+    /// released keeps a retired generation loaded.</para>
+    /// </summary>
+    /// <typeparam name="T">The platform interface.</typeparam>
+    /// <param name="service">A resolved platform service — an instance, or a module's forwarding proxy.</param>
+    public static ModuleServiceLease<T>? TryLease<T>(T service) where T : class
+    {
+        ArgumentNullException.ThrowIfNull(service);
+        if (service is not ModuleServiceProxy proxy)
+            return new ModuleServiceLease<T>(service, null);
+        return proxy.contexts?.TryLeaseModuleService(proxy.module, proxy.index, proxy.caller) is { } leased
+            ? new ModuleServiceLease<T>((T)leased.Instance, leased.Release)
+            : null;
+    }
+
+    /// <summary>
+    /// <paramref name="use"/> run against <paramref name="service"/> under ONE lease (<see cref="TryLease{T}"/>)
+    /// that spans the whole subscription of what it returns, released when that terminates or is
+    /// unsubscribed. Cold: the lease is taken on subscribe. A proxy whose module is no longer held, or is
+    /// retiring, errors with <see cref="ModuleRetiredException"/> naming <paramref name="what"/> — a named
+    /// verdict, never <c>Module … holds no service scope</c> from inside a forwarded call.
+    /// </summary>
+    /// <typeparam name="T">The platform interface.</typeparam>
+    /// <typeparam name="TResult">What the use emits.</typeparam>
+    /// <param name="service">A resolved platform service — an instance, or a module's forwarding proxy.</param>
+    /// <param name="use">The call, against the pinned instance.</param>
+    /// <param name="what">What the service is, for the retirement's message.</param>
+    public static IObservable<TResult> Leased<T, TResult>(T service, Func<T, IObservable<TResult>> use, string what)
+        where T : class
+    {
+        ArgumentNullException.ThrowIfNull(service);
+        ArgumentNullException.ThrowIfNull(use);
+        return System.Reactive.Linq.Observable.Defer(() => TryLease(service) is { } lease
+            ? System.Reactive.Linq.Observable.Using(() => lease, held => use(held.Service))
+            : System.Reactive.Linq.Observable.Throw<TResult>(ModuleRetiredException.For(service, what)));
+    }
+
     /// <inheritdoc />
     protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
     {
@@ -124,6 +171,49 @@ public class ModuleServiceProxy : DispatchProxy
             throw;
         }
     }
+}
+
+/// <summary>
+/// A platform service pinned for the life of this lease (<see cref="ModuleServiceProxy.TryLease{T}"/>):
+/// for a module's forwarding proxy, the instance of the generation that was current when it was taken,
+/// whose services and load context stay alive until <see cref="Dispose"/>. Release it as soon as the
+/// call ends — a retirement waits for it.
+/// </summary>
+/// <typeparam name="T">The platform interface.</typeparam>
+public sealed class ModuleServiceLease<T> : IDisposable where T : class
+{
+    private IDisposable? release;
+
+    internal ModuleServiceLease(T service, IDisposable? release)
+    {
+        Service = service;
+        this.release = release;
+    }
+
+    /// <summary>The pinned instance — call it directly, never through the proxy it was leased from.</summary>
+    public T Service { get; }
+
+    /// <summary>Releases the lease; idempotent.</summary>
+    public void Dispose() => Interlocked.Exchange(ref release, null)?.Dispose();
+}
+
+/// <summary>
+/// A module's service was asked for after its module stopped being held — retired by an uninstall or a
+/// swap, or withdrawn at boot — between the moment a consumer selected it and the moment it was leased
+/// (MeshWeaver#6715). A named, fail-closed verdict: the selection is stale, and asking again decides
+/// without that module.
+/// </summary>
+public sealed class ModuleRetiredException : InvalidOperationException
+{
+    /// <summary>Creates the exception with its message.</summary>
+    /// <param name="message">What was retired, and what that means for the caller.</param>
+    public ModuleRetiredException(string message) : base(message)
+    {
+    }
+
+    internal static ModuleRetiredException For(object service, string what) =>
+        new($"{what} ({ModuleServiceProxy.Label(service)}) is no longer served: its module was retired or withdrawn "
+            + "after it was selected and before it was called — the selection is stale, and asking again decides without it.");
 }
 
 /// <summary>

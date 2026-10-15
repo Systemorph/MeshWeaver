@@ -71,6 +71,11 @@ and every renderer delivers it from there: the Helm values' `pluginCatalog.defau
 operator's boot catalog file and the Aspire portal keys, all as `PluginCatalog:DefaultGrants:N`.
 Before the field existed the seed lived only in a hand-edited Helm overlay, so a re-render from the
 record dropped it and the deploy-drift sentinel reported it as never delivered (Memex#116).
+The list renders **only for a record with `isPluginRegistry: true`**
+(`DeploymentPortalConfig.RegistrySeedPatterns`): a consumer registers AT a registry and never
+seeds grants, so on any other record the list renders on no route. Duplicates are dropped by what
+an entry grants, the way the grant matches: the source and the plan compare case-insensitively and
+the package id exactly, so `Plugins/Foo` and `Plugins/foo` are two grants and both stay.
 
 **First-startup auto-registration** removes the remaining hand-off. A platform admin mints a
 *registration key* (`mwr_…` — Admin app `/Admin` ▸ Instance grants ▸ Registration keys;
