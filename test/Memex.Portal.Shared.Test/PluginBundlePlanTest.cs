@@ -1,8 +1,12 @@
+using System.Collections.Immutable;
 using System.Net;
+using System.Reactive;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Text.Json;
 using Memex.Portal.Shared.Api;
 using Memex.Portal.Shared.Authentication;
+using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Graph;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -59,8 +63,37 @@ public class PluginBundlePlanTest(ITestOutputHelper output) : MonolithMeshTestBa
         public bool AllAccess { get; init; }
     }
 
+    // ── the lagging-mirror seam (#6818) ───────────────────────────────────────────────────────
+    //
+    // While armed, every DataChangedEvent the instance record's OWNER posts — the commit echo that
+    // advances this process's live mirror — is held at the owner's outbound pipeline instead of
+    // sent. The owner's ACK (PatchDataResponse) is untouched, so a write completes exactly as it
+    // does when the echo is merely slow. Released by the test, which re-delivers the held frames in
+    // order. Instance fields: per-test lifetime.
+    private volatile bool holdInstanceEcho;
+    private ImmutableList<(IMessageHub Owner, IMessageDelivery Delivery)> heldEcho = [];
+    private readonly AsyncSubject<Unit> echoHeld = new();
+
+    private void ReleaseInstanceEcho()
+    {
+        holdInstanceEcho = false;
+        foreach (var (owner, delivery) in Interlocked.Exchange(ref heldEcho, []))
+            owner.DeliverMessage(delivery);
+    }
+
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
+            .ConfigureDefaultNodeHub(config => config.AddPostPipeline(p => p.AddPipeline((d, next) =>
+            {
+                if (!holdInstanceEcho
+                    || d.Message is not DataChangedEvent
+                    || !string.Equals(p.Hub.Address.Path, InstancePath(FreeInstance), StringComparison.Ordinal))
+                    return next.Invoke(d);
+                ImmutableInterlocked.Update(ref heldEcho, list => list.Add((p.Hub, d)));
+                echoHeld.OnNext(Unit.Default);
+                echoHeld.OnCompleted();
+                return d.Ignored();
+            })))
             .AddPluginCatalog()
             // The Store/Tier node type, as far as this fixture needs it: enough for Admin/Tiers/*
             // nodes to be creatable on a mesh that does not run the Store.
@@ -288,8 +321,16 @@ public class PluginBundlePlanTest(ITestOutputHelper output) : MonolithMeshTestBa
 
     /// <summary>
     /// 🚨 PROMOTION IS ONE FIELD, AND IT TAKES EFFECT AT ONCE. A global admin sets the plan on the
-    /// instance record; the same process forgets its cached verdict, so the very next request is
-    /// decided with the new plan — no grant string edited, no cache window waited out.
+    /// instance record, and the very next request on this replica is decided with the new plan —
+    /// no grant string edited, no cache window waited out.
+    ///
+    /// <para>🚨 Pinned against a LAGGING MIRROR (#6818). The authenticator reads the record off the
+    /// process-wide live mirror, which advances on the owner's commit echo — a different message
+    /// from the ack that completes the write, with nothing ordering the two. This test holds the
+    /// echo back (the seam above), so the mirror provably lags the ack: the promotion must NOT
+    /// report done while the record the registry decides with still says <c>free</c>. Before the
+    /// fix it did, and the next request was refused the package it had just been promoted to — the
+    /// flake CI showed when the echo merely ran late.</para>
     /// </summary>
     [Fact(Timeout = 300_000)]
     public async Task PromotingTheInstance_WidensTheNextRequest()
@@ -305,12 +346,27 @@ public class PluginBundlePlanTest(ITestOutputHelper output) : MonolithMeshTestBa
         using var before = await Get(app, BundleRoute(ProApp), key);
         before.StatusCode.Should().Be(HttpStatusCode.NotFound, "on the free plan the pro package is not deployable");
 
-        // The promotion: the plan service the admin tab calls, against the record's own path. The
-        // bundle host above resolves through the mesh's registered authenticator, whose cache the
-        // promotion invalidates — so the next request already sees `pro`.
+        // The promotion: the plan service the admin tab calls, against the record's own path — with
+        // the owner's commit echo held, so the mirror the bundle host reads lags the acked write.
+        holdInstanceEcho = true;
         var plans = Mesh.ServiceProvider.GetRequiredService<InstancePlanService>();
-        await plans.SetPlan(InstancePath(FreeInstance), "pro")
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(60)).Await(TestContext.Current.CancellationToken);
+        var promoted = new ReplaySubject<MeshNode>();
+        using var promotion = plans.SetPlan(InstancePath(FreeInstance), "pro").Subscribe(promoted);
+        try
+        {
+            await echoHeld.Should().Within(TimeSpan.FromSeconds(60)).Emit(
+                "the owner committed the promotion and posted its echo — which the seam is holding");
+            await promoted.Should().NotEmit(TimeSpan.FromSeconds(5),
+                "the promotion must not report done while the mirror the registry decides with still "
+                + "carries the pre-promotion record — a request issued now would be refused the package");
+        }
+        finally
+        {
+            ReleaseInstanceEcho();
+        }
+
+        await promoted.Should().Within(TimeSpan.FromSeconds(60)).Emit(
+            "once the echo lands the mirror carries the promotion, and the promotion completes");
 
         using var after = await Get(app, BundleRoute(ProApp), key);
         after.StatusCode.Should().Be(HttpStatusCode.OK, "the promoted instance pulls the pro package on its next request");
