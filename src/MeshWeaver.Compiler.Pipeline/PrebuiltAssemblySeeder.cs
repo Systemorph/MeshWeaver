@@ -501,6 +501,37 @@ public static class PrebuiltAssemblySeeder
         return null;
     }
 
+    /// <summary>
+    /// 🚨 MeshWeaver#6831 — the module version the build a record NAMES was built at, as far as the
+    /// record can say; <c>null</c> when it cannot. This is what a registry states for the bytes it
+    /// serves from its own lane, instead of the version the package is advertised at.
+    ///
+    /// <list type="table">
+    ///   <item><term>adopted (verified, unverified, stale or refused)</term><description>the version
+    ///     the adopted bundle's producer stated — <see cref="NodeTypeDefinition.AdoptedModuleVersion"/>.
+    ///     The bytes ARE that bundle's bytes, whatever source the mesh holds now.</description></item>
+    ///   <item><term>compiled here, not dirty</term><description>the module version of the source it
+    ///     was compiled from — <see cref="NodeTypeDefinition.CurrentModuleVersion"/>, which is the
+    ///     version of exactly the source snapshot the compile recorded.</description></item>
+    ///   <item><term>compiled here, dirty</term><description><c>null</c>: the source has moved since
+    ///     the compile, and nothing on the record says which version it was compiled at.</description></item>
+    /// </list>
+    ///
+    /// <para>Measured on two portals (2026-10-12): the registry advertised <c>Personal</c> at 1.1.1
+    /// while every <c>Personal/PersonalApp</c> record served the 1.0.1 build (one MVID on both
+    /// instances; 1.1.1's only bake was cancelled), and the consumer stamped
+    /// <c>adoptedModuleVersion: 1.1.1</c> on 1.0.1 bytes, because the own-lane serve labelled every
+    /// assembly with the package version.</para>
+    /// </summary>
+    /// <param name="def">The record whose build is being served.</param>
+    public static string? ModuleVersionOfBuild(NodeTypeDefinition def)
+    {
+        ArgumentNullException.ThrowIfNull(def);
+        if (def.BuildProvenance is not BuildProvenance.Compiled)
+            return def.AdoptedModuleVersion;
+        return def.IsDirty ? null : def.CurrentModuleVersion;
+    }
+
     /// <summary>Whether the record's build is PROVEN to correspond to the live source: adopted with
     /// a fingerprint equal to the live one, or compiled here from exactly the live source
     /// versions.</summary>

@@ -340,6 +340,31 @@ Both directions are pinned by `test/Memex.Portal.Shared.Test/PluginBundleSealedL
 asks the same endpoint with a sealed lane and an unsealed one and asserts the two different answers
 — a change that served everybody would pass only the first.
 
+### The module version on each assembly (#6831)
+
+The bundle's top-level `version` is the version the package is **advertised** at. On the own-lane
+branch the registry assembles the archive from each NodeType's `LastCompiledVersion`, which is
+whatever build the record holds now, and that can be an older adoption. Measured 2026-10-12: the
+registry advertised `Personal` at 1.1.1 while `Personal/PersonalApp` still served the 1.0.1 build
+(the same MVID on two instances; 1.1.1's only bake had been cancelled). The consumer stamped
+`adoptedModuleVersion: 1.1.1` on the 1.0.1 bytes, so a record whose provenance names a version
+that was never baked looked like a fresh build.
+
+The registry therefore states each assembly's own version:
+- Each assembly's manifest record carries `moduleVersion`, read off the record that names the
+  bytes by `PrebuiltAssemblySeeder.ModuleVersionOfBuild`:
+  - an adopted build carries its `AdoptedModuleVersion`;
+  - a build compiled here from the current source carries `CurrentModuleVersion`;
+  - a compiled build whose source has moved since is unknown.
+- The manifest carries `moduleVersionPerAssembly: true`. Under it, an assembly with no stated
+  version is **unknown** to the consumer (`BundleReader.Manifest.ModuleVersionOf`); it never
+  inherits the top-level `version`.
+- A bake's sealed bundle carries no flag, because every assembly in it was built at the bundle's
+  version, so that path reads exactly as before.
+- The consumers (`PluginBundleClient`, `ShippedPrebuiltBundles`) stamp `Payload.ModuleVersion`.
+
+Pinned by `test/Memex.Portal.Shared.Test/RegistryStatesTheServedBuildsModuleVersionTest.cs`.
+
 ### Three refusals the lookup carries, and why each is not optional
 
 Reaching the share from the PACKAGE route turns a value that used to be compared into a value that
