@@ -6,7 +6,6 @@
   "category": "Suppliers",
   "description": "Cooperativa de Quesos 'Las Cabras' - Oviedo, Spain",
   "icon": "/static/NodeTypeIcons/truck.svg",
-  "isPersistent": true,
   "content": {
     "$type": "SupplierContent",
     "supplierId": 5,

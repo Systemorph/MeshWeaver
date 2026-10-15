@@ -170,9 +170,14 @@ public sealed record ComboClearance(
     /// one.
     /// </summary>
     private static string Caveats(ComboVerification verdict) =>
-        verdict.Caveats.Count == 0
+        (verdict.Caveats.Count == 0
             ? ""
-            : " Caveats: " + string.Join(" | ", verdict.Caveats);
+            : " Caveats: " + string.Join(" | ", verdict.Caveats))
+        // Retired modules (#3848) neither fail nor hold the verdict, and are still named on it.
+        + (verdict.RetiredModules is not { Count: > 0 } retired
+            ? ""
+            : " Retired, not verifiable: "
+              + string.Join(", ", retired.Select(r => $"'{r.ModuleId}'")) + ".");
 
     private static string First(ImmutableList<string> failures) =>
         failures.Count == 0 ? "(no detail recorded)" : failures[0];

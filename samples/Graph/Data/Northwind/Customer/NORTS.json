@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "North/South - London, UK",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "NORTS",

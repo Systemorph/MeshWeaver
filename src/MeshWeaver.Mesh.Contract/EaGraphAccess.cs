@@ -41,7 +41,7 @@ public enum EaConnection
 ///
 /// <para>Deliberately one record for both entry points on <see cref="IEaGraphAuth"/>:
 /// <see cref="IEaGraphAuth.GetConnection"/> never fills <see cref="AccessToken"/> (it reads the
-/// stored credential and mints nothing), while <see cref="IEaGraphAuth.GetAccessToken"/> fills it
+/// stored credential and mints nothing), while <see cref="IEaGraphAuth.GetAccessToken(string)"/> fills it
 /// exactly when <see cref="Connection"/> is <see cref="EaConnection.Connected"/>. Both answer the
 /// same three-state question, so they answer it in the same shape.</para>
 /// </summary>

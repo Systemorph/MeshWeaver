@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "Seven Seas Imports - London, UK",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "SEVES",

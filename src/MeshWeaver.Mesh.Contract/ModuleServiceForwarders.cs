@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Reflection;
 using System.Runtime.CompilerServices;
@@ -187,30 +188,42 @@ internal sealed class ModuleHostedServicesHost(ModuleContexts contexts, ILogger?
 /// generation that no longer declares the check, is a NAMED <see cref="HealthStatus.Degraded"/> verdict
 /// for that check — never an exception out of the health middleware: the feature is absent, and the
 /// probe says which and why.</para>
+///
+/// <para>🚨 It is an <see cref="IConfigureNamedOptions{TOptions}"/>, as <see cref="ModuleConfigureOptionsForwarder{TOptions}"/>
+/// is, and applies the module's setup by name exactly as <see cref="OptionsFactory{TOptions}"/> would: a module's
+/// <c>Configure&lt;HealthCheckServiceOptions&gt;("name", …)</c> must reach <c>IOptionsMonitor.Get("name")</c>, and a
+/// setup that is not named reaches the default name only (MeshWeaver#6749). The per-generation snapshot below is
+/// therefore taken PER OPTIONS NAME.</para>
 /// </summary>
 internal sealed class ModuleHealthCheckOptionsForwarder(ModuleContexts contexts, string module, int index)
-    : IConfigureOptions<HealthCheckServiceOptions>
+    : IConfigureNamedOptions<HealthCheckServiceOptions>
 {
-    // The checks each GENERATION declares, by name — keyed weakly by that generation's services, so a
-    // retired generation is never pinned by this table (an ephemeron: the value lives only while the
-    // key does). Mesh-scoped instance state on a singleton, never static (NoStaticState).
-    private readonly ConditionalWeakTable<ModuleServices, ImmutableDictionary<string, HealthCheckRegistration>> declared = new();
+    // The checks each GENERATION declares, per options name, by check name — keyed weakly by that
+    // generation's services, so a retired generation is never pinned by this table (an ephemeron: the
+    // value lives only while the key does). Mesh-scoped instance state on a singleton, never static
+    // (NoStaticState).
+    private readonly ConditionalWeakTable<ModuleServices, ConcurrentDictionary<string, ImmutableDictionary<string, HealthCheckRegistration>>> declared = new();
 
-    public void Configure(HealthCheckServiceOptions options)
+    public void Configure(HealthCheckServiceOptions options) => Configure(Options.DefaultName, options);
+
+    public void Configure(string? name, HealthCheckServiceOptions options)
     {
+        var optionsName = name ?? Options.DefaultName;
         if (contexts.Current(module)?.Services is not { } services)
         {
             // Withdrawn before the options were first read: its checks cannot even be named. One
-            // named verdict stands for them (the withdrawal itself is an IncompatibleModule record).
-            options.Registrations.Add(new HealthCheckRegistration(module,
-                _ => Absent($"module {module} is not held by this mesh's module registry — it was withdrawn, so its health checks cannot run"),
-                HealthStatus.Degraded, null));
+            // named verdict stands for them (the withdrawal itself is an IncompatibleModule record) —
+            // on the default name only, where a setup that cannot say its name lands.
+            if (optionsName == Options.DefaultName)
+                options.Registrations.Add(new HealthCheckRegistration(module,
+                    _ => Absent($"module {module} is not held by this mesh's module registry — it was withdrawn, so its health checks cannot run"),
+                    HealthStatus.Degraded, null));
             return;
         }
-        foreach (var check in Declared(services).Values.OrderBy(r => r.Name, StringComparer.Ordinal))
+        foreach (var check in Declared(services, optionsName).Values.OrderBy(r => r.Name, StringComparer.Ordinal))
         {
-            var name = check.Name;
-            options.Registrations.Add(new HealthCheckRegistration(name, _ => Activate(name), check.FailureStatus, check.Tags, check.Timeout)
+            var checkName = check.Name;
+            options.Registrations.Add(new HealthCheckRegistration(checkName, _ => Activate(optionsName, checkName), check.FailureStatus, check.Tags, check.Timeout)
             {
                 Delay = check.Delay,
                 Period = check.Period,
@@ -219,25 +232,31 @@ internal sealed class ModuleHealthCheckOptionsForwarder(ModuleContexts contexts,
     }
 
     // ONE snapshot of the current generation: the factory and the container are the same generation's.
-    private IHealthCheck Activate(string name)
+    private IHealthCheck Activate(string optionsName, string name)
     {
         if (contexts.Current(module)?.Services is not { } services
             || contexts.TryScopeOf(services) is not { } scope)
             return Absent($"module {module} is no longer held by this mesh's module registry (retired or withdrawn) — its health check '{name}' cannot run");
-        return Declared(services).TryGetValue(name, out var check)
+        return Declared(services, optionsName).TryGetValue(name, out var check)
             ? check.Factory(scope)
             : Absent($"the current generation of module {module} no longer declares the health check '{name}'");
     }
 
-    // What `services`' own configuration adds to an EMPTY options instance: that generation's checks,
-    // with that generation's factories. Run once per generation.
-    private ImmutableDictionary<string, HealthCheckRegistration> Declared(ModuleServices services) =>
-        declared.GetValue(services, s =>
-        {
-            var probe = new HealthCheckServiceOptions();
-            ((IConfigureOptions<HealthCheckServiceOptions>)contexts.ResolveIn(s, index)).Configure(probe);
-            return probe.Registrations.ToImmutableDictionary(r => r.Name, StringComparer.Ordinal);
-        });
+    // What `services`' own configuration adds to an EMPTY options instance of `optionsName`: that
+    // generation's checks, with that generation's factories — applied by name exactly as the options
+    // factory would (#6749). Run once per generation and name.
+    private ImmutableDictionary<string, HealthCheckRegistration> Declared(ModuleServices services, string optionsName) =>
+        declared.GetValue(services, _ => new ConcurrentDictionary<string, ImmutableDictionary<string, HealthCheckRegistration>>(StringComparer.Ordinal))
+            .GetOrAdd(optionsName, n =>
+            {
+                var probe = new HealthCheckServiceOptions();
+                var target = contexts.ResolveIn(services, index);
+                if (target is IConfigureNamedOptions<HealthCheckServiceOptions> named)
+                    named.Configure(n, probe);
+                else if (n == Options.DefaultName)
+                    ((IConfigureOptions<HealthCheckServiceOptions>)target).Configure(probe);
+                return probe.Registrations.ToImmutableDictionary(r => r.Name, StringComparer.Ordinal);
+            });
 
     private static IHealthCheck Absent(string why) => new AbsentModuleHealthCheck(why);
 
@@ -249,9 +268,73 @@ internal sealed class ModuleHealthCheckOptionsForwarder(ModuleContexts contexts,
     }
 }
 
+/// <summary>
+/// The root's stand-in for a module's <see cref="IConfigureOptions{TOptions}"/> of a PLATFORM options type —
+/// <c>services.Configure&lt;T&gt;(name, …)</c>, <c>AddOptions&lt;T&gt;(name).Configure(…)</c>, and every
+/// <c>AddHttpClient(name, …)</c> / <c>AddHttpClient&lt;TClient&gt;(…)</c>, which configure the
+/// <c>HttpClientFactoryOptions</c> of their named client exactly that way.
+///
+/// <para>🚨 <b>Why a plain forwarding proxy is not enough.</b> Those registrations are a
+/// <see cref="ConfigureNamedOptions{TOptions}"/>, which ALSO implements <see cref="IConfigureNamedOptions{TOptions}"/>,
+/// and the options factory asks for exactly that: a setup that is not an <see cref="IConfigureNamedOptions{TOptions}"/>
+/// is applied to the DEFAULT name only. A <see cref="DispatchProxy"/> implements the one interface it was
+/// created for, so behind a proxy every NAMED configuration a module made was silently dropped — a module's
+/// typed HttpClient was handed out with none of its base address, headers or timeout, and nothing logged.</para>
+///
+/// <para>So this forwarder implements the named interface and applies the module's CURRENT generation's
+/// setup exactly as <see cref="OptionsFactory{TOptions}"/> would apply the setup itself: by name when it is
+/// named, to the default name otherwise. Resolved on every call, so a live swap is followed (the root's
+/// options CACHE is evicted by <see cref="ModuleContexts.CommitAll"/>).</para>
+/// </summary>
+/// <typeparam name="TOptions">The platform options type.</typeparam>
+internal sealed class ModuleConfigureOptionsForwarder<TOptions>(
+    ModuleContexts contexts, string module, int index, Autofac.ILifetimeScope? caller)
+    : IConfigureNamedOptions<TOptions>
+    where TOptions : class
+{
+    public void Configure(string? name, TOptions options)
+    {
+        var target = contexts.ResolveModuleService(module, index, caller);
+        if (target is IConfigureNamedOptions<TOptions> named)
+            named.Configure(name, options);
+        else if (name == Options.DefaultName)
+            ((IConfigureOptions<TOptions>)target).Configure(options);
+    }
+
+    public void Configure(TOptions options) => Configure(Options.DefaultName, options);
+
+    public override string ToString() => $"IConfigureOptions<{typeof(TOptions).Name}> [module {module}, registration {index}]";
+}
+
 /// <summary>Registers the forwarders for one module's root services.</summary>
 internal static class ModuleServiceForwarding
 {
+    /// <summary>The options type <paramref name="type"/> configures when it is
+    /// <see cref="IConfigureOptions{TOptions}"/>, else null.</summary>
+    internal static Type? ConfiguredOptionsType(Type type) =>
+        type.IsGenericType && type.GetGenericTypeDefinition() == typeof(IConfigureOptions<>)
+            ? type.GetGenericArguments()[0]
+            : null;
+
+    /// <summary>The options type whose root cache a module registration of <paramref name="type"/> feeds —
+    /// every options-pipeline interface (<see cref="IConfigureOptions{TOptions}"/>,
+    /// <see cref="IPostConfigureOptions{TOptions}"/>, <see cref="IValidateOptions{TOptions}"/>) — else null.</summary>
+    internal static Type? OptionsPipelineType(Type type)
+    {
+        if (!type.IsGenericType)
+            return null;
+        var definition = type.GetGenericTypeDefinition();
+        return definition == typeof(IConfigureOptions<>)
+               || definition == typeof(IConfigureNamedOptions<>)
+               || definition == typeof(IPostConfigureOptions<>)
+               || definition == typeof(IValidateOptions<>)
+            ? type.GetGenericArguments()[0]
+            : null;
+    }
+
+    private static object ConfigureOptionsForwarder(Type options, ModuleContexts contexts, string module, int index, Autofac.ILifetimeScope? caller) =>
+        Activator.CreateInstance(typeof(ModuleConfigureOptionsForwarder<>).MakeGenericType(options), contexts, module, index, caller)!;
+
     /// <summary>
     /// Adds to the ROOT collection the forwarder for every platform-typed registration the module made
     /// — exactly the registrations the root would have held — and nothing that names a module type.
@@ -308,6 +391,20 @@ internal static class ModuleServiceForwarding
                     // A module's health check must activate in the MODULE's scope, not the root's.
                     root.Add(ServiceDescriptor.Singleton(type, sp => new ModuleHealthCheckOptionsForwarder(
                         sp.GetRequiredService<ModuleContexts>(), module, index)));
+                    break;
+                case ModuleServiceRoute.Proxy when ConfiguredOptionsType(type) is { } options:
+                    // A NAMED configuration must reach the options factory as a named one — a proxy would
+                    // drop it (ModuleConfigureOptionsForwarder). Singleton: one forwarder, no caller; otherwise
+                    // one per caller scope, as a proxy would be (MeshWeaver#6584).
+                    // 🚨 The lambda captures the LIFETIME, never `registration`: a lambda capturing the loop's
+                    // registration shares its closure with every other forwarder of the iteration, and the
+                    // descriptor names the module's implementation type — pinning generation N for the life
+                    // of the root (measured: ModuleRootServicesSwapTest's retention check).
+                    var lifetime = registration.Descriptor.Lifetime;
+                    root.Add(NotOwnedServiceDescriptor.Forwarder(type, sp => ConfigureOptionsForwarder(
+                        options, sp.GetRequiredService<ModuleContexts>(), module, index,
+                        lifetime == ServiceLifetime.Singleton ? null : ModuleServiceProvider.CallerOfRootScope(sp)),
+                        lifetime));
                     break;
                 case ModuleServiceRoute.Proxy when registration.Descriptor.Lifetime == ServiceLifetime.Singleton:
                     // Singleton: ONE stable proxy, so every consumer holds the same forwarder.

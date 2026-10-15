@@ -3,7 +3,6 @@
   "namespace": "FutuRe/Currency",
   "name": "Swiss Franc",
   "nodeType": "FutuRe/Currency",
-  "isPersistent": true,
   "content": {
     "$type": "Currency",
     "id": "CHF",

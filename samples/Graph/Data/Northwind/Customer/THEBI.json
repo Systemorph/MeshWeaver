@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "The Big Cheese - Portland, USA",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "THEBI",

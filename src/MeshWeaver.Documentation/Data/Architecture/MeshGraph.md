@@ -275,10 +275,10 @@ builds on it). So a `Type/Claim`-typed node at `Insurance/Claims` serves
 with the unmatched tail carried as the virtual instance's key. Virtual nodes inherit the template's
 full hub configuration; the mesh instantiates them on demand — no pre-population required.
 
-> ⚠️ **`addressSegments` is not a real field.** It appears in some older sample node JSON
-> (`samples/Graph/Data/*.json`), but `MeshNode` declares no such property and the hub's
-> `UnmappedMemberHandling = Skip` means it is parsed and discarded. Setting it changes nothing —
-> the prefix walk above is the actual mechanism.
+> ⚠️ **`addressSegments` is a retired field.** `MeshNode` declares no such property — the prefix
+> walk above is the actual mechanism — and a node file that still carries it fails the
+> retired-field gate and would be refused by GitSync's strict reader (see
+> [GitHub Sync](../GitHubSync), "A retired `MeshNode` field is a build error").
 
 ---
 

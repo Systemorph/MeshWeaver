@@ -6,7 +6,6 @@
   "category": "Products",
   "description": "P\u00e2t\u00e9 chinois - 24 boxes x 2 pies",
   "icon": "/static/NodeTypeIcons/shopping-bag.svg",
-  "isPersistent": true,
   "content": {
     "$type": "ProductContent",
     "productId": 55,

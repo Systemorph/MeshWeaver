@@ -6,7 +6,6 @@
   "category": "Products",
   "description": "Schoggi Schokolade - 100 - 100 g pieces",
   "icon": "/static/NodeTypeIcons/shopping-bag.svg",
-  "isPersistent": true,
   "content": {
     "$type": "ProductContent",
     "productId": 27,

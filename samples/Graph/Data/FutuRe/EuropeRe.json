@@ -6,7 +6,6 @@
   "category": "Business Units",
   "description": "European reinsurance operations headquartered in Zurich",
   "icon": "/api/content/FutuRe/EuropeRe/icon.svg",
-  "isPersistent": true,
   "content": {
     "$type": "BusinessUnit",
     "id": "EuropeRe",

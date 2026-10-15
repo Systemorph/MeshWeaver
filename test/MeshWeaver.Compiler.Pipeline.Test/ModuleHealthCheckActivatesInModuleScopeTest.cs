@@ -128,6 +128,27 @@ public sealed class ModuleHealthCheckActivatesInModuleScopeTest : MonolithMeshTe
             .And.Contain("no longer held", "the verdict names the module, the check and why it cannot run");
     }
 
+    /// <summary>
+    /// 🚨 MeshWeaver#6749 — a module's NAMED <c>Configure&lt;HealthCheckServiceOptions&gt;("named_health", …)</c>
+    /// reaches <c>IOptionsMonitor.Get("named_health")</c>, stays out of the default name, and its registration
+    /// still activates in the MODULE's scope. Negative control: the forwarder as a plain
+    /// <c>IConfigureOptions&lt;HealthCheckServiceOptions&gt;</c> — the options factory then applies it to the
+    /// default name only, and the named registration never arrives.
+    /// </summary>
+    [Fact]
+    public void AModuleNamedHealthCheckConfiguration_ReachesItsName_AndActivatesInTheModuleScope()
+    {
+        var monitor = Mesh.ServiceProvider.GetRequiredService<IOptionsMonitor<HealthCheckServiceOptions>>();
+        var registration = monitor.Get("named_health").Registrations.SingleOrDefault(r => r.Name == "named_probe");
+        registration.Should().NotBeNull("the module's NAMED health-check configuration must reach the root's options of that name");
+        monitor.Get(Options.DefaultName).Registrations.Any(r => r.Name == "named_probe").Should()
+            .BeFalse("a named configuration must not land on the default name");
+
+        var check = registration!.Factory(Mesh.ServiceProvider);
+        check.GetType().FullName.Should().Be($"{Module}.ProbeCheck",
+            "the named registration is rebound to activate in the MODULE's scope, like an unnamed one");
+    }
+
     private static string Source(int version) => $$"""
         using Microsoft.Extensions.DependencyInjection;
         using Microsoft.Extensions.Diagnostics.HealthChecks;
@@ -148,6 +169,9 @@ public sealed class ModuleHealthCheckActivatesInModuleScopeTest : MonolithMeshTe
                     {
                         services.AddSingleton<Beat>();
                         services.AddHealthChecks().AddCheck<ProbeCheck>("live_health_probe");
+                        services.Configure<HealthCheckServiceOptions>("named_health", o => o.Registrations.Add(
+                            new HealthCheckRegistration("named_probe",
+                                sp => ActivatorUtilities.GetServiceOrCreateInstance<ProbeCheck>(sp), null, null)));
                         return services;
                     })];
         }

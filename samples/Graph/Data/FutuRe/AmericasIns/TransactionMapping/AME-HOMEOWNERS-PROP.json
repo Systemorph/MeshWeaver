@@ -3,7 +3,6 @@
   "namespace": "FutuRe/AmericasIns/TransactionMapping",
   "name": "AmericasIns: Homeowners → Property (85%)",
   "nodeType": "FutuRe/TransactionMapping",
-  "isPersistent": true,
   "content": {
     "$type": "TransactionMapping",
     "id": "AME-HOMEOWNERS-PROP",

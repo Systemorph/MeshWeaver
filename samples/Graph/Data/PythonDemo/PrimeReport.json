@@ -5,7 +5,6 @@
   "nodeType": "NodeType",
   "category": "Types",
   "description": "A report whose content is computed by an external python3 process through the bounded Process I/O pool",
-  "isPersistent": true,
   "content": {
     "$type": "NodeTypeDefinition",
     "namespace": "PythonDemo",

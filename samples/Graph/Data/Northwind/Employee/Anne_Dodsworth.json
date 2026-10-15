@@ -6,7 +6,6 @@
   "category": "Employees",
   "description": "Anne Dodsworth - Sales Representative",
   "icon": "/static/NodeTypeIcons/person.svg",
-  "isPersistent": true,
   "content": {
     "$type": "EmployeeContent",
     "employeeId": 9,

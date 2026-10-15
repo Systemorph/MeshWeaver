@@ -317,9 +317,13 @@ public static class PluginRegistryEndpoints
                 }
                 // The paths subset (manifest-diff fast path) only FILTERS within the resolved
                 // package's own files — the curated-id resolution above stays the security gate.
-                return hit.Source.Source.FetchPackageFiles(hit.Package, hit.Source.GitRef, body.Paths)
+                // 🚨 The answer names the COMMIT it served (MeshWeaver#3848, decision "Record commit
+                // on install"): the consumer's install record stores it, and the combo verifier
+                // then checks the installed content against that commit — never against the
+                // source's HEAD, which has moved past every install by the time anyone verifies.
+                return hit.Source.Source.FetchPackage(hit.Package, hit.Source.GitRef, body.Paths)
                     .InStage(stages, $"package files '{hit.Package.Id}' from '{hit.Source.Name}'")
-                    .Select(files => (IResult)Results.Content(PluginRegistryPayloads.Files(files), "application/json"));
+                    .Select(fetched => (IResult)Results.Content(PluginRegistryPayloads.Files(fetched), "application/json"));
             })
             .Catch((Exception ex) =>
             {
@@ -347,6 +351,8 @@ public static class PluginRegistryEndpoints
     /// registry resolves the folder from its curated catalog. <paramref name="Ref"/> is advisory (the
     /// registry serves its own configured ref). <paramref name="Paths"/> optionally narrows the
     /// response to a subset of the package's own repo-relative paths (the manifest-diff incremental
-    /// fast path); null = all files. Unknown paths are simply absent from the response.</summary>
+    /// fast path); null = all files. Unknown paths are simply absent from the response. The answer
+    /// carries <c>commit</c>, the exact commit the files were read at, whenever the source can
+    /// name it (MeshWeaver#3848).</summary>
     public record FilesBody(string Id, string? Ref = null, IReadOnlyList<string>? Paths = null);
 }

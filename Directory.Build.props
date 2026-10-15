@@ -358,7 +358,14 @@
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="\" />
   </ItemGroup>
-  <!-- No transitive-dependency overrides are needed any more, and that is deliberate.
+  <!-- Transitive security overrides — see the PackageVersion comment in Directory.Packages.props
+       for the advisories and the dependency paths. No source fix exists yet: NuGet.Packaging 7.9.0
+       (latest) floors Pkcs at 8.0.1, and Microsoft.Identity.Web 4.16.x depends on 10.0.10. -->
+  <ItemGroup>
+    <PackageReference Include="System.Security.Cryptography.Pkcs" PrivateAssets="all" />
+    <PackageReference Include="System.Security.Cryptography.Xml" PrivateAssets="all" />
+  </ItemGroup>
+  <!-- Overrides are the exception, not the rule.
        This block used to force patched versions of System.Security.Cryptography.Xml,
        Microsoft.AspNetCore.DataProtection, OpenTelemetry.Api and AngleSharp. Every one of those
        advisories came from something we could fix at SOURCE instead:
