@@ -1471,9 +1471,10 @@ public partial class MeshOperations
                 // An EMPTY `namespace:`/`path:` names no location (callers write `namespace:` with a
                 // basePath to mean "the children of the base") — drop it, or it would re-anchor the
                 // composed query at the root.
-                var trimmed = string.Join(' ', query.Split(' ', StringSplitOptions.RemoveEmptyEntries)
-                    .Where(token => !token.Equals("namespace:", StringComparison.OrdinalIgnoreCase)
-                        && !token.Equals("path:", StringComparison.OrdinalIgnoreCase)));
+                // Quote-aware, and the rest of the text verbatim: a split-and-rejoin collapsed the
+                // spaces inside `name:"Jane  Q Example"` and dropped a `namespace:` written INSIDE a
+                // quoted value, so an exact-name search ran on a different value.
+                var trimmed = WithoutEmptyLocationQualifiers(query);
                 var scoped = StatesScope(trimmed) ? trimmed : $"{trimmed} scope:descendants".Trim();
                 fullQuery = $"namespace:{resolvedBase} {scoped}".Trim();
             }
@@ -1491,6 +1492,22 @@ public partial class MeshOperations
                         + "the query names a place outside the base, so no answer could honour both. "
                         + "Drop the basePath to search where the query says, or drop the query's "
                         + "path:/namespace: to search under the base.");
+                }
+                // Every named location lies under the base — but a location named in ONE `OR`
+                // branch bounds only that branch: `namespace:Base/* OR nodeType:Markdown` would run
+                // its right branch everywhere. The query keeps its own location only when the WHOLE
+                // expression is bounded by it (an anchor, or a namespace filter on every branch —
+                // the sufficiency predicate with the `partitions:all` flag set aside).
+                if (!(own with { CrossPartition = false }).IsSufficientlySpecified())
+                {
+                    logger.LogInformation(
+                        "Search refused: query {Query} names a location in only some of its branches under basePath {BasePath}",
+                        query, basePath);
+                    return Observable.Return(
+                        $"Error: the query names a location in only some of its OR branches, so under basePath "
+                        + $"'{resolvedBase}' the other branches would search outside it. Give every branch a "
+                        + "path:/namespace: under the base, drop the query's own path:/namespace: to search the "
+                        + "whole base, or drop the basePath.");
                 }
                 fullQuery = query;
             }
@@ -1598,6 +1615,40 @@ public partial class MeshOperations
             locations.Add(parsed.Path);
         locations.AddRange(parsed.ExtractNamespacePatterns());
         return locations.Count == 0 ? null : locations.Select(l => l.Trim('/')).ToList();
+    }
+
+    /// <summary>
+    /// <paramref name="query"/> without its EMPTY <c>namespace:</c>/<c>path:</c> tokens (callers'
+    /// "the base's children" idiom, which names no location), the rest of the text verbatim. Quote
+    /// aware: whitespace and a <c>namespace:</c> inside a quoted value belong to the value.
+    /// </summary>
+    private static string WithoutEmptyLocationQualifiers(string query)
+    {
+        var result = new System.Text.StringBuilder(query.Length);
+        var i = 0;
+        while (i < query.Length)
+        {
+            if (char.IsWhiteSpace(query[i]))
+            {
+                result.Append(query[i++]);
+                continue;
+            }
+            var start = i;
+            var quoted = false;
+            while (i < query.Length && (quoted || !char.IsWhiteSpace(query[i])))
+            {
+                if (quoted && query[i] == '\\' && i + 1 < query.Length)
+                    i++;
+                else if (query[i] == '"')
+                    quoted = !quoted;
+                i++;
+            }
+            var token = query[start..i];
+            if (!token.Equals("namespace:", StringComparison.OrdinalIgnoreCase)
+                && !token.Equals("path:", StringComparison.OrdinalIgnoreCase))
+                result.Append(token);
+        }
+        return result.ToString().Trim();
     }
 
     /// <summary>Whether <paramref name="location"/> is <paramref name="basePath"/> or lies below it.</summary>

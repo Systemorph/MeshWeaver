@@ -34,7 +34,12 @@ public class SearchBasePathKeepsTheQuerysLocationTest(ITestOutputHelper output) 
             new MeshNode("Deal", Beta) { Name = "Deal", NodeType = "Markdown" },
             new MeshNode("Jane", $"{Beta}/Deal") { Name = Person, NodeType = "Markdown" },
             new MeshNode("Archive", Beta) { Name = "Archive", NodeType = "Markdown" },
-            new MeshNode("Jane", $"{Beta}/Archive") { Name = Person, NodeType = "Markdown" });
+            new MeshNode("Jane", $"{Beta}/Archive") { Name = Person, NodeType = "Markdown" },
+            new MeshNode("Spaced", Beta) { Name = SpacedPerson, NodeType = "Markdown" },
+            new MeshNode("Colon", Beta) { Name = ColonPerson, NodeType = "Markdown" });
+
+    private const string SpacedPerson = "Jane  Q Example";
+    private const string ColonPerson = "Jane namespace: Example";
 
     private Task<string> Search(string query, string? basePath, CancellationToken cancellationToken)
         => new MeshOperations(Mesh).Search(query, basePath, 50)
@@ -85,6 +90,57 @@ public class SearchBasePathKeepsTheQuerysLocationTest(ITestOutputHelper output) 
 
         Output.WriteLine(answer);
         Paths(answer).Should().Equal(new[] { $"{Beta}/Deal/Jane" }, "the archived twin is excluded, the live one is not");
+    }
+
+    /// <summary>
+    /// A MULTI-VALUE exclusion keeps the base (review of #6837): the parser used to defer
+    /// <c>-namespace:A|B</c> with the positive alternation and clear the anchor, so the composed
+    /// query lost <c>namespace:{base}</c> and was refused as unanchored. Both list spellings.
+    /// </summary>
+    [Theory(Timeout = 60_000)]
+    [InlineData($"-namespace:{Beta}/Archive|{Beta}/Old")]
+    [InlineData($"-namespace:({Beta}/Archive OR {Beta}/Old)")]
+    public async Task AMultiValueExclusionUnderABaseKeepsTheBase(string exclusion)
+    {
+        var answer = await Search($"{exclusion} name:\"{Person}\"", $"@{Beta}",
+            TestContext.Current.CancellationToken);
+
+        Output.WriteLine(answer);
+        Paths(answer).Should().Equal(new[] { $"{Beta}/Deal/Jane" }, "the archived twin is excluded and the base still anchors");
+        Partitions(answer).Should().Equal(Beta);
+    }
+
+    /// <summary>
+    /// A location named in ONE <c>OR</c> branch does not bound the other (review of #6837):
+    /// <c>namespace:{base}/* OR nodeType:Markdown</c> ran its right branch everywhere and returned
+    /// Alpha. Refused, since no answer can keep both the query and the base.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task ALocationInOnlyOneOrBranchIsRefusedUnderABase()
+    {
+        var answer = await Search($"namespace:{Beta}/* OR nodeType:Markdown partitions:all", $"@{Beta}",
+            TestContext.Current.CancellationToken);
+
+        Output.WriteLine(answer);
+        answer.Should().StartWith("Error:", "the right branch would read outside the base");
+        answer.Should().NotContain($"\"{Alpha}\"");
+    }
+
+    /// <summary>
+    /// The base's own composition keeps the query text verbatim (review of #6837): a split-and-rejoin
+    /// collapsed the spaces inside a quoted value and dropped a <c>namespace:</c> written inside one,
+    /// so an exact-name search ran on another name — here, on <see cref="Person"/>'s two nodes.
+    /// </summary>
+    [Theory(Timeout = 60_000)]
+    [InlineData(SpacedPerson, $"{Beta}/Spaced")]
+    [InlineData(ColonPerson, $"{Beta}/Colon")]
+    public async Task AQuotedValueIsSearchedVerbatimUnderABase(string name, string expected)
+    {
+        var answer = await Search($"namespace: name:\"{name}\"", $"@{Beta}",
+            TestContext.Current.CancellationToken);
+
+        Output.WriteLine(answer);
+        Paths(answer).Should().Equal(expected);
     }
 
     /// <summary>
