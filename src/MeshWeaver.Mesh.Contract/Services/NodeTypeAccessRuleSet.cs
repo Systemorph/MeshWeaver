@@ -1,5 +1,7 @@
 using System.Collections.Immutable;
+using System.Reactive.Linq;
 using MeshWeaver.Mesh.Security;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Mesh.Services;
 
@@ -34,8 +36,10 @@ namespace MeshWeaver.Mesh.Services;
 public sealed class NodeTypeAccessRuleSet
 {
     // Per node type, every registered rule in registration order — the governing one is the LAST that
-    // still serves (see Governing), so a rule whose module is withdrawn or retired leaves the set.
-    private readonly ImmutableDictionary<string, ImmutableArray<INodeTypeAccessRule>> rules;
+    // can still be leased (see Find), so a rule whose module is withdrawn or retired leaves the set.
+    // Each entry is the registration as resolved (a module's forwarding proxy, or an instance) and what
+    // the set hands out for it (Bound).
+    private readonly ImmutableDictionary<string, ImmutableArray<(INodeTypeAccessRule Registered, INodeTypeAccessRule Bound)>> rules;
 
     /// <summary>
     /// Indexes the mesh's registered access rules by node type.
@@ -49,25 +53,63 @@ public sealed class NodeTypeAccessRuleSet
     /// set is built, and a rule whose module is retired later is skipped when a type is looked up: its
     /// node type falls back to the caller's standard check (closed by default), as for a type no module
     /// ever governed, and the withdrawal is reported where every module that failed to install is.</para>
+    ///
+    /// <para>🚨 <b>Every read of a module's rule is LEASED, never checked-then-called</b> (MeshWeaver#6715).
+    /// "Does its module still serve?" followed by a call through the proxy could be split by a
+    /// retirement, and the call then threw <c>Module … holds no service scope</c>. The rule's metadata
+    /// (<see cref="INodeTypeAccessRule.NodeType"/> here, its supported operations and permissions in
+    /// <see cref="Find"/>) is read under ONE lease (<see cref="ModuleServiceProxy.TryLease{T}"/>), and the
+    /// rule handed out for a module evaluates under a lease of its own that spans the evaluation
+    /// (<see cref="ModuleServiceProxy.Leased{T, TResult}"/>): a retirement that starts during either is
+    /// deferred to the release. A retirement that falls BETWEEN the selection and the evaluation is a
+    /// named <see cref="ModuleRetiredException"/> — the decision fails closed and says why, and asking
+    /// again decides without the retired rule.</para>
     /// </summary>
     /// <param name="accessRules">Every <see cref="INodeTypeAccessRule"/> registered on the mesh.</param>
     public NodeTypeAccessRuleSet(IEnumerable<INodeTypeAccessRule> accessRules)
     {
         ArgumentNullException.ThrowIfNull(accessRules);
         rules = accessRules
-            .Where(ModuleServiceProxy.Serves)
-            .GroupBy(r => r.NodeType, StringComparer.OrdinalIgnoreCase)
-            .ToImmutableDictionary(g => g.Key, g => g.ToImmutableArray(), StringComparer.OrdinalIgnoreCase);
+            .Select(rule => (Rule: rule, NodeType: NodeTypeOf(rule)))
+            .Where(r => r.NodeType is not null)
+            .GroupBy(r => r.NodeType!, StringComparer.OrdinalIgnoreCase)
+            .ToImmutableDictionary(
+                g => g.Key,
+                g => g.Select(r => (r.Rule, Bind(r.Rule, r.NodeType!))).ToImmutableArray(),
+                StringComparer.OrdinalIgnoreCase);
     }
 
-    // LAST registration wins, among the rules that still serve.
-    private INodeTypeAccessRule? Governing(string nodeType)
+    // The rule's node type, read under one lease; null when its module is no longer held.
+    private static string? NodeTypeOf(INodeTypeAccessRule rule)
+    {
+        using var lease = ModuleServiceProxy.TryLease(rule);
+        return lease?.Service.NodeType;
+    }
+
+    // What the set hands out: an ordinary rule as it is; a module's forwarding proxy as a rule whose
+    // every call is leased.
+    private static INodeTypeAccessRule Bind(INodeTypeAccessRule rule, string nodeType) =>
+        rule is not ModuleServiceProxy
+            ? rule
+            : rule is INodeTypePermissionRule permissionRule
+                ? new LeasedPermissionRule(permissionRule, nodeType)
+                : new LeasedAccessRule(rule, nodeType);
+
+    // LAST registration wins, among the rules that can still be leased. `decide` reads the governing
+    // rule's metadata UNDER the lease that established it serves: true hands out its bound rule,
+    // false means it governs without an opinion on this question (null), and a rule whose module is
+    // gone is skipped for the registration before it.
+    private INodeTypeAccessRule? Governing(string nodeType, Func<INodeTypeAccessRule, INodeTypeAccessRule, bool> decide)
     {
         if (!rules.TryGetValue(nodeType, out var registered))
             return null;
         for (var i = registered.Length - 1; i >= 0; i--)
-            if (ModuleServiceProxy.Serves(registered[i]))
-                return registered[i];
+        {
+            using var lease = ModuleServiceProxy.TryLease(registered[i].Registered);
+            if (lease is null)
+                continue;
+            return decide(registered[i].Registered, lease.Service) ? registered[i].Bound : null;
+        }
         return null;
     }
 
@@ -85,12 +127,11 @@ public sealed class NodeTypeAccessRuleSet
     /// <returns>The governing rule, or null.</returns>
     public INodeTypeAccessRule? Find(string? nodeType, NodeOperation operation)
     {
-        if (string.IsNullOrEmpty(nodeType) || Governing(nodeType) is not { } rule)
+        if (string.IsNullOrEmpty(nodeType))
             return null;
 
-        return rule.SupportedOperations.Count == 0 || rule.SupportedOperations.Contains(operation)
-            ? rule
-            : null;
+        return Governing(nodeType, (_, rule) =>
+            rule.SupportedOperations is var operations && (operations.Count == 0 || operations.Contains(operation)));
     }
 
     /// <summary>
@@ -109,12 +150,50 @@ public sealed class NodeTypeAccessRuleSet
     /// <returns>The governing rule, or null.</returns>
     public INodeTypePermissionRule? FindPermissionRule(string? nodeType, Permission permission)
     {
-        if (!IsRuleDecidablePermission(permission)
-            || string.IsNullOrEmpty(nodeType)
-            || Governing(nodeType) is not INodeTypePermissionRule permissionRule)
+        if (!IsRuleDecidablePermission(permission) || string.IsNullOrEmpty(nodeType))
             return null;
 
-        return permissionRule.SupportedPermissions.Contains(permission) ? permissionRule : null;
+        // The REGISTERED shape decides whether it is a permission rule (a module's proxy implements
+        // exactly the interface it was registered as), the leased instance what it supports.
+        return Governing(nodeType, (registered, rule) =>
+                registered is INodeTypePermissionRule
+                && rule is INodeTypePermissionRule leased
+                && leased.SupportedPermissions.Contains(permission))
+            as INodeTypePermissionRule;
+    }
+
+    /// <summary>
+    /// A module's rule as the set hands it out: the node type read once when the set was built, and
+    /// every other call made under a lease on the module's CURRENT generation — the metadata for the
+    /// read, an evaluation for its whole subscription (MeshWeaver#6715). A module retired before the
+    /// call is a named <see cref="ModuleRetiredException"/>.
+    /// </summary>
+    private class LeasedAccessRule(INodeTypeAccessRule forwarder, string nodeType) : INodeTypeAccessRule
+    {
+        protected string What => $"the access rule for node type '{nodeType}'";
+
+        public string NodeType => nodeType;
+
+        public IReadOnlyCollection<NodeOperation> SupportedOperations => Read(forwarder, r => r.SupportedOperations);
+
+        // One verdict (the contract), so the lease ends with it even when the rule's stream does not.
+        public IObservable<bool> HasAccess(NodeValidationContext context, string? userId) =>
+            ModuleServiceProxy.Leased(forwarder, r => r.HasAccess(context, userId).Take(1), What);
+
+        protected TResult Read<TRule, TResult>(TRule rule, Func<TRule, TResult> read) where TRule : class
+        {
+            using var lease = ModuleServiceProxy.TryLease(rule) ?? throw ModuleRetiredException.For(rule, What);
+            return read(lease.Service);
+        }
+    }
+
+    private sealed class LeasedPermissionRule(INodeTypePermissionRule forwarder, string nodeType)
+        : LeasedAccessRule(forwarder, nodeType), INodeTypePermissionRule
+    {
+        public IReadOnlyCollection<Permission> SupportedPermissions => Read(forwarder, r => r.SupportedPermissions);
+
+        public IObservable<bool> HasPermission(MeshNode node, AccessContext? accessContext, string? userId, Permission permission) =>
+            ModuleServiceProxy.Leased(forwarder, r => r.HasPermission(node, accessContext, userId, permission).Take(1), What);
     }
 
     /// <summary>

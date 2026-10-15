@@ -274,6 +274,29 @@ public class ContentFieldSortTest
         OnHold,
     }
 
+    /// <summary>
+    /// A DECLARED member keys on its wire value even when that value starts with a digit or is empty —
+    /// "no member name" is decided on the member, never on the first character of its wire text
+    /// (issue #6739). The typed value and the same value read back from JSON then share one key.
+    /// </summary>
+    [Fact]
+    public void ContentEnum_DeclaredMemberWithDigitOrEmptyWireValue_KeysOnItsWireValue()
+    {
+        QuerySortKey.Normalize(Rank.First).Should().Be("1st");
+        QuerySortKey.Normalize(Rank.First)
+            .Should().Be(new QueryEvaluator().GetSortKey(Node("r", Json("""{"x":"1st"}""")), "content.x"));
+        QuerySortKey.Normalize(Rank.Blank).Should().Be("");
+        QuerySortKey.Normalize((Rank)7).Should().Be(7m, "an undefined member is still written as a JSON number");
+    }
+
+    private enum Rank
+    {
+        [System.Runtime.Serialization.EnumMember(Value = "1st")]
+        First,
+        [System.Runtime.Serialization.EnumMember(Value = "")]
+        Blank,
+    }
+
     /// <summary>128-bit integers and Half are numbers too — 9 &lt; 10, never "10" &lt; "9".</summary>
     [Fact]
     public void WideAndHalfNumerics_CompareNumerically()

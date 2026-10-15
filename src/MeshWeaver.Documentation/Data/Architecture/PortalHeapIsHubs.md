@@ -165,14 +165,15 @@ the queue-starvation/OOM investigation (#5555, #1186).
 
 ## Why the LIVE ones are never released
 
-`HostedHubsCollection.messageHubs` — `src/MeshWeaver.Messaging.Hub/HostedHubsCollection.cs:29`:
+`HostedHubsCollection.messageHubs` (the field in `src/MeshWeaver.Messaging.Hub/HostedHubsCollection.cs`):
 
 ```csharp
 private readonly ConcurrentDictionary<Address, IMessageHub> messageHubs = new(AddressComparer.Instance);
 ```
 
 It has **no idle sweep, no TTL, no size cap and no LRU**. The one removal is on the hub's own
-disposal (`:203`):
+disposal, registered in `HostedHubsCollection.Track` (shown as it read at the time of the
+measurement; it now removes the entry only while it is still that hub):
 
 ```csharp
 hub.RegisterForDisposal(h => messageHubs.TryRemove(h.Address, out _));
@@ -182,11 +183,11 @@ So the chain is: an entry leaves iff the hub disposes; a grain-hosted node hub d
 `MessageHubGrain.OnDeactivateAsync` runs (it calls `hub.DisposeAbortingCurrentTurn()` — dispose
 first, then abort the current turn; the order is explained in
 [Hub Initialization Failure](../HubInitializationFailure)); and that method logged its own first line
-(`:864`, `LogInformation`, *"Grain {GrainId} deactivating: reason={Reason}"`*) **zero times across
+(the `LogInformation` at the top of `OnDeactivateAsync`, *"Grain {GrainId} deactivating: reason={Reason}"*) **zero times across
 five replicas and 514 687 log lines in 28 hours**, in a window carrying 2 791 other `info:` lines.
 
 Deactivation never happens because the activation is re-pinned faster than it can age out.
-`MessageHubGrain.cs:560` installs
+`MessageHubGrain.CompleteActivation` installs
 
 ```csharp
 .Set(new GrainKeepAliveCallback(() => TryDelayDeactivation(TimeSpan.FromMinutes(10))))
@@ -250,7 +251,7 @@ Two readings, both decisive, and the first one corrects this page's own earlier 
 
 🚨 **`HostedHubsCollection.messageHubs` is not what holds the dead ones — it did its job.**
 Exactly **one** of the 1 496 is still in a `ConcurrentDictionary<Address, IMessageHub>`. The
-`RegisterForDisposal` removal at `:203` fired for the other 1 495. The registry is where the
+`RegisterForDisposal` removal registered in `HostedHubsCollection.Track` fired for the other 1 495. The registry is where the
 **live** hubs sit (6 925 `sync` + 974 node, none of which anything ever asked to dispose); it is
 not the corpse-holder.
 
@@ -463,7 +464,7 @@ total-vs-disposed. That is exactly why `dotnet.timer.count` appears below as a *
 hubs, and why answering any question on this page currently costs a replica restart. The three
 numbers this whole investigation turns on are cheap to compute in-process and are simply not
 emitted — `HostedHubsCollection.Hubs.Count()` already exists and is used only in two log lines
-(`MessageHub.cs:1879`, `:2487`). An observable-gauge trio over hub count by address type and run
+(`MessageHub.Dispose` and `MessageHub.HandleShutdownCore`). An observable-gauge trio over hub count by address type and run
 level would make the population trackable per replica, continuously, at no risk — and would turn
 "take a dump and hope" into "watch the curve and dump only when it says something changed".
 

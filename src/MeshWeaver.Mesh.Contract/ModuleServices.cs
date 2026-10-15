@@ -720,8 +720,75 @@ public sealed class ModuleServices : IDisposable
         })));
     }
 
-    /// <summary>Disposes the scope — this generation's singletons with it.</summary>
+    // Leases held on this generation's services (low bits) and whether its disposal was requested
+    // (Retiring). ONE word, changed only by compare-and-swap, so "may I lease?" and "may I dispose?"
+    // are decided against each other atomically — no lock, no wait (MeshWeaver#6715).
+    private const int Retiring = 1 << 30;
+    private int leaseState;
+
+    /// <summary>
+    /// A lease on this generation's services, or null once their disposal was requested (MeshWeaver#6715).
+    /// While any lease is held, <see cref="Dispose"/> only MARKS the services retiring: no new lease is
+    /// granted, and the scope — this generation's singletons with it — is disposed by whoever releases
+    /// the LAST lease. So a call that leased the generation runs to its end on live services, however a
+    /// retirement interleaves with it; nothing waits and nothing blocks.
+    /// </summary>
+    internal IDisposable? TryLease()
+    {
+        while (true)
+        {
+            var state = Volatile.Read(ref leaseState);
+            if ((state & Retiring) != 0)
+                return null;
+            if (Interlocked.CompareExchange(ref leaseState, state + 1, state) == state)
+                return new ServicesLease(this);
+        }
+    }
+
+    /// <summary>Whether this generation's disposal was requested — it grants no new lease.</summary>
+    internal bool IsRetiring => (Volatile.Read(ref leaseState) & Retiring) != 0;
+
+    /// <summary>Whether this generation's scope has actually been disposed.</summary>
+    internal bool IsDisposed => Volatile.Read(ref disposed) != 0;
+
+    private void ReleaseLease()
+    {
+        // The last lease out after a requested disposal performs it — exactly once: no lease can be
+        // granted once Retiring is set, so the count reaches zero under it only once.
+        if (Interlocked.Decrement(ref leaseState) == Retiring)
+            DisposeNow();
+    }
+
+    private sealed class ServicesLease(ModuleServices owner) : IDisposable
+    {
+        private int released;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref released, 1) == 0)
+                owner.ReleaseLease();
+        }
+    }
+
+    /// <summary>
+    /// Disposes the scope — this generation's singletons with it — now, or, while a lease
+    /// (<see cref="TryLease"/>) is held, when the last one is released. Grants no lease from here on.
+    /// </summary>
     public void Dispose()
+    {
+        int state;
+        do
+        {
+            state = Volatile.Read(ref leaseState);
+            if ((state & Retiring) != 0)
+                return;
+        }
+        while (Interlocked.CompareExchange(ref leaseState, state | Retiring, state) != state);
+        if (state == 0)
+            DisposeNow();
+    }
+
+    private void DisposeNow()
     {
         IServiceProvider? toDispose;
         lock (gate)
