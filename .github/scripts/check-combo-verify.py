@@ -340,6 +340,13 @@ LANDER_REQUIRED = {
     "a private row's summary carries no module id": "Module ids, failures and caveat text are withheld",
     "the 401 guidance names a VALUE to configure, never a description of the row":
         "config Plugins:Registry:BuildPrincipalAudience = $audience_value ",
+    # #3848: the portal image ships no tester, so the gate runs on the COMPOSED host (#3022).
+    "the gate host is composed from the candidate portal's /app and its tester CLI":
+        'bash .github/scripts/compose-gate-host.sh "$host_root/portal-app" "$host_root/tester-app"',
+    "the tester and the portal are asserted to be one build before the composition is trusted":
+        'framework-identity /portal --expect "$tester_identity"',
+    "the verifier is handed the composed host": '--host "$host_root/host"',
+    "a missing instrument is refused and never landed": '[ "$verify_exit" -ne "$TESTER_MISSING_EXIT" ]',
 }
 LANDER_FORBIDDEN = {
     "an mwi_ instance key": "INSTANCE_KEY",

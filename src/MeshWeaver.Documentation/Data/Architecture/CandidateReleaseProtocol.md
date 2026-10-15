@@ -192,11 +192,29 @@ the gate points it at *an instance's set*:
    at its RECORDED ref into a repo-root layout, plus the manifest `combo-assembly.json` naming
    module → resolved ref → content hash.
 3. **Verify** — `mw-combo-verify` (`tools/MeshWeaver.ComboVerifier`) runs the whole check as one
-   job: assemble, then execute `mw-plugin-test` over that root **inside the candidate image**
-   (`docker run … --entrypoint /app/mw-plugin-test`, the same contract as the plugins repo's
-   `test-repos` CI job — never a `container:` job), read the tester's structured
-   `combo-gate-report.json` (`--report`), and fold everything into one verdict. Same executable,
-   different input.
+   job: assemble, then execute `mw-plugin-test` over that root **as the candidate portal host**,
+   read the tester's structured `combo-gate-report.json` (`--report`), and fold everything into one
+   verdict. Same executable, different input.
+
+   **The gate host is composed, never a single image** — the contract every node-repo lane has
+   run since #3022: the candidate portal's `/app` with the candidate set's tester CLI laid beside
+   it (`.github/scripts/compose-gate-host.sh`, after the tester's `framework-identity` verb has
+   asserted the two images are one build), handed to the verifier as `--host`, mounted read-only,
+   and started by the PORTAL image's own `dotnet` with `--app /app` (`docker run … --entrypoint
+   dotnet <portal> /host/mw-plugin-test.dll /work --app /app --report …`). Neither image alone will
+   do. The portal image ships **no** tester: until #3848 the gate ran `--entrypoint
+   /app/mw-plugin-test` inside it, every run died in tini with exit 127 (`exec /app/mw-plugin-test
+   failed: No such file or directory`), wrote no report, and was landed on every live instance as a
+   NotVerifiable verdict — the lane red on every candidate for a reason that had nothing to do with
+   any candidate. The tester image alone is a strict subset of the portal, so content binding a
+   portal-only assembly would red there as a content error. The tester image for a candidate is
+   `mw-plugin-test:<candidate tag>`, written by the same CD run in promote's phase A, before the
+   portal tag that names the candidate exists ([Image Tag Contract](../ImageTagContract)).
+
+   **A missing instrument is not a verdict.** The verifier probes the host before assembling
+   anything; a host without the tester CLI, its runtimeconfig or the portal's manifest exits **3**,
+   naming each missing file, and writes **no** verdict — so the lander lands nothing and the run is
+   red saying the instrument is broken, never "the candidate could not be verified".
 
 ### The combo IS recorded — in two shapes, not one
 
@@ -328,16 +346,21 @@ to evaluate instead. A check there would be a guess; the combo run is an answer.
 ```bash
 # 1. The instance states its combo (as System — e.g. an admin execute_script on that portal):
 #    hub.ServiceProvider.GetRequiredService<InstanceComboReader>().Read()  → save as combo.json
-# 2. Verify the candidate against it (docker + a GitHub token for the module repos):
+# 2. Compose the gate host from the candidate set — the portal's /app + the tester CLI — exactly
+#    as .github/scripts/combo-verify-instance.sh does (docker create --platform … ; docker cp
+#    <id>:/app …; the tester's framework-identity verb; then):
+.github/scripts/compose-gate-host.sh portal-app tester-app host
+# 3. Verify the candidate against it (docker + a GitHub token for the module repos):
 GITHUB_TOKEN=… mw-combo-verify combo.json meshweaver.azurecr.io/memex-portal-ai:<candidate-tag> \
-    --source plugins=https://github.com/Systemorph/MeshWeaver.Plugins
-# exit 0 = GREEN. Anything else: the summary names every failing module and every caveat,
-# and the work root is kept for inspection.
+    --host host --source plugins=https://github.com/Systemorph/MeshWeaver.Plugins
+# exit 0 = GREEN; 3 = the gate host is not runnable (the INSTRUMENT is missing; no verdict is
+# written). Anything else: the summary names every failing module and every caveat, and the work
+# root is kept for inspection.
 #
 # 🚨 The run is pinned to --platform, default linux/amd64 — what the fleet runs. Do NOT drop it
 # to "use the local architecture": see the note below.  Verifying arm64 instead:
 #     … --platform linux/arm64
-# 3. Land the verdict where the instance's admins look: combo-verdict.json is a
+# 4. Land the verdict where the instance's admins look: combo-verdict.json is a
 #    ComboVerification — merge it into Admin/UpdatePolicy → content.comboVerifications
 #    (upsert by candidateTag), e.g. via the meshweaver MCP: get → merge → patch.
 #    The instance's next update check CONSULTS it: a Red landed here NAMES the failing modules as
@@ -347,8 +370,9 @@ GITHUB_TOKEN=… mw-combo-verify combo.json meshweaver.azurecr.io/memex-portal-a
 ```
 
 The verify job itself holds no portal credential — reading the combo (step 1) and landing the
-verdict (step 3) are the operator's/CD's authenticated touches on the instance; the verification
-in between needs only docker, the candidate image, and read access to the module repos.
+verdict (step 4) are the operator's/CD's authenticated touches on the instance; the verification
+in between needs only docker, the candidate set's portal and tester images, and read access to the
+module repos.
 
 🚨 **A verdict is about ONE architecture, and it has to say which.** A candidate tag is a
 multi-arch manifest list, and the amd64 and arm64 variants carry genuinely different bytes — they

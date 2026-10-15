@@ -9,7 +9,7 @@ using MeshWeaver.Messaging;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.PluginCatalog;
 
-// mw-combo-verify <combo.json> <candidate-image>
+// mw-combo-verify <combo.json> <candidate-image> --host <gate-host-dir>
 //     [--work-root <dir>] [--verdict <file>] [--tag <candidate-tag>]
 //     [--allow-moving] [--allow-incomplete]
 //     [--source <name>=<url>]… [--default-source <url>]
@@ -26,6 +26,16 @@ using MeshWeaver.PluginCatalog;
 //     RED           at least one module fails; every failing module is named — exit 1.
 //     NOTVERIFIABLE the question could not be answered (moving refs, a fetch failure, no
 //                   structured report) — exit 1, with the caveats naming every reason.
+//     (no verdict)  the gate host is not runnable (no tester CLI, runtimeconfig or portal
+//                   manifest in it) — the INSTRUMENT is missing, so no question was asked and no
+//                   verdict file is written — exit 3.
+//
+// <candidate-image> is the candidate PORTAL image (memex-portal-ai:<tag>); its own `dotnet` starts
+// the gate. --host is the COMPOSED GATE HOST for that candidate: the portal's /app with the
+// candidate set's tester CLI beside it, built by .github/scripts/compose-gate-host.sh — the same
+// host every node-repo lane runs since MeshWeaver#3022. The portal image ships no tester, and the
+// tester image's /app is a strict subset of the portal's, so neither image alone is the gate
+// (#3848: every run exited 127 inside the portal image and was landed as NotVerifiable).
 //
 // 🚨 The run is PINNED to --platform (default linux/amd64, what the fleet runs). A candidate tag
 // is a multi-arch manifest list whose variants carry different bytes and different framework build
@@ -45,6 +55,7 @@ string? imageRef = null;
 string? workRoot = null;
 string? verdictPath = null;
 string? candidateTag = null;
+string? hostDir = null;
 var allowMoving = false;
 var allowIncomplete = false;
 string? defaultSource = null;
@@ -94,6 +105,9 @@ for (var i = 0; i < args.Length; i++)
         case "--platform" when i + 1 < args.Length:
             platform = args[++i];
             break;
+        case "--host" when i + 1 < args.Length:
+            hostDir = args[++i];
+            break;
         case "--fetch-timeout" when i + 1 < args.Length:
             fetchTimeout = TimeSpan.FromSeconds(
                 double.Parse(args[++i], CultureInfo.InvariantCulture));
@@ -105,12 +119,12 @@ for (var i = 0; i < args.Length; i++)
         // A value-taking option as the LAST argument would otherwise fall through to the default
         // case as "Unknown argument" — a misleading message for a missing value.
         case "--work-root" or "--verdict" or "--tag" or "--source" or "--default-source"
-            or "--token-env" or "--fetch-timeout" or "--gate-timeout" or "--platform":
+            or "--token-env" or "--fetch-timeout" or "--gate-timeout" or "--platform" or "--host":
             Console.Error.WriteLine($"Option '{args[i]}' requires a value. Try --help.");
             return 2;
         case "--help" or "-h":
             Console.WriteLine(
-                "usage: mw-combo-verify <combo.json> <candidate-image> [--work-root <dir>] "
+                "usage: mw-combo-verify <combo.json> <candidate-image> --host <gate-host-dir> [--work-root <dir>] "
                 + "[--verdict <file>] [--tag <candidate-tag>] [--allow-moving] "
                 + "[--allow-incomplete] [--source <name>=<url>]... [--default-source <url>] "
                 + "[--fetch-timeout <s>] [--gate-timeout <s>] [--token-env <VAR>] "
@@ -134,6 +148,13 @@ if (comboPath is null || imageRef is null)
 {
     Console.Error.WriteLine(
         "Both <combo.json> and <candidate-image> are required. Try --help.");
+    return 2;
+}
+if (hostDir is null)
+{
+    Console.Error.WriteLine(
+        "--host <gate-host-dir> is required: the candidate portal's /app with the candidate set's "
+        + "tester CLI beside it (.github/scripts/compose-gate-host.sh). Try --help.");
     return 2;
 }
 if (!File.Exists(comboPath))
@@ -188,7 +209,21 @@ var assembler = new InstanceComboAssembler(
         Output = Console.Out,
     });
 
-var gate = new DockerImageGate(pools, gateTimeout, Console.Out, platform);
+var gate = new DockerImageGate(pools, gateTimeout, Console.Out, platform, hostDir);
+
+// 🚨 THE INSTRUMENT FIRST (#3848). A gate with no tester to start exits 127 with no report, which
+// folds into a NotVerifiable that reads as a statement about the candidate — and was landed on live
+// instances as one. A missing tester is not a verdict: say what is missing, write no verdict file,
+// and exit with the code that means "the instrument is broken".
+var testerMissing = await gate.ProbeHost().FirstAsync()
+    .ObserveCompletion(ex => Console.Error.WriteLine(
+        $"tester probe faulted AFTER it was reported — reported, not orphaned: {ex}"));
+if (testerMissing is not null)
+{
+    Console.Error.WriteLine($"mw-combo-verify: {testerMissing}");
+    return DockerImageGate.TesterMissingExitCode;
+}
+
 var verifier = new InstanceComboVerifier(assembler, gate.Run);
 
 // 🚨 ObserveCompletion, never Rx's own observable-to-Task bridge (maintainer, 2026-08-30:
