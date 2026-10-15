@@ -31,7 +31,7 @@ using Xunit;
 namespace Memex.Portal.Shared.Test;
 
 /// <summary>
-/// 🚨 MeshWeaver#3848 / #4413 — decided by the maintainer, "Record commit on install": the plugin
+/// 🚨 MeshWeaver#3848 / #4413 — policy <c>record-served-commit-on-install</c>: the plugin
 /// registry's install response returns the EXACT commit it served, and the install record stores
 /// that commit, so the combo verifier can check the installed content against it
 /// (<see cref="ComboVerifiesTheRecordedCommitTest"/>) instead of the source repository's
@@ -84,7 +84,7 @@ public class InstallRecordsTheServedCommitTest(ITestOutputHelper output) : Monol
     [Fact]
     public void TheFilesPayload_CarriesTheCommit_AndAnOldAnswerCarriesNone()
     {
-        IReadOnlyList<PackageFile> files = [new PackageFile($"{Package}/Doc.md", "# Doc")];
+        ImmutableList<PackageFile> files = [new PackageFile($"{Package}/Doc.md", "# Doc")];
 
         PluginRegistryPayloads.ParseFiles(PluginRegistryPayloads.Files(new PackageFetch(files, ServedCommit)))
             .Commit.Should().Be(ServedCommit);
@@ -187,13 +187,13 @@ public class InstallRecordsTheServedCommitTest(ITestOutputHelper output) : Monol
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
-        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
-        {
-            ["PluginCatalog:Sources:0:Name"] = Source,
-            ["PluginCatalog:Sources:0:RepoPath"] = Repo,
-            ["PluginCatalog:Sources:0:Ref"] = "main",
-            ["PluginCatalog:Sources:0:Format"] = "node-repo",
-        });
+        builder.Configuration.AddInMemoryCollection(
+        [
+            new KeyValuePair<string, string?>("PluginCatalog:Sources:0:Name", Source),
+            new KeyValuePair<string, string?>("PluginCatalog:Sources:0:RepoPath", Repo),
+            new KeyValuePair<string, string?>("PluginCatalog:Sources:0:Ref", "main"),
+            new KeyValuePair<string, string?>("PluginCatalog:Sources:0:Format", "node-repo"),
+        ]);
         builder.Services.AddSingleton<IMessageHub>(Mesh);
         builder.Services.AddSingleton(new InstanceRegistryAuthenticator(
             Mesh, Mesh.ServiceProvider.GetRequiredService<ILogger<InstanceRegistryAuthenticator>>()));

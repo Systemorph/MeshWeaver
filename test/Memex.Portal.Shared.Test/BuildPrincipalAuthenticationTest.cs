@@ -479,6 +479,54 @@ public class BuildPrincipalAuthenticationTest(ITestOutputHelper output) : Monoli
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
+    /// <summary>
+    /// 🚨 A retired module (#3848, policy <c>record-served-commit-on-install</c>) is reported APART
+    /// from the verified ones: a verdict that lists the same module as verified AND as retired is
+    /// internally inconsistent and the recording route refuses it (400), while the same verdict
+    /// with a disjoint retired list is recorded — the control that the 400 is about the overlap,
+    /// and about nothing else in the body.
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task ComboVerification_RefusesAModuleBothVerifiedAndRetired_AndRecordsADisjointOne()
+    {
+        jwks = () => tokens.Jwks();
+        await Grant(VerificationPrincipal(), cancellationToken: TestContext.Current.CancellationToken);
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        await access.RunAsSystem(() => Mesh.ServiceProvider.GetRequiredService<IMeshService>()
+            .CreateOrUpdateNode(new MeshNode(UpdatePolicyNodeType.NodeId, UpdatePolicyNodeType.AdminPartition)
+            {
+                Name = "Update policy", NodeType = UpdatePolicyNodeType.NodeType,
+                State = MeshNodeState.Active,
+                Content = new UpdatePolicyContent { Policy = UpdatePolicyKind.None },
+            })).Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
+        await using var app = await StartHost(Path.GetTempPath());
+        var token = tokens.Mint(Audience, eventName: "workflow_run");
+
+        ComboVerification Verdict(string retiredId) => new()
+        {
+            CandidateTag = "3.0.0-ci.456", VerifiedAt = DateTimeOffset.UtcNow,
+            Verdict = ComboVerdictKind.NotVerifiable, Caveats = ["Test could not execute the candidate"],
+            Modules =
+            [
+                new ModuleVerification
+                {
+                    ModuleId = "Widget", Outcome = ModuleVerificationOutcome.NotVerified,
+                    Failures = ["the gate did not run"],
+                },
+            ],
+            RetiredModules = [new RetiredModule { ModuleId = retiredId, Reason = "gone at HEAD" }],
+        };
+
+        using var overlapping = await PostVerdict(app, token,
+            JsonSerializer.Serialize(Verdict("widget"), InstanceComboAssembler.Json));
+        Assert.Equal(HttpStatusCode.BadRequest, overlapping.StatusCode);
+
+        using var disjoint = await PostVerdict(app, token,
+            JsonSerializer.Serialize(Verdict("PlatformUI"), InstanceComboAssembler.Json));
+        Assert.Equal(HttpStatusCode.OK, disjoint.StatusCode);
+        Assert.Contains("\"recorded\":true", await disjoint.Content.ReadAsStringAsync());
+    }
+
     // ── a principal DECLARED in configuration (policy declared-not-derived) ───
 
     [Fact(Timeout = 240_000)]

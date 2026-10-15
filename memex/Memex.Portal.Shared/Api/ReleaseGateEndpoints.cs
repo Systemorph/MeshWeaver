@@ -357,6 +357,8 @@ public static class ReleaseGateEndpoints
                     || verdict.RetiredModules.Any(r => r is null || string.IsNullOrWhiteSpace(r.ModuleId)
                         || verdict.Modules.Any(m => string.Equals(m.ModuleId, r.ModuleId,
                             StringComparison.OrdinalIgnoreCase)))
+                    || verdict.RetiredModules.Select(r => r.ModuleId).Distinct(StringComparer.OrdinalIgnoreCase)
+                        .Count() != verdict.RetiredModules.Count
                     || (verdict.Verdict == ComboVerdictKind.Green
                         && (verdict.Modules.Count == 0 || string.IsNullOrWhiteSpace(verdict.ImageDigest)
                             || string.IsNullOrWhiteSpace(verdict.VerifiedPlatform)
