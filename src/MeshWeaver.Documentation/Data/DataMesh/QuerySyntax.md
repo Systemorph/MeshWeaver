@@ -317,7 +317,11 @@ path:foo/bar/baz scope:ancestorsandself sort:length(path)-desc limit:1
 ### `basePath`, and the `@` reference prefix
 
 `basePath:X` is the query-text spelling of the search tools' `basePath` argument: everything
-**under** `X` — `namespace:X scope:descendants`, unless the query states its own `scope:`.
+**under** `X` — `namespace:X scope:descendants`, unless the query states its own `scope:`. That
+holds for every positive single-location form: a one-value list `basePath:(@acme)` is the same as
+`basePath:@acme`, and a wildcard `basePath:acme/*/Contacts` is `namespace:acme/*/Contacts
+scope:descendants` (the pattern and everything below it). A multi-value list `basePath:A|B` stays
+exact membership, as `namespace:A|B` does.
 
 A location value may carry the `@` reference prefix that tool arguments, markdown links and
 autocomplete use; it is resolved before the query runs, so these three are the same query:
