@@ -29,8 +29,12 @@ than where it was authored:
 > `[FanOut] UNANCHORED … scope:Exact ('<path> nodeType:Code')` on every compile of the type. Every
 > expansion of a **bare-path** entry is now anchored by `path:` or `namespace:`; a qualified query
 > entry (`name:Country`), an explicitly quoted one (`"Country/Name"`) and one of several terms keep
-> their query meaning unchanged and are anchored only if the author anchored them. Pinned by
-> `CodeQueryResolverTest.Expand_BarePath_IsAPathReference_NeverFreeText` and its negative controls.
+> their query meaning unchanged and are anchored only if the author anchored them. An entry with
+> ANY whitespace in it (`Shared/Utils Country`) is several terms and never a bare path — checked
+> before the lexer is asked, because the lexer re-joins its free-text terms with one ASCII space
+> and the round-trip alone cannot tell two terms from one (#6747). Pinned by
+> `CodeQueryResolverTest.Expand_BarePath_IsAPathReference_NeverFreeText` and its negative controls
+> (`Expand_SpaceSeparatedTerms_AreStillAQuery`, `Expand_UnicodeWhitespaceSeparatedTerms_AreStillAQuery`).
 
 ## The defect this closes
 

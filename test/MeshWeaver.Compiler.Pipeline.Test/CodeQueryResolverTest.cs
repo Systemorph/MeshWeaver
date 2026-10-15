@@ -99,6 +99,18 @@ public class CodeQueryResolverTest
             .Should().Equal("Shared/Utils Country nodeType:Code");
     }
 
+    /// <summary>
+    /// #6747 — an ORDINARY space separates two terms too. The parser re-joins free-text terms with
+    /// one ASCII space, so this entry's <c>TextSearch</c> round-trips identically and the parser
+    /// check alone read it as one bare path (<c>path:Shared/Utils Country</c>).
+    /// </summary>
+    [Fact]
+    public void Expand_SpaceSeparatedTerms_AreStillAQuery()
+    {
+        CodeQueryResolver.Expand("Shared/Utils Country", SelfPath).ToList()
+            .Should().Equal("Shared/Utils Country nodeType:Code");
+    }
+
     [Fact]
     public void Expand_DoubleAtShorthand_AlsoYieldsBothForms()
     {
