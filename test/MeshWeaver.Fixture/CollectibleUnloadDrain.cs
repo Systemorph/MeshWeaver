@@ -106,7 +106,12 @@ public static class CollectibleUnloadDrain
     {
         if (unloads is null)
             return new CollectibleUnloadOutcome(0, [], null) { NotMeasured = CollectibleUnloadNotMeasured.NoTracker };
-        if (unloads.Pending == 0)
+        // NOTHING RETIRED is the vacuous case. A tracker whose retirements were all collected BEFORE
+        // the drain started — by a collection the runtime, or another test's teardown in the same
+        // host, drove — is not: its sentinels ran, which IS the measurement, and the signal below
+        // still observes it. Reading that as "nothing pending" failed a correct unload
+        // (ModuleLiveSwapTest's collection case, red 75 ms into the test with nothing pending).
+        if (unloads.Retirements == 0)
             return new CollectibleUnloadOutcome(0, [], null) { NotMeasured = CollectibleUnloadNotMeasured.NothingPending };
 
         // 🚨 Leave the caller's frame BEFORE collecting (measured, Plugins#1605). The drain is called

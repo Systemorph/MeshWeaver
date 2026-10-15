@@ -145,6 +145,27 @@ public class RetiredContextCollectedSignalTest
     }
 
     /// <summary>
+    /// The case the vacuous one must NOT swallow: a context WAS retired and was already collected
+    /// before the drain looked (a collection somebody else drove). Its sentinel ran — that is the
+    /// measurement — so the drain reports it collected. Before the drain read
+    /// <see cref="CollectibleContextUnloads.Retirements"/> it answered "nothing was pending", which
+    /// failed <c>ModuleLiveSwapTest</c>'s collection case on a correct unload.
+    /// </summary>
+    [Fact]
+    public async Task ARetiredContextCollectedBeforeTheDrain_IsReportedCollected_NotNothingPending()
+    {
+        var unloads = new CollectibleContextUnloads();
+        unloads.Retire("already-collected").Collected();
+        await unloads.AllCollected.Timeout(TestTimeouts.Quick).Await(TestContext.Current.CancellationToken);
+        unloads.Pending.Should().Be(0, "the arrangement: the one retired context is already collected");
+
+        var outcome = await CollectibleUnloadDrain.WaitUntilCollectedAsync(unloads);
+
+        outcome.NotMeasured.Should().BeNull("a context was retired and its sentinel ran — that was measured");
+        outcome.Collected.Should().BeTrue(outcome.ToString());
+    }
+
+    /// <summary>
     /// The other way the drain is handed nothing: the test base resolves the tracker late in teardown,
     /// after hosted services are stopped and activities quiesced, so a phase that throws before that
     /// leaves it <c>null</c> — and the mesh may register no tracker at all. Neither is "collected".

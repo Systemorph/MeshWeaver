@@ -336,6 +336,14 @@ public record DisposeRequest
     /// is computed ONCE, at the main node, so a cycle among NodeTypes cannot turn one recycle into
     /// a storm. Only activations that EXIST are torn down — a cascaded request reaching an address
     /// with no live hub is a no-op at the routing layer, and it instantiates nothing.</para>
+    ///
+    /// <para>The other fan-out that has ALREADY computed its whole set is a module live swap's
+    /// recycle wave (<c>ModuleLiveUpdater</c>): it names every hub of its process bound to the
+    /// swapped generations, and carries <c>module:{name}</c> here. Such a request must not cascade
+    /// either (#6729): a NodeType definition hub in that wave would otherwise fan out over the
+    /// mesh-wide index, seconds later, and tear down the SUCCESSOR activations the wave had just made
+    /// room for — once per definition — which a subscriber correctly reads as an owner recycling in
+    /// a loop.</para>
     /// </summary>
     public string? CascadedFrom { get; init; }
 
