@@ -79,6 +79,20 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     /// honest answer for a lifetime that has no give-up. See <see cref="PodHubClaimSettled"/>.
     /// </summary>
     private readonly ConcurrentDictionary<Address, AsyncSubject<Unit>> podHubClaimSettled = new();
+
+    /// <summary>
+    /// Per-address OUTBOUND gate of a host with no memory stream (#4802) — the pod-hub twin of
+    /// <see cref="subscriptionReady"/>. There the claim is the address's only inbound cross-process
+    /// transport, so an answer from another silo that overtakes the claim meets
+    /// <see cref="PodHubNotHereException"/> and is lost to the requester. Outbound grain dispatch from
+    /// the address therefore waits until the claim LANDS — and, like the stream gate, the wait always
+    /// ends: it also completes when the claim's initial budget is spent, when the claim gives up, and
+    /// when the registration is disposed, so it degrades to ungated dispatch and never holds outbound
+    /// traffic hostage. Unlike <see cref="podHubClaimSettled"/> (a test seam that completes only on a
+    /// claim TERMINAL), this gate is a release decision. Instance field, entries removed with their
+    /// registration.
+    /// </summary>
+    private readonly ConcurrentDictionary<Address, AsyncSubject<Unit>> podHubOutboundReady = new();
     private readonly CompositeDisposable inFlight = new();
     // Mesh-scoped IO pool for the genuinely-async stream UnsubscribeAsync. The hub's
     // RegisterForDisposal(IDisposable) is synchronous; the async unsubscribe is bridged
@@ -518,12 +532,26 @@ public class OrleansRoutingService : IRoutingService, IDisposable
                     && !attach.IsCompleted
                         ? attach
                         : null;
+                // 🚨 #4802: on a host with NO memory stream the same race is the pod-hub CLAIM's. The
+                // claim is that hub's only inbound cross-process transport, and it lands asynchronously
+                // (after Active, then a grain call), so a fresh hub's answer from another silo could
+                // reach IPodHubGrain before the claim and be refused PodHubNotHere — the requester then
+                // waits out its whole budget. Hold the outbound message until the claim lands, gated
+                // ONLY while it is pending (see podHubOutboundReady for why the wait always ends).
+                var senderClaim = senderAttach is null
+                    && delivery.Sender is { } claimant
+                    && podHubOutboundReady.TryGetValue(GetHostAddress(claimant), out var claim)
+                    && !claim.IsCompleted
+                        ? claim
+                        : null;
                 var sub = new SingleAssignmentDisposable();
                 inFlight.Add(sub);
-                sub.Disposable = (senderAttach is null
-                        ? DispatchObservable(delivery, address)
-                        : senderAttach.ToObservable()
-                            .SelectMany(_ => DispatchObservable(delivery, address)))
+                sub.Disposable = (senderAttach is not null
+                        ? senderAttach.ToObservable()
+                            .SelectMany(_ => DispatchObservable(delivery, address))
+                        : senderClaim is not null
+                            ? senderClaim.SelectMany(_ => DispatchObservable(delivery, address))
+                            : DispatchObservable(delivery, address))
                     .Catch<IMessageDelivery, Exception>(ex =>
                     {
                         // The stopping token can flip AFTER we dispatched — the placement then
@@ -1038,9 +1066,10 @@ public class OrleansRoutingService : IRoutingService, IDisposable
 
         // 🚨 NO MEMORY STREAM ON THIS HOST — #4802. A multi-silo host registers none: the pod-hub
         // claim above is this hub's ONLY cross-process transport there, for forward traffic and NACKs
-        // alike (RoutingGrain routes both as directed grain calls). So there is nothing to subscribe,
-        // nothing to re-attach on a membership change and nothing to gate outbound dispatch on; the
-        // registration is the local route plus the claim.
+        // alike (RoutingGrain routes both as directed grain calls). So there is nothing to subscribe
+        // and nothing to re-attach on a membership change; the registration is the local route plus
+        // the claim, and outbound dispatch is gated on the CLAIM instead (podHubOutboundReady, armed
+        // by AttachPodHub above) — the answer to a fresh hub's first request must not overtake it.
         if (!HasMemoryStream)
         {
             OrleansRouteTrace.Write($"OrleansRoutingService.RegisterStream NO_STREAM addr={address}");
@@ -1615,6 +1644,19 @@ public class OrleansRoutingService : IRoutingService, IDisposable
         // terminate unobserved. AsyncSubject: it completes once and replays that completion to
         // whoever asks afterwards, so an observer arriving late still sees the terminal.
         var settled = podHubClaimSettled[address] = new AsyncSubject<Unit>();
+        // The outbound gate (#4802) exists only where the claim is the address's sole inbound
+        // transport; a host with a memory stream keeps gating on the stream attach. Armed before the
+        // claim is subscribed for the same reason as `settled`.
+        var outboundReady = new AsyncSubject<Unit>();
+        if (!HasMemoryStream)
+            podHubOutboundReady[address] = outboundReady;
+        void ReleaseOutbound()
+        {
+            // Idempotent: an AsyncSubject ignores notifications after its first completion. OnNext
+            // first — a gate completed without a value would let the held dispatch emit nothing.
+            outboundReady.OnNext(Unit.Default);
+            outboundReady.OnCompleted();
+        }
         inFlight.Add(attach);
 
         void ReleaseClaim(IPodHubGrain? selectedGrain = null)
@@ -1760,6 +1802,10 @@ public class OrleansRoutingService : IRoutingService, IDisposable
                         // the end there. Everywhere else the budget only buys the line below.
                         if (!CanHostGrains)
                             return Observable.Throw<long>(ex);
+                        // The claim keeps retrying, but outbound traffic is no longer held for it:
+                        // past the initial budget the hold would be indefinite, and a held message is
+                        // lost to every receiver, where a released one is lost only to an answer.
+                        ReleaseOutbound();
                         if (!budgetWarned)
                         {
                             budgetWarned = true;
@@ -1821,6 +1867,7 @@ public class OrleansRoutingService : IRoutingService, IDisposable
 
                     if (first)
                     {
+                        ReleaseOutbound();
                         settled.OnNext(Unit.Default);
                         settled.OnCompleted();
                     }
@@ -1837,6 +1884,7 @@ public class OrleansRoutingService : IRoutingService, IDisposable
                         "Pod-hub claim for {Address} did not land in this process — it keeps the Orleans "
                         + "stream transport. Expected on an Orleans client, which cannot host a grain.",
                         addressPath);
+                    ReleaseOutbound();
                     settled.OnNext(Unit.Default);
                     settled.OnCompleted();
                 });
@@ -1857,7 +1905,10 @@ public class OrleansRoutingService : IRoutingService, IDisposable
             // Value-matched: a successor registered under the same address has its own settled
             // subject in this slot by now, and a predecessor's disposal must not take it out.
             podHubClaimSettled.TryRemove(new KeyValuePair<Address, AsyncSubject<Unit>>(address, settled));
+            podHubOutboundReady.TryRemove(new KeyValuePair<Address, AsyncSubject<Unit>>(address, outboundReady));
             attach.Dispose();
+            // A message still held for this claim is released, never stranded with its registration.
+            ReleaseOutbound();
             // A round inside its attach window owns the release: it has not returned from Attach()
             // yet, and the CAS above guarantees it will see the DisposeRequested bit on its way out.
             // Every round entering after this point is refused, so the ownership is unambiguous.
