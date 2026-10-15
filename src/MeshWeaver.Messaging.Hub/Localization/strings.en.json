@@ -2021,6 +2021,8 @@
   "hosting.triage.filedIssue": "Issue {0}",
   "hosting.triage.filedIssueLabel": "Filed as",
   "hosting.triage.filedIssueFound": "found by its origin marker, not filed again",
+  "hosting.repoHealth.budgetRefused.title": "GitHub Actions budget is refusing work ({count} repositories)",
+  "hosting.repoHealth.budgetRefused.body": "The repository health scan at {at} UTC found the organisation's Actions budget refusing work in: {repositories}. Raise the budget or wait for the billing period to reset. This is the only notification for this refusal; the next one comes only after it has cleared and recurs.",
   "secret.inputLabel": "New value",
   "secret.inputPlaceholder": "Paste the value here",
   "secret.generate": "Generate",

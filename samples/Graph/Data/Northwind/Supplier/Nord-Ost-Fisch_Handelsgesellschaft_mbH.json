@@ -6,7 +6,6 @@
   "category": "Suppliers",
   "description": "Nord-Ost-Fisch Handelsgesellschaft mbH - Cuxhaven, Germany",
   "icon": "/static/NodeTypeIcons/truck.svg",
-  "isPersistent": true,
   "content": {
     "$type": "SupplierContent",
     "supplierId": 13,

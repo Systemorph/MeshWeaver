@@ -5,7 +5,6 @@
   "nodeType": "Markdown",
   "description": "A personal space for ideas, notes, and drafts",
   "icon": "/static/NodeTypeIcons/document.svg",
-  "isPersistent": true,
   "content": {
     "$type": "MarkdownDocument",
     "title": "My Notes",

@@ -6,7 +6,6 @@
   "category": "Announcements",
   "description": "Announcing the MeshWeaver platform launch",
   "icon": "/api/content/Systemorph/Marketing/icons/share.svg",
-  "isPersistent": true,
   "content": {
     "title": "Introducing MeshWeaver: The Future of Enterprise AI",
     "text": "Excited to announce the launch of MeshWeaver - our new platform for building enterprise AI solutions.\n\nMeshWeaver enables organizations to:\n- Build agentic AI workflows without vendor lock-in\n- Connect to any data source with our unified data layer\n- Deploy on Azure with enterprise-grade security\n\nAfter 2 years of development, we're ready to transform how enterprises adopt AI.\n\n#AI #Enterprise #Innovation #MeshWeaver",

@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "Antonio Moreno Taquer\u00eda - M\u00e9xico D.F., Mexico",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "ANTON",

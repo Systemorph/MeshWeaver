@@ -92,14 +92,35 @@ public sealed class RegistryReleaseIdentities
             return Observable.Return<ReleaseRecord?>(null);
         });
 
-    private IObservable<ReleaseRecord?> FromMount(
-        RegistryTokenResolver resolver, PluginRegistryReference mount, string version) =>
+    /// <summary>
+    /// The OCI client for the artifact host <paramref name="mount"/>'s bundle index DECLARES, holding
+    /// that mount's durable key — or null when the index declares none. The one rule every
+    /// registry-record reader follows (this type, <see cref="RegistryLivePublications"/>): the key is
+    /// presented to the host the mount itself names, never to a host the reader guessed.
+    /// </summary>
+    /// <remarks>Cold; emits once; a fault of the index read propagates to the caller.</remarks>
+    internal static IObservable<OciRegistryClient?> ArtifactHostOf(
+        IMessageHub hub, RegistryTokenResolver resolver, PluginRegistryReference mount, ILogger? logger) =>
         Observable.Defer(() => resolver.ResolveToken(mount).Take(1)
             .SelectMany(token => new PluginBundleClient(hub, mount.Url, token).FetchIndex())
-            .SelectMany(index =>
+            .Select(index =>
             {
                 var host = (index.ArtifactRegistry ?? "").Trim();
-                if (host.Length == 0)
+                // The DURABLE key, not the exchanged token: the artifact host decides a pull by
+                // forwarding the secret to the registry's key→token exchange, which refuses a token.
+                return host.Length == 0
+                    ? null
+                    : new OciRegistryClient(
+                        hub, host, resolver.ResolveDurableKey(mount),
+                        httpClientName: InstanceRegistrationClient.BundleHttpClientName, logger: logger);
+            }));
+
+    private IObservable<ReleaseRecord?> FromMount(
+        RegistryTokenResolver resolver, PluginRegistryReference mount, string version) =>
+        ArtifactHostOf(hub, resolver, mount, logger)
+            .SelectMany(oci =>
+            {
+                if (oci is null)
                 {
                     logger?.LogInformation(
                         "ReleaseIdentity: {Registry} declares no artifact registry, so it cannot name "
@@ -107,11 +128,7 @@ public sealed class RegistryReleaseIdentities
                     return Observable.Return<ReleaseRecord?>(null);
                 }
 
-                // The DURABLE key, not the exchanged token: the artifact host decides a pull by
-                // forwarding the secret to the registry's key→token exchange, which refuses a token.
-                var oci = new OciRegistryClient(
-                    hub, host, resolver.ResolveDurableKey(mount),
-                    httpClientName: InstanceRegistrationClient.BundleHttpClientName, logger: logger);
+                var host = oci.Registry;
                 return oci.GetManifest(ReleaseRepository, version).SelectMany(manifest =>
                 {
                     if (manifest.Config is not { } config
@@ -128,7 +145,7 @@ public sealed class RegistryReleaseIdentities
                     // The descriptor's size is the registry's CLAIM; the bound is enforced on the
                     // bytes as they arrive, so a body larger than a record is refused while it is
                     // read rather than after it has been held in memory.
-                    var buffer = new BoundedBuffer(MaxRecordBytes);
+                    var buffer = new BoundedBuffer(MaxRecordBytes, "the release record");
                     return oci.GetBlob(ReleaseRepository, config.Digest, () => buffer)
                         .Select(receipt => receipt.Size == config.Size
                             ? ReleaseRecord.Parse(buffer.ToArray(), version)
@@ -142,7 +159,7 @@ public sealed class RegistryReleaseIdentities
                                     host, ReleaseRepository, version);
                         });
                 });
-            }))
+            })
         // A registry with no record for this release answers 404 — the ordinary case for a release
         // published before the record existed, and never a reason to stop asking the next mount.
         .Catch((RegistryRefusedException ex) =>
@@ -171,48 +188,6 @@ public sealed class RegistryReleaseIdentities
     /// published root: one safe path segment, outside the root's own underscore namespace
     /// (<c>_releases</c>).</summary>
     public static bool IsIdentity(string? value) => IsSegment(value) && !value!.StartsWith('_');
-
-    /// <summary>A memory buffer that refuses to grow past a limit — the write that would exceed it
-    /// throws, which faults the transfer.</summary>
-    private sealed class BoundedBuffer(long limit) : MemoryStream
-    {
-        public override void Write(byte[] buffer, int offset, int count)
-        {
-            Guard(count);
-            base.Write(buffer, offset, count);
-        }
-
-        public override void Write(ReadOnlySpan<byte> buffer)
-        {
-            Guard(buffer.Length);
-            base.Write(buffer);
-        }
-
-        public override void WriteByte(byte value)
-        {
-            Guard(1);
-            base.WriteByte(value);
-        }
-
-        public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
-        {
-            Guard(count);
-            return base.WriteAsync(buffer, offset, count, cancellationToken);
-        }
-
-        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
-        {
-            Guard(buffer.Length);
-            return base.WriteAsync(buffer, cancellationToken);
-        }
-
-        private void Guard(int count)
-        {
-            if (Length + count > limit)
-                throw new InvalidDataException(
-                    $"the release record is larger than {limit} byte(s) — not a release record");
-        }
-    }
 
     /// <summary>Whether <paramref name="value"/> is one safe path segment and a legal registry tag.</summary>
     internal static bool IsSegment(string? value) =>

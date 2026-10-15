@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "Hanari Carnes - Rio de Janeiro, Brazil",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "HANAR",

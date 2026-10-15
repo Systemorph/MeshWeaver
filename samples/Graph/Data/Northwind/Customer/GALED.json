@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "Galer\u00eda del gastr\u00f3nomo - Barcelona, Spain",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "GALED",

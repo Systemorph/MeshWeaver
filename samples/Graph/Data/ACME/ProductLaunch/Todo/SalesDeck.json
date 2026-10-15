@@ -6,7 +6,6 @@
   "category": "Tasks",
   "description": "Create the main sales deck for TaskFlow demos and pitches",
   "icon": "/api/content/ACME/Project/Todo/icon.svg",
-  "isPersistent": true,
   "content": {
     "$type": "Todo",
     "title": "Build sales presentation deck",

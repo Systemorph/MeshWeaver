@@ -74,6 +74,36 @@ public sealed class OciRegistryClient
     /// <summary>The page size a tag listing asks for. The registry may answer fewer; every page is followed.</summary>
     public const int TagPageSize = 500;
 
+    /// <summary>The OCI distribution error code for "no manifest under this reference".</summary>
+    public const string ManifestUnknownCode = "MANIFEST_UNKNOWN";
+
+    /// <summary>
+    /// The <c>errors[].code</c> values of an OCI distribution error body; empty when the body is
+    /// missing, not JSON, or carries no code. Pure.
+    /// </summary>
+    /// <param name="body">The response body.</param>
+    internal static System.Collections.Immutable.ImmutableArray<string> ErrorCodesOf(byte[] body)
+    {
+        if (body.Length == 0)
+            return [];
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            if (document.RootElement.ValueKind != JsonValueKind.Object
+                || !document.RootElement.TryGetProperty("errors", out var errors)
+                || errors.ValueKind != JsonValueKind.Array)
+                return [];
+            return [.. errors.EnumerateArray()
+                .Where(e => e.ValueKind == JsonValueKind.Object
+                            && e.TryGetProperty("code", out var c) && c.ValueKind == JsonValueKind.String)
+                .Select(e => e.GetProperty("code").GetString()!)];
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+    }
+
     /// <summary>The named <see cref="HttpClient"/> used when the caller names none.</summary>
     public const string DefaultHttpClientName = "MeshWeaver.Oci";
 
@@ -166,7 +196,20 @@ public sealed class OciRegistryClient
     /// </summary>
     public IObservable<OciManifest> GetManifest(string repository, string reference) =>
         credential.Take(1)
-            .SelectMany(key => httpPool.Invoke(ct => GetManifestAsync(repository, reference, key, ct)));
+            .SelectMany(key => httpPool.Invoke(ct => GetManifestAsync(repository, reference, key, null, ct)));
+
+    /// <summary>
+    /// <see cref="GetManifest(string, string)"/>, refusing a body larger than
+    /// <paramref name="maxBytes"/> WHILE it is read: a stated <c>Content-Length</c> over the bound
+    /// is refused before a byte is read, and the body is copied into a bounded buffer, so an
+    /// oversized answer faults (<see cref="InvalidDataException"/>) without ever being held whole.
+    /// </summary>
+    /// <param name="repository">The repository.</param>
+    /// <param name="reference">A tag or a <c>sha256:…</c> digest.</param>
+    /// <param name="maxBytes">The most manifest bytes the caller accepts.</param>
+    public IObservable<OciManifest> GetManifest(string repository, string reference, long maxBytes) =>
+        credential.Take(1)
+            .SelectMany(key => httpPool.Invoke(ct => GetManifestAsync(repository, reference, key, maxBytes, ct)));
 
     /// <summary>
     /// Streams the blob <paramref name="digest"/> into the destination <paramref name="openDestination"/>
@@ -213,7 +256,7 @@ public sealed class OciRegistryClient
     }
 
     private async Task<OciManifest> GetManifestAsync(
-        string repository, string reference, string key, CancellationToken ct)
+        string repository, string reference, string key, long? maxBytes, CancellationToken ct)
     {
         var uri = new Uri(baseUri, $"/v2/{repository}/manifests/{reference}");
         using var response = await SendAuthenticatedAsync(uri, repository, key, request =>
@@ -224,15 +267,29 @@ public sealed class OciRegistryClient
             }, ct).ConfigureAwait(false);
 
         if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            // 🚨 A 404 alone is NOT "no such manifest": the OCI error body names the code, and a
+            // registry answers 404 NAME_UNKNOWN for an unknown repository — the fleet registry also
+            // uses it to conceal a refused /v2 read. Only MANIFEST_UNKNOWN is an established
+            // absence; every other 404 (no body, another code) stays a plain refusal.
+            var codes = ErrorCodesOf(await response.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false));
+            if (codes.Contains(ManifestUnknownCode))
+                throw new RegistryManifestUnknownException(
+                    $"{registry} has no manifest {reference} in {repository} (MANIFEST_UNKNOWN) — the "
+                    + "publication is unsealed or the reference is stale.");
             throw new RegistryRefusedException(
-                $"{registry} has no manifest {reference} in {repository} (MANIFEST_UNKNOWN) — the "
-                + "publication is unsealed, the reference is stale, or the repository is not served.");
+                $"{registry} answered 404 for manifest {reference} in {repository} "
+                + (codes.IsEmpty ? "with no OCI error code" : $"({string.Join(", ", codes)})")
+                + " — the repository is unknown or not served to this key; the manifest's absence is not established.");
+        }
         if (!response.IsSuccessStatusCode)
             throw new HttpRequestException(
                 $"{registry} answered {(int)response.StatusCode} for manifest {reference} in {repository}.",
                 null, response.StatusCode);
 
-        var bytes = await response.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
+        var bytes = maxBytes is { } bound
+            ? await ReadBoundedAsync(response.Content, bound, $"the manifest {reference} in {repository}", ct).ConfigureAwait(false)
+            : await response.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
         var digest = OciDigest.Of(bytes);
 
         // 🚨 Verified against what was ASKED for first, and against what the registry STATES
@@ -246,6 +303,18 @@ public sealed class OciRegistryClient
 
         var mediaType = response.Content.Headers.ContentType?.MediaType;
         return OciManifest.Parse(bytes, mediaType, digest);
+    }
+
+    /// <summary>The body, copied into a <see cref="BoundedBuffer"/>: refused on a stated length
+    /// over <paramref name="bound"/>, and otherwise the moment the bytes read exceed it.</summary>
+    private static async Task<byte[]> ReadBoundedAsync(HttpContent content, long bound, string what, CancellationToken ct)
+    {
+        if (content.Headers.ContentLength is > 0 and var stated && stated > bound)
+            throw new InvalidDataException($"{what} states {stated} byte(s), more than the {bound} accepted");
+        using var buffer = new BoundedBuffer(bound, what);
+        await using (var body = await content.ReadAsStreamAsync(ct).ConfigureAwait(false))
+            await body.CopyToAsync(buffer, ct).ConfigureAwait(false);
+        return buffer.ToArray();
     }
 
     private async Task<OciBlobReceipt> GetBlobAsync(

@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "Folk och f\u00e4 HB - Br\u00e4cke, Sweden",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "FOLKO",

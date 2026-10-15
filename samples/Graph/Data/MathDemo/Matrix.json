@@ -5,7 +5,6 @@
   "nodeType": "NodeType",
   "category": "Types",
   "description": "A 2x2 matrix rendered with MathNet.Numerics (loaded via #r \"nuget:...\")",
-  "isPersistent": true,
   "content": {
     "$type": "NodeTypeDefinition",
     "namespace": "MathDemo",
