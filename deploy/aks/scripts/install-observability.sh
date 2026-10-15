@@ -394,7 +394,8 @@ MANIFEST
 # Deletes the recovery pod and returns 0 only on a successful listing that no longer shows it.
 remove_recovery_pod() {
   local left
-  kc delete pod "$1" --ignore-not-found --wait=true --timeout=30s >/dev/null 2>&1 || true
+  # A WAITING delete (up to 30 s): its own watchdog, not kc's 20-second short-call bound.
+  bounded "$(request_seconds 35)" kubectl -n "$NS" delete pod "$1" --ignore-not-found --wait=true --timeout=30s >/dev/null 2>&1 || true
   left=$(kc get pod "$1" --ignore-not-found -o name 2>/dev/null) && [ -z "$left" ]
 }
 

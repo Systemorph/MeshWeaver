@@ -77,6 +77,10 @@ if 'configmap' in line or 'replace' in args:
             out('dead-run %d 41' % (time.time() - 10)); sys.exit(0)
         out('this-run'); sys.exit(0)                  # the release check reads only the holder
     sys.exit(0)
+if 'delete pod loki-prometheus-tsdb-recovery' in line and 'slow-delete' in scenario:
+    import time; time.sleep(25)                       # a pod that takes 25 s to terminate
+    with open(os.environ['CALLS'], 'a') as f: f.write('delete-done\n')
+    sys.exit(0)
 if 'apply' in args:
     with open(os.environ['MANIFEST'], 'w') as f: f.write(sys.stdin.read())
     sys.exit(0)
@@ -111,7 +115,8 @@ if 'get pod loki-prometheus-server-abc' in line:
     else: out('0 true')
     sys.exit(0)
 if 'get pod loki-prometheus-tsdb-recovery' in line:
-    deleted = 'delete pod loki-prometheus-tsdb-recovery' in open(os.environ['CALLS']).read()
+    marker = 'delete-done' if 'slow-delete' in scenario else 'delete pod loki-prometheus-tsdb-recovery'
+    deleted = marker in open(os.environ['CALLS']).read()
     if 'leftover-stuck' in scenario or ('leftover-cleaner' in scenario and not deleted):
         out('pod/loki-prometheus-tsdb-recovery')
         sys.exit(0)
@@ -313,6 +318,13 @@ class LeftoverCleanerTest(unittest.TestCase):
         self.assertGreaterEqual(delete, 0, run.calls)
         self.assertLess(delete, run.index('helm rollback'), run.calls)
         self.assertLess(delete, run.index('helm upgrade'), run.calls)
+
+    def test_a_slow_but_successful_delete_is_waited_for(self):
+        # The waiting delete may take up to its own 30 s; a 20-second short-call bound would kill
+        # it at 20 s, see the pod still terminating, and abort a recoverable run.
+        run = run_installer('leftover-cleaner', 'slow-delete')
+        self.assertEqual(run.code, 0, run.stderr)
+        self.assertGreaterEqual(run.index('helm upgrade'), 0, run.calls)
 
     def test_a_leftover_cleaner_that_stays_blocks_rollback_and_upgrade(self):
         # The retry after a failed teardown: the server is at 0, so there is no crash evidence —
