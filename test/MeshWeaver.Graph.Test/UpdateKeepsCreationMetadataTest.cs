@@ -21,6 +21,9 @@ namespace MeshWeaver.Graph.Test;
 /// <c>CreatedBy = null</c>, and the update pipeline wrote that wholesale: the node's creation
 /// time and creator were reset. The pipeline now carries both from the live node whatever the
 /// caller sends — omitted or named — because Postgres holds both columns immutable.</para>
+///
+/// <para>Unconditionally (#6745): a live node WITHOUT a stamp — imported without one — keeps
+/// having none. Its row already exists, so a stamp an update supplied would never be stored.</para>
 /// </summary>
 public class UpdateKeepsCreationMetadataTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -92,5 +95,44 @@ public class UpdateKeepsCreationMetadataTest(ITestOutputHelper output) : Monolit
             "the edited content is live");
         after.CreatedDate.Should().Be(created.CreatedDate, "an update never rewrites the creation date");
         after.CreatedBy.Should().Be(created.CreatedBy, "an update never rewrites the creator");
+    }
+
+    /// <summary>
+    /// #6745 — a node that exists WITHOUT a creation stamp (written to the store without one, as an
+    /// import of a file that carries none) stays without one when an update NAMES a stamp. An update
+    /// never sets creation metadata; it always keeps the live node's values, as Postgres keeps the
+    /// columns it wrote once on insert.
+    ///
+    /// <para>Negative control: the pipeline's former fallback (<c>live.CreatedDate != default ?
+    /// live.CreatedDate : node.CreatedDate</c>, and the same for <c>CreatedBy</c>) — the update then
+    /// stamps the node with the caller's values and both assertions below fail.</para>
+    /// </summary>
+    [Fact(Timeout = 180000)]
+    public async Task UpdateNamingCreationMetadata_OnANodeWithoutAStamp_LeavesItWithout()
+    {
+        var id = NewId();
+        var path = $"{TestPartition}/{id}";
+        var storage = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
+        await storage.Write(Page(id, "# imported without a stamp") with { CreatedDate = default, CreatedBy = null },
+                Mesh.JsonSerializerOptions)
+            .Should().Within(60.Seconds()).Emit("the stamp-less node is stored",
+                cancellationToken: TestContext.Current.CancellationToken);
+
+        var live = await WaitFor(path, n => TextOf(n, Mesh.JsonSerializerOptions) == "# imported without a stamp",
+            "the stamp-less node is live");
+        live.CreatedDate.Should().Be(default(DateTimeOffset), "the premise: the live node carries no creation date");
+        live.CreatedBy.Should().BeNull("the premise: the live node carries no creator");
+
+        await MeshService.UpdateNode(Page(id, "# edited")
+                with { CreatedDate = MeshNode.StorageStable(DateTimeOffset.UtcNow.AddDays(-30)), CreatedBy = "someone-else" })
+            .Take(1)
+            .Should().Within(60.Seconds()).Emit("the update lands",
+                cancellationToken: TestContext.Current.CancellationToken);
+
+        var after = await WaitFor(path, n => TextOf(n, Mesh.JsonSerializerOptions) == "# edited",
+            "the edited content is live");
+        after.CreatedDate.Should().Be(default(DateTimeOffset),
+            "an update never sets the creation date, not even on a node that has none");
+        after.CreatedBy.Should().BeNull("an update never sets the creator, not even on a node that has none");
     }
 }

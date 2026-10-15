@@ -128,6 +128,35 @@ Under a genuinely slow store the writer therefore sees the ack arrive late — `
 completes with success — and `ADVANCE_WITHOUT_HANDOFF` at 5 s still says the successor diffed against
 the mirror. That warning is now the one to read for storage pressure; it is not a failed write.
 
+## The writer of record does not drop a failed write
+
+The persistence sampler is that writer of record, and until this fix its own store write was the
+one place a committed state could still vanish. The sampler marks a state *requested* the moment the
+hub accepts its `SaveMeshNodeRequest`, and the dispose-time flush (`FlushPendingOwnSave`) persists only
+states that were never requested. So a sampled write that **failed** in the store — an outage, a
+connect timeout — logged one warning and left its state marked as saved while the row stayed behind:
+the change lived only in RAM, and a recycle reloaded the older row.
+
+**The shape now.** A failed sampled write logs `[SaveMeshNode] the store write of … FAILED — the state
+is not durable` at **Error**, and un-marks its own save (`PendingOwnSave.MarkWriteFailed`, matched by
+reference, so a newer save that superseded it is left alone). The state reads as unsaved again and
+is re-attempted by the next sampled save or, at the latest, by the dispose flush — which first waits
+for the hub's last store write to **settle**, so a write that fails after teardown began is still
+seen. This is not a retry loop: one re-attempt per later save or teardown, and a failure of the
+dispose flush's attempt surfaces as a `[DISPOSE-ACTION] … faulted` warning on the hub. Pinned by
+`AFailedOwnSaveSurvivesARecycleTest` (MeshWeaver.Graph.Test): the store fails the own save once, the hub
+is recycled, and the fresh activation must serve the change from the durable row — with a healthy
+store as the negative control.
+
+**One write at a time, in order.** A re-attempt follows a failed write quickly, so an OLDER write still
+in flight could otherwise land after the newer one — or after the dispose flush — and roll the row
+back: the file-system adapter's pool runs writes concurrently and its backend has no conditional
+write to refuse the stale one. Every own write and the dispose flush are therefore queued on
+`PendingOwnSave.Enqueue`, which starts a write only once the previous one has terminated (either way)
+and replays the write's own outcome to its caller. The queue is a chain of eagerly fed
+`ReplaySubject`s — the `IoPoolExtensions.Run` shape — so no connection handle is left unowned, and the
+flush joins it simply by being the last entry. Pinned by `OwnWritesAreSerializedTest` (same file).
+
 ## The ack watcher's completion arm (the gap closed by #3033)
 
 `postSub` used to subscribe with **`onNext` and `onError` only**. If the filtered stream *completed
