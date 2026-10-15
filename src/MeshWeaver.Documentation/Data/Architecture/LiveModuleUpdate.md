@@ -409,6 +409,19 @@ builds an index over a platform interface a module can register should apply the
 succeeds. On the base, both failed with the exception above. Its published twin is the negative control:
 there the rule governs its type.
 
+**A withdrawn module's query provider leaves the query fan-out (MeshWeaver#6793).** The same defect, one
+interface over, stopped a host from starting at all. A module that registers an `IMeshQueryProvider` is
+forwarded to the root the same way, and `MeshQuery` — built by `IMeshService`, which a hosted service takes
+at startup — read every provider's `Name` to de-duplicate them. Once a module was withdrawn (on the
+instance, a mail sender whose constructor rejected the tenant id the configuration carried), that read
+threw `Module … holds no service scope in this mesh`, `Host.StartAsync` failed, and the pod crash-looped
+on every roll while the module was reported only as contributing nothing. `MeshQuery` now binds a module's provider under
+ONE lease (`ModuleServiceProxy.TryLease`): the name is read from the generation's own instance, a proxy
+that cannot be leased is left out, every call is made under a lease taken for that call, and the fan-out
+skips a provider whose module is retired later. `AWithdrawnModulesQueryProviderLeavesTheQueryFanOutTest`
+pins it: `IMeshService` builds and a query answers. On the base, the test mesh did not start. Its
+published twin is the negative control: there the module's provider answers in the fan-out.
+
 **A module service is LEASED, never checked and then called (MeshWeaver#6715).** "Does its module still
 serve?" followed by a call through the proxy can be split by a retirement: `ModuleContexts.Retire` removes
 the generation and disposes its services between the two, and the call throws `Module … holds no service
