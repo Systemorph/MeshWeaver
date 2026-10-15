@@ -63,16 +63,25 @@ fi
 
 remaining() { echo $(( BUDGET_SECONDS - SECONDS )); }
 recovery() { echo "RECOVERY: $*"; }
-# Short API calls: each request is bounded by 20 s AND by what is left of the run's deadline (less
-# 10 s to report), so a slow API server can never carry the run past the budget; once the budget is
-# spent every call fails fast and the run reports RED. Waits are bounded by their own --timeout.
+# Short API calls: each is bounded by 20 s AND by what is left of the run's deadline (less 10 s to
+# report), so a slow API server can never carry the run past the budget; once the budget is spent
+# every call fails fast and the run reports RED. Waits are bounded by their own --timeout.
+#
+# 🚨 NEVER bound kubectl with a CONNECTION flag (`--request-timeout`, `--server`, `--token`,
+# `--kubeconfig`, `--context`, …). `az aks command invoke` gives kubectl NO kubeconfig: it runs on
+# the pod's in-cluster service-account config, and client-go uses that fallback ONLY while the
+# merged client config equals the default — any such flag makes it differ, kubectl drops to
+# http://localhost:8080 and every call is refused. Measured 2026-10-15: `kubectl get cm` worked in
+# the invoke pod, `kubectl --request-timeout=20s get cm` answered "localhost:8080 was refused", and
+# the first release of this deadline work failed on its first real run for exactly that. The bound
+# is the process watchdog (`bounded`), which changes nothing kubectl sees.
 request_seconds() {
   local t=$(( $(remaining) - 10 ))
   [ "$t" -gt "${1:-20}" ] && t=${1:-20}
   [ "$t" -lt 1 ] && t=1
   echo "$t"
 }
-kc() { kubectl --request-timeout="$(request_seconds)s" -n "$NS" "$@"; }
+kc() { bounded "$(request_seconds)" kubectl -n "$NS" "$@"; }
 
 # ONE deadline for the whole run. Every stage that can wait takes its bound from what is left of
 # OBS_BUDGET_SECONDS, minus what must stay in hand for what comes after it, and a stage whose
@@ -96,12 +105,15 @@ ROLLBACK_KEEP_BACK=120
 # helm has no request timeout of its own, and its --timeout does not bound every call (status,
 # history, repo, API discovery). `bounded <seconds> cmd…` runs a command under a watchdog that
 # kills it at the bound, so a stalled call fails RED instead of carrying the run past the cap.
-# The watchdog's output goes to /dev/null so `$(bounded …)` never waits on it.
+# The watchdog's output goes to /dev/null so `$(bounded …)` never waits on it. The command keeps
+# the caller's stdin explicitly (`<&0`): a background job in a non-interactive shell otherwise
+# reads /dev/null, and `… | kc apply -f -` would apply nothing. Environment, working directory and
+# arguments are passed through untouched.
 bounded() {
   local secs=$1 pid watchdog rc
   shift
   [ "$secs" -lt 1 ] && secs=1
-  "$@" &
+  "$@" <&0 &
   pid=$!
   ( sleep "$secs"; kill -TERM "$pid" 2>/dev/null ) >/dev/null 2>&1 &
   watchdog=$!
@@ -304,7 +316,7 @@ recover_full_tsdb() {
       restore_prometheus "$replicas"
       exit 1
     fi
-    if listed=$(kubectl --request-timeout="$(request_seconds "$left")s" -n "$NS" get pods -l "$selector" -o name 2>/dev/null) \
+    if listed=$(bounded "$(request_seconds "$left")" kubectl -n "$NS" get pods -l "$selector" -o name 2>/dev/null) \
       && [ -z "$listed" ]; then
       break
     fi
@@ -351,7 +363,7 @@ MANIFEST
   } | kc apply -f - || ok=false
   if [ "$ok" = true ]; then
     if stage_seconds 180 30 "$RECOVERY_KEEP_BACK" "the TSDB recovery pod"; then
-      bounded $(( STAGE_SECONDS + 5 )) kubectl --request-timeout=20s -n "$NS" wait --for=jsonpath='{.status.phase}'=Succeeded \
+      bounded $(( STAGE_SECONDS + 5 )) kubectl -n "$NS" wait --for=jsonpath='{.status.phase}'=Succeeded \
         pod/"$recovery_pod" --timeout="${STAGE_SECONDS}s" || ok=false
     else
       ok=false
@@ -538,7 +550,7 @@ for workload in $workloads; do
     continue
   fi
   # Bounded as a WHOLE: --timeout limits the watch, not the discovery and reads before it.
-  if ! bounded "$left" kubectl --request-timeout=20s -n "$NS" rollout status "$workload" --timeout="${left}s"; then
+  if ! bounded "$left" kubectl -n "$NS" rollout status "$workload" --timeout="${left}s"; then
     not_ready+=("$workload")
   fi
 done
