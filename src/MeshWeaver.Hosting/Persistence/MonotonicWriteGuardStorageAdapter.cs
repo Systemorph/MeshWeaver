@@ -239,10 +239,19 @@ internal sealed class MonotonicWriteGuardStorageAdapter(
             latest.NodeType, latest.Name, latest.Category, latest.MainNode,
             latest.LastModifiedBy, latest.LastModified);
 
-        RecordConflictActivity(path, stale.Version, latest, resolution, options);
+        // 🚨 The trace is a write UNDER `path` (`{path}/_Activity/…`), started here below the subtree
+        // deletion guard, which settles a write only when the write it admitted terminates (#6719).
+        // Fire-and-forget, the trace outlived its parent: the parent settled, a recursive delete of
+        // `path` ran, and the trace committed after it — a descendant left behind under a subtree the
+        // delete reported removed. So the resolution completes only once the trace has terminated
+        // too. It still never FAILS because of the trace: a failed trace is logged by
+        // RecordConflictActivity (best effort, as before) and the resolution completes normally.
+        var traceRecorded = RecordConflictActivity(path, stale.Version, latest, resolution, options)
+            .IgnoreElements()
+            .Select(_ => (MeshNode?)null);
 
-        if (resolution.IsLatestUnchanged)
-            return Observable.Return<MeshNode?>(latest);   // nothing salvageable — the durable row already IS the answer
+        if (resolution.IsLatestUnchanged)   // nothing salvageable — the durable row already IS the answer
+            return Observable.Return<MeshNode?>(latest).Merge(traceRecorded);
 
         Observe(resolution.Node);
         return inner.Write(resolution.Node, options)
@@ -258,7 +267,8 @@ internal sealed class MonotonicWriteGuardStorageAdapter(
                     return written;
                 }
                 return written ?? resolution.Node;
-            });
+            })
+            .Merge(traceRecorded);
     }
 
     private static string Describe(System.Collections.Immutable.ImmutableList<string> members)
@@ -273,14 +283,18 @@ internal sealed class MonotonicWriteGuardStorageAdapter(
     /// <para>Best effort by contract — a failure to record the trace must never fail the resolution it
     /// describes, so it is logged rather than propagated. It is also skipped for paths already inside an
     /// <c>_Activity</c> namespace, so a conflict on a trace can never write a trace about a trace.</para>
+    ///
+    /// <para>Cold, and terminates when the trace write does — the caller composes it into the
+    /// resolution so the trace settles with the write that caused it (#6719).</para>
     /// </summary>
-    private void RecordConflictActivity(
+    /// <returns>Completes once the trace is written, failed (logged) or skipped; never faults.</returns>
+    private IObservable<Unit> RecordConflictActivity(
         string path, long staleVersion, MeshNode latest,
         MeshNodeConflictResolution resolution, JsonSerializerOptions options)
     {
         if (string.IsNullOrEmpty(path)
             || path.Contains("/_Activity/", StringComparison.OrdinalIgnoreCase))
-            return;
+            return Observable.Empty<Unit>();
 
         var latestVersion = latest.Version;
         var messages = ImmutableList<LogMessage>.Empty
@@ -343,11 +357,15 @@ internal sealed class MonotonicWriteGuardStorageAdapter(
             }.Append(messages)
         };
 
-        inner.Write(activity, options).Subscribe(
-            _ => { },
-            ex => logger?.LogWarning(ex,
-                "[MonotonicWriteGuard] could not record the write-conflict activity for {Path}; the conflict itself "
-                + "was resolved and is reported in the preceding warning.", path));
+        return inner.Write(activity, options)
+            .Select(_ => Unit.Default)
+            .Catch<Unit, Exception>(ex =>
+            {
+                logger?.LogWarning(ex,
+                    "[MonotonicWriteGuard] could not record the write-conflict activity for {Path}; the conflict itself "
+                    + "was resolved and is reported in the preceding warning.", path);
+                return Observable.Empty<Unit>();
+            });
     }
 
     /// <summary>

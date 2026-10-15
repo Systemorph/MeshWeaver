@@ -134,8 +134,13 @@ public static class PartitionTeardown
             // signal, so the claim is released BEFORE it is delivered. Under Using it was released
             // only after the subscriber had processed it, and a follow-up teardown issued on that
             // signal (the DeleteSpace probe's cleanup) was refused as "already in flight".
+            // Bounded wait for writes admitted before the claim (#6719): a write that never settles
+            // fails the teardown by name instead of holding the claim — which refuses every write
+            // into the partition — for ever.
+            var settleWithin = (hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions()).Timeout;
             return registry.WithinSubtreeDeletion(
                 partition,
+                settleWithin,
                 () =>
                 {
                     registry.MarkDeleted(partition);
