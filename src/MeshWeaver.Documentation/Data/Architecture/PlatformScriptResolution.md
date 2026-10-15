@@ -207,7 +207,11 @@ nothing to decode. Two shapes need care:
 
 `.github/scripts/check-git-path-listings.py` holds the rule over every `.github/scripts/*.py` and
 `scripts/*.py`, by AST: a git argument list naming a listing (`--name-only`, `--name-status`,
-`ls-files`, `--porcelain`) must also carry `"-z"`. Code inside a `*self_test*` function is exempt,
+`ls-files`, `--porcelain`) must also carry `"-z"`. A `-z` listing must then not be split by line
+or whitespace (`.splitlines()`, `.split()`, `.split("\n")`, `.split(" ")`), whether the split is
+chained onto the call or made on a name the listing was assigned to in the same function, because
+that yields one NUL-joined string, never the paths. Splitting on `"\0"` and reading the raw
+output pass. Code inside a `*self_test*` function is exempt,
 because its fixture repositories use ASCII paths. A file that does not parse is a failure. Its
 `--self-test` measures the quoting on real git output first, so the gate cannot pass on a trap that
 is not real. Both run in the `workflow-shell` job of `dotnet-test.yml`. MeshWeaver.Plugins carries
