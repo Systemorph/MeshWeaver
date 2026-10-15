@@ -78,6 +78,14 @@ public static class InboxLayoutArea
     /// <summary>The data id of the Only select's options — all sources, then each source by name.</summary>
     public const string SourceOptionsId = "inboxSourceOptions";
 
+    /// <summary>The data id of the side menu's tag options — all tags, Important, then each tag with its count.</summary>
+    public const string TagOptionsId = "inboxTagOptions";
+
+    /// <summary>
+    /// The data id of the notice counting the ignorable items the switch hides; empty when it hides none.
+    /// </summary>
+    public const string IgnorableId = "inboxIgnorable";
+
     /// <summary>The data id of the side menu's options — All, then each category with its count.</summary>
     public const string CategoryOptionsId = "inboxCategoryOptions";
 
@@ -120,6 +128,8 @@ public static class InboxLayoutArea
             host.UpdateData(UnreadId, string.Empty);
             host.UpdateData(CappedId, string.Empty);
             host.UpdateData(HiddenId, string.Empty);
+            host.UpdateData(IgnorableId, string.Empty);
+            host.UpdateData(TagOptionsId, TagOptions(host.Localize("inbox.tag.all"), host.Localize("inbox.tag.important"), []));
             host.UpdateData(CategoryOptionsId, CategoryOptions(host.Localize("inbox.category.all"), CategoriesOf(host, sections), InboxRows.CategoryCounts([])));
         }
         // The sources are fixed for the page's life, so their options are written on every render.
@@ -176,8 +186,16 @@ public static class InboxLayoutArea
                 // C# keyword: "string" is not a type name, and the menu failed with "Type not found".
                 typeof(string).Name)
             with { DataContext = filterContext })
-            .WithOrientation(Orientation.Vertical)
-            .WithStyle("width: 200px; flex: none;");
+            .WithOrientation(Orientation.Vertical);
+        // Below the folders, the tags a triage gave — GitHub's label filter: Important first, then each
+        // tag by how often it is used. A tag narrows whatever folder and sources are shown.
+        var tagMenu = (Controls.RadioGroup(new JsonPointerReference("tag"),
+                new JsonPointerReference(LayoutAreaReference.GetDataPointer(TagOptionsId)), typeof(string).Name)
+            with { DataContext = filterContext, Label = host.Localize("inbox.tags") })
+            .WithOrientation(Orientation.Vertical);
+        var side = Controls.Stack.WithVerticalGap(16).WithStyle("width: 200px; flex: none;")
+            .WithView(menu, "Folders")
+            .WithView(tagMenu, "Tags");
 
         var main = Controls.Stack.WithWidth("100%").WithVerticalGap(8)
             .WithView(Controls.H2(host.Localize("inbox.title")).WithStyle("margin: 0;"), "Title")
@@ -211,6 +229,11 @@ public static class InboxLayoutArea
                         new JsonPointerReference(LayoutAreaReference.GetDataPointer(SourceOptionsId)))
                     with { DataContext = filterContext, Label = host.Localize("inbox.only") }, "Only")
                 .WithView(toggles, "Sources")
+                // Spam, promotions and noise stay out of the list until the viewer asks for them.
+                .WithView(Controls.Switch(new JsonPointerReference("showIgnorable")) with
+                {
+                    DataContext = filterContext, Label = host.Localize("inbox.showIgnorable"),
+                }, "ShowIgnorable")
                 .WithView(settings, "Settings"), "Commands")
             // Says which sources could not be read — an unreadable source must never look like an
             // empty one. Bound: it appears and clears with the reads, with no re-render.
@@ -221,10 +244,12 @@ public static class InboxLayoutArea
             // Says how many items needing the viewer the switches hide — "nothing here" must never
             // be a switch's doing.
             .WithView(Controls.Label(new JsonPointerReference(LayoutAreaReference.GetDataPointer(HiddenId))), "Hidden")
+            // Says how many ignorable items are hidden — the noise is filtered, never lost.
+            .WithView(Controls.Label(new JsonPointerReference(LayoutAreaReference.GetDataPointer(IgnorableId))), "Ignorable")
             .WithView(Grid(host, rows), "Grid");
         return Observable.Return<UiControl?>(Controls.Stack.WithOrientation(Orientation.Horizontal)
             .WithWidth("100%").WithStyle("gap: 16px; align-items: flex-start;")
-            .WithView(menu, "Categories")
+            .WithView(side, "Categories")
             .WithView(main.WithStyle("flex: 1; min-width: 0;"), "Main"));
     }
 
@@ -253,6 +278,20 @@ public static class InboxLayoutArea
                 Text(c.Icon, c.Label, counts.TryGetValue(c.Key, out var n) ? Shown(n) : 0))),
         ];
     }
+
+    /// <summary>
+    /// The tag menu's options: all tags (empty key), then <see cref="InboxRows.TagCounts"/> — the items
+    /// judged important under their own label, every tag as <c>#tag</c> — each with its count. Pure.
+    /// </summary>
+    internal static ImmutableList<Option> TagOptions(string allLabel, string importantLabel,
+        IEnumerable<(string Key, string Tag, int Count)> counts)
+        =>
+        [
+            new Option<string>(string.Empty, allLabel),
+            .. counts.Select(c => (Option)new Option<string>(c.Key,
+                (string.Equals(c.Key, InboxRows.ImportantKey, StringComparison.Ordinal) ? $"⭐ {importantLabel}" : "#" + c.Tag)
+                + $"  {c.Count}")),
+        ];
 
     /// <summary>The Only select's options: every source (empty key), then each source with its symbol. Pure.</summary>
     internal static ImmutableList<Option> SourceOptions(string allLabel,
@@ -283,6 +322,8 @@ public static class InboxLayoutArea
         var noHandler = host.Localize("inbox.blocked.noHandler");
         var culture = ViewerCulture(host.ViewerLocale());
         var allLabel = host.Localize("inbox.category.all");
+        var allTags = host.Localize("inbox.tag.all");
+        var importantLabel = host.Localize("inbox.tag.important");
         var categories = CategoriesOf(host, sections);
         var labels = sections.GroupBy(s => s.Source, StringComparer.Ordinal)
             .ToImmutableDictionary(s => s.Key, s => SourceLabel(host, s.First()), StringComparer.Ordinal);
@@ -330,7 +371,11 @@ public static class InboxLayoutArea
                     : string.Empty);
             })
             .Select(legs => InboxRows.Merge(legs.Select(leg => leg.Rows)))
-            .Do(merged => host.UpdateData(CategoryOptionsId, CategoryOptions(allLabel, categories, InboxRows.CategoryCounts(merged))));
+            .Do(merged =>
+            {
+                host.UpdateData(CategoryOptionsId, CategoryOptions(allLabel, categories, InboxRows.CategoryCounts(merged)));
+                host.UpdateData(TagOptionsId, TagOptions(allTags, importantLabel, InboxRows.TagCounts(merged)));
+            });
 
         // The date bounds (before:/after:) are applied to the rows by InboxRows.Apply; only the
         // remaining text goes to the sources.
@@ -350,6 +395,8 @@ public static class InboxLayoutArea
                 var shown = InboxRows.Apply(rows, asked, asked.Category);
                 var hidden = InboxRows.HiddenObligations(rows, asked, needsYou);
                 host.UpdateData(HiddenId, hidden == 0 ? string.Empty : host.Localize("inbox.hidden", hidden));
+                var ignorable = InboxRows.HiddenIgnorable(rows, asked);
+                host.UpdateData(IgnorableId, ignorable == 0 ? string.Empty : host.Localize("inbox.ignorableHidden", ignorable));
                 return shown;
             });
     }
@@ -480,6 +527,7 @@ public static class InboxLayoutArea
                  {
                      (nameof(InboxRow.Title), "inbox.column.item"),
                      (nameof(InboxRow.From), "inbox.column.source"),
+                     (nameof(InboxRow.TagText), "inbox.column.tags"),
                      (nameof(InboxRow.When), "inbox.column.when"),
                  })
             grid = grid.WithColumn(new PropertyColumnControl<string> { Property = property.ToCamelCase() }

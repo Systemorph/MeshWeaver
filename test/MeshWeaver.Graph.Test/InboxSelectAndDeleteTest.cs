@@ -205,10 +205,19 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
         grid.ItemsPerPage?.ToString().Should().Be("50", "the inbox is paged");
         grid.IsClickable.Should().BeTrue("a click on a row opens it");
 
-        var menu = (RadioGroupControl)(await stream.GetControlStream($"{InboxLayoutArea.AreaName}/Categories")
-            .Should().Within(TestTimeouts.Convergence).Match(c => c is RadioGroupControl, "the side menu", ct))!;
-        menu.Type?.ToString().Should().Be(nameof(String),
-            "the client resolves the CLR type name — \"string\" failed live with 'Type not found: string'");
+        foreach (var (area, what) in new[] { ("Folders", "the side menu's folders"), ("Tags", "the side menu's tags") })
+        {
+            var menu = (RadioGroupControl)(await stream.GetControlStream($"{InboxLayoutArea.AreaName}/Categories/{area}")
+                .Should().Within(TestTimeouts.Convergence).Match(c => c is RadioGroupControl, what, ct))!;
+            menu.Type?.ToString().Should().Be(nameof(String),
+                "the client resolves the CLR type name — \"string\" failed live with 'Type not found: string'");
+        }
+        (await stream.GetControlStream($"{InboxLayoutArea.AreaName}/Main/Commands/ShowIgnorable")
+            .Should().Within(TestTimeouts.Convergence).Match(c => c is SwitchControl, "the ignorable switch", ct))
+            .Should().NotBeNull();
+        (await stream.GetControlStream($"{InboxLayoutArea.AreaName}/Main/Commands/Only")
+            .Should().Within(TestTimeouts.Convergence).Match(c => c is SelectControl, "the Only select", ct))
+            .Should().NotBeNull();
 
         var delete = (ButtonControl)(await stream.GetControlStream(DeleteArea).Should().Within(TestTimeouts.Convergence)
             .Match(c => c is ButtonControl, "the Delete button", ct))!;
@@ -497,6 +506,120 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
             "nor is one a switch would hide while a category overrides the switches");
         InboxRows.Fingerprint(only).Should().NotBe(InboxRows.Fingerprint(only with { Only = string.Empty }),
             "picking Only is a change the page must react to");
+    }
+
+    /// <summary>
+    /// A triaged row carries its importance and tags from its content — lower-cased, each once, shown as
+    /// <c>#tag</c>; a row nobody judged has neither.
+    /// </summary>
+    [Fact]
+    public void ARow_ReadsImportanceAndTagsFromItsContent()
+    {
+        var section = new InboxSection(InboxBand.NeedsYou, "Outlook", 10, "q") { TimeField = "receivedAt" };
+        var node = new MeshNode("m1", "alice/_Mailbox/outlook")
+        {
+            Content = JsonSerializer.SerializeToElement(new
+            {
+                receivedAt = "2026-10-14T07:00:00Z", importance = "Important", tags = new object[] { "Reply", " act ", "reply", 3, "" },
+            }),
+        };
+        var row = InboxRows.Of(node, section, null, null);
+        row.Importance.Should().Be(InboxImportance.Important);
+        row.Tags.Should().Equal(["reply", "act"], "trimmed, lower-cased, each once, non-strings and blanks dropped");
+        row.TagText.Should().Be("#reply #act");
+
+        var untriaged = InboxRows.Of(node with { Content = JsonSerializer.SerializeToElement(new { receivedAt = "2026-10-14T07:00:00Z" }) },
+            section, null, null);
+        untriaged.Importance.Should().BeEmpty();
+        untriaged.Tags.Should().BeEmpty();
+        untriaged.TagText.Should().BeEmpty();
+    }
+
+    /// <summary>
+    /// Ignorable items stay out of the list until the viewer switches them on, and the notice counts
+    /// them; a picked tag narrows to its rows and shows them even when ignorable; Important lists the
+    /// items judged important. Items nobody judged are always shown.
+    /// </summary>
+    [Fact]
+    public void Ignorable_IsHiddenAndCounted_ATagNarrows_AndImportantListsTheJudgedImportant()
+    {
+        InboxRow Row(string path, string importance, params string[] tags) => new()
+        {
+            Path = path, SourceId = "Outlook", Source = "Outlook", Category = "Mail",
+            Stamp = $"2026-10-{10 + path[0] - 'a'}T00:00:00Z", Importance = importance, Tags = [.. tags],
+        };
+        var rows = new[]
+        {
+            Row("a", InboxImportance.Important, "reply"),
+            Row("b", InboxImportance.Ignorable, "promo"),
+            Row("c", ""),
+            Row("d", InboxImportance.Ignorable, "spam"),
+            Row("e", "", "reply"),
+        };
+        var none = new InboxFilter();
+
+        InboxRows.Apply(rows, none).Select(r => r.Path).Should().Equal(["e", "c", "a"], "ignorable hidden, newest first");
+        InboxRows.HiddenIgnorable(rows, none).Should().Be(2);
+        InboxRows.Apply(rows, none with { ShowIgnorable = true }).Should().HaveCount(5);
+        InboxRows.HiddenIgnorable(rows, none with { ShowIgnorable = true }).Should().Be(0);
+
+        InboxRows.Apply(rows, none with { Tag = InboxRows.TagKey("reply") }).Select(r => r.Path).Should().Equal(["e", "a"]);
+        InboxRows.Apply(rows, none with { Tag = InboxRows.TagKey("promo") }).Select(r => r.Path).Should().Equal(["b"],
+            "the viewer who picks promo asked for the promotions");
+        InboxRows.HiddenIgnorable(rows, none with { Tag = InboxRows.TagKey("promo") }).Should().Be(0);
+        InboxRows.Apply(rows, none with { Tag = InboxRows.ImportantKey }).Select(r => r.Path).Should().Equal(["a"]);
+
+        InboxRows.HiddenIgnorable(rows, none with { Only = InboxRows.SourceKey("Chat") }).Should().Be(0,
+            "only what the other filters would show is counted");
+        InboxRows.Fingerprint(none).Should().NotBe(InboxRows.Fingerprint(none with { ShowIgnorable = true }));
+        InboxRows.Fingerprint(none).Should().NotBe(InboxRows.Fingerprint(none with { Tag = InboxRows.TagKey("reply") }));
+
+        InboxRows.TagCounts(rows).Should().Equal(
+            [(InboxRows.ImportantKey, "", 1), (InboxRows.TagKey("reply"), "reply", 2), (InboxRows.TagKey("promo"), "promo", 1), (InboxRows.TagKey("spam"), "spam", 1)],
+            "Important first, then by use, then alphabetically");
+        InboxLayoutArea.TagOptions("All tags", "Important", InboxRows.TagCounts(rows)).Select(o => o.Text)
+            .Should().Equal(["All tags", "⭐ Important  1", "#reply  2", "#promo  1", "#spam  1"]);
+    }
+
+    /// <summary>
+    /// Review #4277167952: the items JUDGED important and an ordinary tag spelled <c>important</c> are
+    /// two entries that count and match apart — and the tag stays reachable when nothing was judged.
+    /// </summary>
+    [Fact]
+    public void JudgedImportant_AndAnImportantTag_AreSeparateEntries()
+    {
+        InboxRow Row(string path, string importance, params string[] tags) => new()
+        {
+            Path = path, SourceId = "Outlook", Stamp = $"2026-10-1{path.Length}T00:00:00Z", Importance = importance, Tags = [.. tags],
+        };
+        var rows = new[] { Row("a", InboxImportance.Important), Row("bb", InboxImportance.Ignorable, "important") };
+
+        InboxRows.TagCounts(rows).Should().Equal([(InboxRows.ImportantKey, "", 1), (InboxRows.TagKey("important"), "important", 1)]);
+        InboxRows.Apply(rows, new InboxFilter { Tag = InboxRows.ImportantKey }).Select(r => r.Path).Should().Equal(["a"],
+            "the judged-important entry lists what was judged, not what is tagged");
+        InboxRows.Apply(rows, new InboxFilter { Tag = InboxRows.TagKey("important") }).Select(r => r.Path).Should().Equal(["bb"]);
+
+        var untriaged = new[] { Row("a", ""), Row("bb", "", "important") };
+        InboxRows.TagCounts(untriaged).Should().Equal([(InboxRows.TagKey("important"), "important", 1)],
+            "with nothing judged, the ordinary tag is still listed");
+    }
+
+    /// <summary>
+    /// Review #4277167921: a source that times its rows by <c>LastModified</c> (no time field) keeps
+    /// its triage: importance and tags are read from whatever content the row carries.
+    /// </summary>
+    [Fact]
+    public void AnUntimedRow_KeepsItsImportanceAndTags()
+    {
+        var section = new InboxSection(InboxBand.Recent, "Feed", 10, "q");
+        var node = new MeshNode("n1", "alice/_Feed")
+        {
+            Content = JsonSerializer.SerializeToElement(new { importance = "ignorable", tags = new[] { "promo" } }),
+        };
+        var row = InboxRows.Of(node, section, null, null);
+        row.Importance.Should().Be(InboxImportance.Ignorable);
+        row.Tags.Should().Equal(["promo"]);
+        InboxRows.Apply([row], new InboxFilter()).Should().BeEmpty("an ignorable untimed row is hidden like any other");
     }
 
     /// <summary>The Only select lists every source first, then each source by its symbol and name.</summary>
