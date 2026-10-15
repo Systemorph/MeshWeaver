@@ -152,8 +152,10 @@ public sealed record SatelliteTableMapping(string Segment, string Table, params 
     /// in-repo <c>StorageAdapterMeshQueryProvider</c> from the same signals via
     /// <c>IsSatelliteTargetedQuery</c>. So <c>path:{main} scope:subtree</c> reads <c>mesh_nodes</c>
     /// and returns NO metadata satellites on either backend, while <c>path:{container}
-    /// scope:subtree</c> reads the satellite's own table and returns all of them — the container
-    /// and everything nested under it, other satellite kinds included.</para>
+    /// scope:subtree</c> reads the satellite's own table and returns the container and everything
+    /// nested under it THAT LIVES IN THAT TABLE. A satellite nested under it but stored in ANOTHER
+    /// table (a transcript's <c>_DocumentPart</c> rows under a <c>_Thread</c>) is not in that read;
+    /// to read every stored row back, use <see cref="StorageContainerOf"/>.</para>
     ///
     /// <para>Pair it with <see cref="OwnerOfSatellitePath"/>, which returns the main node this
     /// container hangs off: the two split one path at the same seam. Content satellites
@@ -169,6 +171,65 @@ public sealed record SatelliteTableMapping(string Segment, string Table, params 
             if (IsSatelliteSegment(segments[i]))
                 return string.Join('/', segments[..(i + 1)]);
         return null;
+    }
+
+    /// <summary>
+    /// The satellite container whose <c>path:{container} scope:subtree</c> read is answered from
+    /// the SAME table <paramref name="path"/> is stored in: the shortest prefix of the path that
+    /// ends at a satellite segment and resolves to the path's own table. <c>null</c> when the path
+    /// holds no satellite segment (a main-node path).
+    ///
+    /// <para>🚨 Why it is not <see cref="SatelliteContainerOf"/>. A satellite query is answered from
+    /// ONE table, chosen from the query path by the longest mapped segment
+    /// (<see cref="PartitionDefinition.ResolveTable"/>; the Postgres query resolves the same way).
+    /// A transcript part at <c>X/_Thread/t/transcripts/_Documents/a.md/_DocumentPart/000000</c> is
+    /// stored in <c>document_parts</c>, but its first-satellite container <c>X/_Thread</c> reads
+    /// <c>threads</c>, so a read through that container never returns it. The copy leg of a move
+    /// swept containers that way, the completeness guard then found the part rows in storage and
+    /// not in the copy, and every move of a node with an indexed chat transcript was refused.</para>
+    ///
+    /// <para>Rows that share their first container's table keep that container
+    /// (<c>X/_Thread/t/_ThreadMessage/m</c> → <c>X/_Thread</c>, one read for all of a node's
+    /// threads). A row stored in a deeper table gets the container ending at the segment that
+    /// selects that table (<c>…/a.md/_DocumentPart</c> → <c>document_parts</c>).</para>
+    /// </summary>
+    public static string? StorageContainerOf(string? path)
+    {
+        var first = SatelliteContainerOf(path);
+        if (first is null)
+            return null;
+        var table = TableOf(path!);
+        if (string.Equals(TableOf(first), table, StringComparison.Ordinal))
+            return first;
+        var segments = path!.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        for (var i = 0; i < segments.Length; i++)
+        {
+            if (!IsSatelliteSegment(segments[i]))
+                continue;
+            var prefix = string.Join('/', segments[..(i + 1)]);
+            if (string.Equals(TableOf(prefix), table, StringComparison.Ordinal))
+                return prefix;
+        }
+        // The path's table is chosen by a segment that is not a container (a content segment such
+        // as Source); no container reads it, so keep the first one.
+        return first;
+    }
+
+    /// <summary>
+    /// The table <paramref name="path"/> resolves to under <see cref="Defaults"/>: the table of the
+    /// LONGEST mapped segment the path contains (case-insensitively, first in <see cref="Defaults"/>
+    /// on a tie), exactly as <see cref="PartitionDefinition.ResolveTable"/> chooses it; <c>null</c>
+    /// for the primary table.
+    /// </summary>
+    private static string? TableOf(string path)
+    {
+        var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        SatelliteTableMapping? best = null;
+        foreach (var mapping in Defaults)
+            if ((best is null || mapping.Segment.Length > best.Segment.Length)
+                && segments.Any(s => string.Equals(s, mapping.Segment, StringComparison.OrdinalIgnoreCase)))
+                best = mapping;
+        return best?.Table;
     }
 
     /// <summary>
