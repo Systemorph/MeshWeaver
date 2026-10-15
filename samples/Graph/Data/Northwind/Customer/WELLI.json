@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "Wellington Importadora - Resende, Brazil",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "WELLI",

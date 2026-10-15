@@ -6,8 +6,6 @@
   "category": "AI Use Cases",
   "description": "Intelligent inbox management, prioritization, and response drafting",
   "icon": "/api/content/Systemorph/Marketing/icons/mail.svg",
-  "addressSegments": 0,
-  "isPersistent": true,
   "content": {
     "$type": "MarkdownDocument",
     "title": "Email Triage & Prioritization",

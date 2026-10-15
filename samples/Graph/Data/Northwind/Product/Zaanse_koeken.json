@@ -6,7 +6,6 @@
   "category": "Products",
   "description": "Zaanse koeken - 10 - 4 oz boxes",
   "icon": "/static/NodeTypeIcons/shopping-bag.svg",
-  "isPersistent": true,
   "content": {
     "$type": "ProductContent",
     "productId": 47,

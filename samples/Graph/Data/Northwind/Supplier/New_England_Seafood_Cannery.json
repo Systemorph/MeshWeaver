@@ -6,7 +6,6 @@
   "category": "Suppliers",
   "description": "New England Seafood Cannery - Boston, USA",
   "icon": "/static/NodeTypeIcons/truck.svg",
-  "isPersistent": true,
   "content": {
     "$type": "SupplierContent",
     "supplierId": 19,

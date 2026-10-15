@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "Rattlesnake Canyon Grocery - Albuquerque, USA",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "RATTC",

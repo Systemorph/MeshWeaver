@@ -516,21 +516,25 @@ public record DeleteNodeRequest(string Path)
     /// — the version the caller read when it decided the node may go (#6621). Null (the default)
     /// deletes whatever version is there, exactly as before.
     ///
-    /// <para>🚨 <b>Checked by the owning hub INSIDE the delete, not by the caller beforehand.</b>
+    /// <para>🚨 <b>Checked by the owning node hub, in its commit turn, against its LIVE version.</b>
     /// A read-then-delete on a shared node cannot be made safe from outside: another writer can add
-    /// to the node after the caller's last read and before the delete lands, and the delete then
-    /// removes what that writer just wrote. The owner compares this value against the node's
-    /// durable version AFTER it has opened the subtree-deletion scope, from which point every
-    /// in-process write at or under the path is refused until the delete completes — so a match
-    /// cannot go stale before the commit, and a write that loses the race is told so
-    /// (<c>NotFound</c>, "Node being deleted") instead of being silently removed.</para>
+    /// to the node after the caller's last read and before the delete lands. So the delete seals the
+    /// path against the owner's own writes and opens the subtree-deletion scope, then asks the owner
+    /// (a <see cref="ValidateDeleteRequest"/> carrying <see cref="ValidateDeleteRequest.ExpectedVersion"/>)
+    /// to compare. The owner compares on the turn its own writes and cross-hub patches commit on, so
+    /// every write it has acknowledged is in the compared version, including an own write it has not
+    /// stored yet (#6673). Any later write is refused rather than acknowledged. Check and delete are
+    /// therefore one step.</para>
     ///
     /// <para>A mismatch answers <see cref="NodeDeletionRejectionReason.Conflict"/> and removes
     /// nothing; re-read the node and decide again. A node that is already gone still answers the
-    /// idempotent success <see cref="DeleteNodeResponse.AlreadyAbsent"/> — the postcondition holds
-    /// whatever version it last had. It is compared against the DURABLE version, which an ack
-    /// guarantees, so a caller that read a version from a live stream before its flush may see one
-    /// spurious <c>Conflict</c>; re-reading resolves it.</para>
+    /// idempotent success <see cref="DeleteNodeResponse.AlreadyAbsent"/>. An owner that cannot be
+    /// asked while the node is still stored answers <see cref="NodeDeletionRejectionReason.Unavailable"/>
+    /// and removes nothing.</para>
+    ///
+    /// <para>Not covered yet (#6673): the seal lives in the deleting process, so an owning activation
+    /// on ANOTHER silo is not sealed after the comparison, and the storage delete itself is not a
+    /// compare-and-delete.</para>
     ///
     /// <para><b>Root only.</b> For a <see cref="Recursive"/> delete the check applies to the node at
     /// <see cref="DeleteNodeRequest.Path"/>; descendants are not version-checked (the cascade's leaf

@@ -6,7 +6,6 @@
   "category": "Employees",
   "description": "Nancy Davolio - Sales Representative",
   "icon": "/static/NodeTypeIcons/person.svg",
-  "isPersistent": true,
   "content": {
     "$type": "EmployeeContent",
     "employeeId": 1,

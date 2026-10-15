@@ -295,6 +295,73 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
         return false;
     }
 
+    // ── Version-guarded deletes (#6673) ─────────────────────────────────────────────────────────
+    //
+    // A delete that names DeleteNodeRequest.ExpectedVersion asks the owning hub to compare that
+    // version with the node's LIVE version inside the owner's commit turn. That comparison is only
+    // worth something if no OWN write can be acknowledged after it: an own write (UpdateOwn) is
+    // acknowledged from the in-memory commit, about one persistence-sampler interval BEFORE it is
+    // stored, so a write acked after the comparison would be removed by the delete that the
+    // comparison let through. This set is the seal that closes that window. The delete opens it
+    // BEFORE it asks the owner to compare, and every own commit turn on the sealed path is refused
+    // while it is open — so each own write either committed before the comparison (and the
+    // comparison sees its version) or is refused in its turn (and nothing was acknowledged).
+    // Exact path only: the precondition is the ROOT's, never a descendant's.
+
+    private readonly ConcurrentDictionary<string, int> _versionGuardedDeletions =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Seals <paramref name="path"/> against OWN writes for the duration of a version-guarded delete
+    /// (<see cref="DeleteNodeRequest.ExpectedVersion"/>, #6673). Ref-counted like
+    /// <see cref="BeginSubtreeDeletion"/>. Dispose the returned scope when the delete completes —
+    /// success or failure.
+    /// </summary>
+    /// <param name="path">The exact path of the node the guarded delete targets.</param>
+    /// <returns>The scope; disposing it lifts the seal (idempotent).</returns>
+    public IDisposable BeginVersionGuardedDeletion(string path)
+    {
+        if (string.IsNullOrEmpty(path))
+            return EmptyScope.Instance;
+        _versionGuardedDeletions.AddOrUpdate(path, 1, (_, count) => count + 1);
+        return new CountedScope(_versionGuardedDeletions, path);
+    }
+
+    /// <summary>
+    /// True while a version-guarded delete of exactly <paramref name="path"/> is in flight. The
+    /// owner's own-write commit turn reads this and refuses the write, so no own write is
+    /// acknowledged between the guarded delete's version comparison and its commit.
+    /// </summary>
+    /// <param name="path">The path an own write is about to commit to.</param>
+    /// <returns><c>true</c> when the path is sealed.</returns>
+    public bool IsVersionGuardedDeletionInFlight(string? path)
+        => !string.IsNullOrEmpty(path)
+           && !_versionGuardedDeletions.IsEmpty
+           && _versionGuardedDeletions.ContainsKey(path);
+
+    private sealed class CountedScope(ConcurrentDictionary<string, int> counts, string key) : IDisposable
+    {
+        private int _disposed;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+                return;
+            while (true)
+            {
+                if (!counts.TryGetValue(key, out var count))
+                    return;
+                if (count <= 1)
+                {
+                    if (counts.TryRemove(new KeyValuePair<string, int>(key, count)))
+                        return;
+                }
+                else if (counts.TryUpdate(key, count - 1, count))
+                    return;
+            }
+        }
+    }
+
     private void EndSubtreeDeletion(string rootPath, bool rowOnly)
     {
         var active = rowOnly ? _activeRowDeletions : _activeSubtreeDeletions;

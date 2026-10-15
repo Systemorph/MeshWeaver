@@ -188,7 +188,7 @@ public static class OrleansServerRegistryExtensions
 
     /// <summary>
     /// Registers the default Orleans mesh services — partitioned in-memory persistence, the
-    /// Orleans routing service, the Orleans-distributed change feed and the mesh catalog —
+    /// Orleans routing service and the mesh catalog (with its process-local change feed) —
     /// using try-add semantics so a caller may register replacements first.
     /// </summary>
     /// <param name="services">The service collection to add the mesh services to.</param>
@@ -237,18 +237,13 @@ public static class OrleansServerRegistryExtensions
             ? GrainActivationFailureRegistry.FromInvalidationFeed(invalidations)
             : new GrainActivationFailureRegistry(sp.GetService<IMeshChangeFeed>()));
 
-        // Register Orleans-distributed change feed (wraps local feed + Orleans streams).
-        // 🚨 The factory captures the ROOT IServiceProvider (sp), never IMessageHub — the feed is
-        // constructed from Workspace..ctor mid-hub-build, and resolving IMessageHub there re-enters
-        // BuildHub → new Workspace → IMeshChangeFeed → factory → … and stack-overflows. See
-        // OrleansMeshChangeFeed's ctor doc. The cluster client / IoPool are resolved lazily from sp.
-        services.TryAddSingleton<InProcessMeshChangeFeed>();
-        services.TryAddSingleton<IMeshChangeFeed>(sp =>
-            new OrleansMeshChangeFeed(
-                sp.GetRequiredService<InProcessMeshChangeFeed>(),
-                sp,
-                sp.GetService<ILoggerFactory>()?.CreateLogger<OrleansMeshChangeFeed>()));
-
+        // 🚨 No Orleans change feed (#4802). IMeshChangeFeed is the process-local feed AddMeshCatalog
+        // registers; what another silo committed reaches this process through the STORAGE layer's
+        // own cross-process feed (PostgreSQL LISTEN/NOTIFY → IStorageAdapter.Changes →
+        // StorageChangeFeedRelay → IMeshInvalidationFeed). The memory-stream broadcast that used to
+        // sit here was already shadowed by that registration's TryAdd, and its subscriber grain was
+        // one activation per CLUSTER, so it never delivered to every silo. Durable Streams Are Mesh
+        // Nodes → "Cross-silo change notifications".
         services.AddMeshCatalog();
 
         return services;

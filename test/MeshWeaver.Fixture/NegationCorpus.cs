@@ -64,6 +64,12 @@ public static class NegationCorpus
         new("under-decoy", "Theta", """{"code":"axb"}"""),
         new("backslash", "Iota", """{"code":"c\\d"}"""),
         new("backslash-decoy", "Kappa", """{"code":"cd"}"""),
+        // A QUOTED value is LITERAL (#6634): `|` and `*` inside the quotes are ordinary characters.
+        // Each decoy is what a parser that still reads them as alternation / wildcard would return.
+        new("pipe", "Lambda", """{"code":"a|b"}"""),
+        new("pipe-decoy", "Mu", """{"code":"a"}"""),
+        new("star", "Nu", """{"code":"x*y"}"""),
+        new("star-decoy", "Xi", """{"code":"xzzy"}"""),
     ];
 
     private static ImmutableArray<string> Ids(params string[] ids) => [.. ids];
@@ -73,34 +79,42 @@ public static class NegationCorpus
     [
         new("content.apiKey:enc*", Ids("enc-lower", "enc-upper"),
             "Positive prefix wildcard, case-insensitive on both executors (ILIKE / glob)."),
-        new("-content.apiKey:enc*", Ids("plain", "no-key", "no-content", "pct", "pct-decoy", "under", "under-decoy", "backslash", "backslash-decoy"),
+        new("-content.apiKey:enc*", Ids("plain", "no-key", "no-content", "pct", "pct-decoy", "under", "under-decoy", "backslash", "backslash-decoy", "pipe", "pipe-decoy", "star", "star-decoy"),
             "THE DEFECT: the negated wildcard must be the complement — including nodes that lack the field."),
         new("content.apiKey:*ccc", Ids("plain"),
             "Positive suffix wildcard."),
-        new("-content.apiKey:*ccc", Ids("enc-lower", "enc-upper", "no-key", "no-content", "pct", "pct-decoy", "under", "under-decoy", "backslash", "backslash-decoy"),
+        new("-content.apiKey:*ccc", Ids("enc-lower", "enc-upper", "no-key", "no-content", "pct", "pct-decoy", "under", "under-decoy", "backslash", "backslash-decoy", "pipe", "pipe-decoy", "star", "star-decoy"),
             "Negated suffix wildcard."),
         new("content.kind:secret", Ids("enc-lower", "enc-upper"),
             "Positive non-wildcard content field."),
-        new("-content.kind:secret", Ids("plain", "no-key", "no-content", "pct", "pct-decoy", "under", "under-decoy", "backslash", "backslash-decoy"),
+        new("-content.kind:secret", Ids("plain", "no-key", "no-content", "pct", "pct-decoy", "under", "under-decoy", "backslash", "backslash-decoy", "pipe", "pipe-decoy", "star", "star-decoy"),
             "Control: the negated NON-wildcard content field — NotEqual, null-inclusive."),
         new("name:foo", Ids("no-content"),
             "Positive plain node field."),
-        new("-name:foo", Ids("enc-lower", "enc-upper", "plain", "no-key", "pct", "pct-decoy", "under", "under-decoy", "backslash", "backslash-decoy"),
+        new("-name:foo", Ids("enc-lower", "enc-upper", "plain", "no-key", "pct", "pct-decoy", "under", "under-decoy", "backslash", "backslash-decoy", "pipe", "pipe-decoy", "star", "star-decoy"),
             "Control: the negated plain node field."),
-        new("-content.apiKey:enc* -name:foo", Ids("plain", "no-key", "pct", "pct-decoy", "under", "under-decoy", "backslash", "backslash-decoy"),
+        new("-content.apiKey:enc* -name:foo", Ids("plain", "no-key", "pct", "pct-decoy", "under", "under-decoy", "backslash", "backslash-decoy", "pipe", "pipe-decoy", "star", "star-decoy"),
             "Two negations AND together."),
         new("content.code:50%*", Ids("pct"),
             "`%` is LITERAL — only `*` is a wildcard. Read as SQL's `%` it would match `50xoff` too."),
-        new("-content.code:50%*", Ids("enc-lower", "enc-upper", "plain", "no-key", "no-content", "pct-decoy", "under", "under-decoy", "backslash", "backslash-decoy"),
+        new("-content.code:50%*", Ids("enc-lower", "enc-upper", "plain", "no-key", "no-content", "pct-decoy", "under", "under-decoy", "backslash", "backslash-decoy", "pipe", "pipe-decoy", "star", "star-decoy"),
             "The negated form: `%` literal there too, so the decoy is kept."),
         new("content.code:a_*", Ids("under"),
             "`_` is LITERAL. Read as SQL's single-character `_` it would match `axb` too."),
-        new("-content.code:a_*", Ids("enc-lower", "enc-upper", "plain", "no-key", "no-content", "pct", "pct-decoy", "under-decoy", "backslash", "backslash-decoy"),
+        new("-content.code:a_*", Ids("enc-lower", "enc-upper", "plain", "no-key", "no-content", "pct", "pct-decoy", "under-decoy", "backslash", "backslash-decoy", "pipe", "pipe-decoy", "star", "star-decoy"),
             "The negated form of the literal `_`."),
         new(@"content.code:c\d*", Ids("backslash"),
             "The LIKE escape character is LITERAL. Read as an escape, `c\\d%` is `cd%` — the decoy, not the value."),
-        new(@"-content.code:c\d*", Ids("enc-lower", "enc-upper", "plain", "no-key", "no-content", "pct", "pct-decoy", "under", "under-decoy", "backslash-decoy"),
+        new(@"-content.code:c\d*", Ids("enc-lower", "enc-upper", "plain", "no-key", "no-content", "pct", "pct-decoy", "under", "under-decoy", "backslash-decoy", "pipe", "pipe-decoy", "star", "star-decoy"),
             "The negated form of the literal backslash."),
+        new("content.code:\"a|b\"", Ids("pipe"),
+            "A quoted `|` is LITERAL. Read as alternation it would match `a` (the decoy) and not `a|b`."),
+        new("-content.code:\"a|b\"", Ids("enc-lower", "enc-upper", "plain", "no-key", "no-content", "pct", "pct-decoy", "under", "under-decoy", "backslash", "backslash-decoy", "pipe-decoy", "star", "star-decoy"),
+            "The negated quoted literal `|`."),
+        new("content.code:\"x*y\"", Ids("star"),
+            "A quoted `*` is LITERAL. Read as a wildcard it would match `xzzy` (the decoy) too."),
+        new("-content.code:\"x*y\"", Ids("enc-lower", "enc-upper", "plain", "no-key", "no-content", "pct", "pct-decoy", "under", "under-decoy", "backslash", "backslash-decoy", "pipe", "pipe-decoy", "star-decoy"),
+            "The negated quoted literal `*` — a one-value NotIn, so no executor reads it as a glob."),
     ];
 
     /// <summary>
@@ -117,5 +131,7 @@ public static class NegationCorpus
         ("content.code:50%*", "-content.code:50%*"),
         ("content.code:a_*", "-content.code:a_*"),
         (@"content.code:c\d*", @"-content.code:c\d*"),
+        ("content.code:\"a|b\"", "-content.code:\"a|b\""),
+        ("content.code:\"x*y\"", "-content.code:\"x*y\""),
     ];
 }

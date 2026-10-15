@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "Simons bistro - Kobenhavn, Denmark",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "SIMOB",

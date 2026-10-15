@@ -6,8 +6,6 @@
   "category": "Agentic AI",
   "description": "Vannevar Bush's 1945 vision realized - connecting all information through associative indexing",
   "icon": "/api/content/Systemorph/Marketing/icons/memex-vision.svg",
-  "addressSegments": 0,
-  "isPersistent": true,
   "content": {
     "$type": "MarkdownDocument",
     "title": "The Memex Vision",

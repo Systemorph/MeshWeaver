@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "Trail's Head Gourmet Provisioners - Kirkland, USA",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "TRAIH",

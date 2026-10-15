@@ -7,12 +7,9 @@
   "icon": "/api/content/ACME/Project/Todo/icon.svg",
   "description": "Produce a professional product walkthrough video",
   "category": "Tasks",
-  "addressSegments": 0,
-  "isPersistent": true,
   "lastModified": "2026-01-12T07:43:17.8312475+00:00",
   "version": 2,
   "state": "Active",
-  "isVirtual": false,
   "content": {
     "$type": "Todo",
     "title": "Record product demo video",
@@ -24,7 +21,5 @@
     "dueDateOffsetDays": 30,
     "status": "InProgress",
     "createdAt": "2026-01-19T20:23:16.388293+00:00"
-  },
-  "routingType": "Shared",
-  "instantiationType": "HubConfiguration"
+  }
 }
