@@ -28,6 +28,9 @@ case "$*" in
     [ "$SCENARIO" = pvc_error ] && exit 9
     if [ "$SCENARIO" = pending ]; then printf Pending; else printf Bound; fi ;;
   *'get pods'*) printf 'loki-0 Running\\n' ;;
+  *'get deploy,sts,ds'*) printf 'statefulset.apps/loki\\n' ;;
+  *'rollout status'*) exit 0 ;;
+  *'get deploy loki-prometheus-server'*) exit 1 ;;
   *) exit 8 ;;
 esac
 ''')

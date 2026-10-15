@@ -130,6 +130,18 @@ jobs:
         if: ${{ !cancelled() }}
         run: python3 deploy/aks/scripts/test-observability-storage.py
 
+      # The installer runs inside `az aks command invoke`, which is cut at ~10 minutes and then
+      # returns neither exit code nor log. These cases pin what keeps it inside that cap and
+      # self-healing (2026-10-15): a release stuck pending-* is rolled back first, a Prometheus
+      # crash-looping on a full TSDB volume is cleared (disposable metrics), helm never `--wait`s,
+      # and readiness is reported per workload with exit 2. The pod's clean-up script is EXECUTED
+      # against a scratch TSDB. helm/kubectl/df are stubbed: no cluster, no network.
+      - name: Assert observability installation recovers a stuck release and a full Prometheus volume
+        if: ${{ !cancelled() }}
+        run: |
+          shellcheck deploy/aks/scripts/install-observability.sh
+          python3 deploy/aks/scripts/test-observability-recovery.py
+
       # The observability-values CHECKER's own logic, with helm and docker stubbed — so it runs
       # here, offline, rather than in the job that reaches the network. Same reason as the
       # chart-drift comparator above: a gate that has quietly lost the ability to fail reports a

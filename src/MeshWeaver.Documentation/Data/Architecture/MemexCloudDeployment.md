@@ -224,6 +224,21 @@ curl -sS "https://<your-domain>/bootstrap/first-admin?secret=<bootstrap-secret>&
 
 The observability stack is folded into the standard deploy: export `GRAFANA_PW` alongside `MEMEX_PG_CONN` and `deploy.sh` brings it up automatically.
 
+**It finishes inside `az aks command invoke`'s cap, and it heals the two states that used to wedge it.** `command invoke` cuts a command off after about ten minutes and then returns no exit code and no log. The installer therefore never waits inside helm: `helm upgrade` applies with a bounded `--timeout` and no `--wait`, so the release is recorded `deployed` in seconds, and readiness is checked afterwards, per workload, within a budget (`OBS_BUDGET_SECONDS`, default 540 s). Its exit code is a contract:
+
+| Exit | Meaning |
+|---|---|
+| `0` | installed/updated, every workload Ready, Loki's `/data` is a Bound PVC |
+| `1` | not installed/updated — helm refused, a stuck release could not be recovered, or Loki's storage is not durable |
+| `2` | the release is `deployed`, but a named workload is not Ready; the log carries its events and previous log tail |
+
+Before upgrading it recovers, loudly (every line prefixed `RECOVERY:`):
+
+- **A release stuck in `pending-install`/`pending-upgrade`/`pending-rollback`** — what a run killed mid-operation leaves behind, after which helm refuses every later operation. It rolls back to the last `deployed` revision (or uninstalls a first install that never deployed) and then upgrades as usual.
+- **A Prometheus crash-looping on a full TSDB volume.** Prometheus replays its WAL before size retention can run, so a volume that is already full never recovers on its own (`panic: preallocate: no space left on device`), whatever the values say. Only on that evidence — the server container has restarted and its previous log says `no space left on device` — it scales the server to 0, runs a one-shot pod from the server's own image on the server's volume that deletes the WAL, the head chunks and leftover temporary blocks and then the oldest blocks until the volume is at most 60 % full (`TSDB_RECOVERY_TARGET_PERCENT`), and scales the server back. **The data deleted is disposable metrics** — the last hours of samples and the oldest days; logs live in Loki on their own volume and are untouched. From there `storage.tsdb.retention.size` (6 GB on the 8 GiB volume, held at ≤ 80 % by the `Chart Gate` values check) keeps it bounded.
+
+Both paths and the clean-up script itself are pinned by `deploy/aks/scripts/test-observability-recovery.py` (`Chart Gate`).
+
 ---
 
 ## 9. Admin Access — The P2S VPN
