@@ -238,7 +238,10 @@ never in the `ON CONFLICT SET`) — and an `update` payload that leaves it out d
 time and creator. `NodeUpdatePipeline` therefore carries the LIVE node's values whatever the caller
 sends, before the no-op gate (so a payload differing only in creation metadata changes nothing). A
 value the caller NAMES is not written either: the live node would advertise a stamp the durable row
-never stores and revert on reload. Creation metadata is written by the create paths only. It sits in
+never stores and revert on reload. That is unconditional: a live node that carries NO stamp (imported
+from a file without one, hydrated from a projection) keeps having none — its row already exists, so a
+stamp an update supplied would never be stored either, and there is no "first update fills it in"
+fallback (#6745). Creation metadata is written by the create paths only. It sits in
 the pipeline rather than in `MeshOperations`, so every `UpdateNode` caller gets it, not only MCP and
 the CLI. Pinned by `UpdateKeepsCreationMetadataTest` (MeshWeaver.Graph.Test).
 
