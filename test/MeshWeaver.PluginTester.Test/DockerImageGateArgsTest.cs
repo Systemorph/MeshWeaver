@@ -1,6 +1,7 @@
 #pragma warning disable CS1591
 
 using System;
+using System.IO;
 using System.Linq;
 using MeshWeaver.ComboVerifier;
 using MeshWeaver.PluginCatalog;
@@ -29,8 +30,11 @@ namespace MeshWeaver.PluginTester.Test;
 /// </summary>
 public class DockerImageGateArgsTest
 {
-    private const string Image = "meshweaver.azurecr.io/mw-plugin-test:3.0.0-rc8.ci.6015";
+    // The candidate PORTAL image: the gate runs as the portal host since #3022, and the combo gate
+    // since #3848 — the portal image ships no tester, and the tester image is a subset of it.
+    private const string Image = "meshweaver.azurecr.io/memex-portal-ai:3.1.10873";
     private const string Root = "/tmp/combo-work";
+    private const string Host = "/tmp/combo-host";
 
     /// <summary>The fleet's architecture is what a verdict is about when nothing says otherwise:
     /// AKS node pools are x86_64, and CD's arm64 bake leg is opt-in behind BAKE_ARM64.</summary>
@@ -47,39 +51,94 @@ public class DockerImageGateArgsTest
     public void EveryDockerCall_PinsThePlatform(string platform)
     {
         AssertAdjacent(DockerImageGate.PullArgs(Image, platform), "--platform", platform);
-        AssertAdjacent(DockerImageGate.RunArgs(Image, Root, platform), "--platform", platform);
+        AssertAdjacent(DockerImageGate.RunArgs(Image, Root, Host, platform), "--platform", platform);
     }
 
     /// <summary>
-    /// 🚨 Everything before the image reference is DOCKER's; everything after it is the TESTER's.
-    /// A flag that drifts past the image is not a flag any more — docker never sees it and
-    /// mw-plugin-test receives it as an unknown argument, so the run silently stops being pinned
-    /// while still looking correct. This asserts the boundary, not merely the presence.
+    /// 🚨 Everything before the image reference is DOCKER's; everything after it is what the
+    /// portal's <c>dotnet</c> starts and the TESTER's arguments. A flag that drifts past the image is
+    /// not a flag any more — docker never sees it, so the run silently stops being pinned while
+    /// still looking correct. This asserts the boundary, not merely the presence.
     /// </summary>
     [Fact]
     public void RunArgs_PutEveryDockerFlagBeforeTheImage_AndTheTestersAfterIt()
     {
-        var args = DockerImageGate.RunArgs(Image, Root, DockerImageGate.FleetPlatform);
+        var args = DockerImageGate.RunArgs(Image, Root, Host, DockerImageGate.FleetPlatform);
         var image = Array.IndexOf(args, Image);
         Assert.True(image > 0, "the image reference must appear in the argv");
 
         var docker = args[..image];
         Assert.Contains("--rm", docker);
-        // --init reaps the tester's children; every other invocation of this image in the repo
-        // passes it, and a gate that runs the image differently from CI is not measuring CI.
+        // --init reaps the tester's children and lets a crashed runtime's SIGABRT end the process;
+        // every lane passes it, and a gate that runs the image differently from CI is not measuring CI.
         Assert.Contains("--init", docker);
         AssertAdjacent(docker, "--platform", DockerImageGate.FleetPlatform);
-        AssertAdjacent(docker, "-v", $"{Root}:/work");
-        AssertAdjacent(docker, "--entrypoint", "/app/mw-plugin-test");
+        // Both mounts, each as a `-v <value>` pair: the composed host read-only, the work root writable.
+        var mounts = Enumerable.Range(0, docker.Length - 1)
+            .Where(i => docker[i] == "-v").Select(i => docker[i + 1]).ToArray();
+        Assert.Equal(new[] { $"{Host}:/host:ro", $"{Root}:/work" }, mounts);
 
-        // The tester's own arguments — the repo root it gates, and where to write the structured
-        // report the verifier folds. A report path outside the mount lands inside the container and
-        // is lost, which reads as "the tester produced no report" → NotVerifiable forever, with no
-        // error anywhere to say why.
+        // The portal image's OWN dotnet starts the composed host's tester CLI, as the portal (--app
+        // /app); then the repo root it gates and where to write the structured report the verifier
+        // folds. A report path outside the mount lands inside the container and is lost, which reads
+        // as "the tester produced no report" → NotVerifiable forever, with no error to say why.
+        AssertAdjacent(docker, "--entrypoint", "dotnet");
         Assert.Equal(
-            new[] { "/work", "--report", $"/work/{GateRunReport.FileName}" },
+            new[]
+            {
+                "/host/mw-plugin-test.dll", "/work", "--app", "/app",
+                "--report", $"/work/{GateRunReport.FileName}",
+            },
             args[(image + 1)..]);
     }
+
+    /// <summary>
+    /// 🚨 #3848, measured on run 38688576426: <c>--entrypoint /app/mw-plugin-test</c> inside the
+    /// candidate PORTAL image — which ships no tester — exited 127 (<c>[FATAL tini (7)] exec
+    /// /app/mw-plugin-test failed: No such file or directory</c>) on every slot, and each run was
+    /// landed as a NotVerifiable verdict about the candidate. The gate must never again start a
+    /// tester path the image it runs does not carry.
+    /// </summary>
+    [Fact]
+    public void RunArgs_NeverStartTheTesterFromThePortalImagesOwnApp() =>
+        Assert.DoesNotContain(
+            "/app/mw-plugin-test",
+            DockerImageGate.RunArgs(Image, Root, Host, DockerImageGate.FleetPlatform));
+
+    /// <summary>
+    /// The instrument probe names EVERY file a composed host lacks, and passes a complete one. Its
+    /// negative case is the #3848 shape: the portal's /app on its own, carrying the manifest but no
+    /// tester.
+    /// </summary>
+    [Fact]
+    public void MissingHostFiles_NamesEachMissingFile_AndPassesACompleteHost()
+    {
+        var dir = Directory.CreateTempSubdirectory("combo-host-probe-").FullName;
+        try
+        {
+            Assert.Equal(DockerImageGate.RequiredHostFiles, DockerImageGate.MissingHostFiles(dir));
+
+            // The portal's /app alone: a manifest, no tester.
+            File.WriteAllText(Path.Combine(dir, "meshweaver-surface.manifest"), "x");
+            Assert.Equal(
+                new[] { "mw-plugin-test.dll", "mw-plugin-test.runtimeconfig.json" },
+                DockerImageGate.MissingHostFiles(dir));
+
+            File.WriteAllText(Path.Combine(dir, "mw-plugin-test.dll"), "x");
+            File.WriteAllText(Path.Combine(dir, "mw-plugin-test.runtimeconfig.json"), "{}");
+            Assert.Empty(DockerImageGate.MissingHostFiles(dir));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    /// <summary>A missing instrument has its OWN exit code — not Green (0), not Red/NotVerifiable
+    /// (1), not usage (2) — because the lander keys on it to refuse landing a verdict.</summary>
+    [Fact]
+    public void TesterMissing_HasItsOwnExitCode() =>
+        Assert.DoesNotContain(DockerImageGate.TesterMissingExitCode, new[] { 0, 1, 2 });
 
     /// <summary>The pull names the image and nothing else — a pull carrying the tester's arguments
     /// would fail as a registry error four steps from its cause.</summary>
