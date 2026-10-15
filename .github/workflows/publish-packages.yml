@@ -91,6 +91,9 @@ name: Publish the surviving NuGet packages
 # nuget.org is reached by Trusted Publishing (GitHub OIDC via NuGet/login — no stored NuGet secret), exactly as unlist-orphaned-packages.yml does. The App token replaces
 # the stored GitHub PAT, which is the one this repository could actually stop storing.
 
+# The run-name is how main-cd's `publish-cli` finds the run it dispatched ("Publish cli <version>").
+run-name: "Publish ${{ inputs.packages || 'all' }} ${{ inputs.version || github.ref_name }}"
+
 on:
   push:
     tags:
@@ -240,6 +243,10 @@ jobs:
       # $(Version) and no compiled attribute). PlatformVersion is NOT moved to 3.<minor>.<run>,
       # because PlatformVersionSchemeGuard holds it to a clean line; the armed run number is the
       # package version, which is all `dotnet tool install` reads.
+      # 🚨 The TOOL properties are passed too (#6843 review): `ref` may be an armed commit from
+      # BEFORE the CLI was packable again (2026-10-15), whose csproj inherits IsPackable=false and
+      # would pack nothing. Passing them makes any armed commit publishable; on a current commit
+      # they equal what MeshWeaver.Cli.csproj declares.
       - name: Pack the CLI
         if: contains(steps.version.outputs.ids, 'MeshWeaver.Cli')
         run: |
@@ -247,6 +254,7 @@ jobs:
           dotnet pack meshweaver/src/MeshWeaver.Cli/MeshWeaver.Cli.csproj \
             -c Release \
             -p:Version=${{ steps.version.outputs.version }} \
+            -p:IsPackable=true -p:PackAsTool=true -p:ToolCommandName=memex -p:PackageId=MeshWeaver.Cli \
             --output "$RUNNER_TEMP/nupkgs"
 
       # 🚨 A POSITIVE, SPECIFIC signal: the id, at this exact version, and nothing else. `dotnet
