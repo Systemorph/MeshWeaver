@@ -45,6 +45,7 @@ public class ConfiguredSourceReconcilesOnGreenBuildTest(ITestOutputHelper output
     private const string NewSha = "2222222222222222222222222222222222222222";
     private const string AutoPkg = "ConfiguredAutoPkg";
     private const string NotifyPkg = "ConfiguredNotifyPkg";
+    private const string LocklessPkg = "ConfiguredLocklessPkg";
 
     private System.Text.Json.JsonSerializerOptions Json => Mesh.JsonSerializerOptions;
 
@@ -131,6 +132,53 @@ public class ConfiguredSourceReconcilesOnGreenBuildTest(ITestOutputHelper output
         foreign.ModuleVersion.Should().Be(ModuleVersion(NotifyPkg, OldSha));
     }
 
+    /// <summary>
+    /// 🚨 <b>A record installed BEFORE its repository emitted a manifest.lock is not stuck</b>
+    /// (2026-10-15). Its install record carries no moduleVersion while the listing now states one:
+    /// the record cannot claim to equal the listed content, so the listed identity is a change —
+    /// an Auto record installs (and is stamped, so the next pass compares normally), a Notify
+    /// record is reminded. Measured on an enterprise client's test instance: three packages logged
+    /// "the install record's moduleVersion is empty" on every green build and never moved.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task ARecordWithoutModuleVersion_IsUpdatedOnceTheListingCarriesOne()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await Seed(AutoPkg, PackageUpdatePolicy.Auto, ct, withModuleVersion: false);
+        await Seed(NotifyPkg, PackageUpdatePolicy.Notify, ct, withModuleVersion: false);
+
+        await WriteBuild(NewSha, ct);
+
+        var auto = await AwaitRecord(AutoPkg, r => r.ModuleVersion == ModuleVersion(AutoPkg, NewSha), 240, ct);
+        auto.Version.Should().Be("2.0.0", "the Auto record installed the listed build and is now stamped with its identity");
+
+        var notify = await AwaitRecord(NotifyPkg, r => r.NotifiedModuleVersion == ModuleVersion(NotifyPkg, NewSha), 60, ct);
+        notify.ModuleVersion.Should().BeNull("a Notify record is reminded; its installed content does not move");
+    }
+
+    /// <summary>
+    /// The case that IS still refused: the LISTING carries no identity (its repository commits no
+    /// manifest.lock). Acting on the event there would re-install on every green build. The
+    /// locked Auto package in the same pass is the positive signal that the pass ran.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task AListingWithoutModuleVersion_IsStillRefused()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var watcher = Mesh.ServiceProvider.GetRequiredService<PluginUpdateWatcher>();
+        await Seed(LocklessPkg, PackageUpdatePolicy.Auto, ct, withModuleVersion: false);
+        await Seed(AutoPkg, PackageUpdatePolicy.Notify, ct);
+
+        await WriteBuild(NewSha, ct);
+        await AwaitRecord(AutoPkg, r => r.NotifiedModuleVersion == ModuleVersion(AutoPkg, NewSha), 60, ct);
+        await watcher.ReconcileNow().Timeout(TestTimeouts.Convergence).Await(ct);
+
+        var lockless = await AwaitRecord(LocklessPkg, _ => true, 30, ct);
+        lockless.Version.Should().Be("1.0.0", "a listing with no content identity is refused, never installed on the event");
+        lockless.ModuleVersion.Should().BeNull();
+        lockless.NotifiedModuleVersion.Should().BeNull();
+    }
+
     private Task WriteBuild(string sha, CancellationToken ct)
     {
         var path = BuildCompletion.PathFor("acme", "client-packages");
@@ -156,7 +204,8 @@ public class ConfiguredSourceReconcilesOnGreenBuildTest(ITestOutputHelper output
             .Timeout(TestTimeouts.Convergence).Await(ct);
     }
 
-    private async Task Seed(string id, PackageUpdatePolicy policy, CancellationToken ct, string origin = Origin)
+    private async Task Seed(string id, PackageUpdatePolicy policy, CancellationToken ct, string origin = Origin,
+        bool withModuleVersion = true)
     {
         var auto = policy == PackageUpdatePolicy.Auto;
         var manifest = new PackageManifest
@@ -167,7 +216,8 @@ public class ConfiguredSourceReconcilesOnGreenBuildTest(ITestOutputHelper output
             TargetPartition = id,
             SourceFolder = id,
             Version = "1.0.0",
-            ModuleVersion = ModuleVersion(id, OldSha),
+            // A record installed before its repository emitted manifest.lock carries none.
+            ModuleVersion = withModuleVersion ? ModuleVersion(id, OldSha) : null,
             Source = "Client",
             Origin = origin,
             InstalledFromRef = "main",
@@ -222,7 +272,9 @@ public class ConfiguredSourceReconcilesOnGreenBuildTest(ITestOutputHelper output
     {
         private static RepoSnapshot At(string sha) =>
             new(sha, [.. Package(AutoPkg, sha, sha == OldSha ? "1.0.0" : "2.0.0"),
-                      .. Package(NotifyPkg, sha, sha == OldSha ? "1.0.0" : "2.0.0")]);
+                      .. Package(NotifyPkg, sha, sha == OldSha ? "1.0.0" : "2.0.0"),
+                      // A package whose repository commits NO manifest.lock: no listed identity.
+                      .. Package(LocklessPkg, sha, "2.0.0").Where(f => !f.Path.EndsWith(ModuleManifest.FileName, StringComparison.Ordinal))]);
 
         private static IObservable<TResult> Never<TResult>() => Observable.Never<TResult>();
 
