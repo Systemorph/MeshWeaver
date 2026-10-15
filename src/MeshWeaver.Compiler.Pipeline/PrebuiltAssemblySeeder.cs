@@ -99,8 +99,8 @@ public static class PrebuiltAssemblySeeder
         var finding = offered
             ? $"the prebuilt bundle for framework {LiveFrameworkMvid}/{ReleaseArchitecture.Live} "
               + "names this type but was DECLINED: its source fingerprint disagrees with the "
-              + "files this mesh holds (the record's adopted and current module versions say which "
-              + "side is newer), and nothing syncs those files"
+              + "files this mesh holds (either side may be the newer one), and nothing syncs "
+              + "those files"
             : $"no prebuilt bundle for framework {LiveFrameworkMvid}/{ReleaseArchitecture.Live} "
               + "names this type";
         return $"Untracked module content: NodeType '{nodeTypePath}' is a module's content, but "

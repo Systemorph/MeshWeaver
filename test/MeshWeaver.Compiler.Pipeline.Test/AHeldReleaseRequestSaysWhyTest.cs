@@ -40,6 +40,7 @@ namespace MeshWeaver.Compiler.Pipeline.Test;
 public class AHeldReleaseRequestSaysWhyTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private const string StaleMvid = "0000bbbb0000bbbb";
+    private const string SeededReason = "seeded hold reason the compile must clear";
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
@@ -54,7 +55,8 @@ public class AHeldReleaseRequestSaysWhyTest(ITestOutputHelper output) : Monolith
 
     /// <summary>The issue's record: a module type, adopted from a bundle whose source fingerprint
     /// differs from the live one, serving that build as <see cref="BuildProvenance.StaleAdopted"/>.</summary>
-    private async Task CreateStaleAdoptedType(string path, bool sourceMovedPastTheBuild)
+    private async Task CreateStaleAdoptedType(
+        string path, bool sourceMovedPastTheBuild, string? seededHoldReason = null)
     {
         var node = MeshNode.FromPath(path) with
         {
@@ -78,14 +80,16 @@ public class AHeldReleaseRequestSaysWhyTest(ITestOutputHelper output) : Monolith
                 CompiledSources = sourceMovedPastTheBuild
                     ? ImmutableDictionary<string, long>.Empty.Add($"{path}/Source/Settings", 1)
                     : null,
+                DeliveryHoldReason = seededHoldReason,
             },
         };
         using (Mesh.ServiceProvider.GetRequiredService<MeshWeaver.Messaging.AccessService>().ImpersonateAsSystem())
             await MeshService.CreateNode(node).Should().Within(TestTimeouts.Convergence)
                 .Emit(cancellationToken: TestContext.Current.CancellationToken);
         await Mesh.GetMeshNodeStream(path).Should().Within(TestTimeouts.Convergence)
-            .Match(n => n?.Content is NodeTypeDefinition d
-                        && string.Equals(d.LatestAssemblyMvid, StaleMvid, StringComparison.Ordinal),
+            .Match(n => n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions) is { } d
+                        && string.Equals(d.LatestAssemblyMvid, StaleMvid, StringComparison.Ordinal)
+                        && string.Equals(d.DeliveryHoldReason, seededHoldReason, StringComparison.Ordinal),
                 cancellationToken: TestContext.Current.CancellationToken);
     }
 
@@ -131,13 +135,13 @@ public class AHeldReleaseRequestSaysWhyTest(ITestOutputHelper output) : Monolith
     private async Task<NodeTypeDefinition> Handled(string path, DateTimeOffset requestedAt)
     {
         var node = await Mesh.GetMeshNodeStream(path).Should().Within(TestTimeouts.CrossSilo)
-            .Match(n => n?.Content is NodeTypeDefinition d
+            .Match(n => n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions) is { } d
                         && d.LastReleaseRequestHandledAt is { } handled && handled >= requestedAt
                         && d.CompilationStatus is CompilationStatus.Ok or CompilationStatus.Error
                             or CompilationStatus.Unavailable,
                 "the request is handled and what it dispatched settles",
                 cancellationToken: TestContext.Current.CancellationToken);
-        return (NodeTypeDefinition)node.Content!;
+        return node.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!;
     }
 
     private static void ShouldBeHeldAndSayWhy(NodeTypeDefinition held, string because)
@@ -164,7 +168,9 @@ public class AHeldReleaseRequestSaysWhyTest(ITestOutputHelper output) : Monolith
         await TrackPartition("tracked");
         await CreateStaleAdoptedType(recycled, sourceMovedPastTheBuild: false);
         await CreateStaleAdoptedType(installed, sourceMovedPastTheBuild: true);
-        await CreateStaleAdoptedType(tracked, sourceMovedPastTheBuild: false);
+        // The control starts HELD with a reason, so its final assertion proves the compile CLEARS
+        // an existing reason rather than merely never writing one.
+        await CreateStaleAdoptedType(tracked, sourceMovedPastTheBuild: false, seededHoldReason: SeededReason);
 
         // ── The recycle's shape: a FORCED request. Force skips on-demand adoption (#2818) and
         // lands on the untracked-module gate, which holds — and must now say so. ──
@@ -177,6 +183,11 @@ public class AHeldReleaseRequestSaysWhyTest(ITestOutputHelper output) : Monolith
 
         // ── CONTROL: the same forced request where the partition tracks a repository compiles the
         // live source, and a build of the live source carries no hold reason. ──
+        (await Mesh.GetMeshNodeStream(tracked).Should().Within(TestTimeouts.Convergence)
+                .Emit("the control's record right before its release request",
+                    cancellationToken: TestContext.Current.CancellationToken))
+            .ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!.DeliveryHoldReason
+            .Should().Be(SeededReason, "the control enters its compile holding a reason");
         var trackedAt = await RequestRelease(tracked, force: true);
         var compiled = await Handled(tracked, trackedAt);
         compiled.CompilationStatus.Should().Be(CompilationStatus.Ok,

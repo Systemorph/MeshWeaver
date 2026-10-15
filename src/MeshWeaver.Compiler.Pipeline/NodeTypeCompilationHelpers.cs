@@ -1718,8 +1718,7 @@ internal static class NodeTypeCompilationHelpers
                     // #4469 — cleared wherever the error text is (Copilot review).
                     CompilationImportRefusals = null,
                     // #6832 — the hold says why on the record, since an Ok record carries no error.
-                    DeliveryHoldReason = BuildDeliveryHold.ServingNotice(
-                        serving, PrebuiltAssemblySeeder.RequirePrebuiltConfigKey + "=true: this mesh does not compile module content"),
+                    DeliveryHoldReason = BuildDeliveryHold.ServingNotice(serving, RequirePrebuiltGateReason),
                 };
         }
 
@@ -1811,12 +1810,20 @@ internal static class NodeTypeCompilationHelpers
                 CompilationError = tooFarBehind
                     ? BuildDeliveryHold.TooFarBehindNotice(refused, maxMinorVersionsBehind)
                     : BuildDeliveryHold.IncompatibleNotice(refused),
-                // #6832 — the same sentence, in the one field a held record is read for.
+                // #6832 — the same sentence, in the one field a held record is read for, plus
+                // the gate that stops a replacement compile on this mesh (as the stale-but-serving
+                // branch names it): without it the reason says why the old build cannot run but
+                // not why no new one is built.
                 DeliveryHoldReason = tooFarBehind
-                    ? BuildDeliveryHold.TooFarBehindNotice(refused, maxMinorVersionsBehind)
-                    : BuildDeliveryHold.IncompatibleNotice(refused),
+                    ? BuildDeliveryHold.TooFarBehindNotice(refused, maxMinorVersionsBehind, RequirePrebuiltGateReason)
+                    : BuildDeliveryHold.IncompatibleNotice(refused, RequirePrebuiltGateReason),
             };
     }
+
+    /// <summary>The gate a <c>Modules:RequirePrebuilt</c> hold names in its
+    /// <see cref="NodeTypeDefinition.DeliveryHoldReason"/> (#6832): why no replacement compile runs.</summary>
+    private static readonly string RequirePrebuiltGateReason =
+        PrebuiltAssemblySeeder.RequirePrebuiltConfigKey + "=true: this mesh does not compile module content";
 
     /// <summary>
     /// <see cref="ApplyAdoptedSourceStamp"/> plus the two things a pure function cannot do: resolve
