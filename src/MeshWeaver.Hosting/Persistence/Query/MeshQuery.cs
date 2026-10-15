@@ -94,8 +94,9 @@ public class MeshQuery : IMeshQueryCore
 
     /// <summary>
     /// A module's query provider as the fan-out holds it: the name read once when the fan-out was built,
-    /// and every call made on the module's CURRENT generation under a lease taken for that call
-    /// (<see cref="ModuleServiceProxy.TryLease{T}"/>) — never a check followed by a call through the proxy,
+    /// and every use made on the module's CURRENT generation under a lease (<see cref="ModuleServiceProxy.TryLease{T}"/>)
+    /// — for <see cref="Matches"/> the call, for every observable member the whole SUBSCRIPTION
+    /// (<see cref="ModuleServiceProxy.Leased{T, TResult}"/>) — never a check followed by a call through the proxy,
     /// which a retirement in between turned into <c>Module … holds no service scope</c>. A module retired
     /// before the call is a named <see cref="ModuleRetiredException"/>.
     /// </summary>
@@ -107,21 +108,30 @@ public class MeshQuery : IMeshQueryCore
 
         public bool Matches(IReadOnlyList<string> queryNamespaces) => Call(p => p.Matches(queryNamespaces));
 
+        // 🚨 The observable members hold their lease for the SUBSCRIPTION, not for the call: the
+        // provider returns a cold observable, the fan-out subscribes to it later (through QueryPool),
+        // and a lease released when the call returned let a retirement dispose the generation's
+        // services before or during the query (review of #6801). ModuleServiceProxy.Leased takes the
+        // lease on subscribe and releases it on termination or unsubscription.
         public IObservable<QueryResultChange<T>> Query<T>(MeshQueryRequest request, JsonSerializerOptions options)
-            => Call(p => p.Query<T>(request, options));
+            => Leased(p => p.Query<T>(request, options));
 
         public IObservable<IReadOnlyCollection<QueryResult>> Query(MeshQueryRequest request, JsonSerializerOptions options)
-            => Call(p => p.Query(request, options));
+            => Leased(p => p.Query(request, options));
 
         public IObservable<IReadOnlyCollection<QueryResult>> Autocomplete(
             string basePath, string prefix, JsonSerializerOptions options,
             AutocompleteMode mode = AutocompleteMode.RelevanceFirst, int limit = 10,
             string? contextPath = null, string? context = null)
-            => Call(p => p.Autocomplete(basePath, prefix, options, mode, limit, contextPath, context));
+            => Leased(p => p.Autocomplete(basePath, prefix, options, mode, limit, contextPath, context));
 
         public IObservable<T?> Select<T>(string path, string property, JsonSerializerOptions options)
-            => Call(p => p.Select<T>(path, property, options));
+            => Leased(p => p.Select<T>(path, property, options));
 
+        private IObservable<TResult> Leased<TResult>(Func<IMeshQueryProvider, IObservable<TResult>> use)
+            => ModuleServiceProxy.Leased(forwarder, use, $"the query provider '{name}'");
+
+        // The synchronous member: the lease spans the call, which is all of its use.
         private TResult Call<TResult>(Func<IMeshQueryProvider, TResult> call)
         {
             using var lease = ModuleServiceProxy.TryLease(forwarder)

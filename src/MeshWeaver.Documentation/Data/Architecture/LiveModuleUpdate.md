@@ -417,10 +417,20 @@ instance, a mail sender whose constructor rejected the tenant id the configurati
 threw `Module … holds no service scope in this mesh`, `Host.StartAsync` failed, and the pod crash-looped
 on every roll while the module was reported only as contributing nothing. `MeshQuery` now binds a module's provider under
 ONE lease (`ModuleServiceProxy.TryLease`): the name is read from the generation's own instance, a proxy
-that cannot be leased is left out, every call is made under a lease taken for that call, and the fan-out
-skips a provider whose module is retired later. `AWithdrawnModulesQueryProviderLeavesTheQueryFanOutTest`
-pins it: `IMeshService` builds and a query answers. On the base, the test mesh did not start. Its
-published twin is the negative control: there the module's provider answers in the fan-out.
+that cannot be leased is left out, and the fan-out skips a provider whose module is retired later.
+`AWithdrawnModulesQueryProviderLeavesTheQueryFanOutTest` pins it: `IMeshService` builds and a query
+answers. On the base, the test mesh did not start. Its published twin is the negative control: there the
+module's provider answers in the fan-out.
+
+🚨 **The lease spans the SUBSCRIPTION, not the call.** A provider returns a COLD observable, and the fan-out
+subscribes to it later, through its query pool. A lease taken around the call and released when the call
+returned left the query running with no lease. A retirement landing in between then disposed the
+generation's services under it, and the whole query faulted. So `Matches` (synchronous) is leased for the
+call, and `Query`, `Autocomplete` and `Select` go through `ModuleServiceProxy.Leased`, which takes the lease
+on subscribe and releases it when the subscription terminates or is disposed. A retirement that starts
+mid-query waits for that release. `ModuleQueryProviderLeasedAcrossRetirementTest` retires the generation at
+the moment the module's query is subscribed. The query answers from live services and the unload follows.
+With the lease taken around the call only, the query errors with the fence's `ObjectDisposedException`.
 
 **A module service is LEASED, never checked and then called (MeshWeaver#6715).** "Does its module still
 serve?" followed by a call through the proxy can be split by a retirement: `ModuleContexts.Retire` removes
