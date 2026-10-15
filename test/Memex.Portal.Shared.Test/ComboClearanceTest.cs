@@ -185,6 +185,42 @@ public class ComboClearanceTest
         clearance.IsCleared.Should().BeFalse();
     }
 
+    // ── Retired modules (#3848, policy record-served-commit-on-install) ──
+
+    /// <summary>
+    /// A retired module is NAMED on the clearance sentence of every verdict and changes none of
+    /// them: Green still clears, Red still refuses, NotVerifiable still grants nothing.
+    /// </summary>
+    [Fact]
+    public void RetiredModules_AreNamed_AndChangeNoClearanceKind()
+    {
+        ImmutableList<RetiredModule> retired =
+        [
+            new RetiredModule { ModuleId = "PlatformUI" },
+            new RetiredModule { ModuleId = "DeepSign" },
+        ];
+
+        var green = ComboClearance.For(Tag, Green() with { RetiredModules = retired });
+        var red = ComboClearance.For(Tag, Red(("Widget", "compile failed")) with { RetiredModules = retired });
+        var unverifiable = ComboClearance.For(Tag, NotVerifiable("no report") with { RetiredModules = retired });
+
+        green.Kind.Should().Be(ComboClearanceKind.Cleared, "a retired module neither fails nor holds a Green");
+        red.Kind.Should().Be(ComboClearanceKind.Refused);
+        unverifiable.Kind.Should().Be(ComboClearanceKind.Unverifiable);
+        foreach (var clearance in new[] { green, red, unverifiable })
+            clearance.Reason.Should().Contain("Retired, not verifiable: 'PlatformUI', 'DeepSign'.",
+                "every verdict still names the modules it could not verify because they are gone");
+        red.Reason.Should().Contain("Widget").And.Contain("compile failed",
+            "and the failing module is still named apart");
+    }
+
+    /// <summary>NEGATIVE CONTROL — no retired modules, no retired sentence.</summary>
+    [Fact]
+    public void NoRetiredModules_NoRetiredSentence()
+    {
+        ComboClearance.For(Tag, Green()).Reason.Should().NotContain("Retired");
+    }
+
     // ── helpers ──
 
     private static ComboVerification Green() => new()

@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Net;
 using System.Net.Http;
 using System.Reactive.Linq;
@@ -163,7 +164,7 @@ public sealed class RegistryPackageSource : IPackageSource, IOriginatedPackageSo
             var wanted = paths as ISet<string> ?? new HashSet<string>(paths, StringComparer.Ordinal);
             return parsed with
             {
-                Files = parsed.Files.Where(f => wanted.Contains(f.RelativePath)).ToList(),
+                Files = parsed.Files.Where(f => wanted.Contains(f.RelativePath)).ToImmutableList(),
             };
         });
 }
@@ -231,7 +232,7 @@ public static class PluginRegistryPayloads
             PackageFetch.IsCommitSha(parsed?.Commit) ? parsed!.Commit : null);
     }
 
-    private sealed record FilesResponse(IReadOnlyList<PackageFile>? Files, string? Commit);
+    private sealed record FilesResponse(ImmutableList<PackageFile>? Files, string? Commit);
 }
 
 /// <summary>

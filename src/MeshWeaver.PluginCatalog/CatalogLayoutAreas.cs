@@ -858,7 +858,7 @@ public static partial class CatalogLayoutAreas
                         : Observable.Return<ModuleSet?>(null))
                     .Select(_ => result));
 
-        // 🚨 MeshWeaver#3848 (decision "Record commit on install"): the record states the EXACT
+        // 🚨 MeshWeaver#3848 (policy `record-served-commit-on-install`): the record states the EXACT
         // commit the source served (PackageFetch.InstalledFromRef), never the moving ref it was
         // asked for — the combo verifier fetches the installed content at that commit. A source
         // that names no commit records the requested ref, as before.
@@ -1218,10 +1218,17 @@ public static partial class CatalogLayoutAreas
         PackageManifest record, ILogger? logger, string? authorizingUserId)
     {
         var manifestPath = $"{pkg.Id}/{ModuleManifest.FileName}";
-        return source.FetchPackageFiles(pkg, sourceRef, [manifestPath])
-            .SelectMany(files =>
+        // 🚨 ONE SNAPSHOT for the manifest and the delta (MeshWeaver#6718). `sourceRef` is a MOVING
+        // ref; read twice, it can resolve to commit A for the manifest and to commit B for the
+        // delta, and the record then pairs A's module version and file map with B's files and B's
+        // `installedFromRef`. So the first read's commit becomes the ref of the second read, and a
+        // second read the source answers at any other commit is refused (SameSnapshot) — the
+        // caller falls back to a full install, which reads manifest and files in one fetch.
+        return source.FetchPackage(pkg, sourceRef, [manifestPath])
+            .SelectMany(manifestRead =>
             {
-                var newManifest = files
+                var snapshot = SnapshotOf(manifestRead);
+                var newManifest = manifestRead.Files
                     .Where(f => ModuleManifest.IsManifestPath(f.RelativePath))
                     .Select(f => ModuleManifest.TryParse(f.Content, logger))
                     .FirstOrDefault(m => m is not null);
@@ -1355,13 +1362,51 @@ public static partial class CatalogLayoutAreas
                         // the read is what names the commit the updated record states
                         // (MeshWeaver#3848); restamped without it, the record would state only the
                         // moving ref again. An empty path set moves no file blobs.
-                        return source.FetchPackage(pkg, sourceRef, wanted)
+                        return source.FetchPackage(pkg, snapshot ?? sourceRef, wanted)
+                            .Do(fetched => SameSnapshot(pkg.Id, snapshot, fetched))
                             .Do(fetched => EnsureFetchComplete(pkg.Id, wanted, fetched.Files, logger))
                             .SelectMany(fetched => PackageInstaller.InstallNodeRepoDelta(
                                 hub, pkg, newManifest, fetched.Files, removedNodePaths,
-                                fetched.InstalledFromRef(sourceRef), logger, authorizingUserId));
+                                // 🚨 The record states the MANIFEST's commit, never the delta's:
+                                // with a snapshot, SameSnapshot has just proved the delta was
+                                // served at it; without one (the manifest read named no commit —
+                                // an old registry mid-rollout) nothing ties the delta's commit to
+                                // the manifest, so the record keeps the requested ref rather than
+                                // name a commit the manifest may not have come from (#6718).
+                                snapshot ?? sourceRef, logger, authorizingUserId));
                     });
             });
+    }
+
+    /// <summary>
+    /// The commit the incremental update's FIRST read (the manifest) was served at — the snapshot
+    /// its second read (the delta) is pinned to (MeshWeaver#6718). <c>null</c> when the source
+    /// names no commit (a registry that predates MeshWeaver#3848, a source with no git snapshot
+    /// behind it): both reads then ask for the moving ref, as before, and nothing can tell a
+    /// straddle apart. Pure.
+    /// </summary>
+    internal static string? SnapshotOf(PackageFetch manifestRead) =>
+        PackageFetch.IsCommitSha(manifestRead.Commit) ? manifestRead.Commit : null;
+
+    /// <summary>
+    /// 🚨 <b>The delta must come from the manifest's snapshot</b> (MeshWeaver#6718). The delta is
+    /// asked for AT <paramref name="snapshot"/>; a source that serves another commit anyway — a
+    /// registry that ignores the requested ref and answers its configured one, which has moved —
+    /// would hand over B's files under A's manifest. Refused, naming both commits: the caller
+    /// catches it and falls back to a full install, which reads manifest and files in ONE fetch. A
+    /// delta read that names no commit after the manifest read named one is refused too: it cannot
+    /// show it is the same snapshot.
+    /// </summary>
+    internal static void SameSnapshot(string packageId, string? snapshot, PackageFetch delta)
+    {
+        if (snapshot is null
+            || string.Equals(delta.Commit, snapshot, StringComparison.OrdinalIgnoreCase))
+            return;
+        throw new InvalidOperationException(
+            $"Package '{packageId}': the manifest was read at commit {snapshot} but the delta was "
+            + $"served at {delta.Commit ?? "an unnamed commit"} — the source moved between the two "
+            + "reads and did not serve the requested snapshot (MeshWeaver#6718). Installing in full "
+            + "instead, from one read.");
     }
 
     /// <summary>

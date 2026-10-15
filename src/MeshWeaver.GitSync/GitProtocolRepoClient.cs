@@ -412,6 +412,11 @@ public sealed class GitProtocolRepoClient(
         => octokit.GetChangedPaths(repositoryUrl, baseSha, headSha, subdirectory, accessToken);
 
     /// <inheritdoc />
+    public IObservable<bool> IsAncestor(
+        string repositoryUrl, string ancestorSha, string descendantRef, string accessToken)
+        => octokit.IsAncestor(repositoryUrl, ancestorSha, descendantRef, accessToken);
+
+    /// <inheritdoc />
     public IObservable<GitHubBranchResult> CreateBranch(GitHubCreateBranchRequest request)
         => octokit.CreateBranch(request);
 

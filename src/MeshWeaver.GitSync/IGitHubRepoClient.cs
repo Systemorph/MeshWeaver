@@ -87,6 +87,30 @@ public interface IGitHubRepoClient
         => Observable.Return<IReadOnlyList<string>?>(null);
 
     /// <summary>
+    /// Whether commit <paramref name="ancestorSha"/> is <paramref name="descendantRef"/> itself or
+    /// one of its ancestors — i.e. whether that commit was ever PUBLISHED on that ref, as opposed to
+    /// a commit that exists in the repository only on another branch (an open pull request's head).
+    ///
+    /// <para>A plugin registry honours a consumer's snapshot token only when this answers
+    /// <see langword="true"/> (MeshWeaver#6718): the token pins the delta of an incremental install
+    /// to the commit its manifest was read at, and must never become a way to read a package's
+    /// folder at an unpublished commit.</para>
+    ///
+    /// <para>🚨 Answers <see langword="false"/> whenever ancestry cannot be ESTABLISHED — the
+    /// default implementation (no ancestry support), an unknown sha, a failed call. False is the
+    /// safe answer: the registry then serves its configured ref, and the consumer refuses the
+    /// mismatched snapshot and installs in full.</para>
+    /// </summary>
+    /// <param name="repositoryUrl">The repository.</param>
+    /// <param name="ancestorSha">The full commit sha to test.</param>
+    /// <param name="descendantRef">The ref it must be reachable from (a branch, <c>HEAD</c>, a sha).</param>
+    /// <param name="accessToken">The token to read the repository with; empty for anonymous.</param>
+    /// <returns>One value: whether the ancestry was established.</returns>
+    IObservable<bool> IsAncestor(
+        string repositoryUrl, string ancestorSha, string descendantRef, string accessToken)
+        => Observable.Return(false);
+
+    /// <summary>
     /// The repository's CANONICAL identity as GitHub reports it right now — the answer to
     /// "which repository is this url actually pointing at today".
     ///
