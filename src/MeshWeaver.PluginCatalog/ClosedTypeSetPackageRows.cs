@@ -198,13 +198,25 @@ internal static class ClosedTypeSetPackageRows
                 : Observable.Throw<bool>(new InvalidOperationException(
                     $"{delivery.Message.RejectionReason}: {delivery.Message.Error ?? "the delete was refused"}")))));
 
+    /// <summary>
+    /// The file → node-path mapping the install of <paramref name="manifest"/> applies
+    /// (<see cref="PackageInstaller.InstalledNodePathOf"/>). 🚨 Never the bare node-repo mapping for a
+    /// Content or Code package: those rebase under their target, and the reconcile deletes the
+    /// NodeType rows it finds at these paths as System — a path the install did not write names
+    /// someone else's node.
+    /// </summary>
+    /// <param name="manifest">The package, or its install record.</param>
+    /// <param name="parsers">The parser registry the install uses.</param>
+    internal static Func<string, string?> PathMapOf(PackageManifest manifest, FileFormatParserRegistry parsers) =>
+        file => PackageInstaller.InstalledNodePathOf(manifest, file, parsers);
+
     /// <summary>The node paths <paramref name="files"/> declare (non-node files dropped).</summary>
     /// <param name="files">Package-relative file paths.</param>
-    /// <param name="parsers">The parser registry the install uses.</param>
+    /// <param name="pathOf">The install's file → node-path mapping (<see cref="PathMapOf"/>).</param>
     internal static ImmutableSortedSet<string> NodePathsOf(
-        IEnumerable<string>? files, FileFormatParserRegistry parsers) =>
+        IEnumerable<string>? files, Func<string, string?> pathOf) =>
         (files ?? [])
-            .Select(f => PackageInstaller.NodePathForFile(f, parsers))
+            .Select(pathOf)
             .Where(p => !string.IsNullOrWhiteSpace(p))
             .Select(p => p!)
             .ToImmutableSortedSet(StringComparer.Ordinal);
@@ -212,13 +224,13 @@ internal static class ClosedTypeSetPackageRows
     /// <summary>The files among <paramref name="files"/> whose node is in <paramref name="paths"/>.</summary>
     /// <param name="files">Package-relative file paths.</param>
     /// <param name="paths">Node paths.</param>
-    /// <param name="parsers">The parser registry the install uses.</param>
+    /// <param name="pathOf">The install's file → node-path mapping (<see cref="PathMapOf"/>).</param>
     internal static ImmutableSortedSet<string> FilesOf(
-        IEnumerable<string>? files, IReadOnlyCollection<string> paths, FileFormatParserRegistry parsers)
+        IEnumerable<string>? files, IReadOnlyCollection<string> paths, Func<string, string?> pathOf)
     {
         var set = paths.ToImmutableHashSet(StringComparer.Ordinal);
         return (files ?? [])
-            .Where(f => PackageInstaller.NodePathForFile(f, parsers) is { } p && set.Contains(p))
+            .Where(f => pathOf(f) is { } p && set.Contains(p))
             .ToImmutableSortedSet(StringComparer.Ordinal);
     }
 
@@ -228,16 +240,16 @@ internal static class ClosedTypeSetPackageRows
     /// </summary>
     /// <param name="outcome">The reconcile outcome.</param>
     /// <param name="declaredFiles">The file map the record is stamped with.</param>
-    /// <param name="parsers">The parser registry the install uses.</param>
+    /// <param name="pathOf">The install's file → node-path mapping (<see cref="PathMapOf"/>).</param>
     internal static (IReadOnlyCollection<string>? Examined, IReadOnlyCollection<string>? Withheld) RecordInputs(
-        Outcome outcome, IEnumerable<string>? declaredFiles, FileFormatParserRegistry parsers)
+        Outcome outcome, IEnumerable<string>? declaredFiles, Func<string, string?> pathOf)
     {
         if (declaredFiles is null || (outcome.ReadPaths is null && outcome.WithheldPaths.Count == 0))
             return (null, null);
         var files = declaredFiles.ToArray();
         var examinedPaths = (outcome.ReadPaths ?? ImmutableSortedSet<string>.Empty)
             .Union(outcome.WithheldPaths);
-        return (FilesOf(files, examinedPaths, parsers), FilesOf(files, outcome.WithheldPaths, parsers));
+        return (FilesOf(files, examinedPaths, pathOf), FilesOf(files, outcome.WithheldPaths, pathOf));
     }
 
     /// <summary>

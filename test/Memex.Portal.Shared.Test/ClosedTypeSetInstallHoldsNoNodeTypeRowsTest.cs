@@ -272,6 +272,160 @@ public class ClosedTypeSetInstallHoldsNoNodeTypeRowsTest(ITestOutputHelper outpu
             "the content lane must record the withheld row, or the sweep counts it as owed");
     }
 
+    /// <summary>
+    /// A content package whose <see cref="PackageManifest.SourceFolder"/> and
+    /// <see cref="PackageManifest.TargetPartition"/> DIFFER: <c>Library/Widget.json</c> installs at
+    /// <c>Installed/Widget</c>. The reconcile deletes the NodeType rows it finds at the candidate
+    /// paths as System, so mapping the file the node-repo way (<c>Library/Widget</c>) would delete an
+    /// UNRELATED type in the source partition and miss the installed row. The falsifier is the
+    /// unrelated row: under the node-repo mapping it is gone after the install.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task AContentPackageRebasedUnderAnotherPartition_ReconcilesTheInstalledPath_NotTheSourcePath()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string source = "ClosedLib";
+        const string target = "ClosedLibInstalled";
+        var candidate = new PackageManifest
+        {
+            Id = source,
+            Name = source,
+            Kind = PackageKind.Content,
+            TargetPartition = target,
+            SourceFolder = source,
+            Version = "1.0.0",
+            InstalledFiles = ImmutableSortedDictionary.CreateRange(StringComparer.Ordinal,
+            [
+                new KeyValuePair<string, string>($"{source}/Widget.json", "bbb"),
+                new KeyValuePair<string, string>($"{source}/Item.json", "ccc"),
+                new KeyValuePair<string, string>($"{source}/Guide.md", "ddd"),
+            ]),
+        };
+        var parsers = new FileFormatParserRegistry(
+            Mesh.JsonSerializerOptions, Mesh.ServiceProvider.GetServices<IFileFormatParser>());
+        PackageInstaller.InstalledNodePathOf(candidate, $"{source}/Widget.json", parsers)
+            .Should().Be($"{target}/Widget", "the content lane rebases under its target partition");
+
+        var storage = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
+        // An UNRELATED, unclaimed NodeType row at the path the node-repo mapping would name.
+        await storage.Write(new MeshNode("Widget", source)
+            {
+                NodeType = MeshNode.NodeTypePath,
+                Name = "Unrelated",
+                State = MeshNodeState.Active,
+            }, Mesh.JsonSerializerOptions)
+            .Should().Within(TestTimeouts.WriteConvergence)
+            .Emit("the unrelated row must be stored before the install", ct);
+        (await Stored(Mesh, $"{source}/Widget", ct)).Should().BeTrue("the unrelated row is the subject");
+
+        PackageFile[] files =
+        [
+            new($"{source}/Widget.json", $$"""
+                { "id": "Widget", "nodeType": "NodeType", "name": "Widget", "state": "Active", "content": { "configuration": "config => config" } }
+                """),
+            new($"{source}/Item.json", $$"""
+                { "id": "Item", "nodeType": "{{target}}/Widget", "name": "Item", "state": "Active" }
+                """),
+            new($"{source}/Guide.md", "# Guide"),
+        ];
+        await PackageInstaller.Install(Mesh, candidate, files, "HEAD", Logger())
+            .Should().Within(180.Seconds())
+            .Emit("the content install must complete", ct);
+
+        (await Stored(Mesh, $"{source}/Widget", ct)).Should().BeTrue(
+            "a NodeType row the package never wrote is not the package's to remove");
+        (await Stored(Mesh, $"{target}/Widget", ct)).Should().BeFalse(
+            "the package's own row is withheld at the path the install would have written");
+        (await Stored(Mesh, $"{target}/Item", ct)).Should().BeTrue(
+            "a content instance typed by the withheld row still installs (#6627) — the per-node create "
+            + "would refuse it as InvalidNodeType, because the row it reads for the type is withheld");
+        var node = await storage.Read($"{PackageInstaller.InstalledPartition}/{source}", Mesh.JsonSerializerOptions)
+            .Take(1).DefaultIfEmpty(null)
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("storage must answer for the install record", ct);
+        node!.ContentAs<PackageManifest>(Mesh.JsonSerializerOptions)!.WithheldFiles
+            .Should().Equal([$"{source}/Widget.json"], "the withheld FILE is recorded through the same mapping");
+    }
+
+    /// <summary>
+    /// A delta that ADDS an instance typed by a row this closed host withholds. The per-node create
+    /// checks the type against the store, where the row is by design absent, so without the bulk
+    /// route the delta faults with <c>InvalidNodeType</c> — a package update that can never land.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task ADeltaAddingAnInstanceOfAWithheldType_InstallsIt()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await Install(Mesh, Logger(), ct);
+        (await Record(Mesh, ct))!.WithheldFiles.Should().Equal([TypeFile],
+            "the premise: the earlier install recorded the withheld row");
+
+        const string added = $"{Package}/Item2";
+        var newManifest = new ModuleManifest
+        {
+            Module = Package,
+            ModuleVersion = "fedcba9876543210",
+            Version = "1.0.1",
+            Files = ImmutableSortedDictionary.CreateRange(StringComparer.Ordinal,
+            [
+                new KeyValuePair<string, string>($"{Package}/index.json", "aaa"),
+                new KeyValuePair<string, string>(TypeFile, "bbb"),
+                new KeyValuePair<string, string>($"{Package}/Item.json", "ccc"),
+                new KeyValuePair<string, string>($"{Package}/Item2.json", "fff"),
+                new KeyValuePair<string, string>($"{Package}/Guide.md", "ddd"),
+            ]),
+        };
+        await PackageInstaller.InstallNodeRepoDelta(
+                Mesh, Candidate(), newManifest,
+                [new PackageFile($"{Package}/Item2.json", $$"""
+                    { "id": "Item2", "namespace": "{{Package}}", "path": "{{added}}", "nodeType": "{{TypePath}}", "name": "Item2", "state": "Active" }
+                    """)],
+                Array.Empty<string>(), "HEAD", Logger())
+            .Should().Within(180.Seconds())
+            .Emit("the incremental update adding a typed instance must complete", ct);
+
+        (await Stored(Mesh, added, ct)).Should().BeTrue("the new instance of the withheld type installs");
+        (await Stored(Mesh, TypePath, ct)).Should().BeFalse("the row stays withheld");
+    }
+
+    /// <summary>
+    /// A delta that changes only a type's <c>Source/</c> file. Its release target is DERIVED from the
+    /// written path (the owning type), which on a closed host is the withheld row — so no release
+    /// may be requested there: the flip is a point write to an absent node. The row must stay absent
+    /// and the source must land.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task ASourceOnlyDelta_RequestsNoReleaseOfTheWithheldRow()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await Install(Mesh, Logger(), ct);
+        const string sourceFile = $"{TypePath}/Source/Thing.cs";
+        var newManifest = new ModuleManifest
+        {
+            Module = Package,
+            ModuleVersion = "fedcba9876543211",
+            Version = "1.0.2",
+            Files = ImmutableSortedDictionary.CreateRange(StringComparer.Ordinal,
+            [
+                new KeyValuePair<string, string>($"{Package}/index.json", "aaa"),
+                new KeyValuePair<string, string>(TypeFile, "bbb"),
+                new KeyValuePair<string, string>($"{Package}/Item.json", "ccc"),
+                new KeyValuePair<string, string>($"{Package}/Guide.md", "ddd"),
+                new KeyValuePair<string, string>(sourceFile, "sss"),
+            ]),
+        };
+        await PackageInstaller.InstallNodeRepoDelta(
+                Mesh, Candidate(), newManifest,
+                [new PackageFile(sourceFile, "public class Thing { }")],
+                Array.Empty<string>(), "HEAD", Logger())
+            .Should().Within(180.Seconds())
+            .Emit("the source-only update must complete", ct);
+
+        (await Stored(Mesh, $"{TypePath}/Source/Thing", ct)).Should().BeTrue("the source still installs");
+        (await Stored(Mesh, TypePath, ct)).Should().BeFalse(
+            "no release flip may write the withheld row back");
+    }
+
     [Fact(Timeout = 300_000)]
     public async Task TheBootRepairPass_RemovesARowLeftBehind()
     {

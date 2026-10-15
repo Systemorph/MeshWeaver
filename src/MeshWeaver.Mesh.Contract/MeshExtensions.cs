@@ -5033,7 +5033,8 @@ public static class MeshExtensions
     /// with <see cref="DeleteNodeRequest.Recursive"/>. Deliberately the strict node-type test, not
     /// a "carries type content" one: a <c>Space</c> partition ROOT can carry type content, and a
     /// row-only delete of it would run the partition-drop handler over a subtree the request asked
-    /// to keep.
+    /// to keep. For the same reason a partition root is refused even when it IS a NodeType row (a
+    /// top-level type — <see cref="PartitionDefinition.IsPartitionRoot"/> is structural).
     /// </summary>
     /// <param name="path">The delete's target path.</param>
     /// <param name="rootNode">The target as read from storage.</param>
@@ -5047,6 +5048,15 @@ public static class MeshExtensions
                     $"Cannot delete '{path}': a delete cannot both remove the subtree (Recursive) and keep it "
                     + "(KeepDescendants). Nothing was deleted.", LogLevel.Error)
                 .WithKey("activity.delete.keepDescendantsContradiction", ("path", path));
+        // 🚨 A namespace-less, one-segment node is a partition ROOT whatever its NodeType
+        // (PartitionDefinition.IsPartitionRoot) — a top-level NodeType row included. The
+        // partition-drop post-deletion handler matches it STRUCTURALLY and would drop the very
+        // store this request asked to keep, so the NodeType marker cannot admit it.
+        if (PartitionDefinition.IsPartitionRoot(rootNode))
+            return new LogMessage(
+                    $"Cannot delete '{path}' alone (KeepDescendants): it is a partition root, and deleting it "
+                    + "drops the partition's store with everything under it. Nothing was deleted.", LogLevel.Error)
+                .WithKey("activity.delete.keepDescendantsPartitionRoot", ("path", path));
         if (string.Equals(rootNode.NodeType, MeshNode.NodeTypePath, StringComparison.OrdinalIgnoreCase))
             return null;
         var nodeType = rootNode.NodeType ?? string.Empty;

@@ -75,6 +75,35 @@ public class RowOnlyDeleteIsForNodeTypeRowsTest(ITestOutputHelper output) : Mono
         (await Exists($"{type.Path}/Note", ct)).Should().BeTrue("what lives under it is kept");
     }
 
+    /// <summary>THE FALSIFIER for a top-level type: a namespace-less, one-segment NodeType row is a
+    /// partition ROOT (<see cref="PartitionDefinition.IsPartitionRoot"/>), so a row-only delete of
+    /// it would run the partition-drop handler over the store the request asked to keep. Refused
+    /// before any side effect; the record under it stays.</summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ARowOnlyDelete_OfATopLevelNodeTypeRow_IsRefused_AsAPartitionRoot()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var type = new MeshNode($"RowOnlyTopType{System.Guid.NewGuid():N}"[..24])
+        {
+            Name = "RowOnlyTopType",
+            NodeType = MeshNode.NodeTypePath,
+            State = MeshNodeState.Active,
+        };
+        PartitionDefinition.IsPartitionRoot(type).Should().BeTrue("the fixture must be the shape under test");
+        MeshExtensions.RowOnlyDeleteRefusal(type.Path, type, new DeleteNodeRequest(type.Path) { KeepDescendants = true })!
+            .MessageKey.Should().Be("activity.delete.keepDescendantsPartitionRoot");
+        await Write(type, ct);
+        await Write(new MeshNode("Note", type.Path) { Name = "Note", NodeType = "Markdown" }, ct);
+
+        var response = await Delete(new DeleteNodeRequest(type.Path) { KeepDescendants = true }, ct);
+        Output.WriteLine($"[delete] success={response.Success} reason={response.RejectionReason} error={response.Error}");
+
+        response.Success.Should().BeFalse("a partition root is never removed alone");
+        response.RejectionReason.Should().Be(NodeDeletionRejectionReason.ValidationFailed);
+        (await Exists(type.Path, ct)).Should().BeTrue("nothing was deleted");
+        (await Exists($"{type.Path}/Note", ct)).Should().BeTrue("the partition's content is kept");
+    }
+
     /// <summary>Recursive and KeepDescendants contradict each other; the refusal carries its own
     /// localization key, never an English sentence inside another key's argument.</summary>
     [Fact(Timeout = 120_000)]

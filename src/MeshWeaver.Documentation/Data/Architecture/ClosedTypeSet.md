@@ -97,8 +97,23 @@ container environment variable, next to the module that registers its types.
    maps to no installed file, so the pass derives it from the record
    (`PackageInstaller.SynthesizedNodeTypePathOf`) rather than from the declared files (#6751).
 
-   `KeepDescendants` is **refused unless the stored target is a NodeType definition**, and refused
-   together with `Recursive`, each with its own localized message and before any side effect: on
+   Three consequences of a row being absent, each handled where it bites. **Paths:** the removal
+   reads candidates through the install's OWN file→node mapping (`PackageInstaller.InstalledNodePathOf`):
+   a content or code package strips its `SourceFolder` and rebases under its target, so
+   `Library/Widget.json` with `TargetPartition: Installed` is `Installed/Widget` — reading it as
+   `Library/Widget` would delete, as System, an unrelated type in the source partition. **Creates:**
+   the per-node create checks a type against the store, where a withheld row is absent by design,
+   so a NEW instance typed by one of the package's withheld types (a delta adding it, a content
+   instance) is created through the bulk lane exactly as the full install creates every new
+   instance; updates that keep a type are not type-checked. The record's `WithheldFiles` is what
+   tells a later delta which types are the package's own. **Releases:** a delta derives release
+   targets from written paths (the owner of a changed `Source/` file), which on a closed host name
+   the removed row, so no release is requested there at all — a flip would be a point write to an
+   absent node.
+
+   `KeepDescendants` is **refused unless the stored target is a NodeType definition**, refused for
+   a **partition root** even when it is one (a top-level, namespace-less type — the partition-drop
+   handler matches the shape, not the type), and refused together with `Recursive`, each with its own localized message and before any side effect: on
    any other node the post-deletion handlers would still run (a partition root's would drop the
    store the request asked to keep) and an ordinary parent's children would be orphaned. A row-only
    delete enumerates nothing under its path — neither for the plan nor for the drain's

@@ -755,7 +755,8 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
                 var files = record.Manifest.InstalledFiles?.Keys.ToArray();
                 // A Code package's NodeType row is SYNTHESIZED by the install, not shipped as a
                 // file, so the declared files can never name it — derive it (#6751).
-                var candidates = ClosedTypeSetPackageRows.NodePathsOf(files, parsers);
+                var pathOf = ClosedTypeSetPackageRows.PathMapOf(record.Manifest, parsers);
+                var candidates = ClosedTypeSetPackageRows.NodePathsOf(files, pathOf);
                 if (PackageInstaller.SynthesizedNodeTypePathOf(record.Manifest) is { } synthesized)
                     candidates = candidates.Add(synthesized);
                 return ClosedTypeSetPackageRows.Reconcile(
@@ -763,7 +764,7 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
                     .SelectMany(outcome =>
                     {
                         var (examined, withheldNow) =
-                            ClosedTypeSetPackageRows.RecordInputs(outcome, files, parsers);
+                            ClosedTypeSetPackageRows.RecordInputs(outcome, files, pathOf);
                         var previous = record.Manifest.WithheldFiles;
                         var next = ClosedTypeSetPackageRows.MergeWithheldFiles(
                             true, previous, examined, withheldNow, files);
