@@ -826,23 +826,32 @@ public partial class MeshOperations
     /// Parses the MCP-documented area-read route <c>{nodePath}/area/{Name[/Id]}</c>.
     /// The marker is the LAST exact <c>area</c> segment (ordinal, the documented casing) so
     /// a node path that itself contains an <c>area</c> segment still yields the deepest —
-    /// i.e. correct — node-path/area split. The legacy colon form <c>{path}/area:Name</c> is
-    /// deliberately NOT parsed here: it keeps flowing through <see cref="TryResolveUnifiedPath"/>
-    /// unchanged (it supports UCR-special forms like <c>area:content:file</c> that map to
-    /// <c>$Content</c> areas downstream).
+    /// i.e. correct — node-path/area split.
+    /// <para>Only an <c>area</c> segment that lies WHOLLY BEFORE the first <c>':'</c> marks the
+    /// route (#6815). The id after <c>{Name}/</c> is free text — a reference id like
+    /// <c>url=https://github.com/x</c> carries colons — so a colon anywhere after the marker is
+    /// part of the id, never a reason to drop the route. A colon at or before the marker is the
+    /// legacy colon form (<c>{path}/area:Name</c>, <c>{path}/data:…</c>, <c>area:content:file</c>
+    /// for the <c>$Content</c> areas): it is deliberately NOT parsed here and keeps flowing through
+    /// <see cref="TryResolveUnifiedPath"/> unchanged.</para>
     /// </summary>
-    private static bool TryParseAreaRoute(
+    internal static bool TryParseAreaRoute(
         string resolvedPath, out string nodePath, out string? area, out string? id)
     {
         nodePath = string.Empty;
         area = null;
         id = null;
 
-        if (resolvedPath.Contains(':'))
-            return false; // legacy colon form — handled by TryResolveUnifiedPath
+        // The segments eligible as the marker: every segment COMPLETED before the first colon.
+        // With a colon, the last segment of the colon-free prefix is the one the colon cuts
+        // (`area` in `{path}/area:Name`), so it is excluded — that is the legacy colon form.
+        var colon = resolvedPath.IndexOf(':');
+        var prefix = colon < 0 ? resolvedPath : resolvedPath[..colon];
+        var prefixSegments = prefix.Split('/');
+        var lastEligible = colon < 0 ? prefixSegments.Length - 1 : prefixSegments.Length - 2;
 
         var segments = resolvedPath.Split('/');
-        for (var i = segments.Length - 1; i > 0; i--)
+        for (var i = lastEligible; i > 0; i--)
         {
             if (!string.Equals(segments[i], "area", StringComparison.Ordinal))
                 continue;
