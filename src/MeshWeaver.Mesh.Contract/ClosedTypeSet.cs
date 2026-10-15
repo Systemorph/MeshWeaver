@@ -39,6 +39,23 @@ public sealed record ClosedTypeSet(bool IsClosed)
     public static readonly ClosedTypeSet Closed = new(true);
 
     /// <summary>
+    /// The phrase every <see cref="RefusalFor"/> sentence carries — the one place the refusal's
+    /// wording and its recognition (<see cref="IsRefusal"/>) are tied together.
+    /// </summary>
+    public const string RefusalMarker = "is not part of this image's closed type set";
+
+    /// <summary>
+    /// True when <paramref name="error"/> is a closed-set refusal (<see cref="RefusalFor"/>) — a
+    /// verdict about this process's switch, not about the type's source, so no platform build,
+    /// module set or source edit can change it (#6627).
+    /// </summary>
+    /// <param name="error">A recorded compilation error, or <c>null</c>.</param>
+    public static bool IsRefusal(string? error) =>
+        !string.IsNullOrEmpty(error)
+        && error.Contains(RefusalMarker, StringComparison.Ordinal)
+        && error.Contains(ConfigKey + "=true", StringComparison.Ordinal);
+
+    /// <summary>
     /// The named refusal a closed mesh gives for a type the image does not register — one sentence,
     /// shared by the activation overlay, the compile park and the logs, so every surface reports the
     /// same cause.
@@ -46,7 +63,7 @@ public sealed record ClosedTypeSet(bool IsClosed)
     /// <param name="nodeType">The type that was asked for.</param>
     /// <param name="instancePath">The node that asked for it, when there is one.</param>
     public static string RefusalFor(string nodeType, string? instancePath = null) =>
-        $"NodeType '{nodeType}' is not part of this image's closed type set ({ConfigKey}=true)"
+        $"NodeType '{nodeType}' {RefusalMarker} ({ConfigKey}=true)"
         + (string.IsNullOrEmpty(instancePath) ? "" : $" (referenced by '{instancePath}')")
         + ". This process activates only NodeTypes its image registers in code; a type definition "
         + "stored in the database is never compiled, adopted or served here. Register the type in "

@@ -1311,7 +1311,16 @@ public static partial class CatalogLayoutAreas
                         // re-examined and drops out of the record.
                         var restore = InstallCompleteness.FilesToRestore(
                             newManifest.Files, changedContent, present, parsers,
-                            record.UnreadableFiles);
+                            // A NodeType row a closed type set withholds (#6627) is absent by
+                            // design — restoring it would fetch a file the install never writes.
+                            // Only on a CLOSED host: a set an earlier closed run recorded is owed
+                            // on an open one, and is exactly what this restore must fetch.
+                            hub.ServiceProvider.IsClosedTypeSet()
+                                && record.WithheldFiles is { Count: > 0 } withheldFiles
+                                ? (record.UnreadableFiles
+                                        ?? ImmutableSortedSet<string>.Empty.WithComparer(StringComparer.Ordinal))
+                                    .Union(withheldFiles)
+                                : record.UnreadableFiles);
 
                         // 🚨 The SAME rule the changed-file guard above applies, and for the same
                         // reason: a package's shared Source/Test are compile inputs for EVERY type
