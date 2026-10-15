@@ -69,6 +69,17 @@ Three properties follow, and each is pinned by `InstanceKeyLiveResolutionTest`
    verdict cache any more, so there is nothing to invalidate: `Invalidate(keyHash)` is retained as a
    no-op for callers compiled outside this repository, and `CacheDuration` / `NegativeCacheDuration`
    are gone.
+
+   🚨 **"Lands in the mirror" is not the same moment as "the write completed" (#6818).** A write's
+   terminal is the OWNER's ack; the mirror advances on the owner's commit echo — a different message,
+   to a different hub, with nothing ordering the two. So a writer whose completion promises "the
+   next request decides with this" must wait for the mirror to carry the write, not just for the
+   ack. `InstancePlanService.SetPlan` (a plan promotion) does exactly that: it completes only once
+   `GetMeshNodeStream(path)` shows a version past the one the write was diffed against, or the new
+   plan itself. On every OTHER replica the change is seen when that replica's change feed delivers
+   it — eventually, not at the writer's completion. `PluginBundlePlanTest
+   .PromotingTheInstance_WidensTheNextRequest` pins it by holding the owner's echo back at its
+   outbound pipeline: the promotion must not report done while the mirror still says `free`.
 3. **An unknown key never opens a point read on an absent path.** The listing is empty-on-absent, so
    the definitive 401 is served from memory and the storm breaker is never armed — the failure mode
    that page's table warns about cannot start here.
