@@ -3371,6 +3371,46 @@ public class MessageService : IMessageService
         DrainDeferredDeliveries((delivery, gatesAtDeferral) =>
         {
             discarded++;
+            // 🚨 A REPLY ADDRESSED TO THIS HUB IS NOBODY ELSE'S WORK, AND ITS SENDER AWAITS NOTHING
+            // (#6791). A delivery carrying PostOptions.RequestId is an ANSWER (the same presence
+            // test RefusesIntake's tiers use), and a parked one is a reply to a request THIS
+            // address issued — by this activation's own init, or by the activation this one
+            // replaced. Its only possible reader is this hub's pending-response registry, and that
+            // reader is provably absent: the deferral path lets every reply with a LIVE callback
+            // through the gates (MessageHub.IsAwaitedResponse), so a reply that was parked had none
+            // at deferral, and the registry is cancelled in this same disposal anyway.
+            //
+            // So both halves of the Error below were false for it. "Accepted work … discarded":
+            // nobody outside is waiting on this hub for it. "The sender is answered ShuttingDown":
+            // an on-target delivery is unpacked BEFORE the deferral decision, so a parked reply is
+            // typed and not an IRequest, and NackThroughParent declines it (not-awaited) — no
+            // NACK was ever posted. Nor should one be: the sender is the REPLIER, which registered
+            // no callback for its own reply's id, so a NACK would land as an UN-awaited
+            // DeliveryFailure that answers no question (PortalErrorSink pops those as a modal on
+            // a portal hub). So this branch posts nothing, whatever the payload's shape — a
+            // RawJson pass-through reply included, which IsAwaitedBySender would otherwise accept.
+            //
+            // MEASURED (#6791): every fingerprint folded into that issue during one module
+            // live-update recycle wave was a GetDataResponse parked behind
+            // [DataContextInit,MeshNodeInit] on a hub the cascade reached mid-bring-up.
+            //
+            // Still REPORTED, at Debug, with the same facts. A DeliveryFailure never gets here (it
+            // passes every gate), and a correlated reply refused at INTAKE is a different case:
+            // that one is reported to the requester it was FOR (ScheduleNotify, #4170).
+            if (delivery.Properties.ContainsKey(PostOptions.RequestId))
+            {
+                logger.LogDebug(DisposalDiscardedDeferredDelivery,
+                    "[DISPOSE-DISCARD] Hub {Address} is disposing with {MessageType} (id={MessageId}, from {Sender}) "
+                    + "still deferred; initialization gates closed at deferral: [{Gates}]. RunLevel={RunLevel}; "
+                    + "teardown {Disposal}. It is a REPLY to a request this address issued, and no callback "
+                    + "awaited it when it was parked; the only reader it could have had is this hub's own "
+                    + "pending-response registry, cancelled in this disposal. The replier awaits nothing, so "
+                    + "no answer is posted to it. Teardown-normal; nobody is stranded.",
+                    Address, delivery.Message.GetType().Name, delivery.Id, delivery.Sender,
+                    gatesAtDeferral, hub.RunLevel, disposal);
+                requestFates?.Find(delivery.Id)?.Add("NACK_DECLINED reason=reply-to-disposing-hub", Address);
+                return;
+            }
             if (delivery.Sender is null || delivery.Sender.Equals(Address))
                 logger.LogDebug(DisposalDiscardedDeferredDelivery,
                     "[DISPOSE-DISCARD] Hub {Address} is disposing with its OWN {MessageType} "
