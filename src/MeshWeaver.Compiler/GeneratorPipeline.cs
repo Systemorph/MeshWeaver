@@ -80,6 +80,28 @@ public static class GeneratorPipeline
                    Path.GetFileName(p), BuiltInScopeGeneratorId + ".dll", StringComparison.OrdinalIgnoreCase))];
 
     /// <summary>
+    /// The assemblies the stage-1 CONTENT KEY hashes for the generator half: the
+    /// <see cref="EffectiveGeneratorPaths"/> plus, for every candidate whose package ships a
+    /// RID-specific runtime group, the runtime asset discovery actually LOADS in its place
+    /// (<see cref="SourceGeneratorLoader.RuntimeAssetOf"/>) — two runtime helpers behind one compile
+    /// stub can make a generator emit different source, so they must not share a key. Identical to
+    /// <see cref="EffectiveGeneratorPaths"/> for every package without a <c>runtimes/</c> folder.
+    /// Shared by the bake, the runtime compile and the re-evaluation lane.
+    /// </summary>
+    internal static IReadOnlyList<string> DigestedGeneratorPaths(IReadOnlyList<string> generatorAssemblyPaths)
+    {
+        var effective = EffectiveGeneratorPaths(generatorAssemblyPaths);
+        List<string>? runtime = null;
+        foreach (var path in effective)
+        {
+            if (SourceGeneratorLoader.RuntimeAssetOf(path) is { } asset
+                && !string.Equals(asset, path, StringComparison.OrdinalIgnoreCase))
+                (runtime ??= []).Add(asset);
+        }
+        return runtime is null ? effective : [.. effective, .. runtime];
+    }
+
+    /// <summary>
     /// Runs the built-in scope generator plus any OTHER generator a node <c>#r</c>'d over
     /// <paramref name="compilation"/>. A node's own
     /// <c>#r "nuget:MeshWeaver.BusinessRules.Generator"</c> is filtered OUT — otherwise the same
