@@ -55,6 +55,16 @@ if tool == 'helm':
         sys.exit(1)
     sys.exit(0)
 # kubectl
+if 'configmap' in line or 'replace' in args:
+    import time
+    if 'create configmap' in line:
+        sys.exit(1 if ('locked' in scenario or 'stale-lock' in scenario) else 0)
+    if 'get configmap' in line:
+        if 'locked' in scenario: out('other-run %d 41' % (time.time() + 300)); sys.exit(0)
+        if 'stale-lock' in scenario and 'replace' not in open(os.environ['CALLS']).read():
+            out('dead-run %d 41' % (time.time() - 10)); sys.exit(0)
+        out('this-run'); sys.exit(0)                  # the release check reads only the holder
+    sys.exit(0)
 if 'apply' in args:
     with open(os.environ['MANIFEST'], 'w') as f: f.write(sys.stdin.read())
     sys.exit(0)
@@ -67,7 +77,8 @@ if 'get deploy loki-prometheus-server' in line or 'get deploy/loki-prometheus-se
     if 'go-template' in line: out('app=prometheus,component=server,release=loki,')
     elif '.image' in line: out('quay.io/prometheus/prometheus:v2.41.0')
     elif 'nodeSelector' in line: out('{"agentpool":"system"}')
-    elif 'tolerations' in line: pass
+    elif 'tolerations' in line:
+        if 'tolerations-read-fails' in scenario: sys.exit(1)
     elif 'claimName' in line: out('loki-prometheus-server')
     elif 'replicas' in line: out('1')
     sys.exit(0)
@@ -138,7 +149,8 @@ def run_installer(*scenario, budget=None, target=None):
         calls, manifest = root / 'calls', root / 'manifest'
         env = dict(os.environ, PATH=str(root) + os.pathsep + os.environ['PATH'],
                    GRAFANA_PW='synthetic-test-only', VALUES=str(root / 'values.yaml'),
-                   SCENARIO=','.join(scenario), CALLS=str(calls), MANIFEST=str(manifest))
+                   SCENARIO=','.join(scenario), CALLS=str(calls), MANIFEST=str(manifest),
+                   OBS_LOCK_HOLDER='this-run')
         if budget is not None:
             env['OBS_BUDGET_SECONDS'] = str(budget)
         if target is not None:
@@ -208,6 +220,32 @@ class OrderAndDeadlineTest(unittest.TestCase):
         self.assertIn('could not read the state of release', run.stderr)
         self.assertLess(elapsed, 25, elapsed)
         self.assertEqual(run.index('helm upgrade'), -1, run.calls)
+
+
+class InstallLockTest(unittest.TestCase):
+    def test_the_lock_is_taken_first_and_released_last(self):
+        run = run_installer('pending-upgrade', 'out-of-space')
+        self.assertEqual(run.code, 0, run.stderr)
+        take = run.index('create configmap loki-observability-install-lock')
+        self.assertEqual(take, min(i for i, c in enumerate(run.calls) if c.startswith('kubectl') and 'namespace' not in c))
+        self.assertIn('delete configmap loki-observability-install-lock', run.calls[-1])
+
+    def test_an_overlapping_installation_is_refused_before_it_touches_anything(self):
+        # The live holder's revision is `pending-upgrade` and its cleaner is running: the second
+        # run must neither roll back nor delete nor upgrade — and must not release a lock it lacks.
+        run = run_installer('locked', 'pending-upgrade', 'out-of-space', 'leftover-stuck')
+        self.assertEqual(run.code, 1, run.stdout)
+        self.assertIn('refusing to overlap', run.stderr)
+        for verb in ('helm rollback', 'helm upgrade', 'delete pod', 'scale deploy', 'apply -f -',
+                     'delete configmap'):
+            self.assertEqual(run.index(verb), -1, (verb, run.calls))
+
+    def test_an_expired_lock_is_taken_over_by_compare_and_swap(self):
+        run = run_installer('stale-lock')
+        self.assertEqual(run.code, 0, run.stderr)
+        self.assertIn('expired', run.stdout)
+        self.assertGreaterEqual(run.index('replace -f -'), 0, run.calls)
+        self.assertLess(run.index('replace -f -'), run.index('helm upgrade'), run.calls)
 
 
 class TargetValidationTest(unittest.TestCase):
@@ -364,6 +402,13 @@ class FullTsdbTest(unittest.TestCase):
         # diagnostics were collected before the delete
         self.assertLess(run.index('describe pod loki-prometheus-tsdb-recovery'),
                         max(i for i, c in enumerate(run.calls) if 'delete pod loki-prometheus-tsdb-recovery' in c))
+
+    def test_a_failed_scheduling_read_stops_before_the_server_is_stopped(self):
+        run = run_installer('out-of-space', 'tolerations-read-fails')
+        self.assertEqual(run.code, 1, run.stdout)
+        self.assertIn('not recovering blind', run.stderr)
+        self.assertEqual(run.index('scale deploy'), -1, run.calls)
+        self.assertEqual(run.index('apply -f -'), -1, run.calls)
 
     def test_failed_recovery_is_red_and_scales_back(self):
         run = run_installer('out-of-space', 'recovery-fails')

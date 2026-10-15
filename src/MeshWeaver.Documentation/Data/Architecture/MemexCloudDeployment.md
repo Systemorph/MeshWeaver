@@ -234,6 +234,8 @@ The observability stack is folded into the standard deploy: export `GRAFANA_PW` 
 
 Every helm and kubectl call is bounded by what is left of that deadline, too; a caller that runs the installer inside a longer invoke passes what is left of ITS cap as `OBS_BUDGET_SECONDS` (`deploy.sh` does).
 
+Only one installer runs per cluster at a time: it first takes a lock (`monitoring/loki-observability-install-lock`, a ConfigMap created atomically, carrying an expiry past which its holder is certainly dead; an expired lock is taken over by compare-and-swap) and refuses to overlap a live holder — so a `pending-*` revision or a recovery pod it finds is a dead run's, never a live one's.
+
 Before upgrading it recovers, loudly (every line prefixed `RECOVERY:`), in this order — a leftover recovery pod from an earlier run is removed first (nothing that could restore a server onto its disk runs until it is confirmed gone), then the full volume (before a rollback could replace the crash-looping pod and erase the evidence), then the stuck release:
 
 - **A release stuck in `pending-install`/`pending-upgrade`/`pending-rollback`** — what a run killed mid-operation leaves behind, after which helm refuses every later operation. It rolls back to the last `deployed` revision (or uninstalls a first install that never deployed) and then upgrades as usual.

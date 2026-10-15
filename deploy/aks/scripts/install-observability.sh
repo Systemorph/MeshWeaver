@@ -125,8 +125,8 @@ hb repo update >/dev/null 2>&1
 # helm marks the release pending-install/-upgrade/-rollback BEFORE it touches the cluster and
 # deployed/failed AFTER. A run killed in between (the invoke cap, a cancelled job) leaves the
 # pending revision behind forever, and helm refuses every later operation on the release. This
-# script is the release's only writer, and it is never left running past the invoke that started
-# it, so a pending revision seen at the START of a run is a dead run's — never a live one.
+# script is the release's only writer and holds the install lock (section 0), so a pending
+# revision seen here is a dead run's — never a live one.
 # Recovery is helm's own: roll back to the last `deployed` revision (no --wait: it only has to
 # re-apply known-good manifests and record a fresh `deployed` revision), then upgrade as usual.
 recover_pending_release() {
@@ -265,16 +265,20 @@ recover_full_tsdb() {
   done
   [ "$out_of_space" = true ] || return 0
 
+  # Every read must SUCCEED before the server is stopped. An empty default stands only for a field
+  # a successful read reports absent — never for a failed request, which would otherwise run the
+  # cleaner without the server's scheduling constraints (wrong pool, or Pending on a taint).
+  local reads_ok=true
   image=$(kc get deploy "$PROMETHEUS_DEPLOY" \
-    -o "jsonpath={.spec.template.spec.containers[?(@.name==\"$PROMETHEUS_CONTAINER\")].image}")
-  node_selector=$(kc get deploy "$PROMETHEUS_DEPLOY" -o jsonpath='{.spec.template.spec.nodeSelector}')
-  tolerations=$(kc get deploy "$PROMETHEUS_DEPLOY" -o jsonpath='{.spec.template.spec.tolerations}')
+    -o "jsonpath={.spec.template.spec.containers[?(@.name==\"$PROMETHEUS_CONTAINER\")].image}") || reads_ok=false
+  node_selector=$(kc get deploy "$PROMETHEUS_DEPLOY" -o jsonpath='{.spec.template.spec.nodeSelector}') || reads_ok=false
+  tolerations=$(kc get deploy "$PROMETHEUS_DEPLOY" -o jsonpath='{.spec.template.spec.tolerations}') || reads_ok=false
   claim=$(kc get deploy "$PROMETHEUS_DEPLOY" \
-    -o jsonpath='{.spec.template.spec.volumes[?(@.name=="storage-volume")].persistentVolumeClaim.claimName}')
-  replicas=$(kc get deploy "$PROMETHEUS_DEPLOY" -o jsonpath='{.spec.replicas}')
+    -o jsonpath='{.spec.template.spec.volumes[?(@.name=="storage-volume")].persistentVolumeClaim.claimName}') || reads_ok=false
+  replicas=$(kc get deploy "$PROMETHEUS_DEPLOY" -o jsonpath='{.spec.replicas}') || reads_ok=false
   [ -n "$replicas" ] && [ "$replicas" -gt 0 ] 2>/dev/null || replicas=1
-  if [ -z "$image" ] || [ -z "$claim" ]; then
-    echo "FATAL: Prometheus is out of space but its image or TSDB claim could not be read — not recovering blind." >&2
+  if [ "$reads_ok" != true ] || [ -z "$image" ] || [ -z "$claim" ]; then
+    echo "FATAL: Prometheus is out of space but the server's image, scheduling or TSDB claim could not be read — not recovering blind; nothing was stopped." >&2
     exit 1
   fi
   recovery "the Prometheus TSDB on PVC $claim is full. Clearing the WAL and pruning the oldest blocks"
@@ -391,6 +395,53 @@ restore_prometheus() {
   fi
 }
 
+# ── 0. One installer at a time, cluster-wide ────────────────────────────────────────────────────
+# Two `command invoke` pods are two processes; nothing in helm serialises them. Without this, a
+# second run could roll back the first run's live upgrade (its revision is `pending-*` only because
+# it is IN PROGRESS) or delete the first run's live recovery pod. The lock is a ConfigMap CREATED
+# atomically (create fails if it exists) and carries an expiry past which its holder is
+# certainly dead: no run outlives its budget plus the invoke's own cap. An expired lock is taken
+# over by compare-and-swap (replace at the read resourceVersion), so two takers cannot both win.
+LOCK_NAME="$RELEASE-observability-install-lock"
+LOCK_HOLDER="${OBS_LOCK_HOLDER:-${HOSTNAME:-installer}-$$-$(date +%s)}"
+LOCK_HELD=false
+acquire_install_lock() {
+  local now expires current holder held_until version
+  now=$(date +%s)
+  expires=$(( now + BUDGET_SECONDS + 120 ))
+  kc get namespace "$NS" >/dev/null 2>&1 || kc create namespace "$NS" >/dev/null 2>&1 || true
+  if kc create configmap "$LOCK_NAME" --from-literal=holder="$LOCK_HOLDER" --from-literal=expires="$expires" >/dev/null 2>&1; then
+    LOCK_HELD=true
+    return 0
+  fi
+  if ! current=$(kc get configmap "$LOCK_NAME" -o jsonpath='{.data.holder} {.data.expires} {.metadata.resourceVersion}'); then
+    echo "FATAL: could neither create nor read the install lock $NS/$LOCK_NAME — refusing to run unserialised." >&2
+    exit 1
+  fi
+  read -r holder held_until version <<<"$current"
+  case "$held_until" in ''|*[!0-9]*) held_until=0 ;; esac
+  if [ "$now" -lt "$held_until" ]; then
+    echo "FATAL: another installation ($holder) holds $NS/$LOCK_NAME until $(( held_until - now ))s from now —" >&2
+    echo "       refusing to overlap it. Nothing was rolled back, cleaned or upgraded." >&2
+    exit 1
+  fi
+  recovery "the install lock held by '$holder' expired $(( now - held_until ))s ago — that run is dead; taking it over."
+  if ! printf 'apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: %s\n  namespace: %s\n  resourceVersion: "%s"\ndata:\n  holder: "%s"\n  expires: "%s"\n' \
+      "$LOCK_NAME" "$NS" "$version" "$LOCK_HOLDER" "$expires" | kc replace -f - >/dev/null; then
+    echo "FATAL: lost the race for the expired install lock — another installation took it first." >&2
+    exit 1
+  fi
+  LOCK_HELD=true
+}
+release_install_lock() {
+  [ "$LOCK_HELD" = true ] || return 0
+  local holder
+  holder=$(kc get configmap "$LOCK_NAME" -o jsonpath='{.data.holder}' 2>/dev/null) || return 0
+  [ "$holder" = "$LOCK_HOLDER" ] && kc delete configmap "$LOCK_NAME" --ignore-not-found >/dev/null 2>&1
+  return 0
+}
+trap release_install_lock EXIT
+
 # A cleaner left behind by an earlier run (its teardown could not be confirmed, so it left the
 # server at 0) must be GONE before anything — a rollback or an upgrade — can bring a server back
 # onto its disk. This runs whatever the server's state, because with the server at 0 there is no
@@ -413,6 +464,7 @@ ensure_no_leftover_cleaner() {
 # The full-volume recovery runs BEFORE the pending-release rollback: a rollback that changes the
 # server's pod template replaces the crash-looping pod with a fresh one — zero restarts, no
 # previous log — and the evidence the recovery acts on would be gone while the disk stays full.
+acquire_install_lock
 ensure_no_leftover_cleaner
 recover_full_tsdb
 recover_pending_release
