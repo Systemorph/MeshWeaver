@@ -20,25 +20,16 @@ namespace MeshWeaver.Kernel.Hub;
 /// message updates.
 ///
 /// <para>🚨 <b>Never a hand-posted <c>DataChangeRequest</c> carrying a whole
-/// MeshNode.</b> That write lands in the workspace VERBATIM — the version
-/// stamping in <c>MeshNodeTypeSource.UpdateImpl</c> is side-effect-only and never
-/// reaches the store — so the activity node sat at <c>Version = 0</c> for an
-/// entire run. The persistence sampler then normalises <c>0 → 1</c> when it
-/// writes the row (<c>HandleSaveMeshNode</c>), and the storage change feed echoes
-/// that row back at Version 1. Both of the owner's defences read the version and
-/// therefore both were defeated: the echo-suppression in
-/// <c>SubscribeToOwnDeletion</c> compares <c>persisted.Version (1)</c> against
-/// the live <c>Version (0)</c> and sees no self-write, and
-/// <c>MeshNodeStreamHandle.AdoptPersisted</c>'s forward-only guard reads
-/// <c>1 &gt; 0</c> as "strictly newer" and adopts it. A snapshot sampled MID-RUN
-/// then landed on top of the terminal write and rolled a Succeeded activity back
-/// to <c>Running</c> with <c>End</c> cleared — permanently, since a finished run
-/// never writes again (issue #1784; same defect family as the lagged-echo
-/// data loss of #133). <c>Update</c> mints
-/// <c>MeshNode.NextVersion(...)</c> on the owner, which is what makes both
-/// guards work — and it patches only <c>Content</c>, so <c>MainNode</c>,
-/// <c>HubPath</c>, <c>Start</c>, <c>User</c> and a pending
-/// <c>RequestedStatus</c> survive instead of being clobbered by a rebuilt node.</para>
+/// MeshNode.</b> A rebuilt whole node replaces every field the owner holds, so
+/// <c>MainNode</c>, <c>HubPath</c>, <c>Start</c>, <c>User</c> and a pending
+/// <c>RequestedStatus</c> are clobbered by whatever this logger happened to read.
+/// <c>Update</c> patches only <c>Content</c>, routes the write to the owning hub,
+/// and lets the owner serialise it against every other writer. (Such a write once
+/// also committed at <c>Version = 0</c>, which defeated the owner's echo and
+/// forward-only guards and rolled a finished activity back to <c>Running</c>,
+/// issue #1784. The next version is now minted at commit for every data change,
+/// in <c>MeshNodeTypeSource.PrepareCommit</c>, so the version is no longer the
+/// reason; the clobbering is.)</para>
 ///
 /// Injected into the script's <c>Log</c> global per <see cref="SubmitCodeRequest"/>
 /// so every concurrent run writes to its own ActivityLog.
