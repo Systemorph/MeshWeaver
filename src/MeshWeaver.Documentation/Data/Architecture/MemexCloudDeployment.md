@@ -232,7 +232,7 @@ The observability stack is folded into the standard deploy: export `GRAFANA_PW` 
 | `1` | not installed/updated — helm refused, a stuck release could not be recovered, or Loki's storage is not durable |
 | `2` | the release is `deployed`, but a named workload is not Ready; the log carries its events and previous log tail |
 
-Every helm and kubectl call is bounded by what is left of that deadline, too; a caller that runs the installer inside a longer invoke passes what is left of ITS cap as `OBS_BUDGET_SECONDS` (`deploy.sh` does).
+Every helm and kubectl call is bounded by what is left of that deadline, too — by a process watchdog, never by a kubectl connection flag: inside `command invoke` kubectl has no kubeconfig and runs on the pod's in-cluster service account, which client-go abandons as soon as any connection flag (even `--request-timeout`) is given, sending every call to `localhost:8080`; a caller that runs the installer inside a longer invoke passes what is left of ITS cap as `OBS_BUDGET_SECONDS` (`deploy.sh` does).
 
 Only one installer runs per cluster at a time: it first takes a lock (`monitoring/loki-observability-install-lock`, a ConfigMap created atomically, carrying an expiry past which its holder is certainly dead; an expired lock is taken over by compare-and-swap) and refuses to overlap a live holder — so a `pending-*` revision or a recovery pod it finds is a dead run's, never a live one's.
 
