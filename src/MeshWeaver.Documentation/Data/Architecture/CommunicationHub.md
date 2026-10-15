@@ -469,7 +469,32 @@ Activities. A source names its category (`InboxQueryLeg.Category` and
 source is its category. The picked category lives in the page's filter (`InboxFilter.Category`):
 it shows every item filed under it, even from a source switched off by default, and All leaves the
 source switches in charge. The counts are read before any filter applies
-(`InboxRows.CategoryCounts`).
+(`InboxRows.CategoryCounts`). The menu sits in a COLLAPSIBLE splitter pane: the platform
+splitter's own handle hides it and gives the list the width.
+
+**Only connected sources (policy `inbox-connected-sources-only`).** A source names how to tell it is
+connected for a viewer — `InboxQueryLeg.ConnectedWhen`, a query for its credential, its account
+record or a first message over its channel, anchored on the viewer's partition exactly as the leg
+is (an unanchored one is refused and logged with the leg) and asked for one node
+(`InboxQueries.ConnectionProbe`). The page is a TEMPLATE, emitted at once: every source's toggle
+and switch is declared, each with its style BOUND to `InboxLayoutArea.SourceStylesId`. The rows
+feed asks every connection query once (`InboxLayoutArea.Connected`), publishes the styles and the
+Only options, and reads only the connected sources' legs: a mailbox nobody connected is hidden
+(`display: none`), not offered in Only or the side menu, and never read. Until the reads answer,
+only the sources that need none are shown. A source whose legs name no
+connection query (approvals, notifications, portal chats) is listed for everyone. A connection query
+that fails or does not answer within `InboxLayoutArea.ConnectionWait` LISTS its source and is
+logged — an unreadable connection must never hide a mailbox the viewer did connect. So does an
+INCOMPLETE empty answer (a silent provider, an unfinished storage read — `InboxLayoutArea.FoundConnection`):
+only a complete empty answer hides a source. Whatever projection a provider wrote, the query runs for
+the path alone (`InboxQueries.ConnectionQuery`). Every text the feed writes is resolved on the render turn, in the viewer's language — never on
+the thread a connection read answers on. Core's own
+stored-mail source is connected once mail is stored for the viewer. Owner, 2026-10-15: *"i see a lot
+of stuff that's not even configured ==> must get only configured sources"*.
+
+**Which account.** A person reads several mailboxes in one list, so a row names the account the item
+reached when its source stamps one (the content's `account`, `InboxRow.Account`, the Account
+column); a source with a single account per viewer may leave it empty.
 
 **Put away everything before a day.** The order is ALWAYS newest first (policy
 `inbox-newest-first`; `InboxFilter.Order` is no longer read and the settings menu offers no order). The search box also takes date bounds, `before:2026-10-01` (strictly

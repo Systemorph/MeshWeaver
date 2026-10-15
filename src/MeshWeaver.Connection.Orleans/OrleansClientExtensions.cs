@@ -8,6 +8,9 @@ using Microsoft.Extensions.Hosting;
 // So the routed-failure classification can be pinned without standing up a silo — the decision is
 // pure, and the flake it fixes was never reproducible through a cluster.
 [assembly: InternalsVisibleTo("MeshWeaver.Hosting.Orleans.Test")]
+// So a fault-injection case can wait on the pod-hub claim seam (PodHubClaimSettled) and read
+// HasMemoryStream instead of guessing when a claim landed (#4802).
+[assembly: InternalsVisibleTo("MeshWeaver.FaultInjection.Test")]
 namespace MeshWeaver.Connection.Orleans;
 
 

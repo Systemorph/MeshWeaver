@@ -78,6 +78,24 @@ public interface ITypeSource
     void Update(ChangeItem<EntityStore> changeItem);
 
     /// <summary>
+    /// The ONE transform a type source may apply, and only to a data change that is about to
+    /// COMMIT: given this type's collection as the store holds it now and the instances a
+    /// <see cref="DataChangeRequest"/> carries for it, returns the instances to commit. It runs
+    /// inside the stream's apply turn, before the merge, so whatever it returns is what the store,
+    /// every subscriber and every persister see — unlike <see cref="Update"/>, which runs after the
+    /// store content is fixed. The default commits the incoming instances unchanged.
+    ///
+    /// <para>The MeshNode type source uses it to mint the node's next <c>Version</c> for a change
+    /// that arrived at the version it replaces: a version minted only after the commit never
+    /// reached the store, so the change was committed at the OLD version and its persistence was
+    /// dropped as "already durable". See Doc/Architecture/MeshNodeVersioning.</para>
+    /// </summary>
+    /// <param name="current">This type's collection as the store holds it now, or null when absent.</param>
+    /// <param name="incoming">The instances the change carries for this type (creations and updates).</param>
+    /// <returns>The instances to commit.</returns>
+    InstanceCollection PrepareCommit(InstanceCollection? current, InstanceCollection incoming) => incoming;
+
+    /// <summary>
     /// The collection name under which instances of this type are stored.
     /// </summary>
     string CollectionName { get; }

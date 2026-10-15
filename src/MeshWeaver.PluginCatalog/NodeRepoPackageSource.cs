@@ -239,6 +239,20 @@ public sealed class NodeRepoPackageSource : IPackageSource
         FetchFolder(package, gitRef, paths);
 
     /// <summary>
+    /// The ancestry test behind <see cref="IPackageSource.PublishesCommit"/> — the transport's
+    /// <see cref="IGitHubRepoClient.IsAncestor"/> (repository url, ancestor sha, descendant ref,
+    /// token). Absent (a test stub, a local directory source) ⇒ ancestry is never established and a
+    /// registry over this source serves only its configured ref (MeshWeaver#6718).
+    /// </summary>
+    public Func<string, string, string, string, IObservable<bool>>? IsAncestor { get; init; }
+
+    /// <inheritdoc />
+    IObservable<bool> IPackageSource.PublishesCommit(string commit, string gitRef) =>
+        !PackageFetch.IsCommitSha(commit) || IsAncestor is not { } isAncestor
+            ? Observable.Return(false)
+            : tokenProvider().SelectMany(token => isAncestor(repoUrl, commit, gitRef, token));
+
+    /// <summary>
     /// Fetches the package's files — every file of its <c>&lt;Plugin&gt;/</c> folder, or only
     /// <paramref name="paths"/> of it (the manifest-diff fast path) — moving ONLY those blobs.
     ///
@@ -271,7 +285,7 @@ public sealed class NodeRepoPackageSource : IPackageSource
                 ? narrow(repoUrl, gitRef, null, token, selects)
                 : fetch(repoUrl, gitRef, null, token))
             .Select(snapshot => new PackageFetch(
-                (IReadOnlyList<PackageFile>)snapshot.Files
+                snapshot.Files
                     // 🚨 Carry `Binary` too. A non-UTF-8 blob (a course video/poster under
                     // `<Plugin>/content/**`) has an EMPTY `Content` by design — RepoFileCodec puts
                     // its bytes on `RepoFile.Binary` so a UTF-8 round-trip cannot corrupt them.
@@ -282,7 +296,7 @@ public sealed class NodeRepoPackageSource : IPackageSource
                     // the answer must not depend on which of the two reads served it.
                     .Where(f => selects(f.Path))
                     .Select(f => new PackageFile(f.Path, f.Content, f.Binary))
-                    .ToList(),
+                    .ToImmutableList(),
                 snapshot.CommitSha));
     }
 

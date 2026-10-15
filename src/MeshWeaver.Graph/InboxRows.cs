@@ -36,6 +36,9 @@ public sealed record InboxSection(string Band, string Source, int Order, string 
 
     /// <summary>The catalog key of the category's display name, when the provider gave one.</summary>
     public string? CategoryLabelKey { get; init; }
+
+    /// <summary>The resolved query that finds the source's connection (<see cref="InboxQueryLeg.ConnectedWhen"/>), or null.</summary>
+    public string? ConnectedWhen { get; init; }
 }
 
 /// <summary>
@@ -85,6 +88,13 @@ public sealed record InboxRow
     /// name, so the column is never empty.
     /// </summary>
     public string From { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Which of the viewer's accounts the item reached, when its source says (the content's
+    /// <c>account</c> — the mailbox address of a mail); empty otherwise. One person reads several
+    /// mailboxes in one list, and a reply must go out from the right one.
+    /// </summary>
+    public string Account { get; init; } = string.Empty;
 
     /// <summary>
     /// Where the item lives OUTSIDE the mesh, when its source says (the content's <c>webLink</c> — a
@@ -331,6 +341,7 @@ public static class InboxRows
             Unread = unread,
             RowClass = unread ? UnreadClass : string.Empty,
             From = string.IsNullOrWhiteSpace(from) ? sourceLabel ?? section.Source : from,
+            Account = StringOf(content, "account")?.Trim() ?? string.Empty,
             Link = StringOf(content, "webLink") is { } link && Uri.TryCreate(link, UriKind.Absolute, out var uri)
                    && uri.Scheme == Uri.UriSchemeHttps ? link : string.Empty,
         };

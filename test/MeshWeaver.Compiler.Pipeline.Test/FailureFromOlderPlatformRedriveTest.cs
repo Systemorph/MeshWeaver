@@ -258,4 +258,46 @@ public class FailureFromOlderPlatformRedriveTest
         reServed.FailedPlatformVersion.Should().Be(OldBuild,
             "re-serving a remembered verdict must not rewrite the build it was formed on");
     }
+
+    /// <summary>The closed-set refusal as the compile gate records it on a type row (#6627).</summary>
+    private static NodeTypeDefinition RefusedByTheClosedSet(string failedBuild) =>
+        FailedOn(failedBuild) with { CompilationError = ClosedTypeSet.RefusalFor(TypePath) };
+
+    /// <summary>
+    /// 🚨 #6627 — on a CLOSED type set, a row whose failure IS the closed-set refusal is never
+    /// re-driven by a newer platform build: the refusal records this process's switch, not the
+    /// type's source, and no build can answer it differently. Measured on the control instance:
+    /// every refused row went Pending once per platform build, only to be refused again.
+    /// </summary>
+    [Fact]
+    public void OnAClosedTypeSet_AClosedSetRefusal_IsNotRetriedByANewerBuild()
+    {
+        var def = RefusedByTheClosedSet(OldBuild);
+        ClosedTypeSet.IsRefusal(def.CompilationError).Should().BeTrue("the fixture is the real refusal");
+
+        NodeTypeCompilationHelpers.HasFailureFromOlderPlatform(def, NewBuild, TypePath, closedTypeSet: true)
+            .Should().BeFalse("a closed-set refusal cannot change with the platform version");
+
+        var node = Node(def);
+        NodeTypeCompilationHelpers.ApplyFailedVerdictRedrive(
+                node, TypePath, ModulesHash, parkRegistry: null, livePlatformVersion: NewBuild,
+                closedTypeSet: true)
+            .Should().BeSameAs(node, "the commit step declines and returns the row untouched");
+    }
+
+    /// <summary>
+    /// The controls for the arm above: the same refusal on an OPEN process is not this process's
+    /// answer, so the newer build still retries it; and on a closed process an ordinary compile
+    /// failure is still retried — the skip is the refusal's, not the closed set's in general.
+    /// </summary>
+    [Fact]
+    public void TheSkip_IsTheClosedSetRefusalOnAClosedProcess_AndNothingElse()
+    {
+        NodeTypeCompilationHelpers.HasFailureFromOlderPlatform(
+                RefusedByTheClosedSet(OldBuild), NewBuild, TypePath, closedTypeSet: false)
+            .Should().BeTrue("an open process does not answer with the closed-set refusal");
+        NodeTypeCompilationHelpers.HasFailureFromOlderPlatform(
+                FailedOn(OldBuild), NewBuild, TypePath, closedTypeSet: true)
+            .Should().BeTrue("a CS0246 failure is a build verdict and keeps its one retry per build");
+    }
 }

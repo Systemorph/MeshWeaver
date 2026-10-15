@@ -150,6 +150,27 @@ public class UpdateBindsToTheInstallOriginTest(ITestOutputHelper output) : Monol
     }
 
     [Fact]
+    public async Task APinnedRecordWithoutModuleVersion_IsNotHeldByAnUnboundPass()
+    {
+        // A legacy record (installed before its source emitted a manifest.lock) is taken as a
+        // change once the listing carries an identity (#6797) — but a PINNED one must stay
+        // untouched on the UNBOUND registry path too: no floor hold, no ticket (review on #6797).
+        const string id = "LegacyPinnedPkg";
+        await Seed(id, origin: Honest, policy: PackageUpdatePolicy.None, withModuleVersion: false);
+        await Reconcile(id, Next, binding: null, minMeshVersion: FloorFixture.Above);
+        var pinned = await Record(id);
+        pinned.HeldUpdate.Should().BeNull("nothing moves for a pinned package, whatever side lacks an identity");
+        pinned.HeldUpdateDispatch.Should().BeNull();
+
+        // Control: the same legacy record on NOTIFY reaches the floor gate on the unbound pass and is
+        // held — so the arm above cannot pass because the candidate never got past the identity gate.
+        const string control = "LegacyPinnedControlPkg";
+        await Seed(control, origin: Honest, withModuleVersion: false);
+        await Reconcile(control, Next, binding: null, minMeshVersion: FloorFixture.Above);
+        (await AwaitRecord(control, r => r.HeldUpdate is not null)).HeldUpdate.Should().Contain(FloorFixture.Above);
+    }
+
+    [Fact]
     public async Task AnAdoptionLostToAConcurrentInstall_TakesNothing()
     {
         // The census sees a record with NO origin; before the adoption writes, a concurrent install
@@ -203,14 +224,14 @@ public class UpdateBindsToTheInstallOriginTest(ITestOutputHelper output) : Monol
     }
 
     private async Task Seed(string id, string? origin = null,
-        PackageUpdatePolicy policy = PackageUpdatePolicy.Notify)
+        PackageUpdatePolicy policy = PackageUpdatePolicy.Notify, bool withModuleVersion = true)
     {
         var manifest = new PackageManifest
         {
             Id = id,
             Name = id,
             Version = "1.0.0",
-            ModuleVersion = Installed,
+            ModuleVersion = withModuleVersion ? Installed : null,
             TargetPartition = id,
             Origin = origin,
             AutoUpdate = false,

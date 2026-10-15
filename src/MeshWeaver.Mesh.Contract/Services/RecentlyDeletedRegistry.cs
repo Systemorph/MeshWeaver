@@ -210,6 +210,28 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
         return new SubtreeDeletionScope(this, rootPath);
     }
 
+    // Row-only deletions (DeleteNodeRequest.KeepDescendants): the same hard invariant as a
+    // subtree deletion, for the ONE path being removed — writes under it are not guarded,
+    // because the operation leaves them in place.
+    private readonly ConcurrentDictionary<string, int> _activeRowDeletions =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Marks the node at <paramref name="path"/> — and only that node, never what lies under it —
+    /// as being deleted, for a row-only delete (<c>DeleteNodeRequest.KeepDescendants</c>). While the
+    /// scope is open the storage write guard refuses a write AT <paramref name="path"/>, so the
+    /// delete's version precondition still holds at its commit; writes under the path proceed.
+    /// Ref-counted like <see cref="BeginSubtreeDeletion"/>; dispose when the delete completes.
+    /// </summary>
+    /// <param name="path">The node being deleted alone.</param>
+    public IDisposable BeginRowDeletion(string path)
+    {
+        if (string.IsNullOrEmpty(path))
+            return EmptyScope.Instance;
+        _activeRowDeletions.AddOrUpdate(path, 1, (_, count) => count + 1);
+        return new SubtreeDeletionScope(this, path, rowOnly: true);
+    }
+
     /// <summary>
     /// Runs <paramref name="body"/> inside a <see cref="BeginSubtreeDeletion"/> scope on
     /// <paramref name="rootPath"/>, and RELEASES the scope BEFORE anything the body produced reaches
@@ -277,7 +299,14 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
     public bool IsUnderActiveDeletion(string? path, out string? deletionRoot)
     {
         deletionRoot = null;
-        if (string.IsNullOrEmpty(path) || _activeSubtreeDeletions.IsEmpty)
+        if (string.IsNullOrEmpty(path))
+            return false;
+        if (!_activeRowDeletions.IsEmpty && _activeRowDeletions.ContainsKey(path))
+        {
+            deletionRoot = path;
+            return true;
+        }
+        if (_activeSubtreeDeletions.IsEmpty)
             return false;
         foreach (var kv in _activeSubtreeDeletions)
         {
@@ -472,24 +501,26 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
         }
     }
 
-    private void EndSubtreeDeletion(string rootPath)
+    private void EndSubtreeDeletion(string rootPath, bool rowOnly)
     {
+        var active = rowOnly ? _activeRowDeletions : _activeSubtreeDeletions;
         while (true)
         {
-            if (!_activeSubtreeDeletions.TryGetValue(rootPath, out var count))
+            if (!active.TryGetValue(rootPath, out var count))
                 return;
             if (count <= 1)
             {
-                if (_activeSubtreeDeletions.TryRemove(
+                if (active.TryRemove(
                         new KeyValuePair<string, int>(rootPath, count)))
                     return;
             }
-            else if (_activeSubtreeDeletions.TryUpdate(rootPath, count - 1, count))
+            else if (active.TryUpdate(rootPath, count - 1, count))
                 return;
         }
     }
 
-    private sealed class SubtreeDeletionScope(RecentlyDeletedRegistry registry, string rootPath)
+    private sealed class SubtreeDeletionScope(
+        RecentlyDeletedRegistry registry, string rootPath, bool rowOnly = false)
         : IDisposable
     {
         private int _disposed;
@@ -497,7 +528,7 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
         public void Dispose()
         {
             if (Interlocked.Exchange(ref _disposed, 1) == 0)
-                registry.EndSubtreeDeletion(rootPath);
+                registry.EndSubtreeDeletion(rootPath, rowOnly);
         }
     }
 

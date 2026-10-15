@@ -15,6 +15,11 @@ class StorageVerdictTest(unittest.TestCase):
             root = Path(directory)
             (root / 'helm').write_text('#!/bin/sh\nexit 0\n')
             (root / 'kubectl').write_text('''#!/bin/sh
+# The invoke pod has no kubeconfig: a connection flag drops kubectl to localhost:8080.
+case " $* " in
+  *' --request-timeout'*|*' --server'*|*' --kubeconfig'*|*' --token'*|*' --context'*)
+    echo 'The connection to the server localhost:8080 was refused' >&2; exit 1 ;;
+esac
 case "$*" in
   *volumeMounts*)
     [ "$SCENARIO" = read_error ] && exit 9
@@ -28,6 +33,11 @@ case "$*" in
     [ "$SCENARIO" = pvc_error ] && exit 9
     if [ "$SCENARIO" = pending ]; then printf Pending; else printf Bound; fi ;;
   *'get pods'*) printf 'loki-0 Running\\n' ;;
+  *'get deploy,sts,ds'*) printf 'statefulset.apps/loki\\n' ;;
+  *'rollout status'*) exit 0 ;;
+  *'get deploy loki-prometheus-server'*) exit 1 ;;
+  *'get pod loki-prometheus-tsdb-recovery'*) exit 0 ;;
+  *configmap*|*namespace*) exit 0 ;;
   *) exit 8 ;;
 esac
 ''')

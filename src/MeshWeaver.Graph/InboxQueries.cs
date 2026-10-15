@@ -87,6 +87,28 @@ public static class InboxQueries
     /// </summary>
     public const string TimedRowProjection = RowProjection + ",content";
 
+    /// <summary>
+    /// The tail of a connection query (<see cref="InboxQueryLeg.ConnectedWhen"/>): one node, its path
+    /// only — the page asks whether a connection EXISTS, never what it holds.
+    /// </summary>
+    public const string ConnectionProbe = "limit:1 select:path";
+
+    /// <summary>
+    /// <paramref name="query"/> as the page runs it to find a connection: projected onto the path
+    /// alone, whatever the provider wrote. A connection query with no <c>select:</c>, or a wider one,
+    /// would otherwise fetch a credential's or a message's content only to learn that it exists. The
+    /// term is appended when it is not already exactly <c>select:path</c>; the parser takes the LAST
+    /// one it reads. (The row count is bounded by the request itself.)
+    /// </summary>
+    /// <param name="query">A resolved connection query (<see cref="InboxQueryLeg.ConnectedWhen"/>).</param>
+    public static string ConnectionQuery(string query)
+    {
+        var select = new QueryParser().Parse(query).Select;
+        return select is { Count: 1 } && string.Equals(select[0], "path", StringComparison.Ordinal)
+            ? query
+            : query + " select:path";
+    }
+
     /// <summary>The fields a timed row reads — <see cref="TimedRowProjection"/> as a list.</summary>
     internal static ImmutableArray<string> TimedRowFields { get; } = [.. TimedRowProjection["select:".Length..].Split(',')];
 
@@ -142,17 +164,32 @@ public static class InboxQueries
 
     /// <summary>
     /// The enabled legs <see cref="Resolve"/> refuses to run because they are not anchored on
-    /// <paramref name="viewer"/>'s partition — for the page to LOG, so a provider's mistake is loud
-    /// rather than a silently missing source.
+    /// <paramref name="viewer"/>'s partition — their query, or the query that finds their connection
+    /// (<see cref="InboxQueryLeg.ConnectedWhen"/>) — for the page to LOG, so a provider's mistake is
+    /// loud rather than a silently missing source.
     /// </summary>
     /// <param name="legs">The contributed legs.</param>
     /// <param name="viewer">The viewer's partition.</param>
     public static ImmutableArray<InboxQueryLeg> Refused(IEnumerable<InboxQueryLeg> legs, string viewer)
-        => [.. Substituted(legs, viewer).Where(leg => !IsAnchored(leg.Query, viewer))];
+        => [.. Substituted(legs, viewer).Where(leg => !Runnable(leg, viewer))];
+
+    /// <summary>
+    /// Whether <paramref name="leg"/> reads only <paramref name="viewer"/>'s partition: its query, and
+    /// its connection query when it names one.
+    /// </summary>
+    private static bool Runnable(InboxQueryLeg leg, string viewer)
+        => IsAnchored(leg.Query, viewer)
+           && (string.IsNullOrWhiteSpace(leg.ConnectedWhen) || IsAnchored(leg.ConnectedWhen, viewer));
 
     private static IEnumerable<InboxQueryLeg> Substituted(IEnumerable<InboxQueryLeg> legs, string viewer)
         => legs.Where(leg => leg.Enabled && !string.IsNullOrWhiteSpace(leg.Query))
-            .Select(leg => leg with { Query = leg.Query.Replace(ViewerToken, viewer, StringComparison.Ordinal) });
+            .Select(leg => leg with
+            {
+                Query = leg.Query.Replace(ViewerToken, viewer, StringComparison.Ordinal),
+                ConnectedWhen = string.IsNullOrWhiteSpace(leg.ConnectedWhen)
+                    ? null
+                    : leg.ConnectedWhen.Replace(ViewerToken, viewer, StringComparison.Ordinal),
+            });
 
     /// <summary>
     /// The terminal <c>ActivityStatus</c> values, as query terms. 🚨 <c>Running</c> is the enum
@@ -299,6 +336,9 @@ public static class InboxQueries
         // Timed by when it was RECEIVED: marking a mail read is a write, and it must not move the
         // mail ahead of newer ones. The bound still keeps the newest-touched (LastModified).
         TimeField = "receivedAt",
+        // Connected once any mail is stored for the viewer — a mailbox nobody imported into the mesh
+        // gets no switch (owner, 2026-10-15: "must get only configured sources").
+        ConnectedWhen = $"namespace:{ViewerToken}/{EmailNodeType.UserEmailSegment} nodeType:{EmailNodeType.NodeType} {ConnectionProbe}",
         Query = $"namespace:{ViewerToken}/{EmailNodeType.UserEmailSegment} "
                 + $"nodeType:{EmailNodeType.NodeType} -content.status:{nameof(EmailStatus.Archived)} "
                 + $"-content.direction:{nameof(EmailDirection.Outbound)} "
@@ -339,7 +379,7 @@ public static class InboxQueries
         [
             // 🚨 A leg that does not read exactly the viewer's own partition is never run.
             .. Substituted(legs, viewer)
-                .Where(leg => IsAnchored(leg.Query, viewer))
+                .Where(leg => Runnable(leg, viewer))
                 .OrderBy(leg => leg.Band, StringComparer.Ordinal)
                 .ThenBy(leg => leg.Order)
                 .ThenBy(leg => leg.Source, StringComparer.Ordinal)
