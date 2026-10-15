@@ -9407,7 +9407,8 @@ public static class MeshExtensions
         // `path:{owner}/_Segment scope:subtree`. Containers are the unit rather than individual
         // satellites so the sweep is one query per container that actually exists — typically none
         // — instead of one per satellite row; `scope:subtree` from the container carries nesting
-        // (a _Thread's _ThreadMessage children) with it.
+        // stored in the same table (a _Thread's _ThreadMessage children) with it, and a nested
+        // satellite stored in another table gets its own container (StorageContainerOf).
         IObservable<IReadOnlyList<MeshNode>> SatellitesUnder(
             IReadOnlyCollection<string> storedPaths,
             ImmutableHashSet<string> owners,
@@ -9415,8 +9416,13 @@ public static class MeshExtensions
         {
             if (!copyRequest.IncludeSatellites)
                 return Observable.Return<IReadOnlyList<MeshNode>>(Array.Empty<MeshNode>());
+            // 🚨 StorageContainerOf, not SatelliteContainerOf: each container query is answered from
+            // ONE table, so a satellite nested under another one but stored in its own table (a
+            // transcript's _DocumentPart rows under a _Thread) needs a container that resolves to
+            // ITS table — through the first container it was never read, and the completeness
+            // guard below refused every move of a node with an indexed chat transcript.
             var containers = storedPaths
-                .Select(SatelliteTableMapping.SatelliteContainerOf)
+                .Select(SatelliteTableMapping.StorageContainerOf)
                 .Where(c => !string.IsNullOrEmpty(c))
                 .Select(c => c!)
                 // Only containers hanging off a main node this copy is actually carrying — so
