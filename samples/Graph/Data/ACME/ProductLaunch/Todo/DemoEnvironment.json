@@ -7,12 +7,9 @@
   "icon": "/api/content/ACME/Project/Todo/icon.svg",
   "description": "Configure a stable demo instance with sample data",
   "category": "Tasks",
-  "addressSegments": 0,
-  "isPersistent": true,
   "lastModified": "2026-01-12T07:43:17.8311674+00:00",
   "version": 2,
   "state": "Active",
-  "isVirtual": false,
   "content": {
     "$type": "Todo",
     "title": "Set up demo environment",
@@ -24,7 +21,5 @@
     "dueDateOffsetDays": 5,
     "status": "InProgress",
     "createdAt": "2026-01-19T20:23:16.387287+00:00"
-  },
-  "routingType": "Shared",
-  "instantiationType": "HubConfiguration"
+  }
 }

@@ -6,8 +6,6 @@
   "category": "AI Use Cases",
   "description": "Natural language queries across all enterprise data",
   "icon": "/api/content/Systemorph/Marketing/icons/document-search.svg",
-  "addressSegments": 0,
-  "isPersistent": true,
   "content": {
     "$type": "MarkdownDocument",
     "title": "Intelligent Search",

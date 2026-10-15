@@ -6,8 +6,6 @@
   "category": "MeshWeaver",
   "description": "Real-time updates via CRDT - subscribe to data changes as they happen",
   "icon": "/api/content/Systemorph/Marketing/icons/flash.svg",
-  "addressSegments": 0,
-  "isPersistent": true,
   "content": {
     "$type": "MarkdownDocument",
     "title": "Stream-Based Architecture",

@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "Toms Spezialit\u00e4ten - M\u00fcnster, Germany",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "TOMSP",

@@ -122,9 +122,10 @@ admins can also reach it from **Admin app (`/Admin`) → Partitions**.
 ## Authoring your Space's home page
 
 When someone opens `Acme`, the Space's **Overview** renders, in order: a header
-(logo + name + description + links), then your **body markdown**, then the
-**namespace catalog** of everything inside the Space. All of it is driven by fields
-on the **Space node's content** — you never create a second node for it.
+(logo + name + description + links), then your **body markdown** — and nothing after it.
+The Space's contents are listed in the **index on the left** (the side rail), which the
+platform derives for the Space page, markdown pages and typed pages on their default Overview. All of it is driven by fields on the
+**Space node's content** — you never create a second node for it.
 
 ### The fields you set
 
@@ -155,28 +156,39 @@ Treat `content.body` as the front door. A strong one usually has:
      (`@/…` is markdown-link-only; never put it in raw `<a href>`.)
    - Relative links also work from the Space body: a link written as
      `[Reports](Reports)` resolves against the Space path (`Acme/Reports`).
-3. **The live namespace catalog**, embedded inline (next section).
+3. **Nothing that restates the index.** Do not end the body with a `## Contents` /
+   `## Everything in this space` section and a catalog embed: the side rail already lists
+   every page — one index for the whole Space, the same on every page, with the reader's
+   position marked. A catalog at the bottom is a second, worse copy of it.
 
-### Embedding the namespace catalog (the search that expands by namespace)
+### The index is the side rail — not a catalog in the body
 
-The catalog is the `Search` layout area: a mesh search in **namespace-tree** mode,
-scoped to the Space's own partition, that lets you drill into sub-namespaces with
-lazy-loaded counts and a search box. It is **not** hard-wired into the page — it lives
-in the body as a **deletable `@@`-embed** (the default welcome page ships one), so the
-space owner controls whether and where it appears. Delete the embed line to drop the
-catalog; move it to reposition it. Embed it with:
+The Space page, markdown pages and typed pages on their default Overview carry the index on
+the left, derived from the Space's children. That is where readers navigate the Space's
+contents, so such a body never needs a "children section"; the default welcome page ships
+none. (A page a node type supplies itself through `WithNodePage` has no rail yet — see
+[The Supplied Navigation Rail](/Doc/Architecture/SuppliedNavigationRail).)
 
-```markdown
-@@/Acme/area/Search
+Embed a catalog (the `Search` layout area, `@@/Acme/area/Search`) **only when the listing
+IS the content** — a log or register, a store or catalog page, a filtered or grouped view
+the rail cannot express (`?groupBy=type|category|namespace|flat`, `?subtree=true`), or a
+typed node that renders without the rail — and put it under a heading that names what it
+is (`## Open incidents`, not `## Contents`). In an authored body use the **absolute** form
+(leading `/` + full path), which resolves regardless of render context; `@@` renders the
+area inline, a single `@` renders a hyperlink. See [Mesh Search & Catalogs](/Doc/GUI/MeshSearch).
+
+### Order the pages
+
+The rail orders each level by the node's `order`, then by name — a page without `order`
+sorts after every page that has one, alphabetically. So **always set `order` on every
+child page** of multi-part content (`10`, `20`, `30`, … leaves room to insert later), so
+the index reads in its logical order and never alphabetically by accident. Set it on the
+node, not in `content`:
+
+```jsonc
+// patch @Acme/Reports/Methodology
+{ "order": 20 }
 ```
-
-In an **authored body**, use the **absolute** form (leading `/` + full Space path): it
-resolves regardless of render context because it carries its own address. The default
-welcome page (shared by every Space) uses the relative `@@("area/Search")`, which
-resolves against the Space's own path at render time. `@@` (double-at) renders the area
-inline; a single `@` would render a hyperlink instead. The `Search` area defaults to the
-namespace tree; tune it with `?groupBy=type|category|namespace|flat` and `?subtree=true`
-— see [Mesh Search & Catalogs](/Doc/GUI/MeshSearch).
 
 > The Space's body itself is read from `MeshNode.Content` (the `Space` record) — there
 > is no separate `Space` data stream. The Overview reads the node's content directly,
@@ -192,7 +204,7 @@ The home page is plain node content, so one `patch` against the Space node does 
   "content": {
     "logo": "https://example.com/acme-logo.png",
     "description": "Acme's shared workspace for pension analytics.",
-    "body": "# Acme\n\nWelcome to Acme's workspace…\n\n## Explore\n\n- [Reports](@/Acme/Reports)\n- [Data model](@/Acme/Datenmodell)\n\n## Everything in this space\n\n@@/Acme/area/Search\n"
+    "body": "# Acme\n\nWelcome to Acme's workspace…\n\n## Explore\n\n- [Reports](@/Acme/Reports)\n- [Data model](@/Acme/Datenmodell)\n"
   }
 }
 ```
@@ -214,4 +226,6 @@ the Space's `content` collection and reference it instead.
 | Organize within one team's work | Folders/pages **inside** one Space |
 | Set the Space's landing page | Edit `content.body` on the **Space node** — no separate Overview page |
 | Add a logo | Set `content.logo` (an `https://…` URL or a `content`-collection file) |
-| Show the namespace catalog in the body | Embed `@@/{Space}/area/Search` (`?groupBy=type` to group by type) |
+| List the Space's pages | Nothing to do — the index on the left lists them; never end a body with a catalog |
+| Put the pages in a logical order | Set `order` on every child page (`patch {"order": 10}`, `20`, `30`, …) |
+| Show a listing that IS the content (log, register, store page, grouped view) | Embed `@@/{path}/area/Search` (`?groupBy=type` to group by type) under a heading naming it |

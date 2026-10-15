@@ -291,6 +291,31 @@ unknown member at that same nesting level. Without that distinction, the first c
 roll after strict import refused five valid deployment files
 ([Memex #601](https://github.com/Systemorph/Memex/issues/601)).
 
+#### A retired `MeshNode` field is a build error, not a tolerated field
+
+Strict reading cannot tell a member `MeshNode` **no longer has** from one an older image does not
+know **yet** — both are unmapped. The platform stays strict anyway: there is no tolerance list and no
+compatibility shim in the reader. The content is migrated instead, and the rule is enforced where
+the content is written
+([#6638](https://github.com/Systemorph/MeshWeaver/issues/6638)):
+
+- **The register.** `.github/meshnode-fields.json` lists `MeshNode`'s JSON `members` and the
+  `retired` ones, each with what to do instead (`isPersistent` — remove it; `displayOrder` — use
+  `order`; a top-level `requires` — dependencies live in the package root's `content.requires`; …).
+  `MeshNodeFieldsRegisterTest` keeps `members` equal to the type by reflection, so removing a member
+  from `MeshNode` fails that test until its name moves to `retired`.
+- **The gate.** `.github/scripts/check-retired-node-fields.py` fails on any node file whose top level
+  carries a retired member, naming the file, the field and the replacement. It runs on core's own
+  trees (`samples/Graph/Data`, the documentation tree) and in every node repo's validate lane, so the
+  pull request that adds or keeps one is red — the snapshot refusal never reaches a portal.
+- **The runtime refusal.** If such a file reaches a repository anyway, the snapshot is still
+  refused, and the note says `field 'isPersistent' is not a member of MeshNode (a retired or
+  misspelled field) — remove it from the file`, with the file path.
+
+Retiring a `MeshNode` member is therefore a change in three places in one pull request: the type,
+the register, and every node file in core that carries it — and a counterpart change in every node
+repo that carries it, merged **before** the core change, so no satellite turns red.
+
 The horizon is the one with teeth. Everything newer than it counts as a pending server-side change
 and is protected from overwrite and from the prune, so advancing it past uncommitted work disarms
 exactly the protection two-way exists for — a later push would then delete that work. That is why

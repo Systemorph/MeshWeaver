@@ -329,8 +329,9 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     // 🚨 Invalidation signal: the SAME IMeshInvalidationFeed broadcast every write path
     // already publishes — post-commit storage writes (Created/Updated/Deleted) AND
     // the recycle operation (MeshOperations.RecycleCore publishes an Updated event
-    // before posting DisposeRequest; in Orleans the PathCacheInvalidatorGrain
-    // relays it cross-silo into each process's local feed). On each event the
+    // before posting DisposeRequest; other processes hear the commit through their own
+    // storage change feed — PostgreSQL LISTEN/NOTIFY via StorageChangeFeedRelay, #4802).
+    // On each event the
     // cache RESETS its failure state for that exact path: the storm-breaker
     // negative entry (error, fail count, backoff window) is dropped and a
     // terminally-FAULTED read entry is evicted, so the next natural read gets a

@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Immutable;
+using System.Reactive;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Threading;
 using MeshWeaver.Mesh.Services;
 
@@ -27,6 +29,9 @@ public sealed class CrossProcessChangeRelay : IDisposable
     private ImmutableList<IDisposable> _subscriptions = ImmutableList<IDisposable>.Empty;
     private FaultSwitch? _hold;
     private FaultSwitch? _drop;
+    private ImmutableDictionary<FaultInjectingStorageAdapter, AsyncSubject<Unit>> _departures =
+        ImmutableDictionary<FaultInjectingStorageAdapter, AsyncSubject<Unit>>.Empty.WithComparers(ReferenceEqualityComparer.Instance);
+    private int _holdInWriter;
     private int _disposed;
 
     /// <summary>
@@ -37,6 +42,7 @@ public sealed class CrossProcessChangeRelay : IDisposable
     public void Join(FaultInjectingStorageAdapter member)
     {
         ImmutableInterlocked.Update(ref _members, m => m.Add(member));
+        var departed = ImmutableInterlocked.GetOrAdd(ref _departures, member, _ => new AsyncSubject<Unit>());
         var subscription = member.LocalCommits
             // Noted on ARRIVAL (see FaultInjectingStorageAdapter.Changes), then queued in order.
             .Select(n =>
@@ -44,7 +50,11 @@ public sealed class CrossProcessChangeRelay : IDisposable
                 if (Volatile.Read(ref _hold) is not { IsClosed: true } hold)
                     return Observable.Return(n);
                 hold.NoteArrival($"relay {n.Kind} {n.Path} from {member.Name}");
-                return hold.Released.Select(_ => n);
+                var released = hold.Released.Select(_ => n);
+                // A writer-owned carrier (HoldInWriter) dies with its process: if the origin departs
+                // before the release, its queued notification is gone — the inner sequence completes
+                // empty and Concat moves on without delivering it.
+                return Volatile.Read(ref _holdInWriter) != 0 ? released.TakeUntil(departed) : released;
             })
             .Concat()
             .Subscribe(n => Forward(member, n));
@@ -56,7 +66,37 @@ public sealed class CrossProcessChangeRelay : IDisposable
     /// is released.
     /// </summary>
     public FaultSwitch Hold()
-        => Arm(ref _hold, "hold the cross-process change relay");
+    {
+        Interlocked.Exchange(ref _holdInWriter, 0);
+        return Arm(ref _hold, "hold the cross-process change relay");
+    }
+
+    /// <summary>
+    /// Like <see cref="Hold"/>, but the queued notifications live in the WRITER's process — the shape
+    /// of the retired Orleans memory stream (the writer's broadcast queue and a RAM queue grain): a
+    /// notification still queued when its origin <see cref="Depart">departs</see> is lost, and
+    /// nothing announces it. Exists for a negative control against the store-owned
+    /// <see cref="Hold"/>, so the departure itself is what loses the commit.
+    /// </summary>
+    public FaultSwitch HoldInWriter()
+    {
+        Interlocked.Exchange(ref _holdInWriter, 1);
+        return Arm(ref _hold, "hold the cross-process change relay in the writer's process");
+    }
+
+    /// <summary>
+    /// The process behind <paramref name="member"/> is gone (killed). A notification it still holds
+    /// under <see cref="HoldInWriter"/> dies with it; a store-owned <see cref="Hold"/> is unaffected.
+    /// </summary>
+    /// <param name="member">The departing process's innermost storage adapter.</param>
+    public void Depart(FaultInjectingStorageAdapter member)
+    {
+        if (Volatile.Read(ref _departures).TryGetValue(member, out var departed))
+        {
+            departed.OnNext(Unit.Default);
+            departed.OnCompleted();
+        }
+    }
 
     /// <summary>
     /// From now on, relayed notifications are LOST until the returned switch is released; each lost

@@ -19,6 +19,7 @@ using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Plugin.Packaging;
 using MeshWeaver.PluginCatalog;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using PackagingManifest = MeshWeaver.Plugin.Packaging.PluginManifest;
@@ -527,6 +528,46 @@ public class PreInstalledBaselineSelectionTest
         InstanceAutoRegistrationService.BaselineApplies(null, Parse("Plugins/Essentials", "Education/*"))
             .Should().BeTrue("one whole-source pattern means the deployment did not name its set");
         InstanceAutoRegistrationService.BaselineApplies(false, Parse()).Should().BeFalse();
+    }
+
+    /// <summary>
+    /// 🚨 The decision as a DEPLOYED portal reaches it: options BOUND from configuration, the way
+    /// <c>MemexConfiguration</c> builds them. The first fix read a nullable backing field behind the
+    /// bool; <c>ConfigurationBinder</c> writes every property's current value back through its setter,
+    /// so the field was always "true" and a fresh control instance naming five packages still selected
+    /// 48. Unset must stay unset through binding.
+    /// </summary>
+    [Theory]
+    [InlineData(null, false)]
+    [InlineData("true", true)]
+    [InlineData("false", false)]
+    public void BoundFromConfiguration_AnExplicitSet_FollowsTheKeyOnly(string? key, bool expectedBaseline)
+    {
+        var entries = new Dictionary<string, string?>
+        {
+            ["PluginCatalog:InstallByDefault:0"] = "Plugins/EntityViews",
+            ["PluginCatalog:InstallByDefault:1"] = "Plugins/Chat",
+        };
+        if (key is not null)
+            entries["PluginCatalog:InstallPreInstalledPackages"] = key;
+        var options = new Microsoft.Extensions.Configuration.ConfigurationBuilder()
+            .AddInMemoryCollection(entries).Build()
+            .GetSection(PluginCatalogOptions.SectionName).Get<PluginCatalogOptions>()!;
+
+        InstanceAutoRegistrationService.BaselineApplies(options.EffectiveInstallPreInstalledPackages, options.InstallByDefault)
+            .Should().Be(expectedBaseline);
+    }
+
+    [Fact]
+    public void BoundFromConfiguration_NoPatterns_KeepsTheBaseline()
+    {
+        var options = new Microsoft.Extensions.Configuration.ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["PluginCatalog:HomeUrl"] = "https://x.example" })
+            .Build().GetSection(PluginCatalogOptions.SectionName).Get<PluginCatalogOptions>()!;
+        InstanceAutoRegistrationService.BaselineApplies(options.EffectiveInstallPreInstalledPackages, options.InstallByDefault)
+            .Should().BeTrue();
+        new PluginCatalogOptions { InstallPreInstalledPackages = false }.EffectiveInstallPreInstalledPackages
+            .Should().Be(false, "code that sets the bool to false still suppresses");
     }
 
     [Fact]

@@ -3,7 +3,6 @@
   "namespace": "FutuRe/Country",
   "name": "Switzerland",
   "nodeType": "FutuRe/Country",
-  "isPersistent": true,
   "content": {
     "$type": "Country",
     "id": "CH",

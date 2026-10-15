@@ -6,7 +6,6 @@
   "category": "Products",
   "description": "Sir Rodney's Marmalade - 30 gift boxes",
   "icon": "/static/NodeTypeIcons/shopping-bag.svg",
-  "isPersistent": true,
   "content": {
     "$type": "ProductContent",
     "productId": 20,

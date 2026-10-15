@@ -6,7 +6,6 @@
   "category": "Suppliers",
   "description": "Zaanse Snoepfabriek - Zaandam, Netherlands",
   "icon": "/static/NodeTypeIcons/truck.svg",
-  "isPersistent": true,
   "content": {
     "$type": "SupplierContent",
     "supplierId": 22,

@@ -179,6 +179,29 @@ different `Type` from a new load context — was refused, failing the live swap 
 with the root's entries, so a module colliding with a PLATFORM client is still refused exactly as at boot.
 `ALiveSwapReRegistersATypedHttpClientTest` pins the N→N+1 probe and that root-collision control.
 
+🚨 **A module's NAMED options reach the root only through a NAMED forwarder, and a swap evicts the root's
+options cache.** `services.Configure<T>(name, …)`, `AddOptions<T>(name).Configure(…)` and every
+`AddHttpClient(name, …)` / `AddHttpClient<TClient>(…)` register a `ConfigureNamedOptions<T>` as an
+`IConfigureOptions<T>` — and the options factory applies a setup that is not ALSO an
+`IConfigureNamedOptions<T>` to the default name only. Behind the root's `DispatchProxy` (which implements the one
+interface it was created for) every named configuration a module made was therefore silently dropped: the
+root `IHttpClientFactory` handed out a module's typed client with none of its headers, base address or timeout,
+at boot, with nothing logged. The root now holds a `ModuleConfigureOptionsForwarder<T>` for every forwarded
+`IConfigureOptions<T>`; it applies the CURRENT generation's setup exactly as `OptionsFactory<T>` would — by name
+when it is named, to the default name otherwise. `HealthCheckServiceOptions` keeps its own forwarder
+(`ModuleHealthCheckOptionsForwarder`, which also rebinds each added check to activate in the module's scope), and
+that forwarder is named in the same way, so a module's `Configure<HealthCheckServiceOptions>("name", …)` reaches
+`IOptionsMonitor.Get("name")` (MeshWeaver#6749). And because `IOptionsMonitor<T>` builds a named instance once
+and caches it, `ModuleContexts.CommitAll` clears the root's `IOptionsMonitorCache<T>` for every options type the
+swapped generations configure (configure, post-configure or validate), after they are current — otherwise N+1's
+client kept N's configuration, and the cached delegates kept N's collectible context reachable. Not reached:
+`IOptions<T>.Value`, which a root singleton caches for the life of the container, and a consumer that copied an
+options instance into its own state. `ALiveSwapRefreshesATypedHttpClientsConfigurationTest` pins both halves,
+each with its own negative control. A forwarder's factory lambda captures values (the lifetime, the index),
+never the loop's `registration`: the first draft did, which hoisted it into the closure every forwarder of that
+iteration shares, and the descriptor's implementation type pinned generation N in the root —
+`ModuleRootServicesSwapTest`'s retention check caught it.
+
 🚨 **A list is served as a list.** The first images of this slice collapsed every multi-registration
 service to its LAST element in two places — the module container's fallback answered a platform type with
 one `root.GetRequiredService(type)` stand-in, and the per-node forwarders were one per TYPE. Measured on

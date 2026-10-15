@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "Old World Delicatessen - Anchorage, USA",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "OLDWO",

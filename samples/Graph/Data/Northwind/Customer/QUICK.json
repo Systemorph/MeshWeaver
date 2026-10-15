@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "QUICK-Stop - Cunewalde, Germany",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "QUICK",
