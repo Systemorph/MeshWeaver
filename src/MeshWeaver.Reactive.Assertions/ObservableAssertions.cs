@@ -215,6 +215,73 @@ public class ObservableAssertions<T>
         return this;
     }
 
+    /// <summary>
+    /// Negative assertion bounded by a POSITIVE signal: nothing is emitted before
+    /// <paramref name="settled"/> emits. This is the shape to reach for whenever the system offers
+    /// any later, observable fact that can only exist once the guarded step has been processed — the
+    /// owner's turn completed, a response to a request posted after it, a sentinel write that went
+    /// through the same pipeline. It costs as long as the system takes to settle, not a fixed window.
+    ///
+    /// <para>🚨 <see cref="NotEmit"/> must spend its WHOLE window to pass, so a window sized to be safe
+    /// on a slow runner is paid in full by every passing test: sixteen of them at
+    /// <c>TestTimeouts.Quick</c> (36 s on CI) were most of one CI part's 480 s budget (#6817).
+    /// Shortening the window instead weakens the guard on exactly the slow runner it was sized for.</para>
+    ///
+    /// <para>The wait for <paramref name="settled"/> is bounded by the chain's timeout
+    /// (<see cref="Within"/>), and running out of it FAILS — silence without a settled signal proves
+    /// nothing, so it is never folded into a pass. An error or completion of the SUBJECT before the
+    /// signal counts as "nothing emitted", as it does for <see cref="NotEmit"/>; an error of the
+    /// signal fails. Both are subscribed synchronously, subject first, before this returns, so the
+    /// assertion is armed before the test triggers the step it guards.</para>
+    /// </summary>
+    /// <typeparam name="TSettled">The settled signal's element type; only its first emission counts.</typeparam>
+    /// <param name="settled">Emits once the step under test has demonstrably been processed. It must
+    /// not be satisfiable by the very emission the assertion forbids.</param>
+    /// <param name="because">Why silence is expected; appended to the failure message.</param>
+    /// <param name="cancellationToken">Cancels the WAIT; see <see cref="NotEmit"/>.</param>
+    public async Task<ObservableAssertions<T>> NotEmitBefore<TSettled>(IObservable<TSettled> settled,
+        string because = "", CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(settled);
+        // Merge subscribes the subject first, then the signal — so an emission of the subject that
+        // the step caused is seen even when the signal is produced on the same thread right after.
+        var firstOfEither = _subject
+            .Select(value => (Emitted: true, Value: value))
+            // The subject ending without a value is "nothing was emitted" (NotEmit's semantics), so
+            // it must neither end the race nor fault it: the verdict is still owed by the signal.
+            .Materialize()
+            .Where(n => n.Kind == System.Reactive.NotificationKind.OnNext)
+            .Dematerialize()
+            .Merge(settled.Select(_ => (Emitted: false, Value: default(T)!)))
+            .FirstAsync()
+            .Timeout(_timeout, Observable.Defer(() =>
+                Observable.Throw<(bool Emitted, T Value)>(new AssertionWaitTimeoutException())));
+        (bool Emitted, T Value) outcome;
+        try
+        {
+            outcome = await ReactiveWait.First(SubscribeHereOffSyncContext(firstOfEither), cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (AssertionWaitTimeoutException)
+        {
+            throw new ObservableAssertionException(
+                $"Expected the observable not to emit before its settled signal{Reason(because)}, but the settled signal "
+                + $"did not arrive within {Describe(_timeout)} — silence without a settled signal proves nothing.");
+        }
+        catch (Exception ex)
+        {
+            throw new ObservableAssertionException(
+                $"Expected the observable not to emit before its settled signal{Reason(because)}, but the settled signal errored: {ex.Message}.");
+        }
+        if (outcome.Emitted)
+            throw new ObservableAssertionException(
+                $"Expected the observable not to emit before its settled signal{Reason(because)}, but it emitted {Format(outcome.Value)}.");
+        return this;
+    }
+
     private async Task<T> WaitForFirst(Func<T, bool>? predicate, string expectation, string because,
         CancellationToken cancellationToken)
     {
