@@ -66,8 +66,9 @@ internal sealed class SpeculativeCompilation(INuGetAssemblyResolver nugetResolve
             var resolved = await nugetResolver.ResolveAsync(proposedNugetRefs, targetFramework: null, ct);
             if (resolved.AssemblyPaths.Length > 0)
             {
-                effectiveReferences = inputs.References
-                    .Concat(resolved.AssemblyPaths.Select(p => (MetadataReference)MetadataReference.CreateFromFile(p)))
+                // Host wins, as in every compile path (CompileReferences.PackageAssembliesNotInHost).
+                effectiveReferences = CompileReferences
+                    .WithPackageAssemblies(inputs.References, resolved.AssemblyPaths)
                     .ToImmutableArray();
             }
         }

@@ -270,11 +270,10 @@ public static class NodeSetCompiler
                     + "them: the emitted assembly would be missing exactly the types the directive "
                     + "supplies, and the consumer would adopt it.");
             generatorPaths = resolveNuGet(inputs.NuGetReferences, ct);
-            allReferences =
-            [
-                .. references,
-                .. generatorPaths.Select(p => (MetadataReference)MetadataReference.CreateFromFile(p)),
-            ];
+            // Host wins: a closure assembly the host set already provides is not referenced twice
+            // (CompileReferences.PackageAssembliesNotInHost). The generator candidates and the
+            // content key below keep the full resolution — the runtime compile does the same.
+            allReferences = CompileReferences.WithPackageAssemblies(references, generatorPaths);
         }
 
         Directory.CreateDirectory(outputDirectory);

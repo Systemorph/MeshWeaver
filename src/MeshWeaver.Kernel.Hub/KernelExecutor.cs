@@ -801,8 +801,11 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
         try
         {
             var resolved = await resolver.ResolveAsync(refs, targetFramework: null, ct);
+            // Host wins (CompileReferences.PackageAssembliesNotInHost): a closure assembly the
+            // session already references is not added a second time.
             scriptOptions = scriptOptions.AddReferences(
-                resolved.AssemblyPaths
+                MeshWeaver.Compiler.CompileReferences
+                    .PackageAssembliesNotInHost(scriptOptions.MetadataReferences, resolved.AssemblyPaths)
                     .Select(KernelScriptReferences.GetOrCreateFromFile)
                     .Where(r => r is not null)
                     .Select(r => (MetadataReference)r!));

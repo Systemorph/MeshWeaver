@@ -102,6 +102,40 @@ shared global cache. Two sessions that resolve the SAME managed package version 
 of its native dependency therefore share the first binding. Only a NodeType's own collectible context
 isolates fully (its natives are loaded through, and released with, that context).
 
+## Compile references: the host wins
+
+Host unification decides what LOADS; the compile has to agree with it. Measured on
+an enterprise client portal (platform 3.1.10932) on 2026-10-15: a client NodeType declares
+`#r "nuget: Microsoft.Data.SqlClient, 6.1.1"` and failed to compile with `CS0433` (`JsonElement` in
+both System.Text.Json 10 and 9), `CS0121` (`GetRequiredService<T>` in both copies of
+Microsoft.Extensions.DependencyInjection.Abstractions), `CS0121` on `Enumerable.MaxBy`, a cascade of
+inference errors and hundreds of `CS1701`s. Three defects, three rules:
+
+1. **A closure assembly the host set already provides is not referenced.** Every compile path — the
+   bake (`NodeSetCompiler.Compile`), the runtime compile and its language-service inputs
+   (`MeshNodeCompilationService`), the speculative compile, the script compile and the kernel — composes
+   its references through `CompileReferences.WithPackageAssemblies` /
+   `PackageAssembliesNotInHost`: a package path whose assembly simple name the host reference set
+   (TPA or the container's `/app` + shared frameworks, plus modules) already holds is dropped, in
+   order, deterministically. Only genuinely new assemblies (`Microsoft.Data.SqlClient`, MSAL,
+   `Azure.Identity` where the host lacks them, …) are added. The generator candidates and the stage-1
+   content key (`GeneratedInputDigestOf`) keep the FULL resolution, so the bake and the runtime agree
+   on the key whatever their host sets are.
+2. **Generator discovery loads only assemblies that can hold a generator.** `SourceGeneratorLoader`
+   used to `Assembly.LoadFrom` every `#r` assembly into the default context to look for `[Generator]`
+   types — including SqlClient's `lib/` stub, which the NodeType context then unified with as if the
+   host shipped it (rule 1 of host unification), so `new SqlConnection` threw
+   `PlatformNotSupportedException` even with the `runtimes/` asset selected. It now reads the
+   metadata first and loads only an assembly that references `Microsoft.CodeAnalysis`.
+3. **A package's reference assembly is the compile surface where the toolchain carries one.** In-mesh
+   C# compiles against the host's implementation assemblies, and System.Interactive's implementation
+   keeps `EnumerableEx.MaxBy`/`MinBy` (namespace `System.Linq`) for binary compatibility while its
+   reference assembly hides them from every net6+ compile — so the BCL's `Enumerable.MaxBy` was
+   ambiguous in every NodeType, `#r` or not. `MeshWeaver.Compiler` embeds the `ref/` assembly of each
+   `CompileSurfacePackage` (the build fails if one stops reaching its compile), and
+   `CompileReferences.HostReference` compiles against it in place of the host file of the SAME identity
+   (name, version, public key token); a host carrying another build keeps its own file.
+
 ## What pins it
 
 - `NuGetRuntimeAssetTest` (offline): RID chains; the SqlClient layout selects `runtimes/unix` on
@@ -114,6 +148,12 @@ isolates fully (its natives are loaded through, and released with, that context)
   `Authentication=Active Directory Managed Identity` and `Active Directory Default` (no server contacted), asserts the loaded client
   is the `runtimes/` asset, and asserts nothing the host ships at an equal-or-newer version was loaded
   a second time.
+- `NuGetPackageHostWinsTest` (live feed, skips when unreachable): the client NodeType's shape —
+  `#r "nuget: Microsoft.Data.SqlClient, 6.1.1"` with `JsonElement`/`JsonObject`,
+  `GetRequiredService<T>`, `MaxBy` and a `SqlConnection` — compiled through the bake AND the runtime
+  compile service, then RUN: the emitted image references the host's System.Text.Json and
+  DependencyInjection.Abstractions, SqlClient loads from `runtimes/`, and the default context never
+  holds a package's compile asset. Its offline case compiles `Enumerable.MaxBy` against the host set.
 
 ## Related
 

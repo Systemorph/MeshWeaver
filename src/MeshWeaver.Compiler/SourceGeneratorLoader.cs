@@ -29,8 +29,48 @@ internal static class SourceGeneratorLoader
             .SelectMany(p => LoadFrom(p, logger))
             .ToImmutableArray();
 
+    /// <summary>
+    /// True when the assembly at <paramref name="path"/> can define a generator at all: it
+    /// references <c>Microsoft.CodeAnalysis</c>, where <see cref="GeneratorAttribute"/>,
+    /// <see cref="ISourceGenerator"/> and <see cref="IIncrementalGenerator"/> live. Read from the
+    /// METADATA, without loading anything.
+    ///
+    /// <para>🚨 Why it must not load to find out: discovery loads into the DEFAULT context, and a
+    /// <c>#r</c> closure is mostly ordinary libraries. Loading Microsoft.Data.SqlClient's
+    /// <c>lib/</c> COMPILE asset there — the "not supported on this platform" stub — made it the
+    /// HOST's copy as far as the NodeType load context could tell
+    /// (<c>PackageAssemblyProbe.TryUnifyWithHost</c> unifies with what the default context
+    /// holds), so the NodeType bound the stub instead of the package's
+    /// <c>runtimes/&lt;rid&gt;/lib/</c> asset and threw PlatformNotSupportedException at its first
+    /// <c>new SqlConnection</c>. A non-generator assembly is never loaded here now.</para>
+    /// </summary>
+    internal static bool CanDefineGenerators(string path)
+    {
+        try
+        {
+            using var stream = File.OpenRead(path);
+            using var pe = new System.Reflection.PortableExecutable.PEReader(stream);
+            if (!pe.HasMetadata) return false;
+            var reader = System.Reflection.Metadata.PEReaderExtensions.GetMetadataReader(pe);
+            foreach (var handle in reader.AssemblyReferences)
+            {
+                if (reader.StringComparer.Equals(reader.GetAssemblyReference(handle).Name, "Microsoft.CodeAnalysis"))
+                    return true;
+            }
+            return false;
+        }
+        catch (Exception e) when (e is IOException or BadImageFormatException or UnauthorizedAccessException
+                                      or InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
     private static ImmutableArray<ISourceGenerator> LoadFrom(string path, ILogger logger)
     {
+        if (!CanDefineGenerators(path))
+            return ImmutableArray<ISourceGenerator>.Empty;
+
         // A generator is a process-wide build TOOL loaded into the default (non-collectible)
         // context — never the per-node collectible ALC (which it would pin and leak).
         // Assembly.LoadFrom is idempotent per path (the runtime returns the already-loaded

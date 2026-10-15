@@ -52,7 +52,7 @@ public static class CompileReferences
                     continue;
                 try
                 {
-                    references.Add(MetadataReference.CreateFromFile(path));
+                    references.Add(HostReference(path));
                 }
                 catch
                 {
@@ -89,6 +89,125 @@ public static class CompileReferences
         }
 
         return references;
+    }
+
+    /// <summary>
+    /// The metadata reference a compile uses for the host assembly at <paramref name="path"/>:
+    /// the file itself — unless this toolchain carries the package's REFERENCE assembly for the
+    /// same identity (simple name, version, public key token), which is then compiled against in
+    /// its place. A package can keep members in its implementation for binary compatibility that
+    /// its reference assembly hides from every compile (System.Interactive's
+    /// <c>EnumerableEx.MaxBy</c>, which made the BCL's <c>Enumerable.MaxBy</c> ambiguous — CS0121);
+    /// <c>src/</c> never sees them, and in-mesh C# must not either. The reference keeps
+    /// <paramref name="path"/> as its file path, so it names the same host assembly. A host
+    /// carrying a different build of the package gets its own file — the embedded surface
+    /// describes only the identity it was built from.
+    /// </summary>
+    /// <param name="path">A host (TPA or container) assembly path.</param>
+    public static MetadataReference HostReference(string path)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(path);
+        using var surface = typeof(CompileReferences).Assembly.GetManifestResourceStream(
+            CompileSurfacePrefix + Path.GetFileName(path));
+        if (surface is null)
+            return MetadataReference.CreateFromFile(path);
+        var image = new byte[surface.Length];
+        surface.ReadExactly(image);
+        return SameIdentity(image, path)
+            ? MetadataReference.CreateFromImage(image, filePath: path)
+            : MetadataReference.CreateFromFile(path);
+    }
+
+    private const string CompileSurfacePrefix = "MeshWeaver.Compiler.CompileSurface.";
+
+    private static bool SameIdentity(byte[] referenceImage, string hostPath)
+    {
+        try
+        {
+            using var pe = new System.Reflection.PortableExecutable.PEReader(
+                System.Collections.Immutable.ImmutableArray.Create(referenceImage));
+            var surface = System.Reflection.Metadata.PEReaderExtensions.GetMetadataReader(pe)
+                .GetAssemblyDefinition().GetAssemblyName();
+            var host = System.Reflection.AssemblyName.GetAssemblyName(hostPath);
+            return string.Equals(surface.Name, host.Name, StringComparison.OrdinalIgnoreCase)
+                && surface.Version == host.Version
+                && (surface.GetPublicKeyToken() ?? []).AsSpan().SequenceEqual(host.GetPublicKeyToken() ?? []);
+        }
+        catch (Exception e) when (e is IOException or BadImageFormatException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 🚨 <b>HOST WINS.</b> The NuGet-resolved assembly paths a compile against
+    /// <paramref name="host"/> may add: every path whose assembly simple name the host reference set
+    /// already provides is DROPPED, as is a second path of a simple name already taken from the
+    /// package closure. Order is preserved, so the answer is a pure function of its two inputs.
+    ///
+    /// <para>A <c>#r "nuget:…"</c> resolution is the package's whole transitive closure, and that
+    /// closure routinely carries assemblies the host ships too — Microsoft.Data.SqlClient 6.1.1 brings
+    /// System.Text.Json 9 and Microsoft.Extensions.DependencyInjection.Abstractions 9 beside the
+    /// shared framework's 10. Appended as-is, Roslyn sees two <c>JsonElement</c>s (CS0433) and two
+    /// <c>GetRequiredService&lt;T&gt;</c>s (CS0121), and the NodeType never compiles (an enterprise
+    /// client portal, 2026-10-15). The host's copy is the one that is LOADED at run time anyway — the
+    /// NodeType load context unifies a package dependency with the host's equal-or-newer copy
+    /// (<see cref="MeshWeaver.NuGet.PackageAssemblyProbe"/>), and a name the packages do not supply
+    /// falls through to the default context — so compiling against it is compiling against what
+    /// runs.</para>
+    ///
+    /// <para>Applied to the METADATA REFERENCES only. The generator candidates and the stage-1
+    /// content key (<c>GeneratedInputDigestOf</c>) keep the full resolution, so the bake and the
+    /// runtime still agree on the key whatever their host sets are.</para>
+    /// </summary>
+    /// <param name="host">The reference set the compile is built against (TPA + modules).</param>
+    /// <param name="packageAssemblyPaths">The resolved package closure's compile assemblies.</param>
+    public static IReadOnlyList<string> PackageAssembliesNotInHost(
+        IEnumerable<MetadataReference> host, IEnumerable<string> packageAssemblyPaths)
+    {
+        ArgumentNullException.ThrowIfNull(host);
+        ArgumentNullException.ThrowIfNull(packageAssemblyPaths);
+        var taken = new HashSet<string>(
+            host.Select(SimpleNameOf).OfType<string>(), StringComparer.OrdinalIgnoreCase);
+        var added = new List<string>();
+        foreach (var path in packageAssemblyPaths)
+        {
+            if (string.IsNullOrEmpty(path)) continue;
+            if (taken.Add(Path.GetFileNameWithoutExtension(path)))
+                added.Add(path);
+        }
+        return added;
+    }
+
+    /// <summary>
+    /// <paramref name="host"/> followed by the package assemblies <see cref="PackageAssembliesNotInHost"/>
+    /// keeps — the ONE composition every <c>#r "nuget:…"</c> compile path uses (the bake, the
+    /// runtime compile, the script compile, the language service).
+    /// </summary>
+    /// <param name="host">The reference set the compile is built against (TPA + modules).</param>
+    /// <param name="packageAssemblyPaths">The resolved package closure's compile assemblies.</param>
+    public static IReadOnlyList<MetadataReference> WithPackageAssemblies(
+        IReadOnlyList<MetadataReference> host, IEnumerable<string> packageAssemblyPaths)
+    {
+        var added = PackageAssembliesNotInHost(host, packageAssemblyPaths);
+        if (added.Count == 0) return host;
+        var composed = new List<MetadataReference>(host.Count + added.Count);
+        composed.AddRange(host);
+        composed.AddRange(added.Select(p => (MetadataReference)MetadataReference.CreateFromFile(p)));
+        return composed;
+    }
+
+    /// <summary>
+    /// The assembly simple name a host reference provides: its file name without extension (a
+    /// TPA, module or NuGet assembly is named after its assembly, which is also how the run-time
+    /// probe finds it — <c>{dir}/{name}.dll</c>); <c>null</c> for an in-memory reference.
+    /// </summary>
+    private static string? SimpleNameOf(MetadataReference reference)
+    {
+        var path = reference is PortableExecutableReference { FilePath: { Length: > 0 } file }
+            ? file
+            : reference.Display;
+        return string.IsNullOrEmpty(path) ? null : Path.GetFileNameWithoutExtension(path);
     }
 
     /// <summary>

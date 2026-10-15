@@ -120,8 +120,11 @@ internal class ScriptCompilationService : IDisposable
             if (nugetRefs.Length > 0)
             {
                 var resolved = await _nugetResolver.ResolveAsync(nugetRefs, targetFramework: null, ct);
+                // Host wins (CompileReferences.PackageAssembliesNotInHost): only what the
+                // script's reference set does not already provide is added.
                 scriptOptions = scriptOptions.AddReferences(
-                    resolved.AssemblyPaths.Select(p => MetadataReference.CreateFromFile(p)));
+                    CompileReferences.PackageAssembliesNotInHost(scriptOptions.MetadataReferences, resolved.AssemblyPaths)
+                        .Select(p => MetadataReference.CreateFromFile(p)));
             }
 
             // Save source to disk for debugging if enabled
