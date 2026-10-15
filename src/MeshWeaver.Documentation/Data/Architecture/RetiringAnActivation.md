@@ -161,6 +161,7 @@ answer:
 | sent by this hub itself | Debug | nobody outside waits; `NackThroughParent` declines it (#4178) |
 | a request marked `[ReaskedOnShutdown]` (`SubscribeRequest`) | Debug | every producer rides the transient NACK out and asks the next activation (#4888, #5424, #5589) |
 | a request whose producer stamped `ReasksOnShutdown` on it (`PostOptions.ReaskingOnShutdown()`: the node point read's `GetDataRequest`, every node write's `PatchDataRequest`) | Debug | that producer rides the transient NACK out and asks the next activation (#5718, #6733). A reply never inherits the stamp: `ResponseFor` / `WithRequestIdFrom` drop it (#6717) |
+| a REPLY (carries `PostOptions.RequestId`, e.g. a `GetDataResponse` answering this address's own read) | Debug | its only reader is this hub's pending-response registry: a reply with a live callback passes every gate (`MessageHub.IsAwaitedResponse`), so a parked one had none, and the registry is cancelled by the same disposal. The replier awaits nothing, so nothing is posted to it (#6791) |
 | a message the routing layer may not answer: `[CanBeIgnored]` (`StreamEndedEvent`, `HeartBeatEvent`) or a `DeliveryFailure` | Debug | no sender awaits a reply, and `NackThroughParent` posts none (`AnswerPolicy`). Dropping it for a hub that is going away is what the declaration asks for (#5718) |
 | anything else, from another sender | **Error** | the waiter may take the NACK as final. That is the report worth an issue |
 
@@ -178,6 +179,14 @@ hub that was already leaving. The routing layer dropped such a message silently;
 know the contract, and its sentence "the sender is answered ShuttingDown" was false for it. An
 undeclared event through the same teardown still reports at Error, and that is the control in the
 same test class.
+
+The reply row was measured too (#6791): one module live-update recycle wave on `memex-cloud` filed
+a run of Errors, every one a `GetDataResponse` parked behind `[DataContextInit,MeshNodeInit]` on a
+hub the cascade reached mid-bring-up, each saying "the sender is answered ShuttingDown". That
+sentence was false: an on-target delivery is unpacked before the deferral decision, so the parked
+reply was typed, not an `IRequest`, and `NackThroughParent` declined it (`not-awaited`). Nobody
+was stranded and nobody was answered. The undeclared-REQUEST case in the same test class stays the
+Error control.
 
 ## Reading a refusal in the field
 

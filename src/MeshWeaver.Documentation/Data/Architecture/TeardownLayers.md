@@ -125,8 +125,9 @@ parked behind its gates is answered `ShuttingDown` and reported (`[DISPOSE-DISCA
 is an Error only when a waiter may take that answer as final. A self-addressed delivery, a
 `[ReaskedOnShutdown]` request (`SubscribeRequest`), a request whose producer stamped
 `ReasksOnShutdown` on it (`PostOptions.ReaskingOnShutdown()`: the node point read, every node
-write's `PatchDataRequest`) or a message the routing layer may not answer
-(`[CanBeIgnored]`, a `DeliveryFailure`) is re-asked or owed to nobody, and reports at Debug. The table is in [Retiring an Activation](../RetiringAnActivation) → *What is NOT a retirement*.
+write's `PatchDataRequest`), a message the routing layer may not answer
+(`[CanBeIgnored]`, a `DeliveryFailure`) or a REPLY to a request this address issued (#6791) is
+re-asked or owed to nobody, and reports at Debug. The table is in [Retiring an Activation](../RetiringAnActivation) → *What is NOT a retirement*.
 
 ---
 
