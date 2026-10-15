@@ -87,5 +87,12 @@ echo "=== deployed ==="; kubectl -n "$NS" get deploy,pvc,svc -o wide
 # fail the app deploy.
 if [ -n "${GRAFANA_PW:-}" ] && [ -f ./install-observability.sh ]; then
   echo "=== observability (GRAFANA_PW set) ==="
-  GRAFANA_PW="$GRAFANA_PW" bash ./install-observability.sh || echo "WARN: observability install failed (non-fatal)"
+  # The installer bounds itself by OBS_BUDGET_SECONDS, which counts from ITS start — so hand it
+  # what is left of THIS invoke's ~10-minute cap (540 s of it), not a fresh 540 s.
+  obs_budget=$(( ${DEPLOY_INVOKE_BUDGET_SECONDS:-540} - SECONDS ))
+  if [ "$obs_budget" -lt 180 ]; then
+    echo "WARN: only ${obs_budget}s of the invoke left — observability NOT run; run install-observability.sh in its own invoke."
+  else
+    GRAFANA_PW="$GRAFANA_PW" OBS_BUDGET_SECONDS="$obs_budget" bash ./install-observability.sh || echo "WARN: observability install failed (non-fatal)"
+  fi
 fi
