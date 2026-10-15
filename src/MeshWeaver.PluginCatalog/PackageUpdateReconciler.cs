@@ -138,13 +138,12 @@ internal static class PackageUpdateReconciler
         ILogger? logger,
         InstallOriginBinding? binding)
     {
-        // 🚨 A MISSING hash on either side is not evidence of a change — it is the ABSENCE of
-        // evidence, and the two must not be confused. Without a `manifest.lock` there is no content
-        // identity to compare, so "has it changed" is unanswerable; answering "yes" would act on the
-        // EVENT instead of the content, which is the one property this whole path is built on. Both
-        // callers would be wrong in the same way: the webhook would re-install the module on every
-        // green build of the repo (a doc-only commit elsewhere included), and the boot reconcile
-        // would re-install it on every single pod start.
+        // 🚨 A LISTING without a hash is not evidence of a change — it is the ABSENCE of evidence,
+        // and the two must not be confused. Without a `manifest.lock` the source states no content
+        // identity, so "has it changed" is unanswerable; answering "yes" would act on the EVENT
+        // instead of the content, which is the one property this whole path is built on: the webhook
+        // would re-install the module on every green build of the repo (a doc-only commit elsewhere
+        // included), and the boot reconcile on every single pod start.
         //
         // So: refuse, and say so. A module with no content identity can never auto-update, and that
         // is an authoring defect in the module's CI (Doc/Architecture/PluginAuthoring) rather than
@@ -154,18 +153,34 @@ internal static class PackageUpdateReconciler
         // 🚨 This is checked BEFORE the equality gate below, not after. `null == null` is *equal*,
         // so an equality-first order would silently absorb the commonest shape of this defect — both
         // sides missing a manifest.lock — into "nothing changed" and never say a word (Copilot catch).
-        if (string.IsNullOrEmpty(pkg.ModuleVersion) || string.IsNullOrEmpty(record.ModuleVersion))
+        if (string.IsNullOrEmpty(pkg.ModuleVersion))
         {
             logger?.LogWarning(
-                "Package update: {Id} has no module content identity ({Side} moduleVersion is empty), "
-                + "so it cannot be reconciled and will NOT auto-update. Its CI must emit a "
-                + "manifest.lock sidecar; until then the catalog card's manual Update is the only "
-                + "path. {Provenance}",
+                "Package update: {Id} has no module content identity (the source's listing carries no "
+                + "moduleVersion{RecordSide}), so it cannot be reconciled and will NOT auto-update. Its CI "
+                + "must emit a manifest.lock sidecar; until then the catalog card's manual Update is the "
+                + "only path. {Provenance}",
                 pkg.Id,
-                string.IsNullOrEmpty(pkg.ModuleVersion) ? "the source's" : "the install record's",
+                string.IsNullOrEmpty(record.ModuleVersion) ? ", and neither does the install record" : "",
                 provenance);
             return Observable.Return(Unit.Default);
         }
+
+        // 🚨 The OTHER side missing is a different case and is NOT refused (2026-10-15). A record
+        // installed before its repository's CI emitted a manifest.lock carries no moduleVersion,
+        // while the listing now states one. The record therefore cannot claim to EQUAL the listed
+        // content — what it holds is unknown — so the listed identity is a change: an Auto record
+        // installs unattended (which stamps the moduleVersion, so the next pass compares normally
+        // and stays silent), a Notify record is reminded once (NotifiedModuleVersion), a pinned one
+        // is left alone. Refusing here left every package installed before its repo emitted locks
+        // stuck forever behind a manual click — measured on an enterprise client's test instance,
+        // where three packages logged "the install record's moduleVersion is empty" on every
+        // green build after their repository started committing locks.
+        if (string.IsNullOrEmpty(record.ModuleVersion))
+            logger?.LogInformation(
+                "Package update: {Id}'s install record carries no moduleVersion (installed before its "
+                + "source emitted a manifest.lock); the listed {Candidate} is taken as a change. {Provenance}",
+                pkg.Id, pkg.ModuleVersion, provenance);
 
         // 🚨 THE gate: content identity, not the event that woke us. Equal module hashes ⇒ nothing in
         // this module changed ⇒ stay completely silent — no notification, and not one file fetched.
