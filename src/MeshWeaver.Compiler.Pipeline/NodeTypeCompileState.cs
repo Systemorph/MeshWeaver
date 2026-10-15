@@ -196,6 +196,10 @@ public record NodeTypeCompileState
     /// <c>StateMembers_AreExactlyTheMaskedOperationalMembers</c> refuses.</summary>
     public string? AdoptedModuleVersion { get; init; }
 
+    /// <summary>See <see cref="NodeTypeDefinition.DeliveryHoldReason"/> (#6832). Mirrored because
+    /// the sync seams mask it.</summary>
+    public string? DeliveryHoldReason { get; init; }
+
     /// <summary>See <see cref="NodeTypeDefinition.CurrentSourceFingerprint"/>.</summary>
     public string? CurrentSourceFingerprint { get; init; }
 
@@ -251,6 +255,7 @@ public record NodeTypeCompileState
                 CurrentSourceIncludes = definition.CurrentSourceIncludes,
                 AdoptedModuleVersion = definition.AdoptedModuleVersion,
                 CurrentModuleVersion = definition.CurrentModuleVersion,
+                DeliveryHoldReason = definition.DeliveryHoldReason,
                 CurrentSourceFingerprint = definition.CurrentSourceFingerprint,
                 BuildProvenance = definition.BuildProvenance,
             };
@@ -280,6 +285,7 @@ public record NodeTypeCompileState
         && AdoptedSourceIncludes is null && CurrentSourceIncludes is null
         && AdoptedModuleVersion is null
         && CurrentModuleVersion is null
+        && DeliveryHoldReason is null
         && CurrentSourceFingerprint is null
         && BuildProvenance is Mesh.Services.BuildProvenance.Compiled;
 }
