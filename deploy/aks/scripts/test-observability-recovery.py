@@ -20,6 +20,7 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+import time
 import textwrap
 import unittest
 import yaml
@@ -70,6 +71,8 @@ if 'get deploy loki-prometheus-server' in line or 'get deploy/loki-prometheus-se
     sys.exit(0)
 if 'get pods -l' in line:
     if '-o name' in line:
+        if 'slow-list' in scenario:
+            import time; time.sleep(3); sys.exit(1)        # a slow API server that then fails
         if 'list-error' in scenario: sys.exit(1)
         if 'termination-timeout' in scenario: out('pod/loki-prometheus-server-abc')
         sys.exit(0)                            # terminated once scaled to 0
@@ -81,6 +84,10 @@ if 'get pod loki-prometheus-server-abc' in line:
     else: out('0 true')
     sys.exit(0)
 if 'get pod loki-prometheus-tsdb-recovery' in line:
+    deleted = 'delete pod loki-prometheus-tsdb-recovery' in open(os.environ['CALLS']).read()
+    if 'leftover-stuck' in scenario or ('leftover-cleaner' in scenario and not deleted):
+        out('pod/loki-prometheus-tsdb-recovery')
+        sys.exit(0)
     if 'teardown-stuck' in scenario and os.path.exists(os.environ['MANIFEST']):
         out('pod/loki-prometheus-tsdb-recovery')   # present only once it was created
     sys.exit(0)
@@ -123,8 +130,6 @@ def run_installer(*scenario, budget=None):
         for name in ('helm', 'kubectl'):
             (root / name).write_text(STUB)
             (root / name).chmod(0o755)
-        (root / 'sleep').write_text('#!/bin/sh\nexit 0\n')
-        (root / 'sleep').chmod(0o755)
         (root / 'values.yaml').write_text('loki: {}\n')
         calls, manifest = root / 'calls', root / 'manifest'
         env = dict(os.environ, PATH=str(root) + os.pathsep + os.environ['PATH'],
@@ -133,7 +138,7 @@ def run_installer(*scenario, budget=None):
         if budget is not None:
             env['OBS_BUDGET_SECONDS'] = str(budget)
         result = subprocess.run(['bash', str(SCRIPT)], env=env, capture_output=True, text=True,
-                                timeout=30)
+                                timeout=90)
         return Run(result,
                    calls.read_text().splitlines() if calls.exists() else [],
                    manifest.read_text() if manifest.exists() else '')
@@ -176,6 +181,28 @@ class StuckReleaseTest(unittest.TestCase):
         self.assertEqual(run.code, 0, run.stderr)
         self.assertEqual(run.index('helm rollback'), -1, run.calls)
         self.assertNotIn('RECOVERY:', run.stdout)
+
+
+class LeftoverCleanerTest(unittest.TestCase):
+    def test_a_leftover_cleaner_is_removed_before_anything_else(self):
+        run = run_installer('pending-upgrade', 'leftover-cleaner')
+        self.assertEqual(run.code, 0, run.stderr)
+        delete = run.index('delete pod loki-prometheus-tsdb-recovery')
+        self.assertGreaterEqual(delete, 0, run.calls)
+        self.assertLess(delete, run.index('helm rollback'), run.calls)
+        self.assertLess(delete, run.index('helm upgrade'), run.calls)
+
+    def test_a_leftover_cleaner_that_stays_blocks_rollback_and_upgrade(self):
+        # The retry after a failed teardown: the server is at 0, so there is no crash evidence —
+        # the preflight alone must stop helm from restoring a server onto the cleaner's disk.
+        for scenario in (('leftover-stuck',), ('leftover-stuck', 'pending-upgrade')):
+            with self.subTest(scenario=scenario):
+                run = run_installer(*scenario)
+                self.assertEqual(run.code, 1, run.stdout)
+                self.assertIn('could not be confirmed gone', run.stderr)
+                self.assertEqual(run.index('helm rollback'), -1, run.calls)
+                self.assertEqual(run.index('helm upgrade'), -1, run.calls)
+                self.assertEqual(run.index('scale deploy'), -1, run.calls)
 
 
 class BoundedUpgradeTest(unittest.TestCase):
@@ -271,11 +298,26 @@ class FullTsdbTest(unittest.TestCase):
         # Still listed, or the listing itself failed: neither proves the server stopped.
         for scenario in ('termination-timeout', 'list-error'):
             with self.subTest(scenario=scenario):
-                run = run_installer('out-of-space', scenario)
+                run = run_installer('out-of-space', scenario, budget=185)   # a ~35 s stop deadline
                 self.assertEqual(run.code, 1, run.stdout)
                 self.assertIn('NOT touched', run.stderr)
                 self.assertEqual(run.index('apply -f -'), -1, run.calls)
                 self.assertGreater(run.index('--replicas=1'), run.index('--replicas=0'), run.calls)
+
+    def test_slow_listings_are_held_to_the_absolute_stop_deadline(self):
+        # Budget 185 s leaves a ~35 s stop deadline (150 s kept back). Each listing takes 3 s; the
+        # loop must end on wall-clock time, not on a count of its sleeps, and restore the server.
+        started = time.monotonic()
+        run = run_installer('out-of-space', 'slow-list', budget=185)
+        elapsed = time.monotonic() - started
+        self.assertEqual(run.code, 1, run.stdout)
+        self.assertRegex(run.stderr, r'stopped within 3[0-5]s')
+        self.assertLess(elapsed, 35 + 12, elapsed)
+        self.assertEqual(run.index('apply -f -'), -1, run.calls)
+        self.assertGreaterEqual(run.index('--replicas=1'), 0, run.calls)
+        for call in run.calls:
+            if 'get pods -l' in call and '-o name' in call:
+                self.assertLessEqual(int(re.search(r'--request-timeout=(\d+)s', call).group(1)), 35)
 
     def test_cleaner_not_confirmed_gone_leaves_the_server_at_zero(self):
         run = run_installer('out-of-space', 'recovery-fails', 'teardown-stuck')

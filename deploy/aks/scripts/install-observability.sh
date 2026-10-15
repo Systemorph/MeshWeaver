@@ -52,8 +52,16 @@ TSDB_RECOVERY_TARGET_PERCENT="${TSDB_RECOVERY_TARGET_PERCENT:-60}"
 
 remaining() { echo $(( BUDGET_SECONDS - SECONDS )); }
 recovery() { echo "RECOVERY: $*"; }
-# Short API calls are bounded per request; waits are bounded by their own --timeout (below).
-kc() { kubectl --request-timeout=20s -n "$NS" "$@"; }
+# Short API calls: each request is bounded by 20 s AND by what is left of the run's deadline (less
+# 10 s to report), so a slow API server can never carry the run past the budget; once the budget is
+# spent every call fails fast and the run reports RED. Waits are bounded by their own --timeout.
+request_seconds() {
+  local t=$(( $(remaining) - 10 ))
+  [ "$t" -gt "${1:-20}" ] && t=${1:-20}
+  [ "$t" -lt 1 ] && t=1
+  echo "$t"
+}
+kc() { kubectl --request-timeout="$(request_seconds)s" -n "$NS" "$@"; }
 
 # ONE deadline for the whole run. Every stage that can wait takes its bound from what is left of
 # OBS_BUDGET_SECONDS, minus what must stay in hand for what comes after it, and a stage whose
@@ -223,25 +231,33 @@ recover_full_tsdb() {
   # If this run is cut off between here and the scale-back below, the chart renders `replicas: 1`
   # for the server and the next run's helm upgrade restores it (three-way merge against live).
   stage_seconds 120 30 "$RECOVERY_KEEP_BACK" "wait for the Prometheus server to stop" || exit 1
-  local stop_limit=$STAGE_SECONDS waited=0 listed
+  local stop_deadline=$(( SECONDS + STAGE_SECONDS )) left listed
   kc scale deploy "$PROMETHEUS_DEPLOY" --replicas=0 || { echo "FATAL: could not scale $PROMETHEUS_DEPLOY to 0." >&2; exit 1; }
   # Only a SUCCESSFUL, EMPTY listing proves the server stopped. A failed request also prints
   # nothing, and RWO lets a second pod mount the disk on the same node — cleaning under a live
   # Prometheus is exactly what must not happen.
+  # The bound is an ABSOLUTE deadline: every request and every sleep is cut to the time left, so
+  # slow listings cannot stretch the loop (the replica restore is in RECOVERY_KEEP_BACK).
   while :; do
-    if listed=$(kc get pods -l "$selector" -o name 2>/dev/null) && [ -z "$listed" ]; then break; fi
-    if [ "$waited" -ge "$stop_limit" ]; then
-      echo "FATAL: could not confirm the Prometheus server stopped within ${stop_limit}s; the TSDB was NOT touched." >&2
+    left=$(( stop_deadline - SECONDS ))
+    if [ "$left" -le 0 ]; then
+      echo "FATAL: could not confirm the Prometheus server stopped within ${STAGE_SECONDS}s; the TSDB was NOT touched." >&2
       restore_prometheus "$replicas"
       exit 1
     fi
-    sleep 5; waited=$(( waited + 5 ))
+    if listed=$(kubectl --request-timeout="$(request_seconds "$left")s" -n "$NS" get pods -l "$selector" -o name 2>/dev/null) \
+      && [ -z "$listed" ]; then
+      break
+    fi
+    left=$(( stop_deadline - SECONDS ))
+    [ "$left" -gt 0 ] && sleep "$(( left < 5 ? left : 5 ))"
   done
 
   local recovery_pod="$RELEASE-prometheus-tsdb-recovery" ok=true
   if ! remove_recovery_pod "$recovery_pod"; then
-    echo "FATAL: a previous $recovery_pod is still present; the TSDB was NOT touched." >&2
-    restore_prometheus "$replicas"
+    # A cleaner that may still be deleting files on this very PVC: no server goes back onto it.
+    echo "FATAL: a previous $recovery_pod could not be confirmed gone; the TSDB was NOT touched and" >&2
+    echo "       $PROMETHEUS_DEPLOY is LEFT AT 0 so no server shares the disk with it." >&2
     exit 1
   fi
   {
@@ -319,6 +335,26 @@ restore_prometheus() {
   fi
 }
 
+# A cleaner left behind by an earlier run (its teardown could not be confirmed, so it left the
+# server at 0) must be GONE before anything — a rollback or an upgrade — can bring a server back
+# onto its disk. This runs whatever the server's state, because with the server at 0 there is no
+# crash evidence left to trigger the recovery path.
+ensure_no_leftover_cleaner() {
+  local pod="$RELEASE-prometheus-tsdb-recovery" present
+  if ! present=$(kc get pod "$pod" --ignore-not-found -o name); then
+    echo "FATAL: could not check for a leftover $pod — not starting anything that could restore a server onto its disk." >&2
+    exit 1
+  fi
+  [ -n "$present" ] || return 0
+  recovery "a TSDB recovery pod from an earlier run is still present — removing it before anything else."
+  kc logs "$pod" 2>&1 | tail -n 20 | sed 's/^/RECOVERY: (earlier run) /'
+  if ! remove_recovery_pod "$pod"; then
+    echo "FATAL: the leftover $pod could not be confirmed gone; nothing was rolled back or upgraded." >&2
+    exit 1
+  fi
+}
+
+ensure_no_leftover_cleaner
 recover_pending_release
 recover_full_tsdb
 
@@ -421,10 +457,16 @@ if [ ${#not_ready[@]} -gt 0 ]; then
   echo
   echo "NOT READY within the ${BUDGET_SECONDS}s budget: ${not_ready[*]}" >&2
   for workload in "${not_ready[@]}"; do
+    # Diagnostics are optional; the verdict is not. Stop collecting them before the budget ends.
+    if [ "$(remaining)" -lt 15 ]; then
+      echo "(diagnostics cut short: the ${BUDGET_SECONDS}s budget is spent)" >&2
+      break
+    fi
     echo "── $workload ──" >&2
     kc describe "$workload" 2>&1 | tail -n 25 >&2
     selector=$(selector_of "$workload")
     for pod in $(kc get pods -l "$selector" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
+      [ "$(remaining)" -lt 15 ] && break
       echo "── pod $pod: events ──" >&2
       kc get events --field-selector "involvedObject.name=$pod" 2>&1 | tail -n 10 >&2
       echo "── pod $pod: previous log (tail) ──" >&2

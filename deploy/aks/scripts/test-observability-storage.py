@@ -31,6 +31,7 @@ case "$*" in
   *'get deploy,sts,ds'*) printf 'statefulset.apps/loki\\n' ;;
   *'rollout status'*) exit 0 ;;
   *'get deploy loki-prometheus-server'*) exit 1 ;;
+  *'get pod loki-prometheus-tsdb-recovery'*) exit 0 ;;
   *) exit 8 ;;
 esac
 ''')
