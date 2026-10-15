@@ -360,17 +360,20 @@ public static class WorkspaceOperations
                                         ("count", invalidCount),
                                         ("collection", g.Key.TypeSource!.CollectionName)));
                             }
-                            var instances =
+                            var current = storeAndUpdates.Store.GetCollection(g.Key.TypeSource!.CollectionName);
+                            // The type source's commit transform runs HERE, inside the apply turn and
+                            // before the merge, so what it returns is what commits (ITypeSource.PrepareCommit
+                            // — the MeshNode source mints the next Version of a changed node there).
+                            var instances = g.Key.TypeSource!.PrepareCommit(current,
                                 new InstanceCollection(keyed
                                     .Where(x => x.Key is not null)
                                     .ToDictionary(x => x.Key!, x => x.Instance))
                                 {
                                     GetKey = g.Key.TypeSource!.TypeDefinition.GetKey
-                                };
+                                });
                             var updated = change.Options?.Snapshot == true
                                 ? instances
-                                : (storeAndUpdates.Store.GetCollection(g.Key.TypeSource.CollectionName) ?? new())
-                                .Merge(instances);
+                                : (current ?? new()).Merge(instances);
                             var updates =
                                 storeAndUpdates.Store.ComputeChanges(g.Key.TypeSource.CollectionName, updated)
                                     .ToArray();
