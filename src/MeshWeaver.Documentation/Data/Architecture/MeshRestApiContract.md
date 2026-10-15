@@ -41,6 +41,48 @@ Two things are deliberately NOT part of this contract:
   render-area timeout is a 504. A caller that wants to know whether a non-2xx is a verb answer reads
   `kind`.
 
+## A verb's deadline that expires is a 504, not a crash
+
+Many verbs bound a wait with an Rx `.Timeout(…)`. If a verb lets that `TimeoutException` escape
+instead of turning it into a sentinel, the shared body behind every verb (`MeshApiEndpoints.RunString`)
+answers it like `/render-area` answers its own deadline:
+
+| what escaped the verb | status | body |
+|---|---|---|
+| `TimeoutException` | **504** | `{ "error": "Timed out: POST /api/mesh/<verb> did not complete in time (…)", "kind": "Timeout" }` |
+| any other exception | **500**, from the portal's exception handler | the error page; the log line names the request (below) |
+
+The expiry is logged once, at Warning, with `{RequestMethod} {RequestRoute}`. Before this change
+the exception left as a faulted `Task`, and ASP.NET reported an unhandled 500 (MeshWeaver#6790).
+Other faults are deliberately NOT mapped. A fault that is not a deadline is a defect, and turning it
+into a response here would hide it. `Timeout` is not one of the three sentinel kinds, so the CLI
+treats the envelope as an ordinary HTTP failure.
+
+## The unhandled-exception line names the request
+
+`ExceptionHandlerMiddleware`'s own line, *"An unhandled exception has occurred while executing the
+request."*, names no request. When the exception has no frames of its own, which is always the case
+for an Rx timeout because Rx creates the exception without throwing it, the endpoint that failed
+cannot be recovered from the incident. That is how #6790 stayed undecidable.
+`MeshWeaver.Hosting.AspNetCore.Portal.RequestNamingExceptionHandling.UseRequestNamingExceptionHandler(path)`
+is the drop-in replacement for `UseExceptionHandler(path)`:
+
+- It re-executes onto the same error page.
+- It writes the line through the framework's own replacement point,
+  `ExceptionHandlerOptions.SuppressDiagnosticsCallback`, under the category
+  `MeshWeaver.Hosting.AspNetCore.UnhandledRequestException`: *"An unhandled exception has occurred
+  while executing {RequestMethod} {RequestRoute}."*
+- The line carries the same level, the same event id and the exception, and it is written ONCE: the
+  callback suppresses the middleware's pathless copy.
+- `{RequestRoute}` is the matched endpoint's route TEMPLATE (`/api/mesh/get`, `/api/content/{*path}`),
+  never the concrete path or the query string, because those carry user data. When no endpoint
+  matched, it is `(no endpoint matched)`.
+- An exception the middleware could not handle still gets the middleware's own line. That covers a
+  response that had already started and an error page that failed.
+
+The portal host's call site lives in MeshWeaver.Plugins (`MemexPortalComposition.StartMemexApplication`).
+It switches to this extension once a sealed platform set carries it.
+
 ## Why the raw string was a defect, not a style
 
 `MeshOperations` verbs return a `string` that is either a JSON document or one of three prose
@@ -85,6 +127,19 @@ stdout, `Error:` to stderr with exit 1, any other non-2xx a `MemexCliException`.
 that a document whose *content* mentions the words still goes out verbatim with a 200 — plus the
 CLI unwrap in both directions. With the classifier disabled, the three sentinel rows and the
 classifier case go red; the document row stays green (the mapping never touches it).
+
+`Memex.Portal.Shared.Test/UnhandledRequestIsNamedTest` runs a real TestServer host over the real mesh.
+It checks four things:
+
+- An expired verb deadline answers 504 and names the route.
+- A non-deadline fault still reaches the exception handler as a 500.
+- The request-naming handler logs exactly one line, and that line carries the route template and not
+  the concrete path.
+- As a control, the plain `UseExceptionHandler` line names no request.
+
+With the `TimeoutException` catch removed, the first check goes red with a 500. When the callback
+does not replace the middleware's line, the third goes red, either on the category or because two
+lines were written.
 
 ## Related
 
