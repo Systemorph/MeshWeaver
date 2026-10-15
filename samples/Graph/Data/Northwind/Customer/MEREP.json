@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "M\u00e8re Paillarde - Montr\u00e9al, Canada",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "MEREP",

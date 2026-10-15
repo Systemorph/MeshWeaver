@@ -6,7 +6,6 @@
   "category": "Tasks",
   "description": "Define TaskFlow's unique value proposition and market positioning",
   "icon": "/api/content/ACME/Project/Todo/icon.svg",
-  "isPersistent": true,
   "content": {
     "$type": "Todo",
     "title": "Create product positioning document",

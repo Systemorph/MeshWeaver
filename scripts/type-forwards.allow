@@ -40,3 +40,12 @@
 # $(MeshWeaverRoot) (core, MeshWeaver.Plugins, MeshWeaver.SocialMedia — the latter pinned
 # pre-split). A forwarder is impossible here: the base would have to reference the AI assembly,
 # which references the base (the documented reference-cycle case).
+
+# #6561 — #4802 slice 1 DELETES the Orleans memory-stream change feed; nothing moved, so there is no
+# landing site to forward to. Swept every fleet repo's origin/main: MeshWeaver.Plugins holds only a
+# test-class NAME (OrleansMeshChangeFeedTest, which never references the type) and two <c> doc
+# comments; Education, Reinsurance, SocialMedia, Manufacturing and Memex hold nothing. In-mesh
+# NodeType source cannot reference MeshWeaver.Hosting.Orleans, and neither type is part of any
+# module bundle or bake surface.
+MeshWeaver.Hosting.Orleans:MeshWeaver.Hosting.Orleans.OrleansMeshChangeFeed  #6561 — deleted, not moved; no module binds it (fleet git grep, origin/main)
+MeshWeaver.Hosting.Orleans:MeshWeaver.Hosting.Orleans.PathCacheInvalidatorGrain  #6561 — deleted, not moved; no module binds it (fleet git grep, origin/main)

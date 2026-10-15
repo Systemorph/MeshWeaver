@@ -3,7 +3,6 @@
   "namespace": "FutuRe/AmountType",
   "name": "Claims",
   "nodeType": "FutuRe/AmountType",
-  "isPersistent": true,
   "content": {
     "$type": "AmountType",
     "systemName": "Claims",

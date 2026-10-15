@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "Queen Cozinha - Sao Paulo, Brazil",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "QUEEN",

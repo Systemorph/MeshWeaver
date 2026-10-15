@@ -6,7 +6,6 @@
   "category": "Products",
   "description": "Nord-Ost Matjeshering - 10 - 200 g glasses",
   "icon": "/static/NodeTypeIcons/shopping-bag.svg",
-  "isPersistent": true,
   "content": {
     "$type": "ProductContent",
     "productId": 30,

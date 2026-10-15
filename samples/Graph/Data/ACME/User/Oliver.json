@@ -5,7 +5,6 @@
   "nodeType": "User",
   "description": "Compliance Officer at Software",
   "icon": "/static/NodeTypeIcons/person.svg",
-  "isPersistent": true,
   "content": {
     "$type": "User",
     "email": "oliver.chen@acme.example.com",

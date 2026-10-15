@@ -193,6 +193,49 @@ carries only the fields you pass, leaving every omitted one at its stored value.
 a body you intend to REPLACE must be read in full with `GetEvent` first — `UpdateEvent` replaces the
 whole body, so whatever you do not send back is gone.
 
+## Several mailboxes — a work and a personal one (2026-10-13)
+
+A person may connect **more than one Microsoft 365 mailbox** to the assistant. Each mailbox is its
+own consent and its own encrypted grant; the assistant picks one per request.
+
+**Where the grants live.** The grant written first — and every grant stored before several
+mailboxes existed — is the **primary** mailbox, at its original path `Auth/_EaCredential/{user}`.
+Nobody migrates or reconnects: an existing grant simply *is* the primary. Each mailbox added since
+is a record beneath it, `Auth/_EaCredential/{user}/ea-credential--{10 hex}` (`EaMailboxes.NewAccountId`),
+and **no id is ever reused**. Every record carries the address the person signed in as
+(`EaCredential.Address`, read from the id token of the consent — `openid profile email` are asked
+for at consent only, never added to the stored scope string, so no existing grant is invalidated);
+a grant stored before addresses were recorded gains its address at its next consent.
+
+**Connecting another mailbox.** `/auth/ea/connect?account=new` always runs the consent, with
+Microsoft's account picker (`prompt=select_account`), so the person can choose a different
+Microsoft account. The OAuth `state` carries the account (`acct:{account}:{return URL}`; a state
+without the prefix is the primary, so a consent in flight across a deploy still completes), and the
+callback stores the grant:
+
+- an address that is already connected **reconnects that mailbox** — never a duplicate;
+- a person with no primary yet gets the primary;
+- otherwise a fresh `ea-credential--…` id.
+
+`?account={id}` reconnects one added mailbox, with its address as the `login_hint`.
+
+**Choosing the mailbox.** `IEaGraphAuth.GetAccessToken(user, account)` mints for one mailbox;
+`GetMailboxes(user)` lists them all, primary first, each with its three-state answer (an
+undetermined read is listed as such, never dropped). The assistant's mail and calendar tools take an
+optional **`mailbox`** argument — an address or account id — and default to the **primary** (or, if
+the primary cannot serve, the first connected mailbox); `ListMailboxes` tells the model which exist.
+A draft lives in the mailbox it was made in, so amending or discarding it names the same mailbox.
+Drafting stays the only mail write (`Email:AgentSend` unchanged); Teams uses the primary grant.
+
+**Removing one.** `RemoveMailbox(user, account)` deletes an added mailbox's record. The primary is
+**emptied, never deleted**: `DeleteNode` removes descendants, and the added mailboxes are the
+primary's children. An emptied primary reads as not connected and is not listed.
+
+**Compatibility.** Every new `IEaGraphAuth` member has a default that serves the primary only, so
+an implementation written before several mailboxes existed keeps compiling and keeps working.
+Settings › Connections lists the mailboxes under the Microsoft 365 tile (MeshWeaver.Plugins,
+`AI/GettingStartedAndConnections`).
+
 ## Architecture
 
 - **`IEaGraphAuth` / `EaGraphAuth`** — builds the consent URL, exchanges the auth code, stores/refreshes

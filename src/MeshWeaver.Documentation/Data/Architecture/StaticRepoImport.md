@@ -237,7 +237,33 @@ Changes iff a node or an inline content file is added, removed, or modified — 
 
 GitSync's changed-path set normally limits writes to files changed between the last synced commit and the fetched head. The repository bytes do not capture every change in how those files are read, though: an older image can deserialize a typed JSON object without a newly-added property, persist the older shape, and later report the same repository commit as up to date. On a later sync, the new image parses that unchanged file into a different source node.
 
-For an existing node outside the Git diff, the importer now compares the current parsed-source token with the prior import manifest. A mismatch is enough evidence to re-evaluate that node through the ordinary upsert and conflict-policy path; a match still skips it. If the manifest is missing, an out-of-diff node remains skipped, preserving the guard against a missing/stale manifest causing a whole-partition rewrite. A drifted path joins the effective evaluated set only once its re-evaluation is actually WRITTEN, so the manifest records the new token once, not on every sync. Two-way imports still preserve a newer human-authored live node — and a drifted node they preserve keeps its PRIOR manifest token. Recording the new token for content that never landed is the #1326 false claim in the two-way direction: a later pass in which the server copy no longer wins would read "already at this content", skip the node, and leave it divergent for good. A Git-diff-scoped pass still cannot stamp a whole-partition success marker.
+For an existing node outside the Git diff, the importer now compares the current parsed-source token with the prior import manifest. A mismatch is enough evidence to re-evaluate that node through the ordinary upsert and conflict-policy path; a match still skips it. If the manifest is missing, an out-of-diff node remains skipped, preserving the guard against a missing/stale manifest causing a whole-partition rewrite. A drifted path's new token is recorded only once its re-evaluation is actually WRITTEN (see "The manifest claims only what landed" below), so the manifest records it once, not on every sync. Two-way imports still preserve a newer human-authored live node — and a drifted node they preserve keeps its PRIOR manifest token. A Git-diff-scoped pass still cannot stamp a whole-partition success marker.
+
+### The manifest claims only what landed
+
+The per-node manifest (`{P}/_Activity/import-manifest`) is a map of path to source token, and every entry is a **claim**: the mesh holds that token's content at that path. Two skips trust it without reading the node — the per-node "unchanged" skip (entry equals the source token and the node is present) and the partition-level short-circuit (a converged marker plus a manifest that matches every source token). So an entry recorded for content that never landed is permanent: every later non-force import skips the node.
+
+🚨 **A run records the new token only for a path whose write the owner ACKNOWLEDGED** (`StaticRepoImporter.ComputeManifest`, issue #6628). Per path:
+
+| What happened this run | Manifest entry |
+|---|---|
+| Written — the upsert or bulk create came back with the node | the current source token |
+| Refused deterministically, not also written | a refusal entry for the current token ([A Content Verdict Is Per Node](../AContentVerdictIsPerNode)) |
+| Failed retryably, not also written | none, so the next pass looks again |
+| Anything else: skipped as unchanged, preserved by two-way sync, skipped as claimed, a blocked create, outside a Git-diff scope, a root left untouched because it is claimed | the PREVIOUS entry, or none |
+| Pruned (deleted) this run | removed |
+
+An upsert answered "already exists" is **presence, not a write**: nothing was applied, so it counts as a retryable failure and is never claimed (`StaticRepoImporter.AcknowledgedWrites`).
+
+**What went wrong before.** The map used to be built from the SOURCE and narrowed afterwards: a Git-diff-scoped run kept the previous token for out-of-scope paths (#1326) and failures were carved out (#4459). A FULL run, though, claimed every source path that did not fail, including paths it preserved, skipped as claimed, or whose write was answered without being applied. On memex.systemorph.com (2026-10-09) two Code source nodes stayed on the previous revision while their partitions' later non-force updates answered "an earlier FULL import already recorded this exact content", and the NodeTypes compiled against them stayed in `Error` until a forced import. Building the map from what landed makes that claim impossible to write, whichever way the write went missing.
+
+**Why the skip does not read the stored node instead.** Comparing the live node against the source on every skip was considered and rejected. The token is a hash of the RAW source node, while the store holds the materialized node after the owner's merge (prerender, preserved compile state), so no cheap equality exists without a new persisted stamp on `MeshNode`. The only stored-side view the importer holds without extra I/O is its eventually-consistent subtree query, and deciding on a node's content from a query is the CQRS rule's forbidden shape. And a comparison that errs towards "differs" would put no-op upserts into the written set, which is what drives NodeType recompiles (the mass-recompile storm the incremental skip exists to prevent). An honest manifest gives the skip the same safety with no read.
+
+**The cost.** A claimed node, or a claimed partition root, whose source changes now keeps its old entry, so the partition-level short-circuit no longer fires for that partition and each sync runs the full evaluation. That evaluation writes nothing while the claim stands. Two-way preservation already made such a run non-converged, so it changes nothing there.
+
+**What it does not repair.** Entries that an older image already recorded falsely stay until that node's source changes again, or until a forced import (GitSync `op=update force=true`) or a reconciling import rewrites the partition.
+
+`AManifestClaimsOnlyWhatLandedTest` pins the full-run shapes: a preserved node and a claimed node are not claimed, and the next run rewrites each one. It also pins the map rule itself and the "already exists" classification.
 
 The token is a hash over the parsed node with no I/O, and every scoped pass already computed it for every source node when writing the manifest — so detecting drift adds CPU proportional to the partition, never a read or a write.
 

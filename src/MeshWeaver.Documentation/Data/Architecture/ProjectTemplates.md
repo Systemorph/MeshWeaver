@@ -199,7 +199,6 @@ Create a JSON file in `samples/Graph/Data/User/` and a matching access assignmen
   "name": "Jane Doe",
   "nodeType": "User",
   "icon": "/static/NodeTypeIcons/person.svg",
-  "isPersistent": true,
   "content": {
     "$type": "User",
     "email": "jane@example.com",

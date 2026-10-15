@@ -6,7 +6,6 @@
   "category": "Lines of Business",
   "description": "Multi-peril commercial package policies covering property, liability, and inland marine risks for businesses",
   "icon": "/api/content/FutuRe/AmericasIns/LineOfBusiness/icon.svg",
-  "isPersistent": true,
   "content": {
     "$type": "LineOfBusiness",
     "systemName": "COMMERCIAL",

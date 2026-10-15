@@ -1,3 +1,5 @@
+using System.Collections.Immutable;
+using System.Globalization;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -98,7 +100,8 @@ public static class AreaProbe
 
     /// <summary>
     /// Renders (= EXECUTES) the <c>Tests</c> layout area on <paramref name="nodePath"/> and
-    /// waits for a terminal verdict frame: any ❌ row or framework error control is red; an
+    /// waits for a terminal verdict frame: any row whose RESULT is ❌ (a case's output never
+    /// decides), a ❌ in the verdict's own title or markdown, or a framework error control is red; an
     /// all-green <c>N/N passed</c> summary (or ✅ rows without ❌) is green. No verdict within
     /// <paramref name="timeout"/> is red — a Tests area that reports nothing is a broken gate,
     /// never a silent pass.
@@ -189,16 +192,26 @@ public static class AreaProbe
         if (renderError is not null)
             return new AreaVerdict(CheckOutcome.Failed, FirstLines(renderError));
 
-        if (strings.Any(s => s.Contains('❌')))
-            return new AreaVerdict(CheckOutcome.Failed, RedDetail(frame, strings));
+        // 🚨 The verdict is read COLUMN-WISE (TestsAreaFrame), never as "a ❌ anywhere in the frame".
+        // A case's OUTPUT is free text the case wrote — a nested report, a copied line — and may
+        // carry ❌ (or an "N/M passed" sentence) on a case that PASSED; MeshTestRunner keeps that
+        // output in the verdict grid. Sniffing every cell turned such a green row into a red gate
+        // naming the green case as the failure (#6714). A grid row is red when its RESULT says so;
+        // outside the grid, the verdict's own title and markdown text still count as written.
+        var read = TestsAreaFrame.Read(frame);
+        var verdictText = read.Text.Prepend(read.Title ?? "").ToImmutableArray();
 
-        foreach (var candidate in strings)
+        var redRows = read.Rows.Where(IsRedRow).ToImmutableArray();
+        if (redRows.Length > 0 || verdictText.Any(s => s.Contains('❌')))
+            return new AreaVerdict(CheckOutcome.Failed, RedDetail(redRows, verdictText));
+
+        foreach (var candidate in verdictText)
         {
             var summary = PassSummary.Match(candidate);
             if (summary.Success)
             {
-                var passed = int.Parse(summary.Groups[1].Value);
-                var total = int.Parse(summary.Groups[2].Value);
+                var passed = int.Parse(summary.Groups[1].Value, CultureInfo.InvariantCulture);
+                var total = int.Parse(summary.Groups[2].Value, CultureInfo.InvariantCulture);
                 return passed == total
                     ? new AreaVerdict(CheckOutcome.Passed, $"{passed}/{total} passed")
                     : new AreaVerdict(CheckOutcome.Failed, $"only {passed}/{total} passed");
@@ -206,10 +219,14 @@ public static class AreaProbe
         }
 
         // A green table without the summary line still counts (❌ was excluded above).
-        return strings.Any(s => s.Contains('✅'))
+        return read.Rows.Any(r => r.Result.StartsWith('✅')) || verdictText.Any(s => s.Contains('✅'))
             ? new AreaVerdict(CheckOutcome.Passed, "all rendered cases green")
             : null;
     }
+
+    // A grid case is red when its RESULT column says so — the glyph is the contract every reader
+    // matches (MeshTestRunner.ColumnTitles.Display); the localized word beside it is not.
+    private static bool IsRedRow(TestsAreaFrame.Row row) => row.Result.StartsWith('❌');
 
     /// <summary>
     /// True when the frame carries the requested area's rendered control — and, for a
@@ -321,81 +338,29 @@ public static class AreaProbe
 
     /// <summary>
     /// The actionable lines of a red verdict frame: every failing case WITH its reason, then the
-    /// "N/M passed" summary. Two shapes carry the ❌: a markdown table (one string, a row per line)
-    /// and the streaming runner's data grid, where a case is an OBJECT whose cells are separate
-    /// strings — <c>{class, case, result: "❌ FAIL", time, output}</c>. Reading the ❌ string alone
-    /// in the second shape reported a bare "❌ FAIL": the case and the failing assertion sit in the
-    /// sibling cells. So a ❌ cell is reported with every cell of its row.
+    /// "N/M passed" summary. Two shapes carry a failure: a markdown table (one string, a row per
+    /// line, whose ❌ lines carry their own reasons) and the streaming runner's data grid, where a
+    /// case is a row whose cells are separate — <c>{class, case, result: "❌ FAIL", time, output}</c>.
+    /// Reading the ❌ cell alone in the second shape reported a bare "❌ FAIL": the case and the
+    /// failing assertion sit in the sibling cells. So a red row is reported with every cell, and
+    /// ONLY red rows are — a passing row whose output happens to carry a ❌ is not a failure (#6714).
     /// </summary>
-    private static string RedDetail(JsonElement frame, IReadOnlyList<string> strings)
+    private static string RedDetail(ImmutableArray<TestsAreaFrame.Row> redRows, ImmutableArray<string> verdictText)
     {
-        var lines = new List<string>();
-        foreach (var content in ContentRoots(frame))
-            CollectRedRows(content, lines);
-        if (lines.Count == 0)
-            lines.Add(FirstLines(strings.First(s => s.Contains('❌'))));
-        var summary = strings
+        var lines = redRows
+            .Select(r => Cap(string.Join(" · ",
+                ImmutableArray.Create(r.Class, r.Case, r.Result, r.Time, r.Output).Where(c => c.Length > 0))))
+            .Concat(verdictText
+                .SelectMany(s => s.ReplaceLineEndings("\n").Split('\n'))
+                .Where(l => l.Contains('❌'))
+                .Select(Cap))
+            .ToImmutableList();
+        var summary = verdictText
             .SelectMany(s => s.ReplaceLineEndings("\n").Split('\n'))
             .FirstOrDefault(l => PassSummary.IsMatch(l));
         if (summary is not null && !lines.Any(l => l.Contains(summary, StringComparison.Ordinal)))
-            lines.Add(summary);
+            lines = lines.Add(summary);
         return string.Join("\n", lines.Distinct());
-    }
-
-    // The non-chrome parts of a frame — the same scope CollectStrings reads.
-    private static IEnumerable<JsonElement> ContentRoots(JsonElement frame)
-    {
-        if (frame.ValueKind != JsonValueKind.Object)
-        {
-            yield return frame;
-            yield break;
-        }
-        foreach (var property in frame.EnumerateObject())
-        {
-            if (string.Equals(property.Name, LayoutAreaReference.Areas, StringComparison.Ordinal)
-                && property.Value.ValueKind == JsonValueKind.Object)
-            {
-                foreach (var area in property.Value.EnumerateObject())
-                    if (!IsChromeArea(area.Name))
-                        yield return area.Value;
-            }
-            else
-            {
-                yield return property.Value;
-            }
-        }
-    }
-
-    private static void CollectRedRows(JsonElement node, List<string> into)
-    {
-        switch (node.ValueKind)
-        {
-            case JsonValueKind.String:
-                // A markdown table, or a bare row string: its ❌ lines carry their own reasons.
-                if (node.GetString() is { } text && text.Contains('❌'))
-                    into.AddRange(text.ReplaceLineEndings("\n").Split('\n')
-                        .Where(l => l.Contains('❌'))
-                        .Select(Cap));
-                break;
-            case JsonValueKind.Object:
-                var cells = node.EnumerateObject()
-                    .Where(p => p.Value.ValueKind == JsonValueKind.String && !p.Name.StartsWith('$'))
-                    .Select(p => p.Value.GetString())
-                    .Where(v => !string.IsNullOrEmpty(v))
-                    .Select(v => v!)
-                    .ToList();
-                if (cells.Any(c => c.Contains('❌') && !c.Contains('\n')))
-                    // A row of cells: the case, its result AND its output, in the row's own order.
-                    into.Add(Cap(string.Join(" · ", cells)));
-                else
-                    foreach (var property in node.EnumerateObject())
-                        CollectRedRows(property.Value, into);
-                break;
-            case JsonValueKind.Array:
-                foreach (var item in node.EnumerateArray())
-                    CollectRedRows(item, into);
-                break;
-        }
 
         static string Cap(string row) =>
             row.Length <= MaxRowLength ? row : row[..MaxRowLength] + " …";

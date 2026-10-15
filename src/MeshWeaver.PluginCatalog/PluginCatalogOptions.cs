@@ -152,27 +152,47 @@ public sealed class PluginCatalogOptions
     /// declares an EXPLICIT set — every entry naming a package (<c>Source/Package</c>), none a whole
     /// source (<c>Source/*</c>). A deployment that names its packages gets exactly those plus their
     /// declared <c>requires</c>; until this, the baseline added every <c>preInstalled</c> package of
-    /// every source on top (a fresh control instance naming five packages selected 48). Set it
-    /// <c>true</c> to keep the baseline beside a declared set, <c>false</c> to suppress it
-    /// everywhere — an explicit value always wins. The getter keeps reading <c>true</c> while
-    /// unset (the surface and its default are unchanged); the decision reads
-    /// <see cref="InstallPreInstalledPackagesConfigured"/>, which tells "unset" from "true".</para>
+    /// every source on top (a fresh control instance naming five packages selected 48). Configure the
+    /// key <c>true</c> to keep the baseline beside a declared set, <c>false</c> to suppress it
+    /// everywhere — an explicit configured value always wins. 🚨 In CODE, assigning this property
+    /// <c>true</c> is indistinguishable from its default (the configuration binder writes the
+    /// default back through the setter on every bind, so "set to true" cannot be told from "not
+    /// set"); code that wants the baseline beside an explicit set assigns
+    /// <see cref="InstallPreInstalledPackagesConfigured"/> = <c>true</c>. Assigning <c>false</c>
+    /// here still suppresses it. This property keeps its surface and default
+    /// (<c>true</c>); "unset" is read from <see cref="InstallPreInstalledPackagesConfigured"/>, which
+    /// the configuration binds from the SAME key.</para>
     /// </summary>
-    public bool InstallPreInstalledPackages
-    {
-        get => installPreInstalledPackages ?? true;
-        set => installPreInstalledPackages = value;
-    }
-
-    private bool? installPreInstalledPackages;
+    public bool InstallPreInstalledPackages { get; set; } = true;
 
     /// <summary>
-    /// <see cref="InstallPreInstalledPackages"/> as CONFIGURED: null when nothing set it (no
-    /// configuration key, no assignment), else the value set. What the default install's baseline
-    /// decision reads — an explicit value wins, an unset one follows
-    /// <see cref="InstallByDefault"/>.
+    /// <c>PluginCatalog:InstallPreInstalledPackages</c> exactly as CONFIGURED — null when the key is
+    /// absent. Bound from the same key as <see cref="InstallPreInstalledPackages"/>
+    /// (<see cref="Microsoft.Extensions.Configuration.ConfigurationKeyNameAttribute"/>).
+    ///
+    /// <para>🚨 <b>Why a second, nullable property and not a nullable backing field behind the
+    /// bool.</b> <c>ConfigurationBinder</c> reads every bindable property's CURRENT value and writes
+    /// it back through the setter whether or not the key exists (it skips only a null value). A bool
+    /// whose getter answered <c>true</c> while unset was therefore always "set to true" by binding,
+    /// and the explicit-set rule never fired on a deployed portal — measured on a fresh control
+    /// instance running the first fix: the pass still selected 48 packages. A <c>bool?</c> that is
+    /// null is left alone by the binder, so null here really means "not configured".</para>
+    ///
+    /// <para>Code that builds the options by hand may set either: an explicit <c>false</c> on
+    /// <see cref="InstallPreInstalledPackages"/> still suppresses the baseline; to keep the baseline
+    /// beside an explicit set in code, set this property to <c>true</c>.</para>
     /// </summary>
-    public bool? InstallPreInstalledPackagesConfigured => installPreInstalledPackages;
+    [Microsoft.Extensions.Configuration.ConfigurationKeyName(nameof(InstallPreInstalledPackages))]
+    public bool? InstallPreInstalledPackagesConfigured { get; set; }
+
+    /// <summary>
+    /// The baseline decision's input: <see cref="InstallPreInstalledPackagesConfigured"/> when the
+    /// configuration states it, else <c>false</c> when code set
+    /// <see cref="InstallPreInstalledPackages"/> to false, else null (unset — follow
+    /// <see cref="InstallByDefault"/>).
+    /// </summary>
+    public bool? EffectiveInstallPreInstalledPackages =>
+        InstallPreInstalledPackagesConfigured ?? (InstallPreInstalledPackages ? null : false);
     /// <summary>This installation's public base URL, recorded on the instance node (advisory).
     /// 🚨 Since #3650 it is also where a registry DELIVERS its module-published broadcast
     /// (<see cref="ModulePublished"/>): an installation that records none is reached by the safety

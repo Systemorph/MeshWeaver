@@ -5,7 +5,6 @@
   "nodeType": "CorporateIdentity",
   "description": "Systemorph corporate identity for document exports.",
   "icon": "/api/content/Systemorph/logo_t.png",
-  "isPersistent": true,
   "content": {
     "$type": "CorporateIdentity",
     "id": "Systemorph",

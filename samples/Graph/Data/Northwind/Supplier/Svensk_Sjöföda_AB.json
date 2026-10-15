@@ -6,7 +6,6 @@
   "category": "Suppliers",
   "description": "Svensk Sj\u00f6f\u00f6da AB - Stockholm, Sweden",
   "icon": "/static/NodeTypeIcons/truck.svg",
-  "isPersistent": true,
   "content": {
     "$type": "SupplierContent",
     "supplierId": 17,

@@ -53,11 +53,11 @@ public static class MeshExtensions
         config.TypeRegistry.WithType(typeof(PingResponse), nameof(PingResponse));
         config.TypeRegistry.WithType(typeof(MeshNode), nameof(MeshNode));
         config.TypeRegistry.WithType(typeof(MeshNodeState), nameof(MeshNodeState));
-        // MeshChangeEvent rides over the Orleans memory stream for the cross-silo change-feed
-        // relay (OrleansMeshChangeFeed). The Orleans allowed-types gate (MeshTypeNameFilter) only
-        // permits IMessageDelivery + types the hub's ITypeRegistry knows; unregistered, a
-        // MeshChangeEvent published to the stream is rejected at the manifest gate and never
-        // reaches a cross-silo subscriber. Register it (short name) so it can cross that boundary.
+        // MeshChangeEvent once rode the Orleans memory stream for a cross-silo change-feed relay
+        // that is retired (#4802: cross-process delivery is the storage layer's own feed). The
+        // registration stays because the Orleans allowed-types gate (MeshTypeNameFilter) only
+        // permits IMessageDelivery + types the hub's ITypeRegistry knows, and a silo of the
+        // previous generation may still serialize one during a rolling update.
         config.TypeRegistry.WithType(typeof(MeshWeaver.Mesh.Services.MeshChangeEvent), nameof(MeshWeaver.Mesh.Services.MeshChangeEvent));
         config.TypeRegistry.WithType(typeof(MeshWeaver.Mesh.Services.MeshChangeKind), nameof(MeshWeaver.Mesh.Services.MeshChangeKind));
         // AccessContext rides as a TYPED field on every IMessageDelivery. Unregistered, the
@@ -3596,52 +3596,179 @@ public static class MeshExtensions
     }
 
     /// <summary>
-    /// The <see cref="DeleteNodeRequest.ExpectedVersion"/> precondition (#6621), read against the
-    /// node's DURABLE row from inside the subtree-deletion scope. Emits once when the delete may
-    /// proceed (no precondition, or the stored version matches). Otherwise it calls
-    /// <paramref name="onChanged"/> with the stored version, or <paramref name="onAbsent"/> when the
-    /// node is already gone, and completes EMPTY, so the caller's pipeline posts that one verdict
-    /// and stops.
+    /// The <see cref="DeleteNodeRequest.ExpectedVersion"/> precondition, decided by the OWNING
+    /// node hub inside its own commit turn (#6621, #6673). Emits once when the delete may proceed
+    /// (no precondition, or the owner's LIVE version matches). Otherwise it calls
+    /// <paramref name="onChanged"/> with the owner's version, <paramref name="onAbsent"/> when the
+    /// node is already gone, or <paramref name="onUnestablished"/> when no verdict could be reached,
+    /// and completes EMPTY, so the caller's pipeline posts that one verdict and stops.
+    ///
+    /// <para>🚨 <b>Why the owner, and why its turn.</b> An own write (<c>UpdateOwn</c>) is
+    /// acknowledged from the owner's in-memory commit, one persistence-sampler interval before it is
+    /// stored. Compared against the DURABLE row, a delete expecting V matched while the owner had
+    /// already acknowledged V+1, and then removed that acknowledged change (#6673). The owner's live
+    /// version includes every write it has acknowledged. The comparison runs on the turn every own
+    /// write and every cross-hub patch commits on, and the caller has sealed the path
+    /// (<see cref="RecentlyDeletedRegistry.BeginVersionGuardedDeletion"/>) BEFORE asking, so each
+    /// own write is either committed before the comparison (and seen by it) or refused in its own
+    /// turn (and never acknowledged). A cross-hub patch is acknowledged only after its durable flush,
+    /// which the subtree-deletion scope already refuses. Check and seal are therefore one step.</para>
     /// </summary>
-    private static IObservable<System.Reactive.Unit> ExpectedVersionHolds(
+    private static IObservable<System.Reactive.Unit> ExpectedVersionHoldsOnTheOwner(
+        IMessageHub issuingHub,
         IStorageAdapter persistence,
         System.Text.Json.JsonSerializerOptions options,
         string path,
         long? expectedVersion,
+        AccessContext? callerAccessContext,
         TimeSpan budget,
         ILogger logger,
         Action<long> onChanged,
-        Action onAbsent)
+        Action onAbsent,
+        Action<string> onUnestablished)
     {
         if (expectedVersion is not { } expected)
             return Observable.Return(System.Reactive.Unit.Default);
-        return persistence.Read(path, options)
-            .DefaultIfEmpty(null!)
-            .Take(1)
+
+        var ask = new ValidateDeleteRequest(path) { ExpectedVersion = expected };
+        IObservable<IMessageDelivery<ValidateDeleteResponse>> Ask() => Observable
+            .Defer(() => issuingHub.Observe(ask, o => callerAccessContext is null
+                ? o.WithTarget(new Address(path))
+                : o.WithTarget(new Address(path)).WithAccessContext(callerAccessContext)))
+            .Take(1);
+
+        return OwnerVersionVerdict(
+                () => RideOutRecyclingLeaf(Ask, path, DeleteStage.CheckExpectedVersion, logger).Select(d => d.Message),
+                () => persistence.Read(path, options),
+                path, expected)
             .TimeoutAtStage(budget, () => DeleteStageTimeout(
                 DeleteStage.CheckExpectedVersion,
-                $"storage did not return the node at '{path}' for its expected-version check within "
+                $"the owning hub of '{path}' did not answer its expected-version check within "
                 + $"{budget.TotalSeconds:0}s"))
-            .SelectMany(current =>
+            .SelectMany(verdict =>
             {
-                if (current is null)
+                if (verdict.IsValid)
+                    return Observable.Return(System.Reactive.Unit.Default);
+                switch (verdict.Reason)
                 {
-                    logger.LogInformation(
-                        "[DeleteNode] already-absent path={Path} — gone before its expected-version check",
-                        path);
-                    onAbsent();
-                    return Observable.Empty<System.Reactive.Unit>();
+                    case NodeDeletionRejectionReason.NodeNotFound:
+                        logger.LogInformation(
+                            "[DeleteNode] already-absent path={Path} — gone before its expected-version check",
+                            path);
+                        onAbsent();
+                        break;
+                    case NodeDeletionRejectionReason.Conflict when verdict.ActualVersion is { } actual:
+                        logger.LogInformation(
+                            "[DeleteNode] version-conflict path={Path} expected={Expected} actual={Actual} "
+                            + "(the owner's live version) — nothing deleted",
+                            path, expected, actual);
+                        onChanged(actual);
+                        break;
+                    default:
+                        logger.LogWarning(
+                            "[DeleteNode] expected-version-unestablished path={Path} reason={Reason}: {Error}",
+                            path, verdict.Reason, verdict.Errors.FirstOrDefault());
+                        onUnestablished(verdict.Errors.FirstOrDefault() ?? "no verdict");
+                        break;
                 }
-                if (current.Version != expected)
-                {
-                    logger.LogInformation(
-                        "[DeleteNode] version-conflict path={Path} expected={Expected} actual={Actual} — nothing deleted",
-                        path, expected, current.Version);
-                    onChanged(current.Version);
-                    return Observable.Empty<System.Reactive.Unit>();
-                }
-                return Observable.Return(System.Reactive.Unit.Default);
+                return Observable.Empty<System.Reactive.Unit>();
             });
+    }
+
+    /// <summary>
+    /// The asker's reading of the owner's answer to a version-guarded <see cref="ValidateDeleteRequest"/>
+    /// (#6673, #6750). Emits exactly one verdict; only an answer that CONFIRMS the expected version
+    /// (<see cref="ValidateDeleteResponse.ConfirmedVersion"/>) is valid. Everything that is not a
+    /// decision of the owner is <see cref="NodeDeletionRejectionReason.Unavailable"/> — never a match,
+    /// and never a validation verdict:
+    /// <list type="bullet">
+    /// <item><description>a valid answer without the echo — an owner on an image that predates the
+    /// check ran the ordinary validators and answered a plain Ok, during a mixed-version roll;</description></item>
+    /// <item><description>the owner could not be asked and storage says the row still exists;</description></item>
+    /// <item><description>the owner could not be asked AND the storage read that would tell "gone" from
+    /// "unreachable" faulted too. Before #6750 that second fault escaped to the handler's terminal arm
+    /// and was reported as <c>Unknown</c>/<c>ValidationFailed</c>.</description></item>
+    /// </list>
+    /// </summary>
+    /// <param name="askOwner">One cold, recycling-tolerant ask of the owner.</param>
+    /// <param name="readStored">The storage read, used only when the owner could not be asked.</param>
+    /// <param name="path">The node being deleted.</param>
+    /// <param name="expected">The version the deleter read.</param>
+    internal static IObservable<ValidateDeleteResponse> OwnerVersionVerdict(
+        Func<IObservable<ValidateDeleteResponse>> askOwner,
+        Func<IObservable<MeshNode?>> readStored,
+        string path,
+        long expected)
+        => askOwner()
+            .Select(answer => answer.IsValid && answer.ConfirmedVersion != expected
+                ? ValidateDeleteResponse.FromError(
+                    $"the owning hub of '{path}' answered without confirming version {expected} — it predates "
+                    + "the version-guarded check (a mixed-version roll), so the version was never compared",
+                    NodeDeletionRejectionReason.Unavailable)
+                : answer)
+            // The owner could not be asked (routing refused the address, the request faulted).
+            // Only storage can say whether that is because the node is gone; anything else is no
+            // verdict at all, and the delete fails CLOSED — never "the version matched".
+            .Catch((Exception ex) => readStored()
+                .DefaultIfEmpty(null)
+                .Take(1)
+                .Select(stored => stored is null
+                    ? ValidateDeleteResponse.FromError(
+                        $"Node not found at path: {path}", NodeDeletionRejectionReason.NodeNotFound)
+                    : ValidateDeleteResponse.FromError(
+                        $"the owning hub of '{path}' could not be asked for its live version: {ex.Message}",
+                        NodeDeletionRejectionReason.Unavailable))
+                .Catch((Exception readEx) => Observable.Return(ValidateDeleteResponse.FromError(
+                    $"the owning hub of '{path}' could not be asked for its live version ({ex.Message}), "
+                    + $"and its stored row could not be read either ({readEx.Message})",
+                    NodeDeletionRejectionReason.Unavailable))));
+
+    /// <summary>
+    /// The owner's half of <see cref="ExpectedVersionHoldsOnTheOwner"/>: compares
+    /// <paramref name="expected"/> with this hub's OWN node's live version inside the MeshNode
+    /// primary stream's commit turn — the turn <c>UpdateOwn</c> and the in-turn cross-hub patch
+    /// commit on, so the comparison is ordered against every write this owner has acknowledged.
+    /// It writes nothing (the turn returns no change).
+    /// </summary>
+    private static IObservable<ValidateDeleteResponse> CompareLiveVersionInOwnerTurn(
+        IMessageHub hub, string path, long expected, TimeSpan bound)
+    {
+        var workspace = hub.GetWorkspace();
+        var primary = workspace.DataContext.GetDataSourceForType(typeof(MeshNode))?.GetStreamForPartition(null);
+        var own = workspace.GetStream(new MeshNodeReference());
+        if (primary is null || own is null)
+            return Observable.Return(ValidateDeleteResponse.FromError(
+                $"the hub at '{path}' holds no MeshNode stream, so it cannot answer for the node's live version",
+                NodeDeletionRejectionReason.Unavailable));
+
+        // A cold activation answers only once its node has loaded: the reduced own-node stream is
+        // derived from the primary, so once it carries the node the primary's next turn sees it.
+        return own
+            .Where(change => change.Value is not null)
+            .Take(1)
+            .Timeout(bound, Observable.Defer(() => Observable.Throw<ChangeItem<MeshNode>>(
+                new TimeoutException(
+                    $"[ValidateDelete] the own node at '{path}' did not load within {bound.TotalSeconds:0}s"))))
+            .SelectMany(_ => Observable.Create<ValidateDeleteResponse>(observer =>
+            {
+                primary.Update(store =>
+                {
+                    var current = store?.Collections.GetValueOrDefault(nameof(MeshNode))?.Instances.Values
+                        .OfType<MeshNode>()
+                        .FirstOrDefault(n => string.Equals(n.Path, path, StringComparison.OrdinalIgnoreCase));
+                    observer.OnNext(current is null
+                        ? ValidateDeleteResponse.FromError(
+                            $"Node not found at path: {path}", NodeDeletionRejectionReason.NodeNotFound)
+                        : current.Version == expected
+                            ? ValidateDeleteResponse.Ok() with { ConfirmedVersion = expected }
+                            :ValidateDeleteResponse.FromError(
+                                $"'{path}' is at version {current.Version}, not {expected}",
+                                NodeDeletionRejectionReason.Conflict) with { ActualVersion = current.Version });
+                    observer.OnCompleted();
+                    return (ChangeItem<EntityStore>?)null; // a comparison, not a write
+                }, observer.OnError);
+                return System.Reactive.Disposables.Disposable.Empty;
+            }));
     }
 
     /// <summary>Stage names — one per bounded stage of <see cref="HandleDeleteNodeRequest"/>.</summary>
@@ -4108,12 +4235,21 @@ public static class MeshExtensions
                                 //    landing during the permission / validator stages would slip
                                 //    between the check and the delete — the read-then-delete race
                                 //    the precondition exists to close.
+                                //    🚨 And it is decided by the OWNER, in its commit turn, with
+                                //    the path sealed against own writes first (#6673) — see
+                                //    ExpectedVersionHoldsOnTheOwner. The seal rides the same
+                                //    scope, so it is lifted exactly when the subtree guard is.
                                 return Observable.Using(
-                                    () => recentlyDeleted?.BeginSubtreeDeletion(path)
-                                          ?? System.Reactive.Disposables.Disposable.Empty,
-                                    subtreeScope => ExpectedVersionHolds(
-                                        persistence, hub.JsonSerializerOptions, path,
-                                        capturedRequest.ExpectedVersion, budget, logger,
+                                    () => recentlyDeleted is null
+                                        ? System.Reactive.Disposables.Disposable.Empty
+                                        : capturedRequest.ExpectedVersion is null
+                                            ? recentlyDeleted.BeginSubtreeDeletion(path)
+                                            : new System.Reactive.Disposables.CompositeDisposable(
+                                                recentlyDeleted.BeginSubtreeDeletion(path),
+                                                recentlyDeleted.BeginVersionGuardedDeletion(path)),
+                                    subtreeScope => ExpectedVersionHoldsOnTheOwner(
+                                        issuingHub, persistence, hub.JsonSerializerOptions, path,
+                                        capturedRequest.ExpectedVersion, request.AccessContext, budget, logger,
                                         onChanged: actual =>
                                         {
                                             var msg = $"Did not delete '{path}': it changed since it was read "
@@ -4127,7 +4263,18 @@ public static class MeshExtensions
                                                         ("actual", actual.ToString(System.Globalization.CultureInfo.InvariantCulture)))],
                                                 ImmutableList.Create(path));
                                         },
-                                        onAbsent: PostAlreadyAbsent)
+                                        onAbsent: PostAlreadyAbsent,
+                                        onUnestablished: detail =>
+                                        {
+                                            var msg = $"Did not delete '{path}': its expected version could not be "
+                                                + $"checked against the owning hub ({detail}). Nothing was deleted; "
+                                                + "this is an availability failure, not a verdict about the node.";
+                                            PostFailed(msg, NodeDeletionRejectionReason.Unavailable,
+                                                [new LogMessage(msg, LogLevel.Error)
+                                                    .WithKey("activity.delete.versionUnestablished",
+                                                        ("path", path), ("detail", detail))],
+                                                ImmutableList.Create(path));
+                                        })
                                     .SelectMany(_ => CollectPathsForDelete(hub, path, capturedRequest.Recursive, budget, logger))
                                     .SelectMany(collected =>
                                     {
@@ -6239,16 +6386,37 @@ public static class MeshExtensions
         // ServiceProvider, which is the DI touch a teardown path must not make.
         var parent = hub.Configuration.ParentHub;
 
+        // One rung inside the caller's per-leg bound — see the remarks above. Derived, so the
+        // ordering cannot drift apart again: there is nothing to drift against.
+        var nested = opts.Nest(opts.NestedTimeout);
+
+        // 🚨 The OWNER-TURN half of a version-guarded delete (#6673): compare against the LIVE
+        // version, in the commit turn, and nothing else — see ValidateDeleteRequest.ExpectedVersion.
+        if (request.Message.ExpectedVersion is { } expectedVersion)
+        {
+            CompareLiveVersionInOwnerTurn(hub, path, expectedVersion, nested)
+                .Select(answer => (object)answer)
+                // 🚨 Teardown is classified exactly as the validator branch below classifies it
+                // (#6750): ShuttingDown, which RideOutRecyclingLeaf re-asks on — never Unavailable,
+                // which would fail the guarded delete over a recycle nobody asked for.
+                .Catch((Exception ex) => Observable.Return(
+                    OwnerTurnFaultAnswer(hub, request, path, ex, logger)))
+                // One-shot: the chain answers once and completes, so a terminal error arm is
+                // correct here — it reports a fault the Catch above did not turn into an answer.
+                .Subscribe(
+                    answer => AnswerFromLiveOrParent(hub, parent, request, answer, logger),
+                    ex => logger.LogWarning(ex,
+                        "[ValidateDelete] {Path}: the live-version check produced no answer — "
+                        + "the caller's leg bound reports it", path));
+            return request.Processed();
+        }
+
         var existingNodeObs = persistence.Read(path, hub.JsonSerializerOptions);
 
         // Running validators against a fabricated DeleteNodeRequest keeps
         // RunDeletionValidatorsObs unchanged — every validator sees the same inputs it
         // would see during the real delete.
         var proxyDeleteRequest = new DeleteNodeRequest(path);
-
-        // One rung inside the caller's per-leg bound — see the remarks above. Derived, so the
-        // ordering cannot drift apart again: there is nothing to drift against.
-        var nested = opts.Nest(opts.NestedTimeout);
 
         existingNodeObs
             .Timeout(nested, Observable.Defer(() => Observable.Throw<MeshNode?>(
@@ -6284,21 +6452,7 @@ public static class MeshExtensions
                 // scope has been closed cannot serve anything, so the delivery is answered as
                 // RETRYABLE. The pre-flight rides that out and re-asks the fresh activation.
                 if (IsTeardownOfThisHub(hub, ex))
-                {
-                    logger.LogInformation(
-                        "[ValidateDelete] {Path}: this activation was disposed while validating "
-                        + "({Error}) — answering ShuttingDown so the pre-flight re-asks the fresh "
-                        + "activation; this is not a verdict about the delete",
-                        path, ex.GetType().Name);
-                    return Observable.Return<object>(new DeliveryFailure(request)
-                    {
-                        ErrorType = ErrorType.ShuttingDown,
-                        Message = ShutdownNack.RetryForTheAuthoritativeAnswer(
-                            hub.Address,
-                            $"{ShutdownNack.FormatActivationTag(hub)}, {ex.GetType().Name}",
-                            $"cannot finish ValidateDeleteRequest for '{path}'")
-                    });
-                }
+                    return Observable.Return<object>(TeardownNack(hub, request, path, ex, logger));
 
                 logger.LogWarning(ex, "[ValidateDelete] {Path} failed — treating as error", path);
                 return Observable.Return<object>(
@@ -6360,6 +6514,43 @@ public static class MeshExtensions
     /// (<see cref="ScopeTeardown.IsTerminatedByScopeTeardown"/> — the probe that keeps an unrelated
     /// disposed dependency from being mistaken for a teardown).
     /// </summary>
+    /// <summary>
+    /// The answer a <see cref="ValidateDeleteRequest"/> gets when THIS activation is being torn
+    /// down under it: a <see cref="ErrorType.ShuttingDown"/> nack, the retryable promise
+    /// <see cref="RideOutRecyclingLeaf{T}"/> re-asks the fresh activation on. Never a verdict.
+    /// </summary>
+    private static DeliveryFailure TeardownNack(
+        IMessageHub hub, IMessageDelivery request, string path, Exception ex, ILogger logger)
+    {
+        logger.LogInformation(
+            "[ValidateDelete] {Path}: this activation was disposed while validating "
+            + "({Error}) — answering ShuttingDown so the pre-flight re-asks the fresh "
+            + "activation; this is not a verdict about the delete",
+            path, ex.GetType().Name);
+        return new DeliveryFailure(request)
+        {
+            ErrorType = ErrorType.ShuttingDown,
+            Message = ShutdownNack.RetryForTheAuthoritativeAnswer(
+                hub.Address,
+                $"{ShutdownNack.FormatActivationTag(hub)}, {ex.GetType().Name}",
+                $"cannot finish ValidateDeleteRequest for '{path}'")
+        };
+    }
+
+    /// <summary>
+    /// The answer of the OWNER-TURN half of a version-guarded delete when its live-version
+    /// comparison faulted (#6750): a teardown of this activation is the retryable
+    /// <see cref="TeardownNack"/>, exactly as the validator branch answers it; any other fault is
+    /// no verdict — <see cref="NodeDeletionRejectionReason.Unavailable"/>.
+    /// </summary>
+    internal static object OwnerTurnFaultAnswer(
+        IMessageHub hub, IMessageDelivery request, string path, Exception ex, ILogger logger)
+        => IsTeardownOfThisHub(hub, ex)
+            ? TeardownNack(hub, request, path, ex, logger)
+            : ValidateDeleteResponse.FromError(
+                $"the live-version check of '{path}' failed: {ex.Message}",
+                NodeDeletionRejectionReason.Unavailable);
+
     private static bool IsTeardownOfThisHub(IMessageHub hub, Exception ex)
         => hub.IsShuttingDown
            || hub.RunLevel > MessageHubRunLevel.Started
