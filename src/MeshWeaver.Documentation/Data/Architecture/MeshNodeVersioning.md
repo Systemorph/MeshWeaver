@@ -155,13 +155,16 @@ incoming)` runs inside the stream's apply turn (`WorkspaceOperations.UpdateDataC
 it returns is what commits. `MeshNodeTypeSource` mints there with the same rule as `UpdateImpl`
 (`AdvanceVersion`): a node that changed but did not advance past the stored version commits at its
 `NextVersion`, a node the sender already advanced keeps its version, a node equal to the stored one but
-for its version is not a change, and a node the store does not hold yet is a create. `UpdateImpl` then
+for its version is not a change — and when it carries an OLDER version the stored node commits in its
+place, because the stale copy would otherwise rewind the stored version and the next mint would re-use
+one already made durable — and a node the store does not hold yet is a create. `UpdateImpl` then
 finds nothing left to mint, so one edit is still one bump.
 
 Pinned by `ADataChangeOfTheOwnNodeSurvivesARecycleTest` (MeshWeaver.Graph.Test): a data change at the
 current version is sent to the node's own address, the hub is recycled at once, and the durable row and
 the fresh activation must carry the change at an advanced version. The negative control sends the same
-change with the version already advanced, the one shape that was always persisted.
+change with the version already advanced, the one shape that was always persisted. A third case sends
+an unchanged copy at an older version and asserts the live version does not go back.
 
 ## Not the Hub Clock (#325)
 

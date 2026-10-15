@@ -118,6 +118,61 @@ public class ADataChangeOfTheOwnNodeSurvivesARecycleTest(ITestOutputHelper outpu
     }
 
     /// <summary>
+    /// 🚨 A data change carrying the node UNCHANGED but at an OLDER version — a stale echo of a state
+    /// already superseded — is not a change, and must not commit as one: the stored version stays
+    /// where it is. Committing the incoming copy rewound it, and the next mint then re-used a
+    /// version already made durable.
+    /// </summary>
+    [Fact(Timeout = 240000)]
+    public async Task AnUnchangedCopyAtAnOlderVersion_DoesNotRewindTheVersion()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var id = NewId();
+        var path = $"{TestPartition}/{id}";
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        await meshService.CreateNode(new MeshNode(id, TestPartition)
+            {
+                Name = id,
+                NodeType = "Markdown",
+                State = MeshNodeState.Active,
+                Content = new MarkdownContent { Content = "v1" },
+            })
+            .Take(1).Should().Within(60.Seconds()).Emit("the page must exist first", cancellationToken: ct);
+        var created = await Mesh.GetWorkspace().GetMeshNodeStream(path)
+            .Where(n => n is not null && TextOf(n) == "v1")
+            .Should().Within(60.Seconds()).Emit("the node's hub serves the created state", cancellationToken: ct);
+
+        IObservable<DataChangeResponse> Send(MeshNode node) => RequestHub
+            .Observe<DataChangeResponse>(DataChangeRequest.Update([node]), o => o.WithTarget(new Address(path)))
+            .Select(d => d.Message)
+            .Take(1);
+
+        (await Send(created! with { Content = new MarkdownContent { Content = "v2" } })
+            .Should().Within(60.Seconds()).Emit("the owner answers the change", cancellationToken: ct))!
+            .Status.Should().Be(DataChangeStatus.Committed);
+        var changed = await Mesh.GetWorkspace().GetMeshNodeStream(path)
+            .Where(n => n is not null && TextOf(n) == "v2")
+            .Should().Within(60.Seconds()).Emit("the change is live", cancellationToken: ct);
+        changed!.Version.Should().BeGreaterThan(created.Version, "the change minted the next version");
+
+        // The stale echo: the CURRENT content at the version it carried before the change.
+        (await Send(changed with { Version = created.Version })
+            .Should().Within(60.Seconds()).Emit("the owner answers the stale echo", cancellationToken: ct))!
+            .Status.Should().Be(DataChangeStatus.Committed);
+
+        // Read on the OWNER, after its answer: the commit ran in the apply turn before the answer was
+        // posted, so its own stream already holds whatever was committed.
+        var owner = Mesh.GetHostedHub(new Address(path), HostedHubCreation.Never);
+        owner.Should().NotBeNull("the node's hub is active");
+        var held = await owner!.GetWorkspace().GetMeshNodeStream(path)
+            .Where(n => n is not null)
+            .Take(1)
+            .Should().Within(60.Seconds()).Emit("the owner serves its node", cancellationToken: ct);
+        held!.Version.Should().Be(changed.Version, "an unchanged copy at an older version must not rewind the stored version");
+        TextOf(held).Should().Be("v2");
+    }
+
+    /// <summary>
     /// Negative control: the identical sequence with the version already advanced by the sender. It
     /// passes with or without the fix, so the guard above fails only on the un-minted version.
     /// </summary>

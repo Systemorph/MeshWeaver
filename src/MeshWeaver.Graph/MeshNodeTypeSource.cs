@@ -546,7 +546,8 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
     /// carry its own version, so every downstream gate sees a new revision. The rule is exactly the
     /// one <see cref="UpdateImpl"/> applies (<see cref="AdvanceVersion"/>), so a write path that
     /// already advanced the version is not bumped twice, and UpdateImpl then finds nothing left to
-    /// mint. A node equal to the stored one but for its version is not a change and is left alone;
+    /// mint. A node equal to the stored one but for its version is not a change; when it carries an
+    /// OLDER version the stored node commits in its place, so a stale echo never rewinds the version;
     /// a node the store does not hold yet is a create and keeps the create path's stamping.</para>
     /// </summary>
     /// <param name="current">The MeshNode collection as the store holds it now.</param>
@@ -556,17 +557,28 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
     {
         if (current is null || current.Instances.Count == 0 || incoming.Instances.Count == 0)
             return incoming;
-        var advanced = incoming.Instances
-            .Where(x => current.Instances.TryGetValue(x.Key, out var existing)
-                        && existing is MeshNode ex && x.Value is MeshNode nv
-                        // Same reflection-free comparison as UpdateImpl's update detection.
-                        && !ex.Equals(nv with { Version = ex.Version }))
-            .Select(x => new KeyValuePair<object, object>(x.Key,
-                AdvanceVersion((MeshNode)x.Value, ((MeshNode)current.Instances[x.Key]).Version)))
+        var prepared = incoming.Instances
+            .Select(x => current.Instances.TryGetValue(x.Key, out var existing)
+                         && existing is MeshNode ex && x.Value is MeshNode nv
+                ? Prepare(x.Key, ex, nv)
+                : (KeyValuePair<object, object>?)null)
+            .OfType<KeyValuePair<object, object>>()
             .ToArray();
-        return advanced.Length == 0
+        return prepared.Length == 0
             ? incoming
-            : incoming with { Instances = incoming.Instances.SetItems(advanced) };
+            : incoming with { Instances = incoming.Instances.SetItems(prepared) };
+
+        KeyValuePair<object, object>? Prepare(object key, MeshNode existing, MeshNode node)
+        {
+            // Same reflection-free comparison as UpdateImpl's update detection.
+            if (!existing.Equals(node with { Version = existing.Version }))
+                return new(key, AdvanceVersion(node, existing.Version));
+            // Equal but for an OLDER version: not a change, and it must not commit as one — the
+            // incoming copy would REWIND the stored version (a stale echo of a state already
+            // superseded), and the next mint would then re-use a version already made durable.
+            // The stored node stands.
+            return node.Version < existing.Version ? new(key, existing) : null;
+        }
     }
 
     /// <summary>Records that this hub now holds own-node state at <paramref name="version"/>:
