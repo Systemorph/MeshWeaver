@@ -23,6 +23,24 @@ public static class DeploymentPortalConfig
     /// </summary>
     public const string MaintainerSignsAloneKey = "Hosting__Operator__MaintainerSignsAlone";
 
+    /// <summary>
+    /// The portal key that tells the instance how its model settings relate to this record (policy
+    /// <c>model-settings-seed-and-ceiling</c>): rendered as <see cref="ModelGovernanceSeedAndCeiling"/>
+    /// on a customer-governed record (<see cref="HostingOperatorSpec.CustomerGoverned"/>) whose
+    /// <c>ai</c> block names at least one model, and not at all otherwise — an absent key is the
+    /// instance's default, where the record's model list IS the instance's. Reserved for the typed
+    /// fields: an <c>ExtraPortalConfig</c> entry naming it, in any case, is never passed through, so no
+    /// extra can lift a record's ceiling or impose one the record does not declare.
+    /// </summary>
+    public const string ModelGovernanceKey = "AI__ModelGovernance";
+
+    /// <summary>
+    /// The value of <see cref="ModelGovernanceKey"/> on a customer-governed record: the record SEEDS the
+    /// instance's model settings and is their CEILING. The instance's own administrator may narrow
+    /// within it (switch a declared model off, choose a declared model per tier) and never exceed it.
+    /// </summary>
+    public const string ModelGovernanceSeedAndCeiling = "SeedAndCeiling";
+
     /// <summary>The configuration key prefix the portal reads its catalog wiring from.</summary>
     public const string CatalogSection = "PluginCatalog";
 
@@ -973,6 +991,9 @@ public static class DeploymentPortalConfig
             Set("ModelTier__Standard", ai.Tiers?.Standard);
             Set("ModelTier__Light", ai.Tiers?.Light);
             Set("ModelTier__Utility", ai.Tiers?.Utility);
+            // Policy model-settings-seed-and-ceiling: on a customer-governed record that names models,
+            // the record's model lists and tiers are the instance's SEED and CEILING, not its value.
+            Set(ModelGovernanceKey, IsModelCeiling(d) ? ModelGovernanceSeedAndCeiling : null);
         }
 
         if (d.Email is { } email)
@@ -1020,13 +1041,41 @@ public static class DeploymentPortalConfig
         foreach (var (key, value) in d.ExtraPortalConfig)
             // 🚨 The sole-signer flag is RESERVED for the typed field, rendered or not: an extra must
             // never re-enable it (in any case) on a record whose operator.maintainerSignsAlone is false —
-            // on the Aspire route there is no other guard (policy sole-maintainer-approval).
-            if (!c.Keys.Contains(key, StringComparer.OrdinalIgnoreCase)
-                && !string.Equals(key, MaintainerSignsAloneKey, StringComparison.OrdinalIgnoreCase))
+            // on the Aspire route there is no other guard (policy sole-maintainer-approval). The same
+            // holds for the model-governance key (policy model-settings-seed-and-ceiling). Compared as
+            // CONFIGURATION keys, not strings: .NET reads `AI:ModelGovernance` and `AI__ModelGovernance`
+            // as one setting, so a colon-spelled extra is the same key and is refused the same way.
+            if (!c.Keys.Any(rendered => SameConfigKey(rendered, key))
+                && !SameConfigKey(key, MaintainerSignsAloneKey)
+                && !SameConfigKey(key, ModelGovernanceKey))
                 c[key] = value ?? "";
 
         return c;
     }
+
+    /// <summary>
+    /// Whether two environment-variable names address the same configuration setting: case-insensitive,
+    /// with <c>__</c> and <c>:</c> as the same section separator — exactly as the .NET environment
+    /// configuration provider reads them. Pure.
+    /// </summary>
+    private static bool SameConfigKey(string a, string b) =>
+        string.Equals(a.Replace("__", ":", StringComparison.Ordinal), b.Replace("__", ":", StringComparison.Ordinal),
+            StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Whether <paramref name="d"/> makes its model settings the instance's SEED and CEILING (policy
+    /// <c>model-settings-seed-and-ceiling</c>): the record is customer-governed
+    /// (<see cref="HostingOperatorSpec.CustomerGoverned"/>) AND its <c>ai</c> block names at least one
+    /// model under a provider. A customer record that names no model carries no model settings to cap
+    /// with, so it stays on the default reading. Pure.
+    /// </summary>
+    /// <param name="d">The deployment record.</param>
+    /// <returns>True when the record renders <see cref="ModelGovernanceKey"/>.</returns>
+    public static bool IsModelCeiling(DeploymentContent d) =>
+        d.Operator is { CustomerGoverned: true }
+        && d.Ai is { } ai
+        && new[] { ai.Anthropic, ai.AzureAis, ai.AzureFoundry, ai.OpenRouter, ai.OpenRouterEU }
+            .Any(p => p is not null && p.Models.Any(m => !string.IsNullOrWhiteSpace(m)));
 
     private static void Provider(SortedDictionary<string, string> c, string section, ModelProvider? p, string? flagKey)
     {

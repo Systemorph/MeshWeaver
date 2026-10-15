@@ -83,6 +83,18 @@ through the document path instead — **Share ⇒ as email** in the node menu, i
 Skill/share-email`, served from MeshWeaver.Plugins). It sends **as the user**, off the same
 `EaCredential`, so it needs no second consent.
 
+### Inbound attachments are listed, never read
+
+The other direction has a limit too. When a message carries attachments, `ReadMail` lists each
+one by **metadata only**: `name`, `contentType`, `size` in bytes, `isInline` and `kind` (`file`,
+`item` or `reference`). The listing asks Graph for exactly those fields, and `contentBytes` is not
+among them, so an attachment's bytes are never even fetched. No external file content becomes model
+input, and none enters the mesh unless the person acts. An agent tells the person what arrived, by
+name. To work with a file, the person saves it from their mail client and uploads it into the mesh.
+If Graph refuses the listing, the message body still comes back, with a note naming the error.
+This is a maintainer decision, recorded on MeshWeaver.Plugins#3704; the tool itself lives in
+MeshWeaver.Plugins (`MeshWeaver.Mail.MicrosoftGraph`).
+
 ### Mailings — draft once, approve once, send to many
 
 The same message to several people, each one personal, is a **mailing**, not N drafts. The agent's

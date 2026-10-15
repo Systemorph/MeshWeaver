@@ -245,6 +245,18 @@ bound NodeType is T"* (optionally narrowed to some addresses, or to the activati
   never depends on it — nor waits for it: the prune is a subscription of its own, started once the
   request is committed, so the ticket is answered as soon as the write lands.
 
+- **A recycle of a NodeType DEFINITION is one of these requests (#6520).** A routed `DisposeRequest`
+  on a definition hub (the direct `recycle` verb on a NodeType, a package install, a control-lane
+  plan) runs the definition's recycle cascade, which reads the mesh's NodeType definitions once for
+  the dependents (the types sharing its sources, transitively), disposes the dependent definitions'
+  own hubs by address, and writes ONE request naming the type and every dependent, with the dispose's
+  reason and `RequestedBy: RecycleCascade from '<type>'`. It no longer asks any partition for the
+  type's stored instances — that enumeration, one cross-partition query per network type, was what
+  stalled the PostgreSQL query provider. Every disposal of a request carries `CascadedFrom`, so none
+  of them cascades again ([Hub Disposal Model](../HubDisposalModel) → "A recycle of the main bit").
+  The direct `recycle` verb is otherwise unchanged: it checks `Update`, and on a NodeType it stamps
+  the forced release before the dispose.
+
 The request is a platform write. On the control instance it is issued by the build queue as System:
 the `recycle` job kind (MeshWeaver.Plugins, `Hosting/Queue`) runs it, either when a NodeType of the
 estate releases a new build or when a platform admin enqueues one over MCP (`enqueue_recycle`).
