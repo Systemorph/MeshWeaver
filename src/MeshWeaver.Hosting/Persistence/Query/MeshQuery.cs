@@ -49,6 +49,19 @@ public class MeshQuery : IMeshQueryCore
     /// Creates the top-level query fan-out, deduplicating the registered
     /// providers by <see cref="IMeshQueryProvider.Name"/> so duplicate
     /// registrations of the same provider class execute only once per query.
+    ///
+    /// <para>🚨 <b>A provider whose module is gone is not a member</b> (MeshWeaver#6793). A module that
+    /// registers an <see cref="IMeshQueryProvider"/> — a platform interface — is forwarded to the root as a
+    /// <see cref="ModuleServiceProxy"/>, and that registration stays in the root's set after the module is
+    /// WITHDRAWN at boot (its shared instances could not be built). Reading its
+    /// <see cref="IMeshQueryProvider.Name"/> here threw <c>Module … holds no service scope in this
+    /// mesh</c>; <c>IMeshService</c> builds this fan-out, a hosted service takes <c>IMeshService</c>, so
+    /// the host never started and the pod crash-looped while the module was merely reported as
+    /// contributing nothing. A module's provider is now bound under ONE lease
+    /// (<see cref="ModuleServiceProxy.TryLease{T}"/>): its name is read from the generation's own instance,
+    /// a proxy that cannot be leased is left out, and the fan-out skips a provider whose module is retired
+    /// later — the feature is absent and the withdrawal is reported, exactly as for the security rules
+    /// (<see cref="NodeTypeAccessRuleSet"/>).</para>
     /// </summary>
     /// <param name="providers">The registered per-adapter query providers to aggregate.</param>
     /// <param name="hub">The message hub supplying JSON serializer options and identity context.</param>
@@ -61,10 +74,62 @@ public class MeshQuery : IMeshQueryCore
         // StaticNodeQueryProvider registrations from AddPersistence vs
         // AddCoreAndWrapperServices fold into one execution per query.
         this.providers = providers
+            .Select(Bind)
+            .OfType<IMeshQueryProvider>()
             .GroupBy(p => p.Name, StringComparer.Ordinal)
             .Select(g => g.First())
             .ToList();
         this.hub = hub;
+    }
+
+    // An ordinary provider as it is; a module's forwarding proxy bound to its name, read under one lease —
+    // or null when its module is no longer held (withdrawn at boot, or retired).
+    private static IMeshQueryProvider? Bind(IMeshQueryProvider provider)
+    {
+        if (provider is not ModuleServiceProxy)
+            return provider;
+        using var lease = ModuleServiceProxy.TryLease(provider);
+        return lease is null ? null : new ModuleQueryProvider(provider, lease.Service.Name);
+    }
+
+    /// <summary>
+    /// A module's query provider as the fan-out holds it: the name read once when the fan-out was built,
+    /// and every call made on the module's CURRENT generation under a lease taken for that call
+    /// (<see cref="ModuleServiceProxy.TryLease{T}"/>) — never a check followed by a call through the proxy,
+    /// which a retirement in between turned into <c>Module … holds no service scope</c>. A module retired
+    /// before the call is a named <see cref="ModuleRetiredException"/>.
+    /// </summary>
+    private sealed class ModuleQueryProvider(IMeshQueryProvider forwarder, string name) : IMeshQueryProvider
+    {
+        public IMeshQueryProvider Forwarder => forwarder;
+
+        public string Name => name;
+
+        public bool Matches(IReadOnlyList<string> queryNamespaces) => Call(p => p.Matches(queryNamespaces));
+
+        public IObservable<QueryResultChange<T>> Query<T>(MeshQueryRequest request, JsonSerializerOptions options)
+            => Call(p => p.Query<T>(request, options));
+
+        public IObservable<IReadOnlyCollection<QueryResult>> Query(MeshQueryRequest request, JsonSerializerOptions options)
+            => Call(p => p.Query(request, options));
+
+        public IObservable<IReadOnlyCollection<QueryResult>> Autocomplete(
+            string basePath, string prefix, JsonSerializerOptions options,
+            AutocompleteMode mode = AutocompleteMode.RelevanceFirst, int limit = 10,
+            string? contextPath = null, string? context = null)
+            => Call(p => p.Autocomplete(basePath, prefix, options, mode, limit, contextPath, context));
+
+        public IObservable<T?> Select<T>(string path, string property, JsonSerializerOptions options)
+            => Call(p => p.Select<T>(path, property, options));
+
+        private TResult Call<TResult>(Func<IMeshQueryProvider, TResult> call)
+        {
+            using var lease = ModuleServiceProxy.TryLease(forwarder)
+                ?? throw new ModuleRetiredException(
+                    $"the query provider '{name}' ({ModuleServiceProxy.Label(forwarder)}) is no longer served: its module "
+                    + "was retired or withdrawn after it was selected — asking again decides without it.");
+            return call(lease.Service);
+        }
     }
 
     /// <summary>
@@ -411,7 +476,9 @@ public class MeshQuery : IMeshQueryCore
     /// provider own the "is this mine?" decision in one place.
     /// </remarks>
     private IReadOnlyList<IMeshQueryProvider> SelectMatchingProviders(IReadOnlyList<string> _)
-        => providers;
+        => providers
+            .Where(p => p is not ModuleQueryProvider module || ModuleServiceProxy.Serves(module.Forwarder))
+            .ToList();
 
     /// <summary>
     /// Computes the namespace candidates for a <see cref="MeshQueryRequest"/>
