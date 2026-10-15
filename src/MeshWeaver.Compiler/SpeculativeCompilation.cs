@@ -63,33 +63,28 @@ internal sealed class SpeculativeCompilation(INuGetAssemblyResolver nugetResolve
         // `inputs.References`, which already holds the stored sources' closure: composed onto that,
         // a changed package version would read as host-owned and the proposed one be discarded,
         // so diagnostics would check the old API while the save compiles against the new one.
-        ImmutableArray<MetadataReference> effectiveReferences = inputs.References;
-        var storedRefs = inputs.SkeletonNuGetReferences
-            .Concat(inputs.Sources
-                .Where(s => !string.Equals(s.Path, sourcePath, StringComparison.OrdinalIgnoreCase))
-                .SelectMany(s => inputs.SourceNuGetReferences.TryGetValue(s.Path, out var r) ? r : []))
-            .ToList();
         var proposedChangesDirectives = proposedNugetRefs.Length > 0
             || inputs.SourceNuGetReferences.ContainsKey(sourcePath);
-        if (proposedChangesDirectives && !inputs.HostReferences.IsDefault)
+        var rebuild = proposedChangesDirectives && !inputs.HostReferences.IsDefault;
+        // Rebuilt: every effective directive onto the host set. Not rebuilt (no directive change,
+        // or no host set recorded): the proposed directives, if any, onto what the inputs hold.
+        var composeOnto = rebuild ? inputs.HostReferences : inputs.References;
+        var toResolve = rebuild
+            ? inputs.SkeletonNuGetReferences
+                .Concat(inputs.Sources
+                    .Where(s => !string.Equals(s.Path, sourcePath, StringComparison.OrdinalIgnoreCase))
+                    .SelectMany(s => inputs.SourceNuGetReferences.TryGetValue(s.Path, out var r) ? r : []))
+                .Concat(proposedNugetRefs)
+                .ToList()
+            : [.. proposedNugetRefs];
+        GeneratorPipeline.StripBuiltInScopeGeneratorRef(
+            toResolve, builtInPresent: GeneratorPipeline.BuiltInGeneratorPaths.Count > 0);
+
+        var effectiveReferences = composeOnto;
+        if (toResolve.Count > 0)
         {
-            var effectiveNugetRefs = storedRefs.Concat(proposedNugetRefs).ToList();
-            GeneratorPipeline.StripBuiltInScopeGeneratorRef(
-                effectiveNugetRefs, builtInPresent: GeneratorPipeline.BuiltInGeneratorPaths.Count > 0);
-            effectiveReferences = inputs.HostReferences;
-            if (effectiveNugetRefs.Count > 0)
-            {
-                var resolved = await nugetResolver.ResolveAsync(effectiveNugetRefs, targetFramework: null, ct);
-                effectiveReferences = [.. CompileReferences.WithPackageAssemblies(
-                    inputs.HostReferences, resolved.AssemblyPaths)];
-            }
-        }
-        else if (proposedNugetRefs.Length > 0)
-        {
-            // No host set recorded: compose onto what the inputs hold.
-            var resolved = await nugetResolver.ResolveAsync(proposedNugetRefs, targetFramework: null, ct);
-            effectiveReferences = [.. CompileReferences.WithPackageAssemblies(
-                inputs.References, resolved.AssemblyPaths)];
+            var resolved = await nugetResolver.ResolveAsync(toResolve, targetFramework: null, ct);
+            effectiveReferences = [.. CompileReferences.WithPackageAssemblies(composeOnto, resolved.AssemblyPaths)];
         }
 
         // Resolve the EFFECTIVE source set first (proposed body substituted), because the import
