@@ -221,7 +221,9 @@ public record DeploymentContent
     ///
     /// <para>Rendered on every route from this one declaration (Memex#116): the Helm values'
     /// <c>pluginCatalog.defaultGrants</c>, and <see cref="DeploymentPortalConfig.BootConfigurationEntries"/>
-    /// plus the Aspire route's portal keys through <see cref="DeploymentPortalConfig.DefaultGrantEntries"/>.
+    /// plus the Aspire route's portal keys through <see cref="DeploymentPortalConfig.RegistrySeedEntries"/>
+    /// — and only for a record with <see cref="IsPluginRegistry"/>: on any other record the list renders
+    /// nothing.
     /// Before it existed the seed lived only in a hand-edited overlay, and a re-render from the record
     /// silently dropped it.</para>
     /// </summary>

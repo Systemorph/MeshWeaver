@@ -65,10 +65,12 @@ public static class QuerySortKey
         TimeOnly t => t.ToString("HH:mm:ss.fffffff", CultureInfo.InvariantCulture),
         TimeSpan ts => ts.ToString("c", CultureInfo.InvariantCulture),
         // An enum value with no member name (undefined, or a flags combination the converter cannot
-        // name) is written by the converter as a JSON NUMBER — so it keys as one.
-        Enum e => EnumWireName(e) is var wire && (char.IsAsciiDigit(wire[0]) || wire[0] == '-')
+        // name) is written by the converter as a JSON NUMBER — so it keys as one. "No member name" is
+        // decided on the CLR name, which for such a value is its number ("5", "-1") and otherwise a C#
+        // identifier — never on the wire name, which a declared [EnumMember] may spell "1st" or "".
+        Enum e => IsUnnamed(e)
             ? Convert.ToDecimal(e, CultureInfo.InvariantCulture)
-            : wire,
+            : EnumWireName(e),
         // Exact where the source is exact: every integral type and decimal fit a decimal without
         // loss (2^53 + 1 stays distinct from 2^53); only binary floating point stays double.
         sbyte or byte or short or ushort or int or uint or long or ulong or decimal
@@ -137,6 +139,9 @@ public static class QuerySortKey
     /// its <see cref="System.Runtime.Serialization.EnumMemberAttribute"/> value when it declares one,
     /// else its name — so typed content and the same value read back from JSON share one key.
     /// </summary>
+    private static bool IsUnnamed(Enum value)
+        => value.ToString() is var name && (char.IsAsciiDigit(name[0]) || name[0] == '-');
+
     private static string EnumWireName(Enum value)
     {
         var name = value.ToString();
