@@ -1041,14 +1041,26 @@ public static class DeploymentPortalConfig
         foreach (var (key, value) in d.ExtraPortalConfig)
             // 🚨 The sole-signer flag is RESERVED for the typed field, rendered or not: an extra must
             // never re-enable it (in any case) on a record whose operator.maintainerSignsAlone is false —
-            // on the Aspire route there is no other guard (policy sole-maintainer-approval).
-            if (!c.Keys.Contains(key, StringComparer.OrdinalIgnoreCase)
-                && !string.Equals(key, MaintainerSignsAloneKey, StringComparison.OrdinalIgnoreCase)
-                && !string.Equals(key, ModelGovernanceKey, StringComparison.OrdinalIgnoreCase))
+            // on the Aspire route there is no other guard (policy sole-maintainer-approval). The same
+            // holds for the model-governance key (policy model-settings-seed-and-ceiling). Compared as
+            // CONFIGURATION keys, not strings: .NET reads `AI:ModelGovernance` and `AI__ModelGovernance`
+            // as one setting, so a colon-spelled extra is the same key and is refused the same way.
+            if (!c.Keys.Any(rendered => SameConfigKey(rendered, key))
+                && !SameConfigKey(key, MaintainerSignsAloneKey)
+                && !SameConfigKey(key, ModelGovernanceKey))
                 c[key] = value ?? "";
 
         return c;
     }
+
+    /// <summary>
+    /// Whether two environment-variable names address the same configuration setting: case-insensitive,
+    /// with <c>__</c> and <c>:</c> as the same section separator — exactly as the .NET environment
+    /// configuration provider reads them. Pure.
+    /// </summary>
+    private static bool SameConfigKey(string a, string b) =>
+        string.Equals(a.Replace("__", ":", StringComparison.Ordinal), b.Replace("__", ":", StringComparison.Ordinal),
+            StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Whether <paramref name="d"/> makes its model settings the instance's SEED and CEILING (policy

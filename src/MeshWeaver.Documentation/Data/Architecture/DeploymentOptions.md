@@ -67,7 +67,9 @@ same lists differently (policy `model-settings-seed-and-ceiling`, see [Policy No
 | The record drops a model | its node is pruned | the same, and an instance choice that named it is clamped back to the record's seed |
 
 The key is reserved for the typed fields: an `extraPortalConfig` entry cannot impose a ceiling a record
-does not declare, nor lift one it does. The instance side is described on MeshWeaver.Plugins
+does not declare, nor lift one it does. The comparison is by configuration key, not by spelling:
+`AI__ModelGovernance`, `ai__modelgovernance` and `AI:ModelGovernance` are one setting to .NET
+configuration, so each is refused. The instance side is described on MeshWeaver.Plugins
 `AI/ModelConfiguration` → "Customer-governed instances".
 
 ## Option C — Secrets via Key Vault + CSI (keyless, no committed keys)

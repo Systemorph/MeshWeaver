@@ -247,12 +247,18 @@ public class FluentBuilderTest
         {
             ExtraPortalConfig = off.ExtraPortalConfig
                 .SetItem("Hosting__Operator__MaintainerSignsAlone", "true")
-                .SetItem("HOSTING__OPERATOR__MAINTAINERSIGNSALONE", "true"),
+                .SetItem("HOSTING__OPERATOR__MAINTAINERSIGNSALONE", "true")
+                // .NET configuration reads ':' and '__' as the same separator — the same setting.
+                .SetItem("Hosting:Operator:MaintainerSignsAlone", "true"),
         };
         foreach (var options in new[] { PortalConfigOptions.Helm, PortalConfigOptions.Aspire("http://localhost:8080") })
             Assert.DoesNotContain(DeploymentPortalConfig.PortalConfig(shadowed, options).Keys,
-                k => string.Equals(k, "Hosting__Operator__MaintainerSignsAlone", StringComparison.OrdinalIgnoreCase));
+                k => SameSetting(k, "Hosting__Operator__MaintainerSignsAlone"));
     }
+
+    // Whether an environment name addresses the given setting as .NET configuration reads it.
+    private static bool SameSetting(string key, string setting) =>
+        string.Equals(key.Replace("__", ":"), setting.Replace("__", ":"), StringComparison.OrdinalIgnoreCase);
 
     [Fact]
     public void ACustomerGovernedRecordSurvivesTheContractAndRendersNothingIntoThePortal()
@@ -323,15 +329,22 @@ public class FluentBuilderTest
         {
             ExtraPortalConfig = managed.ExtraPortalConfig
                 .SetItem("AI__ModelGovernance", "SeedAndCeiling")
-                .SetItem("ai__modelgovernance", "SeedAndCeiling"),
+                .SetItem("ai__modelgovernance", "SeedAndCeiling")
+                // The colon spelling is the same setting to .NET configuration (review of #6809).
+                .SetItem("AI:ModelGovernance", "SeedAndCeiling"),
         };
-        var lifted = governed with { ExtraPortalConfig = governed.ExtraPortalConfig.SetItem("AI__MODELGOVERNANCE", "Record") };
+        var lifted = governed with
+        {
+            ExtraPortalConfig = governed.ExtraPortalConfig
+                .SetItem("AI__MODELGOVERNANCE", "Record")
+                .SetItem("ai:modelgovernance", "Record"),
+        };
         foreach (var options in new[] { PortalConfigOptions.Helm, PortalConfigOptions.Aspire("http://localhost:8080") })
         {
             Assert.DoesNotContain(DeploymentPortalConfig.PortalConfig(imposed, options).Keys,
-                k => string.Equals(k, DeploymentPortalConfig.ModelGovernanceKey, StringComparison.OrdinalIgnoreCase));
+                k => SameSetting(k, DeploymentPortalConfig.ModelGovernanceKey));
             var liftedConfig = DeploymentPortalConfig.PortalConfig(lifted, options);
-            Assert.Single(liftedConfig.Keys, k => string.Equals(k, DeploymentPortalConfig.ModelGovernanceKey, StringComparison.OrdinalIgnoreCase));
+            Assert.Single(liftedConfig.Keys, k => SameSetting(k, DeploymentPortalConfig.ModelGovernanceKey));
             Assert.Equal(DeploymentPortalConfig.ModelGovernanceSeedAndCeiling, liftedConfig[DeploymentPortalConfig.ModelGovernanceKey]);
         }
     }
