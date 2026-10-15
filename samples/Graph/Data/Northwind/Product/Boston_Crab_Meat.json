@@ -6,7 +6,6 @@
   "category": "Products",
   "description": "Boston Crab Meat - 24 - 4 oz tins",
   "icon": "/static/NodeTypeIcons/shopping-bag.svg",
-  "isPersistent": true,
   "content": {
     "$type": "ProductContent",
     "productId": 40,

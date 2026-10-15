@@ -6,7 +6,6 @@
   "category": "Lines of Business",
   "description": "Combined cyber insurance and technology professional liability for digital economy risks",
   "icon": "/api/content/FutuRe/EuropeRe/LineOfBusiness/icon.svg",
-  "isPersistent": true,
   "content": {
     "$type": "LineOfBusiness",
     "systemName": "TECH_RISK",

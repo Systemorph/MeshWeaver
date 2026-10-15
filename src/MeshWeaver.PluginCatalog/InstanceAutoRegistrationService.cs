@@ -844,8 +844,8 @@ public sealed class InstanceAutoRegistrationService(
                 + "Source/* pattern and match nothing: [{Malformed}]. The list is therefore not an explicit "
                 + "package set, and the preInstalled baseline is kept.",
                 malformed.Count, string.Join(", ", malformed));
-        var baseline = BaselineApplies(options.InstallPreInstalledPackagesConfigured, options.InstallByDefault);
-        if (options.InstallPreInstalledPackagesConfigured is null && !baseline)
+        var baseline = BaselineApplies(options.EffectiveInstallPreInstalledPackages, options.InstallByDefault);
+        if (options.EffectiveInstallPreInstalledPackages is null && !baseline)
             logger.LogInformation(
                 "[DefaultInstall] PluginCatalog:InstallByDefault declares an EXPLICIT package set [{Wanted}] — "
                 + "exactly those packages and what they declare in `requires` are selected; the "

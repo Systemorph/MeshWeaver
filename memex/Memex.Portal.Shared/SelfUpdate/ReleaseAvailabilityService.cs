@@ -77,6 +77,12 @@ public class ReleaseAvailabilityService(
         hub.ServiceProvider.GetService<RegistryReleaseIdentities>()
         ?? new RegistryReleaseIdentities(hub, logger);
 
+    /// <summary>Where each source's publication is read LIVE when the registry named the identity
+    /// (policy <c>registry-fed-gate-reads-live-publication</c>).</summary>
+    private readonly RegistryLivePublications livePublications =
+        hub.ServiceProvider.GetService<RegistryLivePublications>()
+        ?? new RegistryLivePublications(hub, logger);
+
     /// <summary>
     /// 🚨 The gate's DENOMINATOR, read incrementally (#4742). The mesh-scoped singleton
     /// <c>AddSelfUpdate</c> registers; the fall-back is an instance of this service's own, which is
@@ -475,7 +481,7 @@ public class ReleaseAvailabilityService(
 
     /// <summary>
     /// 🚨 THE SHARED PREDICATE, with its two IO halves (#3651) — read the target's publication
-    /// (<see cref="PublishedBundleCatalogue.ReadWithRegistryIdentity"/>), link every landed module against the surface
+    /// (<see cref="PublishedBundleCatalogue.ReadWithLivePublication"/>), link every landed module against the surface
     /// it carries (<see cref="ModuleLinkObservation.Measure"/>), then decide
     /// (<see cref="ReleaseAvailability.IsUpdatable(ReleaseTarget, IEnumerable{RequiredPackage}, ReleaseArtifacts, ReleaseGatePolicy)"/>).
     /// Both IO halves run on the file-system pool, never on a hub action block; the rule is pure.
@@ -494,9 +500,18 @@ public class ReleaseAvailabilityService(
             .SelectMany(marked => marked == false
                 ? registryIdentities.Resolve(version).Select(record => record?.Identity)
                 : Observable.Return<string?>(null))
-            .SelectMany(registryIdentity => pool.InvokeBlocking(_ =>
+            // 🚨 A registry-fed root holds a SNAPSHOT (policy registry-fed-gate-reads-live-publication,
+            // #6622): where the registry named the identity, each source's publication is read LIVE,
+            // now, and that — not what this pod pulled at start — is the sealed set judged.
+            .SelectMany(registryIdentity => registryIdentity is null
+                ? Observable.Return<(string? Identity, LivePublicationReading? Live)>((null, null))
+                : pool.InvokeBlocking(_ => PublishedBundleCatalogue.SourcesOnRoot(publishedRoot))
+                    .SelectMany(sources => livePublications.Read(registryIdentity, sources))
+                    .Select(live => (Identity: (string?)registryIdentity, Live: (LivePublicationReading?)live)))
+            .SelectMany(resolved => pool.InvokeBlocking(_ =>
         {
-            var observation = PublishedBundleCatalogue.ReadWithRegistryIdentity(publishedRoot, version, registryIdentity, logger);
+            var observation = PublishedBundleCatalogue.ReadWithLivePublication(
+                publishedRoot, version, resolved.Identity, resolved.Live, logger);
             var measured = ModuleLinkObservation.Measure(observation.Artifacts, required, logger);
             return ReleaseAvailability.IsUpdatable(observation.Target, required, measured, policy);
         }));

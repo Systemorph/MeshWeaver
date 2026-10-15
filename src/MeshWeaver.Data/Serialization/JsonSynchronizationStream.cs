@@ -113,10 +113,57 @@ public static class JsonSynchronizationStream
     /// embed one yet. Null is never treated as "the same corpse": it charges the activation budget
     /// exactly as every rejection did before #2986, so a site that has not been taught to stamp an
     /// identity degrades to the old accounting rather than to an unbounded ride-out.</para>
+    ///
+    /// <para><paramref name="RouteRefusal"/> is set when NO owner activation refused at all: the
+    /// <c>ShuttingDown</c> NACK carries no activation tag and no owner banner
+    /// (<see cref="ShutdownNack.IsAnsweredByOwner"/>), i.e. the ROUTING LAYER answered — this host
+    /// stopping (<c>"Host is shutting down, cannot route to …"</c>), a silo directory in flux during
+    /// a roll, a pod hub not yet claimed. Such a refusal is not an owner activation and is never
+    /// charged to the activation budget (#6729): see <c>RouteRefusalKey</c>.</para>
     /// </summary>
     /// <param name="Reason">Human-readable cause, logged with the re-ask.</param>
     /// <param name="Activation">The rejecting activation's stable tag, or null when unknown.</param>
-    private sealed record RecycleRejection(string Reason, string? Activation);
+    /// <param name="RouteRefusal">The routing layer's refusal text, or null when the owner answered.</param>
+    private sealed record RecycleRejection(string Reason, string? Activation, string? RouteRefusal = null);
+
+    /// <summary>
+    /// Classifies a transient <c>ShuttingDown</c> NACK into the rejection the re-arm latch charges:
+    /// the activation tag when the owner stamped one, and — when it did not AND the refusal does not
+    /// carry the owner's banner — the routing layer's text, so the latch rides it out on the TIME
+    /// axis instead of counting it as an owner activation (#6729).
+    /// </summary>
+    /// <param name="reason">Human-readable cause, logged with the re-ask.</param>
+    /// <param name="message">The NACK text (<c>DeliveryFailureException.Message</c>).</param>
+    /// <param name="owner">The owner the stream subscribed to.</param>
+    private static RecycleRejection ClassifyShutdownNack(string reason, string? message, Address owner)
+    {
+        var tag = ShutdownNack.ExtractActivationTag(message);
+        var fromRoute = tag is null && !ShutdownNack.IsAnsweredByOwner(message, owner);
+        return new RecycleRejection(reason, tag, fromRoute ? message ?? string.Empty : null);
+    }
+
+    /// <summary>
+    /// 🚨 The key a ROUTING-LAYER refusal is charged under in the ride-out ledger (#6729). It is not
+    /// a hex activation token, so it can never collide with one.
+    ///
+    /// <para>Measured on memex-cloud 2026-10-13: pods <c>…-m2jn9</c> (19:52:18Z) and <c>…-54lxb</c>
+    /// (20:01:57Z) each logged <c>"Application is shutting down..."</c> after their drain gave up
+    /// with circuits still open, and in the SAME second every open circuit's sync streams — owners
+    /// <c>rbuergi</c>, <c>Admin</c>, threads, payments, unrelated to one another — ended with
+    /// <c>"4 DISTINCT owner activations have refused this stream"</c>. No owner had recycled: the
+    /// subscriber's own router answered each re-ask <c>"Host is shutting down, cannot route to
+    /// …"</c>, an untagged <c>ShuttingDown</c>. Untagged meant "a distinct activation", and with
+    /// no local teardown to join the re-ask went out at once, so four router refusals inside a
+    /// millisecond spent the activation budget and the give-up blamed an owner recycle loop that
+    /// never happened — filed as some twenty incidents.</para>
+    ///
+    /// <para>A routing refusal is ONE condition — the route is unavailable — so it belongs on the
+    /// TIME axis: paced by <c>RecycleReAskPace</c> and bounded by <see cref="MaxSameActivationReAsks"/>
+    /// like a teardown being ridden out, and its give-up names the route, not the owner. A roll's
+    /// directory flux settles inside that window; a stopping host disposes the stream with its hub
+    /// before it runs out.</para>
+    /// </summary>
+    private const string RouteRefusalKey = "(route)";
 
     /// <summary>
     /// A rejection that has PAID for its re-ask, plus which of the two budgets paid — carried
@@ -127,7 +174,8 @@ public static class JsonSynchronizationStream
     /// <param name="RidingOutSameActivation">
     /// True when the activation that refused us is the one that refused the PREVIOUS attempt — the
     /// same teardown, still draining, so this attempt rests before it re-asks instead of returning
-    /// to the corpse microseconds later.
+    /// to the corpse microseconds later. Also true for every ROUTING-LAYER refusal (#6729): there is
+    /// no teardown to join, so an un-paced re-ask would meet the same refusal at once.
     /// </param>
     private sealed record ReArmDecision(RecycleRejection Rejection, bool RidingOutSameActivation);
 
@@ -609,9 +657,8 @@ public static class JsonSynchronizationStream
                         // orphaned stream became the visible symptom — a freshly installed root
                         // whose area never renders (StaleStampRootBindingTest, 120 s with the
                         // client sitting idle after the NACK landed).
-                        rejectedByRecycle.OnNext(new RecycleRejection(
-                            "rejected our SubscribeRequest while shutting down",
-                            ShutdownNack.ExtractActivationTag(ex.Message)));
+                        rejectedByRecycle.OnNext(ClassifyShutdownNack(
+                            "rejected our SubscribeRequest while shutting down", ex.Message, owner));
                         return;
                     }
 
@@ -872,21 +919,32 @@ public static class JsonSynchronizationStream
                             {
                                 var isTransient =
                                     ex is DeliveryFailureException { Failure.ErrorType: ErrorType.ShuttingDown };
-                                var tag = isTransient ? ShutdownNack.ExtractActivationTag(ex.Message) : null;
+                                var rejection = isTransient
+                                    ? ClassifyShutdownNack(
+                                        "re-ask was itself rejected while the owner was still shutting down",
+                                        ex.Message, owner)
+                                    : null;
+                                var tag = rejection?.Activation;
                                 // 🚨 Warning ONCE per activation, Debug for the paced repeats at the
                                 // same corpse. The ride-out is bounded but can legitimately re-ask
                                 // MaxSameActivationReAsks times while ONE teardown drains, and a
                                 // Warning per attempt would ship 16 lines per stream to Loki for a
                                 // condition the first line already reported. The give-up below is a
                                 // Warning of its own, so nothing that ends badly ends quietly.
+                                // The same holds for a ROUTE that keeps refusing (#6729): one
+                                // Warning for the first routing-layer refusal, Debug for the paced
+                                // repeats while the route stays unavailable.
                                 var repeat = isTransient
-                                             && tag is not null
-                                             && tag == Volatile.Read(ref lastRejectingActivation);
+                                             && (tag is not null
+                                                 ? tag == Volatile.Read(ref lastRejectingActivation)
+                                                 : rejection!.RouteRefusal is not null
+                                                   && Volatile.Read(ref refusingActivations)
+                                                       .ContainsKey(RouteRefusalKey));
                                 if (repeat)
                                     logger.LogDebug(ex,
                                         "Stream {StreamId}: resubscribe failed again at the same owner "
                                         + "activation (#{Activation}) — still riding the teardown out.",
-                                        reduced.StreamId, tag);
+                                        reduced.StreamId, tag ?? RouteRefusalKey);
                                 else
                                     logger.LogWarning(ex,
                                         "Stream {StreamId}: resubscribe failed.",
@@ -901,9 +959,7 @@ public static class JsonSynchronizationStream
                                 // from a fresh one.
                                 if (isTransient)
                                 {
-                                    rejectedByRecycle.OnNext(new RecycleRejection(
-                                        "re-ask was itself rejected while the owner was still shutting down",
-                                        tag));
+                                    rejectedByRecycle.OnNext(rejection!);
                                     return;
                                 }
                                 // 🚨 Everything else is a VERDICT about the owner, exactly as it is on the
@@ -1022,6 +1078,26 @@ public static class JsonSynchronizationStream
             // stopped trying, so the caller saw only 60 s of nothing.
             ReArmDecision? ChargeReArmBudget(RecycleRejection rejection)
             {
+                // 🚨 A ROUTING-LAYER refusal is not an owner activation (#6729). Charged on the TIME
+                // axis under its own key and paced like a teardown ride-out: the route is ONE
+                // condition (this host stopping, a directory in flux), and counting each refusal as
+                // a "distinct owner activation" spent the whole activation budget inside a
+                // millisecond and blamed an owner recycle loop that never happened.
+                if (rejection.RouteRefusal is { } routeRefusal)
+                {
+                    var routeRefusals = ImmutableInterlocked.AddOrUpdate(
+                        ref refusingActivations, RouteRefusalKey, 1, (_, spent) => spent + 1);
+                    if (routeRefusals <= MaxSameActivationReAsks)
+                        return new ReArmDecision(rejection, RidingOutSameActivation: true);
+                    GiveUp(
+                        "Stream {0}: giving up on owner {1} — the ROUTE to it refused {2} re-subscribes as "
+                        + "ShuttingDown (budget {3}) and NO owner activation answered: the refusal came from "
+                        + "the routing layer, not the owner, so no owner recycle loop is implied. The stream "
+                        + "now ENDS with this error so its readers can re-read. Last refusal: {4}",
+                        routeRefusals, MaxSameActivationReAsks, routeRefusal);
+                    return null;
+                }
+
                 var activation = rejection.Activation;
                 // A rejection with NO activation identity (an owner on an older image, or a NACK
                 // site that embeds none) is never assumed to be the same corpse: it charges the

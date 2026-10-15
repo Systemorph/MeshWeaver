@@ -6,7 +6,6 @@
   "category": "Products",
   "description": "R\u00f6d Kaviar - 24 - 150 g jars",
   "icon": "/static/NodeTypeIcons/shopping-bag.svg",
-  "isPersistent": true,
   "content": {
     "$type": "ProductContent",
     "productId": 73,

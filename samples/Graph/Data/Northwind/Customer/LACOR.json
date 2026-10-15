@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "La corne d'abondance - Versailles, France",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "LACOR",

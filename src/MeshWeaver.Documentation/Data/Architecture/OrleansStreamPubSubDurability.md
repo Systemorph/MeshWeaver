@@ -260,10 +260,11 @@ same retry / NACK / failure signal the forward leg already has. Sketch of what t
 - and then `OrleansStreamingReadiness` — 97 lines with exactly one consumer — becomes **deletable**.
 
 > 🚨 **The cleanup dividend is smaller than this page used to claim.** It said the memory stream
-> provider "is only kept alive by this one use". It is not: `PathCacheInvalidatorGrain`
-> (`[ImplicitStreamSubscription("mesh-created"/"mesh-deleted")]`) and
-> `OrleansMeshChangeFeed.BroadcastAsync` both publish on `StreamProviders.Memory`, so
-> `AddMemoryStreams` and its `PubSubStore` stay whatever happens to the routing leg. The
+> provider "is only kept alive by this one use". It was not: `PathCacheInvalidatorGrain`
+> (`[ImplicitStreamSubscription("mesh-created"/"mesh-updated"/"mesh-deleted")]`) and
+> `OrleansMeshChangeFeed.BroadcastAsync` both used `StreamProviders.Memory`. Both are now deleted
+> (#4802 — cross-silo change delivery is the storage layer's own feed), so the routing leg and its
+> NACK fallback are what keep `AddMemoryStreams` and its `PubSubStore` alive. The
 > `subscriptionReady` attach gate (#1081) and `SubscribeWhenStreamingReadyAsync` likewise survive
 > as long as any hub subscribes a stream at all. Budget the rewrite on its own merits, not on a
 > deletion that is not there.

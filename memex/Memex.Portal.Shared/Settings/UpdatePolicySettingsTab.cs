@@ -449,7 +449,8 @@ public static class UpdatePolicySettingsTab
             _ =>
                 localize("ui.updateNotVerifiable", [tag]) + "\n\n"
                 + NotVerifiedModuleList(verdict)
-                + CaveatList(verdict, localize) + "\n\n" + verifiedAt,
+                + CaveatList(verdict, localize)
+                + RetiredBlock(verdict, localize) + "\n\n" + verifiedAt,
         };
     }
 
@@ -496,12 +497,25 @@ public static class UpdatePolicySettingsTab
     }
 
     /// <summary>The caveats as a labeled block appended to a Green/Red verdict; empty when there
-    /// are none.</summary>
+    /// are none. Followed by the retired modules, which every verdict carries.</summary>
     private static string CaveatBlock(
         ComboVerification verdict, Func<string, object?[], string> localize) =>
-        verdict.Caveats.Count == 0
+        (verdict.Caveats.Count == 0
             ? ""
-            : "\n\n" + localize("ui.updateCaveats", []) + "\n\n" + CaveatList(verdict, localize);
+            : "\n\n" + localize("ui.updateCaveats", []) + "\n\n" + CaveatList(verdict, localize))
+        + RetiredBlock(verdict, localize);
+
+    /// <summary>
+    /// 🌍 The modules reported as <b>retired, not verifiable</b> (MeshWeaver#3848): their source
+    /// folder is gone, so they neither fail nor hold the verdict — and are still named, under a
+    /// heading in the viewer's language. Empty when there are none.
+    /// </summary>
+    private static string RetiredBlock(
+        ComboVerification verdict, Func<string, object?[], string> localize) =>
+        verdict.RetiredModules is not { Count: > 0 } retired
+            ? ""
+            : "\n\n" + localize("ui.updateRetiredModules", [retired.Count]) + "\n\n"
+              + string.Join("\n", retired.Select(r => $"- **{r.ModuleId}**"));
 
     private static string CaveatList(
         ComboVerification verdict, Func<string, object?[], string> localize)

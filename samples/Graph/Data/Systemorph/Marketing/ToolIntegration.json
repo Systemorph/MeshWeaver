@@ -6,8 +6,6 @@
   "category": "MeshWeaver",
   "description": "Connect AI agents to existing systems through configurable tools",
   "icon": "/api/content/Systemorph/Marketing/icons/share.svg",
-  "addressSegments": 0,
-  "isPersistent": true,
   "content": {
     "$type": "MarkdownDocument",
     "title": "Tool Integration",

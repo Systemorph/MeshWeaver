@@ -100,6 +100,51 @@ Pinned by `OnePartitionCostsOnlyItsOwnTypesTest`: a query provider that refuses 
 its real source set and the broken one absent. With the fallback replaced by a rethrow, the same
 test fails with the provider's fault — the pre-fix behaviour.
 
+## A set OLDER than the record is not the set (issue #6631)
+
+Size is not the only way a set can be wrong. A set of the right size can hold an EARLIER version
+of a file than the store already has — a cached synced query (`nodetype-sources:<type>`) that
+missed an update, an index that lags. Measured on memex.systemorph.com on 2026-10-06:
+`Hosting/Deployment` was compiled on the activation path and again by the batch bake over a set
+holding the NEW `Source/PrBabysitterTending` (`public static partial class PrBabysitter`) beside
+the OLD, non-partial `Source/PrBabysitter`, although the type's `CurrentSourceVersions` had named
+the new `PrBabysitter` for 50 seconds. Roslyn answered `CS0260 Missing partial modifier` and ~90
+follow-ons, and the type was stamped with a verdict about code that was fine.
+
+The record is the witness again, read for a third property: **no source in the set may be older
+than the version the record names for the same path.** `SourceSetFreshness.RefuseIfOlderThanRecord`
+(MeshWeaver.Compiler.Pipeline) applies it at the ONE choke point every compile goes through —
+`MeshNodeCompilationService.SnapshotSourcesCore` — to a caller's override (the bake's resolved set,
+the release trigger's query) and to BOTH legs of the activation path's race. A set behind the record
+is reported UNESTABLISHED: in the race that means the cached leg, which replays synchronously and
+used to win instantly whatever it held, can no longer win, and the slower authoritative direct read
+does; when no leg holds a current set, the compile throws `SourceDiscoveryUnavailableException` and
+the type is stamped `Unavailable` ("not evaluated"), never `Error`.
+
+The rule is deliberately one-sided:
+
+| Set vs record, per path | Meaning | Verdict |
+|---|---|---|
+| set **older** than the record | the view has not seen a write the store holds | **Unestablished** — refused |
+| set **newer** than the record | the ordinary watcher lag — the record trails the files | compiles |
+| path in only one of the two | an add or remove in flight, direction unknown | compiles; `IsDirty` and the re-drive own it |
+
+The bake's own `VersionRecordAgrees` already demanded exact agreement before reusing its batch set;
+this is the same witness carried down to the compiler, so the activation path — which had none — is
+held to it too.
+
+Pinned by `ACompileNeverReadsASetOlderThanItsRecordTest`: the measured set (old `PrBabysitter`, new
+`PrBabysitterTending`) handed to the compiler under a record naming the new `PrBabysitter` settles
+as `SourceDiscoveryUnavailableException` — with the rule neutralised the same test reads the
+`CS0260` verdict — while the set the record names, and a set newer than it, compile; and a stale
+cached race answer loses to the authoritative read.
+
+**Not established:** which per-process view held the old content on the measured pod, and whether a
+record that itself lags (written by a watcher reading the same stale view) can let a stale set
+through — the rule can only be as current as the record. The second observation on #6631 (a
+terminal `[ROUTE] NotFound` for an existing node during its type's recompile) is a separate cause
+and is not addressed here.
+
 ## What went wrong (issue #3663)
 
 The predicate used to require that the type **declare** its own source queries:

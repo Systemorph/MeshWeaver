@@ -6,8 +6,6 @@
   "category": "AI Use Cases",
   "description": "Automated extraction, classification, and intelligent routing of documents",
   "icon": "/api/content/Systemorph/Marketing/icons/clipboard-task.svg",
-  "addressSegments": 0,
-  "isPersistent": true,
   "content": {
     "$type": "MarkdownDocument",
     "title": "Intelligent Document Processing",

@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "Paris sp\u00e9cialit\u00e9s - Paris, France",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "PARIS",

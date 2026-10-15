@@ -6,7 +6,6 @@
   "category": "Products",
   "description": "Ipoh Coffee - 16 - 500 g tins",
   "icon": "/static/NodeTypeIcons/shopping-bag.svg",
-  "isPersistent": true,
   "content": {
     "$type": "ProductContent",
     "productId": 43,

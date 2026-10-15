@@ -7,12 +7,9 @@
   "icon": "/api/content/ACME/Project/Todo/icon.svg",
   "description": "Create wireframes for the TaskFlow product landing page",
   "category": "Tasks",
-  "addressSegments": 0,
-  "isPersistent": true,
   "lastModified": "2026-01-12T07:43:17.8314811+00:00",
   "version": 4,
   "state": "Active",
-  "isVirtual": false,
   "content": {
     "$type": "Todo",
     "title": "Design landing page wireframes",
@@ -24,7 +21,5 @@
     "dueDateOffsetDays": 3,
     "status": "InProgress",
     "createdAt": "2026-01-19T20:23:16.388212+00:00"
-  },
-  "routingType": "Shared",
-  "instantiationType": "HubConfiguration"
+  }
 }

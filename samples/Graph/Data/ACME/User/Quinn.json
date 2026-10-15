@@ -5,7 +5,6 @@
   "nodeType": "User",
   "description": "Customer Support Lead at Software",
   "icon": "/static/NodeTypeIcons/person.svg",
-  "isPersistent": true,
   "content": {
     "$type": "User",
     "email": "quinn.johnson@acme.example.com",

@@ -56,6 +56,11 @@ internal sealed class OrleansTestBackingStore
     /// </summary>
     public IServiceCollection Register(IServiceCollection services)
     {
+        // A shared change feed is the LISTEN/NOTIFY model, i.e. what a multi-silo host must
+        // declare (#4802); without it the silos share rows but not commits.
+        if (sharedChanges is not null)
+            services.DeclareCrossProcessChangeDelivery(
+                "test: one change feed shared by every silo (the PostgreSQL LISTEN/NOTIFY model)");
         services.Replace(ServiceDescriptor.Singleton<InMemoryStorageAdapter>(sp =>
             sharedChanges is { } shared
                 ? new InMemoryStorageAdapter(

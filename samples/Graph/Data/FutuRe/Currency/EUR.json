@@ -3,7 +3,6 @@
   "namespace": "FutuRe/Currency",
   "name": "Euro",
   "nodeType": "FutuRe/Currency",
-  "isPersistent": true,
   "content": {
     "$type": "Currency",
     "id": "EUR",
