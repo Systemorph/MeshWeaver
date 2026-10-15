@@ -3,7 +3,6 @@
   "namespace": "FutuRe/EuropeRe/TransactionMapping",
   "name": "EuropeRe: Household → Property (90%)",
   "nodeType": "FutuRe/TransactionMapping",
-  "isPersistent": true,
   "content": {
     "$type": "TransactionMapping",
     "id": "EUR-HOUSEHOLD-PROP",

@@ -5,7 +5,6 @@
   "name": "Why we bet on the actor model",
   "nodeType": "Doc/DataMesh/SocialMedia/Post",
   "icon": "/static/NodeTypeIcons/document.svg",
-  "isPersistent": true,
   "content": {
     "$type": "SocialMediaPost",
     "title": "Why we bet on the actor model",

@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "Furia Bacalhau e Frutos do Mar - Lisboa, Portugal",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "FURIB",

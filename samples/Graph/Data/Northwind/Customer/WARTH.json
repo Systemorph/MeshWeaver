@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "Wartian Herkku - Oulu, Finland",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "WARTH",

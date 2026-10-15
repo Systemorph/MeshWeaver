@@ -97,10 +97,10 @@ def main() -> int:
     if a.all or not a.base:
         mode, projects, reason = "all", [], "not a pull request (merge group, push, schedule or dispatch) — the full suite runs"
     else:
-        r = subprocess.run(["git", "-C", str(root), "diff", "--name-only", f"{a.base}...{a.head}"], capture_output=True, text=True)
+        r = subprocess.run(["git", "-C", str(root), "diff", "-z", "--name-only", f"{a.base}...{a.head}"], capture_output=True, text=True)
         if r.returncode != 0:
-            r = subprocess.run(["git", "-C", str(root), "diff", "--name-only", a.base, a.head], capture_output=True, text=True)
-        changed = [l.strip() for l in r.stdout.splitlines() if l.strip()] if r.returncode == 0 else []
+            r = subprocess.run(["git", "-C", str(root), "diff", "-z", "--name-only", a.base, a.head], capture_output=True, text=True)
+        changed = [p for p in r.stdout.split("\0") if p] if r.returncode == 0 else []
         refs, tests = project_graph(root)
         mode, projects, reason = classify(changed, refs, tests)
     lines = [f"mode={mode}", f"projects={','.join(projects)}", f"reason={reason}"]

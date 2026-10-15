@@ -6,7 +6,6 @@
   "category": "Products",
   "description": "Queso Manchego La Pastora - 10 - 500 g pkgs.",
   "icon": "/static/NodeTypeIcons/shopping-bag.svg",
-  "isPersistent": true,
   "content": {
     "$type": "ProductContent",
     "productId": 12,

@@ -4,7 +4,6 @@
   "name": "Example 2x2",
   "nodeType": "MathDemo/Matrix",
   "description": "Sample 2x2 matrix for the NuGet-in-node-type documentation walkthrough.",
-  "isPersistent": true,
   "content": {
     "$type": "Matrix",
     "name": "Example 2x2",

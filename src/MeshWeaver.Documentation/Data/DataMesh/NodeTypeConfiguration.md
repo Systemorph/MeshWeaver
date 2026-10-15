@@ -70,8 +70,7 @@ A NodeType has two parts: its **node properties** (the metadata stored in the me
   "nodeType": "NodeType",
   "description": "An organization containing projects",
   "icon": "Building",
-  "order": 10,
-  "isPersistent": true
+  "order": 10
 }
 ```
 

@@ -6,7 +6,6 @@
   "category": "Products",
   "description": "Gudbrandsdalsost - 10 kg pkg.",
   "icon": "/static/NodeTypeIcons/shopping-bag.svg",
-  "isPersistent": true,
   "content": {
     "$type": "ProductContent",
     "productId": 69,

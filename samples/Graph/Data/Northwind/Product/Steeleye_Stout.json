@@ -6,7 +6,6 @@
   "category": "Products",
   "description": "Steeleye Stout - 24 - 12 oz bottles",
   "icon": "/static/NodeTypeIcons/shopping-bag.svg",
-  "isPersistent": true,
   "content": {
     "$type": "ProductContent",
     "productId": 35,

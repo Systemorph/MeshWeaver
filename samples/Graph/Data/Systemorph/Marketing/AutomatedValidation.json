@@ -6,8 +6,6 @@
   "category": "AI Use Cases",
   "description": "Cross-reference and verify data against master records",
   "icon": "/api/content/Systemorph/Marketing/icons/checkmark-circle.svg",
-  "addressSegments": 0,
-  "isPersistent": true,
   "content": {
     "$type": "MarkdownDocument",
     "title": "Automated Validation",

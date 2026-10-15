@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "Lehmanns Marktstand - Frankfurt a.M., Germany",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "LEHMS",

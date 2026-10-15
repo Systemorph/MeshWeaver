@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "Ottilies K\u00e4seladen - K\u00f6ln, Germany",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "OTTIK",

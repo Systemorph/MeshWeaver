@@ -950,7 +950,8 @@ public class MessageService : IMessageService
         // waiting out its budget. DeletedAddressNackClassificationTest asserts both halves
         // (Contain("No node found") / NotContain("shutting down")) precisely because nothing else
         // can catch it.
-        var (errorType, message) = IsAddressDeleted()
+        var nodeAbsent = IsAddressDeleted();
+        var (errorType, message) = nodeAbsent
             ? (ErrorType.NotFound, DeletedAddressMessage)
             : (classification is ErrorType.Unknown ? ErrorType.ShuttingDown : classification, reason);
         try
@@ -960,7 +961,8 @@ public class MessageService : IMessageService
             // does its post pipeline on a rejection. Reporting either as "answered" would suppress
             // every remaining carrier while the requester stays unanswered (Copilot review on #4154).
             var posted = parent.Post(
-                new DeliveryFailure(delivery) { ErrorType = errorType, Message = message },
+                // NodeAbsent rides the tombstone verdict as the typed form of the sentence (#6626).
+                new DeliveryFailure(delivery) { ErrorType = errorType, Message = message, NodeAbsent = nodeAbsent },
                 o => o.ResponseFor(delivery));
             if (posted is null || posted.State == MessageDeliveryState.Failed)
             {
@@ -1050,9 +1052,10 @@ public class MessageService : IMessageService
     /// </summary>
     public const string FailureAlreadyReported = "FailureAlreadyReported";
 
-    private IMessageDelivery ReportFailure(IMessageDelivery delivery, ErrorType errorType = ErrorType.Unknown)
+    private IMessageDelivery ReportFailure(IMessageDelivery delivery, ErrorType errorType = ErrorType.Unknown,
+        bool nodeAbsent = false)
     {
-        TryReportFailure(delivery, errorType);
+        TryReportFailure(delivery, errorType, nodeAbsent);
         return delivery;
     }
 
@@ -1065,7 +1068,7 @@ public class MessageService : IMessageService
     /// finishes it still owes the NACK. The distinction is the answer-once contract at the one
     /// site that returns a verdict to a routing layer with a carrier of its own (the intake gate).
     /// </summary>
-    private bool TryReportFailure(IMessageDelivery delivery, ErrorType errorType)
+    private bool TryReportFailure(IMessageDelivery delivery, ErrorType errorType, bool nodeAbsent = false)
     {
         var error = delivery.Properties.TryGetValue("Error", out var e) ? e?.ToString() : null;
         logger.LogWarning(
@@ -1142,7 +1145,7 @@ public class MessageService : IMessageService
                 // The post seam's verdict IS the carrier's verdict: it hands back the delivery it
                 // accepted, or a Failed one when neither its own pump, a live parent nor the
                 // in-process route would take it (every branch stamps the request's trail).
-                var posted = Post(new DeliveryFailure(delivery, message) { ErrorType = errorType },
+                var posted = Post(new DeliveryFailure(delivery, message) { ErrorType = errorType, NodeAbsent = nodeAbsent },
                     new PostOptions(Address).ResponseFor(delivery));
                 // 🚨 Ignored belongs with Failed, exactly as MeshExtensions.WasCarried says
                 // (MeshWeaver#1174). The storm breaker and the aggregate shedder refuse a post
@@ -2790,7 +2793,7 @@ public class MessageService : IMessageService
                             "{MessageType} (ID: {MessageId}) faulted in {Address} after {Duration}ms because the hub is tearing down, and the address is TOMBSTONED — NACKing as authoritative NotFound.",
                             messageTypeName, delivery.Id, Address, executionStopwatch.ElapsedMilliseconds);
                         if (!NackThroughParent(delivery, e.ToString()))
-                            ReportFailure(delivery.Failed(DeletedAddressMessage), ErrorType.NotFound);
+                            ReportFailure(delivery.Failed(DeletedAddressMessage), ErrorType.NotFound, nodeAbsent: true);
                     }
                     else
                     {

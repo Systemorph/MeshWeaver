@@ -6,7 +6,6 @@
   "category": "Suppliers",
   "description": "Lyngbysild - Lyngby, Denmark",
   "icon": "/static/NodeTypeIcons/truck.svg",
-  "isPersistent": true,
   "content": {
     "$type": "SupplierContent",
     "supplierId": 21,

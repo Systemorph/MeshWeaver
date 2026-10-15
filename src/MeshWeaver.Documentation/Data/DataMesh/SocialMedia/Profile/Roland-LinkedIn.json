@@ -5,7 +5,6 @@
   "name": "Roland on LinkedIn",
   "nodeType": "Doc/DataMesh/SocialMedia/Profile",
   "icon": "/static/NodeTypeIcons/person.svg",
-  "isPersistent": true,
   "content": {
     "$type": "SocialMediaProfile",
     "name": "Roland on LinkedIn",

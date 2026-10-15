@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "Around the Horn - London, UK",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "AROUT",

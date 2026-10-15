@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "Chop-suey Chinese - Bern, Switzerland",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "CHOPS",

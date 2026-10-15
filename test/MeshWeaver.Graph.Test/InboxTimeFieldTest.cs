@@ -1,8 +1,10 @@
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Fixture;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
+using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -73,6 +75,93 @@ public class InboxTimeFieldTest(ITestOutputHelper output) : MonolithMeshTestBase
     private sealed class Unconvertible
     {
         public IntPtr Handle { get; init; } = new(1);
+    }
+
+    /// <summary>
+    /// <c>before:</c> / <c>after:</c> in the search narrow the rows by their time — so everything
+    /// before a day can be listed, ticked and put away in one Delete — and the rest of the text still
+    /// goes to the sources. A bound that is not a date stays text.
+    /// </summary>
+    [Fact]
+    public void ADateBoundInTheSearch_NarrowsTheRowsByTheirTime()
+    {
+        InboxRows.SplitDates("invoice before:2026-10-01 after:2026-09-01").Should()
+            .Be(("invoice", (DateTimeOffset?)new DateTimeOffset(2026, 10, 1, 0, 0, 0, TimeSpan.Zero), (DateTimeOffset?)new DateTimeOffset(2026, 9, 1, 0, 0, 0, TimeSpan.Zero)));
+        InboxRows.SplitDates("before:yesterday").Should().Be(("before:yesterday", (DateTimeOffset?)null, (DateTimeOffset?)null),
+            "a bound that is not a date is searched for as text, never silently dropped");
+
+        MeshNode At(string id, DateTimeOffset when) => new(id, "alice/_X") { Name = id, LastModified = when };
+        var section = new InboxSection(InboxBand.NeedsYou, "Mail", 20, "q");
+        var rows = new[] { At("sept", Earlier.AddDays(-20)), At("oct1", new DateTimeOffset(2026, 10, 1, 0, 0, 0, TimeSpan.Zero)), At("oct2", Later) }
+            .Select(n => InboxRows.Of(n, section, null, null)).ToList();
+        InboxRows.Apply(rows, new InboxFilter { Search = "before:2026-10-01" }).Select(r => r.Title).Should().Equal(["sept"],
+            "strictly before the day");
+        InboxRows.Apply(rows, new InboxFilter { Search = "after:2026-10-01" }).Select(r => r.Title).Should().Equal(["oct2", "oct1"],
+            "the day itself and later, newest first");
+        InboxRows.Apply(rows, new InboxFilter()).Should().HaveCount(3, "negative control: no bound, nothing narrowed");
+    }
+
+    /// <summary>
+    /// The public <c>InboxRows.Apply</c> surface is ONE overload (issue #6740): a second public overload
+    /// taking <c>string? category</c> beside <c>CultureInfo? culture</c> made <c>Apply(rows, filter, null)</c>
+    /// ambiguous (CS0121) for every caller outside this assembly. The category travels on the filter.
+    /// </summary>
+    [Fact]
+    public void PublicApply_HasOneOverload_AndReadsTheCategoryOffTheFilter()
+    {
+        typeof(InboxRows).GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)
+            .Where(m => m.Name == nameof(InboxRows.Apply))
+            .Select(m => m.GetParameters()[2].ParameterType)
+            .Should().Equal([typeof(System.Globalization.CultureInfo)], "a literal null third argument must bind to exactly one public overload");
+
+        MeshNode At(string id, int day) => new(id, "alice/_X") { Name = id, LastModified = Earlier.AddDays(day) };
+        var rows = new[]
+        {
+            InboxRows.Of(At("w", 1), new InboxSection(InboxBand.NeedsYou, "WhatsApp", 30, "q1") { Category = "Conversations" }, null, null),
+            InboxRows.Of(At("a", 2), new InboxSection(InboxBand.Running, "Activities", 10, "q3"), null, null),
+        };
+        InboxRows.Apply(rows, new InboxFilter { Category = "Conversations" }).Select(r => r.Title).Should().Equal(["w"],
+            "the public overload narrows by the filter's category");
+        InboxRows.Apply(rows, new InboxFilter()).Should().HaveCount(2, "negative control: no category, nothing narrowed");
+    }
+
+    /// <summary>
+    /// The side menu's categories: a category shows every row filed under it — even a source switched
+    /// off by default — and All (none) leaves the switches in charge. Counts are read before any of it.
+    /// </summary>
+    [Fact]
+    public void ACategory_ShowsItsRows_EvenFromASourceSwitchedOff()
+    {
+        MeshNode At(string id, int day) => new(id, "alice/_X") { Name = id, LastModified = Earlier.AddDays(day) };
+        var chat = new InboxSection(InboxBand.NeedsYou, "WhatsApp", 30, "q1") { Category = "Conversations" };
+        var teams = new InboxSection(InboxBand.NeedsYou, "Teams", 32, "q2") { Category = "Conversations", Unread = true };
+        var activities = new InboxSection(InboxBand.Running, "Activities", 10, "q3");
+        var rows = new[]
+        {
+            InboxRows.Of(At("w", 1), chat, null, null), InboxRows.Of(At("t", 2), teams, null, null),
+            InboxRows.Of(At("a", 3), activities, null, null),
+        };
+        var switchedOff = new InboxFilter { Sources = ImmutableDictionary<string, bool>.Empty.Add(InboxRows.SourceKey("Activities"), false) };
+
+        InboxRows.Apply(rows, switchedOff, "Conversations").Select(r => r.Title).Should().Equal(["t", "w"],
+            "two sources filed under one category, newest first");
+        InboxRows.Apply(rows, switchedOff, "Activities").Select(r => r.Title).Should().Equal(["a"],
+            "a source switched off is reached by its category");
+        InboxRows.Apply(rows, switchedOff, category: null).Select(r => r.Title).Should().Equal(["t", "w"],
+            "negative control: with All, the switches apply");
+        rows[2].Category.Should().Be("Activities", "a leg with no category is filed under its source");
+
+        var counts = InboxRows.CategoryCounts(rows);
+        counts["Conversations"].Should().Be((2, 1), "two rows, one unread");
+        counts["Activities"].Should().Be((1, 0));
+
+        // The side menu's options: All first, then each category — its unread count when it has
+        // unread rows, else all its rows.
+        var options = InboxLayoutArea.CategoryOptions("All",
+            [("Conversations", "Conversations", "💬"), ("Activities", "Activities", "⚙️")], counts);
+        options.Select(o => ((Option<string>)o).Item).Should().Equal([string.Empty, "Conversations", "Activities"]);
+        options.Select(o => o.Text).Should().Equal(["📥 All  1", "💬 Conversations  1", "⚙️ Activities  1"],
+            "All and Conversations show their one unread row; Activities, with none unread, its one row");
     }
 
     /// <summary>A timed leg keeps <c>content</c> in its projection; an untimed one does not.</summary>
