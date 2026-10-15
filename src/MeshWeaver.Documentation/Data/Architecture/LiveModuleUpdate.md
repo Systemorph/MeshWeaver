@@ -169,7 +169,11 @@ self-updater answered `NothingToActivate` on its proposal check and its safety n
 restart that adopts set 2 never came.
 
 The key is now what the three directories LIST: each file's name, length and own last-write time,
-and each subdirectory's name. That is what the reading is derived from, and no filesystem leaves it
+and each subdirectory's name — and, under `activation.d/`, each module's own record directory file
+by file, because a record (a landing, an uninstall tombstone) lands by a rename into that directory
+and leaves `activation.d/`'s own listing unchanged
+(`ARecordOnlyChange_InsideAModulesRecordDirectory_IsSeen`). Module payload directories stay
+name-only: nothing the reading derives lives in them. That is what the reading is derived from, and no filesystem leaves it
 unchanged across a create, rename, replace or delete. A directory that cannot be listed yields no key
 at all, so the reading is retaken and reports the fault instead of serving the old snapshot. The old
 `DiskFingerprint` stays as an `[Obsolete]` type for binary compatibility and keys nothing.
