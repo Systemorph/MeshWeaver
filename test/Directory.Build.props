@@ -18,8 +18,8 @@
          where cancellation matters. NOT a code-quality suppression: xUnit1031 (blocking task ops →
          deadlock risk) is deliberately NOT here and is fixed at the source instead. -->
     <!-- NU1510 ("PackageReference X will not be pruned"): the root props suppresses it for its
-         security-override references, and this tree carries the same overrides (SSH.NET, and the
-         Pkcs/Xml pair below) without importing the root. A project that binds the
+         security-override references (the Pkcs/Xml pair), and this tree carries its own copy of that
+         pair plus a test-only override the root does not have (SSH.NET), without importing the root. A project that binds the
          Microsoft.AspNetCore.App framework (MeshWeaver.PluginTester.Test) gets System.Security.
          Cryptography.Xml from that framework, so NuGet reports the override as unprunable there —
          a restore advisory about the override itself, not a code warning. Same policy as the root. -->
