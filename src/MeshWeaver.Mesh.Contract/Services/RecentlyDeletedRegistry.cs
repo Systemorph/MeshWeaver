@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Reactive.Concurrency;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Threading;
 using MeshWeaver.Messaging;
 
@@ -253,9 +254,36 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
     /// <param name="body">The work the scope protects. Subscribed once, inside the scope.</param>
     /// <returns>The body's notifications, delivered after the scope is released.</returns>
     public IObservable<T> WithinSubtreeDeletion<T>(string rootPath, Func<IObservable<T>> body) =>
+        WithinSubtreeDeletion(rootPath, new MeshOperationOptions().Timeout, body);
+
+    /// <summary>
+    /// <see cref="WithinSubtreeDeletion{T}(string, Func{IObservable{T}})"/> with an explicit bound on
+    /// the wait for writes admitted under <paramref name="rootPath"/> before the scope opened (#6719).
+    /// 🚨 The wait holds the scope open, and the scope refuses EVERY write under the root — so an
+    /// admitted write that never terminates must not hold it forever. Past
+    /// <paramref name="settleWithin"/> the operation fails with a <see cref="TimeoutException"/> naming
+    /// the pending paths, the body never runs (nothing is torn down or moved), and the scope is
+    /// released before the error is delivered.
+    /// </summary>
+    /// <typeparam name="T">The body's element type.</typeparam>
+    /// <param name="rootPath">The subtree being deleted (or moved away, or torn down).</param>
+    /// <param name="settleWithin">How long the admitted writes may take to settle.</param>
+    /// <param name="body">The work the scope protects. Subscribed once, inside the scope.</param>
+    /// <returns>The body's notifications, delivered after the scope is released.</returns>
+    public IObservable<T> WithinSubtreeDeletion<T>(
+        string rootPath, TimeSpan settleWithin, Func<IObservable<T>> body) =>
         Observable.Using(
             () => BeginSubtreeDeletion(rootPath),
-            scope => Observable.Defer(body)
+            // The body runs only once every write ADMITTED under the root before the scope opened
+            // has settled (#6719) — see AdmittedWritesSettled — and not at all if they do not.
+            scope => AdmittedWritesSettled(rootPath)
+                .Timeout(settleWithin, Observable.Defer(() => Observable.Throw<System.Reactive.Unit>(
+                    new TimeoutException(
+                        $"write(s) admitted under '{rootPath}' before its deletion scope opened did not "
+                        + $"settle within {settleWithin.TotalSeconds:0}s: "
+                        + $"{string.Join(", ", AdmittedWritesUnder(rootPath).Take(10))}. Nothing was done "
+                        + "under the scope."))))
+                .SelectMany(_ => Observable.Defer(body))
                 .Materialize()
                 .ToList()
                 .Do(_ => scope.Dispose())
@@ -293,6 +321,128 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
             }
         }
         return false;
+    }
+
+    // ─── Admitted writes (#6719) ─────────────────────────────────────────────
+    //
+    // The scope above refuses a write at ADMISSION. A write admitted a moment
+    // before the scope opened is not refused: it is already on its way to the
+    // store (queued on the I/O pool, or slow at the backend), and it commits
+    // whenever the backend gets to it. Nothing ordered that commit against the
+    // delete, so it could land AFTER the delete removed the row and recreate the
+    // node the delete had just reported gone; its post-commit Supersede then
+    // erased the tombstone, so the recreate looked legitimate.
+    //
+    // The ordering is closed from the delete's side: the storage write guard
+    // REGISTERS every write it admits until that write terminates, and a
+    // deletion, once its scope is open, waits for every write admitted under its
+    // root to settle before it reads, plans or removes anything. The scope stops
+    // new admissions; the wait drains the ones already admitted. Every in-process
+    // write under the root is therefore either refused or committed BEFORE the
+    // delete — never after it.
+    //
+    // Why both sides check in the order they do: the guard registers FIRST and
+    // then tests the scope; the delete opens the scope FIRST and then reads the
+    // registrations. Both are ConcurrentDictionary writes (full fences), so at
+    // least one side sees the other — the write is refused, or the delete waits
+    // for it. A write that registers and is then refused unregisters at once.
+
+    private readonly ConcurrentDictionary<long, IReadOnlyCollection<string>> _admittedWrites = new();
+    private long _nextAdmittedWrite;
+
+    // Signals that an admitted write settled. Synchronized: writes settle on whatever thread the
+    // backend completes them on, and a Subject's observers must not be called concurrently.
+    private readonly ISubject<System.Reactive.Unit> _admittedWriteSettled =
+        Subject.Synchronize(new Subject<System.Reactive.Unit>());
+
+    /// <summary>
+    /// Registers a write the storage write guard has ADMITTED, for the paths it writes. Dispose the
+    /// returned handle when the write ITSELF terminates — completion or error; a caller unsubscribing does
+    /// not stop an eager store write, so it is not a settlement — and
+    /// any deletion waiting in <see cref="AdmittedWritesSettled"/> re-checks. Register BEFORE testing
+    /// <see cref="IsUnderActiveDeletion"/>, never after: that order is what makes the two sides see
+    /// each other (see the section comment).
+    /// </summary>
+    /// <param name="paths">The node paths the admitted write will commit.</param>
+    /// <returns>The registration; disposing it twice is harmless.</returns>
+    public IDisposable AdmitWrite(IReadOnlyCollection<string> paths)
+    {
+        if (paths.Count == 0)
+            return EmptyScope.Instance;
+        var id = Interlocked.Increment(ref _nextAdmittedWrite);
+        _admittedWrites[id] = paths;
+        return new AdmittedWrite(this, id);
+    }
+
+    /// <summary>
+    /// The paths of every write admitted at or under <paramref name="rootPath"/> that has not settled
+    /// yet. Diagnostics for a deletion that is waiting on them.
+    /// </summary>
+    /// <param name="rootPath">The subtree root.</param>
+    /// <param name="rowOnly">Only writes to <paramref name="rootPath"/> ITSELF — a row-only delete
+    /// (<c>KeepDescendants</c>) removes nothing beneath it, so a descendant write is not its concern.</param>
+    /// <returns>The pending paths, possibly empty.</returns>
+    public IReadOnlyList<string> AdmittedWritesUnder(string rootPath, bool rowOnly = false)
+        => _admittedWrites.Values
+            .SelectMany(paths => paths)
+            .Where(path => Covers(path, rootPath, rowOnly))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+    /// <summary>
+    /// Emits once, and completes, when no write admitted at or under <paramref name="rootPath"/> is
+    /// still in flight. Subscribe to it only while the deletion scope on <paramref name="rootPath"/>
+    /// is OPEN: the scope is what stops new admissions, so the set can only shrink and the wait
+    /// terminates as soon as the writes already on their way have committed or failed. Cold; emits
+    /// synchronously on Subscribe when nothing is pending, which is the overwhelmingly common case.
+    /// </summary>
+    /// <param name="rootPath">The subtree whose deletion is about to run.</param>
+    /// <param name="rowOnly">Wait only for writes to <paramref name="rootPath"/> ITSELF. A row-only
+    /// delete (<c>KeepDescendants</c>) guards just the row (<see cref="BeginRowDeletion"/>), so writes to
+    /// the descendants it keeps stay admitted throughout and the pending set under the root need not
+    /// shrink: waiting on them would time out a delete that has no pending write to the row it removes.</param>
+    /// <returns>One <see cref="System.Reactive.Unit"/> once the subtree (or the row) has no admitted write pending.</returns>
+    public IObservable<System.Reactive.Unit> AdmittedWritesSettled(string rootPath, bool rowOnly = false)
+        => string.IsNullOrEmpty(rootPath)
+            ? Observable.Return(System.Reactive.Unit.Default)
+            // The settle signal is subscribed BEFORE the first check (Merge subscribes in order and
+            // Return emits synchronously), so a write settling between the check and the
+            // subscription cannot be missed.
+            : Observable.Defer(() => _admittedWriteSettled
+                .Merge(Observable.Return(System.Reactive.Unit.Default))
+                .Where(_ => !HasAdmittedWriteUnder(rootPath, rowOnly))
+                .Take(1));
+
+    private bool HasAdmittedWriteUnder(string rootPath, bool rowOnly)
+    {
+        if (_admittedWrites.IsEmpty)
+            return false;
+        foreach (var kv in _admittedWrites)
+            foreach (var path in kv.Value)
+                if (Covers(path, rootPath, rowOnly))
+                    return true;
+        return false;
+    }
+
+    private static bool Covers(string path, string root, bool rowOnly)
+        => rowOnly
+            ? string.Equals(path, root, StringComparison.OrdinalIgnoreCase)
+            : IsAtOrUnder(path, root);
+
+    private static bool IsAtOrUnder(string path, string root)
+        => path.Length >= root.Length
+           && path.StartsWith(root, StringComparison.OrdinalIgnoreCase)
+           && (path.Length == root.Length || path[root.Length] == '/');
+
+    private void SettleAdmittedWrite(long id)
+    {
+        if (_admittedWrites.TryRemove(id, out _))
+            _admittedWriteSettled.OnNext(System.Reactive.Unit.Default);
+    }
+
+    private sealed class AdmittedWrite(RecentlyDeletedRegistry registry, long id) : IDisposable
+    {
+        public void Dispose() => registry.SettleAdmittedWrite(id);
     }
 
     // ── Version-guarded deletes (#6673) ─────────────────────────────────────────────────────────
