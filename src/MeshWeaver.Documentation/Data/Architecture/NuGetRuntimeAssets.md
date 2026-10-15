@@ -111,16 +111,21 @@ both System.Text.Json 10 and 9), `CS0121` (`GetRequiredService<T>` in both copie
 Microsoft.Extensions.DependencyInjection.Abstractions), `CS0121` on `Enumerable.MaxBy`, a cascade of
 inference errors and hundreds of `CS1701`s. Three defects, three rules:
 
-1. **A closure assembly the host set already provides is not referenced.** Every compile path — the
-   bake (`NodeSetCompiler.Compile`), the runtime compile and its language-service inputs
+1. **One assembly per name — the copy that will run.** Every compile path — the bake
+   (`NodeSetCompiler.Compile`), the runtime compile and its language-service inputs
    (`MeshNodeCompilationService`), the speculative compile, the script compile and the kernel — composes
-   its references through `CompileReferences.WithPackageAssemblies` /
-   `PackageAssembliesNotInHost`: a package path whose assembly simple name the host reference set
-   (TPA or the container's `/app` + shared frameworks, plus modules) already holds is dropped, in
-   order, deterministically. Only genuinely new assemblies (`Microsoft.Data.SqlClient`, MSAL,
-   `Azure.Identity` where the host lacks them, …) are added. The generator candidates and the stage-1
-   content key (`GeneratedInputDigestOf`) keep the FULL resolution, so the bake and the runtime agree
-   on the key whatever their host sets are.
+   its references through `CompileReferences.WithPackageAssemblies`, which applies the load context's
+   own binding rule (host unification, above) to every name the package closure and the host set
+   (TPA or the container's `/app` + shared frameworks, plus modules) both hold: same identity with the
+   host equal or newer → the host's reference, the package copy dropped; same identity with the
+   package newer → the package's copy REPLACES the host's (the load context loads it in isolation);
+   a different identity (another publisher's key) → both kept. Names the host lacks are added; a name
+   appearing twice in the closure keeps its first path. Pure and order-preserving, so the bake and
+   the runtime agree for the same host; the generator candidates and the stage-1 content key
+   (`GeneratedInputDigestOf`) keep the FULL resolution. A speculative compile rebuilds the package half
+   from the EFFECTIVE sources' directives onto the recorded host set
+   (`CompilationInputs.HostReferences`), so a proposed body that changes a package version is checked
+   against the version it pins.
 2. **Generator discovery loads only assemblies that can hold a generator.** `SourceGeneratorLoader`
    used to `Assembly.LoadFrom` every `#r` assembly into the default context to look for `[Generator]`
    types — including SqlClient's `lib/` stub, which the NodeType context then unified with as if the

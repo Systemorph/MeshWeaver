@@ -140,61 +140,111 @@ public static class CompileReferences
     }
 
     /// <summary>
-    /// 🚨 <b>HOST WINS.</b> The NuGet-resolved assembly paths a compile against
-    /// <paramref name="host"/> may add: every path whose assembly simple name the host reference set
-    /// already provides is DROPPED, as is a second path of a simple name already taken from the
-    /// package closure. Order is preserved, so the answer is a pure function of its two inputs.
-    ///
-    /// <para>A <c>#r "nuget:…"</c> resolution is the package's whole transitive closure, and that
-    /// closure routinely carries assemblies the host ships too — Microsoft.Data.SqlClient 6.1.1 brings
+    /// 🚨 <b>ONE ASSEMBLY PER NAME — the copy that will RUN.</b> Composes <paramref name="host"/>
+    /// with a <c>#r "nuget:…"</c> resolution, which is the package's whole transitive closure and
+    /// routinely carries assemblies the host ships too: Microsoft.Data.SqlClient 6.1.1 brings
     /// System.Text.Json 9 and Microsoft.Extensions.DependencyInjection.Abstractions 9 beside the
     /// shared framework's 10. Appended as-is, Roslyn sees two <c>JsonElement</c>s (CS0433) and two
     /// <c>GetRequiredService&lt;T&gt;</c>s (CS0121), and the NodeType never compiles (an enterprise
-    /// client portal, 2026-10-15). The host's copy is the one that is LOADED at run time anyway — the
-    /// NodeType load context unifies a package dependency with the host's equal-or-newer copy
-    /// (<see cref="MeshWeaver.NuGet.PackageAssemblyProbe"/>), and a name the packages do not supply
-    /// falls through to the default context — so compiling against it is compiling against what
-    /// runs.</para>
+    /// client portal, 2026-10-15).
     ///
-    /// <para>Applied to the METADATA REFERENCES only. The generator candidates and the stage-1
-    /// content key (<c>GeneratedInputDigestOf</c>) keep the full resolution, so the bake and the
-    /// runtime still agree on the key whatever their host sets are.</para>
+    /// <para>For a package assembly whose simple name the host set already holds, the compile takes
+    /// exactly the copy the NodeType load context will BIND at run time
+    /// (<see cref="MeshWeaver.NuGet.PackageAssemblyProbe.TryUnifyWithHost"/>), so compile and run
+    /// cannot disagree:</para>
+    /// <list type="bullet">
+    ///   <item><b>Same identity, host equal or newer</b> → the host's reference; the package copy is
+    ///     dropped (it unifies with the host at run time).</item>
+    ///   <item><b>Same identity, package newer</b> → the package's copy REPLACES the host's reference
+    ///     (the load context refuses an older host and loads the package's copy in isolation, so code
+    ///     needing the newer API compiles against it).</item>
+    ///   <item><b>Different identity</b> (another publisher's public key, another culture) → both are
+    ///     kept: a same-named assembly of another publisher is a different assembly, at compile time
+    ///     as at run time.</item>
+    /// </list>
+    /// <para>A package name appearing twice in the closure keeps its first path; a name the host does
+    /// not hold is added. Pure and order-preserving, so the bake and the runtime compose the same set
+    /// for the same host. Applied to the METADATA REFERENCES only: generator candidates and the
+    /// stage-1 content key (<c>GeneratedInputDigestOf</c>) keep the full resolution.</para>
     /// </summary>
-    /// <param name="host">The reference set the compile is built against (TPA + modules).</param>
+    /// <param name="host">The reference set the compile is built against (TPA or container set, plus
+    /// modules) — WITHOUT any package closure.</param>
     /// <param name="packageAssemblyPaths">The resolved package closure's compile assemblies.</param>
-    public static IReadOnlyList<string> PackageAssembliesNotInHost(
-        IEnumerable<MetadataReference> host, IEnumerable<string> packageAssemblyPaths)
+    /// <param name="createReference">Makes a reference for a package path (default
+    /// <see cref="MetadataReference.CreateFromFile(string, MetadataReferenceProperties, DocumentationProvider)"/>);
+    /// a <c>null</c> answer skips the path.</param>
+    public static IReadOnlyList<MetadataReference> WithPackageAssemblies(
+        IReadOnlyList<MetadataReference> host,
+        IEnumerable<string> packageAssemblyPaths,
+        Func<string, MetadataReference?>? createReference = null)
     {
         ArgumentNullException.ThrowIfNull(host);
         ArgumentNullException.ThrowIfNull(packageAssemblyPaths);
-        var taken = new HashSet<string>(
-            host.Select(SimpleNameOf).OfType<string>(), StringComparer.OrdinalIgnoreCase);
-        var added = new List<string>();
+        createReference ??= path => MetadataReference.CreateFromFile(path);
+
+        var hostIndex = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        for (var i = 0; i < host.Count; i++)
+            if (SimpleNameOf(host[i]) is { } name)
+                hostIndex.TryAdd(name, i);
+
+        var decided = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var replaced = new Dictionary<int, MetadataReference>();
+        var added = new List<MetadataReference>();
         foreach (var path in packageAssemblyPaths)
         {
             if (string.IsNullOrEmpty(path)) continue;
-            if (taken.Add(Path.GetFileNameWithoutExtension(path)))
-                added.Add(path);
+            var name = Path.GetFileNameWithoutExtension(path);
+            if (!decided.Add(name)) continue;
+            var choice = hostIndex.TryGetValue(name, out var index)
+                ? Choose(host[index], path)
+                : PackageChoice.Add;
+            if (choice == PackageChoice.HostWins || createReference(path) is not { } reference)
+                continue;
+            if (choice == PackageChoice.ReplaceHost)
+                replaced[index] = reference;
+            else
+                added.Add(reference);
         }
-        return added;
+
+        if (replaced.Count == 0 && added.Count == 0)
+            return host;
+        var composed = new List<MetadataReference>(host.Count + added.Count);
+        for (var i = 0; i < host.Count; i++)
+            composed.Add(replaced.TryGetValue(i, out var swap) ? swap : host[i]);
+        composed.AddRange(added);
+        return composed;
     }
 
-    /// <summary>
-    /// <paramref name="host"/> followed by the package assemblies <see cref="PackageAssembliesNotInHost"/>
-    /// keeps — the ONE composition every <c>#r "nuget:…"</c> compile path uses (the bake, the
-    /// runtime compile, the script compile, the language service).
-    /// </summary>
-    /// <param name="host">The reference set the compile is built against (TPA + modules).</param>
-    /// <param name="packageAssemblyPaths">The resolved package closure's compile assemblies.</param>
-    public static IReadOnlyList<MetadataReference> WithPackageAssemblies(
-        IReadOnlyList<MetadataReference> host, IEnumerable<string> packageAssemblyPaths)
+    private enum PackageChoice { Add, HostWins, ReplaceHost }
+
+    /// <summary>The run-time binding rule (<c>PackageAssemblyProbe.TryUnifyWithHost</c>) applied to a
+    /// name both sides hold. An identity that cannot be read on either side keeps the host's.</summary>
+    private static PackageChoice Choose(MetadataReference hostReference, string packagePath)
     {
-        var added = PackageAssembliesNotInHost(host, packageAssemblyPaths);
-        if (added.Count == 0) return host;
-        var composed = new List<MetadataReference>(host.Count + added.Count);
-        composed.AddRange(host);
-        composed.AddRange(added.Select(p => (MetadataReference)MetadataReference.CreateFromFile(p)));
-        return composed;
+        var hostPath = hostReference is PortableExecutableReference { FilePath: { Length: > 0 } file }
+            ? file
+            : null;
+        if (hostPath is null || AssemblyNameOf(hostPath) is not { } host || AssemblyNameOf(packagePath) is not { } package)
+            return PackageChoice.HostWins;
+        if (!MeshWeaver.NuGet.PackageAssemblyProbe.SameIdentityModuloVersion(package, host)
+            || !MeshWeaver.NuGet.PackageAssemblyProbe.SameIdentityModuloVersion(host, package))
+            return PackageChoice.Add;
+        return package.Version is { } wanted && host.Version is { } have && have < wanted
+            ? PackageChoice.ReplaceHost
+            : PackageChoice.HostWins;
+    }
+
+    private static System.Reflection.AssemblyName? AssemblyNameOf(string path)
+    {
+        try
+        {
+            return System.Reflection.AssemblyName.GetAssemblyName(path);
+        }
+        catch (Exception e) when (e is IOException or BadImageFormatException or UnauthorizedAccessException
+                                      or ArgumentException)
+        {
+            return null;
+        }
     }
 
     /// <summary>

@@ -106,7 +106,11 @@ public class NuGetPackageHostWinsTest(ITestOutputHelper output) : MonolithMeshTe
     {
         await SkipUnlessNuGetOrgReachable(TestContext.Current.CancellationToken);
         var resolver = new NuGetAssemblyResolver(NullLogger<NuGetAssemblyResolver>.Instance);
-        ResolvedPackageSet? resolved = null;
+        // Resolved up front, so the synchronous bake's callback hands back a finished answer
+        // rather than blocking on the feed.
+        var resolved = await resolver.ResolveAsync(
+            [new NuGetPackageReference("Microsoft.Data.SqlClient", "6.1.1")],
+            targetFramework: null, TestContext.Current.CancellationToken);
         var output = Path.Combine(Path.GetTempPath(), "mw-hostwins-" + Guid.NewGuid().ToString("N"));
 
         try
@@ -122,15 +126,14 @@ public class NuGetPackageHostWinsTest(ITestOutputHelper output) : MonolithMeshTe
                 dependencyIdOf: _ => null,
                 toolchainId: NodeTypeCompilationHelpers.ProcessToolchainId,
                 outputDirectory: output,
-                resolveNuGet: (refs, ct) =>
+                resolveNuGet: (refs, _) =>
                 {
-                    resolved = resolver.ResolveAsync(refs, targetFramework: null, ct).GetAwaiter().GetResult();
+                    refs.Should().ContainSingle(r => r.Id == "Microsoft.Data.SqlClient" && r.VersionRange == "6.1.1");
                     return resolved.AssemblyPaths;
                 },
                 ct: TestContext.Current.CancellationToken);
 
-            resolved.Should().NotBeNull();
-            var context = new PackageProbingContext([.. resolved!.ProbingDirectories]);
+            var context = new PackageProbingContext([.. resolved.ProbingDirectories]);
             try
             {
                 var assembly = context.LoadFromAssemblyPath(compiled.DllPath);
