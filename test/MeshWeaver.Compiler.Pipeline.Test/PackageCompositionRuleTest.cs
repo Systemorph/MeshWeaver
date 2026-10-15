@@ -75,6 +75,13 @@ public sealed class PackageCompositionRuleTest : IDisposable
             [MetadataReference.CreateFromFile(other), MetadataReference.CreateFromFile(host)], [newer]);
 
         Paths(composed).Should().Equal(other, newer);
+
+        // Code that binds through the DEFAULT context (kernel, node-config script) cannot load the
+        // newer copy beside the host's, so there the host's reference stays.
+        Paths(CompileReferences.WithPackageAssemblies(
+                [MetadataReference.CreateFromFile(other), MetadataReference.CreateFromFile(host)], [newer],
+                packagesLoadInIsolation: false))
+            .Should().Equal(other, host);
     }
 
     [Fact]

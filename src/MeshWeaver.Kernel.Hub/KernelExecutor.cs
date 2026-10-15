@@ -802,11 +802,13 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
         {
             var resolved = await resolver.ResolveAsync(refs, targetFramework: null, ct);
             // One assembly per name, the copy that runs (CompileReferences.WithPackageAssemblies):
-            // a closure assembly the session already references is not added a second time.
+            // a closure assembly the session already references is not added a second time. The
+            // kernel's packages bind in the DEFAULT context, which cannot load a second version of a
+            // host assembly — so the host's reference is kept even when the package's is newer.
             scriptOptions = scriptOptions.WithReferences(
                 MeshWeaver.Compiler.CompileReferences.WithPackageAssemblies(
                     [.. scriptOptions.MetadataReferences], resolved.AssemblyPaths,
-                    KernelScriptReferences.GetOrCreateFromFile));
+                    KernelScriptReferences.GetOrCreateFromFile, packagesLoadInIsolation: false));
             InstallRuntimeProbe(resolved.ProbingDirectories);
             Logger.LogInformation("Resolved {Count} NuGet package(s) for interactive cell.", refs.Length);
         }

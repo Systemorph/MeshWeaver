@@ -173,10 +173,17 @@ public static class CompileReferences
     /// <param name="createReference">Makes a reference for a package path (default
     /// <see cref="MetadataReference.CreateFromFile(string, MetadataReferenceProperties, DocumentationProvider)"/>);
     /// a <c>null</c> answer skips the path.</param>
+    /// <param name="packagesLoadInIsolation">True (the NodeType compile) when the code runs in a load
+    /// context that binds a NEWER package copy in isolation (<c>PackageAssemblyProbe.Resolve</c>).
+    /// False for code that binds through the DEFAULT context (the interactive kernel, the node-config
+    /// script), which can never load a second version of an assembly the host already loaded: there
+    /// the host's reference is kept even when the package's is newer, so nothing compiles against an
+    /// API the run cannot bind.</param>
     public static IReadOnlyList<MetadataReference> WithPackageAssemblies(
         IReadOnlyList<MetadataReference> host,
         IEnumerable<string> packageAssemblyPaths,
-        Func<string, MetadataReference?>? createReference = null)
+        Func<string, MetadataReference?>? createReference = null,
+        bool packagesLoadInIsolation = true)
     {
         ArgumentNullException.ThrowIfNull(host);
         ArgumentNullException.ThrowIfNull(packageAssemblyPaths);
@@ -196,7 +203,7 @@ public static class CompileReferences
             var name = Path.GetFileNameWithoutExtension(path);
             if (!decided.Add(name)) continue;
             var choice = hostIndex.TryGetValue(name, out var index)
-                ? Choose(host[index], path)
+                ? Choose(host[index], path, packagesLoadInIsolation)
                 : PackageChoice.Add;
             if (choice == PackageChoice.HostWins || createReference(path) is not { } reference)
                 continue;
@@ -219,7 +226,7 @@ public static class CompileReferences
 
     /// <summary>The run-time binding rule (<c>PackageAssemblyProbe.TryUnifyWithHost</c>) applied to a
     /// name both sides hold. An identity that cannot be read on either side keeps the host's.</summary>
-    private static PackageChoice Choose(MetadataReference hostReference, string packagePath)
+    private static PackageChoice Choose(MetadataReference hostReference, string packagePath, bool packagesLoadInIsolation)
     {
         var hostPath = hostReference is PortableExecutableReference { FilePath: { Length: > 0 } file }
             ? file
@@ -229,7 +236,7 @@ public static class CompileReferences
         if (!MeshWeaver.NuGet.PackageAssemblyProbe.SameIdentityModuloVersion(package, host)
             || !MeshWeaver.NuGet.PackageAssemblyProbe.SameIdentityModuloVersion(host, package))
             return PackageChoice.Add;
-        return package.Version is { } wanted && host.Version is { } have && have < wanted
+        return packagesLoadInIsolation && package.Version is { } wanted && host.Version is { } have && have < wanted
             ? PackageChoice.ReplaceHost
             : PackageChoice.HostWins;
     }

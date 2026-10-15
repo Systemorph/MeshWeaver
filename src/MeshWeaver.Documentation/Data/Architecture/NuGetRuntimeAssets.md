@@ -118,7 +118,9 @@ inference errors and hundreds of `CS1701`s. Three defects, three rules:
    own binding rule (host unification, above) to every name the package closure and the host set
    (TPA or the container's `/app` + shared frameworks, plus modules) both hold: same identity with the
    host equal or newer → the host's reference, the package copy dropped; same identity with the
-   package newer → the package's copy REPLACES the host's (the load context loads it in isolation);
+   package newer → the package's copy REPLACES the host's (the NodeType load context loads it in
+   isolation — the kernel and the node-config script, which bind through the DEFAULT context and
+   cannot load a second version, keep the host's: `packagesLoadInIsolation: false`);
    a different identity (another publisher's key) → both kept. Names the host lacks are added; a name
    appearing twice in the closure keeps its first path. Pure and order-preserving, so the bake and
    the runtime agree for the same host; the generator candidates and the stage-1 content key
