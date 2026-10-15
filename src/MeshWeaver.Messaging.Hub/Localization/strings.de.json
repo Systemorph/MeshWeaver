@@ -1970,6 +1970,7 @@
   "inbox.band.empty": "Nichts vorhanden.",
   "inbox.column.item": "Eintrag",
   "inbox.column.source": "Von",
+  "inbox.column.account": "Konto",
   "inbox.column.when": "Letzte Änderung",
   "inbox.column.open": "Öffnen",
   "inbox.blocked.running": "Läuft noch. Der Eintrag verschwindet aus dieser Liste, sobald er fertig ist.",
