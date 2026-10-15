@@ -144,6 +144,13 @@ content identity … will NOT auto-update") — exactly as on the catalog path. 
 package source must have its content CI maintain `<Module>/manifest.lock`, or its packages update
 only through the catalog card's manual Update.
 
+🚨 Only the **listing** side is refused. An install **record** without a `moduleVersion` — installed
+before its repository's CI emitted locks — while the listing now carries one is a **change**, not a
+refusal (2026-10-15): the record cannot claim to equal content it never identified. An Auto record
+installs unattended and is stamped with the identity, so the next pass compares normally; a Notify
+record is reminded once. Refusing it had left every package installed before its repository emitted
+locks stuck behind a manual click.
+
 ### Why the consumer READS instead of waiting to be told
 
 There is nothing for a consumer to subscribe to. The registry is a **different deployment with a
@@ -608,7 +615,7 @@ registered with it. An installation that configures none of this is reached by t
 | Symptom | Cause |
 |---|---|
 | Nothing happens on a green build | The webhook does not send **Workflow runs**; or no catalog's `SourceRepoPath` matches the repo; or the run's conclusion was not `success`; or its **workflow path is not the content-CI convention** (`.github/workflows/ci.yml`, with core at `.github/workflows/dotnet-test.yml`); or the run's **trigger is not on the allow-list** (`push`, `repository_dispatch`, `schedule`, `workflow_dispatch` are eligible; `pull_request`, `dynamic` and anything unknown are not — see *Which green runs count as a publish signal* above); or the run was **not on the repository's default branch**. Every leg fails closed: a payload with no readable workflow path or branch records nothing. |
-| A module never updates, and the log says it "has no module content identity" | The module's `manifest.lock` is missing or unparseable, so there is no `ModuleVersion` to compare and "has it changed" is unanswerable. A missing hash is the **absence of evidence**, not evidence of a change: treating it as changed would re-install the module on every green build of the repo *and* on every pod start, which is acting on the event rather than the content. It is refused, loudly, and the catalog card's manual **Update** stays available. Fix the module's CI to emit the sidecar. |
+| A module never updates, and the log says it "has no module content identity (the source's listing carries no moduleVersion…)" | The module's `manifest.lock` is missing or unparseable in the SOURCE, so there is no `ModuleVersion` to compare and "has it changed" is unanswerable. A missing hash is the **absence of evidence**, not evidence of a change: treating it as changed would re-install the module on every green build of the repo *and* on every pod start, which is acting on the event rather than the content. It is refused, loudly, and the catalog card's manual **Update** stays available. Fix the module's CI to emit the sidecar. (A record that lacks the identity while the listing has it is NOT refused — it is updated, see above.) |
 | Nothing happens on a green build, **and the log says the delivery "matched NONE of the N sync config(s)"** | No `_GitSync` targets that repository — usually because the repository was **renamed** and the configs still store its old name. The matcher falls back to GitHub's canonical `full_name` (which follows the rename redirect) and repoints the config when it finds one, so this line surviving means the lookup could not be made either: the repository is unreachable with the config creator's credential, or the hook really is installed on a repository this mesh does not sync. The Warning names both sides — the incoming repository and everything it was compared against. |
 | A green build produced nothing, and the log says the fact is **NOT recorded AND the sync did not run** | The `Admin/_Build/{owner}.{repo}` write failed. GitHub was answered 200, so there is no redelivery. The payload is kept at `Admin/_MissedBuild/{owner}.{repo}` (#3374) — read it with `MissedBuildFact.WatchQuery`, and compare it against the current build record to see whether a later green run of the SAME workflow has already superseded it. If a second Warning says the miss could not be recorded either, the log line is the only witness and the fact must be replayed from GitHub. |
 | Build node updates but no installation reacts | The package is not installed on that instance. A catalog lists far more packages than any instance installs; only packages with an install record are considered. |

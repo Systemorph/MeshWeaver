@@ -112,6 +112,10 @@ internal static class InstallOrigin
         public IObservable<PackageFetch> FetchPackage(
             PackageManifest package, string gitRef, IReadOnlyCollection<string>? paths) =>
             inner.FetchPackage(package, gitRef, paths);
+
+        // Forwarded for the same reason: the default establishes no ancestry (#6718).
+        public IObservable<bool> PublishesCommit(string commit, string gitRef) =>
+            inner.PublishesCommit(commit, gitRef);
     }
 }
 
