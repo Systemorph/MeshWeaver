@@ -1927,7 +1927,7 @@
   "inbox.band.Running": "Läuft",
   "inbox.band.Recent": "Kürzlich",
   "inbox.capped": "Einige Quellen zeigen nur ihre neuesten Einträge. Ältere finden Sie über die Suche.",
-  "inbox.hidden": "{0} Eintrag/Einträge, die auf Sie warten, sind durch die Quellen-Schalter ausgeblendet.",
+  "inbox.hidden": "{0} Eintrag/Einträge, die auf Sie warten, sind durch den Quellenfilter (Nur oder die Quellen-Schalter) ausgeblendet.",
   "inbox.unread": "Konnte nicht gelesen werden — Suche ändern oder Seite neu öffnen, um es erneut zu versuchen: {0}",
   "inbox.source.Notifications": "Benachrichtigungen",
   "inbox.source.Approvals": "Genehmigungen",
