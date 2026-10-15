@@ -10,12 +10,14 @@ using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Fixture;
+using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Orleans;
 using Orleans.Runtime;
+using Orleans.Streams;
 using Xunit;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
@@ -79,6 +81,12 @@ public class SiloShutdownActivationGateTest : TestBase
         lifetime = new HostBuilder().Build().Services.GetRequiredService<IHostApplicationLifetime>();
         Services.AddSingleton(lifetime);
         Services.AddSingleton(readiness);
+        // 🚨 This rig models a host that REGISTERS the memory stream (a single-process host, an
+        // Orleans client) — the only kind on which an outbound dispatch is HELD behind the sender's
+        // pending inbound attach (#1081), which is the window the late-flip test opens. A multi-silo
+        // host registers none (#4802) and dispatches inline, so without this registration the
+        // window test would be asking a no-stream host to hold a dispatch it never holds.
+        Services.AddKeyedSingleton<IStreamProvider>(StreamProviders.Memory, new UnattachableMemoryStream());
         Services.AddSingleton<AccessService>();
         // The hub sits AT the sender address, so the DeliveryFailure the router posts back to
         // delivery.Sender lands on this handler — the real NACK, not a stand-in.
@@ -254,6 +262,21 @@ public class SiloShutdownActivationGateTest : TestBase
     /// implemented because it is the only one the mesh uses — every other member throws, so a new
     /// call shape fails loudly here instead of passing silently.
     /// </summary>
+    /// <summary>
+    /// A memory-stream registration whose attach never succeeds. Its presence is what makes
+    /// <c>OrleansRoutingService</c> treat this as a stream host; the attach then fails when the
+    /// readiness signal fires, exactly as it did when this rig resolved no provider at all. The
+    /// attach-SUCCESS path is covered by the real-cluster routing tests.
+    /// </summary>
+    private sealed class UnattachableMemoryStream : IStreamProvider
+    {
+        public string Name => StreamProviders.Memory;
+        public bool IsRewindable => false;
+
+        public IAsyncStream<T> GetStream<T>(StreamId streamId) =>
+            throw new InvalidOperationException("this rig's memory stream is never attached");
+    }
+
     private sealed class RecordingGrainFactory : IGrainFactory
     {
         private readonly ConcurrentQueue<GrainRequest> requests = new();
