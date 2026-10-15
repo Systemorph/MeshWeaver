@@ -607,7 +607,7 @@ public sealed class PendingModuleActivations(string moduleRoot)
     /// never once per probe</b> (MeshWeaver#4608, the sibling of #3664).
     ///
     /// <para>#3664 found <see cref="Read()"/> walking the module volume on every startup and
-    /// readiness probe and memoised it behind <see cref="DiskFingerprint"/>. The REQUIRED-modules
+    /// readiness probe and memoised it behind a fingerprint of the module directories. The REQUIRED-modules
     /// probe asks the volume the same three questions — the activation sidecar, one existence
     /// probe per landed DLL, and one per declared entry — and it was left doing all of them per
     /// call, against the same share, for the same reason. Measured on memex.systemorph.com
@@ -675,7 +675,7 @@ public sealed class PendingModuleActivations(string moduleRoot)
 
     /// <summary>
     /// Takes a reading of the module volume on <see cref="IoPool"/> and holds it for
-    /// <see cref="ReadProbeInputs"/>. It is a no-op costing three directory stats when the
+    /// <see cref="ReadProbeInputs"/>. It is a no-op costing three directory listings when the
     /// fingerprint has not moved, so a caller may ask as often as it likes.
     ///
     /// <para>This is the WORK half of the split this type exists to hold: the work runs here, on a
@@ -786,18 +786,30 @@ public sealed class PendingModuleActivations(string moduleRoot)
     //
     // The state this reads changes only when something LANDS or a wave is PROPOSED, and every
     // writer in this assembly lands its file by temp-file + rename INTO one of three directories
-    // (modules/, modules/activation.d/, modules/sets/) or creates/deletes a marker there — each of
-    // which moves that directory's last-write time on every filesystem the mesh runs on. So the
-    // disk-derived half of the report is memoised behind a fingerprint of those three
-    // timestamps (three stats per probe), and only the cheap in-process half — which assemblies
-    // THIS process has loaded — is recomputed per call. The snapshot is an immutable record swapped
-    // atomically on an instance field: two concurrent probes may compute it twice, both correctly;
-    // no lock, no timer, nothing to clear.
+    // (modules/, modules/activation.d/, modules/sets/) or creates/deletes a marker there. So the
+    // disk-derived half of the report is memoised behind a fingerprint of what those three
+    // directories LIST, and only the cheap in-process half — which assemblies THIS process has
+    // loaded — is recomputed per call. The snapshot is an immutable record swapped atomically on an
+    // instance field: two concurrent probes may compute it twice, both correctly; no lock, no
+    // timer, nothing to clear.
+    //
+    // 🚨 MeshWeaver#6829 — the fingerprint used to be the three directories' OWN last-write times,
+    // on the premise that a rename into a directory moves its timestamp "on every filesystem the
+    // mesh runs on". The module volume is an Azure Files (SMB) share, where that premise is not a
+    // guarantee: a directory's last-write time need not move when a file is created in or renamed
+    // into it. When it does not, the snapshot is frozen for the life of the process — a fresh
+    // instance read the volume mid-landing (one module landed, set 1 empty), the wave then landed
+    // ~33 modules and proposed set 2, and every later reading still said "nothing pending, 1 module
+    // in NO proposed set", so the self-updater answered NothingToActivate and the restart that
+    // adopts set 2 was never taken. The key is now the directories' LISTINGS — each file's name,
+    // length and own last-write time, each subdirectory's name — which is what the reading is
+    // actually derived from, and which no filesystem leaves unchanged across a create, rename,
+    // replace or delete.
     private DiskSnapshot? snapshot;
 
     /// <summary>The disk-derived inputs of one report, valid while <see cref="Fingerprint"/> stands.</summary>
     private sealed record DiskSnapshot(
-        DiskFingerprint Fingerprint,
+        string? Fingerprint,
         ModuleActivationList? Activation,
         string? Corrupt,
         Exception? OpenFailure,
@@ -808,10 +820,62 @@ public sealed class PendingModuleActivations(string moduleRoot)
         Func<string, bool> ModuleFileResolves);
 
     /// <summary>
-    /// The last-write times of the three directories every activation writer renames into. PURE
-    /// over the file system; a missing directory reads as <see cref="DateTime.MinValue"/>, so the
-    /// first landing into it changes the fingerprint too.
+    /// What the three directories every activation writer renames into currently LIST (MeshWeaver#6829):
+    /// per directory, every file's name, length and own last-write time, and every subdirectory's
+    /// name, in ordinal order. A missing directory reads as its own marker, so the first landing into
+    /// it is a change too. Null when a directory could not be listed — a fingerprint that matches
+    /// nothing, so the reading is taken (and reports the fault) rather than served from a snapshot
+    /// of a volume this process cannot currently see.
+    ///
+    /// <para>🚨 Deliberately NOT the directories' own last-write times: whether a directory's
+    /// timestamp moves when a file is renamed into it is a property of the filesystem, and on an
+    /// SMB share it need not — which froze this reader's snapshot for the life of the process.</para>
     /// </summary>
+    internal static string? ListingFingerprint(string baseDirectory)
+    {
+        var key = new System.Text.StringBuilder();
+        foreach (var directory in new[]
+                 {
+                     Path.Combine(baseDirectory, "modules"),
+                     ModuleActivationSidecar.EntriesDirectory(baseDirectory),
+                     ModuleSetStore.SetsDirectory(baseDirectory),
+                 })
+        {
+            key.Append('#').Append(directory).Append('\n');
+            try
+            {
+                if (!Directory.Exists(directory))
+                {
+                    key.Append("(absent)\n");
+                    continue;
+                }
+                foreach (var info in new DirectoryInfo(directory).EnumerateFileSystemInfos()
+                             .OrderBy(i => i.Name, StringComparer.Ordinal))
+                {
+                    if (info is FileInfo file)
+                        key.Append("f:").Append(file.Name).Append('|').Append(file.Length)
+                            .Append('|').Append(file.LastWriteTimeUtc.Ticks).Append('\n');
+                    else
+                        key.Append("d:").Append(info.Name).Append('\n');
+                }
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                // Not swallowed: a null fingerprint never equals a held snapshot, so the reading is
+                // taken and the sidecar/set readers report the same fault through their own channels.
+                return null;
+            }
+        }
+        return key.ToString();
+    }
+
+    /// <summary>
+    /// The last-write times of the three directories every activation writer renames into.
+    /// 🚨 No longer the memo key (MeshWeaver#6829): a directory's last-write time need not move on a
+    /// rename into it on an SMB share, which froze the reading. Kept so a host compiled against the
+    /// previous platform still binds; <see cref="PendingModuleActivations"/> keys on the listings.
+    /// </summary>
+    [Obsolete("A directory's last-write time need not move on a rename into it (SMB) — MeshWeaver#6829. PendingModuleActivations keys its memo on the directory listings instead.")]
     public readonly record struct DiskFingerprint(DateTime Modules, DateTime Entries, DateTime Sets)
     {
         public static DiskFingerprint Of(string baseDirectory) => new(
@@ -844,9 +908,10 @@ public sealed class PendingModuleActivations(string moduleRoot)
     /// readers that have no pool leaf to cancel.</param>
     private DiskSnapshot ReadDisk(CancellationToken token = default)
     {
-        var fingerprint = DiskFingerprint.Of(ModuleRootPath);
+        var fingerprint = ListingFingerprint(ModuleRootPath);
         var current = snapshot;
-        if (current is not null && current.Fingerprint == fingerprint)
+        if (current is not null && fingerprint is not null
+            && string.Equals(current.Fingerprint, fingerprint, StringComparison.Ordinal))
             return current;
 
         // ① Before the first enumeration — a cancelled walk must not START one.

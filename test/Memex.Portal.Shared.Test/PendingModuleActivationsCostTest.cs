@@ -99,6 +99,47 @@ public class PendingModuleActivationsCostTest : IDisposable
         Assert.Equal(ModuleB, report.Pending.Single().Name, ignoreCase: true);
     }
 
+    /// <summary>
+    /// 🚨 MeshWeaver#6829 — the module volume is an SMB share, on which a directory's last-write
+    /// time need not move when a file is renamed into it. Reproduced here by putting the three
+    /// directories' timestamps back after the second wave: the volume's CONTENT changed (two more
+    /// modules landed, set 2 proposed) while every directory timestamp reads as before. A reader
+    /// keyed on those timestamps keeps its first snapshot — 1 pending, the shape that made the
+    /// self-updater answer NothingToActivate — while 3 are pending on disk.
+    /// </summary>
+    [Fact]
+    public async Task ALandingIsSeen_WhenTheVolumeDoesNotMoveDirectoryTimestamps()
+    {
+        await LandWave(ModuleA);
+        var pending = new PendingModuleActivations(root);
+        var nothingLoaded = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        Assert.Single(pending.Read(nothingLoaded).Pending);
+        Assert.Equal(1, pending.DiskReads);
+
+        var directories = new[]
+        {
+            Path.Combine(root, "modules"),
+            ModuleActivationSidecar.EntriesDirectory(root),
+            ModuleSetStore.SetsDirectory(root),
+        };
+        var before = directories.Select(Directory.GetLastWriteTimeUtc).ToArray();
+
+        await LandWave(ModuleB, ModuleC);
+        for (var i = 0; i < directories.Length; i++)
+            Directory.SetLastWriteTimeUtc(directories[i], before[i]);
+        Assert.Equal(before, directories.Select(Directory.GetLastWriteTimeUtc).ToArray());
+
+        var after = pending.Read(nothingLoaded);
+
+        Assert.Equal(2, pending.DiskReads);
+        Assert.Equal(3, after.Pending.Count);
+        Assert.Empty(after.Deferred);
+
+        // And the memo still holds: an unchanged volume is not re-read.
+        pending.Read(nothingLoaded);
+        Assert.Equal(2, pending.DiskReads);
+    }
+
     /// <summary>A missing modules tree is a fingerprint too — the first landing into it is a change, not an identical "nothing".</summary>
     [Fact]
     public async Task TheFirstLandingIntoAnEmptyRoot_IsAChange()
