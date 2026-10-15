@@ -43,7 +43,7 @@
 # drifted the same way (Monolith 200→345, Data 25→73, PluginTester 60→8).
 #
 # The floor for ANY sharding is the heaviest single SCHEDULABLE UNIT — a project,
-# or one part of a split one. Today that is Hosting.Test at 272 s per part. Adding
+# or one part of a split one. Today that is Hosting.Orleans.Test at 269 s. Adding
 # shards below that floor buys nothing.
 #
 # SPLIT RULE — TWO independent triggers. Either one is sufficient.
@@ -87,7 +87,14 @@
 #      MeshWeaver.Hosting.Test was the one after that: listed at 27 s, it measured 364-367 s
 #      solo on runs 36907697857, 36909173530 and 36909294363 (76% of the cap) and was killed at
 #      480 s exit=124 on run 36913173194, still progressing through its classes, once three
-#      security tests added ~40 s of deliberate negative waits. It runs in two parts since.
+#      security tests added ~40 s of deliberate negative waits. It ran in two parts after that,
+#      and outgrew them: on main run 38685284606 part 2/2 measured 426 s (89% of the cap) beside
+#      part 1/2 at 174 s, and on PR runs 38685234550 and 38685319202 — the same main base, one
+#      class added or removed — the every-Nth split flipped parity, part 1/2 drew the 36 s
+#      negative-wait classes (BuildTriggeredSyncPinsTheBuiltCommitTest, GreenBuildSkipsASettled-
+#      SourceTest, SaveMeshNodeRequestIsACheckedWriteTest, SystemOwnedSweepRetractsTheLastAdminTest)
+#      and was killed at 480 s exit=124, still progressing. Measured total ~600 s; it runs in
+#      three parts since.
 #
 #      MeshWeaver.Graph.Test was the one after that: listed at 64 s, it measured 406 s solo on
 #      run 37158590539 (85% of the cap) and was killed at 480 s exit=124 on run 37159733607,
@@ -143,7 +150,7 @@ WEIGHTS=$(cat <<'EOF'
 480 MeshWeaver.Graph.Test 2
 61 MeshWeaver.FaultInjection.Test
 20 MeshWeaver.Updates.Test
-543 MeshWeaver.Hosting.Test 2
+600 MeshWeaver.Hosting.Test 3
 43 MeshWeaver.Layout.Test
 7 MeshWeaver.ContentCollections.Test
 37 MeshWeaver.Documentation.Test
