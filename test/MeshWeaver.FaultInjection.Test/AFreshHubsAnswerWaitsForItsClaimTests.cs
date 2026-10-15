@@ -8,6 +8,7 @@ using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.Orleans.Test;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.Testing.FaultInjection;
 using Microsoft.Extensions.DependencyInjection;
@@ -64,7 +65,10 @@ public abstract class AFreshHubsAnswerAndItsClaim(FaultInjectionCluster mesh)
         var responder = new Address(OrleansTestMeshExtensions.SiloHostedStreamRoutedType, $"echo-{Guid.NewGuid():N}");
         using var responderRegistration = responderRouting.RegisterStream(responder, (d, _) =>
         {
-            if (d.Sender is { } back)
+            // Only the ping is answered: the transient NACK for a refused echo also arrives here, and
+            // echoing THAT would re-send the answer until the claim lands — a retry the real mesh
+            // does not perform, which would carry the negative control.
+            if (d.Message is PingRequest && d.Sender is { } back)
                 responderRouting.DeliverMessage(new MessageDelivery<PingRequest>(
                         new PingRequest(), new PostOptions(responder).WithTarget(back),
                         System.Text.Json.JsonSerializerOptions.Default))
@@ -97,10 +101,12 @@ public abstract class AFreshHubsAnswerAndItsClaim(FaultInjectionCluster mesh)
                 .RouteMessage(ping).WaitAsync(TestTimeouts.Convergence, ct);
 
         var echo = heard.Where(d => d.Sender == responder);
-        if (!SentThroughTheGatedRouter)
-            // The echo is refused PodHubNotHere while the claim is held; give it time to be.
-            await echo.Should().NotEmit(TimeSpan.FromSeconds(3),
-                "the echo overtakes the held claim and is refused on silo 1", ct);
+        // Both arms hold the claim long enough for an ungated ping's echo to reach silo 1 and be
+        // refused there — releasing earlier would let the echo find the claim by luck, not by the gate.
+        await echo.Should().NotEmit(TimeSpan.FromSeconds(3),
+            SentThroughTheGatedRouter
+                ? "the ping is held at the sender's router until its claim lands"
+                : "the echo overtakes the held claim and is refused on silo 1", ct);
 
         claim.Release();
 
