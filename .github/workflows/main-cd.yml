@@ -3666,10 +3666,14 @@ jobs:
   # the image-identity check and the registry writes, so a later red step would otherwise publish
   # a CLI whose version `3-latest` does not name (#6843 review).
   # 🚨 A dispatch accepted is not a package published. This job WAITS for the run it dispatched
-  # (found by its run-name, `Publish cli <version>`) and is red unless that run is green, and it is
-  # a need of `alert-on-failure`, so a failed pack, login, push or LISTED check files the same
-  # `ci-failure` issue as every other CD red. It is NOT a `delivery-verdict` need: the platform
-  # rolled already, and the verdict judges the platform only.
+  # (found by its run-name, `Publish cli <version>`) and is red unless that run is green — a
+  # CANCELLED run included: publish-packages.yml keys its concurrency per version, so nothing
+  # supersedes a CLI publication (#6843 review). Its alert is NOT CD's `ci-failure` (which
+  # `verify-images` closes on any image promotion) but the `cli-publish-failure` sentinel
+  # (.github/scripts/cli-publish-alert.sh), closed only by a LISTED CLI at that version or newer.
+  # publish-packages.yml files it for a failed publication; the last step here files it when the
+  # dispatch itself fails or the run never completes. Not a `delivery-verdict` need either: the
+  # platform rolled already, and the verdict judges the platform only.
   publish-cli:
     name: "Publish the memex CLI of the armed set to nuget.org"
     needs: [preflight, arm]
@@ -3677,9 +3681,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
-      actions: write    # `gh workflow run publish-packages.yml` — nothing else
+      actions: write    # `gh workflow run publish-packages.yml`
+      issues: write     # the cli-publish-failure sentinel, when the dispatch or the wait fails
+      contents: read
     steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            .github/scripts
+            scripts/check-issue-taxonomy.py
+          sparse-checkout-cone-mode: false
       - name: Dispatch publish-packages.yml (packages=cli) for the armed version and commit
+        id: dispatch
         env:
           GH_TOKEN: ${{ github.token }}
           V: ${{ needs.arm.outputs.version }}
@@ -3697,8 +3710,8 @@ jobs:
             -f version="$V" -f ref="$SHA" -f packages=cli
           echo "- memex CLI: publish-packages.yml dispatched for \`MeshWeaver.Cli $V\` from \`$SHA\`" >> "$GITHUB_STEP_SUMMARY"
           # Find THAT run by its run-name and wait for it — at most 40 minutes, polled every 60 s
-          # (REST, never faster: the shared rate limit). Superseded (`cancelled` by a newer arming's
-          # dispatch in the lane's concurrency group) is not a failure: the newer version publishes.
+          # (REST, never faster: the shared rate limit). Anything but `success` is red, `cancelled`
+          # included: nothing supersedes a CLI publication any more (per-version concurrency).
           title="Publish cli $V"; id=""; deadline=$(( $(date +%s) + 2400 ))
           while [ "$(date +%s)" -lt "$deadline" ]; do
             sleep 60
@@ -3712,12 +3725,24 @@ jobs:
             [ "$status" = completed ] || { echo "publish run $id: $status"; continue; }
             case "$conclusion" in
               success)   echo "- memex CLI: \`MeshWeaver.Cli $V\` published and LISTED ($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$id)" >> "$GITHUB_STEP_SUMMARY"; exit 0 ;;
-              cancelled) echo "::notice::publish run $id was cancelled — superseded by a newer arming's dispatch; that version publishes instead"; exit 0 ;;
-              *)         echo "::error::publishing MeshWeaver.Cli $V FAILED ($conclusion): $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$id — nuget.org does not carry the CLI of the armed set"; exit 1 ;;
+              *)         echo "found=1" >> "$GITHUB_OUTPUT"
+                         echo "::error::publishing MeshWeaver.Cli $V FAILED ($conclusion): $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$id — nuget.org does not carry the CLI of the armed set"; exit 1 ;;
             esac
           done
           echo "::error::the publish run \"$title\" ${id:+($id) }did not complete within 40 minutes — nuget.org may not carry the CLI of the armed set"
           exit 1
+      # The publish run files its OWN red (cli-alert). This covers what it cannot: a dispatch that
+      # failed, or a run that never appeared or never completed. `found=1` means the run completed
+      # red, and that run has filed it already.
+      - name: File the cli-publish-failure sentinel (dispatch or wait failed)
+        if: failure() && steps.dispatch.outputs.found != '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          V: ${{ needs.arm.outputs.version }}
+        run: |
+          bash .github/scripts/cli-publish-alert.sh red "$V" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            "main-cd publish-cli could not dispatch publish-packages.yml or the run did not complete"
 
   # ────────────────── NOTIFY THE PLATFORM-UPDATE AGENT (required) ──────────────────
   # After the release is ARMED (`arm`'s phase C — policy `one-promotion-gate`), tell the control instance's mesh that a new
@@ -5175,9 +5200,7 @@ jobs:
     # `image-closure-record` is in this list ON PURPOSE (#4066): it is outside `delivery-verdict` so a
     # control-side outage cannot stop an image shipping, and main CD has no PR observer — so without a
     # direct need here its red would be an unattended job and never a durable alert.
-    # `publish-cli` is in this list ON PURPOSE (#6843): the memex CLI on nuget.org follows
-    # `3-latest`, outside `delivery-verdict`, so its red would otherwise be unattended too.
-    needs: [preflight, gate, portal-image, portal-image-mirror, image-closure-record, migration-image, plugin-test-image, promote, verify-images, publish-bake, arm, notify-platform-update, publish-cli, delivery-verdict, satellite-compat-image, satellite-compat]
+    needs: [preflight, gate, portal-image, portal-image-mirror, image-closure-record, migration-image, plugin-test-image, promote, verify-images, publish-bake, arm, notify-platform-update, delivery-verdict, satellite-compat-image, satellite-compat]
     # 🚨 A DIRECT need failed — never `failure()`, which is true when ANY ANCESTOR failed. The
     # compatibility legs need `published-modules`, so under `failure()` a missing module
     # publication filed THIS issue ("no deployable image was published") over a platform set that

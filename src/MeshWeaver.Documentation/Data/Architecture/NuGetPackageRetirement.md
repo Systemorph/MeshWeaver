@@ -101,6 +101,8 @@ is an entry point, not platform bytes: it references `System.CommandLine` and no
 | When | every time main-cd's `arm` arms a set: its `publish-cli` job dispatches `publish-packages.yml` with `packages=cli`, `version=<armed version>`, `ref=<armed core commit>`. A release tag publishes it beside the Aspire integration |
 | Bytes | packed by `publish-packages.yml` at the armed commit (`-p:Version`, the publishable string only, #3022), asserted to be a `DotnetTool` package carrying `tools/net10.0/any/memex.dll`, then verified LISTED |
 | Why the run number is safe on nuget.org | `3.<minor>.<run>` sorts as SemVer exactly as the fleet ranks builds (policy `platform-semver-versioning`); the `-ci.<n>` label that made `rc9` outrank `rc13` is refused by the lane |
+| When it fails | main-cd's `publish-cli` waits for the run it dispatched and is red unless it is green. The alert is the `cli-publish-failure` sentinel (`.github/scripts/cli-publish-alert.sh`), **not** CD's `ci-failure`, which `verify-images` closes on any image promotion. It is opened by a failed publication (or a failed dispatch or wait) and closed only when a CLI at that version or newer is LISTED |
+| Concurrency | one group per (packages, version, dry-run): nothing supersedes a CLI publication, every armed version publishes, and a cancelled run counts as a failure |
 | Retirement sweep | `src/MeshWeaver.Cli` is packable again, so `orphaned-nuget-packages.py` derives `MeshWeaver.Cli` as packed and never unlists it; `PackableProjectReadmeTest` holds the packable set at two projects |
 
 CI still reaches the verbs through the `mw-plugin-test` image; nothing in the fleet installs the

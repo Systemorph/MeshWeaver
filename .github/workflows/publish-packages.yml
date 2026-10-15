@@ -121,8 +121,15 @@ on:
 permissions:
   contents: read
 
+# 🚨 ONE GROUP PER (packages, version, dry-run) — never one shared group (#6843 review). A shared
+# group keeps one running + ONE pending run, so every later dispatch — a newer arming, or merely a
+# dry run — silently CANCELLED the pending CLI publication, and main-cd's `publish-cli` could not tell
+# "superseded by a newer publication" from "replaced by a dry run that pushed nothing". Keyed this
+# way, nothing ever supersedes a CLI publication: every armed version publishes, and a cancelled
+# run is a failure. Two runs of the SAME version still serialise (`--skip-duplicate` makes the
+# second a no-op), and different versions push in parallel, which nuget.org accepts.
 concurrency:
-  group: publish-packages
+  group: publish-packages-${{ inputs.packages || 'all' }}-${{ inputs.version || github.ref_name }}${{ inputs.dry-run && '-dry' || '' }}
   cancel-in-progress: false
 
 jobs:
@@ -366,3 +373,45 @@ jobs:
             echo "\`MeshWeaver.MemexTemplate\` was NOT published — this lane has no step for it yet (the GUI question is answered; see the header)"
             echo "decision recorded in Doc/Architecture/NuGetPackageRetirement."
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # ──────────────── THE CLI'S OWN ALERT: opened red, closed only by a LISTED CLI ────────────────
+  # Not CD's `ci-failure`: `verify-images` closes that after any image promotion, which proves
+  # nothing about nuget.org (#6843 review). `cli-publish-failure` is a sentinel of its own
+  # (.github/scripts/cli-publish-alert.sh) — opened when a real CLI publication fails, closed only
+  # when one at that version or newer is LISTED. A dry run never touches it. Serialised across runs,
+  # because the per-version groups above let two publications finish at once.
+  cli-alert:
+    name: "CLI publish alert (open on red, close on LISTED)"
+    needs: [preflight, publish]
+    if: always() && !inputs.dry-run
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: cli-publish-alert
+      cancel-in-progress: false
+    permissions:
+      issues: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            .github/scripts
+            scripts/check-issue-taxonomy.py
+          sparse-checkout-cone-mode: false
+      - name: Open or close the cli-publish-failure sentinel
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          V: ${{ inputs.version || github.ref_name }}
+          RESULT: ${{ needs.publish.result }}
+          PRE: ${{ needs.preflight.result }}
+        run: |
+          set -euo pipefail
+          V="${V#v}"
+          RUN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          if [ "$PRE" = success ] && [ "$RESULT" = success ]; then
+            bash .github/scripts/cli-publish-alert.sh green "$V" "$RUN_URL"
+          else
+            bash .github/scripts/cli-publish-alert.sh red "$V" "$RUN_URL" "publish-packages.yml ended preflight=$PRE, publish=$RESULT"
+          fi
