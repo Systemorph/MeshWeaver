@@ -466,6 +466,49 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
     }
 
     /// <summary>
+    /// Only / Show / Hide per source: Only narrows the list to the one source picked and wins over its
+    /// switch; clearing it gives the switches back unchanged; a side-menu category still wins over
+    /// both; and what Only hides of the obligation band is counted like a switch.
+    /// </summary>
+    [Fact]
+    public void Only_NarrowsToOneSource_WinsOverItsSwitch_AndClearsBackToTheSwitches()
+    {
+        InboxRow Row(string path, string source, int rank, string category = "") => new()
+        {
+            Path = path, SourceId = source, Source = source, Rank = rank,
+            Category = category.Length > 0 ? category : source, Stamp = "2026-10-1" + path.Length + "T00:00:00Z",
+        };
+        var rows = new[] { Row("a", "Outlook", 0), Row("bb", "Chat", 0), Row("ccc", "Teams", 2, "Mail") };
+        var switches = ImmutableDictionary<string, bool>.Empty
+            .Add(InboxRows.SourceKey("Outlook"), false).Add(InboxRows.SourceKey("Teams"), false);
+        var only = new InboxFilter { Sources = switches, Only = InboxRows.SourceKey("Outlook") };
+
+        InboxRows.Apply(rows, only).Select(r => r.Path).Should().Equal(["a"],
+            "Only shows the one source picked — even though its switch is off");
+        InboxRows.Apply(rows, only with { Only = string.Empty }).Select(r => r.Path).Should().Equal(["bb"],
+            "clearing Only gives the switches back: Outlook and Teams off, Chat on");
+        InboxRows.Apply(rows, only with { Category = "Mail" }).Select(r => r.Path).Should().Equal(["ccc"],
+            "a category picked in the side menu shows everything filed under it, whatever Only says");
+        InboxRows.HiddenObligations(rows, only, needsYouRank: 0).Should().Be(1,
+            "the Chat row needs the viewer and Only hides it — counted, never silently hidden");
+        InboxRows.HiddenObligations(rows, only with { Category = "Chat" }, needsYouRank: 0).Should().Be(0,
+            "a picked category shows the Chat row whatever Only says — a visible obligation is not hidden");
+        InboxRows.HiddenObligations(rows, only with { Only = string.Empty, Category = "Outlook" }, needsYouRank: 0).Should().Be(0,
+            "nor is one a switch would hide while a category overrides the switches");
+        InboxRows.Fingerprint(only).Should().NotBe(InboxRows.Fingerprint(only with { Only = string.Empty }),
+            "picking Only is a change the page must react to");
+    }
+
+    /// <summary>The Only select lists every source first, then each source by its symbol and name.</summary>
+    [Fact]
+    public void TheOnlyOptions_ListAllSourcesThenEachSource()
+    {
+        var options = InboxLayoutArea.SourceOptions("All sources", [("s1", "Outlook", "📧"), ("s2", "Chat", "")]);
+        options.Select(o => ((Option<string>)o).Item).Should().Equal(["", "s1", "s2"]);
+        options.Select(o => o.Text).Should().Equal(["All sources", "📧 Outlook", "Chat"]);
+    }
+
+    /// <summary>
     /// The Undo batch is recorded item by item as each write lands, never only when the whole click
     /// finishes: a click cancelled after its first item keeps that item undoable, and an Undo
     /// cancelled part-way leaves exactly what is still away.

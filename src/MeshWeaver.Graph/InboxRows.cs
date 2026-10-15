@@ -162,6 +162,13 @@ public sealed record InboxFilter
     /// shown: a leg a package brings later must not arrive switched off.
     /// </summary>
     public ImmutableDictionary<string, bool> Sources { get; init; } = ImmutableDictionary<string, bool>.Empty;
+
+    /// <summary>
+    /// The one source the viewer narrowed the list to, by <see cref="InboxRows.SourceKey"/>, or empty
+    /// for none. While set it wins over <see cref="Sources"/> — "only Outlook" shows Outlook even when
+    /// its switch is off — and clearing it gives the switches back exactly as they were.
+    /// </summary>
+    public string Only { get; init; } = string.Empty;
 }
 
 /// <summary>The rows of the inbox, as pure functions of the nodes the legs returned.</summary>
@@ -211,7 +218,7 @@ public static class InboxRows
     /// </summary>
     /// <param name="filter">The filter.</param>
     public static string Fingerprint(InboxFilter filter)
-        => string.Join('\n', new[] { filter.Search, filter.Order, filter.Category }
+        => string.Join('\n', new[] { filter.Search, filter.Order, filter.Category, filter.Only }
             .Concat(filter.Sources.OrderBy(s => s.Key, StringComparer.Ordinal).Select(s => $"{s.Key}={s.Value}")));
 
     /// <summary>
@@ -406,13 +413,22 @@ public static class InboxRows
     {
         var (_, before, after) = SplitDates(filter.Search);
         var shown = string.IsNullOrEmpty(category)
-            ? rows.Where(row => !filter.Sources.TryGetValue(SourceKey(row.SourceId), out var on) || on)
+            ? rows.Where(row => Shown(row, filter))
             : rows.Where(row => string.Equals(row.Category, category, StringComparison.Ordinal));
         return shown.Where(row => InRange(row.Stamp, before, after))
             .OrderByDescending(r => r.Stamp, StringComparer.Ordinal)
             .ThenBy(r => r.Path, StringComparer.Ordinal)
             .ToImmutableList();
     }
+
+    /// <summary>
+    /// Whether the source of <paramref name="row"/> is shown: the one source picked under Only when
+    /// there is one, else its switch (a source with no switch is shown). Pure.
+    /// </summary>
+    internal static bool Shown(InboxRow row, InboxFilter filter)
+        => filter.Only.Length > 0
+            ? string.Equals(SourceKey(row.SourceId), filter.Only, StringComparison.Ordinal)
+            : !filter.Sources.TryGetValue(SourceKey(row.SourceId), out var on) || on;
 
     /// <summary>
     /// The side menu's counts: how many rows each category holds, and how many of them are unread —
@@ -459,17 +475,18 @@ public static class InboxRows
     }
 
     /// <summary>
-    /// How many rows of the obligation band the source switches hide — counted BEFORE the switches
+    /// How many rows of the obligation band the source switches (or Only) hide — counted BEFORE the switches
     /// apply, so the count is never filtered away with the rows.
     /// </summary>
     /// <param name="rows">The merged rows.</param>
     /// <param name="filter">What the viewer asked for.</param>
     /// <param name="needsYouRank">The rank of the "Needs you" band, or null when no leg feeds it.</param>
     public static int HiddenObligations(IEnumerable<InboxRow> rows, InboxFilter filter, int? needsYouRank)
-        => needsYouRank is not { } rank
+        // A picked category shows every row filed under it whatever the source filter says, so the
+        // source filter hides nothing then — counting would report a visible obligation as hidden.
+        => needsYouRank is not { } rank || filter.Category.Length > 0
             ? 0
-            : rows.Count(row => row.Rank == rank
-                                && filter.Sources.TryGetValue(SourceKey(row.SourceId), out var on) && !on);
+            : rows.Count(row => row.Rank == rank && !Shown(row, filter));
 
     /// <summary>
     /// The rows a bulk act may touch: the selected keys re-checked against the rows as they stand

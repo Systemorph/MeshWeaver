@@ -75,6 +75,9 @@ public static class InboxLayoutArea
     /// </summary>
     public const string HiddenId = "inboxHidden";
 
+    /// <summary>The data id of the Only select's options — all sources, then each source by name.</summary>
+    public const string SourceOptionsId = "inboxSourceOptions";
+
     /// <summary>The data id of the side menu's options — All, then each category with its count.</summary>
     public const string CategoryOptionsId = "inboxCategoryOptions";
 
@@ -119,6 +122,9 @@ public static class InboxLayoutArea
             host.UpdateData(HiddenId, string.Empty);
             host.UpdateData(CategoryOptionsId, CategoryOptions(host.Localize("inbox.category.all"), CategoriesOf(host, sections), InboxRows.CategoryCounts([])));
         }
+        // The sources are fixed for the page's life, so their options are written on every render.
+        host.UpdateData(SourceOptionsId, SourceOptions(host.Localize("inbox.only.all"),
+            sources.Select(source => (Key: InboxRows.SourceKey(source.Id), source.Label, source.Icon))));
         host.SeedRowSelection(InboxRows.SelectionId);
         // One per page, created on the render turn; the buttons share it.
         if (host.GetVariable<InboxActs>(UndoId) is not { } acts)
@@ -199,6 +205,11 @@ public static class InboxLayoutArea
                 .WithView(Controls.Button(host.Localize("inbox.reject")).WithAppearance(Appearance.Neutral)
                     .WithIconStart(FluentIcons.Dismiss())
                     .WithReactiveClickAction(ctx => Decide(ctx, acts, owner, rows, ApprovalDecisions.Reject)), "Reject")
+                // Only / Show / Hide per source: Only narrows the list to the one source picked here
+                // and wins over the switches; "All sources" gives the switches back as they were.
+                .WithView(Controls.Select(new JsonPointerReference("only"),
+                        new JsonPointerReference(LayoutAreaReference.GetDataPointer(SourceOptionsId)))
+                    with { DataContext = filterContext, Label = host.Localize("inbox.only") }, "Only")
                 .WithView(toggles, "Sources")
                 .WithView(settings, "Settings"), "Commands")
             // Says which sources could not be read — an unreadable source must never look like an
@@ -242,6 +253,15 @@ public static class InboxLayoutArea
                 Text(c.Icon, c.Label, counts.TryGetValue(c.Key, out var n) ? Shown(n) : 0))),
         ];
     }
+
+    /// <summary>The Only select's options: every source (empty key), then each source with its symbol. Pure.</summary>
+    internal static ImmutableList<Option> SourceOptions(string allLabel,
+        IEnumerable<(string Key, string Label, string Icon)> sources)
+        =>
+        [
+            new Option<string>(string.Empty, allLabel),
+            .. sources.Select(s => (Option)new Option<string>(s.Key, s.Icon.Length > 0 ? $"{s.Icon} {s.Label}" : s.Label)),
+        ];
 
     /// <summary>The keys that press Delete — as a mail client: Backspace or Delete, with the rows ticked.</summary>
     internal const string DeleteShortcut = "Backspace|Delete";
