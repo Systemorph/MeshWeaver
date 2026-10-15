@@ -544,10 +544,14 @@ public partial class QueryParser
                 continue;
             }
 
+            // Every POSITIVE single-location form: an equality, a one-value list `basePath:(X)`, and
+            // a wildcard `basePath:acme/*/Contacts` (a LIKE). A wildcard sets no concrete anchor,
+            // and the descendant scope still applies — it widens the pattern to the subtree, as
+            // `namespace:… scope:descendants` does. A multi-value list stays exact membership.
             if (original.Condition is { } basePathCondition
                 && basePathCondition.Selector.Equals(BasePathQualifier, StringComparison.OrdinalIgnoreCase)
-                && basePathCondition.Operator is QueryOperator.Equal
-                && (original.Literal || !QueryWildcard.ContainsWildcard(basePathCondition.Value)))
+                && (basePathCondition.Operator is QueryOperator.Equal or QueryOperator.Like
+                    || (basePathCondition.Operator is QueryOperator.In && basePathCondition.Values.Length == 1)))
                 basePathAnchored = true;
 
             if (token.Type == TokenType.Comparison && token.Condition != null)
@@ -792,10 +796,16 @@ public partial class QueryParser
         // When namespace: is used without explicit scope, default to Children (exact namespace)
         // This makes namespace:X behave like "search items directly in folder X" (not recursive)
         // Use scope:descendants explicitly for recursive search
-        if (namespaceUsed && !explicitScope)
+        // `basePath:X` means the whole subtree under X, as the tools' basePath argument does — for a
+        // wildcard too, which sets no concrete anchor (namespaceUsed stays false) but is widened to
+        // the subtree below once the scope is known.
+        if (basePathAnchored && !explicitScope)
         {
-            // `basePath:X` means the whole subtree under X, as the tools' basePath argument does.
-            scope = basePathAnchored ? QueryScope.Descendants : QueryScope.Children;
+            scope = QueryScope.Descendants;
+        }
+        else if (namespaceUsed && !explicitScope)
+        {
+            scope = QueryScope.Children;
         }
 
         // `namespace:X` names a NAMESPACE, never the node AT path X — that node's own namespace is

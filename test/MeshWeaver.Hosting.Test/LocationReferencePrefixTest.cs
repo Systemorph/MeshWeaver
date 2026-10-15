@@ -59,6 +59,7 @@ public class LocationReferencePrefixTest
     [InlineData("name:\"Jane Doe\" basePath:@acme", "acme")]
     [InlineData("basePath:acme/Deals nodeType:Crm/Contact", "acme/Deals")]
     [InlineData("basePath:@/acme name:\"Jane Doe\"", "acme")]
+    [InlineData("basePath:(@acme) name:\"Jane Doe\"", "acme")]
     public void BasePathIsTheDescendantsOfItsPath_NotAFilter(string query, string path)
     {
         var parsed = Parse(query);
@@ -68,6 +69,26 @@ public class LocationReferencePrefixTest
         parsed.IsSufficientlySpecified().Should().BeTrue("basePath anchors the query");
         ContainsSelector(parsed.Filter, QueryParser.BasePathQualifier).Should().BeFalse(
             "basePath is a location, never a filter on a property no node has");
+    }
+
+    /// <summary>
+    /// A WILDCARD <c>basePath:</c> sets no concrete anchor, and still means the descendants: it
+    /// parses exactly as its documented equivalent <c>namespace:… scope:descendants</c> — the
+    /// pattern widened to self-or-below — never an exact-scope LIKE that misses deeper matches
+    /// (review of #6836).
+    /// </summary>
+    [Fact]
+    public void AWildcardBasePathIsTheDescendantsOfThePattern()
+    {
+        var parsed = Parse("basePath:@acme/*/Contacts nodeType:Crm/Contact");
+        var equivalent = Parse("namespace:acme/*/Contacts scope:descendants nodeType:Crm/Contact");
+
+        parsed.Scope.Should().Be(QueryScope.Descendants);
+        parsed.Scope.Should().Be(equivalent.Scope);
+        parsed.Path.Should().Be(equivalent.Path);
+        NamespacePatterns(parsed.Filter).Should().Equal(NamespacePatterns(equivalent.Filter));
+        NamespacePatterns(parsed.Filter).Should().Contain($"{QueryOperator.Like}:acme/*/Contacts/*","the pattern is widened to everything below it");
+        ContainsSelector(parsed.Filter, QueryParser.BasePathQualifier).Should().BeFalse();
     }
 
     [Fact]
@@ -90,6 +111,15 @@ public class LocationReferencePrefixTest
 
         parsed.Path.Should().Be("jane@example.com");
     }
+
+    private static string[] NamespacePatterns(QueryNode? node) => node switch
+    {
+        QueryComparison c when c.Condition.Selector.Equals("namespace", StringComparison.OrdinalIgnoreCase)
+            => c.Condition.Values.Select(v => $"{c.Condition.Operator}:{v}").ToArray(),
+        QueryAnd a => a.Children.SelectMany(NamespacePatterns).ToArray(),
+        QueryOr o => o.Children.SelectMany(NamespacePatterns).ToArray(),
+        _ => [],
+    };
 
     private static bool ContainsSelector(QueryNode? node, string selector) => node switch
     {
