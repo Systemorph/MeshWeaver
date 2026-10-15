@@ -1598,18 +1598,80 @@ public static class JsonSynchronizationStream
         // as `applied` does on the re-assert path.
         //
         // Not a poll and not a retry: one Rx one-shot on the very state the subscriber is waiting
-        // for, disposed by Take(1) when it fires and by the stream when it does not. If the state
-        // never arrives, the subscriber's own request/response terminal fires and ResyncRefused
-        // re-opens its gate WITHOUT counting the ask — the correct reading, since an owner with
-        // nothing to send has not failed to answer.
+        // for, disposed by Take(1) when it fires.
+        //
+        // 🚨 …AND ANSWERED WHEN THE STREAM ENDS WITHOUT EVER EMITTING (#6759). The hold used to be
+        // registered on the stream's disposal and do nothing there, on the reading that "the
+        // subscriber's own request/response terminal fires". That terminal is the REQUEST TIMEOUT
+        // (60 s by default), and for a JsonSynchronizationStream re-ask it is far worse than slow:
+        // the re-ask holds the subscriber's in-flight guard, so every later re-ask, the owner's own
+        // end-of-stream announcement included, is swallowed for that whole window. An owner
+        // recycled while it holds this answer (the overlay self-heal recycles a per-node hub the
+        // moment its type compiles, which is exactly when a reader is most likely to have re-asked)
+        // therefore left the read silent for the full request timeout. The stream ending is a
+        // terminal of its own: the work this owner accepted can no longer be finished HERE, so it
+        // is refused as a transient ShuttingDown, which the subscriber rides out to the next
+        // activation. Exactly one answer still: Ack and RefuseAsTornDown share ClaimTheAnswer.
         void AnswerWhenTheStreamFirstEmits(ISynchronizationStream<TReduced> stream)
         {
             logger.LogDebug(
                 "Owner {Owner} has nothing to re-assert on stream {StreamId} for {Subscriber} yet — "
                 + "holding the acknowledgement until its first frame",
                 hub.Address, request.StreamId, request.Subscriber);
-            var pending = stream.Take(1).Subscribe(_ => Ack(), Refuse);
-            stream.RegisterForDisposal(pending);
+            // Captured on the handler's turn, while the scope is provably alive: the disposal arm
+            // below runs in the owner's teardown, where re-resolving ParentHub can throw.
+            var parent = hub.Configuration.ParentHub;
+            var pending = stream.Take(1).Subscribe(
+                _ => Ack(),
+                Refuse,
+                () => RefuseAsTornDown(parent, "its stream completed before it had any state to re-assert"));
+            stream.RegisterForDisposal(new AnonymousDisposable(() =>
+            {
+                pending.Dispose();
+                RefuseAsTornDown(parent, "its stream was disposed before it had any state to re-assert");
+            }));
+        }
+
+        // The refusal for a held re-assert whose stream ended without ever emitting (#6759).
+        // Composed through ShutdownNack so the subscriber reads it as the OWNER's transient refusal
+        // (banner + activation tag), never as a routing-layer one. Posted by the owner while it can
+        // still post, else by the parent captured on the handler's turn — the owner's own Post is
+        // gated closed from DisposeHostedHubs on, which is when its sync streams are disposed. Same
+        // route as DataExtensions.NackSilentRead and the owner-side patch NACK.
+        //
+        // 🚨 With the parent past DisposeHostedHubs too — a whole-tree teardown — the answer is STILL
+        // posted through the owner (#6805 review). The post seam then hands a correlated NACK to a
+        // requester in this process directly (MessageHub.TryDeliverNackInProcess, #4072): a sibling
+        // subscriber is Quiescing on exactly this callback, and dropping the answer here left it
+        // waiting for its own quiesce budget.
+        void RefuseAsTornDown(IMessageHub? parent, string why)
+        {
+            if (!ClaimTheAnswer())
+                return;
+            var failure = new DeliveryFailure(delivery)
+            {
+                ErrorType = ErrorType.ShuttingDown,
+                Message = ShutdownNack.RetryForTheAuthoritativeAnswer(
+                    hub.Address,
+                    $"RunLevel={hub.RunLevel}, {ShutdownNack.FormatActivationTag(hub)}",
+                    $"the re-subscribe of stream {request.StreamId} for {request.Subscriber} was "
+                    + $"accepted but never answered: {why}"),
+            };
+            try
+            {
+                if (parent is not null
+                    && hub.RunLevel >= MessageHubRunLevel.DisposeHostedHubs
+                    && parent.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
+                    parent.Post(failure, RespondTo);
+                else
+                    hub.Post(failure, RespondTo);
+            }
+            catch (Exception ex)
+            {
+                logger.LogDebug(ex,
+                    "Owner {Owner} could not refuse the held re-assert of stream {StreamId} for {Subscriber}",
+                    hub.Address, request.StreamId, request.Subscriber);
+            }
         }
 
         // The answer for a path that produced NO snapshot — never an ack. See the note above.
