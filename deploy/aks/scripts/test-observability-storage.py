@@ -15,6 +15,11 @@ class StorageVerdictTest(unittest.TestCase):
             root = Path(directory)
             (root / 'helm').write_text('#!/bin/sh\nexit 0\n')
             (root / 'kubectl').write_text('''#!/bin/sh
+# The invoke pod has no kubeconfig: a connection flag drops kubectl to localhost:8080.
+case " $* " in
+  *' --request-timeout'*|*' --server'*|*' --kubeconfig'*|*' --token'*|*' --context'*)
+    echo 'The connection to the server localhost:8080 was refused' >&2; exit 1 ;;
+esac
 case "$*" in
   *volumeMounts*)
     [ "$SCENARIO" = read_error ] && exit 9
