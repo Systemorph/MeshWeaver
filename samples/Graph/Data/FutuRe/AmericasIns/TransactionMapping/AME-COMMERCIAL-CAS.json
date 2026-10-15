@@ -3,7 +3,6 @@
   "namespace": "FutuRe/AmericasIns/TransactionMapping",
   "name": "AmericasIns: Commercial Lines → Casualty (25%)",
   "nodeType": "FutuRe/TransactionMapping",
-  "isPersistent": true,
   "content": {
     "$type": "TransactionMapping",
     "id": "AME-COMMERCIAL-CAS",

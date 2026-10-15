@@ -11,6 +11,11 @@ namespace MeshWeaver.Mesh;
 ///
 /// <para>This replaces standing application-wide Graph permissions: access is the user's own, consented
 /// by them, and revocable by them.</para>
+///
+/// <para><b>Several mailboxes.</b> A person may connect more than one Microsoft 365 mailbox. The grant
+/// written first (and every grant written before several mailboxes existed) is the PRIMARY one and keeps
+/// its original path; each mailbox added since is its own record beneath it, with an
+/// <see cref="EaMailboxes.NewAccountId"/> id. See <see cref="EaMailbox"/>.</para>
 /// </summary>
 public record EaCredential
 {
@@ -46,6 +51,22 @@ public record EaCredential
     /// </summary>
     [Browsable(false)]
     public DateTimeOffset? RefusedAt { get; init; }
+
+    /// <summary>
+    /// The mailbox account this grant serves: null (or <see cref="EaMailboxes.Primary"/>) for the
+    /// primary grant, <c>ea-credential--{10 hex}</c> for a mailbox added since. Informational — the
+    /// record's PATH is what identifies it.
+    /// </summary>
+    [Browsable(false)]
+    public string? Account { get; init; }
+
+    /// <summary>
+    /// The address the person signed in as when consenting (the id token's <c>preferred_username</c>
+    /// or <c>email</c>). The mailbox's label, and what the assistant's <c>mailbox</c> argument matches.
+    /// Null on a grant written before addresses were recorded.
+    /// </summary>
+    [Browsable(false)]
+    public string? Address { get; init; }
 
     /// <summary>The token endpoint's own words for the refusal (<c>error</c> + <c>error_description</c>), for the diagnostic.</summary>
     [Browsable(false)]

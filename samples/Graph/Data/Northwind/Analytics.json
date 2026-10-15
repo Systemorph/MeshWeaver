@@ -7,7 +7,6 @@
   "description": "Dashboards and analytics views for Northwind data",
   "icon": "/api/content/Northwind/icons/analytics.svg",
   "order": 3,
-  "isPersistent": true,
   "content": {
     "$type": "CatalogContent",
     "id": "Analytics",

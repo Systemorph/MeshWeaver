@@ -6,7 +6,6 @@
   "category": "Suppliers",
   "description": "Grandma Kelly's Homestead - Ann Arbor, USA",
   "icon": "/static/NodeTypeIcons/truck.svg",
-  "isPersistent": true,
   "content": {
     "$type": "SupplierContent",
     "supplierId": 3,

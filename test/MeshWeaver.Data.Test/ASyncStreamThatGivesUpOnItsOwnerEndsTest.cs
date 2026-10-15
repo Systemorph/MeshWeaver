@@ -42,6 +42,12 @@ public class ASyncStreamThatGivesUpOnItsOwnerEndsTest(ITestOutputHelper output) 
     private int subscribes;
     private Func<int, string> activationForRefusal = n => $"{n:X8}";
     private bool alsoAnnounceEachRefusal;
+    // How the scripted refusal is WORDED: by the owner (banner + activation tag, the default), by the
+    // owner with no tag (a NACK site never taught to stamp one), or by the ROUTING LAYER (no banner,
+    // no tag — the subscriber's own router answering "Host is shutting down, cannot route to …").
+    private RefusalSpeaker speaker = RefusalSpeaker.OwnerTagged;
+
+    private enum RefusalSpeaker { OwnerTagged, OwnerUntagged, Router }
     private IMessageHub? owner;
     private (string StreamId, Address Subscriber)? stream;
     private readonly ReplaySubject<int> acceptedAfterRefusals = new();
@@ -65,11 +71,18 @@ public class ASyncStreamThatGivesUpOnItsOwnerEndsTest(ITestOutputHelper output) 
 
                 var n = Interlocked.Increment(ref refusals);
                 var activation = activationForRefusal(n);
+                var text = speaker switch
+                {
+                    RefusalSpeaker.OwnerTagged => ShutdownNack.RejectingNow(owner!.Address,
+                        $"{ShutdownNack.ActivationMarker}{activation}", "cannot process SubscribeRequest"),
+                    RefusalSpeaker.OwnerUntagged => ShutdownNack.RejectingNow(owner!.Address, null,
+                        "cannot process SubscribeRequest"),
+                    // The Orleans router's own wording for a delivery it will not route because THIS
+                    // host is stopping (OrleansRoutingService.DeliverMessage) — no banner, no tag.
+                    _ => $"Host is shutting down, cannot route to {owner!.Address}",
+                };
                 owner!.Post(
-                    new DeliveryFailure(d,
-                        $"Hub {owner.Address} is shutting down ({ShutdownNack.ActivationMarker}{activation}) — "
-                        + $"cannot process SubscribeRequest; {ShutdownNack.ReactivationPromise}. Rejecting now.")
-                    { ErrorType = ErrorType.ShuttingDown },
+                    new DeliveryFailure(d, text) { ErrorType = ErrorType.ShuttingDown },
                     o => o.ResponseFor(d));
                 if (alsoAnnounceEachRefusal)
                     owner.Post(new StreamEndedEvent(subscribe.StreamId) { Activation = activation },
@@ -186,5 +199,94 @@ public class ASyncStreamThatGivesUpOnItsOwnerEndsTest(ITestOutputHelper output) 
         Volatile.Read(ref refusals).Should().Be(20);
         Volatile.Read(ref terminal).Should().BeNull(
             "no single activation refused more re-asks than its own budget");
+    }
+
+    /// <summary>
+    /// 🚨 #6729 — the ROUTE refuses, not the owner. Six re-asks are answered by the routing layer
+    /// (<c>"Host is shutting down, cannot route to …"</c>: no owner banner, no activation tag), then
+    /// the route serves again. No owner activation refused anything, so the activation budget (3) must
+    /// not be charged: the stream rides the route out on the paced time axis and recovers.
+    /// <para>Before the fix each untagged refusal counted as a "distinct owner activation", the
+    /// re-ask went out with nothing to wait on, and the fourth refusal ended the stream with
+    /// "4 DISTINCT owner activations have refused this stream" — measured on memex-cloud as one
+    /// such give-up per open circuit stream, for unrelated owners, in the second each pod logged
+    /// "Application is shutting down...".</para>
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task RouteRefusals_AreNotOwnerActivations_AndTheStreamRecovers()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        speaker = RefusalSpeaker.Router;
+        refusalsLeft = 6;
+        var (held, ended, values) = Open();
+        using var _ = held;
+        await values.Should().Within(TestTimeouts.Convergence).Emit("the stream is established", ct);
+
+        refusing = true;
+        var (streamId, subscriber) = stream!.Value;
+        owner!.Post(new StreamEndedEvent(streamId) { Activation = "0C0C0C0C" }, o => o.WithTarget(subscriber));
+
+        await acceptedAfterRefusals.Should().Within(TestTimeouts.Convergence).Emit(
+            "routing-layer refusals are one unavailable route, not a succession of owner activations — "
+            + "the stream rides them out and re-asks until the route serves again (#6729)", ct);
+        Volatile.Read(ref refusals).Should().Be(6);
+        Volatile.Read(ref terminal).Should().BeNull(
+            "no owner activation refused this stream, so no owner recycle loop may be reported");
+    }
+
+    /// <summary>
+    /// #6729 — a route that never comes back still ends the stream (bounded), and the give-up names
+    /// the ROUTE, never "DISTINCT owner activations".
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task ARouteThatStaysClosed_EndsTheStream_NamingTheRouteNotAnOwnerLoop()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        speaker = RefusalSpeaker.Router;
+        var (held, ended, values) = Open();
+        using var _ = held;
+        await values.Should().Within(TestTimeouts.Convergence).Emit("the stream is established", ct);
+
+        refusing = true;
+        var (streamId, subscriber) = stream!.Value;
+        owner!.Post(new StreamEndedEvent(streamId) { Activation = "0C0C0C0C" }, o => o.WithTarget(subscriber));
+
+        var refused = (SyncStreamOwnerRefusedException)await ended.Should().Within(TestTimeouts.Convergence).Match(
+            ex => ex is SyncStreamOwnerRefusedException,
+            "the route ride-out is bounded: a route that never serves again still ends the stream", ct);
+        Output.WriteLine(refused.Message);
+        refused.Message.Should().Contain("ROUTE");
+        refused.Message.Should().NotContain("DISTINCT owner activations",
+            "the routing layer answered every re-ask; blaming an owner recycle loop sends triage to an "
+            + "owner that never recycled (#6729)");
+        Volatile.Read(ref refusals).Should().BeGreaterThan(3,
+            "the route refusals were ridden out past the activation budget before the give-up");
+    }
+
+    /// <summary>
+    /// Negative control for the discrimination: an untagged refusal that carries the OWNER's banner was
+    /// spoken by the owner, so it keeps the pre-#2986 accounting — each one a distinct activation — and
+    /// the stream gives up on the activation budget, naming distinct owner activations.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task UntaggedOwnerRefusals_StillChargeTheActivationBudget()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        speaker = RefusalSpeaker.OwnerUntagged;
+        var (held, ended, values) = Open();
+        using var _ = held;
+        await values.Should().Within(TestTimeouts.Convergence).Emit("the stream is established", ct);
+
+        refusing = true;
+        var (streamId, subscriber) = stream!.Value;
+        owner!.Post(new StreamEndedEvent(streamId), o => o.WithTarget(subscriber));
+
+        var refused = (SyncStreamOwnerRefusedException)await ended.Should().Within(TestTimeouts.Convergence).Match(
+            ex => ex is SyncStreamOwnerRefusedException,
+            "an owner that answers without an activation tag is still the owner refusing", ct);
+        refused.Message.Should().Contain("DISTINCT owner activations");
+        Volatile.Read(ref refusals).Should().BeLessThanOrEqualTo(3,
+            "untagged owner refusals keep the activation accounting: the announcement plus three "
+            + "refusals spend the budget of three");
     }
 }

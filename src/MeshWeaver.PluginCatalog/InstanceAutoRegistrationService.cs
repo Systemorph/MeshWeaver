@@ -835,7 +835,23 @@ public sealed class InstanceAutoRegistrationService(
             .Where(e => e is not null)
             .Select(e => e!)
             .ToList();
-        var baseline = options.InstallPreInstalledPackages;
+        var malformed = options.InstallByDefault
+            .Where(p => !string.IsNullOrWhiteSpace(p) && PluginGrantEntry.TryParse(p) is null)
+            .ToList();
+        if (malformed.Count > 0)
+            logger.LogWarning(
+                "[DefaultInstall] {Count} PluginCatalog:InstallByDefault entr(y/ies) are not a Source/Package or "
+                + "Source/* pattern and match nothing: [{Malformed}]. The list is therefore not an explicit "
+                + "package set, and the preInstalled baseline is kept.",
+                malformed.Count, string.Join(", ", malformed));
+        var baseline = BaselineApplies(options.EffectiveInstallPreInstalledPackages, options.InstallByDefault);
+        if (options.EffectiveInstallPreInstalledPackages is null && !baseline)
+            logger.LogInformation(
+                "[DefaultInstall] PluginCatalog:InstallByDefault declares an EXPLICIT package set [{Wanted}] — "
+                + "exactly those packages and what they declare in `requires` are selected; the "
+                + "registry's preInstalled baseline is not. Set PluginCatalog:InstallPreInstalledPackages=true "
+                + "to keep the baseline beside the set.",
+                string.Join(", ", wanted));
         // The environment's own composition, read ONCE per boot pass off the live flag surface. The
         // reader is reactive (configuration reloads push a new value), but a boot pass is a single
         // decision taken at a point in time — re-deciding mid-install would mean two passes writing
@@ -859,6 +875,46 @@ public sealed class InstanceAutoRegistrationService(
             : Observable.Return(FeatureComposition.Empty);
 
         return composition.SelectMany(composed => InstallSelection(options, wanted, baseline, composed));
+    }
+
+    /// <summary>
+    /// Whether the packages declaring <c>preInstalled</c> are selected — the platform baseline lane.
+    /// Pure.
+    ///
+    /// <para>🚨 <b>An instance that DECLARES its set gets that set</b> (policy
+    /// <c>declared-package-set-is-exact</c>). <see cref="PluginCatalogOptions.InstallByDefault"/> naming packages EXACTLY
+    /// (<c>Source/Package</c>, no whole-source <c>Source/*</c>) is a deployment record saying
+    /// "these" — and the baseline lane used to add every <c>preInstalled</c> package of every source
+    /// on top of it, unasked. Measured on a fresh control instance that named five packages: the
+    /// pass selected 48 (47 <c>preInstalled</c> packages plus <c>Store</c> by closure), and on a
+    /// closed type set every one of their in-mesh NodeTypes parks. The declared set's own
+    /// <c>requires</c> are still installed (the dependency closure runs over the full catalog), so
+    /// "exactly what was named, and what that needs" is what lands.</para>
+    ///
+    /// <para>An EXPLICIT <see cref="PluginCatalogOptions.InstallPreInstalledPackages"/> wins either
+    /// way: <c>true</c> keeps the baseline beside a declared set, <c>false</c> suppresses it
+    /// everywhere. Unset, the baseline applies wherever nothing is named exactly — no patterns, or
+    /// any whole-source pattern (the chart default <c>Plugins/*</c>) — exactly as before.</para>
+    /// </summary>
+    /// <param name="configured">The configured switch; null when not set.</param>
+    /// <param name="patterns">The CONFIGURED <see cref="PluginCatalogOptions.InstallByDefault"/>
+    /// entries, unparsed — a malformed one must be seen, not silently dropped.</param>
+    /// <returns>Whether the <c>preInstalled</c> baseline is selected this pass.</returns>
+    internal static bool BaselineApplies(bool? configured, IReadOnlyList<string> patterns) =>
+        configured ?? !DeclaresExplicitSet(patterns);
+
+    /// <summary>Whether the operator's patterns name an explicit package set: at least one entry,
+    /// and EVERY configured entry is a well-formed <c>Source/Package</c> (never a whole source, never
+    /// an entry that does not parse — a malformed entry keeps the baseline rather than letting the
+    /// valid rest stand for a set the operator did not state). Blank entries are not entries. Pure.</summary>
+    /// <param name="patterns">The configured <see cref="PluginCatalogOptions.InstallByDefault"/> entries.</param>
+    /// <returns>True for an explicit set.</returns>
+    internal static bool DeclaresExplicitSet(IReadOnlyList<string> patterns)
+    {
+        var entries = patterns.Where(p => !string.IsNullOrWhiteSpace(p)).ToList();
+        return entries.Count > 0
+               && entries.All(p => PluginGrantEntry.TryParse(p) is { } entry
+                                   && entry.PackageId != PluginGrantEntry.AllPackages);
     }
 
     /// <summary>The decision, once the three selection signals are known: list the sources, select,
@@ -2133,12 +2189,343 @@ public sealed class InstanceAutoRegistrationService(
         logger.LogInformation(
             "[DefaultInstall] {Count} package(s), in dependency order — {Packages}",
             installable.Count, string.Join(", ", installable.Select(c => c.Package.Id)));
-        return installable
-            .Select(Install)
-            .ToObservable()
-            .Concat()
-            .Aggregate(seed, (acc, one) => acc.Add(one));
+        // 🚨 PHASE 1 — MODULES, THEN PHASE 2 — NODES (see LandModulesFirst). Strictly sequential:
+        // the content phase is subscribed only once every module of the selection has been decided.
+        return LandModulesFirst(installable)
+            .SelectMany(phase1 => installable
+                .Select(Install)
+                .ToObservable()
+                .Concat()
+                .Aggregate(seed with { ModulesLanded = phase1.Landed }, (acc, one) => acc.Add(one))
+                // 🚨 ONE proposal per pass, at its END: checked against the install records AND the
+                // whole selection's declared floors, and blocked by any carrier phase 1 could not
+                // clear. Phase 2's per-package installs propose nothing (proposeModuleSet: false) —
+                // each would be checked against the records written so far and could publish a
+                // module phase 1 pre-landed for a package whose floor a LATER package refuses.
+                // Only a pass that ran a module wave proposes: a module-declaring package from a source
+                // that serves no bundles (a git or registered source) lands nothing on either phase, and
+                // a proposal without a wave would publish whatever the record holds, cleared by nobody.
+                .SelectMany(summary => !phase1.HadWave
+                    ? Observable.Return(summary)
+                    : ProposeCheckedForTheSelection(
+                            installable.Select(c => c.Package).ToImmutableList(),
+                            BlockedAfterPhase2(phase1.Blocked, phase1.Cleared, summary))
+                        .Select(verdict => summary with { ModuleSetVerdict = verdict })));
+
+        // Phase 2's own verdicts are NEWER than phase 1's: a package it HELD (ownership re-read),
+        // SKIPPED (a terminal refusal before the pass, or one visible only at install time) or FAILED
+        // without phase 1 having cleared it blocks its module too. A fresh carrier phase 1 cleared
+        // does not block on failing — that is the bootstrap's expected first pass, and blocking it
+        // would keep the modules from ever loading.
+        IReadOnlySet<string> BlockedAfterPhase2(
+            IReadOnlySet<string> phase1Blocked, IReadOnlySet<string> phase1Cleared, DefaultInstallSummary summary)
+        {
+            // A FAILED package blocks too — unless it is a fresh carrier phase 1 CLEARED (its module
+            // landed or was proven up to date, every gate passed): that failure is the node
+            // validation the bootstrap's first pass expects. An already-installed carrier that fails
+            // (a fetch, a parameter) never reached WithModule, so nothing cleared its module here.
+            var failedUncleared = candidates
+                .Where(c => (summary.Failures ?? []).Contains(c.Package.Id)
+                            && !string.IsNullOrWhiteSpace(c.Package.Module)
+                            && !phase1Cleared.Contains(c.Package.Module!))
+                .Select(c => c.Package.Id);
+            var refusedNow = (summary.Held ?? []).Select(h => h.Package)
+                .Concat((summary.Skipped ?? []).Select(s => s.Package))
+                .Concat(failedUncleared)
+                .ToImmutableHashSet(StringComparer.Ordinal);
+            // Through ALL candidates, not just the installable ones: a TERMINAL skip (entitlement,
+            // licence, plan tier) left `installable` before phase 1, and an entry an earlier pass
+            // landed for it must block this proposal all the same.
+            return phase1Blocked
+                .Concat(candidates
+                    .Where(c => refusedNow.Contains(c.Package.Id) && !string.IsNullOrWhiteSpace(c.Package.Module))
+                    .Select(c => c.Package.Module!))
+                .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+        }
     }
+
+    /// <summary>
+    /// 🚨 <b>PHASE 1 of the default install: land the compiled MODULE of every selected package that
+    /// is not installed yet, BEFORE any package's nodes are written</b> (policy
+    /// <c>default-install-modules-first</c>).
+    ///
+    /// <para><b>Why the order is the fix.</b> A mixed package's module used to land only AFTER its
+    /// content (<c>CatalogLayoutAreas.InstallOrUpdateCore</c>'s <c>WithModule</c> runs on the
+    /// content's success), and content is validated against the NodeTypes this process has
+    /// registered (<c>PackageInstaller.ValidateBulkTypes</c> — "NodeType(s) not registered"). So
+    /// on an image that does not ship the modules the packages deliver, the store's own bootstrap
+    /// is a cycle with no entry point: <c>Store</c>'s nodes include <c>Skill</c> (registered by the
+    /// <c>MeshWeaver.AI</c> module the <c>AI</c> package delivers), <c>AI</c>'s root is typed
+    /// <c>Store/Plugin</c> (declared by the <c>Store</c> package), and every other package's root
+    /// is <c>Store/Plugin</c> too. Each install failed validation, so no module ever landed, so no
+    /// restart could ever register the types — measured on a fresh control instance whose image
+    /// carries none of them (2026-10-13: <c>0 installed, 0 up to date, 48 failed</c>, <c>/data/modules</c>
+    /// empty).</para>
+    ///
+    /// <para><b>What breaks the cycle.</b> A module's bytes do not depend on any node: they are
+    /// fetched from the registry, link-probed against the running platform and landed
+    /// (<see cref="PluginBundleClient.AdoptModuleOutcome"/>). Landing them first, for the whole
+    /// selection, means the NEXT process start registers every NodeType those modules contribute
+    /// (restart-as-activation — a brand-new module is <c>NotHeld</c> and cannot go live in this
+    /// process, <c>Doc/Architecture/LiveModuleUpdate</c>), and the landing raises the pending-restart
+    /// marker that the self-updater takes. That boot's pass then finds <c>Skill</c>/<c>Agent</c>
+    /// registered, installs <c>Store</c> first (the dependency order already puts it before every
+    /// package that requires it) and everything rooted on <c>Store/Plugin</c> after it. The
+    /// "NodeType must be registered" validation is untouched: this pass's content failures are
+    /// recorded as FAILED with their cause, and the next pass is their retry.</para>
+    ///
+    /// <para><b>Scope — fresh installs only.</b> A package that already has an install record keeps
+    /// its module on the funnel it always used (module after content, inside the floor and
+    /// update-policy holds), so this phase never lands drift those holds exist to gate. A package
+    /// whose install record cannot be READ is not treated as fresh either. The same refusals the
+    /// install funnel applies before a file travels apply here before a byte lands: the entitlement
+    /// (with the same deployment-config principal), licence acceptance and the declared parameters — a package the
+    /// funnel would refuse lands no module ahead of that refusal. The platform floor is the
+    /// adoption's own <c>floorHold</c>.</para>
+    ///
+    /// <para>Never fails the pass: the adoption absorbs every failure into its outcome (logged by
+    /// the client), and the content phase runs whatever this phase answered.</para>
+    /// </summary>
+    /// <param name="installable">The pass's installable candidates, in dependency order.</param>
+    /// <returns>Cold; emits the entry-assembly names of the modules this phase LANDED, once.</returns>
+    private IObservable<(ImmutableList<string> Landed, IReadOnlySet<string> Blocked, IReadOnlySet<string> Cleared, bool HadWave)> LandModulesFirst(
+        IReadOnlyList<InstallCandidate> installable)
+    {
+        var carriers = installable
+            .Select(c => (Candidate: c,
+                Bundles: (c.Source.Source as RegistryPackageSource)?.Bundles ?? c.Source.Bundles))
+            .Where(x => !string.IsNullOrWhiteSpace(x.Candidate.Package.Module) && x.Bundles is not null)
+            .ToList();
+        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
+        IReadOnlySet<string> none = ImmutableHashSet<string>.Empty;
+        if (carriers.Count == 0 || persistence is null)
+            return Observable.Return((ImmutableList<string>.Empty, none, none, false));
+
+        var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
+        var configuration = hub.ServiceProvider.GetService<IConfiguration>();
+
+        // (Fresh: a not-yet-installed carrier this phase decided; Landed: the module it newly landed;
+        // Blocked: the module of a carrier this phase could NOT clear — an unreadable install record,
+        // missing parameters, an ownership hold, an entitlement or licence refusal, or an adoption that
+        // neither landed nor proved the existing entry up to date).
+        IObservable<(bool Fresh, string? Landed, string? Blocked)> One(InstallCandidate candidate, PluginBundleClient bundles)
+        {
+            var package = candidate.Package;
+            return persistence.Read($"{PackageInstaller.InstalledPartition}/{package.Id}", hub.JsonSerializerOptions)
+                .Take(1)
+                .DefaultIfEmpty()
+                .Select(record => (Fresh: record is null, Unreadable: (string?)null))
+                .Catch((Exception ex) => Observable.Return((Fresh: false, Unreadable: (string?)ex.Message)))
+                .SelectMany(state =>
+                {
+                    if (state.Unreadable is { } cause)
+                    {
+                        logger.LogWarning(
+                            "[DefaultInstall] module phase: the install record of {Id} could not be read "
+                            + "({Cause}) — its module {Module} is not landed ahead of its content; the "
+                            + "install funnel decides it as before.", package.Id, cause, package.Module);
+                        return Observable.Return((Fresh: false, Landed: (string?)null, Blocked: package.Module));
+                    }
+                    if (!state.Fresh)
+                        return Observable.Return((Fresh: false, Landed: (string?)null, Blocked: (string?)null));
+                    if (PackageParameters.Missing(configuration, package) is { Count: > 0 })
+                        // The content phase refuses it by name (PackageParameters.Require, at Error);
+                        // saying it twice adds nothing, landing its module ahead would add a module
+                        // for a package this environment cannot run.
+                        return Observable.Return((Fresh: false, Landed: (string?)null, Blocked: package.Module));
+                    var principal = AuthorizingPrincipal(candidate);
+                    // 🚨 The SAME ownership decision the node install takes (OwnershipHold): a
+                    // candidate whose partition another writer keeps current is HELD and adopts
+                    // nothing — so no module of it lands ahead either. The node install reports the
+                    // hold; here it only means "no module ahead".
+                    return OwnershipHold(candidate, PartitionOf(candidate))
+                        // Fail closed: an ownership question that could not be answered lands nothing
+                        // ahead; the node install asks it again and reports what it finds.
+                        .Catch((Exception ex) => Observable.Return<string?>($"the partition's ownership could not be read: {ex.Message}"))
+                        .SelectMany(hold => hold is not null
+                            ? Observable.Return((Fresh: false, Landed: (string?)null, Blocked: package.Module))
+                            : Gated(principal));
+                    IObservable<(bool Fresh, string? Landed, string? Blocked)> Gated(string? principal) =>
+                        PackageEntitlement.Authorize(hub, package, principal, logger)
+                        // The licence gate the installer applies after the entitlement
+                        // (PackageInstaller.Install): no licensed byte lands before its terms are
+                        // accepted, and a deployment-config principal cannot accept on anyone's behalf.
+                        .SelectMany(_ => LicenseAcceptanceGate.Require(hub, package, principal, logger))
+                        .SelectMany(_ => bundles.AdoptModuleOutcome(package.Id, package.Module!,
+                                $"{PackageInstaller.InstalledPartition}/{package.Id}")
+                            // Bounded per package exactly like the reconciler's adoption
+                            // (RegistryUpdateReconciler.PerPackageAdoptBudget): a trickling transfer
+                            // must not starve the remaining modules and the whole content phase.
+                            .Timeout(RegistryUpdateReconciler.PerPackageAdoptBudget))
+                        .Select(outcome =>
+                        {
+                            if (outcome.FilesLanded > 0)
+                                return (Fresh: true, Landed: package.Module, Blocked: (string?)null);
+                            // 🚨 Only SkipUpToDate proves an existing entry IS the artifact served now.
+                            // Every other zero-land outcome (a floor hold, a declined or failed fetch,
+                            // a refused landing) may leave an OLDER generation in the record, and a
+                            // proposal must not activate it under the newer content phase 2 installs.
+                            if (outcome.Failure is null && outcome.Verdict?.Action == ModuleUpdateAction.SkipUpToDate)
+                                return (Fresh: true, Landed: (string?)null, Blocked: (string?)null);
+                            logger.LogWarning(
+                                "[DefaultInstall] module phase: {Module} of {Id} did not land — {Outcome}. "
+                                + "Packages whose nodes need its NodeTypes fail validation this pass and are "
+                                + "retried by the next.", package.Module, package.Id,
+                                outcome.Failure ?? $"{outcome.Verdict?.Action}: {outcome.Verdict?.Reason}");
+                            return (Fresh: true, Landed: (string?)null, Blocked: package.Module);
+                        })
+                        // A refusal is the content phase's to report (it applies the same gate and
+                        // records it as a skip or a failure); here it only means "no module ahead".
+                        // Anything else (the budget expiring, an unexpected fault) is named and this
+                        // carrier steps aside, so the remaining carriers still run.
+                        .Catch((Exception ex) =>
+                        {
+                            // 🚨 A gate refusal is NOT a decided fresh carrier: it must not trigger
+                            // the module-set proposal, or an entry an earlier pass landed would be
+                            // proposed — and activated — against the current refusal.
+                            if (ex is PackageAuthorizationException or LicenseAcceptanceRequiredException)
+                                return Observable.Return((Fresh: false, Landed: (string?)null, Blocked: package.Module));
+                            logger.LogWarning(ex,
+                                "[DefaultInstall] module phase: {Module} of {Id} did not land — {Cause}. "
+                                + "The content phase decides the package as before.",
+                                package.Module, package.Id, ex.Message);
+                            return Observable.Return((Fresh: true, Landed: (string?)null, Blocked: package.Module));
+                        });
+                });
+        }
+
+        return accessService.RunAsSystem(() => carriers
+                .Select(x => One(x.Candidate, x.Bundles!)
+                    .Select(o => (o.Fresh, o.Landed, o.Blocked, Module: x.Candidate.Package.Module!)))
+                .ToObservable()
+                .Concat()
+                .ToList()
+                .Select(outcomes =>
+                {
+                    var landed = outcomes.Where(o => o.Landed is not null).Select(o => o.Landed!).ToImmutableList();
+                    // 🚨 The set is derived from the WHOLE activation record, so a proposal would
+                    // also carry a module an earlier pass landed for a package this phase could not
+                    // clear NOW (a gate refusal, an ownership hold, missing parameters, an adoption
+                    // that neither landed nor proved the entry up to date, or an install record it
+                    // could not read — fail closed). The pass's one proposal (at its end) is blocked
+                    // by an ENABLED activation entry for any such module; a module that was never
+                    // landed cannot be activated by it, so it blocks nothing.
+                    IReadOnlySet<string> blocked = outcomes.Where(o => o.Blocked is not null).Select(o => o.Blocked!)
+                        .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+                    if (landed.Count > 0)
+                        logger.LogInformation(
+                            "[DefaultInstall] module phase: landed {Count} module(s) BEFORE any package content — "
+                            + "[{Modules}]. A newly landed module loads at a restart once the module set naming it "
+                            + "is proposed (once, at the end of this pass); a package whose nodes need its NodeTypes "
+                            + "fails validation in this pass and is installed by a pass after that restart.",
+                            landed.Count, string.Join(", ", landed));
+                    // Cleared: a FRESH carrier that passed every gate and whose module landed now or was
+                    // proven up to date — the one kind whose phase-2 failure (node validation before
+                    // the module loads) is expected and must not block the proposal.
+                    IReadOnlySet<string> cleared = outcomes
+                        .Where(o => o.Fresh && o.Blocked is null)
+                        .Select(o => o.Module)
+                        .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+                    return (landed, blocked, cleared, true);
+                }))
+            .Catch((Exception ex) =>
+            {
+                logger.LogError(ex,
+                    "[DefaultInstall] module phase faulted: {Cause}. The content phase runs as before — "
+                    + "each package's module still follows its content on the install funnel. No module of "
+                    + "this selection is cleared for the pass's proposal.", ex.Message);
+                // Fail CLOSED for activation: a wave that aborted established nothing about its
+                // carriers, so every carrier's module blocks the pass's one proposal.
+                IReadOnlySet<string> allCarriers = carriers.Select(x => x.Candidate.Package.Module!)
+                    .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+                return Observable.Return((ImmutableList<string>.Empty, allCarriers, none, true));
+            });
+    }
+
+    /// <summary>
+    /// The module-phase close: propose the set the activation record describes, checked against the
+    /// install records AND <paramref name="selection"/> (<see cref="ModuleDependencyFloor.ProposeChecked(IMessageHub, ModuleLandingService, IReadOnlyList{PackageManifest})"/>).
+    /// A refused or unreadable proposal leaves the mesh on its current set and is said at Warning —
+    /// the same answer <c>CatalogLayoutAreas.ProposeMeshModuleSet</c> gives.
+    /// </summary>
+    /// <param name="selection">The manifests this pass is about to install.</param>
+    /// <param name="blocked">The modules of carriers this pass could not clear — an enabled
+    /// activation entry for any of them blocks the proposal.</param>
+    private IObservable<string> ProposeCheckedForTheSelection(
+        IReadOnlyList<PackageManifest> selection, IReadOnlySet<string> blocked)
+    {
+        var landing = hub.ServiceProvider.GetService<ModuleLandingService>();
+        if (landing is null)
+            return Observable.Return("no module landing service on this host — nothing to propose");
+        return landing.GetActivation().Take(1)
+            .SelectMany(activation =>
+            {
+                var carried = activation.Entries
+                    .Where(e => e.Enabled && blocked.Contains(e.Name))
+                    .Select(e => e.Name)
+                    .ToList();
+                // 🚨 …and an ABSENT blocked module another selected package REQUIRES: the floor check
+                // skips a dependency with no landed entry, so without this a wave whose AI failed to
+                // land while Chat (requiring AI) landed would publish the half set.
+                var blockedIds = selection
+                    .Where(p => !string.IsNullOrWhiteSpace(p.Module) && blocked.Contains(p.Module!))
+                    .Select(p => p.Id)
+                    .ToImmutableHashSet(StringComparer.Ordinal);
+                var requiredButBlocked = selection
+                    .SelectMany(p => p.Requires.Select(PackageDependencyGraph.DependencyId))
+                    .Where(blockedIds.Contains)
+                    .Distinct(StringComparer.Ordinal)
+                    .ToList();
+                string? withheld = carried.Count > 0
+                    ? $"the activation record carries [{string.Join(", ", carried)}] for package(s) this pass "
+                      + "could not clear (a gate refusal, an ownership hold, missing parameters or an unreadable "
+                      + "install record), and a proposal would activate them"
+                    : requiredButBlocked.Count > 0
+                        ? $"package(s) [{string.Join(", ", requiredButBlocked)}] are required by this selection but "
+                          + "their modules could not be cleared this pass; a set without them would load their "
+                          + "dependents alone"
+                        : null;
+                if (withheld is null)
+                    return Propose();
+                var verdict = $"{ModuleSetWithheld}: {withheld}";
+                logger.LogWarning("[DefaultInstall] module phase: proposing NO module set — {Verdict}", verdict);
+                return Observable.Return(verdict);
+            });
+
+        IObservable<string> Propose() => ModuleDependencyFloor.ProposeChecked(hub, landing, selection)
+            .Select(set => set is null
+                ? $"{ModuleSetUnchanged}: nothing new to propose"
+                : $"{ModuleSetProposed}: sequence {set.Sequence} — the landed modules load at the next restart")
+            .DefaultIfEmpty($"{ModuleSetUnchanged}: nothing new to propose")
+            .Do(verdict => logger.LogInformation("[DefaultInstall] module phase: {Verdict}", verdict))
+            .Catch((Exception ex) =>
+            {
+                logger.LogWarning(ex,
+                    "[DefaultInstall] module phase: the landed module set could not be proposed — the mesh "
+                    + "stays on its current set and the next wave proposes again. Cause: {Cause}", ex.Message);
+                return Observable.Return($"{ModuleSetRefused}: {ex.Message}");
+            });
+    }
+
+    /// <summary>Verdict prefix: the pass proposed a module set.</summary>
+    internal const string ModuleSetProposed = "proposed";
+
+    /// <summary>Verdict prefix: the pass proposed, and the set was already current.</summary>
+    internal const string ModuleSetUnchanged = "unchanged";
+
+    /// <summary>Verdict prefix: the pass WITHHELD its proposal (an uncleared carrier).</summary>
+    internal const string ModuleSetWithheld = "withheld";
+
+    /// <summary>Verdict prefix: the proposal was refused (a dependency floor, an unreadable record).</summary>
+    internal const string ModuleSetRefused = "refused";
+
+    /// <summary>The principal a candidate is installed on the authority of — the deployment
+    /// configuration's, for a commercial package it authorizes; null for every other (a free package
+    /// needs none, and System authorizes nothing).</summary>
+    private string? AuthorizingPrincipal(InstallCandidate candidate) =>
+        candidate.ConfigAuthority is not null && candidate.Package.IsCommercial()
+            ? hub.ServiceProvider.GetService<DeploymentConfigAuthority>()?.Principal
+            : null;
 
     /// <summary>
     /// Installs (or re-reconciles) ONE package and re-asserts its public read — unless this lane
@@ -2180,7 +2567,26 @@ public sealed class InstanceAutoRegistrationService(
         // hold every proven install on the fleet's normal shape — which is the stated cost that
         // kept #4625 open rather than folded into #4619. See
         // PartitionContentOwnership.ImportedFromAnotherRepository for the full asymmetry.
-        return candidate.RefIsProven
+        return OwnershipHold(candidate, partition)
+            .SelectMany(reason => reason is not null
+                ? HoldForThePartitionsOwnWriter(candidate, partition, reason)
+                : Land(candidate, partition));
+    }
+
+    /// <summary>The target partition of a candidate — its declared <c>targetPartition</c>, else its id. Pure.</summary>
+    private static string PartitionOf(InstallCandidate candidate) =>
+        string.IsNullOrWhiteSpace(candidate.Package.TargetPartition)
+            ? candidate.Package.Id
+            : candidate.Package.TargetPartition!;
+
+    /// <summary>
+    /// Why this unattended lane may NOT write <paramref name="partition"/> for
+    /// <paramref name="candidate"/> — gate 1c / 1d below (MeshWeaver#4588, #4625) — or null when it
+    /// may. ONE decision for both phases: the node install holds on it, and the module phase lands no
+    /// module for a held candidate (a hold adopts nothing, so neither may the phase before it).
+    /// </summary>
+    private IObservable<string?> OwnershipHold(InstallCandidate candidate, string partition) =>
+        candidate.RefIsProven
             // 🚨 The folder is the SOURCE's configured prefix PLUS the module's own, through the one
             // implementation provisioning uses (review on #4649). A package listing stores
             // `SourceFolder` relative to `Subdir`, so passing it alone would compare `repo#module`
@@ -2197,18 +2603,11 @@ public sealed class InstanceAutoRegistrationService(
                     ModuleDiscoveryService.Subdirectory(
                         candidate.Source.Subdir,
                         candidate.Package.SourceFolder ?? candidate.Package.Id)))
-                .SelectMany(mismatch => mismatch is { } reason
-                    ? HoldForThePartitionsOwnWriter(candidate, partition, reason)
-                    : Land(candidate, partition))
             // The NON-logging overload: HoldForThePartitionsOwnWriter says the whole thing once,
             // with the verdict's reason inside it. The logging overload here would warn a second
             // time about the same hold, and a contract that says "said once" has to mean it.
             : PartitionContentOwnership.Observe(hub, partition)
-                .SelectMany(ownership =>
-                    UnprovenRefHold(ownership, candidate.Source.GitRef) is { } reason
-                        ? HoldForThePartitionsOwnWriter(candidate, partition, reason)
-                        : Land(candidate, partition));
-    }
+                .Select(ownership => UnprovenRefHold(ownership, candidate.Source.GitRef));
 
     /// <summary>
     /// 🚨 <b>An unattended install never lands an UNPROVEN ref in a partition another writer keeps
@@ -2318,10 +2717,7 @@ public sealed class InstanceAutoRegistrationService(
         // verifies it against the current configuration; it is stamped on the install record
         // (AuthorizedBy, re-verified by every unattended update) and on the ledger. A free package
         // needs no principal and gets none — nothing changes for it.
-        var authority = hub.ServiceProvider.GetService<DeploymentConfigAuthority>();
-        var principal = candidate.ConfigAuthority is not null && package.IsCommercial()
-            ? authority?.Principal
-            : null;
+        var principal = AuthorizingPrincipal(candidate);
         if (principal is not null)
             logger.LogInformation(
                 "[DefaultInstall] commercial package {Id} is installed on the authority of {Principal} "
@@ -2339,7 +2735,9 @@ public sealed class InstanceAutoRegistrationService(
         return accessService
             .RunAsSystem(() => CatalogLayoutAreas
                     .InstallOrUpdate(hub, candidate.Source.Source, candidate.Source.GitRef, package, logger,
-                        authorizingUserId: principal)
+                        authorizingUserId: principal,
+                        // The pass proposes ONCE, at its end, checked against the whole selection.
+                        proposeModuleSet: false)
                     .Take(1)
                     .Do(result => logger.LogInformation(
                         "[DefaultInstall] {Id} → {Partition}: {Written} written, {Unchanged} unchanged",
@@ -2968,6 +3366,23 @@ public readonly record struct DefaultInstallSummary(
         ImmutableList<DefaultInstallAuthorization>.Empty;
 
     /// <summary>
+    /// The modules this pass's MODULE PHASE landed ahead of any package content (the platform
+    /// bootstrap — <c>InstanceAutoRegistrationService.LandModulesFirst</c>), by entry-assembly name.
+    /// A newly landed module loads at a restart once a proposed module set names it, so a package whose nodes need its NodeTypes
+    /// is in <see cref="Failures"/> of THIS pass and is delivered by the pass after that restart.
+    /// </summary>
+    public ImmutableList<string> ModulesLanded { get; init; } = ImmutableList<string>.Empty;
+
+    /// <summary>
+    /// What THIS pass decided about the mesh's module set, once, at its end (policy
+    /// <c>default-install-modules-first</c>): <c>proposed: …</c>, <c>unchanged: …</c>,
+    /// <c>withheld: …</c> (a carrier the pass could not clear) or <c>refused: …</c> (a declared floor,
+    /// an unreadable record). Null when the pass ran no module wave. Other lanes (the reconciler's
+    /// wave close) propose on their own; this is this lane's verdict only.
+    /// </summary>
+    public string? ModuleSetVerdict { get; init; }
+
+    /// <summary>
     /// 🚨 True when at least one source's listing FAILED this pass (#4097), so what the pass did
     /// not see is unknown rather than absent. <see cref="TierRefused"/> is then a partial answer:
     /// the ledger keeps its previous refusals and the activation markers are left standing,
@@ -3040,6 +3455,9 @@ public readonly record struct DefaultInstallSummary(
             .AddRange(other.TierRefused ?? ImmutableList<PlanTierRefusal>.Empty),
         Authorized = (Authorized ?? ImmutableList<DefaultInstallAuthorization>.Empty)
             .AddRange(other.Authorized ?? ImmutableList<DefaultInstallAuthorization>.Empty),
+        ModulesLanded = (ModulesLanded ?? ImmutableList<string>.Empty)
+            .AddRange(other.ModulesLanded ?? ImmutableList<string>.Empty),
+        ModuleSetVerdict = other.ModuleSetVerdict ?? ModuleSetVerdict,
         ListingIncomplete = ListingIncomplete || other.ListingIncomplete,
         SourceUnreachable = SourceUnreachable || other.SourceUnreachable,
     };
@@ -3062,7 +3480,11 @@ public readonly record struct DefaultInstallSummary(
         + (Held is { Count: > 0 } h
             ? " — HELD (another writer owns the partition; re-derived next boot): "
               + $"[{string.Join(", ", h.Select(x => x.Package))}]"
-            : "");
+            : "")
+        + (ModulesLanded is { Count: > 0 } m
+            ? $" — MODULES LANDED ahead of content: [{string.Join(", ", m)}]"
+            : "")
+        + (ModuleSetVerdict is { Length: > 0 } v ? $" — MODULE SET {v}" : "");
 }
 
 /// <summary>

@@ -105,6 +105,30 @@ including SQL's `%`, `_` and `\`. `code:50%*` matches `50%off` and not `50xoff`;
 matches `a_b` and not `axb`. The SQL backends escape those characters before they translate `*`
 into their own wildcard ([Query Provider Parity](/Doc/Architecture/QueryProviderParity)).
 
+### Quoted values are literal
+
+A value in quotes (`"…"` or `'…'`) is taken **exactly as written**: a `|` inside the quotes is not
+alternation and a `*` inside the quotes is not a wildcard. Quotes are also how a value keeps its
+spaces.
+
+```
+namespace:"acme/Docs/a|b"     # exactly the namespace acme/Docs/a|b — not a OR b
+namespace:"acme/report*"      # exactly the namespace acme/report* — not a prefix pattern
+-name:"draft*"                # every node whose name is not literally draft*
+path:"a/b c"|"a"              # the bar BETWEEN quoted values is still alternation
+namespace:("acme/report*")    # a one-value list keeps the quoting: the same literal anchor
+-namespace:("acme/report*")   # ... and its negation stays an exclusion of exactly that namespace
+```
+
+A one-value list is read as its single value: `-namespace:(acme/Docs)` excludes like
+`-namespace:acme/Docs`, never anchors the query at `acme/Docs` (#6752).
+
+So a caller that builds a `namespace:` or `path:` token from a string it does not control (a
+document path, a user-typed name) quotes it and gets exactly that one value — provided the string
+contains no quote character of the same kind, which still ends the value. Both executors, the
+in-memory evaluator and the SQL backends, compare a quoted value literally; the shared
+`NegationCorpus` pins it for both (#6634).
+
 ### Comparison Operators
 
 ```
@@ -322,7 +346,37 @@ Specifies sort order. Default is ascending; append `-desc` for descending:
 sort:name               # Name ascending
 sort:name-desc          # Name descending
 sort:lastModified-desc  # Most recently modified first
+sort:content.inception  # A content field, earliest first
+sort:content.terms.renewal-desc   # A nested content field, latest first
 ```
+
+#### Sorting on a content field
+
+`sort:content.<field>` (and `content.a.b` for a nested one) orders by the field's **typed** value,
+on every backend, and before `limit:` / paging is applied — the backend's own `ORDER BY` decides
+which rows survive the cap, and the merge across partitions (`namespace:(A/X OR B/X)`) orders the
+union by the same rule:
+
+| Value | Compares as |
+|---|---|
+| Number | Numerically — `9 < 10 < 100`, never as text |
+| Date, date-time | Its ISO-8601 text (`2027-07-01`, `2027-07-01T09:30:00.0000000Z`) — chronological, and the same key whether the content is a compiled type or as-written JSON |
+| Text, boolean, anything else | Text, case-insensitively |
+| Null or absent | **Last, in both directions** |
+
+Numbers rank before text when a field holds both. Nulls go last for `sort:x` *and* `sort:x-desc`
+so that a row without the field is never the first answer either way (Postgres's own default would
+put them first in a descending sort; the generator says `NULLS LAST` explicitly). The same rules
+apply to every `sort:` selector, node fields included; an enum node field (`state`, `syncBehavior`)
+orders by its number, as its column does. Date-times are reduced to one fixed-width form before
+they compare — the serializer trims fractional seconds, so `…08:30:00Z` and `…08:30:00.1Z` sit in
+one field, and raw text would put the later one first. Postgres does the same rewrite with string
+functions only, for `Z`/`+00:00` and zoneless values, so a value that merely looks like a date
+cannot fail the query. The one residual: a non-UTC offset (`+02:00`) is compared as the instant in
+memory but as text on Postgres, so in a field that mixes offsets the pre-`limit:` window can
+differ. A sort function (`length`, `lower`, `upper`) runs on the value as written. The in-memory
+contract is `QuerySortKey`; the Postgres one is `PostgreSqlSqlGenerator.OrderByTerms`
+(MeshWeaver.Plugins).
 
 #### The default when you write no `sort:`
 

@@ -79,6 +79,7 @@ assume "same commit ⇒ same digest".
 | the Store, `RegistryUpdateReconciler`, `InstanceAutoRegistrationService` (a bundle adopted at runtime) | one bundle manifest by digest, named by the index's `artifact` (`cr.meshweaver.cloud/plugins/<source>/<package>@sha256:…`), then its `.zip` layer by digest | the instance credential `RegistryTokenResolver` already holds, presented at the registry's token realm as `Basic instance:<token>` | `PluginBundleClient` through `OciRegistryClient` (`MeshWeaver.PluginCatalog`, the same client `OciTagLister` lists image tags with) — the same landing path, entering `ModuleLandingService.LandCore`, gated by the `ModulePlatformLink` probe and the load; a bundle whose `artifact` is `null` takes the HTTP route |
 | `memex-local` and every self-hosted install | as above | the instance key in its manifest, projected as `ContainerRegistry:DockerConfigJson` (`{"auths":{"cr.meshweaver.cloud":{"auth":base64("instance:<key>")}}}`, emitted only when the key decrypts — core #3722) | no second credential |
 | the release-availability gate (`ReleaseAvailabilityService`), for a candidate release its published root has no marker for | the release record `plugins/releases:<version>` — its manifest by tag, then its config blob by digest | the instance credential `RegistryTokenResolver` holds for a registry mount (`ResolveDurableKey`), presented only to the artifact host that mount's bundle index declares | `RegistryReleaseIdentities` through `OciRegistryClient`; nothing is written — see "A release's identity on a registry-fed root" |
+| the same gate, once the registry named that identity | each source's publication index `plugins/<source>:<identity>`, by tag, at the moment the gate runs | the same mount's durable key, presented only to the artifact host that mount declares | `RegistryLivePublications`; one manifest GET per source, nothing written — see "The sealed set is the live publication" |
 | satellite CI on `main` (`node-repo-gate`, `compose-sealed-modules`, `memex build plugin`) | the index and bundles for the pinned identity | the repository's instance key (`REGISTRY_KEY`) | ORAS |
 | satellite CI on a `pull_request` | **unchanged: the HTTP prebuilt surface** (`/api/plugins/bundles/prebuilt/…`) with the GitHub OIDC build principal | OIDC token | see "What stays on the HTTP surface" |
 
@@ -159,36 +160,78 @@ The gate therefore asks the registry when, and only when, the marker file is abs
 3. the record's config (`{"identity","version"}`) is taken when its media type is the release
    record's, its bytes hash to the digest the manifest names, it names the version asked for, and
    its identity is a single path segment;
-4. the bundles are then read from the root exactly as with a marker.
+4. each source's publication under that identity is read **live** — see "The sealed set is the
+   live publication" below.
 
 | situation | answer |
 |---|---|
-| the marker file exists | the file; the registry is not asked |
-| no marker, the registry names the identity, and its bundles are on the root | judged like any marked release |
-| no marker, the registry names an identity nothing on the root is published under | identity known, no bundle sealed — the completeness hold, by package |
+| the marker file exists | the file and the bundles on the root; the registry is not asked |
+| no marker, the registry names the identity | judged against each source's live publication `plugins/<source>:<identity>` |
 | no marker and no mount declares an artifact host, the record is absent or malformed, or the read fails | *identity not resolvable* — the hold, as before |
 
 "The marker file exists" means its presence was established. A marker whose presence cannot be
 determined (access denied, an I/O fault) is neither read as absent nor overridden: the registry is
 not asked and the read reports what it found.
 
-🚨 **The second row is weaker than a marked release, and is not equivalent to one.** The registry
-record binds `version → identity` and nothing more. The bundles the gate then counts are the
-snapshot `bundle-fetch` pulled when THIS pod started, while `plugins/<source>:<identity>` is a tag
-that moves whenever that source publishes again under the same identity. The pod that starts on the
-new image pulls the tag as it stands then. A package that left a source's publication after this
-pod started is therefore still counted here, and the new pod compiles it at boot instead of
-adopting it. The gate on such a root answers "the identity is known and this pod's snapshot is
-complete for it", not "the publication the next pod will pull is complete". Closing that needs the
-release bound to an immutable publication digest per source, which the release record does not
-carry.
+#### The sealed set is the live publication
 
-The third row is the other limit of a registry-fed root: `bundle-fetch` materialises
-one identity, the running image's. A release that moves the compatibility key
-(`c<major>e<epoch>`) is not shown adoptable from that root, because its bundles are not there
-until the pod restarts on the new image. The enumeration of candidates
-(`PublishedBundleCatalogue.PublishedReleases`) still reads marker files only; the poller supplies
-its own candidate list, so it does not depend on it.
+Policy `registry-fed-gate-reads-live-publication` ([Policy Not Prose](../PolicyNotProse)),
+MeshWeaver#6622.
+
+The bundles on a registry-fed root are the snapshot `bundle-fetch` pulled when the running pod
+started. `plugins/<source>:<identity>` is a tag that moves whenever that source publishes again
+under the same identity, and the pod that starts on the next release pulls the tag as it stands
+then. A gate that counted the snapshot answered about a publication no future pod will pull: a
+package withdrawn since this pod started still counted as sealed (the next pod compiled it at
+boot instead of adopting it), and a package added since did not count (a release that would have
+been fine was held).
+
+So where the registry named the identity, the gate reads each source's publication **at the
+moment it runs** (`RegistryLivePublications`), and that is the sealed set it judges:
+
+1. the sources are the `<root>/<identity>/<source>` directories the root materialises — the
+   chart's `bundles.sources` that held a publication when the pod started
+   (`PublishedBundleCatalogue.SourcesOnRoot`);
+2. for each source, the registry mounts are asked in order for the artifact host their bundle
+   index declares, and that host for the manifest `plugins/<source>:<identity>`, with the mount's
+   durable key and no other. The FIRST mount that answers Published ends the reading: no later
+   mount can change that verdict, so asking it would only let a slow mount run the gate's answer
+   budget out and turn a decided Published into Indeterminate (#6743);
+3. the index is read bounded: a body larger than a publication index (`MaxIndexBytes`) is refused
+   as it arrives, never after it has been held whole;
+4. the publication counts only if `bundle-fetch` would materialise it: EVERY index entry is a valid
+   OCI descriptor (media type, sha256 digest, positive size), there is exactly one sidecar entry
+   (`io.meshweaver.role=sidecars`), and that sidecar manifest — one more GET, by digest — carries a
+   non-empty layer titled `_complete`, the sentinel `bundle-fetch` dies without;
+5. a package counts as sealed exactly when a bundle entry of that index (`artifactType`
+   `application/vnd.meshweaver.bundle.v1+json`) names it in its `io.meshweaver.package`
+   annotation — the entry `push-bundle-publication.sh` writes for every bundle.
+
+Not checked from the index, and so still `bundle-fetch`'s own refusal: that every bundle `_complete`
+LISTS actually lands (that needs the bundle manifests and their blobs, which is the pull itself).
+
+The snapshot still supplies what only bytes can — dependency records, the sealed module set, the
+declared ranges — for the packages it holds. The release record `plugins/releases:<version>` is
+not changed and gains no field: it binds `version → identity`, and the identity's publications are
+read where they live.
+
+| live reading for a source | answer |
+|---|---|
+| the tag resolves to a publication index | its bundle entries are that source's sealed packages |
+| every declared host answers `404 MANIFEST_UNKNOWN` | established absent: nothing is sealed for that source — a verdict, by package |
+| no mount declares a host, a host refuses the key or fails, the tag names something that is not a publication index or is larger than one, an entry is not a valid descriptor, a bundle entry names no package, or the sidecar manifest or its `_complete` is missing | *could not look* — the observation is unreadable and the verdict Indeterminate; the snapshot is never used instead |
+
+Unreadable is never read as "absent", and never as "the snapshot is current": either reading would
+be a guess about the publication the next pod pulls. On a platform roll an Indeterminate package
+answer is an advisory, as every package answer is (policy
+`platform-rolls-independently-of-packages`).
+
+**What stays out of reach.** A source the root never materialised (its tag was absent when the
+pod started) is not asked about, because the chart's source list is not visible to the portal. A
+release that moves the compatibility key (`c<major>e<epoch>`) is now judged by its live package
+list too, but the root holds none of its bytes, so its module set is unobserved. The enumeration
+of candidates (`PublishedBundleCatalogue.PublishedReleases`) still reads marker files only; the
+poller supplies its own candidate list, so it does not depend on it.
 
 ## Authorization: memex decides, the edge enforces
 

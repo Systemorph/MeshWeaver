@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "Tortuga Restaurante - M\u00e9xico D.F., Mexico",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "TORTU",

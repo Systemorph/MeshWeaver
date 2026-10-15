@@ -200,12 +200,15 @@ public record DeploymentContent
     public ImmutableList<PluginRepoMount> PluginRepos { get; init; } = ImmutableList<PluginRepoMount>.Empty;
 
     /// <summary>
-    /// Packages a FRESH instance seeds itself with, beyond the platform baseline every
-    /// installation gets. Package ids (<c>Edu</c>) or explicit <c>Source/Package</c> patterns
-    /// (<c>Plugins/Edu</c>, <c>Plugins/*</c>); a bare id is qualified against
-    /// <see cref="PluginRepos"/>, because the catalog matches source-scoped and FAILS CLOSED on an
-    /// unqualified one. Rendered into <c>PluginCatalog:InstallByDefault</c>, which the portal
-    /// applies once, on an installation with no install records.
+    /// Packages a FRESH instance seeds itself with. Package ids (<c>Edu</c>) or explicit
+    /// <c>Source/Package</c> patterns (<c>Plugins/Edu</c>, <c>Plugins/*</c>); a bare id is qualified
+    /// against <see cref="PluginRepos"/>, because the catalog matches source-scoped and FAILS CLOSED
+    /// on an unqualified one. Rendered into <c>PluginCatalog:InstallByDefault</c>, which the portal
+    /// seeds once per package. 🚨 A list that names packages only (no <c>Source/*</c>) is an
+    /// EXPLICIT set: the instance installs exactly those and what they declare in <c>requires</c>,
+    /// and the registry's <c>preInstalled</c> baseline is NOT added on top unless
+    /// <c>PluginCatalog:InstallPreInstalledPackages=true</c> says so (policy
+    /// <c>declared-package-set-is-exact</c>). An empty list, or one with a whole-source pattern, keeps the baseline.
     /// </summary>
     public ImmutableList<string> PreInstall { get; init; } = ImmutableList<string>.Empty;
 

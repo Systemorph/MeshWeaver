@@ -160,6 +160,7 @@ answer:
 |---|---|---|
 | sent by this hub itself | Debug | nobody outside waits; `NackThroughParent` declines it (#4178) |
 | a request marked `[ReaskedOnShutdown]` (`SubscribeRequest`) | Debug | every producer rides the transient NACK out and asks the next activation (#4888, #5424, #5589) |
+| a request whose producer stamped `ReasksOnShutdown` on it (`PostOptions.ReaskingOnShutdown()`: the node point read's `GetDataRequest`, every node write's `PatchDataRequest`) | Debug | that producer rides the transient NACK out and asks the next activation (#5718, #6733). A reply never inherits the stamp: `ResponseFor` / `WithRequestIdFrom` drop it (#6717) |
 | a message the routing layer may not answer: `[CanBeIgnored]` (`StreamEndedEvent`, `HeartBeatEvent`) or a `DeliveryFailure` | Debug | no sender awaits a reply, and `NackThroughParent` posts none (`AnswerPolicy`). Dropping it for a hub that is going away is what the declaration asks for (#5718) |
 | anything else, from another sender | **Error** | the waiter may take the NACK as final. That is the report worth an issue |
 

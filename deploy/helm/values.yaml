@@ -238,9 +238,10 @@ pluginCatalog:
   installByDefault: ["Plugins/*"]
   # CONSUMER: the platform's own baseline — packages whose manifest declares `preInstalled`, the
   # Agents/Skills libraries and Essentials. Reconciled on EVERY boot (that is what heals an instance
-  # whose baseline partition was lost) and ON by default in code. Set false only for an air-gapped or
-  # hand-curated install that manages its own content. Rendered only when set, so the code default
-  # stands otherwise.
+  # whose baseline partition was lost). Unset, code applies it unless installByDefault names an
+  # EXPLICIT set (Source/Package entries only, no Source/*) — then exactly that set and its declared
+  # requires install. true keeps the baseline beside such a set; false suppresses it everywhere (an
+  # air-gapped or hand-curated install). Rendered only when set, so the code default stands otherwise.
   # installPreInstalledPackages: true
 
 # ---- Per-environment composition: FEATURE FLAGS ------------------------------

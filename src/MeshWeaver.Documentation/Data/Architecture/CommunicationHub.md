@@ -326,8 +326,15 @@ strings, anchored the same way. The bands differ only in what their legs select:
 | band | selects | glyph |
 |---|---|---|
 | **Needs you** | open obligations addressed to the viewer | `☐` |
-| **Running** | activities in flight (`ActivityStatus.Running`) **and threads executing** | `⏳` |
-| **Last 24 hours** | terminal activities inside a window | `✅` / `❌` |
+| **Running** | marked activities still going (`ActivityStatus.Running`) **and threads executing**; a marked activity that FAILED is in *Needs you* | `⏳` |
+| **Last 24 hours** | *(designed; core feeds no leg into it today)* | `✅` |
+
+🚨 **As built (policy `inbox-activities-need-someone`):** core's own Activities source lists only
+the runs MARKED for the inbox (`ActivityLog.ShowInInbox`, set by the code that starts a run a person
+asked for and waits on, or one that will need their decision) that still need someone: a run still
+going is in *Running*; a run that FAILED is finished, so it is in *Needs you*, dealt with on its own
+page. Background runs (scripts, Tests-area runs, indexing) are never marked, so they never appear.
+A run that finished well is not listed; its own page keeps it.
 
 **Running is its own band because it is neither.** It is not owed by the viewer — pushing it into
 *Needs you* invents an obligation nobody has — and it is not finished, so it cannot carry a tick. It
@@ -335,8 +342,7 @@ is also the band that answers the question people actually open the inbox with w
 slow: *is it still going?*
 
 🚨 **Running is a live band, so it needs no poller.** The rows come from the same node streams
-everything else binds to; an activity that finishes moves itself to the third band on the next
-emission. A timer that re-reads "is it done yet?" is the band's failure mode, not its
+everything else binds to; an activity that finishes well leaves the band on the next emission. A timer that re-reads "is it done yet?" is the band's failure mode, not its
 implementation.
 
 This is also the only place a tick legitimately appears — the third band is *by definition* things
@@ -380,6 +386,9 @@ function of the filter and the legs.
 |---|---|---|
 | search box | `search` | the term goes to the query engine with EVERY leg, as free text (full text and the semantic index), under the owner's identity — never a match over the rows already loaded |
 | one icon toggle per source (`ToggleButtonControl`), beside the search | `sources/{key}` (the id, hex-encoded) | shows or hides what one provider brought, by its symbol (`InboxQueryLeg.SourceIcon`), its name the tooltip; a source with no entry is shown, so a leg a package brings later never arrives switched off — unless its legs say `ShownByDefault: false` (notifications: the feed is long, so it is one click away and the bell still shows it) |
+| the Only select (`SelectControl`), before the toggles | `only` (a source key, empty for all) | Only / Show / Hide per source: picking one source lists that source alone and wins over its switch (so "only Outlook" shows Outlook even while its toggle is off); "All sources" gives the switches back exactly as they were. A side-menu category still wins over both, and what Only hides of the "Needs you" band is counted in the hidden-obligations notice like a switch |
+| the Show ignorable switch (`SwitchControl`) | `showIgnorable` | items a triage judged `ignorable` (`InboxImportance` — spam, promotions, noise) stay out of the list until it is on; the notice above the grid counts what it hides. Items nobody judged are always shown |
+| the side menu's tags (`RadioGroupControl`, below the folders) | `tag` | GitHub's label filter over the triage's tags (`InboxRow.Tags`, read from the content's `tags`): ⭐ Important first (the content's `importance`), then each tag by use, each with its count. A tag narrows the folder and sources shown, and shows its rows even when ignorable — picking `#promo` asks for the promotions. The entries are keyed apart — `importance:important` for what a triage JUDGED important, `tag:<name>` for a tag — so an ordinary tag spelled `important` is its own entry. Importance and tags are read from whatever content a row carries, timed or not; an untimed leg's projection drops content, so a source whose rows carry a triage declares a time field (the timed projection keeps content). The grid's Tags column shows them as `#reply #act` |
 | ⚙︎ settings menu (`MenuItemControl`, icon only) | `order`, `sources/{key}` | the order select — `InboxOrder.Newest` by default, everything by date as a mail client lists it; also oldest, by title, by source, and what needs you first (band rank) — and the same source switches with their names |
 | the grid's checkboxes | `inboxSelection` | the ticked row keys, read by Delete |
 
@@ -408,7 +417,17 @@ are what, from whom and when. A source with read state brings TWO legs — one s
 items (`InboxQueryLeg.Unread`), one the rest — so "unread" is decided by the query, never by
 reading content on the page: unread mail is "not `Read`", an unread notification is "not
 `isRead`". An unread row carries `rowClass: inbox-unread` and the grid applies it per row
-(`DataGridControl.WithRowClassProperty`), so it renders bold.
+(`DataGridControl.WithRowClassProperty`), so it renders bold. A LIVE source that answers read and
+unread items in one leg (a mailbox read from its provider) says so per item instead: a timed row
+reads `isRead`, `from` (the sender, shown in the From column — else the source's name) and
+`webLink` (an https address in the provider's own client) from its content.
+
+**A click on a row opens it** (`DataGridControl.WithClickAction` → `InboxLayoutArea.OpenTarget`):
+an item with a `webLink` opens there (a full page load — it leaves the portal), any other at its
+node's page. Ticking a box, and shift/cmd-clicks, are selection gestures the grid keeps to itself.
+The grid is paged (50 a page, the size selectable). A source without a symbol is toggled by a
+button that shows its NAME — never a single letter, which the icon renderer read as an icon name
+and drew as an empty button.
 
 **Reading never reorders.** A row is timed by its node's `LastModified` unless its source names a
 content property instead (`InboxQueryLeg.TimeField`, e.g. a conversation's last reply). Name one
@@ -440,6 +459,25 @@ target (`InboxItemOutcome.StepUp`). When the batch ends, the inbox sends the app
 covering every held decision (`StepUpPaths.StartUrl` with all targets — the endpoint already stamps
 a receipt per target), then back to the inbox. Each type's control plane consumes its own receipt
 and ratifies, and the request leaves the inbox once its type files it away.
+
+**Categories (policy `inbox-categories-by-kind`).** A side menu — the platform's one-choice
+control (`RadioGroupControl`), its value bound to the filter's `category` and its options fed with
+the live counts (`InboxLayoutArea.CategoryOptions`) — lists All, then each category with its symbol
+and count (unread when it has any, else all): Approvals, Mail, Conversations, Notifications,
+Activities. A source names its category (`InboxQueryLeg.Category` and
+`CategoryLabelKey`; WhatsApp, Teams, iMessage and portal chats share **Conversations**), else its
+source is its category. The picked category lives in the page's filter (`InboxFilter.Category`):
+it shows every item filed under it, even from a source switched off by default, and All leaves the
+source switches in charge. The counts are read before any filter applies
+(`InboxRows.CategoryCounts`).
+
+**Put away everything before a day.** The order is ALWAYS newest first (policy
+`inbox-newest-first`; `InboxFilter.Order` is no longer read and the settings menu offers no order). The search box also takes date bounds, `before:2026-10-01` (strictly
+before that day) and `after:2026-10-01` (that day or later), in UTC: they narrow the rows by their
+time (`InboxRows.SplitDates`), and only the remaining text goes to the sources. A bound that is not
+a date stays text and is searched for as written. Tick all, then press Delete, to put away
+everything in the range. It reaches the rows the page has read, each source's newest
+`InboxQueries.LegLimit`; the "capped" notice says when a source has more.
 
 The command row's Delete and Undo act on every ticked row; **Backspace or Delete presses Delete**
 (`ButtonControl.WithShortcut`) — never while typing in the search box.

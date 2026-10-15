@@ -352,6 +352,11 @@ public static class ReleaseGateEndpoints
                         || !Enum.IsDefined(m.Outcome) || m.Failures is null)
                     || verdict.Modules.Select(m => m.ModuleId).Distinct(StringComparer.OrdinalIgnoreCase)
                         .Count() != verdict.Modules.Count
+                    // Retired modules (#3848) are reported apart and never ALSO verified.
+                    || verdict.RetiredModules is null
+                    || verdict.RetiredModules.Any(r => r is null || string.IsNullOrWhiteSpace(r.ModuleId)
+                        || verdict.Modules.Any(m => string.Equals(m.ModuleId, r.ModuleId,
+                            StringComparison.OrdinalIgnoreCase)))
                     || (verdict.Verdict == ComboVerdictKind.Green
                         && (verdict.Modules.Count == 0 || string.IsNullOrWhiteSpace(verdict.ImageDigest)
                             || string.IsNullOrWhiteSpace(verdict.VerifiedPlatform)

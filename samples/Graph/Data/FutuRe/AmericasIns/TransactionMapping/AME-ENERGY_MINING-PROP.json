@@ -3,7 +3,6 @@
   "namespace": "FutuRe/AmericasIns/TransactionMapping",
   "name": "AmericasIns: Energy & Mining → Property (20%)",
   "nodeType": "FutuRe/TransactionMapping",
-  "isPersistent": true,
   "content": {
     "$type": "TransactionMapping",
     "id": "AME-ENERGY_MINING-PROP",

@@ -6,7 +6,6 @@
   "category": "Business Units",
   "description": "Americas primary insurance and reinsurance operations",
   "icon": "/api/content/FutuRe/AmericasIns/icon.svg",
-  "isPersistent": true,
   "content": {
     "$type": "BusinessUnit",
     "id": "AmericasIns",

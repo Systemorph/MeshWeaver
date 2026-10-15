@@ -672,9 +672,15 @@ public static partial class CatalogLayoutAreas
     /// package shipped before but not any more never merely survives because the incremental path
     /// declined to touch it.
     /// </summary>
+    /// <param name="proposeModuleSet">Whether this install closes its own module-landing wave by
+    /// proposing the module set (the default — a one-package install IS a wave, #3395). The default
+    /// install passes false: it lands the selection's modules ahead of content and proposes ONCE, at the
+    /// end of the pass, checked against every selected package's floors (policy
+    /// <c>default-install-modules-first</c>) — a per-package proposal in between would be checked
+    /// against the records alone and could publish a pre-landed module a later package's floor refuses.</param>
     internal static IObservable<InstallResult> InstallOrUpdate(
         IMessageHub hub, IPackageSource source, string sourceRef, PackageManifest pkg, ILogger? logger,
-        string? authorizingUserId = null)
+        string? authorizingUserId = null, bool proposeModuleSet = true)
     {
         // 🚨 WHERE this install comes from is the SOURCE's identity, never the manifest's: a listed
         // package.json may author any `origin` it likes, so it is overwritten here — on the one
@@ -705,7 +711,7 @@ public static partial class CatalogLayoutAreas
             // records onto unmet floors.
             .SelectMany(_ => HoldIfPlatformBelowFloor(hub, pkg, logger,
                 () => HoldIfADependencyIsBelowItsFloor(hub, pkg, logger,
-                    () => InstallOrUpdateCore(hub, source, sourceRef, pkg, logger, authorizingUserId))));
+                    () => InstallOrUpdateCore(hub, source, sourceRef, pkg, logger, authorizingUserId, proposeModuleSet))));
     }
 
     /// <summary>
@@ -825,7 +831,7 @@ public static partial class CatalogLayoutAreas
 
     private static IObservable<InstallResult> InstallOrUpdateCore(
         IMessageHub hub, IPackageSource source, string sourceRef, PackageManifest pkg, ILogger? logger,
-        string? authorizingUserId)
+        string? authorizingUserId, bool proposeModuleSet)
     {
         // The module branch of the install funnel (#1664 Slice C): a package that DECLARES a
         // compiled module routes its binary payload — AFTER the content lands — to bundle-fetch →
@@ -847,13 +853,19 @@ public static partial class CatalogLayoutAreas
                     // activation record it was derived from. Never fails the install: an
                     // unproposable set leaves the mesh on the one every replica already runs, and
                     // the next wave proposes again.
-                    .SelectMany(_ => ProposeMeshModuleSet(hub, logger))
+                    .SelectMany(_ => proposeModuleSet
+                        ? ProposeMeshModuleSet(hub, logger)
+                        : Observable.Return<ModuleSet?>(null))
                     .Select(_ => result));
 
+        // 🚨 MeshWeaver#3848 (decision "Record commit on install"): the record states the EXACT
+        // commit the source served (PackageFetch.InstalledFromRef), never the moving ref it was
+        // asked for — the combo verifier fetches the installed content at that commit. A source
+        // that names no commit records the requested ref, as before.
         IObservable<InstallResult> Full() =>
-            Verified(WithModule(source.FetchPackageFiles(pkg, sourceRef)
-                .SelectMany(files => PackageInstaller.Install(
-                    hub, pkg, files, sourceRef, logger,
+            Verified(WithModule(source.FetchPackage(pkg, sourceRef, null)
+                .SelectMany(fetched => PackageInstaller.Install(
+                    hub, pkg, fetched.Files, fetched.InstalledFromRef(sourceRef), logger,
                     authorizingUserId: authorizingUserId))));
 
         // 🚨 #2387 — EVERY WRITING EXIT IS READ BACK. The verdict that decides the severity is the
@@ -1339,13 +1351,15 @@ public static partial class CatalogLayoutAreas
                             pkg.Id, changedContent.Count, restore.Count,
                             delta.RemovedFiles.Count, changedModuleSources, newManifest.ModuleVersion);
 
-                        return (wanted.Count == 0
-                                ? Observable.Return((IReadOnlyList<PackageFile>)[])
-                                : source.FetchPackageFiles(pkg, sourceRef, wanted))
-                            .Do(fetched => EnsureFetchComplete(pkg.Id, wanted, fetched, logger))
-                            .SelectMany(changedFiles => PackageInstaller.InstallNodeRepoDelta(
-                                hub, pkg, newManifest, changedFiles, removedNodePaths, sourceRef,
-                                logger, authorizingUserId));
+                        // 🚨 Fetched even when nothing but removals travel (an empty `wanted`):
+                        // the read is what names the commit the updated record states
+                        // (MeshWeaver#3848); restamped without it, the record would state only the
+                        // moving ref again. An empty path set moves no file blobs.
+                        return source.FetchPackage(pkg, sourceRef, wanted)
+                            .Do(fetched => EnsureFetchComplete(pkg.Id, wanted, fetched.Files, logger))
+                            .SelectMany(fetched => PackageInstaller.InstallNodeRepoDelta(
+                                hub, pkg, newManifest, fetched.Files, removedNodePaths,
+                                fetched.InstalledFromRef(sourceRef), logger, authorizingUserId));
                     });
             });
     }

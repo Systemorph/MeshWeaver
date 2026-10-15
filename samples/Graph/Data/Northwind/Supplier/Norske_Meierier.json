@@ -6,7 +6,6 @@
   "category": "Suppliers",
   "description": "Norske Meierier - Sandvika, Norway",
   "icon": "/static/NodeTypeIcons/truck.svg",
-  "isPersistent": true,
   "content": {
     "$type": "SupplierContent",
     "supplierId": 15,

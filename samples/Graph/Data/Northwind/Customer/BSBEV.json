@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "B's Beverages - London, UK",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "BSBEV",

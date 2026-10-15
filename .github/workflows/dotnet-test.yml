@@ -2295,6 +2295,19 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/compile-check.py --self-test
 
+    # 🚨 A plain `git diff --name-only` C-QUOTES a non-ASCII path (`"…C\303\264te…"`), and a script
+    # that reads it verbatim holds a path that names no file — a refused selection
+    # (MeshWeaver.Plugins#3566), a module never selected, a `.cs` silently dropped from a scan. Every
+    # listing a script parses is read with `-z`; this ratchet keeps it so, over .github/scripts and
+    # scripts. Self-test first: it proves the quoting on real git output.
+    - name: "The git path-listing ratchet can fail (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/check-git-path-listings.py --self-test
+
+    - name: "Every git path listing a script parses is read NUL-delimited (-z)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/check-git-path-listings.py
+
     # 🚨 THE LOCAL LOOP, RUN WHERE ITS INPUT CHANGES (#4785). `run-node-tests.py` is the command
     # AGENTS.md tells an author to run before pushing, and it IMPORTS compile-check.py above. When
     # #4711 replaced the compile model and removed `usings_union`, the harness died with an
@@ -2331,6 +2344,14 @@ jobs:
     - name: "A core change rebuilds images only when it touches an image input (self-test)"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/core-image-relevance.py --self-test
+
+    # main-cd's push path delivers in BUILD-COMPLETION order, not commit order, so a parent can be
+    # handed to delivery after its child already published (CD #10796 → 6b9944c after #10795 →
+    # 04d56c7, 2026-10-14) and mint a higher version for older code. Proven both ways here: strictly
+    # behind ⇒ declined; ahead, same commit, diverged, identical, no set, unreadable compare ⇒ publish.
+    - name: "CD never publishes a commit older than the newest published set (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/cd-superseded.py --self-test
 
     # main-cd's tester leg stages the Razor generator per RID from the SDK FEED (not an MCR image
     # that lags a new SDK by hours and withheld the seal on the 10.0.402 release day). It runs on
@@ -2385,6 +2406,19 @@ jobs:
         set -euo pipefail
         python3 .github/scripts/check-node-path-collisions.py --tree src/MeshWeaver.Documentation/Data
         python3 .github/scripts/check-node-path-collisions.py --filesystem-layout --tree samples/Graph/Data
+
+    # A node file carrying a member MeshNode no longer has is a BUILD ERROR (#6638): GitSync's strict
+    # reader refuses the whole snapshot on one such file, and the platform stays strict, so the
+    # content is migrated, never the reader. The register is `.github/meshnode-fields.json`
+    # (MeshNodeFieldsRegisterTest keeps it equal to the type). Every node repo's validate lane
+    # fetches this guard and the register from here, so both are proven here; and core's own trees
+    # are held to it.
+    - name: "A node file carrying a retired MeshNode field is caught (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/check-retired-node-fields.py --self-test
+    - name: "No node file in core's trees carries a retired MeshNode field"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/check-retired-node-fields.py --tree src/MeshWeaver.Documentation/Data --tree samples/Graph/Data
 
     # The gate host every node-repo bake and gate RUNS AS since MeshWeaver#3022 — the portal's /app
     # with the tester CLI beside it (compose-gate-host.sh, fetched by the reusable lanes at their

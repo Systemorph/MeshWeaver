@@ -89,12 +89,19 @@ accepted for registration (`mwr_` vs `mwi_` — disjoint by shape).
 an empty (if authorized) catalog until an admin clicked Install on each package. Two keys close that,
 and they are independent:
 
-- **`PluginCatalog:InstallPreInstalledPackages`** (default **`true`**) reconciles the packages whose
-  manifest declares `PreInstalled` — the platform's own baseline (Agents, Skills, Essentials, …) — on
-  **every** boot, because that baseline is what the platform needs to function and what must survive
-  a self-update. On an up-to-date instance the content-identity gate turns it into one catalog
-  listing and no writes. It is also the only mechanism that can heal an instance whose baseline
-  partition was lost.
+- **`PluginCatalog:InstallPreInstalledPackages`** reconciles the packages whose manifest declares
+  `PreInstalled` — the platform's own baseline (Agents, Skills, Essentials, …) — on **every** boot,
+  because that baseline is what the platform needs to function and what must survive a self-update.
+  On an up-to-date instance the content-identity gate turns it into one catalog listing and no
+  writes. It is also the only mechanism that can heal an instance whose baseline partition was lost.
+  🚨 **Unset, it follows `InstallByDefault`:** it applies unless `InstallByDefault` declares an
+  **explicit set** — every entry `Source/Package`, none a whole source `Source/*`. A deployment that
+  names its packages gets exactly those and what they declare in `requires`; set the key `true` to
+  keep the baseline beside the set, `false` to suppress it everywhere (an explicit value always
+  wins) — policy `declared-package-set-is-exact`. Before that policy the baseline was added on top
+  of any set: a fresh control instance naming five packages selected **48** (measured 2026-10-13) — every `preInstalled` package of the registry — and on its closed
+  type set each one's in-mesh NodeTypes parked. See
+  [The bootstrap: modules first, then nodes](#the-bootstrap-modules-first-then-nodes).
 - **`PluginCatalog:InstallByDefault`** (default empty) *seeds* each matching package once. The pass
   runs on **every** boot and is gated **per package** by the default-install ledger
   (`Plugins/_DefaultInstallLedger`): a catalog entry matching the `Source/Package` patterns that the
@@ -124,6 +131,58 @@ and they are independent:
   boot: what THIS deployment always has, with a declared-but-disabled flag EXCLUDING what it names.
   🚨 Use this, not `InstallByDefault`, to ASSERT what a portal always has — the seed is
   ledger-gated, so it never re-installs a package it delivered once and an operator removed. Full treatment: [Environment Composition](/Doc/Architecture/EnvironmentComposition).
+
+### The bootstrap: modules first, then nodes
+
+**A mixed package's MODULE lands before ANY package's nodes are written** (policy
+`default-install-modules-first`) — phase 1 of the default install (`InstanceAutoRegistrationService.LandModulesFirst`), for every selected package that has no
+install record yet. Phase 2, the node install in dependency order, starts only once every module of
+the selection has been decided.
+
+The order is the fix for a cycle the store has with itself on an image that ships none of the
+modules it delivers (MeshWeaver.Plugins#2970 took them out of the images):
+
+| package | its nodes need | which only exists once |
+|---|---|---|
+| `Store` | `Skill` (a `Skill` node) | the `MeshWeaver.AI` module is loaded — `AI` delivers it |
+| `AI` | `Store/Plugin` (its root) | `Store`'s nodes are installed |
+| every other package | `Store/Plugin` (its root) | `Store`'s nodes are installed |
+
+The installer refuses a node whose NodeType is not registered (`PackageInstaller.ValidateBulkTypes`,
+"NodeType(s) not registered"), and a module used to land only after its own package's content had
+validated. So nothing could install first and no module ever reached the volume — measured on a fresh
+control instance, 2026-10-13: `Install of 'Store' failed: NodeType(s) not registered: Skill`,
+`Install of 'AI' failed: NodeType 'Store/Plugin' is not registered`, `0 installed, 0 up to date, 48
+failed`, `/data/modules` empty.
+
+A module's bytes depend on no node, so phase 1 lands them all (fetched from the registry, link-probed,
+written to `modules/`). A brand-new module is `NotHeld` in the running process and activates at the
+next restart after a proposed module set names it ([Live Module Update](/Doc/Architecture/LiveModuleUpdate));
+the pass proposes that set ONCE, at its end (checked, see below), and the landing raises the
+pending-restart marker the self-updater takes. The pass after that restart finds `Skill`/`Agent`
+registered and installs `Store` first — the declared `requires` already put it ahead of every package
+rooted on `Store/Plugin` — and the rest after it. The validation itself is unchanged: phase 2's
+failures in the first pass are recorded as FAILED with their cause and retried by the next pass.
+
+Phase 1 applies the gates the install funnel applies before a file travels — the entitlement (with
+the same deployment-config principal), licence acceptance and the declared parameters — and the
+partition-ownership hold (a candidate whose partition another writer keeps current is held by the node
+install and lands no module ahead either) — so a package the funnel would
+refuse lands no module ahead of that refusal; the platform floor is the adoption's own hold. An
+already-installed package keeps its module on the funnel (after its content, inside the floor and
+update-policy holds), so phase 1 never lands drift those holds gate. The pass proposes the module set ONCE, at its end —
+phase 2's per-package installs propose nothing (`InstallOrUpdate(…, proposeModuleSet: false)`) — checked
+against the install records AND the whole selection (`ModuleDependencyFloor.ProposeChecked` with the
+selection's manifests), so a fresh package's declared floor binds the set before its record exists; an
+enabled entry for a module of a carrier the phase could not clear blocks the proposal. The pass's summary line names
+what phase 1 landed: `MODULES LANDED ahead of content: […]`; a landed module loads at a restart only
+once a proposed module set names it, and the phase logs whether its proposal was written or refused.
+
+Pinned by `StoreBootstrapLandsModulesFirstTest` (a fresh mesh: the store's packages fail validation
+exactly as production did, every module of the selection lands, the selection is the declared set and
+its `requires`, never an unnamed `preInstalled` package) and `StoreBootstrapCompletesAfterTheRestartTest`
+(with `Skill` registered, one pass installs `Store`, then `AI`, then what requires it), both against
+an in-process registry serving the real wire shapes (`test/Memex.Portal.Shared.Test`).
 
 > 🚨 The selection is **source-scoped, and that is a security property, not a convenience**. An
 > instance is routinely granted the platform repo *and* paid course content; "install everything I'm

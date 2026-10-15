@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "Bon app' - Marseille, France",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "BONAP",

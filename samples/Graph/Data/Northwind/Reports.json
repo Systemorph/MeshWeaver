@@ -6,6 +6,5 @@
   "category": "Reports",
   "description": "Data-driven analytical reports on Northwind sales, orders, products, clients, and employees",
   "icon": "/api/content/Northwind/icons/reports.svg",
-  "displayOrder": 2,
-  "isPersistent": true
+  "order": 2
 }

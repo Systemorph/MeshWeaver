@@ -988,7 +988,11 @@ def read_base_tree(base: str) -> Surface:
     # ONE `git cat-file --batch` for the whole base tree rather than a `git show` per file: the
     # scanned set is ~1500 files, and a subprocess each turns a 2-second gate into a 25-second one.
     wanted: list[tuple[str, str]] = []
-    for line in _run(["git", "ls-tree", "-r", base]).splitlines():
+    # `-z`, split on NUL: a plain listing C-quotes a non-ASCII path ("src/…\303\264….cs"), which
+    # `_is_scanned` then skips — and a removal from that file would never reach the surface diff.
+    for line in _run(["git", "ls-tree", "-r", "-z", base]).split("\0"):
+        if not line:
+            continue
         meta, _, path = line.partition("\t")
         if not _is_scanned(path):
             continue
