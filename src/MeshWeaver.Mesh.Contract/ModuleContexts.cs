@@ -250,6 +250,15 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
     public IServiceProvider? ModuleScope(string module) =>
         Current(module)?.Services?.Scope(Root);
 
+    /// <summary>The scope of the generation <paramref name="services"/> belong to — a snapshot the caller
+    /// already took, so the scope and whatever else it reads off that snapshot are the SAME generation's —
+    /// or null once that generation's services are disposed (MeshWeaver#6766).</summary>
+    internal IServiceProvider? TryScopeOf(ModuleServices services) => services.TryScope(Root);
+
+    /// <summary>Registration <paramref name="index"/> of the generation <paramref name="services"/> belong
+    /// to — a snapshot the caller already took, never a second read of <see cref="Current"/>.</summary>
+    internal object ResolveIn(ModuleServices services, int index) => services.Resolve(Root, index);
+
     /// <summary>The current generations, with <paramref name="stage"/>'s generations in place of the
     /// current ones of the same name while it is open — what a STAGED generation's container sees.</summary>
     internal IReadOnlyCollection<ModuleGeneration> GenerationsSeenFrom(ModuleSwapStage? stage) =>
