@@ -142,6 +142,11 @@ public static class NodeTypeOperationalContent
         // declare its own build compatible.
         "adoptedModuleVersion",
         "currentModuleVersion",
+        // #6832 — WHY the record is in a delivery hold (the gate's named reason). Operational for
+        // the same reason compilationError is: an authored value would claim a hold this mesh
+        // never measured, and an authored null would erase the one readable trace of why a
+        // handled release request produced no build.
+        "deliveryHoldReason",
         "compiledFrameworkVersion",
         // The build's platform FLOOR/CEILING (policy platform-backwards-compatibility) — operational
         // for the same reason: they decide whether this process adopts the recorded build.

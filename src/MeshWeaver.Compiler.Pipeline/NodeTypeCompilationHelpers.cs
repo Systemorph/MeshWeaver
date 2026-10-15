@@ -1608,6 +1608,9 @@ internal static class NodeTypeCompilationHelpers
                               ?? System.Collections.Immutable.ImmutableDictionary
                                   .CreateRange(snapshot),
             RequestedSourceStampAt = null,
+            // #6832 — every verdict below either lifts a hold (adopted, verified or not), dispatches
+            // a compile, or re-states the hold with its own reason.
+            DeliveryHoldReason = null,
         };
 
         // ── #2813 — the three-way. ─────────────────────────────────────────────────────────────
@@ -1698,6 +1701,7 @@ internal static class NodeTypeCompilationHelpers
                 RequestedSourceStampAt = null,
                 BuildProvenance = BuildProvenance.StaleAdopted,
                 CompiledSources = null,
+                DeliveryHoldReason = null,
             };
             if (canCompileLocally)
                 return DispatchPending(serving, modulesHash, snapshot);
@@ -1713,6 +1717,8 @@ internal static class NodeTypeCompilationHelpers
                     CompilationError = null,
                     // #4469 — cleared wherever the error text is (Copilot review).
                     CompilationImportRefusals = null,
+                    // #6832 — the hold says why on the record, since an Ok record carries no error.
+                    DeliveryHoldReason = BuildDeliveryHold.ServingNotice(serving, RequirePrebuiltGateReason),
                 };
         }
 
@@ -1734,6 +1740,7 @@ internal static class NodeTypeCompilationHelpers
         {
             RequestedSourceStampAt = null,
             BuildProvenance = BuildProvenance.AdoptionRefused,
+            DeliveryHoldReason = null,
             // 🚨 CLEARED, not merely "not stamped". Seed does NOT clear CompiledSources, so a type
             // that had previously COMPILED here carries a snapshot matching CurrentSourceVersions
             // straight into the refusal — and IsDirty would read FALSE while BuildProvenance reads
@@ -1803,8 +1810,20 @@ internal static class NodeTypeCompilationHelpers
                 CompilationError = tooFarBehind
                     ? BuildDeliveryHold.TooFarBehindNotice(refused, maxMinorVersionsBehind)
                     : BuildDeliveryHold.IncompatibleNotice(refused),
+                // #6832 — the same sentence, in the one field a held record is read for, plus
+                // the gate that stops a replacement compile on this mesh (as the stale-but-serving
+                // branch names it): without it the reason says why the old build cannot run but
+                // not why no new one is built.
+                DeliveryHoldReason = tooFarBehind
+                    ? BuildDeliveryHold.TooFarBehindNotice(refused, maxMinorVersionsBehind, RequirePrebuiltGateReason)
+                    : BuildDeliveryHold.IncompatibleNotice(refused, RequirePrebuiltGateReason),
             };
     }
+
+    /// <summary>The gate a <c>Modules:RequirePrebuilt</c> hold names in its
+    /// <see cref="NodeTypeDefinition.DeliveryHoldReason"/> (#6832): why no replacement compile runs.</summary>
+    private static readonly string RequirePrebuiltGateReason =
+        PrebuiltAssemblySeeder.RequirePrebuiltConfigKey + "=true: this mesh does not compile module content";
 
     /// <summary>
     /// <see cref="ApplyAdoptedSourceStamp"/> plus the two things a pure function cannot do: resolve
@@ -4164,6 +4183,8 @@ internal static class NodeTypeCompilationHelpers
             // ApplyCompileFailure deliberately does NOT do this: after a failed compile the bytes
             // in place are still whatever the refusal left, so the refusal is still the true story.
             BuildProvenance = Mesh.Services.BuildProvenance.Compiled,
+            // #6832 — a build of the live source lifts any delivery hold, so its reason goes too.
+            DeliveryHoldReason = null,
             LastCompileSucceededAt = DateTimeOffset.UtcNow,
             // Stamp LastCompiledVersion to MATCH the version the IAssemblyStore upload used
             // (set by UploadToStoreIfNeeded — the captured node Version at compile kickoff).
