@@ -10,8 +10,17 @@ public partial class QueryParser
     private static readonly HashSet<string> ReservedQualifiers = new(StringComparer.OrdinalIgnoreCase)
     {
         "path", "namespace", "scope", "sort", "limit", "source", "select", "context", "is",
-        "partitions"
+        "partitions", BasePathQualifier
     };
+
+    /// <summary>
+    /// <c>basePath:X</c> — the query-text spelling of the search tools' <c>basePath</c> argument:
+    /// everything UNDER <c>X</c>, i.e. <c>namespace:X scope:descendants</c> unless the query states
+    /// its own <c>scope:</c>. It is reserved because the tools advertise the word: before it was,
+    /// an agent that wrote it into the query text got a FILTER on a <c>basePath</c> property no
+    /// node has, and a clean <c>count: 0</c> for nodes that exist (#6828).
+    /// </summary>
+    public const string BasePathQualifier = "basePath";
 
     /// <summary>
     /// Parses a GitHub-style query string into a ParsedQuery.
@@ -520,14 +529,30 @@ public partial class QueryParser
         bool? isMain = null;
         bool? isContent = null;
         var crossPartition = false;
+        // A positive `basePath:X` anchored the query: with no explicit scope it walks the
+        // DESCENDANTS of X, the same as the tools' basePath argument (#6828).
+        var basePathAnchored = false;
 
-        foreach (var token in tokens)
+        foreach (var original in tokens)
         {
+            // Location values are resolved BEFORE anything reads them: the `@` reference prefix
+            // comes off, and `basePath:` becomes the namespace anchor it means (#6828).
+            var token = ResolveLocationToken(original);
             if (token.Type == TokenType.TextSearch)
             {
                 textSearchParts.Add(token.Value);
                 continue;
             }
+
+            // Every POSITIVE single-location form: an equality, a one-value list `basePath:(X)`, and
+            // a wildcard `basePath:acme/*/Contacts` (a LIKE). A wildcard sets no concrete anchor,
+            // and the descendant scope still applies — it widens the pattern to the subtree, as
+            // `namespace:… scope:descendants` does. A multi-value list stays exact membership.
+            if (original.Condition is { } basePathCondition
+                && basePathCondition.Selector.Equals(BasePathQualifier, StringComparison.OrdinalIgnoreCase)
+                && (basePathCondition.Operator is QueryOperator.Equal or QueryOperator.Like
+                    || (basePathCondition.Operator is QueryOperator.In && basePathCondition.Values.Length == 1)))
+                basePathAnchored = true;
 
             if (token.Type == TokenType.Comparison && token.Condition != null)
             {
@@ -771,7 +796,14 @@ public partial class QueryParser
         // When namespace: is used without explicit scope, default to Children (exact namespace)
         // This makes namespace:X behave like "search items directly in folder X" (not recursive)
         // Use scope:descendants explicitly for recursive search
-        if (namespaceUsed && !explicitScope)
+        // `basePath:X` means the whole subtree under X, as the tools' basePath argument does — for a
+        // wildcard too, which sets no concrete anchor (namespaceUsed stays false) but is widened to
+        // the subtree below once the scope is known.
+        if (basePathAnchored && !explicitScope)
+        {
+            scope = QueryScope.Descendants;
+        }
+        else if (namespaceUsed && !explicitScope)
         {
             scope = QueryScope.Children;
         }
@@ -820,6 +852,54 @@ public partial class QueryParser
 
         var textSearch = textSearchParts.Count > 0 ? string.Join(" ", textSearchParts) : null;
         return (filterTokens, textSearch, path, scope, orderBy, limit, source, select, context, isMain, paths, isContent, crossPartition);
+    }
+
+    /// <summary>
+    /// Resolves a location token (<c>path:</c>, <c>namespace:</c>, <c>basePath:</c>) to the form
+    /// every executor compares against stored paths. Returns <paramref name="token"/> itself when
+    /// there is nothing to resolve.
+    ///
+    /// <para><b>The <c>@</c> reference prefix comes off</b> (#6828). <c>@X</c> / <c>@/X</c> is how a
+    /// path is written in markdown links, autocomplete and every tool argument, and the tools strip
+    /// it there (<c>MeshOperations.ResolvePath</c>). Written INTO the query text it was kept, so
+    /// <c>namespace:@acme name:"Jane Doe"</c> anchored at a partition literally named <c>@acme</c>
+    /// — no rows, no error, and a <c>count: 0</c> that read as "this person does not exist". No
+    /// mesh path segment begins with <c>@</c> (an address's partition may CONTAIN one, never lead
+    /// with one), so the strip cannot change what a well-formed query meant.</para>
+    ///
+    /// <para><b><c>basePath:</c> becomes <c>namespace:</c></b> with the same operator and values;
+    /// <see cref="ExtractReservedQualifiers"/> widens a positive one to the descendants.</para>
+    /// </summary>
+    private static Token ResolveLocationToken(Token token)
+    {
+        if (token.Type != TokenType.Comparison || token.Condition is not { } condition)
+            return token;
+        var isBasePath = condition.Selector.Equals(BasePathQualifier, StringComparison.OrdinalIgnoreCase);
+        if (!isBasePath
+            && !condition.Selector.Equals("path", StringComparison.OrdinalIgnoreCase)
+            && !condition.Selector.Equals("namespace", StringComparison.OrdinalIgnoreCase))
+            return token;
+        if (!isBasePath && !condition.Values.Any(v => v.StartsWith('@')))
+            return token;
+        return token with
+        {
+            Condition = condition with
+            {
+                Selector = isBasePath ? "namespace" : condition.Selector,
+                Values = condition.Values.Select(StripReferencePrefix).ToArray(),
+            },
+        };
+    }
+
+    /// <summary>
+    /// Strips the <c>@</c> reference prefix from one location value: <c>@acme/x</c> and
+    /// <c>@/acme/x</c> are both <c>acme/x</c>. A value without the prefix is returned unchanged.
+    /// </summary>
+    private static string StripReferencePrefix(string value)
+    {
+        if (string.IsNullOrEmpty(value) || value[0] != '@')
+            return value;
+        return value[1..].TrimStart('/');
     }
 
     /// <summary>

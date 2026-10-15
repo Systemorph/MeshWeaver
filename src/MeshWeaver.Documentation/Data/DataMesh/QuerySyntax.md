@@ -314,6 +314,34 @@ path:foo/bar/baz scope:ancestorsandself sort:length(path)-desc limit:1
 
 `scope:ancestorsandself` expands the candidate set to self and ancestors; `sort:length(path)-desc limit:1` collapses it to the deepest match. Both clauses are required. Callers that want the full ancestor chain (breadcrumbs, parent navigation) simply omit `limit:1`.
 
+### `basePath`, and the `@` reference prefix
+
+`basePath:X` is the query-text spelling of the search tools' `basePath` argument: everything
+**under** `X` — `namespace:X scope:descendants`, unless the query states its own `scope:`. That
+holds for every positive single-location form: a one-value list `basePath:(@acme)` is the same as
+`basePath:@acme`, and a wildcard `basePath:acme/*/Contacts` is `namespace:acme/*/Contacts
+scope:descendants` (the pattern and everything below it). A multi-value list `basePath:A|B` stays
+exact membership, as `namespace:A|B` does.
+
+A location value may carry the `@` reference prefix that tool arguments, markdown links and
+autocomplete use; it is resolved before the query runs, so these three are the same query:
+
+```
+name:"Jane Doe" basePath:@acme
+namespace:@acme scope:descendants name:"Jane Doe"
+namespace:acme scope:descendants name:"Jane Doe"
+```
+
+This applies to `path:`, `namespace:` and `basePath:` values (each alternative of `path:@a|@b`
+too). Only a LEADING `@` is a prefix — a partition named after an address
+(`namespace:jane@example.com`) keeps its `@`. Before #6828 the prefix was kept, so `namespace:@acme`
+anchored at a partition literally called `@acme`, and `basePath:` was not a qualifier but a filter
+on a property no node has: both answered `count: 0` for nodes that exist.
+
+`name:` itself is a case-insensitive **exact** match on the node's `Name`, quoted multi-word
+values included (`name:"Jane Doe"` matches `jane doe`, not `Jane Q. Doe`); use `name:*Doe*` for a
+contains-match.
+
 ### `partitions` — say where to look
 
 Every partition is its own store. A query that names no partition (`path:`/`namespace:` with a
