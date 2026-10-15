@@ -59,6 +59,33 @@
     <EmbeddedResource Include="platform-compatibility.json" LogicalName="MeshWeaver.Compiler.platform-compatibility.json" />
   </ItemGroup>
 
+  <!-- 🚨 COMPILE SURFACES. In-mesh C# compiles against the host's IMPLEMENTATION assemblies (TPA),
+       never against reference assemblies — and a package may keep members in its lib/ for binary
+       compatibility that its ref/ hides from every compile. System.Interactive is the measured
+       case: lib/ keeps EnumerableEx.MaxBy/MinBy in namespace System.Linq, ref/ drops them for
+       net6+, so every NodeType calling the BCL's Enumerable.MaxBy hit CS0121 while no src/ project
+       could (an enterprise client portal, 2026-10-15). The REFERENCE assembly each listed package
+       contributes to THIS project's compile is embedded, and CompileReferences.HostReference
+       compiles against it in place of the same-identity host file. A listed package that
+       contributes no reference assembly fails the build: the list must never go quietly stale. -->
+  <ItemGroup>
+    <CompileSurfacePackage Include="System.Interactive" />
+  </ItemGroup>
+
+  <Target Name="EmbedPackageCompileSurfaces" AfterTargets="ResolveAssemblyReferences">
+    <PropertyGroup>
+      <_MwCompileSurfacePackages>;@(CompileSurfacePackage);</_MwCompileSurfacePackages>
+    </PropertyGroup>
+    <ItemGroup>
+      <_MwCompileSurfaceKept Include="@(ReferencePath)"
+                             Condition="'%(ReferencePath.NuGetPackageId)' != '' and '%(ReferencePath.Extension)' == '.dll' and $(_MwCompileSurfacePackages.Contains(';%(ReferencePath.NuGetPackageId);'))" />
+      <EmbeddedResource Include="@(_MwCompileSurfaceKept)"
+                        LogicalName="MeshWeaver.Compiler.CompileSurface.%(Filename)%(Extension)" />
+    </ItemGroup>
+    <Error Condition="'@(_MwCompileSurfaceKept->Count())' != '@(CompileSurfacePackage->Count())'"
+           Text="Compile surfaces: expected a reference assembly from each of '@(CompileSurfacePackage)', found '@(_MwCompileSurfaceKept->'%(Filename)')'. A listed package no longer reaches this project's compile — drop it from CompileSurfacePackage or restore the dependency." />
+  </Target>
+
   <ItemGroup>
     <ProjectReference Include="..\MeshWeaver.ContentCollections\MeshWeaver.ContentCollections.csproj" />
     <ProjectReference Include="..\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
