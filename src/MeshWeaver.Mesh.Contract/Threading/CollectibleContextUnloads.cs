@@ -60,6 +60,13 @@ public sealed class CollectibleContextUnloads
     /// </summary>
     public int Pending => pending.Values.Count(r => !r.IsCollected);
 
+    /// <summary>
+    /// How many contexts were EVER retired on this tracker — monotone. A collected context leaves the
+    /// map, so <see cref="Pending"/> alone cannot tell "nothing was retired" from "everything retired
+    /// was already collected" (by a collection somebody else drove); this can.
+    /// </summary>
+    public long Retirements => Interlocked.Read(ref sequence);
+
     /// <summary>Names of the retired contexts not yet collected — for a retention report.</summary>
     public IReadOnlyList<string> PendingContextNames =>
         pending.Values.Where(r => !r.IsCollected).Select(r => r.ContextName).ToArray();
