@@ -134,8 +134,9 @@ public sealed record ActivationRecycleRetention
 
         if (bool.TryParse(configuration[EnabledConfigKey], out var enabled))
             retention = retention with { Enabled = enabled };
-        if (TimeSpan.TryParse(configuration[MaxAgeConfigKey], System.Globalization.CultureInfo.InvariantCulture, out var maxAge)
-            && maxAge > TimeSpan.Zero)
+        // Every PARSED span is clamped, zero and negative included: only an absent or unparseable
+        // value falls back to the default.
+        if (TimeSpan.TryParse(configuration[MaxAgeConfigKey], System.Globalization.CultureInfo.InvariantCulture, out var maxAge))
             retention = retention with { MaxAge = maxAge < MinimumMaxAge ? MinimumMaxAge : maxAge };
         if (int.TryParse(configuration[MaxDeletionsPerRunConfigKey], out var max) && max >= 1)
             retention = retention with { MaxDeletionsPerRun = max };

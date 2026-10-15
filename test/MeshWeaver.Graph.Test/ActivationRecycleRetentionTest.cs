@@ -146,6 +146,10 @@ public class ActivationRecycleRetentionTest(ITestOutputHelper output) : Monolith
 
         ActivationRecycleRetention.FromConfiguration(Config("00:00:01")).MaxAge
             .Should().Be(ActivationRecycleRetention.MinimumMaxAge);
+        ActivationRecycleRetention.FromConfiguration(Config("00:00:00")).MaxAge
+            .Should().Be(ActivationRecycleRetention.MinimumMaxAge, "a parsed zero is below the floor, not malformed");
+        ActivationRecycleRetention.FromConfiguration(Config("-1.00:00:00")).MaxAge
+            .Should().Be(ActivationRecycleRetention.MinimumMaxAge, "a parsed negative span is below the floor, not malformed");
         ActivationRecycleRetention.FromConfiguration(Config("not-a-span")).MaxAge
             .Should().Be(ActivationRecycleRetention.Default.MaxAge);
         ActivationRecycleRetention.FromConfiguration(Config("7.00:00:00")).MaxAge

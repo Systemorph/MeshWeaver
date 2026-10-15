@@ -227,7 +227,7 @@ bound NodeType is T"* (optionally narrowed to some addresses, or to the activati
   | Key | Default | Meaning |
   |---|---|---|
   | `ActivationRecycle:Retention:Enabled` | `true` | `false` turns the prune off (no query is issued) |
-  | `ActivationRecycle:Retention:MaxAge` | `30.00:00:00` | a request untouched for this long is removed with its reports; a configured value below one day is clamped to one day |
+  | `ActivationRecycle:Retention:MaxAge` | `30.00:00:00` | a request untouched for this long is removed with its reports; a configured value below one day — zero and negative included — is clamped to one day; only an absent or unparseable value keeps the default |
   | `ActivationRecycle:Retention:MaxDeletionsPerRun` | `50` | the most requests one prune removes, so a backlog drains over several requests |
 
   Thirty days is long enough that the audit of a recent deploy or incident is still there when it
@@ -242,7 +242,8 @@ bound NodeType is T"* (optionally narrowed to some addresses, or to the activati
   on it bounds them. The request just written is never pruned. The decision is fail-closed: a row
   that is undated, not a request, or not directly under `Admin/_Recycle` is kept. A failed listing
   or delete costs that prune only. It is logged, and the next request retries; the caller's ticket
-  never depends on it.
+  never depends on it — nor waits for it: the prune is a subscription of its own, started once the
+  request is committed, so the ticket is answered as soon as the write lands.
 
 The request is a platform write. On the control instance it is issued by the build queue as System:
 the `recycle` job kind (MeshWeaver.Plugins, `Hosting/Queue`) runs it, either when a NodeType of the

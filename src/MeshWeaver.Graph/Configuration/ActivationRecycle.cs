@@ -234,15 +234,32 @@ public static class ActivationRecycle
                 };
                 // The id is the dedupe key: an existing request is the answer, never a second write.
                 // A NEW request is the moment the rows grow, so it is also when the expired ones go
-                // (ActivationRecycleRetention): the writer prunes, no timer does.
+                // (ActivationRecycleRetention): the writer prunes, no timer does. The prune is its
+                // OWN subscription, started once the request is committed: the ticket is answered
+                // the moment the write lands and never waits for the listing or the deletes.
                 return Exists().SelectMany(there => there
                     ? Observable.Return(new ActivationRecycleTicket(path, null))
                     : access.RunAsSystem(() => mesh.CreateNode(node).Take(1))
-                        .SelectMany(_ => Prune(hub, hub.ServiceProvider.GetRequiredService<ActivationRecycleRetention>(),
-                                DateTimeOffset.UtcNow, path)
-                            .Select(_ => new ActivationRecycleTicket(path, null))));
+                        .Do(_ => StartPrune(hub, path))
+                        .Select(_ => new ActivationRecycleTicket(path, null)));
             })
             .Take(1);
+    }
+
+    /// <summary>
+    /// Starts the prune that follows a newly committed request as a subscription of its own, so the
+    /// request's ticket never waits for it. <see cref="Prune"/> already maps every fault to a logged
+    /// zero; the error handler here is the backstop for anything that escapes it.
+    /// </summary>
+    private static void StartPrune(IMessageHub hub, string keepPath)
+    {
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(ActivationRecycle));
+        Prune(hub, hub.ServiceProvider.GetRequiredService<ActivationRecycleRetention>(), DateTimeOffset.UtcNow, keepPath)
+            .Subscribe(
+                _ => { },
+                ex => logger?.LogWarning(ex,
+                    "[ActivationRecycle] retention: the prune after {Path} faulted; expired requests stay until the next request prunes them",
+                    keepPath));
     }
 
     /// <summary>
