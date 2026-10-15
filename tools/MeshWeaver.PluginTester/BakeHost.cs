@@ -248,7 +248,9 @@ internal sealed class BakeHost
             }
             if (!seen.Add(path))
                 continue;
-            references.Add(MetadataReference.CreateFromFile(path));
+            // The same per-assembly choice the portal's runtime compile makes (a package's
+            // reference assembly over its implementation where the toolchain carries one).
+            references.Add(CompileReferences.HostReference(path));
             if (path.StartsWith(app, StringComparison.Ordinal))
                 fromApp++;
             else

@@ -1611,10 +1611,14 @@ internal class MeshNodeCompilationService(
         // the generator doesn't emit #r — but handle them for forward-compatibility.)
         var allNugetRefs = new List<NuGetPackageReference>(skeletonNugetRefs);
         var strippedSources = new List<(string Path, string Code, long LastModifiedTicks)>(resolvedPairs.Count);
+        var sourceNugetRefs = ImmutableDictionary.CreateBuilder<string, ImmutableArray<NuGetPackageReference>>(
+            StringComparer.OrdinalIgnoreCase);
         foreach (var p in resolvedPairs)
         {
             var (stripped, refs) = NuGetDirectiveParser.Extract(p.Config.Code ?? string.Empty);
             allNugetRefs.AddRange(refs);
+            if (refs.Length > 0)
+                sourceNugetRefs[p.Path] = [.. refs];
             strippedSources.Add((p.Path, stripped, p.LastModifiedTicks));
         }
 
@@ -1632,8 +1636,10 @@ internal class MeshNodeCompilationService(
         IObservable<ImmutableArray<MetadataReference>> referencesObs =
             allNugetRefs.Count > 0
                 ? _ioPool.Run(ct => nugetResolver.ResolveAsync(allNugetRefs, targetFramework: null, ct))
-                    .Select(resolved => References
-                        .Concat(resolved.AssemblyPaths.Select(p => (MetadataReference)MetadataReference.CreateFromFile(p)))
+                    // One assembly per name (CompileReferences.WithPackageAssemblies) — the same
+                    // composition as the emit path, so diagnostics agree with the compile.
+                    .Select(resolved => CompileReferences
+                        .WithPackageAssemblies(References, resolved.AssemblyPaths)
                         .ToImmutableArray())
                 : Observable.Return(References.ToImmutableArray());
 
@@ -1666,7 +1672,14 @@ internal class MeshNodeCompilationService(
                 References: references,
                 ParseOptions: parseOptions,
                 CompilationOptions: compilationOptions,
-                SourceVersions: versions);
+                SourceVersions: versions)
+            {
+                // What a speculative compile rebuilds the package half from — never `references`,
+                // which already holds this source set's package closure.
+                HostReferences = [.. References],
+                SkeletonNuGetReferences = [.. skeletonNugetRefs],
+                SourceNuGetReferences = sourceNugetRefs.ToImmutable(),
+            };
         });
     }
 
@@ -1941,7 +1954,7 @@ internal class MeshNodeCompilationService(
             EmitPipeline.OptionsFingerprint,
             GeneratedInputIdentity.CompilerIdentity,
             GeneratedInputIdentity.AssemblyFileIdentities(
-                GeneratorPipeline.EffectiveGeneratorPaths(nugetAssemblyPaths)));
+                GeneratorPipeline.DigestedGeneratorPaths(nugetAssemblyPaths)));
 
     /// <summary>
     /// 🚨 THE RE-EVALUATION LANE's regeneration entry point (#1976): the stage-1 CONTENT-KEY
@@ -2094,8 +2107,12 @@ internal class MeshNodeCompilationService(
         if (nugetRefs.Length > 0)
         {
             var resolved = await nugetResolver.ResolveAsync(nugetRefs, targetFramework: null, ct);
-            references = References.Concat(
-                resolved.AssemblyPaths.Select(p => MetadataReference.CreateFromFile(p)));
+            // One assembly per name, the copy the load context binds at run time: a closure assembly
+            // the host set already provides (System.Text.Json,
+            // Microsoft.Extensions.DependencyInjection.Abstractions, …) is not referenced a second
+            // time — CompileReferences.WithPackageAssemblies. The generator candidates and the
+            // content key keep the full resolution, exactly as the bake does.
+            references = CompileReferences.WithPackageAssemblies(References, resolved.AssemblyPaths);
             nugetAssemblyPaths = resolved.AssemblyPaths;
             cacheService.RegisterProbingDirectories(nodeName, resolved.ProbingDirectories);
         }
