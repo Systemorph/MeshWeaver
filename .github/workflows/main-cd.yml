@@ -3652,6 +3652,43 @@ jobs:
   # emits the same platform-build fact for the promoted tag and nothing else: in-mesh source
   # compiles against the IMAGE, never against a package feed (NuGet publication is retired).
 
+  # ────────────────── THE `memex` CLI ON nuget.org FOLLOWS `3-latest` ──────────────────
+  # Maintainer, 2026-10-15: the CLI is published again, at the version the fleet runs — "and
+  # 3latest?". So whenever `arm` actually ARMS a set (the one event that moves `3-latest`), the
+  # CLI of that set is published as the armed `3.<minor>.<run>`, packed from the armed core commit.
+  # It is a DISPATCH of publish-packages.yml, never a pack here: nuget.org's Trusted Publishing
+  # policy names that workflow FILE, and a nupkg built in this job would be pushed under an
+  # identity the policy does not know. `actions: write` is the least grant that dispatches; the job
+  # holds no other right and no secret. A set superseded while the dispatch queued still publishes
+  # its own version: nuget.org orders 3.<minor>.<run> by run, so the newest arming stays the
+  # highest stable, and an older version on the feed is harmless. A failed dispatch is RED and is
+  # NOT a delivery need (the platform rolled already; `delivery-verdict` judges the platform only).
+  publish-cli:
+    name: "Publish the memex CLI of the armed set to nuget.org"
+    needs: [preflight, arm]
+    if: always() && needs.preflight.result == 'success' && needs.arm.outputs.armed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write    # `gh workflow run publish-packages.yml` — nothing else
+    steps:
+      - name: Dispatch publish-packages.yml (packages=cli) for the armed version and commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          V: ${{ needs.arm.outputs.version }}
+          SHA: ${{ needs.arm.outputs.core_sha }}
+        run: |
+          set -euo pipefail
+          [ -n "$V" ] && [ -n "$SHA" ] || { echo "::error::arm armed a set but reported no version ('$V') or core commit ('$SHA') — nothing to publish on no evidence"; exit 1; }
+          # The publish lane refuses anything but a clean X.Y.Z; refuse here too, by name, so a
+          # retired `3.0.0-ci.N` arming says why it publishes no CLI rather than failing over there.
+          case "$V" in
+            *[!0-9.]*) echo "::notice::$V is not a SemVer-era version — the CLI is published only as 3.<minor>.<run>"; exit 0 ;;
+          esac
+          gh workflow run publish-packages.yml --repo "$GITHUB_REPOSITORY" --ref main \
+            -f version="$V" -f ref="$SHA" -f packages=cli
+          echo "- memex CLI: publish-packages.yml dispatched for \`MeshWeaver.Cli $V\` from \`$SHA\`" >> "$GITHUB_STEP_SUMMARY"
+
   # ────────────────── NOTIFY THE PLATFORM-UPDATE AGENT (required) ──────────────────
   # After the release is ARMED (`arm`'s phase C — policy `one-promotion-gate`), tell the control instance's mesh that a new
   # platform build exists: one signed POST to the WebhookInbox target the Hosting plugin watches

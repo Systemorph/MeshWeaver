@@ -12,8 +12,9 @@ namespace MeshWeaver.Graph.Test;
 /// <summary>
 /// What this repository still publishes to nuget.org, and the README every package needs.
 ///
-/// <para>Two assertions, one subject. <b>The set</b>: exactly one project here packs —
-/// <c>memex/aspire/Memex.Aspire.Hosting</c> (<c>MeshWeaver.Aspire.Hosting.Memex</c>). Everything
+/// <para>Two assertions, one subject. <b>The set</b>: exactly two projects here pack —
+/// <c>memex/aspire/Memex.Aspire.Hosting</c> (<c>MeshWeaver.Aspire.Hosting.Memex</c>) and
+/// <c>src/MeshWeaver.Cli</c> (<c>MeshWeaver.Cli</c>, restored 2026-10-15). Everything
 /// else under the MeshWeaver prefix was retired on 2026-09-07 and the packages unlisted
 /// (<c>Doc/Architecture/NuGetPackageRetirement</c>); the second survivor,
 /// <c>MeshWeaver.MemexTemplate</c>, lives in MeshWeaver.Plugins and is out of this tree's reach.
@@ -36,10 +37,13 @@ namespace MeshWeaver.Graph.Test;
 /// </summary>
 public class PackableProjectReadmeTest
 {
-    /// <summary>The one project in this repository that still produces a NuGet package.</summary>
+    /// <summary>The projects in this repository that still produce a NuGet package: the Aspire
+    /// integration (release tags) and the <c>memex</c> CLI (every arming, following <c>3-latest</c> —
+    /// maintainer, 2026-10-15).</summary>
     private static readonly string[] ExpectedPackableProjects =
     [
         Path.Combine("memex", "aspire", "Memex.Aspire.Hosting", "Memex.Aspire.Hosting.csproj"),
+        Path.Combine("src", "MeshWeaver.Cli", "MeshWeaver.Cli.csproj"),
     ];
 
     [Fact]
@@ -64,7 +68,7 @@ public class PackableProjectReadmeTest
             .ToList();
 
         relative.Should().Equal(ExpectedPackableProjects,
-            "exactly one project here still publishes to nuget.org (Doc/Architecture/"
+            "exactly these projects still publish to nuget.org (Doc/Architecture/"
             + "NuGetPackageRetirement). A project appearing in this list has regained packability: "
             + "it will be packed by publish-packages.yml AND it will spare its retired package from "
             + "the unlist sweep, both silently. A project MISSING from it stops being published.");
