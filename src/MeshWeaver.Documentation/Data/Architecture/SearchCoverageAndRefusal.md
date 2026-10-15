@@ -178,6 +178,34 @@ an empty list from one provider must not vouch for partitions another provider n
 `basePath` now becomes `namespace:{base} scope:descendants` unless the query states its own
 `scope:`. "Search from here" means the subtree.
 
+### `basePath` never rewrites the query's own location
+
+A query that names its own location (`path:`, `namespace:`, a membership or wildcard namespace)
+**keeps** it when that location lies at or under the base — it is the narrower statement — and is
+**refused**, naming both, when it lies outside: no answer can honour both. Only a query that names
+no location of its own (an exclusion like `-namespace:X` is a filter, not a location; an empty
+`namespace:` names nothing) is scoped by the base.
+
+Three edges keep that honest:
+
+- **A location must bound the WHOLE query.** `namespace:<base>/* OR nodeType:Markdown` names a
+  location under the base in its left branch only; the right branch would read everywhere, so the
+  query is refused. The test is the sufficiency predicate itself (an anchor, or a namespace filter
+  on every `OR` branch), with `partitions:all` set aside.
+- **A multi-value exclusion is a filter too.** The parser emits `-namespace:A|B` (and
+  `-namespace:(A OR B)`) as a `namespace NotIn (…)` filter and leaves the anchor and scope alone; it
+  used to defer it with the positive alternation, which cleared the anchor — so the composed query
+  lost `namespace:<base>` and was refused as unanchored, or answered from outside the base.
+- **The rest of the text is kept verbatim.** Dropping an empty `namespace:` is quote-aware: a
+  split-and-rejoin collapsed the spaces in `name:"Jane  Q Example"` and dropped a `namespace:`
+  written inside a quoted value.
+
+Before #6828 the tool deleted every `namespace:` from the text before prefixing the base, so
+`namespace:<space B> name:"…"` under `basePath: @<space A>` became the FREE-TEXT term `<space B>`
+read inside A — a semantic search flooded with whatever mentioned the words, reporting
+`coverage.partitions: ["<space A>"]` for a query that named B — and `-namespace:X` became a search
+FOR X. The coverage was honest about where it read; the composition was wrong about where to read.
+
 ## Reading a zero — how to state the denominator
 
 The pre-deploy NodeType sweep is now written in the declared form, and its zero is stated against
