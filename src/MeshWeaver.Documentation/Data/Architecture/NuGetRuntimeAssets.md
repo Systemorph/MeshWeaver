@@ -102,6 +102,56 @@ shared global cache. Two sessions that resolve the SAME managed package version 
 of its native dependency therefore share the first binding. Only a NodeType's own collectible context
 isolates fully (its natives are loaded through, and released with, that context).
 
+## Compile references: the host wins
+
+Host unification decides what LOADS; the compile has to agree with it. Measured on
+an enterprise client portal (platform 3.1.10932) on 2026-10-15: a client NodeType declares
+`#r "nuget: Microsoft.Data.SqlClient, 6.1.1"` and failed to compile with `CS0433` (`JsonElement` in
+both System.Text.Json 10 and 9), `CS0121` (`GetRequiredService<T>` in both copies of
+Microsoft.Extensions.DependencyInjection.Abstractions), `CS0121` on `Enumerable.MaxBy`, a cascade of
+inference errors and hundreds of `CS1701`s. Three defects, three rules:
+
+1. **One assembly per name — the copy that will run.** Every compile path — the bake
+   (`NodeSetCompiler.Compile`), the runtime compile and its language-service inputs
+   (`MeshNodeCompilationService`), the speculative compile, the script compile and the kernel — composes
+   its references through `CompileReferences.WithPackageAssemblies`, which applies the load context's
+   own binding rule (host unification, above) to every name the package closure and the host set
+   (TPA or the container's `/app` + shared frameworks, plus modules) both hold: same identity with the
+   host equal or newer → the host's reference, the package copy dropped; same identity with the
+   package newer → the package's copy REPLACES the host's (the NodeType load context loads it in
+   isolation — the kernel and the node-config script, which bind through the DEFAULT context and
+   cannot load a second version, keep the host's: `packagesLoadInIsolation: false`);
+   a different identity (another publisher's key) → both kept. Names the host lacks are added; a name
+   appearing twice in the closure keeps its first path. Pure and order-preserving, so the bake and
+   the runtime agree for the same host; the generator candidates and the stage-1 content key
+   (`GeneratedInputDigestOf`) keep the FULL resolution. A speculative compile rebuilds the package half
+   from the EFFECTIVE sources' directives onto the recorded host set
+   (`CompilationInputs.HostReferences`), so a proposed body that changes a package version is checked
+   against the version it pins.
+2. **Generator discovery loads only assemblies that can hold a generator.** `SourceGeneratorLoader`
+   used to `Assembly.LoadFrom` every `#r` assembly into the default context to look for `[Generator]`
+   types — including SqlClient's `lib/` stub, which the NodeType context then unified with as if the
+   host shipped it (rule 1 of host unification), so `new SqlConnection` threw
+   `PlatformNotSupportedException` even with the `runtimes/` asset selected. It now reads the
+   metadata first and loads only an assembly that references `Microsoft.CodeAnalysis` — plus that
+   generator's own dependency closure among the candidates (a helper package its type derives from),
+   dependencies first, skipping what the host ships, each from its package's RUNTIME asset
+   (`runtimes/<rid>/lib/` where shipped) and recursing over that runtime image's references. The
+   content key hashes those runtime assets too (`GeneratorPipeline.DigestedGeneratorPaths`), so two
+   runtime helpers behind one compile stub never share a key.
+   An installed MODULE counts as host-shipped too: the NodeType context binds a module that satisfies
+   the requested version AHEAD of a package's copy of the same name, matching the compile's choice.
+3. **A package's reference assembly is the compile surface where the toolchain carries one.** In-mesh
+   C# compiles against the host's implementation assemblies, and System.Interactive's implementation
+   keeps `EnumerableEx.MaxBy`/`MinBy` (namespace `System.Linq`) for binary compatibility while its
+   reference assembly hides them from every net6+ compile — so the BCL's `Enumerable.MaxBy` was
+   ambiguous in every NodeType, `#r` or not. `MeshWeaver.Compiler` embeds the `ref/` assembly of each
+   `CompileSurfacePackage` (the build fails if one stops reaching its compile), and
+   `CompileReferences.HostReference` compiles against it in place of the host file of the SAME identity
+   (name, version, public key token), materialised as a content-addressed file holding exactly those
+   bytes (so the emit-failure capture rereads the image Roslyn used); a host carrying another build
+   keeps its own file.
+
 ## What pins it
 
 - `NuGetRuntimeAssetTest` (offline): RID chains; the SqlClient layout selects `runtimes/unix` on
@@ -114,6 +164,12 @@ isolates fully (its natives are loaded through, and released with, that context)
   `Authentication=Active Directory Managed Identity` and `Active Directory Default` (no server contacted), asserts the loaded client
   is the `runtimes/` asset, and asserts nothing the host ships at an equal-or-newer version was loaded
   a second time.
+- `NuGetPackageHostWinsTest` (live feed, skips when unreachable): the client NodeType's shape —
+  `#r "nuget: Microsoft.Data.SqlClient, 6.1.1"` with `JsonElement`/`JsonObject`,
+  `GetRequiredService<T>`, `MaxBy` and a `SqlConnection` — compiled through the bake AND the runtime
+  compile service, then RUN: the emitted image references the host's System.Text.Json and
+  DependencyInjection.Abstractions, SqlClient loads from `runtimes/`, and the default context never
+  holds a package's compile asset. Its offline case compiles `Enumerable.MaxBy` against the host set.
 
 ## Related
 
