@@ -178,6 +178,20 @@ an empty list from one provider must not vouch for partitions another provider n
 `basePath` now becomes `namespace:{base} scope:descendants` unless the query states its own
 `scope:`. "Search from here" means the subtree.
 
+### `basePath` never rewrites the query's own location
+
+A query that names its own location (`path:`, `namespace:`, a membership or wildcard namespace)
+**keeps** it when that location lies at or under the base — it is the narrower statement — and is
+**refused**, naming both, when it lies outside: no answer can honour both. Only a query that names
+no location of its own (an exclusion like `-namespace:X` is a filter, not a location; an empty
+`namespace:` names nothing) is scoped by the base.
+
+Before #6828 the tool deleted every `namespace:` from the text before prefixing the base, so
+`namespace:<space B> name:"…"` under `basePath: @<space A>` became the FREE-TEXT term `<space B>`
+read inside A — a semantic search flooded with whatever mentioned the words, reporting
+`coverage.partitions: ["<space A>"]` for a query that named B — and `-namespace:X` became a search
+FOR X. The coverage was honest about where it read; the composition was wrong about where to read.
+
 ## Reading a zero — how to state the denominator
 
 The pre-deploy NodeType sweep is now written in the declared form, and its zero is stated against
