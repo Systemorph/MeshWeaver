@@ -889,7 +889,12 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
         // version it binds AHEAD of a package's (older) copy of the same name — exactly the choice
         // the compile made (CompileReferences.WithPackageAssemblies keeps the host set's module
         // reference unless the package's copy is newer).
+        // Only a module of the SAME identity (culture, public key token) — a same-named assembly of
+        // another publisher is a different assembly here exactly as in the compile's choice.
         var module = string.IsNullOrEmpty(name) ? null : _modules?.Resolve(name);
+        if (module is not null
+            && !MeshWeaver.NuGet.PackageAssemblyProbe.SameIdentityModuloVersion(assemblyName, module.GetName()))
+            module = null;
         if (module is not null
             && (assemblyName.Version is null || module.GetName().Version is not { } moduleVersion
                 || moduleVersion >= assemblyName.Version))
