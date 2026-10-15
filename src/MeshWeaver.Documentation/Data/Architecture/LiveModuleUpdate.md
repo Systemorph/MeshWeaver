@@ -135,7 +135,7 @@ N+1).
 | `ModuleContributions` (`MeshWeaver.Mesh.Contract`) | One generation's materialised contributions, and `LiveUpdateBlockers()` — the declared `[ModuleRestartRequired]` reason plus what the platform MEASURES it cannot re-apply in-process: root services through `WithGlobalServiceRegistry`, the mesh hub's configuration (`HubConfigurations`), address types, the builder hook, HTTP endpoints. Nodes and every-per-node-hub configuration ARE re-appliable. |
 | Re-appliable seams (`MeshBuilder`, `StaticMeshNodeListProvider`) | A module's nodes are served from its CURRENT generation in the seed tier, at the position its boot nodes held (same precedence as before). Its every-per-node-hub configuration goes through one indirection read when a hub is built. `InstalledModuleAssembly` for a module in its own context is answered from the `InstalledModules` registry at every read with the current generation (absent once withdrawn or retired), so the compile reference set (`MeshNodeCompilationService`, now keyed by the module MVIDs) and `InstalledModulesFingerprint` (now read live) follow a swap — and every build stamped with the old fingerprint reads as stale and rebuilds against N+1 on its next activation. 🚨 None of these registrations captures a module's boot `Assembly` strongly: one did, and it rooted generation N for the life of the process (`ModuleLiveSwapTest`'s collection assertion caught it). |
 | `ModuleLiveUpdater` (`MeshWeaver.Graph`) | The swap: load N+1 → refuse (N untouched) on any blocker of N, N+1 or a dependent, or a load / materialisation failure → load N+1 and re-load every dependent into ONE `ModuleSwapStage` (a staged context binds the STAGED N+1, so the dependents re-bind before anything is current) → only when all of them loaded, materialised and prepared, `CommitAll` makes the whole set current in one step; a failure before that unloads the staged set, which no request was ever routed to, and N never stopped serving (#6128 review: committing N+1 first published it to every reader of the generations while a dependent could still fail) → recycle this process's per-node hubs bound to the module's NodeTypes or nodes (every per-node hub when a generation configures every hub, or when an in-mesh build here is linked against a swapped module) → once those hubs are DEAD, retire the old generations. Serial (a subject and `Concat`, no gate), so a second update that arrives mid-swap is applied after it. Outcomes are an open vocabulary (`ModuleSwapKind`: `Live`, `UpToDate`, `RestartRequired`, `Failed`, `NotHeld`); `NeedsRestart` is the one question a caller asks. **`Swap(path)` is `internal`** (granted to `MeshWeaver.PluginCatalog` only): it runs the bytes at a path as platform-classified code, so a public method on a mesh singleton would let any code that resolves it name the bytes or roll a module back to an older directory. The only way in is `ModuleLiveActivation.ActivatePending`, which takes no path and swaps only the pinned copy of what the landing service landed. A generation's contributions are recorded **before** it is made current, so no reader ever sees a current generation whose contributions are null. |
-| `ModuleLiveActivation` (`MeshWeaver.PluginCatalog`) | For every module `PendingModuleActivations` reports landed-but-not-serving in THIS process, swap the PINNED copy of its landed generation in live. A module this process does not hold in its own context is `NotHeld`. A pass that cannot read the state keeps the restart. |
+| `ModuleLiveActivation` (`MeshWeaver.PluginCatalog`) | For every module `PendingModuleActivations` reports landed-but-not-serving in THIS process, swap the PINNED copy of its landed generation in live — all of them as ONE swap (`SwapAll`), so the pass recycles each hub once (see *One landing, one recycle wave*). A module this process does not hold in its own context is `NotHeld`. A pass that cannot read the state keeps the restart. |
 | `SelfUpdateHostedService.ConsiderRestart` | 🚨 **Live first.** Where a pending activation used to mean a restart, the check now calls `ModuleLiveActivation`; only when something did not go live does it take — or hand to the control lane — the automatic restart, whose announcement now names the modules and reasons. The verdict `ActivatedLive` records a pass that SWAPPED something in and needed no restart; a pass that found the generation marked while nothing is pending in this process is `NothingToActivate` and carries the reader's own line — declined in favour of the image's copy, quarantined, a previous generation — never "went LIVE" (MeshWeaver#6620: that sentence was reported while the old assembly kept serving). A host without the plugin catalog keeps the old path. |
 
 **Tests.** `ModuleLiveSwapTest` (`MeshWeaver.Compiler.Pipeline.Test`, a running monolith mesh): N→N+1
@@ -154,6 +154,65 @@ recorded; two updates before the restart are one restart and the record names th
 during an in-flight restart schedules no second one; and the negative control — no check runs, and
 the guard names the stuck landed-not-loaded module. Mutation check: forcing the old restart path makes
 the live test fail (`Restarts` 1, expected 0).
+
+### One landing, one recycle wave (MeshWeaver#6729)
+
+**A landing recycles each owner address ONCE.** `ModuleLiveActivation` hands every pending module of a
+pass to `ModuleLiveUpdater.SwapAll` as ONE swap. Each module is still loaded, refused or committed on
+its own, in order, with exactly the checks a single swap applies. What they share is the recycle: every
+hub bound to any committed generation is torn down once, after the last commit, and every old
+generation is retired after those hubs are dead.
+
+**The wave does not cascade.** Each `DisposeRequest` of the wave carries `module:{name}[,{name}…]` in
+`DisposeRequest.CascadedFrom`, and `MessageHub.HandleDispose` never runs a `RecycleCascade` for a
+request that carries a value there. The wave already names every hub of its process that is bound to
+the swapped generations, or every per-node hub when a generation reaches them all, so for a swap the
+wave IS the dependency network. Hubs of other processes are not this wave's to recycle, because each
+process swaps its own module contexts and recycles its own hubs.
+
+**One module's fault never costs the others their wave.** Because the swap collects every module before
+it recycles, the preparation of one module never faults the swap. A fault before that module commits is
+its own `Failed` outcome, and its running generation keeps serving. A hand-over fault after it commits
+keeps the module in the wave, because its new generation is current, and its outcome names the fault.
+The wave also posts ONE `DisposeRequest` per address. Each committed module's hub set is a separate
+snapshot of the live registry, so a hub that an unrelated recycle replaced between two snapshots shows
+up as two activations of one path. Both are waited for, but a second request to that address would tear
+down the successor.
+
+**Why both rules exist.** It was measured on memex-cloud on 2026-10-15 at 00:49Z, on pods already
+running the #6756 fix. One landing swapped `MeshWeaver.OgCard` and `MeshWeaver.Markdown.Export`, and
+both pods' sync streams gave up on "4 DISTINCT owner activations" for unrelated owners
+(`Hosting/PlatformBuilds`, `Hosting/TriageRule`, `Ops/Issue/*`, …), 120 such lines between 00:01Z and
+06:07Z. The owner's refusals, read through a governed `Logs` action
+(`Ops/Actions/iw-6729-memexcloud-preburst-0047-0049-20261015`), named a fresh activation each time:
+`Hosting/PlatformBuilds` died as `#00AA2EE2` (*RecycleCascade from 'Hosting/InstanceAction': ModuleLiveUpdate:
+MeshWeaver.OgCard …*), as `#025E3E68` (*… from 'Hosting/Build' …*), and as `#0045ECAE` (*… from
+'Store/Publishing': ModuleLiveUpdate: MeshWeaver.Markdown.Export …*), each time still deferring its
+first `SubscribeRequest` behind its initialisation gates. The cause was the wave itself. The swap
+disposed every per-node hub, NodeType definition hubs included. Each definition then enumerated the
+mesh-wide index and, seconds later, posted a second request to every instance of its network. Those
+were addresses the wave had already torn down and their subscribers had already re-activated. A second
+module's own wave did the same once more. The subscriber's give-up was therefore CORRECT: the address
+really was recycling in a loop, and the fix belongs to the recycler, as the give-up's own text says.
+
+**Tests.** `AModuleLandingRecyclesEachOwnerOnceTest` (`MeshWeaver.Compiler.Pipeline.Test`, a running
+monolith mesh, the framework's own `RecycleCascade` seam as the instrument):
+
+- A swap's wave does not run the cascade.
+- A direct recycle of the same kind of hub does. This is the negative control that the instrument
+  fires.
+- Two modules landing together, with a live reader holding the probe open, tear the probe down exactly
+  once. Every probe activation is recorded as the registry adds it (`HostedHubsCollection.HubAdded`),
+  so a successor that is created and torn down quickly cannot be missed.
+- A second module that faults while it is prepared leaves the first one `Live`, recycled onto its new
+  generation, and is reported `Failed` itself. With the fault left to escape, both modules are reported
+  `Failed` and the probe is never recycled.
+
+Against the pre-fix updater (one swap per module, no `CascadedFrom`), the first and third cases are red.
+
+**Not established.** `ModuleReloadExecutor.SwapThenReport` still asks `IModuleLiveActivation.Swap` once
+per module. No implementation of that seam is registered today, so it recycles nothing. An
+implementation must swap a reload's modules as one wave, through `SwapAll`.
 
 ## What is shipped (slice 4 — root services, and only boot-time may restart)
 
@@ -408,6 +467,29 @@ builds an index over a platform interface a module can register should apply the
 `AWithdrawnModulesAccessRuleLeavesTheSecurityRulesTest` pins this: the rule set builds, and a node write
 succeeds. On the base, both failed with the exception above. Its published twin is the negative control:
 there the rule governs its type.
+
+**A withdrawn module's query provider leaves the query fan-out (MeshWeaver#6793).** The same defect, one
+interface over, stopped a host from starting at all. A module that registers an `IMeshQueryProvider` is
+forwarded to the root the same way, and `MeshQuery` — built by `IMeshService`, which a hosted service takes
+at startup — read every provider's `Name` to de-duplicate them. Once a module was withdrawn (on the
+instance, a mail sender whose constructor rejected the tenant id the configuration carried), that read
+threw `Module … holds no service scope in this mesh`, `Host.StartAsync` failed, and the pod crash-looped
+on every roll while the module was reported only as contributing nothing. `MeshQuery` now binds a module's provider under
+ONE lease (`ModuleServiceProxy.TryLease`): the name is read from the generation's own instance, a proxy
+that cannot be leased is left out, and the fan-out skips a provider whose module is retired later.
+`AWithdrawnModulesQueryProviderLeavesTheQueryFanOutTest` pins it: `IMeshService` builds and a query
+answers. On the base, the test mesh did not start. Its published twin is the negative control: there the
+module's provider answers in the fan-out.
+
+🚨 **The lease spans the SUBSCRIPTION, not the call.** A provider returns a COLD observable, and the fan-out
+subscribes to it later, through its query pool. A lease taken around the call and released when the call
+returned left the query running with no lease. A retirement landing in between then disposed the
+generation's services under it, and the whole query faulted. So `Matches` (synchronous) is leased for the
+call, and `Query`, `Autocomplete` and `Select` go through `ModuleServiceProxy.Leased`, which takes the lease
+on subscribe and releases it when the subscription terminates or is disposed. A retirement that starts
+mid-query waits for that release. `ModuleQueryProviderLeasedAcrossRetirementTest` retires the generation at
+the moment the module's query is subscribed. The query answers from live services and the unload follows.
+With the lease taken around the call only, the query errors with the fence's `ObjectDisposedException`.
 
 **A module service is LEASED, never checked and then called (MeshWeaver#6715).** "Does its module still
 serve?" followed by a call through the proxy can be split by a retirement: `ModuleContexts.Retire` removes

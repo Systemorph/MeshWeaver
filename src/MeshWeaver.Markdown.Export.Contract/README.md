@@ -20,7 +20,7 @@ Contents:
 | Type | Role |
 |---|---|
 | `ExportDocumentRequest` / `ExportDocumentResponse` | The hub request and its start-acknowledgement (the response carries the Activity path, not the bytes). |
-| `DocumentExportOptions` | What the export dialog collects: format, fidelity, branding, cover, TOC, page-break rules. |
+| `DocumentExportOptions` | What the export dialog collects: format, fidelity, branding, cover, TOC, page-break rules, include children, and the linked-documents appendix (`IncludeLinkedDocuments` with `LinkedDocumentsMaxDepth`). |
 | `ExportFormat`, `ExportFidelity` | The output format, and how faithfully it reproduces the browser's rendering. |
 | `RenderedDocument` | The produced file — name, mime type, bytes. Travels through `ActivityLog.ReturnValue`. |
 | `CorporateIdentity` | Content of a `CorporateIdentity` mesh node: the branding an export applies. |

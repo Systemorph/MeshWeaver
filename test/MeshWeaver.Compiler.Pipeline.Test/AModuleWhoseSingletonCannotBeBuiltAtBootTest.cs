@@ -88,6 +88,13 @@ public abstract class ModuleSingletonsBuiltAtBootTestBase(ITestOutputHelper outp
     /// a security rule, which the root forwards as a platform interface.</summary>
     protected virtual bool RegistersAccessRule => false;
 
+    /// <summary>Whether the module registers an <see cref="MeshWeaver.Mesh.Services.IMeshQueryProvider"/> —
+    /// a query source, which the root forwards as a platform interface (MeshWeaver#6793).</summary>
+    protected virtual bool RegistersQueryProvider => false;
+
+    /// <summary>The path of the node the module's query provider answers with.</summary>
+    public const string QueriedProbePath = "BootBuiltQueried/answer";
+
     /// <summary>The node type the module's access rule governs.</summary>
     public const string GuardedNodeType = "BootBuiltGuarded";
 
@@ -95,7 +102,7 @@ public abstract class ModuleSingletonsBuiltAtBootTestBase(ITestOutputHelper outp
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder) =>
         base.ConfigureMesh(builder)
             .ConfigureServices(services => services.AddScoped<CircuitBoundState>())
-            .InstallAssemblies(WriteModule(root, Broken, CircuitBound, ShipsReferences, RegistersAccessRule));
+            .InstallAssemblies(WriteModule(root, Broken, CircuitBound, ShipsReferences, RegistersAccessRule, RegistersQueryProvider));
 
     /// <summary>The mesh's module registry.</summary>
     protected ModuleContexts Contexts => Mesh.ServiceProvider.GetRequiredService<ModuleContexts>();
@@ -118,7 +125,7 @@ public abstract class ModuleSingletonsBuiltAtBootTestBase(ITestOutputHelper outp
     /// <see cref="ShipsReferences"/> — one no image-bound module of the test mesh installs.</summary>
     public const string ShippedReferenceName = "System.Private.Xml";
 
-    private static string Source(bool broken, bool circuitBound, bool shipsReferences, bool accessRule) => $$"""
+    private static string Source(bool broken, bool circuitBound, bool shipsReferences, bool accessRule, bool queryProvider) => $$"""
         using Microsoft.Extensions.DependencyInjection;
         [assembly: MeshWeaver.Test.BootBuilt.Module]
         namespace MeshWeaver.Test.BootBuilt;
@@ -129,6 +136,27 @@ public abstract class ModuleSingletonsBuiltAtBootTestBase(ITestOutputHelper outp
             public System.Collections.Generic.IReadOnlyCollection<MeshWeaver.Mesh.Security.NodeOperation> SupportedOperations { get; } = [];
             public System.IObservable<bool> HasAccess(MeshWeaver.Mesh.Services.NodeValidationContext context, string? userId) =>
                 System.Reactive.Linq.Observable.Return(true);
+        }
+        public sealed class QueryProbe : MeshWeaver.Mesh.Services.IMeshQueryProvider
+        {
+            private static readonly MeshWeaver.Mesh.MeshNode Answer =
+                new("answer", "BootBuiltQueried") { Name = "answered by the module", NodeType = "Markdown" };
+            public string Name => "MeshWeaver.Test.BootBuilt.QueryProbe";
+            public bool Matches(System.Collections.Generic.IReadOnlyList<string> queryNamespaces) => true;
+            public System.IObservable<MeshWeaver.Mesh.QueryResultChange<T>> Query<T>(
+                MeshWeaver.Mesh.Services.MeshQueryRequest request, System.Text.Json.JsonSerializerOptions options) =>
+                System.Reactive.Linq.Observable.Return(new MeshWeaver.Mesh.QueryResultChange<T>
+                {
+                    ChangeType = MeshWeaver.Mesh.QueryChangeType.Initial,
+                    Items = request.Query.Contains("BootBuiltQueried") && Answer is T answer ? [answer] : [],
+                });
+            public System.IObservable<System.Collections.Generic.IReadOnlyCollection<MeshWeaver.Mesh.QueryResult>> Autocomplete(
+                string basePath, string prefix, System.Text.Json.JsonSerializerOptions options,
+                MeshWeaver.Mesh.Services.AutocompleteMode mode = MeshWeaver.Mesh.Services.AutocompleteMode.RelevanceFirst,
+                int limit = 10, string? contextPath = null, string? context = null) =>
+                System.Reactive.Linq.Observable.Return<System.Collections.Generic.IReadOnlyCollection<MeshWeaver.Mesh.QueryResult>>([]);
+            public System.IObservable<T?> Select<T>(string path, string property, System.Text.Json.JsonSerializerOptions options) =>
+                System.Reactive.Linq.Observable.Return<T?>(default);
         }
         public sealed class Fragile
         {
@@ -160,6 +188,7 @@ public abstract class ModuleSingletonsBuiltAtBootTestBase(ITestOutputHelper outp
                         {{(circuitBound ? CircuitBoundRegistrations : "")}}
                         {{(shipsReferences ? ShippedReferenceRegistration : "")}}
                         {{(accessRule ? AccessRuleRegistration : "")}}
+                        {{(queryProvider ? QueryProviderRegistration : "")}}
                         return services;
                     })];
         }
@@ -189,11 +218,15 @@ public abstract class ModuleSingletonsBuiltAtBootTestBase(ITestOutputHelper outp
     private const string AccessRuleRegistration =
         "services.AddSingleton<MeshWeaver.Mesh.Services.INodeTypeAccessRule, GuardRule>();";
 
+    // A query source the module contributes — forwarded to the root as a platform interface (MeshWeaver#6793).
+    private const string QueryProviderRegistration =
+        "services.AddSingleton<MeshWeaver.Mesh.Services.IMeshQueryProvider, QueryProbe>();";
+
     /// <summary>Compiles the test module under <paramref name="directoryRoot"/> and returns its entry DLL —
     /// for hosts this base does not build (MeshWeaver#6557's plain MS DI host).</summary>
     internal static string WriteModule(string directoryRoot, bool broken, bool circuitBound, bool shipsReferences = false,
-        bool accessRule = false) =>
-        Write(directoryRoot, Source(broken, circuitBound, shipsReferences, accessRule));
+        bool accessRule = false, bool queryProvider = false) =>
+        Write(directoryRoot, Source(broken, circuitBound, shipsReferences, accessRule, queryProvider));
 
     private static string Write(string directoryRoot, string source)
     {

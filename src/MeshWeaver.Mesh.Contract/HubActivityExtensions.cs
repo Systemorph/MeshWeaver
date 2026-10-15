@@ -116,7 +116,9 @@ public static class HubActivityExtensions
 
         hub.GetWorkspace().GetMeshNodeStream(activityPath).Update(node =>
         {
-            if (node.Content is not ActivityLog log) return node;
+            // .ContentAs, never a cast: a node read across hubs can carry its content as JSON, and
+            // a cast would make the request a silent no-op.
+            if (node.ContentAs<ActivityLog>(hub.JsonSerializerOptions) is not { } log) return node;
             if (log.RequestedStatus == status) return node; // no-op
             return node with { Content = log with { RequestedStatus = status } };
         }).Subscribe(

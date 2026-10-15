@@ -56,20 +56,35 @@ internal sealed class SpeculativeCompilation(INuGetAssemblyResolver nugetResolve
         CancellationToken ct)
     {
         // Strip #r from the proposed source so Roslyn doesn't reject it with CS7011.
-        // Resolve any new package refs and append them to the cached reference set —
-        // mirrors the production compile path's NuGet handling.
         var (cleanedProposed, proposedNugetRefs) = NuGetDirectiveParser.Extract(proposedCode ?? string.Empty);
 
-        ImmutableArray<MetadataReference> effectiveReferences = inputs.References;
-        if (proposedNugetRefs.Length > 0)
+        // The package half is REBUILT from the directives of the EFFECTIVE sources (the proposed
+        // body's in place of the stored one's) and composed onto the HOST set — never appended to
+        // `inputs.References`, which already holds the stored sources' closure: composed onto that,
+        // a changed package version would read as host-owned and the proposed one be discarded,
+        // so diagnostics would check the old API while the save compiles against the new one.
+        var proposedChangesDirectives = proposedNugetRefs.Length > 0
+            || inputs.SourceNuGetReferences.ContainsKey(sourcePath);
+        var rebuild = proposedChangesDirectives && !inputs.HostReferences.IsDefault;
+        // Rebuilt: every effective directive onto the host set. Not rebuilt (no directive change,
+        // or no host set recorded): the proposed directives, if any, onto what the inputs hold.
+        var composeOnto = rebuild ? inputs.HostReferences : inputs.References;
+        var toResolve = rebuild
+            ? inputs.SkeletonNuGetReferences
+                .Concat(inputs.Sources
+                    .Where(s => !string.Equals(s.Path, sourcePath, StringComparison.OrdinalIgnoreCase))
+                    .SelectMany(s => inputs.SourceNuGetReferences.TryGetValue(s.Path, out var r) ? r : []))
+                .Concat(proposedNugetRefs)
+                .ToList()
+            : [.. proposedNugetRefs];
+        GeneratorPipeline.StripBuiltInScopeGeneratorRef(
+            toResolve, builtInPresent: GeneratorPipeline.BuiltInGeneratorPaths.Count > 0);
+
+        var effectiveReferences = composeOnto;
+        if (toResolve.Count > 0)
         {
-            var resolved = await nugetResolver.ResolveAsync(proposedNugetRefs, targetFramework: null, ct);
-            if (resolved.AssemblyPaths.Length > 0)
-            {
-                effectiveReferences = inputs.References
-                    .Concat(resolved.AssemblyPaths.Select(p => (MetadataReference)MetadataReference.CreateFromFile(p)))
-                    .ToImmutableArray();
-            }
+            var resolved = await nugetResolver.ResolveAsync(toResolve, targetFramework: null, ct);
+            effectiveReferences = [.. CompileReferences.WithPackageAssemblies(composeOnto, resolved.AssemblyPaths)];
         }
 
         // Resolve the EFFECTIVE source set first (proposed body substituted), because the import
