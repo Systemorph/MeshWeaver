@@ -465,7 +465,8 @@ public sealed class InstanceComboAssembler
     private const string HeadRef = "HEAD";
 
     /// <summary>
-    /// 🚨 <b>Retired, not verifiable</b> (MeshWeaver#3848, decided by the maintainer): a module
+    /// 🚨 <b>Retired, not verifiable</b> (MeshWeaver#3848, policy
+    /// <c>record-served-commit-on-install</c>): a module
     /// whose source folder is ABSENT at the ref it was fetched at is RETIRED only when the folder
     /// is absent at the source repository's <c>HEAD</c> as well — the package has left its
     /// source, its content can never be re-materialised, and the verifier reports it without
@@ -510,7 +511,7 @@ public sealed class InstanceComboAssembler
                 .Select(entries => entries.ToImmutableList());
 
         // Already read at HEAD: the absence IS the retirement fact, no second read.
-        if (string.Equals(gitRef, HeadRef, StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(gitRef, HeadRef, StringComparison.Ordinal))
             return Observable.Return(outcomes
                 .Select(outcome => outcome.Absent
                     ? Retire(outcome, outcome.Entry.ResolvedCommit)
@@ -551,7 +552,7 @@ public sealed class InstanceComboAssembler
                         ? $"'{spec.Subdirectory ?? outcome.Entry.ModuleId}' no longer exists"
                         : $"folder '{spec.FolderFilter}/' no longer exists")
                     + $" in '{spec.RepositoryUrl}' — absent at '{spec.GitRef}'"
-                    + (string.Equals(spec.GitRef, HeadRef, StringComparison.OrdinalIgnoreCase)
+                    + (string.Equals(spec.GitRef, HeadRef, StringComparison.Ordinal)
                         ? ""
                         : $" and at '{HeadRef}'")
                     + (headCommit is null ? "" : $" ({headCommit})")

@@ -53,11 +53,25 @@ public static class OrleansServerRegistryExtensions
     /// <param name="hostBuilder">The host builder to configure.</param>
     /// <returns>The configured mesh host builder for further chaining.</returns>
     public static MeshHostBuilder UseOrleansMeshServer(this IHostBuilder hostBuilder)
+        => hostBuilder.UseOrleansMeshServer(configurePubSubStore: null);
+
+    /// <summary>
+    /// Configures the host as a MeshWeaver Orleans mesh server using a generated mesh address, with
+    /// an optional DURABLE PubSubStore — the marker of a host that runs as one of several silos,
+    /// which since #4802 also means it registers no Orleans memory stream. See
+    /// <see cref="ConfigureMeshWeaverServer"/>.
+    /// </summary>
+    /// <param name="hostBuilder">The host builder to configure.</param>
+    /// <param name="configurePubSubStore">The durable PubSubStore registration, or null for a
+    /// single-process host.</param>
+    /// <returns>The configured mesh host builder for further chaining.</returns>
+    public static MeshHostBuilder UseOrleansMeshServer(
+        this IHostBuilder hostBuilder, Action<ISiloBuilder>? configurePubSubStore)
     {
         var meshBuilder = hostBuilder.CreateOrleansConnectionBuilder();
         meshBuilder.Host.UseOrleans(silo =>
         {
-            silo.ConfigureMeshWeaverServer();
+            silo.ConfigureMeshWeaverServer(configurePubSubStore);
         });
         return meshBuilder.UseOrleansMeshServer();
     }
@@ -75,8 +89,13 @@ public static class OrleansServerRegistryExtensions
     }
 
     /// <summary>
-    /// Applies the standard MeshWeaver silo configuration: memory streams, the PubSub store
-    /// grain storage, and the access-context incoming grain call filter.
+    /// Applies the standard MeshWeaver silo configuration: the PubSub store grain storage, memory
+    /// streams for a SINGLE-PROCESS host only, and the access-context incoming grain call filter.
+    ///
+    /// <para>🚨 <b>Since #4802 a multi-silo host (a durable <paramref name="configurePubSubStore"/>)
+    /// registers NO memory stream.</b> Every cross-silo leg there is a directed grain call and every
+    /// commit travels on the store's own feed, so the history below describes why the durable store
+    /// was once a correctness decision for the stream; it remains the marker of a multi-silo host.</para>
     ///
     /// <para>🚨 <b><paramref name="configurePubSubStore"/> is a correctness decision, not a tuning
     /// knob (issue #1729).</b> Cross-silo delivery to every <c>StreamRoutedAddressTypes</c> hub
@@ -151,16 +170,30 @@ public static class OrleansServerRegistryExtensions
             services.AddMeshWeaverClusterMembershipTolerance();
         });
 
-        silo.AddMemoryStreams(StreamProviders.Memory);
-
         // 🚨 INSTEAD of, never in addition to. Two providers under the same name leave the
         // effective store decided by registration order — a deployment that had correctly asked
         // for durability could still be running on RAM. OrleansPubSubStoreConfigurationTest pins
         // "exactly one, and it is the caller's" for precisely that reason.
         if (configurePubSubStore is null)
+        {
+            // 🚨 THE MEMORY STREAM IS A SINGLE-PROCESS FACILITY NOW — #4802. Only a host that is a
+            // cluster of one by construction (the Monolith, a localhost silo, the bake silo, an
+            // in-process TestCluster, which also hosts client-side hubs that need it) registers it.
+            silo.AddMemoryStreams(StreamProviders.Memory);
             silo.AddMemoryGrainStorage(StreamProviders.PubSubStore);
+        }
         else
+        {
+            // A MULTI-SILO host registers NO memory stream. Its queue grains live in the RAM of one
+            // silo each, so every roll lost what they held and the pulling agents retried against a
+            // departed silo on every membership change (#4802's SiloUnavailableException site). Every
+            // cross-silo leg is a directed grain call here — forward deliveries, NACKs (RoutingGrain
+            // .PostFailure), and the pod-hub claim — and every commit reaches every silo through the
+            // store's own feed (PostgreSQL LISTEN/NOTIFY). The PubSubStore is still registered as
+            // supplied: it is harmless without a stream, and its presence is what marks this host
+            // multi-silo.
             configurePubSubStore(silo);
+        }
 
         return silo.AddIncomingGrainCallFilter<AccessContextGrainCallFilter>();
     }

@@ -229,10 +229,12 @@ public static class PackageSources
                 ? new NodeRepoPackageSource(client.Fetch, src, tokenProvider, logger)
                 {
                     NarrowFetch = client.Fetch,
+                    IsAncestor = client.IsAncestor,
                 }
                 : new GitHubPackageSource(client.Fetch, src, tokenProvider, subdir, logger)
                 {
                     NarrowFetch = client.Fetch,
+                    IsAncestor = client.IsAncestor,
                 };
         }
         // A LOCAL path in node-repo format: read the checkout straight off disk. This is what lets

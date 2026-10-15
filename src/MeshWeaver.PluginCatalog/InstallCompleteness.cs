@@ -79,8 +79,12 @@ public static class InstallCompleteness
         if (record?.InstalledFiles is not { Count: > 0 } files)
             return ImmutableSortedSet<string>.Empty.WithComparer(StringComparer.Ordinal);
         var unreadable = record.UnreadableFiles;
+        // 🚨 …and the rows the installer deliberately does not hold on THIS host (a NodeType row on
+        // a closed type set, #6627): they are owed to no mesh that cannot serve them.
+        var withheld = record.WithheldFiles;
         return files.Keys
             .Where(f => unreadable?.Contains(f) != true)
+            .Where(f => withheld?.Contains(f) != true)
             .Select(f => PackageInstaller.NodePathForFile(f, parsers))
             .Where(p => !string.IsNullOrWhiteSpace(p))
             .Select(p => p!)

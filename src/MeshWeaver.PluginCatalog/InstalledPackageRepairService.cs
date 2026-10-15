@@ -97,7 +97,16 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
                     return Observable.Return(Unit.Default);
                 }))
             .SelectMany(_ => InstalledRecords(logger))
-            .SelectMany(records => (records.Count == 0
+            .Select(all => (All: all, PerPartition: OnePerPartition(all)))
+            .SelectMany(listed => RepairRecords(listed.All, listed.PerPartition, logger));
+
+    /// <summary>The repair over the listed records: <paramref name="records"/> is one per
+    /// partition (what the access re-assert, the sweep and the heal walk), <paramref name="all"/>
+    /// every install record (what the closed-type-set row reconciliation walks — #6751: a second
+    /// package installed into the same target partition declares its own NodeType rows).</summary>
+    private IObservable<Unit> RepairRecords(
+        IReadOnlyList<InstalledRecord> all, IReadOnlyList<InstalledRecord> records, ILogger? logger) =>
+            (records.Count == 0
                     ? Observable.Return(Unit.Default)
                     : records
                         .Select(record => Reconcile(record, logger))
@@ -109,11 +118,37 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
                             "[PackageRepair] reconciled declared access + install hooks for {Count} "
                             + "installed partition(s)", records.Count)))
                 .Do(_ => ReportDeclaredModulesWithNoBinary(records, logger))
-                .SelectMany(_ => VerifyCompleteness(records, logger))
+                // 🚨 On a CLOSED type set, BEFORE the sweep: remove the NodeType rows earlier
+                // installs left and record them as withheld (#6627), so a host whose packages never
+                // update converges too and the sweep does not count those rows as owed.
+                .SelectMany(_ => WithholdNodeTypeRows(all, logger))
+                .Select(stamped => SameRecords(records, stamped))
+                .SelectMany(current => VerifyCompleteness(current, logger))
                 // The module half reports before the heal WAITS (on the default install), so a
                 // long boot install cannot delay what the module sweep has to say.
                 .SelectMany(verdicts => VerifyModules(records, logger).Select(_ => verdicts))
-                .SelectMany(verdicts => Heal(records, verdicts, logger)));
+                .SelectMany(verdicts => Heal(records, verdicts, logger));
+
+    /// <summary>The first record per target partition — the population every per-partition pass
+    /// walks (one access re-assert, one completeness verdict, one heal per partition).</summary>
+    /// <param name="all">Every install record.</param>
+    private static IReadOnlyList<InstalledRecord> OnePerPartition(IReadOnlyList<InstalledRecord> all) =>
+        all.GroupBy(r => r.Partition, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.First())
+            .ToList();
+
+    /// <summary><paramref name="records"/> with each entry replaced by its counterpart in
+    /// <paramref name="stamped"/> (matched by package id), so the sweep reads the withheld answer
+    /// the reconciliation just recorded.</summary>
+    /// <param name="records">The per-partition records.</param>
+    /// <param name="stamped">Every record, as the reconciliation left it.</param>
+    private static IReadOnlyList<InstalledRecord> SameRecords(
+        IReadOnlyList<InstalledRecord> records, IReadOnlyList<InstalledRecord> stamped)
+    {
+        var byId = stamped.GroupBy(r => r.PackageId, StringComparer.Ordinal)
+            .ToImmutableDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
+        return records.Select(r => byId.TryGetValue(r.PackageId, out var s) ? s : r).ToList();
+    }
 
     /// <summary>
     /// 🚨 <b>The sweep's verdict gets a consumer that ACTS</b> — MeshWeaver#4812.
@@ -682,7 +717,104 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
         string PackageId, string Partition, PackageManifest Manifest, string Identity);
 
     /// <summary>
-    /// Every recorded install, one entry per partition. Reads the <c>Package</c> records the
+    /// 🚨 The boot half of #6627 — on a CLOSED type set, every install record's declared nodes are
+    /// read, the NodeType definition rows among them are removed
+    /// (<see cref="ClosedTypeSetPackageRows.Reconcile"/>), and the record's
+    /// <see cref="PackageManifest.WithheldFiles"/> is stamped through the record's own stream when
+    /// it changed. The install lanes do the same on every install and update; this pass is what
+    /// reaches a host whose packages never move.
+    ///
+    /// <para>On an OPEN mesh nothing is withheld, so a record that still carries a withheld set —
+    /// written while this deployment ran a closed type set — is CLEARED here, before the sweep.
+    /// Left in place it would keep subtracting those NodeType files from what the package owes, and
+    /// a host whose package never updates could never restore the definitions it now serves. The
+    /// sweep reads the cleared answer even if the stamp fails: on an open mesh the rows ARE
+    /// owed.</para>
+    /// </summary>
+    /// <returns>The records as the completeness sweep must read them — with the stamped answer.</returns>
+    private IObservable<IReadOnlyList<InstalledRecord>> WithholdNodeTypeRows(
+        IReadOnlyList<InstalledRecord> records, ILogger? logger)
+    {
+        if (records.Count == 0)
+            return Observable.Return(records);
+        if (!hub.ServiceProvider.IsClosedTypeSet())
+            return records
+                .Select(record => record.Manifest.WithheldFiles is null
+                    ? Observable.Return(record)
+                    : StampWithheld(record, null, logger)
+                        .Select(_ => record with { Manifest = record.Manifest with { WithheldFiles = null } }))
+                .ToObservable()
+                .Concat()
+                .ToList()
+                .Select(updated => (IReadOnlyList<InstalledRecord>)updated.ToArray());
+        var parsers = new FileFormatParserRegistry(
+            hub.JsonSerializerOptions, hub.ServiceProvider.GetServices<IFileFormatParser>());
+        return records
+            .Select(record =>
+            {
+                var files = record.Manifest.InstalledFiles?.Keys.ToArray();
+                // A Code package's NodeType row is SYNTHESIZED by the install, not shipped as a
+                // file, so the declared files can never name it — derive it (#6751).
+                var pathOf = ClosedTypeSetPackageRows.PathMapOf(record.Manifest, parsers);
+                var candidates = ClosedTypeSetPackageRows.NodePathsOf(files, pathOf);
+                if (PackageInstaller.SynthesizedNodeTypePathOf(record.Manifest) is { } synthesized)
+                    candidates = candidates.Add(synthesized);
+                return ClosedTypeSetPackageRows.Reconcile(
+                        hub, record.PackageId, candidates, Array.Empty<string>(), logger)
+                    .SelectMany(outcome =>
+                    {
+                        var (examined, withheldNow) =
+                            ClosedTypeSetPackageRows.RecordInputs(outcome, files, pathOf);
+                        var previous = record.Manifest.WithheldFiles;
+                        var next = ClosedTypeSetPackageRows.MergeWithheldFiles(
+                            true, previous, examined, withheldNow, files);
+                        if ((previous ?? []).SetEquals(next ?? []) && (previous is null) == (next is null))
+                            return Observable.Return(record);
+                        return StampWithheld(record, next, logger)
+                            .Select(stamped => stamped
+                                ? record with { Manifest = record.Manifest with { WithheldFiles = next } }
+                                : record);
+                    });
+            })
+            .ToObservable()
+            .Concat()
+            .ToList()
+            .Select(updated => (IReadOnlyList<InstalledRecord>)updated.ToArray());
+    }
+
+    /// <summary>
+    /// Writes <paramref name="next"/> as the install record's
+    /// <see cref="PackageManifest.WithheldFiles"/> through the record's own stream, as System.
+    /// Emits true once written, false when the write failed (named at Warning).
+    /// </summary>
+    private IObservable<bool> StampWithheld(
+        InstalledRecord record, ImmutableSortedSet<string>? next, ILogger? logger)
+    {
+        var access = hub.ServiceProvider.GetRequiredService<AccessService>();
+        var recordPath = $"{PackageInstaller.InstalledPartition}/{record.PackageId}";
+        return access.RunAsSystem(() => hub.GetWorkspace().GetMeshNodeStream(recordPath)
+                .Update(current => current with
+                {
+                    Content = current.ContentAs<PackageManifest>(hub.JsonSerializerOptions)
+                        is { } manifest
+                        ? manifest with { WithheldFiles = next }
+                        : current.Content,
+                }))
+            .Take(1)
+            .Select(_ => true)
+            .Catch<bool, Exception>(ex =>
+            {
+                logger?.LogWarning(ex,
+                    "[PackageRepair] {Id}: {What} the install record's withheld NodeType rows FAILED — "
+                    + "the stored record keeps its previous answer until the next boot",
+                    record.PackageId, next is null ? "clearing" : "recording");
+                return Observable.Return(false);
+            });
+    }
+
+    /// <summary>
+    /// Every recorded install — ALL of them, several per partition when packages share one
+    /// (<see cref="OnePerPartition"/> narrows it for the per-partition passes). Reads the <c>Package</c> records the
     /// installer writes, so the repair covers exactly what is installed — no hard-coded package
     /// list. The record's content IS the manifest as installed (id, partition, price, declared
     /// public segments), which is what drives the access re-assert.
@@ -703,8 +835,6 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
                     InstallCompleteness.DescribeRecord(
                         x.Node.Path, x.Node.Version, x.Node.LastModified, x.Manifest)))
                 .Where(r => !string.IsNullOrWhiteSpace(r.Partition))
-                .GroupBy(r => r.Partition, StringComparer.OrdinalIgnoreCase)
-                .Select(g => g.First())
                 .ToList())
             .Catch((Exception ex) =>
             {
