@@ -16,7 +16,8 @@ public static class ModuleSourceUpdateOutcome
     /// <summary>The import ran; its activity ended Succeeded or Warning (a seal hold or a declined module is a Warning, named).</summary>
     public const string Updated = "Updated";
 
-    /// <summary>Not a module source here, or not importable (no repository, export-only) — the detail names which.</summary>
+    /// <summary>Not updated: not a module source here, not importable (no repository, export-only), or not
+    /// STARTED because an earlier import of the batch was not seen to end — the detail names which.</summary>
     public const string Skipped = "Skipped";
 
     /// <summary>The import failed, was cancelled, or did not finish within its budget — the detail names which.</summary>
@@ -123,6 +124,11 @@ public static class ModuleSourceUpdate
     internal static IObservable<ImmutableList<ModuleSourceUpdateRow>> UpdateAllWithin(
         IMessageHub hub, TimeSpan activityBudget, Func<string, IObservable<ActivityLog>> watchActivity)
     {
+        // Refused HERE, before any source is listed or any import started: a non-positive budget
+        // would otherwise surface only once the first import's activity exists.
+        if (activityBudget <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(activityBudget), activityBudget,
+                "the per-source import budget must be positive");
         var mesh = hub.ServiceProvider.GetRequiredService<IMeshService>();
         var access = hub.ServiceProvider.GetRequiredService<AccessService>();
         return access.RunAsSystem(() => mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(
@@ -244,11 +250,15 @@ public static class ModuleSourceUpdate
         {
             var created = new AsyncSubject<string>();
             var watch = created
-                .SelectMany(activity => watchActivity(activity)
-                    .Where(log => log.Status.IsTerminal())
-                    .Take(1)
-                    .Select(log => new ImportEnd(activity, log, null))
-                    .Timeout(activityBudget)
+                // 🚨 DEFERRED, so the Catch below is in place before the watch is even built: a
+                // delegate that throws on construction is a watch fault like any other, after the
+                // activity exists — it must answer "may still be running", never reach One's catch
+                // (which answers "nothing running" and lets the next import start beside this one).
+                .SelectMany(activity => Observable.Defer(() => watchActivity(activity)
+                        .Where(log => log.Status.IsTerminal())
+                        .Take(1)
+                        .Select(log => new ImportEnd(activity, log, null))
+                        .Timeout(activityBudget))
                     .DefaultIfEmpty(new ImportEnd(activity, null,
                         "the watch on the import's activity ended before it reported a terminal status, "
                         + "so the import may still be running"))

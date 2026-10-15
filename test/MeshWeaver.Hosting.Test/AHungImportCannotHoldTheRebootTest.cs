@@ -159,24 +159,65 @@ public class AHungImportCannotHoldTheRebootTest(ITestOutputHelper output) : Mono
     public async Task AWatchFaultAfterTheActivityExists_KeepsTheImportRunning_AndStartsNoLaterImport()
     {
         var ct = TestContext.Current.CancellationToken;
-        var first = await GivenAHungModuleSource("FaultA", ct);
-        var second = await GivenAHungModuleSource("FaultB", ct);
+        await AFaultedWatch_EndsTheBatch_WithOneImportStarted("FaultA", "FaultB",
+            _ => Observable.Throw<ActivityLog>(new InvalidOperationException("the activity's point read met a routing NotFound")),
+            ct);
+    }
+
+    /// <summary>
+    /// 🚨 #6625 review — the same fault, raised by the watch delegate ITSELF while it is being built
+    /// (a synchronous throw, not an <c>Observable.Throw</c>). Built outside the watch's own catch, it
+    /// reached <c>One</c>'s catch, which answers "nothing running", and the second import started beside
+    /// the first: the fetch count is the control.
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task AWatchThatThrowsWhileBeingBuilt_KeepsTheImportRunning_AndStartsNoLaterImport()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await AFaultedWatch_EndsTheBatch_WithOneImportStarted("ThrowA", "ThrowB",
+            _ => throw new InvalidOperationException("the watch could not be built"),
+            ct);
+    }
+
+    private async Task AFaultedWatch_EndsTheBatch_WithOneImportStarted(
+        string firstPrefix, string secondPrefix, Func<string, IObservable<ActivityLog>> watch, CancellationToken ct)
+    {
+        var first = await GivenAHungModuleSource(firstPrefix, ct);
+        var second = await GivenAHungModuleSource(secondPrefix, ct);
         var fetchCount = 0;
         using var counting = repoClient.Fetches.Subscribe(_ => Interlocked.Increment(ref fetchCount));
+        var firstFetch = repoClient.Fetches.FirstAsync().Replay();
+        using var firstFetchConnection = firstFetch.Connect();
 
-        var rows = await ModuleSourceUpdate.UpdateAllWithin(Mesh, TimeSpan.FromMinutes(5),
-                _ => Observable.Throw<ActivityLog>(new InvalidOperationException("the activity's point read met a routing NotFound")))
+        var rows = await ModuleSourceUpdate.UpdateAllWithin(Mesh, TimeSpan.FromMinutes(5), watch)
             .Should().Within(TestTimeouts.Convergence)
             .Emit("a faulted watch must still end the batch with a row per source", ct);
 
         Output.WriteLine(string.Join(Environment.NewLine, rows.Select(r => $"{r.ConfigPath}: {r.Outcome} — {r.Detail}")));
+        // The control: the first import really started (the watch faults from onActivityCreated, so the
+        // rows can arrive before the import's fetch is subscribed — wait for it, never accept zero).
+        await firstFetch.Should().Within(TestTimeouts.Convergence)
+            .Emit("the control: the first import really started", ct);
         var mine = rows.Where(r => r.Space == first || r.Space == second).ToArray();
         mine.Should().HaveCount(2);
         mine[0].Outcome.Should().Be(ModuleSourceUpdateOutcome.Failed);
         mine[0].Detail.Should().Contain("faulted").And.Contain("may still be running").And.Contain("NOT established");
         mine[1].Outcome.Should().Be(ModuleSourceUpdateOutcome.Skipped);
         mine[1].Detail.Should().Contain("not started");
-        Volatile.Read(ref fetchCount).Should().BeLessThanOrEqualTo(1, "the second import must never have started");
+        Volatile.Read(ref fetchCount).Should().Be(1, "the first import started and the second must never have");
+    }
+
+    /// <summary>#6625 review — a non-positive budget is refused at the boundary, before any source is
+    /// listed or any import started (it used to surface only after the first activity existed).</summary>
+    [Fact]
+    public void ANonPositiveBudget_IsRefused_BeforeAnyImportStarts()
+    {
+        var fetchCount = 0;
+        using var counting = repoClient.Fetches.Subscribe(_ => Interlocked.Increment(ref fetchCount));
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => ModuleSourceUpdate.UpdateAllWithin(Mesh, TimeSpan.Zero));
+        Assert.Throws<ArgumentOutOfRangeException>(() => ModuleSourceUpdate.UpdateAllWithin(Mesh, TimeSpan.FromSeconds(-1)));
+        Volatile.Read(ref fetchCount).Should().Be(0);
     }
 
     /// <summary>
