@@ -128,7 +128,7 @@ class Run:
         return -1
 
 
-def run_installer(*scenario, budget=None):
+def run_installer(*scenario, budget=None, target=None):
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         for name in ('helm', 'kubectl'):
@@ -141,6 +141,8 @@ def run_installer(*scenario, budget=None):
                    SCENARIO=','.join(scenario), CALLS=str(calls), MANIFEST=str(manifest))
         if budget is not None:
             env['OBS_BUDGET_SECONDS'] = str(budget)
+        if target is not None:
+            env['TSDB_RECOVERY_TARGET_PERCENT'] = target
         result = subprocess.run(['bash', str(SCRIPT)], env=env, capture_output=True, text=True,
                                 timeout=90)
         return Run(result,
@@ -206,6 +208,16 @@ class OrderAndDeadlineTest(unittest.TestCase):
         self.assertIn('could not read the state of release', run.stderr)
         self.assertLess(elapsed, 25, elapsed)
         self.assertEqual(run.index('helm upgrade'), -1, run.calls)
+
+
+class TargetValidationTest(unittest.TestCase):
+    def test_an_invalid_target_stops_before_any_scale_or_cleanup(self):
+        for target in ('60%', '-1', '0', '96', 'abc'):
+            with self.subTest(target=target):
+                run = run_installer('out-of-space', target=target)
+                self.assertEqual(run.code, 1, run.stdout)
+                self.assertIn('TSDB_RECOVERY_TARGET_PERCENT', run.stderr)
+                self.assertEqual(run.calls, [], run.calls)   # not one helm or kubectl call
 
 
 class LeftoverCleanerTest(unittest.TestCase):

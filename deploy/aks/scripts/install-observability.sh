@@ -51,6 +51,15 @@ PROMETHEUS_CONTAINER=prometheus-server
 # The recovery prunes the oldest TSDB blocks until the volume is at most this full. Prometheus then
 # starts with room for a fresh WAL, and its own size retention (values file) takes over from there.
 TSDB_RECOVERY_TARGET_PERCENT="${TSDB_RECOVERY_TARGET_PERCENT:-60}"
+# Validated at startup, before anything is scaled or deleted: the clean-up compares integers, so
+# "60%" or a negative value would never stop it pruning.
+case "$TSDB_RECOVERY_TARGET_PERCENT" in
+  ''|*[!0-9]*) echo "FATAL: TSDB_RECOVERY_TARGET_PERCENT must be an integer 1-95, got '$TSDB_RECOVERY_TARGET_PERCENT'." >&2; exit 1 ;;
+esac
+if [ "$TSDB_RECOVERY_TARGET_PERCENT" -lt 1 ] || [ "$TSDB_RECOVERY_TARGET_PERCENT" -gt 95 ]; then
+  echo "FATAL: TSDB_RECOVERY_TARGET_PERCENT must be an integer 1-95, got '$TSDB_RECOVERY_TARGET_PERCENT'." >&2
+  exit 1
+fi
 
 remaining() { echo $(( BUDGET_SECONDS - SECONDS )); }
 recovery() { echo "RECOVERY: $*"; }
@@ -338,7 +347,8 @@ MANIFEST
   } | kc apply -f - || ok=false
   if [ "$ok" = true ]; then
     if stage_seconds 180 30 "$RECOVERY_KEEP_BACK" "the TSDB recovery pod"; then
-      kubectl -n "$NS" wait --for=jsonpath='{.status.phase}'=Succeeded pod/"$recovery_pod" --timeout="${STAGE_SECONDS}s" || ok=false
+      bounded $(( STAGE_SECONDS + 5 )) kubectl --request-timeout=20s -n "$NS" wait --for=jsonpath='{.status.phase}'=Succeeded \
+        pod/"$recovery_pod" --timeout="${STAGE_SECONDS}s" || ok=false
     else
       ok=false
     fi
@@ -475,7 +485,8 @@ for workload in $workloads; do
     not_ready+=("$workload")
     continue
   fi
-  if ! kubectl -n "$NS" rollout status "$workload" --timeout="${left}s"; then
+  # Bounded as a WHOLE: --timeout limits the watch, not the discovery and reads before it.
+  if ! bounded "$left" kubectl --request-timeout=20s -n "$NS" rollout status "$workload" --timeout="${left}s"; then
     not_ready+=("$workload")
   fi
 done
