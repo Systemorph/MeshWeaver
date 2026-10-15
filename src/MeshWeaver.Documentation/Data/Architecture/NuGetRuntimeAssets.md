@@ -133,7 +133,11 @@ inference errors and hundreds of `CS1701`s. Three defects, three rules:
    types — including SqlClient's `lib/` stub, which the NodeType context then unified with as if the
    host shipped it (rule 1 of host unification), so `new SqlConnection` threw
    `PlatformNotSupportedException` even with the `runtimes/` asset selected. It now reads the
-   metadata first and loads only an assembly that references `Microsoft.CodeAnalysis`.
+   metadata first and loads only an assembly that references `Microsoft.CodeAnalysis` — plus that
+   generator's own dependency closure among the candidates (a helper package its type derives from),
+   dependencies first, skipping what the host ships.
+   An installed MODULE counts as host-shipped too: the NodeType context binds a module that satisfies
+   the requested version AHEAD of a package's copy of the same name, matching the compile's choice.
 3. **A package's reference assembly is the compile surface where the toolchain carries one.** In-mesh
    C# compiles against the host's implementation assemblies, and System.Interactive's implementation
    keeps `EnumerableEx.MaxBy`/`MinBy` (namespace `System.Linq`) for binary compatibility while its
@@ -141,7 +145,9 @@ inference errors and hundreds of `CS1701`s. Three defects, three rules:
    ambiguous in every NodeType, `#r` or not. `MeshWeaver.Compiler` embeds the `ref/` assembly of each
    `CompileSurfacePackage` (the build fails if one stops reaching its compile), and
    `CompileReferences.HostReference` compiles against it in place of the host file of the SAME identity
-   (name, version, public key token); a host carrying another build keeps its own file.
+   (name, version, public key token), materialised as a content-addressed file holding exactly those
+   bytes (so the emit-failure capture rereads the image Roslyn used); a host carrying another build
+   keeps its own file.
 
 ## What pins it
 

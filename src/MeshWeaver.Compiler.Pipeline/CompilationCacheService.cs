@@ -882,13 +882,22 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
         // from the host's), else to the package's runtime asset from the probing directories —
         // runtimes/<rid>/lib/<tfm> ahead of lib/<tfm>, see RuntimeAssetSelector.
         var name = assemblyName.Name;
-        if (!string.IsNullOrEmpty(name) && !_probingDirs.IsDefaultOrEmpty
-            && MeshWeaver.NuGet.PackageAssemblyProbe.Resolve(this, assemblyName, _probingDirs, _logger) is { } packaged)
-            return packaged;
         // A MODULE (policy module-live-update-default): its current generation, from its own
         // context. Asked explicitly because no default-context binding may ever hand a module out —
         // the default context would cache the first generation it saw for the life of the process.
-        if (!string.IsNullOrEmpty(name) && _modules?.Resolve(name) is { } module)
+        // 🚨 A module is HOST-shipped for a package closure too: when it satisfies the requested
+        // version it binds AHEAD of a package's (older) copy of the same name — exactly the choice
+        // the compile made (CompileReferences.WithPackageAssemblies keeps the host set's module
+        // reference unless the package's copy is newer).
+        var module = string.IsNullOrEmpty(name) ? null : _modules?.Resolve(name);
+        if (module is not null
+            && (assemblyName.Version is null || module.GetName().Version is not { } moduleVersion
+                || moduleVersion >= assemblyName.Version))
+            return module;
+        if (!string.IsNullOrEmpty(name) && !_probingDirs.IsDefaultOrEmpty
+            && MeshWeaver.NuGet.PackageAssemblyProbe.Resolve(this, assemblyName, _probingDirs, _logger) is { } packaged)
+            return packaged;
+        if (module is not null)
             return module;
 
         // For other dependencies, delegate to the default context

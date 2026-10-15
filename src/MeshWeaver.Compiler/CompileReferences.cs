@@ -98,24 +98,52 @@ public static class CompileReferences
     /// its place. A package can keep members in its implementation for binary compatibility that
     /// its reference assembly hides from every compile (System.Interactive's
     /// <c>EnumerableEx.MaxBy</c>, which made the BCL's <c>Enumerable.MaxBy</c> ambiguous — CS0121);
-    /// <c>src/</c> never sees them, and in-mesh C# must not either. The reference keeps
-    /// <paramref name="path"/> as its file path, so it names the same host assembly. A host
-    /// carrying a different build of the package gets its own file — the embedded surface
-    /// describes only the identity it was built from.
+    /// <c>src/</c> never sees them, and in-mesh C# must not either. The reference assembly is
+    /// materialised as a FILE holding exactly those bytes (content-addressed under the temp
+    /// directory), so every reader of <see cref="PortableExecutableReference.FilePath"/> — the
+    /// emit-failure capture, the identity reads of <see cref="WithPackageAssemblies"/> — sees the
+    /// image Roslyn compiled against. A host carrying a different build of the package, or a
+    /// surface that cannot be written, gets the host file.
     /// </summary>
     /// <param name="path">A host (TPA or container) assembly path.</param>
     public static MetadataReference HostReference(string path)
     {
         ArgumentException.ThrowIfNullOrEmpty(path);
+        var fileName = Path.GetFileName(path);
         using var surface = typeof(CompileReferences).Assembly.GetManifestResourceStream(
-            CompileSurfacePrefix + Path.GetFileName(path));
+            CompileSurfacePrefix + fileName);
         if (surface is null)
             return MetadataReference.CreateFromFile(path);
         var image = new byte[surface.Length];
         surface.ReadExactly(image);
-        return SameIdentity(image, path)
-            ? MetadataReference.CreateFromImage(image, filePath: path)
+        return SameIdentity(image, path) && MaterializeSurface(image, fileName) is { } surfacePath
+            ? MetadataReference.CreateFromFile(surfacePath)
             : MetadataReference.CreateFromFile(path);
+    }
+
+    /// <summary>Writes <paramref name="image"/> to <c>{temp}/meshweaver-compile-surfaces/{sha256}/{fileName}</c>
+    /// once (content-addressed, published by a no-replace rename) and returns the path; <c>null</c> when
+    /// it cannot be written.</summary>
+    private static string? MaterializeSurface(byte[] image, string fileName)
+    {
+        try
+        {
+            var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(image)).ToLowerInvariant();
+            var directory = Path.Combine(Path.GetTempPath(), "meshweaver-compile-surfaces", hash);
+            var target = Path.Combine(directory, fileName);
+            if (File.Exists(target) && new FileInfo(target).Length == image.Length)
+                return target;
+            Directory.CreateDirectory(directory);
+            var temporary = Path.Combine(directory, fileName + "." + Guid.NewGuid().ToString("N") + ".tmp");
+            File.WriteAllBytes(temporary, image);
+            if (!MeshWeaver.Utils.NoReplaceMove.TryMove(temporary, target))
+                File.Delete(temporary);
+            return File.Exists(target) && new FileInfo(target).Length == image.Length ? target : null;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 
     private const string CompileSurfacePrefix = "MeshWeaver.Compiler.CompileSurface.";

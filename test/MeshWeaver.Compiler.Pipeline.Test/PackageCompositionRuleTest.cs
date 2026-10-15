@@ -159,4 +159,36 @@ public sealed class PackageCompositionRuleTest : IDisposable
                 ImmutableArray<string>.Empty,
                 ImmutableDictionary<string, string>.Empty));
     }
+
+    /// <summary>
+    /// Generator discovery loads only assemblies that can hold a generator, but a generator's OWN
+    /// dependencies still load: here the generator derives from a helper (no Roslyn reference) that
+    /// sits in another package directory the default context cannot probe.
+    /// </summary>
+    [Fact]
+    public void AGeneratorWhoseTypeDerivesFromAHelperInAnotherPackage_IsDiscovered()
+    {
+        var suffix = Guid.NewGuid().ToString("N");
+        var helperName = "MwGenHelper" + suffix;
+        var helper = Emit("helper", helperName, "1.0.0.0",
+            "public abstract class HelperBase" + suffix + " { public string Hint => \"helper\"; }");
+        var generatorDir = Path.Combine(root, "generator");
+        Directory.CreateDirectory(generatorDir);
+        var generator = Path.Combine(generatorDir, "MwGen" + suffix + ".dll");
+        var compilation = CSharpCompilation.Create("MwGen" + suffix,
+            [CSharpSyntaxTree.ParseText(
+                "using Microsoft.CodeAnalysis;\n"
+                + "[Generator] public sealed class Gen" + suffix + " : HelperBase" + suffix + ", ISourceGenerator {\n"
+                + "  public void Initialize(GeneratorInitializationContext context) { }\n"
+                + "  public void Execute(GeneratorExecutionContext context) => context.AddSource(\"g.cs\", \"public static class FromGen { }\");\n"
+                + "}")],
+            [.. CompileReferences.Default, MetadataReference.CreateFromFile(helper)],
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        var emitted = compilation.Emit(generator);
+        Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics));
+
+        SourceGeneratorLoader.CanDefineGenerators(helper).Should().BeFalse();
+        SourceGeneratorLoader.Discover([helper, generator], Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance)
+            .Should().ContainSingle();
+    }
 }

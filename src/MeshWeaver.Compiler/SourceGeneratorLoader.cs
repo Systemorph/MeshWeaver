@@ -22,12 +22,69 @@ internal static class SourceGeneratorLoader
     /// <c>#r</c>-resolved assemblies — a SMALL, node-specific set, never the full framework
     /// reference list). Non-generator assemblies contribute nothing.
     /// </summary>
-    public static ImmutableArray<ISourceGenerator> Discover(IEnumerable<string> assemblyPaths, ILogger logger) =>
-        assemblyPaths
+    public static ImmutableArray<ISourceGenerator> Discover(IEnumerable<string> assemblyPaths, ILogger logger)
+    {
+        var paths = assemblyPaths
             .Where(p => !string.IsNullOrEmpty(p))
             .Distinct(StringComparer.OrdinalIgnoreCase)
-            .SelectMany(p => LoadFrom(p, logger))
-            .ToImmutableArray();
+            .ToList();
+        var byName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var path in paths)
+            byName.TryAdd(Path.GetFileNameWithoutExtension(path), path);
+        var preloaded = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var builder = ImmutableArray.CreateBuilder<ISourceGenerator>();
+        foreach (var path in paths.Where(CanDefineGenerators))
+        {
+            PreloadDependencies(path, byName, preloaded, logger);
+            builder.AddRange(LoadFrom(path, logger));
+        }
+        return builder.ToImmutable();
+    }
+
+    /// <summary>
+    /// Loads, dependencies first, the assemblies among the candidates that a GENERATOR assembly
+    /// references (transitively) and the host does not ship — e.g. a helper package a generator's
+    /// type derives from, which lives in another package directory the default context cannot probe.
+    /// Only a generator's own closure is loaded; an ordinary library of the <c>#r</c> closure (the
+    /// SqlClient stub) never is.
+    /// </summary>
+    private static void PreloadDependencies(
+        string path, IReadOnlyDictionary<string, string> byName, HashSet<string> preloaded, ILogger logger)
+    {
+        foreach (var reference in ReferencedNames(path))
+        {
+            if (!byName.TryGetValue(reference, out var dependency) || !preloaded.Add(reference))
+                continue;
+            if (MeshWeaver.NuGet.PackageAssemblyProbe.HostIdentityOf(reference) is not null)
+                continue; // the host binds it
+            PreloadDependencies(dependency, byName, preloaded, logger);
+            try
+            {
+                Assembly.LoadFrom(dependency);
+            }
+            catch (Exception ex) when (ex is IOException or BadImageFormatException or FileLoadException)
+            {
+                logger.LogDebug(ex, "SourceGeneratorLoader: could not preload generator dependency {Path}", dependency);
+            }
+        }
+    }
+
+    private static IEnumerable<string> ReferencedNames(string path)
+    {
+        try
+        {
+            using var stream = File.OpenRead(path);
+            using var pe = new System.Reflection.PortableExecutable.PEReader(stream);
+            if (!pe.HasMetadata) return [];
+            var reader = System.Reflection.Metadata.PEReaderExtensions.GetMetadataReader(pe);
+            return [.. reader.AssemblyReferences.Select(h => reader.GetString(reader.GetAssemblyReference(h).Name))];
+        }
+        catch (Exception e) when (e is IOException or BadImageFormatException or UnauthorizedAccessException
+                                      or InvalidOperationException)
+        {
+            return [];
+        }
+    }
 
     /// <summary>
     /// True when the assembly at <paramref name="path"/> can define a generator at all: it
