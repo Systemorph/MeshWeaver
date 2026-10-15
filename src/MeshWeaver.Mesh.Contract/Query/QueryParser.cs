@@ -516,7 +516,6 @@ public partial class QueryParser
         // namespaces when scope:selfAndAncestors. This is what lets a SINGLE query union
         // built-in + per-context + per-NodeType + per-user instances (see AgentPickerProjection).
         string[]? namespaceAlternation = null;
-        bool namespaceAlternationNegated = false;
         // Where each wildcard `namespace:*/X` LIKE filter landed in filterTokens, so the post-loop
         // pass can widen it to the SUBTREE once `scope:` is known (the qualifier may appear AFTER
         // the namespace token). See WidenWildcardNamespacesToSubtree.
@@ -634,11 +633,25 @@ public partial class QueryParser
                     // Alternation `namespace:A|B|C` (parsed to In/NotIn with >1 values) is an EXACT
                     // MEMBERSHIP constraint across the listed namespaces, not a single base namespace
                     // + scope walk. Deferred to post-loop resolution (a `namespace IN (...)` filter).
-                    if (token.Condition!.Operator is QueryOperator.In or QueryOperator.NotIn
-                        && token.Condition.Values.Length > 1)
+                    //
+                    // 🚨 A NEGATED alternation `-namespace:A|B` is an EXCLUSION FILTER, never the
+                    // namespace constraint (#6828, review of #6837): deferring it with the positive
+                    // form cleared the query's anchor and reset its scope in the post-loop pass, so
+                    // `namespace:X -namespace:X/A|X/B` lost `X` — refused as unanchored, or, with
+                    // `partitions:all`, answered from outside `X`. It is emitted here as the
+                    // `namespace NotIn (...)` filter the deferred pass would have produced, and
+                    // leaves the anchor and scope alone, like the single `-namespace:X` below.
+                    if (token.Condition!.Operator is QueryOperator.NotIn && token.Condition.Values.Length > 1)
+                    {
+                        filterTokens.Add(new Token(TokenType.Comparison, string.Empty,
+                            new QueryCondition("namespace", QueryOperator.NotIn,
+                                token.Condition.Values.Select(v => v.Trim('/'))
+                                    .Distinct(StringComparer.OrdinalIgnoreCase).ToArray())));
+                        continue;
+                    }
+                    if (token.Condition.Operator is QueryOperator.In && token.Condition.Values.Length > 1)
                     {
                         namespaceAlternation = token.Condition.Values;
-                        namespaceAlternationNegated = token.Condition.Operator == QueryOperator.NotIn;
                         namespaceUsed = true;
                         continue;
                     }
@@ -845,7 +858,7 @@ public partial class QueryParser
                 .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             filterTokens.Add(new Token(TokenType.Comparison, string.Empty,
                 new QueryCondition("namespace",
-                    namespaceAlternationNegated ? QueryOperator.NotIn : QueryOperator.In, distinct)));
+                    QueryOperator.In, distinct)));
             path = null;
             scope = QueryScope.Exact;
         }
