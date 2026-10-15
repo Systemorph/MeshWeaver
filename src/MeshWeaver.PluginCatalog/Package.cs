@@ -507,6 +507,25 @@ public record PackageManifest
     public ImmutableSortedSet<string>? UnreadableFiles { get; init; }
 
     /// <summary>
+    /// 🚨 The declared files that ARE nodes but that this host deliberately does not hold: a
+    /// package's NodeType definition rows (<c>nodeType: NodeType</c>) on a CLOSED TYPE SET
+    /// (<c>Mesh:ClosedTypeSet=true</c>, <c>Doc/Architecture/ClosedTypeSet</c>, #6627). There a row
+    /// can never define a type — it could only ever settle at the closed-set refusal and read as
+    /// <c>Error</c> in every NodeType sweep — so the installer writes none and removes the ones it
+    /// left before.
+    ///
+    /// <para><b>Why the record carries it.</b> The install-completeness sweep derives what a package
+    /// owes the mesh from <see cref="InstalledFiles"/>; without this set every withheld row would be
+    /// reported ABSENT and handed to the heal, which would reinstall the package to restore a node
+    /// the installer will never write. Recorded by the writer, merged like
+    /// <see cref="UnreadableFiles"/> (an incremental update only examined what it fetched), and
+    /// excluded from the declared population and from the restore widening.</para>
+    ///
+    /// <para><c>null</c> on an open mesh and on every record written before this field existed.</para>
+    /// </summary>
+    public ImmutableSortedSet<string>? WithheldFiles { get; init; }
+
+    /// <summary>
     /// Opt IN to unattended updates for this installed package: when the source repo's CI goes
     /// green and this module's content hash actually moved, install the delta without waiting for
     /// a human to click Update. Unset — the platform default — the record stays on the reminder
