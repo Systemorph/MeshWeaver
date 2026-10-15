@@ -203,7 +203,9 @@ public static class InstanceRebootExecutor
                         var failed = rows.Where(r => r.Outcome == ModuleSourceUpdateOutcome.Failed).ToImmutableList();
                         var lines = rows.Select(r => $"sync {r.ConfigPath}: {r.Outcome} — {r.Detail}").ToArray();
                         var summary = $"{updated.Count} module source(s) updated, {failed.Count} failed, "
-                                      + $"{rows.Count - updated.Count - failed.Count} skipped (not module sources)"
+                                      // Reason-neutral: a row is skipped as not a module source OR as not
+                                      // started behind an unfinished import (#6625) — each sync line says which.
+                                      + $"{rows.Count - updated.Count - failed.Count} skipped (each sync line names why)"
                                       + (failed.IsEmpty ? "" : ": " + string.Join("; ", failed.Select(f => $"{f.ConfigPath} — {f.Detail}")));
                         var outcome = !failed.IsEmpty ? InstanceRebootStepOutcome.Failed
                             : updated.IsEmpty ? InstanceRebootStepOutcome.Skipped

@@ -22,6 +22,9 @@
          their decision table is pinned in core (GreenBuildPublishSignalTest) rather than travelling
          to the satellite with the suite that boots one. -->
     <InternalsVisibleTo Include="MeshWeaver.Documentation.Test" />
+    <!-- AHungImportCannotHoldTheRebootTest substitutes ModuleSourceUpdate's activity watch to fault
+         or end it after the activity exists (#6753). -->
+    <InternalsVisibleTo Include="MeshWeaver.Hosting.Test" />
   </ItemGroup>
 
   <ItemGroup>
