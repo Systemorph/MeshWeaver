@@ -89,6 +89,7 @@ For the surrounding test-writing rules, see [Writing Tests](/Doc/Architecture/Wr
 | `.Be(expected, because?, cancellationToken?)` | `Task<ObservableAssertions<T>>` | First emission must equal `expected`. |
 | `.Complete(because?, cancellationToken?)` | `Task<ObservableAssertions<T>>` | Stream must complete within the timeout (no value required). |
 | `.NotEmit(within: t, because?, cancellationToken?)` | `Task<ObservableAssertions<T>>` | Nothing must arrive within `t` — the **one** place a fixed wait is correct. Keep `t` short. |
+| `.NotEmitBefore(settled, because?, cancellationToken?)` | `Task<ObservableAssertions<T>>` | Nothing may arrive before `settled` emits — a negative bounded by a POSITIVE signal. Fails if `settled` does not arrive within the chain's timeout. **Prefer this to `NotEmit` whenever any settled signal exists** (see [Writing Tests](/Doc/Architecture/WritingTests) → "A negative assertion ends on a settled signal"). |
 
 Every terminal wait takes a trailing `cancellationToken`. It cancels the WAIT, not the stream: the awaited task settles as cancelled (`OperationCanceledException`) and the subscription is dropped. A test that declares a `Timeout` passes `TestContext.Current.CancellationToken` there — xunit.v3 4.x cancels it when the timeout fires, and its `xUnit1069` analyzer makes a `Timeout` that never consumes the token a build error (see [Writing Tests, Rule 2a](/Doc/Architecture/WritingTests)). A cancelled wait is never re-described as "did not emit", and `NotEmit` never reads it as a pass.
 
@@ -217,7 +218,7 @@ await stream.Scan(ImmutableList<T>.Empty, (acc, change) => acc.AddRange(change.I
     .Should().Match(acc => acc.Count == N);
 ```
 
-`.NotEmit(within)` is the only place a fixed wait is intentional — a "nothing should happen" test has no positive signal to wait for. Keep the window short.
+`.NotEmit(within)` is the only place a fixed wait is intentional, and only when a "nothing should happen" test truly has no positive signal to wait for. Keep the window short. When the system offers ANY later fact that exists only once the guarded step was processed — the owner's answer to a request posted after it, a sentinel write through the same pipeline, the create response that follows its post-creation handlers — use `.NotEmitBefore(settled)` or read the state once after that signal instead: a passing `NotEmit` always spends its whole window (#6817).
 
 ---
 
