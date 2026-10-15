@@ -91,9 +91,10 @@ public class BuildTriggeredSyncPinsTheBuiltCommitTest(ITestOutputHelper output)
     private IMeshService MeshService => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
     /// <summary>
-    /// 🚨 <b>A push imports at the pushed commit, and a RED build of that commit does not hold it.</b>
+    /// 🚨 <b>A push imports at the pushed commit, and a RED build on its branch does not hold it.</b>
     ///
-    /// <para>The red build (of the branch's previous commit) is delivered FIRST: it must fetch nothing
+    /// <para>The red build (of the branch's previous commit; the same-commit case is
+    /// <see cref="APush_ImportsAtItsCommit_ThoughThatCommitsOwnBuildIsRed"/>) is delivered FIRST: it must fetch nothing
     /// (a failed run is no signal of any kind). Then the push — which before this change logged and
     /// imported nothing — must reach GitHub at its own sha, and that fetch is the SETTLED signal for
     /// the red build's silence: nothing may be fetched before it (#6817). Against the old code this
@@ -126,6 +127,38 @@ public class BuildTriggeredSyncPinsTheBuiltCommitTest(ITestOutputHelper output)
             "the import must read the commit the push named, never the branch resolved at fetch time "
             + "(MeshWeaver.Plugins#1430)");
         requested.Should().NotBe("main");
+    }
+
+    /// <summary>
+    /// 🚨 <b>A RED build of the very commit a push names does not hold that push.</b> The same-commit
+    /// case: an implementation that refused a push only when THAT commit's own build had failed
+    /// would pass <see cref="APush_ImportsAtThePushedCommit_EvenThoughTheBranchsBuildIsRed"/> and
+    /// fails here.
+    ///
+    /// <para>The red build's silence is asserted on its own, ended by the sentinel push — not by the
+    /// pushed commit's fetch, which an erroneous build-triggered fetch of the same sha would
+    /// satisfy.</para>
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task APush_ImportsAtItsCommit_ThoughThatCommitsOwnBuildIsRed()
+    {
+        await Arrange("PushOwnRed", TestContext.Current.CancellationToken);
+
+        var redFetchesNothing = NothingFetchedBeforeTheSentinel(
+            "a red build is no signal of any kind, so it fetches nothing — not even its own commit");
+        var red = await Anonymously(() => Webhooks.Process("workflow_run",
+            BuildPayload(PushedSha, conclusion: "failure")));
+        red.Should().Be(0, "a red build is no publish signal and records nothing");
+        await DeliverTheSentinelPush();
+        await redFetchesNothing;
+
+        var fetched = repoClient.FetchedRefs.Where(r => r == PushedSha)
+            .Should().Within(TestTimeouts.Convergence * 2)
+            .Emit("the push must import although that very commit's build is red (policy sources-sync-on-push)");
+        var triggered = await Anonymously(() => Webhooks.Process("push", PushPayload(PushedSha)));
+
+        triggered.Should().Be(1, "the one sync source of this repository is selected by the push");
+        (await fetched).Should().Be(PushedSha);
     }
 
     /// <summary>
