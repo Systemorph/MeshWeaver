@@ -345,6 +345,7 @@ unmarked, because producers outside this repository may post it too.
 | `DeferredDeliveryNackedOnDisposeTest.ARequestWhoseProducerDeclaresTheReask_IsTeardownNormal_NotAnError` (`MeshWeaver.Messaging.Hub.Test`) | a delivery stamped `ReasksOnShutdown` still reported at Error when a teardown discards it, or no longer answered `ShuttingDown` (#5718) |
 | `PatchDiscardedByABringUpTeardownIsReaskedTest` (`MeshWeaver.Graph.Test`) | a node write parked behind a young activation's gates that does not land on the next activation after a direct teardown, or whose discard is reported at Error (#6733) |
 | `PostOptionsReaskStampTest` (`MeshWeaver.Messaging.Hub.Test`) | a reply built with `ResponseFor` / `WithRequestIdFrom` that inherits the request's `ReasksOnShutdown` stamp (#6717) |
+| `UnansweredReassertOnRecycleTest` (`MeshWeaver.Data.Test`) | an owner recycled while it holds the answer to a re-ask it accepted dropping that answer, so the subscriber's in-flight re-ask blocks every later one until the request timeout (#6759) |
 
 ## See also
 
@@ -371,6 +372,26 @@ arm logged it and dropped it, the heartbeat kept posting to the deleted owner ev
 answer that was already in the log. It is #1029's silence on the door #1029 did not close, and it is
 intermittent only because the owner's own teardown notice usually reaches the reader before the
 change-feed event latches the re-ask.
+
+## A held re-assert is answered when its stream ends (#6759)
+
+A re-ask that reaches an owner already serving the stream is a RE-ASSERT: the owner re-sends the
+stream's current state, then acknowledges. When the stream has no state yet, the owner holds its
+answer until the stream first emits. That hold used to be registered on the stream's disposal and do
+nothing there. So an owner recycled before its stream ever emitted dropped the answer: no ack, no
+refusal. The subscriber's re-ask stayed in flight until the request timeout (60 s), and its in-flight
+guard dropped every later re-ask in that window, including the one the owner's own end-of-stream
+announcement triggers. The read emitted nothing for the whole request timeout.
+
+The overlay self-heal makes this reachable: it recycles a per-node hub the moment its NodeType
+compiles. A reader whose initial subscribe and change-feed re-ask both queued behind that activation
+can have both processed, and the recycle run, before the fresh stream emits.
+
+The stream ending is now a terminal of its own. If the held answer is still unclaimed when the stream
+completes or is disposed, the owner refuses it with a transient `ShuttingDown` composed through
+`ShutdownNack` (banner and activation tag). The owner posts the refusal itself while it can, or else
+its parent posts it, the same route as the read and write NACKs above. The subscriber then rides the
+recycle out like any other refusal, and its next re-ask lands on the fresh activation.
 
 ## 🚨 The promise lives in the TEXT, not in the envelope (#4866)
 
