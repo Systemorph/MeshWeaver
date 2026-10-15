@@ -1973,6 +1973,7 @@
   "inbox.band.empty": "Nothing here.",
   "inbox.column.item": "Item",
   "inbox.column.source": "From",
+  "inbox.column.account": "Account",
   "inbox.column.when": "Last change",
   "inbox.column.open": "Open",
   "inbox.blocked.running": "Still running. It leaves this list when it finishes.",

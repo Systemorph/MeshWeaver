@@ -129,4 +129,18 @@ public record InboxQueryLeg
 
     /// <summary>The catalog key of the category's display name; when empty, the source's label is used.</summary>
     public string? CategoryLabelKey { get; init; }
+
+    /// <summary>
+    /// The query that finds the source's CONNECTION in the viewer's partition — a credential, an
+    /// account record, a first message over the channel — with <c>{viewer}</c> where the viewer's
+    /// partition belongs. When set, the inbox lists the source only for a viewer for whom it finds a
+    /// node: a mailbox nobody connected gets no switch, no menu entry and no read. Left empty, the
+    /// source is always listed (the platform's own approvals, notifications, chats).
+    /// <para>🚨 Anchored exactly as <see cref="Query"/> is — one partition, the viewer's own — and
+    /// cheap: it is asked for ONE node when the page opens. Never point it at a live provider's
+    /// folder; that would ask the provider before the page knows it is connected.</para>
+    /// <para>Every leg of one source should agree; the inbox lists a source when ANY of its legs'
+    /// connection queries finds a node, or when one of its legs names none.</para>
+    /// </summary>
+    public string? ConnectedWhen { get; init; }
 }
