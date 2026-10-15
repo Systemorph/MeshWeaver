@@ -149,7 +149,11 @@ public sealed class InstanceComboVerifier
             caveats.Add(
                 $"'{moving.ModuleId}' was materialised from a MOVING ref — this verdict is about "
                 + "the content the run happened to fetch, and a later run can resolve differently.");
-        foreach (var diverged in assembly.Modules.Where(m => m.ModuleVersionMatches == false))
+        // A divergence read at a MOVING ref is the sync-past-the-install case. One read at the
+        // install record's own commit (ExactCommit) cannot be: the commit does not move, and that
+        // entry's own error already names the diagnosis — blaming a later sync would contradict it.
+        foreach (var diverged in assembly.Modules.Where(m => m.ModuleVersionMatches == false
+                     && m.Pin != MaterializationPin.ExactCommit))
             caveats.Add(
                 $"'{diverged.ModuleId}' has diverged from its install record (the space synced past "
                 + $"the install: recorded {diverged.RecordedModuleVersion}, fetched "

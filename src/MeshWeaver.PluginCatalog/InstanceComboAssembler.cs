@@ -511,7 +511,7 @@ public sealed class InstanceComboAssembler
                 .Select(entries => entries.ToImmutableList());
 
         // Already read at HEAD: the absence IS the retirement fact, no second read.
-        if (string.Equals(gitRef, HeadRef, StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(gitRef, HeadRef, StringComparison.Ordinal))
             return Observable.Return(outcomes
                 .Select(outcome => outcome.Absent
                     ? Retire(outcome, outcome.Entry.ResolvedCommit)
@@ -552,7 +552,7 @@ public sealed class InstanceComboAssembler
                         ? $"'{spec.Subdirectory ?? outcome.Entry.ModuleId}' no longer exists"
                         : $"folder '{spec.FolderFilter}/' no longer exists")
                     + $" in '{spec.RepositoryUrl}' — absent at '{spec.GitRef}'"
-                    + (string.Equals(spec.GitRef, HeadRef, StringComparison.OrdinalIgnoreCase)
+                    + (string.Equals(spec.GitRef, HeadRef, StringComparison.Ordinal)
                         ? ""
                         : $" and at '{HeadRef}'")
                     + (headCommit is null ? "" : $" ({headCommit})")

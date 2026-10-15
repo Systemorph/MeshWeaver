@@ -793,12 +793,17 @@ public interface IPackageSource
 /// One package read: its files and the exact commit the source served them at, when the source
 /// can name it (<see cref="IPackageSource.FetchPackage"/>).
 /// </summary>
-/// <param name="Files">The package's files — immutable, so the files a commit is stated for
-/// cannot change after the read.</param>
+/// <param name="Files">The package's files. Held as an immutable snapshot (copied unless it
+/// already is one), so the files a commit is stated for cannot change after the read; the
+/// parameter keeps its <see cref="IReadOnlyList{T}"/> type because modules bind this record's
+/// constructor exactly (the record-signature gate).</param>
 /// <param name="Commit">The full commit sha the files were read at; <c>null</c> when the source
 /// does not know it (an old registry, a source with no git snapshot behind it).</param>
-public sealed record PackageFetch(ImmutableList<PackageFile> Files, string? Commit)
+public sealed record PackageFetch(IReadOnlyList<PackageFile> Files, string? Commit)
 {
+    /// <summary>The package's files, as an immutable snapshot taken when the read was recorded.</summary>
+    public IReadOnlyList<PackageFile> Files { get; init => field = value.ToImmutableList(); } = Files.ToImmutableList();
+
     /// <summary>
     /// The ref an install record states for this read: the served <see cref="Commit"/> when it is
     /// a full commit sha, else <paramref name="requestedRef"/> — the pre-decision behaviour, which

@@ -1367,7 +1367,13 @@ public static partial class CatalogLayoutAreas
                             .Do(fetched => EnsureFetchComplete(pkg.Id, wanted, fetched.Files, logger))
                             .SelectMany(fetched => PackageInstaller.InstallNodeRepoDelta(
                                 hub, pkg, newManifest, fetched.Files, removedNodePaths,
-                                fetched.InstalledFromRef(snapshot ?? sourceRef), logger, authorizingUserId));
+                                // 🚨 The record states the MANIFEST's commit, never the delta's:
+                                // with a snapshot, SameSnapshot has just proved the delta was
+                                // served at it; without one (the manifest read named no commit —
+                                // an old registry mid-rollout) nothing ties the delta's commit to
+                                // the manifest, so the record keeps the requested ref rather than
+                                // name a commit the manifest may not have come from (#6718).
+                                snapshot ?? sourceRef, logger, authorizingUserId));
                     });
             });
     }

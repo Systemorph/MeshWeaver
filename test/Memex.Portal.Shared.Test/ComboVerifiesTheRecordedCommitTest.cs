@@ -76,6 +76,9 @@ public class ComboVerifiesTheRecordedCommitTest : IDisposable
         var assembled = run.Assembly.Modules.Single();
         assembled.Status.Should().Be(ModuleAssemblyStatus.Failed);
         assembled.Error.Should().Contain("diverges from the commit it was recorded at");
+        run.Verdict.Caveats.Should().NotContain(c => c.Contains("synced past the install"),
+            "a commit does not move, so a later sync cannot explain a divergence AT the recorded "
+            + "commit — that caveat would contradict the failure's own diagnosis");
         run.Verdict.Verdict.Should().Be(ComboVerdictKind.NotVerifiable);
     }
 
@@ -92,6 +95,8 @@ public class ComboVerifiesTheRecordedCommitTest : IDisposable
         var assembled = run.Assembly.Modules.Single();
         assembled.Status.Should().Be(ModuleAssemblyStatus.Failed);
         assembled.Error.Should().Contain("moduleVersion mismatch");
+        run.Verdict.Caveats.Should().Contain(c => c.Contains("synced past the install"),
+            "a divergence read at a moving ref IS the sync-past-the-install case");
         run.Verdict.RetiredModules.Should().BeEmpty("the package still exists in its source");
         run.Verdict.Verdict.Should().Be(ComboVerdictKind.NotVerifiable);
     }

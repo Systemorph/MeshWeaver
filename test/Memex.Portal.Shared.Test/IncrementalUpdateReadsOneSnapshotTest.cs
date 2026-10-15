@@ -103,6 +103,32 @@ public class IncrementalUpdateReadsOneSnapshotTest(ITestOutputHelper output) : M
             "the delta was asked for at A, served at B and refused; the fall-back reads main once");
     }
 
+    /// <summary>
+    /// A manifest read that names NO commit (an old registry mid-rollout) cannot pin the delta,
+    /// so the delta reads the moving ref — and if THAT read names a commit, the record must not
+    /// state it: nothing ties it to the manifest, which may have come from an earlier tip. The
+    /// record keeps the requested ref. Before the fix it stated B over A's manifest.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task AnUnnamedManifestRead_NeverStampsTheDeltasCommit()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        // Read 0 = the first install (names its commit), read 1 = the update's manifest read
+        // (names NONE), read 2 = the delta (names B).
+        var source = new AdvancingSource(honoursCommit: true, unnamedRead: 1);
+        await InstallInstalledVersion(source, ct);
+
+        source.Advance();
+        await Update(source, VersionA, ct);
+
+        var record = await Record();
+        record.InstalledFromRef.Should().Be("main",
+            "THE assertion: the manifest read named no commit, so the delta's commit B proves "
+            + "nothing about the manifest (A) and the record must not claim it");
+        source.Requested.Should().Equal(["main", "main", "main"],
+            "with no snapshot the delta reads the moving ref, as before #6718");
+    }
+
     // ── The registry's half: the snapshot token ─────────────────────────────────────────────────
 
     /// <summary>A full commit sha reachable from the configured ref is read; the configured ref
@@ -214,7 +240,7 @@ public class IncrementalUpdateReadsOneSnapshotTest(ITestOutputHelper output) : M
     /// when <c>honoursCommit</c>, and at the current tip otherwise (a registry that ignores the
     /// requested ref).
     /// </summary>
-    private sealed class AdvancingSource(bool honoursCommit) : IPackageSource
+    private sealed class AdvancingSource(bool honoursCommit, int unnamedRead = -1) : IPackageSource
     {
         private static readonly ImmutableDictionary<string, ImmutableList<PackageFile>> Trees =
             ImmutableDictionary<string, ImmutableList<PackageFile>>.Empty
@@ -239,12 +265,13 @@ public class IncrementalUpdateReadsOneSnapshotTest(ITestOutputHelper output) : M
             PackageManifest package, string gitRef, IReadOnlyCollection<string>? paths) =>
             Observable.Defer(() =>
             {
+                var index = requested.Count;
                 ImmutableInterlocked.Update(ref requested, r => r.Add(gitRef));
                 var commit = honoursCommit && Trees.ContainsKey(gitRef) ? gitRef : Tip();
                 var files = Trees[commit];
                 return Observable.Return(new PackageFetch(
                     paths is null ? files : files.Where(f => paths.Contains(f.RelativePath)).ToImmutableList(),
-                    commit));
+                    index == unnamedRead ? null : commit));
             });
 
         /// <summary>The commit <c>main</c> resolves to on this read; the last tip stays.</summary>
