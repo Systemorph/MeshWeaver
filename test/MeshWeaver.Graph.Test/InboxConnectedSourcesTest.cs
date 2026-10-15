@@ -1,3 +1,4 @@
+using System.Reactive;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Data;
@@ -6,6 +7,7 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Client;
+using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -103,6 +105,89 @@ public class InboxConnectedSourcesTest(ITestOutputHelper output) : MonolithMeshT
         InboxRows.Of(node, section, null, null).Account.Should().Be("jane.roe@example.com");
         InboxRows.Of(node with { Content = JsonSerializer.SerializeToElement(new { from = "max@example.com" }) }, section, null, null)
             .Account.Should().BeEmpty("a source that stamps no account leaves the column empty");
+    }
+
+    /// <summary>
+    /// The page is BUILT on the turn the connection reads answer on, not on the render's own turn —
+    /// and it is still built in the VIEWER's language: a German viewer reads German column titles.
+    /// The English viewer is the negative control, so the German half cannot pass on a catalog that
+    /// happens to say the same in both languages.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task APageBuiltAfterTheConnectionReads_SpeaksTheViewersLanguage()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string german = "inbox-de";
+        const string english = "inbox-en";
+        await CreateUserAsync(german, ct);
+        await CreateUserAsync(english, ct);
+
+        (await ColumnTitles(german, "de", ct)).Should().Contain("Konto",
+            "the account column is titled in the viewer's language, whichever turn the connection read answered on");
+        (await ColumnTitles(english, "en", ct)).Should().Contain("Account").And.NotContain("Konto");
+    }
+
+    /// <summary>
+    /// A connection read that could not see everything — a provider that never answered, a storage
+    /// read that did not finish — is NOT "not connected": the source stays listed. A complete empty
+    /// answer is the negative control: that, and only that, hides it.
+    /// </summary>
+    [Fact]
+    public void AnIncompleteEmptyAnswer_ListsTheSource_ACompleteOneDoesNot()
+    {
+        InboxLayoutArea.FoundConnection(new QueryResultChange<MeshNode> { ChangeType = QueryChangeType.Initial })
+            .Should().BeFalse("a complete empty answer: nothing is connected");
+        InboxLayoutArea.FoundConnection(new QueryResultChange<MeshNode> { ChangeType = QueryChangeType.Initial, SilentProviders = ["Postgres"] })
+            .Should().BeTrue("a provider that never answered cannot say the source is unconnected");
+        InboxLayoutArea.FoundConnection(new QueryResultChange<MeshNode> { ChangeType = QueryChangeType.Initial, SnapshotIncomplete = true })
+            .Should().BeTrue("an incomplete storage read cannot say the source is unconnected");
+        InboxLayoutArea.FoundConnection(new QueryResultChange<MeshNode> { ChangeType = QueryChangeType.Initial, Items = [new MeshNode("a", "x")] })
+            .Should().BeTrue("a found connection");
+    }
+
+    /// <summary>
+    /// The page is built on the turn the connection reads answer on — here a thread-pool turn that
+    /// carries no identity, as a database provider's or the wait's timer does — and is built in the
+    /// viewer's language there. The same answer read WITHOUT the restore is the negative control: on
+    /// that turn the ambient language is not the viewer's.
+    /// </summary>
+    [Fact]
+    public async Task ThePageIsBuiltInTheViewersIdentity_OnAnAnswerFromAnotherTurn()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var viewer = new AccessContext { ObjectId = "de-viewer", Name = "de-viewer", Locale = "de" };
+        var offTurn = Observable.Return(Unit.Default, System.Reactive.Concurrency.TaskPoolScheduler.Default);
+
+        (await InboxLayoutArea.InViewerContext(offTurn, Mesh.ServiceProvider, viewer, _ => access.Localize("inbox.column.account"))
+                .Should().Within(TestTimeouts.Convergence).Emit("the page", ct))
+            .Should().Be("Konto", "the build runs inside the viewer's identity");
+        (await offTurn.Select(_ => access.Localize("inbox.column.account"))
+                .Should().Within(TestTimeouts.Convergence).Emit("the unrestored build", ct))
+            .Should().Be("Account", "without the restore the off-turn build reads no viewer and falls back to English");
+    }
+
+    /// <summary>
+    /// A connection query is run for the path alone, whatever projection its provider wrote — none,
+    /// or a wider one — so asking whether a connection exists never reads what it holds.
+    /// </summary>
+    [Fact]
+    public void AConnectionQuery_ReadsThePathOnly()
+    {
+        const string q = "namespace:alice/_Account nodeType:Account";
+        new QueryParser().Parse(InboxQueries.ConnectionQuery(q)).Select.Should().Equal(["path"]);
+        new QueryParser().Parse(InboxQueries.ConnectionQuery(q + " select:content")).Select.Should().Equal(["path"]);
+        InboxQueries.ConnectionQuery(q + " select:path").Should().Be(q + " select:path", "an already narrow query is left as written");
+    }
+
+    private async Task<IReadOnlyList<string>> ColumnTitles(string owner, string locale, CancellationToken ct)
+    {
+        TestUsers.DevLogin(Mesh, new AccessContext { ObjectId = owner, Name = owner, Email = $"{owner}@meshweaver.io", Locale = locale });
+        var stream = GetClient().GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new Address(owner), new LayoutAreaReference(InboxLayoutArea.AreaName));
+        var grid = (DataGridControl)(await stream.GetControlStream(InboxLayoutArea.AreaName + "/Main/Grid")
+            .Should().Within(TestTimeouts.Convergence).Match(c => c is DataGridControl, "the grid", ct))!;
+        return [.. grid.Columns.OfType<PropertyColumnControl>().Select(c => c.Title?.ToString() ?? string.Empty)];
     }
 
     private async Task<IReadOnlyList<string>> Toggles(string owner, CancellationToken ct)

@@ -116,10 +116,26 @@ public static class InboxLayoutArea
         var all = Sections(legs, owner);
         // Only the sources the viewer has CONNECTED are listed — a mailbox nobody connected gets no
         // switch, no menu entry and no read (owner, 2026-10-15: "must get only configured sources").
-        return Connected(host.Hub, all, owner)
-            .Select(connected => (UiControl?)Page(host, owner, zone,
+        // 🚨 The page is BUILT on whatever turn the connection reads answer on — a query provider's
+        // thread, or the timer of the ConnectionWait fallback — where the ambient identity is not
+        // the viewer's, and host.Localize / host.ViewerLocale read the ambient. So the viewer's
+        // identity is restored around the build, or a German viewer gets an English page.
+        return InViewerContext(Connected(host.Hub, all, owner), host.Hub.ServiceProvider, host.ViewerContext ?? access?.Context,
+            connected => (UiControl?)Page(host, owner, zone,
                 [.. all.Where(section => connected.Contains(section.Source))]));
     }
+
+    /// <summary>
+    /// <paramref name="build"/> applied to each of <paramref name="source"/>'s answers inside
+    /// <paramref name="viewer"/>'s identity, on whichever thread the answer lands.
+    /// </summary>
+    /// <param name="source">The answers the page waits for.</param>
+    /// <param name="services">Resolves the mesh's access service.</param>
+    /// <param name="viewer">The identity the area was opened for; null passes through.</param>
+    /// <param name="build">Builds the output from one answer.</param>
+    internal static IObservable<TOut> InViewerContext<TIn, TOut>(
+        IObservable<TIn> source, IServiceProvider services, AccessContext? viewer, Func<TIn, TOut> build)
+        => source.CarryAccessContext(services, viewer).Select(build);
 
     /// <summary>How long the page waits for one source's connection query before it lists the source anyway.</summary>
     internal static readonly TimeSpan ConnectionWait = TimeSpan.FromSeconds(5);
@@ -137,9 +153,17 @@ public static class InboxLayoutArea
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(InboxLayoutArea));
         var mesh = hub.ServiceProvider.GetRequiredService<IMeshService>();
         IObservable<bool> Probe(string source, string query) =>
-            mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(query, owner) with { Limit = 1 })
+            mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(InboxQueries.ConnectionQuery(query), owner) with { Limit = 1 })
                 .Take(1)
-                .Select(change => change.Items.Any())
+                .Select(change =>
+                {
+                    var found = FoundConnection(change);
+                    if (found && change.Items.Count == 0)
+                        logger?.LogWarning(
+                            "Inbox: the connection read for {Source} was incomplete (silent providers: {Silent}; snapshot incomplete: {Incomplete}) — {Query}; listing it",
+                            source, string.Join(", ", change.SilentProviders ?? []), change.SnapshotIncomplete, query);
+                    return found;
+                })
                 // A read that ends without answering is no answer — listed, like a failure.
                 .DefaultIfEmpty(true)
                 .Timeout(ConnectionWait)
@@ -162,6 +186,17 @@ public static class InboxLayoutArea
             : bySource.CombineLatest().Take(1)
                 .Select(answers => answers.Where(a => a.Connected).Select(a => a.Source).ToImmutableHashSet(StringComparer.Ordinal));
     }
+
+    /// <summary>
+    /// Whether one connection query's first answer LISTS its source: it found a node, or it could not
+    /// see everything (<see cref="QueryResultChange{T}.SilentProviders"/>,
+    /// <see cref="QueryResultChange{T}.SnapshotIncomplete"/>). Only a COMPLETE empty answer says the
+    /// source is not connected — an incomplete one is no answer, and must not hide a source the
+    /// viewer did connect.
+    /// </summary>
+    /// <param name="change">The query's first answer.</param>
+    internal static bool FoundConnection(QueryResultChange<MeshNode> change)
+        => change.Items.Count > 0 || change.SnapshotIncomplete || change.SilentProviders is { Count: > 0 };
 
     /// <summary>The page over the connected sources' <paramref name="sections"/>.</summary>
     private static UiControl Page(LayoutAreaHost host, string owner, string? zone, ImmutableArray<InboxSection> sections)

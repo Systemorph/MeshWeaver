@@ -93,6 +93,22 @@ public static class InboxQueries
     /// </summary>
     public const string ConnectionProbe = "limit:1 select:path";
 
+    /// <summary>
+    /// <paramref name="query"/> as the page runs it to find a connection: projected onto the path
+    /// alone, whatever the provider wrote. A connection query with no <c>select:</c>, or a wider one,
+    /// would otherwise fetch a credential's or a message's content only to learn that it exists. The
+    /// term is appended when it is not already exactly <c>select:path</c>; the parser takes the LAST
+    /// one it reads. (The row count is bounded by the request itself.)
+    /// </summary>
+    /// <param name="query">A resolved connection query (<see cref="InboxQueryLeg.ConnectedWhen"/>).</param>
+    public static string ConnectionQuery(string query)
+    {
+        var select = new QueryParser().Parse(query).Select;
+        return select is { Count: 1 } && string.Equals(select[0], "path", StringComparison.Ordinal)
+            ? query
+            : query + " select:path";
+    }
+
     /// <summary>The fields a timed row reads — <see cref="TimedRowProjection"/> as a list.</summary>
     internal static ImmutableArray<string> TimedRowFields { get; } = [.. TimedRowProjection["select:".Length..].Split(',')];
 

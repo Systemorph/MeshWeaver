@@ -481,7 +481,12 @@ is (an unanchored one is refused and logged with the leg) and asked for one node
 connected gets no switch, no Only entry, no menu entry and no read. A source whose legs name no
 connection query (approvals, notifications, portal chats) is listed for everyone. A connection query
 that fails or does not answer within `InboxLayoutArea.ConnectionWait` LISTS its source and is
-logged — an unreadable connection must never hide a mailbox the viewer did connect. Core's own
+logged — an unreadable connection must never hide a mailbox the viewer did connect. So does an
+INCOMPLETE empty answer (a silent provider, an unfinished storage read — `InboxLayoutArea.FoundConnection`):
+only a complete empty answer hides a source. Whatever projection a provider wrote, the query runs for
+the path alone (`InboxQueries.ConnectionQuery`). The page is built on whichever turn those reads
+answer on, so it is built inside the viewer's own identity (`InboxLayoutArea.InViewerContext`) — the
+viewer's language and time zone, never the answering thread's. Core's own
 stored-mail source is connected once mail is stored for the viewer. Owner, 2026-10-15: *"i see a lot
 of stuff that's not even configured ==> must get only configured sources"*.
 
