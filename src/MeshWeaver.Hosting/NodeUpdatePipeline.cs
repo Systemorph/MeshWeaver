@@ -109,15 +109,18 @@ internal static class NodeUpdatePipeline
                     // tool, which sends what the agent passes, reset both this way), or a value it
                     // names — the live values win. Writing a caller's value would make the live node
                     // advertise a creation stamp the durable row never stores, reverting on reload.
-                    // A live node that has none yet (a projection-hydrated instance) takes the
-                    // caller's. Applied BEFORE the no-op gate, so an update that differs from the
-                    // live node only in creation metadata is a no-op.
+                    // That holds just as much when the live node has NO stamp (a node imported
+                    // without one, a projection-hydrated instance): its row already exists, so a
+                    // stamp an update supplied would still never be stored. An update therefore
+                    // keeps the live values UNCONDITIONALLY — a node without a stamp stays without
+                    // one (#6745). Applied BEFORE the no-op gate, so an update that differs from
+                    // the live node only in creation metadata is a no-op.
                     var candidate = node with
                     {
                         Version = live.Version,
                         LastModified = live.LastModified,
-                        CreatedDate = live.CreatedDate != default ? live.CreatedDate : node.CreatedDate,
-                        CreatedBy = !string.IsNullOrEmpty(live.CreatedBy) ? live.CreatedBy : node.CreatedBy,
+                        CreatedDate = live.CreatedDate,
+                        CreatedBy = live.CreatedBy,
                     };
                     if (MeshNode.SerializedEquals(live, candidate, hub.JsonSerializerOptions))
                         return live;
