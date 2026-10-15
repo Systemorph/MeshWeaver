@@ -470,24 +470,8 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
             // reactivation whose durable seed lost to a stale replay (the "incoming Version=834
             // is BELOW the stored Version=2423" refusals of 2026-07-30): deriving the stamp
             // from it manufactured a descending mint that MonotonicWriteGuard refused forever.
-            var ownFloor = Volatile.Read(ref _ownNodeVersionFloor);
             var stampedUpdates = updates
-                .Select(u =>
-                {
-                    var isOwn = string.Equals(u.Node.Path, _hubPath, StringComparison.OrdinalIgnoreCase);
-                    var floor = Math.Max(u.PreviousVersion, u.Node.Version);
-                    if (isOwn)
-                        floor = Math.Max(floor, ownFloor);
-                    // Already advanced by the write path that produced this change ⇒ that IS the
-                    // new revision. Only a node still sitting at (or below) its previous version
-                    // needs the bump here.
-                    var alreadyAdvanced = u.Node.Version > u.PreviousVersion
-                        && (!isOwn || u.Node.Version >= ownFloor);
-                    return u.Node with
-                    {
-                        Version = alreadyAdvanced ? u.Node.Version : MeshNode.NextVersion(floor)
-                    };
-                })
+                .Select(u => AdvanceVersion(u.Node, u.PreviousVersion))
                 .ToArray();
             instances = instances with
             {
@@ -524,6 +508,77 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
             }
 
         _lastSaved = instances;
+    }
+
+    /// <summary>
+    /// The version a CHANGED node commits at: its own when the write path that produced it already
+    /// advanced past <paramref name="previousVersion"/> (and, for the own node, reached
+    /// <see cref="_ownNodeVersionFloor"/>), otherwise <see cref="MeshNode.NextVersion"/> of the
+    /// highest version known for it. Derived from the node, never the per-activation hub clock (#325).
+    /// </summary>
+    private MeshNode AdvanceVersion(MeshNode node, long previousVersion)
+    {
+        var isOwn = string.Equals(node.Path, _hubPath, StringComparison.OrdinalIgnoreCase);
+        var ownFloor = Volatile.Read(ref _ownNodeVersionFloor);
+        var floor = Math.Max(previousVersion, node.Version);
+        if (isOwn)
+            floor = Math.Max(floor, ownFloor);
+        // Already advanced by the write path that produced this change ⇒ that IS the new
+        // revision. Only a node still sitting at (or below) its previous version needs the bump.
+        var alreadyAdvanced = node.Version > previousVersion && (!isOwn || node.Version >= ownFloor);
+        return alreadyAdvanced ? node : node with { Version = MeshNode.NextVersion(floor) };
+    }
+
+    /// <summary>
+    /// 🚨 <b>A DATA CHANGE THAT CHANGES A NODE COMMITS AT THE NODE'S NEXT VERSION.</b>
+    ///
+    /// <para>A <see cref="DataChangeRequest"/> carrying a node at the version it replaces — read the
+    /// node, change it, send it back: a synced subscriber's write-back, an undo, a script — used to
+    /// commit at that OLD version. <see cref="UpdateImpl"/> minted the next version, but only into
+    /// its own diff bookkeeping (<see cref="ITypeSource.Update"/> cannot transform the store), so the
+    /// store, every mirror and the persistence sampler all held the change at the old version. The
+    /// sampler's save then read as "already persisted" against the durable high-water the create
+    /// had left (<see cref="PostCommitFlushRegistry"/> — sound only because two distinct own-node
+    /// states never share a version), the dispose flush skipped it on the same predicate, and a
+    /// recycle reloaded the older row: an acknowledged change, silently gone.</para>
+    ///
+    /// <para>Minting here, inside the apply turn and before the merge, makes the committed state
+    /// carry its own version, so every downstream gate sees a new revision. The rule is exactly the
+    /// one <see cref="UpdateImpl"/> applies (<see cref="AdvanceVersion"/>), so a write path that
+    /// already advanced the version is not bumped twice, and UpdateImpl then finds nothing left to
+    /// mint. A node equal to the stored one but for its version is not a change; when it carries an
+    /// OLDER version the stored node commits in its place, so a stale echo never rewinds the version;
+    /// a node the store does not hold yet is a create and keeps the create path's stamping.</para>
+    /// </summary>
+    /// <param name="current">The MeshNode collection as the store holds it now.</param>
+    /// <param name="incoming">The nodes the data change carries.</param>
+    /// <returns>The nodes to commit, each changed one at its next version.</returns>
+    public override InstanceCollection PrepareCommit(InstanceCollection? current, InstanceCollection incoming)
+    {
+        if (current is null || current.Instances.Count == 0 || incoming.Instances.Count == 0)
+            return incoming;
+        var prepared = incoming.Instances
+            .Select(x => current.Instances.TryGetValue(x.Key, out var existing)
+                         && existing is MeshNode ex && x.Value is MeshNode nv
+                ? Prepare(x.Key, ex, nv)
+                : (KeyValuePair<object, object>?)null)
+            .OfType<KeyValuePair<object, object>>()
+            .ToArray();
+        return prepared.Length == 0
+            ? incoming
+            : incoming with { Instances = incoming.Instances.SetItems(prepared) };
+
+        KeyValuePair<object, object>? Prepare(object key, MeshNode existing, MeshNode node)
+        {
+            // Same reflection-free comparison as UpdateImpl's update detection.
+            if (!existing.Equals(node with { Version = existing.Version }))
+                return new(key, AdvanceVersion(node, existing.Version));
+            // Equal but for an OLDER version: not a change, and it must not commit as one — the
+            // incoming copy would REWIND the stored version (a stale echo of a state already
+            // superseded), and the next mint would then re-use a version already made durable.
+            // The stored node stands.
+            return node.Version < existing.Version ? new(key, existing) : null;
+        }
     }
 
     /// <summary>Records that this hub now holds own-node state at <paramref name="version"/>:

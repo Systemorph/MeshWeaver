@@ -734,7 +734,7 @@ it stops red naming `id-token: write`.
 
 ## The recorded commit is the reference, and a retired package is reported, not failed (#3848)
 
-Decided by the maintainer ("Record commit on install"). Before the decision, every roster instance
+Policy `record-served-commit-on-install` ([Policy Not Prose](../PolicyNotProse)). Before it, every roster instance
 that the run's identity reached came back `NotVerifiable` with **zero modules verified**
 (memex: 86 modules, memex-cloud: 124; run 38416709107). The cause was not the candidate. The
 assembler refuses the whole root when any one module cannot be pinned, and two classes of module
@@ -760,6 +760,34 @@ could never be pinned:
    **proves** the recorded `moduleVersion` there. Content that diverges from its recorded commit
    fails (`moduleVersion mismatch at the recorded commit`), and no `--allow-moving` excuses it,
    because a commit does not move.
+
+### One snapshot for the manifest and the delta (#6718)
+
+An incremental update reads TWICE: first `manifest.lock`, to diff it against the record, then the
+changed files. Both reads used to ask for the moving ref, so a ref that advanced from commit A to B
+between them produced a record pairing A's module version and file map with B's files and B's
+`installedFromRef`. The verifier then refused the record at B, loudly, but the partition already
+held a mix of two snapshots.
+
+- **The manifest read's commit pins the delta read.** `CatalogLayoutAreas.IncrementalUpdate` takes
+  the commit the first read was served at (`SnapshotOf`) and asks for the delta **at that commit**;
+  the record states it too. A source that names no commit (an older registry) reads the ref twice,
+  as before, because there is nothing to pin to.
+- **A delta served at any other commit is refused** (`SameSnapshot`), naming both commits. The
+  caller falls back to a full install, which reads manifest and files in ONE fetch. So a source that
+  ignores the requested commit can cost a full install, and can never produce a mixed record.
+- **The registry honours the commit as a snapshot token.** `POST /api/plugins/files` reads its
+  configured ref, except when `ref` is a full commit sha **reachable from** that configured ref
+  (`IPackageSource.PublishesCommit`: a GitHub compare `ahead`/`identical`, or
+  `git merge-base --is-ancestor` for a local source). A commit that exists only on another branch,
+  an unknown sha, or a source that cannot establish ancestry reads the configured ref, as before,
+  so the token can never become a way to read a package at an unpublished commit. Every decorator
+  forwards `PublishesCommit`, because the interface default establishes nothing.
+
+Pinned by `IncrementalUpdateReadsOneSnapshotTest`: a source whose ref advances between the two
+reads and that honours the commit (the delta lands on A), the same advance at a source that ignores
+the requested commit (refused, then one full read at B), and the registry's ref choice for a
+reachable sha, an unreachable sha and a branch name.
 
 **No backfill.** A record written before the decision carries the requested ref (`main`, `HEAD`)
 and keeps the old path (fetch the moving ref and prove the hash) until its next update restamps

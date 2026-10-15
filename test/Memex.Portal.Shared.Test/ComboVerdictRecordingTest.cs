@@ -213,6 +213,64 @@ public class ComboVerdictRecordingTest(ITestOutputHelper output) : MonolithMeshT
             "the per-module reason names WHICH module prevented verification");
     }
 
+    /// <summary>
+    /// Retired modules (#3848, policy <c>record-served-commit-on-install</c>) render under their
+    /// own heading on EVERY verdict branch, and apart from the failed and not-verified lists: a
+    /// retired module is named, and never reads as a failure.
+    /// </summary>
+    [Theory]
+    [InlineData(ComboVerdictKind.Green)]
+    [InlineData(ComboVerdictKind.Red)]
+    [InlineData(ComboVerdictKind.NotVerifiable)]
+    public void StatusMarkdown_RetiredModules_AreNamedUnderTheirOwnHeading_OnEveryVerdict(ComboVerdictKind kind)
+    {
+        var verdict = (kind == ComboVerdictKind.Red ? RedVerdict(Tag) : GreenVerdict(Tag)) with
+        {
+            Verdict = kind,
+            RetiredModules =
+            [
+                new RetiredModule { ModuleId = "PlatformUI", Reason = "retired, not verifiable: gone at HEAD" },
+                new RetiredModule { ModuleId = "DeepSign", Reason = "retired, not verifiable: gone at HEAD" },
+            ],
+        };
+        if (kind == ComboVerdictKind.NotVerifiable)
+            verdict = verdict with
+            {
+                Modules =
+                [
+                    PassedModule("Widget") with
+                    {
+                        Outcome = ModuleVerificationOutcome.NotVerified,
+                        Failures = ["Refused: pinned only to a moving ref"],
+                    },
+                ],
+            };
+        var content = new UpdatePolicyContent { LatestAvailableTag = Tag, ComboVerifications = [verdict] };
+
+        var markdown = UpdatePolicySettingsTab.StatusMarkdown(content, EchoLocalizer);
+
+        markdown.Should().Contain("ui.updateRetiredModules[2]",
+            "the retired modules carry their own heading, with their count");
+        var retiredBlock = markdown[markdown.IndexOf("ui.updateRetiredModules[2]", StringComparison.Ordinal)..];
+        retiredBlock.Should().Contain("- **PlatformUI**").And.Contain("- **DeepSign**",
+            "every retired module is named beneath that heading");
+        markdown[..markdown.IndexOf("ui.updateRetiredModules[2]", StringComparison.Ordinal)]
+            .Should().NotContain("PlatformUI", "a retired module is never listed as failed or not verified")
+            .And.NotContain("DeepSign");
+        if (kind == ComboVerdictKind.Red)
+            markdown.Should().Contain("**Widget**", "the failing module is still listed apart");
+    }
+
+    /// <summary>NEGATIVE CONTROL — a verdict with no retired modules renders no retired heading.</summary>
+    [Fact]
+    public void StatusMarkdown_NoRetiredModules_RendersNoRetiredHeading()
+    {
+        var content = new UpdatePolicyContent { LatestAvailableTag = Tag, ComboVerifications = [GreenVerdict(Tag)] };
+
+        UpdatePolicySettingsTab.StatusMarkdown(content, EchoLocalizer)
+            .Should().NotContain("ui.updateRetiredModules");
+    }
+
     [Fact]
     public void StatusMarkdown_NoVerdictForTheTag_RendersThePlainAvailableLine()
     {

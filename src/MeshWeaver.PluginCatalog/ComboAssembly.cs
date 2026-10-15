@@ -89,7 +89,7 @@ public static class ModuleAssemblyStatus
     /// <b>Retired, not verifiable</b> (MeshWeaver#3848): the module's source folder no longer
     /// exists — not at the ref it was recorded at, and not at the source repository's
     /// <c>HEAD</c> — so its content can never be re-materialised and nothing about it can be
-    /// verified. Decided by the maintainer: such a module is REPORTED, and it does NOT fail the
+    /// verified. Policy <c>record-served-commit-on-install</c>: such a module is REPORTED, and it does NOT fail the
     /// verification. A folder missing at the recorded ref but still present at <c>HEAD</c> is
     /// <see cref="Failed"/>, never this — the record is wrong, the package is not gone.
     /// </summary>

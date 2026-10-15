@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.GitSync;
@@ -124,8 +125,22 @@ public sealed class GitHubPackageSource : IPackageSource
             {
                 Files = fetched.Files
                     .Where(f => paths.Contains(f.RelativePath, StringComparer.Ordinal))
-                    .ToList(),
+                    .ToImmutableList(),
             });
+
+    /// <summary>
+    /// The ancestry test behind <see cref="IPackageSource.PublishesCommit"/> — the transport's
+    /// <see cref="IGitHubRepoClient.IsAncestor"/> (repository url, ancestor sha, descendant ref,
+    /// token). Absent ⇒ ancestry is never established and a registry over this source serves only
+    /// its configured ref (MeshWeaver#6718).
+    /// </summary>
+    public Func<string, string, string, string, IObservable<bool>>? IsAncestor { get; init; }
+
+    /// <inheritdoc />
+    IObservable<bool> IPackageSource.PublishesCommit(string commit, string gitRef) =>
+        !PackageFetch.IsCommitSha(commit) || IsAncestor is not { } isAncestor
+            ? Observable.Return(false)
+            : tokenProvider().SelectMany(token => isAncestor(repoUrl, commit, gitRef, token));
 
     private IObservable<PackageFetch> FetchFolder(PackageManifest package, string gitRef) =>
         tokenProvider().SelectMany(token => NarrowFetch is { } narrow
@@ -135,7 +150,7 @@ public sealed class GitHubPackageSource : IPackageSource
             // on `RepoFile.Binary`), so projecting only `Content` publishes an empty file. See
             // PackageFile / issue #848.
             .Select(snapshot => new PackageFetch(
-                snapshot.Files.Select(f => new PackageFile(f.Path, f.Content, f.Binary)).ToList(),
+                snapshot.Files.Select(f => new PackageFile(f.Path, f.Content, f.Binary)).ToImmutableList(),
                 snapshot.CommitSha));
 
     private static bool IsManifest(string path) =>

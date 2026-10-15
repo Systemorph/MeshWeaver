@@ -200,6 +200,19 @@ public static class PackageInstaller
     internal const string CodeDefaultPartition = "type";
 
     /// <summary>
+    /// The NodeType row <see cref="InstallCode"/> SYNTHESIZES for a <see cref="PackageKind.Code"/>
+    /// package (<c>{install root}/{id}</c>), or <c>null</c> for every other kind. No installed file
+    /// maps to it, so a pass that derives node paths from <see cref="PackageManifest.InstalledFiles"/>
+    /// cannot name it; the boot repair derives it here instead (#6751), from the same definition the
+    /// install writes it under.
+    /// </summary>
+    /// <param name="manifest">The package (an install record's manifest).</param>
+    internal static string? SynthesizedNodeTypePathOf(PackageManifest manifest) =>
+        manifest.Kind == PackageKind.Code && !string.IsNullOrWhiteSpace(manifest.Id)
+            ? $"{InstallRootOf(manifest)}/{manifest.Id}"
+            : null;
+
+    /// <summary>
     /// 🚨 <b>Holds the package's root for exactly as long as the install runs (#3510) — so nothing
     /// else recycles it out from under the writes in flight beneath it.</b>
     ///
@@ -279,6 +292,11 @@ public static class PackageInstaller
             return Observable.Throw<InstallResult>(new InvalidOperationException(
                 $"Package '{manifest.Id}' has no installable content files."));
 
+        // 🚨 A closed type set holds no NodeType definition rows (#6627) — see ClosedTypeSetPackageRows.
+        var contentSplit = ClosedTypeSetPackageRows.Withhold(hub, nodes, manifest.Id, logger);
+        var pathOf = ClosedTypeSetPackageRows.PathMapOf(manifest, parsers);
+        nodes = contentSplit.Write;
+
         if (RefuseIfStaticShadowed(hub, manifest, nodes, logger) is { } shadowed)
             return shadowed;
 
@@ -304,12 +322,16 @@ public static class PackageInstaller
             .SelectMany(accessWrites => EnsureDeclaredAccess(
                     hub, manifest, partition, logger, nodes.Select(n => n.Path))
                 .Select(_ => accessWrites))
-            .SelectMany(accessWrites => content
-                .Select(n => UpsertIfChanged(hub, persistence, n, options)
+            // A content instance typed by a row this host withholds is created as the full
+            // install creates it — see UpsertIfChangedAmidWithheldTypes (#6627).
+            .SelectMany(accessWrites => WithheldTypesOf(hub, manifest.Id, contentSplit.WithheldPaths, pathOf)
+                .Select(withheldTypes => (accessWrites, withheldTypes)))
+            .SelectMany(t => content
+                .Select(n => UpsertIfChangedAmidWithheldTypes(hub, persistence, n, options, t.withheldTypes)
                     .Select(wrote => (n.Path, Wrote: wrote)))
                 .ToObservable().MergeBounded(batchSize).ToList()
                 .Select(contentWrites => (IReadOnlyList<(string Path, bool Wrote)>)
-                    accessWrites.Concat(contentWrites).ToArray()))
+                    t.accessWrites.Concat(contentWrites).ToArray()))
             .SelectMany(writes =>
             {
                 var written = writes.Where(w => w.Wrote).Select(w => w.Path).ToImmutableList();
@@ -332,8 +354,17 @@ public static class PackageInstaller
                     // consumers; with nothing released locally, `alreadyReleased` is empty.
                     .SelectMany(_ => ReleaseDependentsOutsidePackage(
                         hub, written, Array.Empty<string>(), manifest.Id, logger))
-                    .SelectMany(_ => WriteInstalledRecord(
-                        hub, manifest, installedFromRef, nodes.Length, authorizingUserId: authorizingUserId))
+                    // The record carries what the reconcile learned (#6627), exactly as the
+                    // node-repo lanes do: without it a withheld row reads as ABSENT to the
+                    // completeness sweep and the package is handed to the heal on every pass.
+                    .SelectMany(_ => ClosedTypeSetPackageRows.Reconcile(
+                        hub, manifest.Id,
+                        ClosedTypeSetPackageRows.NodePathsOf(manifest.InstalledFiles?.Keys, pathOf),
+                        contentSplit.WithheldPaths, logger))
+                    .SelectMany(outcome => WriteInstalledRecord(
+                        hub, manifest, installedFromRef, nodes.Length, authorizingUserId: authorizingUserId,
+                        withheld: ClosedTypeSetPackageRows.RecordInputs(
+                            outcome, manifest.InstalledFiles?.Keys, pathOf)))
                     .SelectMany(_ => WarmInstalledRoots(hub, manifest, nodes, logger))
                     // …then the package's committed binaries, into the warmed root's content
                     // collection — the half of "publish" that merging used to leave undone (#848).
@@ -3046,7 +3077,8 @@ public static class PackageInstaller
         ModuleManifest? moduleManifest = null, string? authorizingUserId = null,
         IReadOnlyCollection<string>? examinedFiles = null,
         IReadOnlyCollection<string>? unreadableFiles = null,
-        bool comparedEveryNode = true)
+        bool comparedEveryNode = true,
+        (IReadOnlyCollection<string>? Examined, IReadOnlyCollection<string>? Withheld) withheld = default)
     {
         var recordPath = $"{InstalledPartition}/{manifest.Id}";
         var serializerOptions = hub.JsonSerializerOptions;
@@ -3093,6 +3125,12 @@ public static class PackageInstaller
                     // update only examined what it fetched. See MergeUnreadableFiles.
                     UnreadableFiles = MergeUnreadableFiles(
                         existingRecord?.UnreadableFiles, examinedFiles, unreadableFiles,
+                        (moduleManifest?.Files ?? manifest.InstalledFiles)?.Keys.ToArray()),
+                    // 🚨 The NodeType rows a CLOSED type set does not hold (#6627) — recorded so the
+                    // completeness sweep does not count them as owed. Null on an open mesh.
+                    WithheldFiles = ClosedTypeSetPackageRows.MergeWithheldFiles(
+                        hub.ServiceProvider.IsClosedTypeSet(), existingRecord?.WithheldFiles,
+                        withheld.Examined, withheld.Withheld,
                         (moduleManifest?.Files ?? manifest.InstalledFiles)?.Keys.ToArray()),
                     // Transport-only: the candidate-side map rides in on the CATALOG entry for the
                     // diff and must not be persisted — the record's baseline is InstalledFiles
@@ -3159,7 +3197,7 @@ public static class PackageInstaller
         var partition = string.IsNullOrWhiteSpace(manifest.TargetPartition)
             ? CodeDefaultPartition
             : manifest.TargetPartition!;
-        var nodeTypePath = $"{partition}/{manifest.Id}";
+        var nodeTypePath = SynthesizedNodeTypePathOf(manifest)!;
         var sourceFolder = manifest.SourceFolder ?? manifest.Id;
         var parsers = new FileFormatParserRegistry(hub.JsonSerializerOptions, hub.ServiceProvider.GetServices<IFileFormatParser>());
 
@@ -3181,7 +3219,12 @@ public static class PackageInstaller
             Content = new NodeTypeDefinition { Configuration = manifest.NodeTypeConfiguration },
         };
 
-        var all = new[] { nodeTypeNode }.Concat(sourceNodes).ToArray();
+        // 🚨 A closed type set holds no NodeType definition rows (#6627): the synthesized type row
+        // is withheld (and a row an earlier install left is removed below), the Source nodes still
+        // install as records. Nothing is released — there is no row to compile.
+        var codeSplit = ClosedTypeSetPackageRows.Withhold(hub, [nodeTypeNode], manifest.Id, logger);
+        var writesType = codeSplit.WithheldPaths.Count == 0;
+        var all = (writesType ? new[] { nodeTypeNode } : []).Concat(sourceNodes).ToArray();
 
         if (RefuseIfStaticShadowed(hub, manifest, all, logger) is { } shadowed)
             return shadowed;
@@ -3195,7 +3238,9 @@ public static class PackageInstaller
         // closure below needs to know WHICH nodes moved, and `Merge` does not preserve order, so a
         // count (or a positional zip against sourceNodes) cannot be turned back into paths.
         return EnsureInstallPartitions(hub, partition, logger)
-            .SelectMany(_ => UpsertIfChanged(hub, persistence, nodeTypeNode, options)
+            .SelectMany(_ => (writesType
+                    ? UpsertIfChanged(hub, persistence, nodeTypeNode, options)
+                    : Observable.Return(false))
                 .Select(wrote => (nodeTypeNode.Path, Wrote: wrote)))
             .SelectMany(typeWrite => sourceNodes
                 .Select(n => UpsertIfChanged(hub, persistence, n, options)
@@ -3217,7 +3262,7 @@ public static class PackageInstaller
                 // kick a redundant Roslyn build. SEQUENCED, never fire-and-forget: the observable is
                 // cold, so a bare call would request no release at all, and an install that cannot
                 // order against the compiles it starts is the defect #1732 is about.
-                var releases = result.Written > 0
+                var releases = result.Written > 0 && writesType
                     ? SeedThenRequestReleases(hub, manifest.Id, [nodeTypePath], logger)
                     : Observable.Return(System.Reactive.Unit.Default);
                 return releases
@@ -3227,8 +3272,14 @@ public static class PackageInstaller
                     // leave every consumer stale (2026-08-25).
                     .SelectMany(_ => ReleaseDependentsOutsidePackage(
                         hub, written,
-                        result.Written > 0 ? [nodeTypePath] : Array.Empty<string>(),
+                        result.Written > 0 && writesType ? [nodeTypePath] : Array.Empty<string>(),
                         manifest.Id, logger))
+                    // The outcome is not stamped on the record: the synthesized row has no installed
+                    // file, so the completeness sweep never owes it and there is no file to record
+                    // as withheld. The boot repair DERIVES the row from the record instead
+                    // (SynthesizedNodeTypePathOf, #6751).
+                    .SelectMany(_ => ClosedTypeSetPackageRows.Reconcile(
+                        hub, manifest.Id, Array.Empty<string>(), codeSplit.WithheldPaths, logger))
                     .SelectMany(_ => WriteInstalledRecord(
                         hub, manifest, installedFromRef, all.Length, authorizingUserId: authorizingUserId))
                     .SelectMany(_ => WarmInstalledRoots(hub, manifest, all, logger))
@@ -3272,6 +3323,88 @@ public static class PackageInstaller
             .Take(1)
             .SelectMany(current => DecideAndWrite(hub, current, node, options))
             .Catch<bool, Exception>(_ => Upsert(hub, node).Select(_ => true));
+    }
+
+    /// <summary>
+    /// <c>UpsertIfChanged</c> for a lane that WITHHOLDS NodeType rows (#6627): a NEW node typed by one of the package's
+    /// <paramref name="withheldTypes"/> is created through the bulk lane, exactly as the full
+    /// install creates every new instance (<c>ValidateBulkTypes</c>' in-package rule), instead of the
+    /// per-node create, whose type check reads the store — where a withheld row is, by design,
+    /// absent — and would refuse the package's own instance as <c>InvalidNodeType</c>.
+    ///
+    /// <para>Narrow by construction: only a type the package itself DECLARES and this host withholds,
+    /// only one no static provider serves (a static type resolves on the per-node path anyway), only
+    /// a CREATE (an update keeping the type is not type-checked), and never the partition root or an
+    /// underscore satellite — those keep the per-node handler's guards, as in the full install.</para>
+    /// </summary>
+    private static IObservable<bool> UpsertIfChangedAmidWithheldTypes(
+        IMessageHub hub, IStorageAdapter? persistence, MeshNode node, JsonSerializerOptions options,
+        IReadOnlySet<string> withheldTypes)
+    {
+        if (persistence is null || !CreatesUnderAWithheldType(hub, node, withheldTypes))
+            return UpsertIfChanged(hub, persistence, node, options);
+        return persistence.Read(node.Path, options)
+            .Take(1)
+            .SelectMany(current => current is null
+                ? CreateTypedByAWithheldType(hub, persistence, node, options)
+                : DecideAndWrite(hub, current, node, options))
+            .Catch<bool, Exception>(_ => Upsert(hub, node).Select(_ => true));
+    }
+
+    /// <summary>True for a non-root, non-satellite node whose NodeType is one the package declares
+    /// and this host withholds, and which no static provider serves.</summary>
+    internal static bool CreatesUnderAWithheldType(IMessageHub hub, MeshNode node, IReadOnlySet<string> withheldTypes) =>
+        withheldTypes.Count > 0
+        && !string.IsNullOrEmpty(node.NodeType)
+        && withheldTypes.Contains(node.NodeType)
+        && node.Path.Contains('/', StringComparison.Ordinal)
+        && !node.Path.Split('/').Any(segment => segment.StartsWith('_'))
+        && hub.ServiceProvider.FindStaticNode(node.NodeType) is null;
+
+    /// <summary>
+    /// ONE node through the bulk lane — the same stamping, System scope and change-feed announcement
+    /// as the full install's bulk save — reporting a store that did not take it loudly.
+    /// </summary>
+    private static IObservable<bool> CreateTypedByAWithheldType(
+        IMessageHub hub, IStorageAdapter persistence, MeshNode node, JsonSerializerOptions options)
+    {
+        var now = MeshNode.StorageStableNow();
+        var stamped = MeshWeaver.Mesh.NodeTypeOperationalContent.WithoutOperational(node, options) with
+        {
+            State = MeshNodeState.Active,
+            CreatedDate = node.CreatedDate == default ? now : MeshNode.StorageStable(node.CreatedDate),
+            LastModified = now,
+        };
+        var changeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
+        return hub.ServiceProvider.GetService<AccessService>()
+            .RunAsSystem(() => persistence.WriteManyAndPublishCreated([stamped], options, changeFeed))
+            .Select(written => written.Count == 1
+                ? true
+                : throw new InvalidOperationException(
+                    $"Install of '{node.Path}' (typed by the withheld '{node.NodeType}') was not accepted by storage."));
+    }
+
+    /// <summary>
+    /// The NodeType paths a lane must treat as the package's own though it writes no row for them:
+    /// the rows this pass withheld plus those an earlier pass recorded as withheld
+    /// (<see cref="PackageManifest.WithheldFiles"/>), mapped through the install's own file map.
+    /// </summary>
+    /// <returns>Empty on an open mesh (every row is written there). A record that cannot be read
+    /// contributes nothing: the lane then falls back to the per-node create, which refuses LOUDLY —
+    /// never to a bulk write it could not justify.</returns>
+    private static IObservable<ImmutableHashSet<string>> WithheldTypesOf(
+        IMessageHub hub, string packageId, IEnumerable<string> withheldNow, Func<string, string?> pathOf)
+    {
+        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
+        if (!hub.ServiceProvider.IsClosedTypeSet() || persistence is null)
+            return Observable.Return(ImmutableHashSet<string>.Empty);
+        var now = withheldNow.ToImmutableHashSet(StringComparer.Ordinal);
+        var options = hub.JsonSerializerOptions;
+        return persistence.Read($"{InstalledPartition}/{packageId}", options).Take(1)
+            .Select(n => n?.ContentAs<PackageManifest>(options))
+            .DefaultIfEmpty(null)
+            .Catch<PackageManifest?, Exception>(_ => Observable.Return<PackageManifest?>(null))
+            .Select(record => now.Union(ClosedTypeSetPackageRows.NodePathsOf(record?.WithheldFiles, pathOf)));
     }
 
     // The write decision against a KNOWN current state — the body UpsertIfChanged wraps with its
@@ -3530,6 +3663,16 @@ public static class PackageInstaller
         if (nodes.Length == 0)
             return Observable.Throw<InstallResult>(new InvalidOperationException(
                 $"Node-repo plugin '{manifest.Id}' has no installable nodes."));
+
+        // 🚨 A CLOSED type set holds no NodeType definition rows (#6627) — they are withheld from
+        // every stage below, and the rows earlier installs left are removed before the record is
+        // written. The rows are still the package's DECLARED types, so an instance typed by one is
+        // validated as in-package exactly as on an open mesh (ValidateBulkTypes), and the retired-
+        // node prune still sees them as shipped (it must never prune a withheld path recursively).
+        var allParsed = nodes;
+        var split = ClosedTypeSetPackageRows.Withhold(hub, nodes, manifest.Id, logger);
+        var pathOf = ClosedTypeSetPackageRows.PathMapOf(manifest, parsers);
+        nodes = split.Write;
 
         if (RefuseIfStaticShadowed(hub, manifest, nodes, logger) is { } shadowed)
             return shadowed;
@@ -3812,6 +3955,7 @@ public static class PackageInstaller
         IObservable<System.Reactive.Unit> ValidateBulkTypes(IReadOnlyList<MeshNode> bulk)
         {
             var inPackage = nodeTypePaths
+                .Concat(split.WithheldPaths)
                 .Concat(root is not null && ImportWriteOrder.IsNodeTypeDefinition(root)
                     ? new[] { root.Path }
                     : Array.Empty<string>())
@@ -4124,15 +4268,21 @@ public static class PackageInstaller
                     // deleted kept serving its last-built assembly until the framework identity
                     // moved, then recompiled against zero sources and parked the portal's readiness.
                     .SelectMany(_ => PruneRetiredNodes(
-                        hub, manifest, moduleManifest, nodes, persistence, meshService, options, logger))
+                        hub, manifest, moduleManifest, allParsed, persistence, meshService, options, logger))
                     // The pruned paths are carried THROUGH the rest of the chain: together with
                     // `written` they are the change set the mesh-wide recompile closure runs over
                     // at the end (a retired Source/*.cs is exactly as stale-making for a foreign
                     // `shared=` consumer as a rewritten one).
-                    .SelectMany(pruned => WriteInstalledRecord(
+                    .SelectMany(pruned => ClosedTypeSetPackageRows.Reconcile(
+                            hub, manifest.Id,
+                            ClosedTypeSetPackageRows.NodePathsOf(moduleManifest?.Files.Keys, pathOf),
+                            split.WithheldPaths, logger)
+                        .Select(outcome => (Pruned: pruned, Withheld: ClosedTypeSetPackageRows.RecordInputs(
+                            outcome, moduleManifest?.Files.Keys ?? manifest.InstalledFiles?.Keys, pathOf))))
+                    .SelectMany(t => WriteInstalledRecord(
                             hub, manifest, installedFromRef, nodes.Length, moduleManifest,
-                            authorizingUserId, examined, unreadable)
-                        .Select(_ => pruned))
+                            authorizingUserId, examined, unreadable, withheld: t.Withheld)
+                        .Select(_ => t.Pruned))
                     // Adoption first (it can settle a release without compiling at all), then the
                     // FIRST wave: the root's own in-package NodeType, whose rebuild is precisely
                     // what SettleRetypedRoot waits for.
@@ -4407,6 +4557,13 @@ public static class PackageInstaller
         var unreadable = parsed.Unreadable;
         var examined = changedFiles.Select(f => f.RelativePath).ToArray();
 
+        // 🚨 A CLOSED type set holds no NodeType definition rows (#6627) — the same withholding as
+        // the full install, and the same removal of the rows earlier installs left, over EVERY node
+        // the new manifest declares (a delta touching none of the type files must still clear them).
+        var deltaSplit = ClosedTypeSetPackageRows.Withhold(hub, nodes, manifest.Id, logger);
+        var pathOf = ClosedTypeSetPackageRows.PathMapOf(manifest, parsers);
+        nodes = deltaSplit.Write;
+
         if (RefuseIfStaticShadowed(hub, manifest, nodes, logger) is { } shadowed)
             return shadowed;
 
@@ -4444,10 +4601,12 @@ public static class PackageInstaller
                         .TimeoutNamingTheLeg(TimeSpan.FromSeconds(30), $"waiting for NodeType '{path}' to become visible in storage"))
                     .ToObservable().Concat().LastAsync().Select(_ => System.Reactive.Unit.Default);
 
-        IObservable<IList<bool>> WriteAll(IReadOnlyList<MeshNode> batch) =>
+        // A NEW instance typed by a row this host withholds is created as the full install creates
+        // it — see UpsertIfChangedAmidWithheldTypes (#6627).
+        IObservable<IList<bool>> WriteAll(IReadOnlyList<MeshNode> batch, IReadOnlySet<string> withheldTypes) =>
             batch.Count == 0
                 ? Observable.Return((IList<bool>)new List<bool>())
-                : batch.Select(n => UpsertIfChanged(hub, persistence, n, options))
+                : batch.Select(n => UpsertIfChangedAmidWithheldTypes(hub, persistence, n, options, withheldTypes))
                     .ToObservable().Concat().ToList();
 
         // Prune the removed nodes — System-impersonated per delete, like every installer write.
@@ -4472,11 +4631,19 @@ public static class PackageInstaller
         return EnsureInstallPartitions(hub, manifest.TargetPartition ?? manifest.Id, logger)
             .SelectMany(_ => EnsureDeclaredAccess(hub, manifest, manifest.TargetPartition ?? manifest.Id,
                 logger, nodes.Select(n => n.Path)))
-            .SelectMany(_ => WriteAll(head))
-            .SelectMany(headWrites => TypesVisible()
-                .SelectMany(_ => WriteAll(tail))
-                .Select(tailWrites => (IList<bool>)headWrites.Concat(tailWrites).ToList()))
+            .SelectMany(_ => WithheldTypesOf(hub, manifest.Id, deltaSplit.WithheldPaths, pathOf))
+            .SelectMany(withheldTypes => WriteAll(head, withheldTypes)
+                .Select(headWrites => (headWrites, withheldTypes)))
+            .SelectMany(h => TypesVisible()
+                .SelectMany(_ => WriteAll(tail, h.withheldTypes))
+                .Select(tailWrites => (IList<bool>)h.headWrites.Concat(tailWrites).ToList()))
             .SelectMany(writes => Prune().Select(pruned => (Writes: writes, Pruned: pruned)))
+            .SelectMany(t => ClosedTypeSetPackageRows.Reconcile(
+                    hub, manifest.Id,
+                    ClosedTypeSetPackageRows.NodePathsOf(newManifest.Files.Keys, pathOf),
+                    deltaSplit.WithheldPaths, logger)
+                .Select(outcome => (t.Writes, t.Pruned, Withheld: ClosedTypeSetPackageRows.RecordInputs(
+                    outcome, newManifest.Files.Keys, pathOf))))
             .SelectMany(t =>
             {
                 var written = head.Concat(tail)
@@ -4528,7 +4695,7 @@ public static class PackageInstaller
                         hub, manifest, manifest.TargetPartition ?? manifest.Id, logger))
                     .SelectMany(_ => WriteInstalledRecord(hub, manifest, installedFromRef,
                         newManifest.Files.Count, newManifest, authorizingUserId,
-                        examined, unreadable, comparedEveryNode: false))
+                        examined, unreadable, comparedEveryNode: false, withheld: t.Withheld))
                     .SelectMany(_ => WarmInstalledRoots(hub, manifest, nodes, logger))
                     // A changed BINARY is a changed file like any other: manifest.lock hashes the
                     // `content/**` assets too, so a re-cut video is in `changedFiles` and an
@@ -4951,6 +5118,42 @@ public static class PackageInstaller
     }
 
     /// <summary>
+    /// The path the install of <paramref name="manifest"/> WRITES the node of
+    /// <paramref name="relativePath"/> at, or null when that file becomes no node — the same
+    /// mapping the lane itself applies. A node-repo file is canonical
+    /// (<see cref="NodePathForFile(string, FileFormatParserRegistry)"/>); a Content or Code package
+    /// strips its <see cref="PackageManifest.SourceFolder"/> and REBASES under its target
+    /// (<see cref="ParseNode"/>), so for <c>SourceFolder=Library</c>, <c>TargetPartition=Installed</c>
+    /// the file <c>Library/Widget.json</c> is the node <c>Installed/Widget</c>, never
+    /// <c>Library/Widget</c>.
+    ///
+    /// <para>🚨 Every caller that turns an install record's file map into node paths it then ACTS
+    /// on must use this — the closed-type-set reconcile deletes the NodeType rows it finds at those
+    /// paths as System (#6627), so a path the install did not write names someone else's node.</para>
+    /// </summary>
+    /// <param name="manifest">The package (or its install record).</param>
+    /// <param name="relativePath">The file's package-relative path.</param>
+    /// <param name="parsers">The parser registry the install uses.</param>
+    internal static string? InstalledNodePathOf(
+        PackageManifest manifest, string relativePath, FileFormatParserRegistry parsers)
+    {
+        var rebaseUnder = manifest.Kind switch
+        {
+            PackageKind.Content => string.IsNullOrWhiteSpace(manifest.TargetPartition) ? null : manifest.TargetPartition,
+            PackageKind.Code => SynthesizedNodeTypePathOf(manifest),
+            _ => null,
+        };
+        if (rebaseUnder is null || manifest.Kind == PackageKind.NodeRepo)
+            return NodePathForFile(relativePath, parsers);
+        if (IsManifest(relativePath))
+            return null;
+        var rel = FolderRelative(relativePath, manifest.SourceFolder ?? manifest.Id);
+        if (ContentAssetMapper.IsContentPath(rel))
+            return null;
+        return NodePathForFile(rel, parsers) is { } path ? $"{rebaseUnder}/{path}" : null;
+    }
+
+    /// <summary>
     /// The install record's <see cref="PackageManifest.UnreadableFiles"/> after THIS install — the
     /// content half of "is this file a node", merged rather than replaced (MeshWeaver#3659).
     ///
@@ -5327,11 +5530,32 @@ public static class PackageInstaller
     /// The composed <see cref="SeedPrebuiltAssemblies"/> → <see cref="RequestReleases"/> pair, for
     /// the paths that have no root recycle to order around (the incremental delta update). Cold:
     /// Subscribe to run, and the completion means every release trigger has landed.
+    ///
+    /// <para>🚨 <b>Nothing on a closed type set</b> (#6627): that host holds no NodeType definition
+    /// row to compile, adopt or release. A delta's targets are DERIVED from written paths (the
+    /// owner of a changed <c>Source/</c> file), so they name the very rows the reconcile removed — a
+    /// release flip there is a point write to an absent node, whose routing NotFound trips the
+    /// storm breaker on that path.</para>
     /// </summary>
     private static IObservable<System.Reactive.Unit> SeedThenRequestReleases(
         IMessageHub hub, string packageId, IReadOnlyCollection<string> nodeTypePaths, ILogger? logger)
-        => SeedPrebuiltAssemblies(hub, packageId, nodeTypePaths, logger)
-            .SelectMany(_ => RequestReleases(hub, nodeTypePaths, logger));
+        => hub.ServiceProvider.IsClosedTypeSet()
+            ? NoReleaseOnAClosedTypeSet(packageId, nodeTypePaths, logger)
+            : SeedPrebuiltAssemblies(hub, packageId, nodeTypePaths, logger)
+                .SelectMany(_ => RequestReleases(hub, nodeTypePaths, logger));
+
+    /// <summary>The closed-type-set answer of <see cref="SeedThenRequestReleases"/>: nothing to
+    /// release, named once at Debug so a reader can see the targets were derived and skipped.</summary>
+    private static IObservable<System.Reactive.Unit> NoReleaseOnAClosedTypeSet(
+        string packageId, IReadOnlyCollection<string> nodeTypePaths, ILogger? logger)
+    {
+        if (nodeTypePaths.Count > 0)
+            logger?.LogDebug(
+                "[PackageInstaller] {Id}: {Key}=true — no NodeType row is held on this host, so the {Count} "
+                + "derived release target(s) are not requested: [{Paths}]",
+                packageId, ClosedTypeSet.ConfigKey, nodeTypePaths.Count, string.Join(", ", nodeTypePaths));
+        return Observable.Return(System.Reactive.Unit.Default);
+    }
 
     /// <summary>
     /// 🚨 <b>IF STORE UPDATES, ALL DEPENDENT PACKAGES UPDATE AS WELL.</b> Seeds and releases every
