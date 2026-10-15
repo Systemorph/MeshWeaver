@@ -537,18 +537,47 @@ public static class DeploymentPortalConfig
 
     /// <summary>
     /// The registration-seed grants a record declares (<see cref="DeploymentContent.DefaultGrants"/>),
-    /// trimmed, blanks dropped, duplicates (case-insensitive) kept once, in declared order — the ONE
-    /// normalisation every renderer uses, so the Helm values, the boot file and the Aspire keys of a
-    /// record cannot disagree. Empty for none. Pure.
+    /// trimmed, blanks dropped, duplicates kept once, in declared order — the ONE normalisation every
+    /// renderer uses, so the Helm values, the boot file and the Aspire keys of a record cannot disagree.
+    /// Two entries are duplicates only when they GRANT the same thing (<see cref="GrantIdentity"/>): the
+    /// source and the plan compare case-insensitively, the package id ordinally, as the grant matches
+    /// (<c>PluginGrantEntry.Matches</c>) — so <c>Plugins/Foo</c> and <c>Plugins/foo</c> are two grants
+    /// and both are kept (issue #6744). Empty for none. Pure.
     /// </summary>
     public static ImmutableList<string> DefaultGrantPatterns(IEnumerable<string>? grants)
     {
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
         return (grants ?? Enumerable.Empty<string>())
             .Where(g => !string.IsNullOrWhiteSpace(g))
             .Select(g => g.Trim())
-            .Where(seen.Add)
+            .Where(g => seen.Add(GrantIdentity(g)))
             .ToImmutableList();
+    }
+
+    /// <summary>
+    /// The registration-seed grants a record renders: <see cref="DefaultGrantPatterns"/> of its
+    /// <see cref="DeploymentContent.DefaultGrants"/> for a plugin REGISTRY, and NONE for any other record —
+    /// a consumer registers AT a registry and never seeds grants, so rendering its list would only be
+    /// inert, misleading configuration (issue #6744). Every renderer reads the record through this.
+    /// </summary>
+    public static ImmutableList<string> RegistrySeedPatterns(DeploymentContent? record) =>
+        record is { IsPluginRegistry: true }
+            ? DefaultGrantPatterns(record.DefaultGrants)
+            : ImmutableList<string>.Empty;
+
+    /// <summary>
+    /// What a <c>Source/Package[@plan]</c> grant grants, as a comparable key: the source and the plan
+    /// upper-cased invariantly, the package id as written, and a bare source read as <c>Source/*</c>.
+    /// </summary>
+    private static string GrantIdentity(string pattern)
+    {
+        var at = pattern.LastIndexOf('@');
+        var plan = at < 0 ? "" : pattern[(at + 1)..].Trim().ToUpperInvariant();
+        var body = at < 0 ? pattern : pattern[..at].Trim();
+        var slash = body.IndexOf('/');
+        var source = (slash < 0 ? body : body[..slash]).Trim().ToUpperInvariant();
+        var package = slash < 0 ? "*" : body[(slash + 1)..].Trim();
+        return $"{source}/{package}@{plan}";
     }
 
     /// <summary>
@@ -557,9 +586,18 @@ public static class DeploymentPortalConfig
     /// default (no seed) stands. Pure.
     /// </summary>
     public static ImmutableList<string> DefaultGrantEntries(IEnumerable<string>? grants) =>
-        DefaultGrantPatterns(grants)
-            .Select((g, i) => $"{CatalogSection}:DefaultGrants:{i}={g}")
-            .ToImmutableList();
+        Entries(DefaultGrantPatterns(grants));
+
+    /// <summary>
+    /// The flat <c>PluginCatalog:DefaultGrants:N=pattern</c> entries a RECORD renders
+    /// (<see cref="RegistrySeedPatterns"/>) — none for a record that is not a
+    /// plugin registry. Pure.
+    /// </summary>
+    public static ImmutableList<string> RegistrySeedEntries(DeploymentContent? record) =>
+        Entries(RegistrySeedPatterns(record));
+
+    private static ImmutableList<string> Entries(ImmutableList<string> patterns) =>
+        patterns.Select((g, i) => $"{CatalogSection}:DefaultGrants:{i}={g}").ToImmutableList();
 
     /// <summary>
     /// The single-registry URL a record declares (<see cref="DeploymentContent.RegistryUrl"/>),
@@ -595,7 +633,7 @@ public static class DeploymentPortalConfig
 
         // The registration seed a REGISTRY hands every new instance (Memex#116) — declared on the
         // record, so the boot file carries it exactly as the Helm values and the Aspire keys do.
-        entries = entries.AddRange(DefaultGrantEntries(record.DefaultGrants));
+        entries = entries.AddRange(RegistrySeedEntries(record));
 
         // The single-registry URL (Memex#116) — likewise declared on the record, never only an overlay.
         entries = entries.AddRange(RegistryUrlEntries(record.RegistryUrl));
@@ -884,7 +922,7 @@ public static class DeploymentPortalConfig
         // file — the Aspire adapter.
         if (options.IncludeBootEntries)
             foreach (var entry in ConfigurationEntries(d.PluginRepos, d.PreInstall)
-                         .AddRange(DefaultGrantEntries(d.DefaultGrants))
+                         .AddRange(RegistrySeedEntries(d))
                          .AddRange(RegistryUrlEntries(d.RegistryUrl)))
             {
                 var eq = entry.IndexOf('=');
