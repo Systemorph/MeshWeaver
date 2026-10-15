@@ -507,14 +507,22 @@ public static class PrebuiltAssemblySeeder
     /// serves from its own lane, instead of the version the package is advertised at.
     ///
     /// <list type="table">
-    ///   <item><term>adopted (verified, unverified, stale or refused)</term><description>the version
-    ///     the adopted bundle's producer stated — <see cref="NodeTypeDefinition.AdoptedModuleVersion"/>.
-    ///     The bytes ARE that bundle's bytes, whatever source the mesh holds now.</description></item>
-    ///   <item><term>compiled here, not dirty</term><description>the module version of the source it
-    ///     was compiled from — <see cref="NodeTypeDefinition.CurrentModuleVersion"/>, which is the
-    ///     version of exactly the source snapshot the compile recorded.</description></item>
-    ///   <item><term>compiled here, dirty</term><description><c>null</c>: the source has moved since
-    ///     the compile, and nothing on the record says which version it was compiled at.</description></item>
+    ///   <item><term>the record names a version for THESE bytes</term><description>
+    ///     <see cref="NodeTypeDefinition.BuiltModuleVersion"/>, when its
+    ///     <see cref="NodeTypeDefinition.BuiltModuleVersionMvid"/> is the
+    ///     <see cref="NodeTypeDefinition.LatestAssemblyMvid"/> — written by the adoption or the
+    ///     compile that produced the bytes, so neither a delivery hold (which relabels a compiled
+    ///     build <c>StaleAdopted</c> without touching it) nor an <c>@@</c>-include-only edit (which
+    ///     moves <see cref="NodeTypeDefinition.CurrentModuleVersion"/> without making the type
+    ///     dirty) can relabel them.</description></item>
+    ///   <item><term>a record written before that pair, adopted and judged (verified or
+    ///     unverified)</term><description><see cref="NodeTypeDefinition.AdoptedModuleVersion"/>:
+    ///     only an adoption makes a record either, and a local compile makes it
+    ///     <see cref="BuildProvenance.Compiled"/>, so those bytes ARE the adopted bundle's.</description></item>
+    ///   <item><term>anything else</term><description><c>null</c> — unknown. A historical compiled,
+    ///     stale or refused record cannot say which build it holds: <c>AdoptedModuleVersion</c>
+    ///     survives a local compile, and <c>CurrentModuleVersion</c> follows the source, not the
+    ///     bytes.</description></item>
     /// </list>
     ///
     /// <para>Measured on two portals (2026-10-12): the registry advertised <c>Personal</c> at 1.1.1
@@ -527,9 +535,13 @@ public static class PrebuiltAssemblySeeder
     public static string? ModuleVersionOfBuild(NodeTypeDefinition def)
     {
         ArgumentNullException.ThrowIfNull(def);
-        if (def.BuildProvenance is not BuildProvenance.Compiled)
-            return def.AdoptedModuleVersion;
-        return def.IsDirty ? null : def.CurrentModuleVersion;
+        if (def.BuiltModuleVersionMvid is not null
+            && string.Equals(def.BuiltModuleVersionMvid, def.LatestAssemblyMvid, StringComparison.Ordinal))
+            return def.BuiltModuleVersion;
+        return def.BuiltModuleVersionMvid is null
+               && def.BuildProvenance is BuildProvenance.AdoptedVerified or BuildProvenance.AdoptedUnverified
+            ? def.AdoptedModuleVersion
+            : null;
     }
 
     /// <summary>Whether the record's build is PROVEN to correspond to the live source: adopted with
@@ -1310,6 +1322,8 @@ public static class PrebuiltAssemblySeeder
             // outranks it. Captured rather than recomputed so it is BY CONSTRUCTION the record the
             // owner received. See NodeTypeAdoptionRegistry.RecordAdopted.
             NodeTypeDefinition? stampedDefinition = null;
+            // The adopted bytes' identity, read once from the image in hand (#2471, #6831).
+            var adoptedMvid = ServedBuildIdentity.OfBytes(assemblyBytes);
 
             return store
                 .PutWithLocation(nodeTypePath, version, assemblyBytes, pdbBytes)
@@ -1359,9 +1373,7 @@ public static class PrebuiltAssemblySeeder
                             // case where a path says least: several pods adopt the same
                             // bundle under the same key, and a replica that later serves a
                             // different build is invisible to a path comparison.
-                            LatestAssemblyMvid =
-                                ServedBuildIdentity.OfBytes(assemblyBytes)
-                                ?? def.LatestAssemblyMvid,
+                            LatestAssemblyMvid = adoptedMvid ?? def.LatestAssemblyMvid,
                             CompiledFrameworkVersion = NodeTypeCompilationHelpers.FrameworkVersion,
                             // The bytes' platform RANGE, as the PRODUCER stated it — the floor is
                             // the build that compiled them, never this adopting process (policy
@@ -1414,6 +1426,12 @@ public static class PrebuiltAssemblySeeder
                             // Null from a producer that recorded none is carried as null: the
                             // rule then answers UNKNOWN, which never refuses.
                             AdoptedModuleVersion = moduleVersion,
+                            // #6831 — and the same version keyed to THESE bytes' identity, which
+                            // (unlike AdoptedModuleVersion) a later local compile replaces and a
+                            // delivery hold leaves alone. Unreadable bytes record no pair, so the
+                            // served version reads as unknown rather than as a guess.
+                            BuiltModuleVersion = adoptedMvid is null ? null : moduleVersion,
+                            BuiltModuleVersionMvid = adoptedMvid,
                             // The producer's dependency record (#1707 slice 2) — validated
                             // above; stamped so ongoing validity checks judge the adopted
                             // build like a locally-compiled one. Legacy bundles (null)

@@ -196,6 +196,13 @@ public record NodeTypeCompileState
     /// <c>StateMembers_AreExactlyTheMaskedOperationalMembers</c> refuses.</summary>
     public string? AdoptedModuleVersion { get; init; }
 
+    /// <summary>See <see cref="NodeTypeDefinition.BuiltModuleVersion"/> (#6831). Mirrored because the
+    /// sync seams mask it.</summary>
+    public string? BuiltModuleVersion { get; init; }
+
+    /// <summary>See <see cref="NodeTypeDefinition.BuiltModuleVersionMvid"/> (#6831).</summary>
+    public string? BuiltModuleVersionMvid { get; init; }
+
     /// <summary>See <see cref="NodeTypeDefinition.CurrentSourceFingerprint"/>.</summary>
     public string? CurrentSourceFingerprint { get; init; }
 
@@ -250,6 +257,8 @@ public record NodeTypeCompileState
                 AdoptedSourceIncludes = definition.AdoptedSourceIncludes,
                 CurrentSourceIncludes = definition.CurrentSourceIncludes,
                 AdoptedModuleVersion = definition.AdoptedModuleVersion,
+                BuiltModuleVersion = definition.BuiltModuleVersion,
+                BuiltModuleVersionMvid = definition.BuiltModuleVersionMvid,
                 CurrentModuleVersion = definition.CurrentModuleVersion,
                 CurrentSourceFingerprint = definition.CurrentSourceFingerprint,
                 BuildProvenance = definition.BuildProvenance,
@@ -279,6 +288,7 @@ public record NodeTypeCompileState
         && AdoptedSourceFingerprint is null && AdoptedSourcePaths is null
         && AdoptedSourceIncludes is null && CurrentSourceIncludes is null
         && AdoptedModuleVersion is null
+        && BuiltModuleVersion is null && BuiltModuleVersionMvid is null
         && CurrentModuleVersion is null
         && CurrentSourceFingerprint is null
         && BuildProvenance is Mesh.Services.BuildProvenance.Compiled;

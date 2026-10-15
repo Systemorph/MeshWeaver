@@ -142,6 +142,11 @@ public static class NodeTypeOperationalContent
         // declare its own build compatible.
         "adoptedModuleVersion",
         "currentModuleVersion",
+        // #6831 — the module version of the bytes the record names, keyed to their MVID. Operational
+        // for the same reason: an authored value would let a repo file state what version a
+        // registry advertises its served bytes at.
+        "builtModuleVersion",
+        "builtModuleVersionMvid",
         "compiledFrameworkVersion",
         // The build's platform FLOOR/CEILING (policy platform-backwards-compatibility) — operational
         // for the same reason: they decide whether this process adopts the recorded build.

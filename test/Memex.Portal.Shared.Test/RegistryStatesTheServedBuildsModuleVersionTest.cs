@@ -66,6 +66,8 @@ public class RegistryStatesTheServedBuildsModuleVersionTest(ITestOutputHelper ou
         {
             BuildProvenance = BuildProvenance.Compiled,
             CurrentModuleVersion = AdvertisedVersion,
+            // The compile recorded the version of these bytes (the helper keys it to their MVID).
+            BuiltModuleVersion = AdvertisedVersion,
         }, ct);
 
         var key = await RegisterInstance(ct);
@@ -87,13 +89,16 @@ public class RegistryStatesTheServedBuildsModuleVersionTest(ITestOutputHelper ou
         Assert.Equal(AdvertisedVersion, compiled.ModuleVersion);
     }
 
-    /// <summary>The pure rule the registry reads the version through, row by row.</summary>
+    /// <summary>The pure rule the registry reads the version through, for a record written BEFORE
+    /// the version was keyed to the bytes' MVID: only a judged adoption can still say; every other
+    /// historical record is unknown, never a guess from the live source. The transitions that write
+    /// the keyed version are pinned in <c>BuiltModuleVersionFollowsTheBytesTest</c>.</summary>
     [Theory]
     [InlineData(BuildProvenance.AdoptedVerified, false, "1.0.1")]
     [InlineData(BuildProvenance.AdoptedUnverified, false, "1.0.1")]
-    [InlineData(BuildProvenance.StaleAdopted, true, "1.0.1")]
-    [InlineData(BuildProvenance.AdoptionRefused, true, "1.0.1")]
-    [InlineData(BuildProvenance.Compiled, false, "1.1.1")]
+    [InlineData(BuildProvenance.StaleAdopted, true, null)]
+    [InlineData(BuildProvenance.AdoptionRefused, true, null)]
+    [InlineData(BuildProvenance.Compiled, false, null)]
     [InlineData(BuildProvenance.Compiled, true, null)]
     public void TheServedBuildsVersion_ComesFromTheBuild_NeverFromTheSource(
         BuildProvenance provenance, bool dirty, string? expected)
@@ -140,6 +145,8 @@ public class RegistryStatesTheServedBuildsModuleVersionTest(ITestOutputHelper ou
                 LastCompiledVersion = storeVersion,
                 LatestAssemblyCollection = location.Collection,
                 LatestAssemblyPath = location.ContentPath,
+                LatestAssemblyMvid = ServedBuildIdentity.OfBytes(bytes),
+                BuiltModuleVersionMvid = shape.BuiltModuleVersion is null ? null : ServedBuildIdentity.OfBytes(bytes),
                 CompiledFrameworkVersion = PrebuiltAssemblySeeder.LiveFrameworkMvid,
             },
         };

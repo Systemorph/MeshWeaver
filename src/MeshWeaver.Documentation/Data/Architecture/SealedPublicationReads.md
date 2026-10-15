@@ -353,9 +353,22 @@ that was never baked looked like a fresh build.
 The registry therefore states each assembly's own version:
 - Each assembly's manifest record carries `moduleVersion`, read off the record that names the
   bytes by `PrebuiltAssemblySeeder.ModuleVersionOfBuild`:
-  - an adopted build carries its `AdoptedModuleVersion`;
-  - a build compiled here from the current source carries `CurrentModuleVersion`;
-  - a compiled build whose source has moved since is unknown.
+  - the version is `BuiltModuleVersion`, recorded in the same write that names the bytes: an
+    adoption records the producer's stated version, and a local compile records the
+    `CurrentModuleVersion` of exactly the source snapshot it compiled, or nothing when that
+    snapshot moved during the compile;
+  - it counts only while its `BuiltModuleVersionMvid` is the record's `LatestAssemblyMvid`, so a
+    writer that names new bytes without their version yields **unknown**, never the old bytes'
+    version;
+  - a record written before that pair existed says only what an adoption it was judged on says
+    (`AdoptedVerified`/`AdoptedUnverified` → `AdoptedModuleVersion`); every other historical
+    record is unknown.
+
+  Neither of the older fields can say it. `AdoptedModuleVersion` survives a local compile, and a
+  delivery hold (`BuildDeliveryHold.Settle`) relabels a locally compiled build `StaleAdopted`
+  without touching its bytes, so adopt 1.0.1 → compile 1.1.1 → hold for 1.1.2 would label the 1.1.1
+  bytes 1.0.1. `CurrentModuleVersion` follows the source, and an `@@`-include-only edit moves it
+  without making the type `IsDirty`, so the same bytes would read 1.1.2.
 - The manifest carries `moduleVersionPerAssembly: true`. Under it, an assembly with no stated
   version is **unknown** to the consumer (`BundleReader.Manifest.ModuleVersionOf`); it never
   inherits the top-level `version`.
@@ -363,7 +376,9 @@ The registry therefore states each assembly's own version:
   version, so that path reads exactly as before.
 - The consumers (`PluginBundleClient`, `ShippedPrebuiltBundles`) stamp `Payload.ModuleVersion`.
 
-Pinned by `test/Memex.Portal.Shared.Test/RegistryStatesTheServedBuildsModuleVersionTest.cs`.
+Pinned by `test/Memex.Portal.Shared.Test/RegistryStatesTheServedBuildsModuleVersionTest.cs` and,
+for the compile-to-hold and include-only transitions,
+`test/MeshWeaver.Compiler.Pipeline.Test/BuiltModuleVersionFollowsTheBytesTest.cs`.
 
 ### Three refusals the lookup carries, and why each is not optional
 
