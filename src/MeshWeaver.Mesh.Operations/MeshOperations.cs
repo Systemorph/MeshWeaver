@@ -833,7 +833,10 @@ public partial class MeshOperations
     /// part of the id, never a reason to drop the route. A colon at or before the marker is the
     /// legacy colon form (<c>{path}/area:Name</c>, <c>{path}/data:…</c>, <c>area:content:file</c>
     /// for the <c>$Content</c> areas): it is deliberately NOT parsed here and keeps flowing through
-    /// <see cref="TryResolveUnifiedPath"/> unchanged.</para>
+    /// <see cref="TryResolveUnifiedPath"/> unchanged. So is a colon that cuts a legacy keyword
+    /// (<c>area</c>, <c>data</c>, <c>content</c>, …) even when an earlier, INTERIOR <c>area</c>
+    /// segment of the node path precedes it: <c>Root/area/Child/area:Echo</c> is area <c>Echo</c>
+    /// on <c>Root/area/Child</c>, never area <c>Child</c> on <c>Root</c>.</para>
     /// </summary>
     internal static bool TryParseAreaRoute(
         string resolvedPath, out string nodePath, out string? area, out string? id)
@@ -848,6 +851,14 @@ public partial class MeshOperations
         var colon = resolvedPath.IndexOf(':');
         var prefix = colon < 0 ? resolvedPath : resolvedPath[..colon];
         var prefixSegments = prefix.Split('/');
+
+        // A colon that cuts a UCR keyword (`area:`, `data:`, `content:`, …) IS the legacy colon
+        // form, wherever an `area` segment sits before it: `Root/area/Child/area:Echo/x` addresses
+        // `Echo` on node `Root/area/Child`, so an INTERIOR `area` segment of the node path must not
+        // be taken for the marker. Any other colon (`url=https://…`) belongs to a free-text id.
+        if (colon >= 0 && IsLegacyColonKeyword(prefixSegments[^1]))
+            return false;
+
         var lastEligible = colon < 0 ? prefixSegments.Length - 1 : prefixSegments.Length - 2;
 
         var segments = resolvedPath.Split('/');
@@ -869,6 +880,15 @@ public partial class MeshOperations
 
         return false;
     }
+
+    /// <summary>
+    /// True when <paramref name="segment"/> — the path segment a <c>':'</c> cuts — is a keyword of the
+    /// legacy colon form <c>{path}/{keyword}:{rest}</c>: <c>area</c> or a UCR prefix
+    /// (<see cref="MeshWeaver.Data.UcrPrefixResolver.PrefixToAreaMap"/>).
+    /// </summary>
+    private static bool IsLegacyColonKeyword(string segment)
+        => string.Equals(segment, "area", StringComparison.Ordinal)
+           || Data.UcrPrefixResolver.PrefixToAreaMap.ContainsKey(segment);
 
     /// <summary>
     /// Serves the MCP <c>get {path}/area/{Name}</c> route: renders through the settled

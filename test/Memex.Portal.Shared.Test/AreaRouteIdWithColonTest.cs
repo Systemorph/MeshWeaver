@@ -45,11 +45,26 @@ public class AreaRouteIdWithColonTest(ITestOutputHelper output) : MonolithMeshTe
         id.Should().Be(ColonId);
     }
 
+    [Fact]
+    public void Parse_InteriorAreaSegment_WithColonId_SplitsAtTheDeepestMarker()
+    {
+        MeshOperations.TryParseAreaRoute($"Root/area/Child/area/{Area}/{ColonId}", out var nodePath, out var area, out var id)
+            .Should().BeTrue("a colon in a free-text id does not turn the route into the legacy form");
+        nodePath.Should().Be("Root/area/Child");
+        area.Should().Be(Area);
+        id.Should().Be(ColonId);
+    }
+
     [Theory]
     [InlineData(Node + "/area:" + Area)]
     [InlineData(Node + "/area:" + Area + "/legacy-id")]
     [InlineData(Node + "/area:content:logo.svg")]
     [InlineData(Node + "/data:Collection/area/x")]
+    // An INTERIOR `area` segment of the node path is not the marker when a legacy keyword follows.
+    [InlineData("Root/area/Child/area:" + Area + "/legacy-id")]
+    [InlineData("Root/area/Child/area:" + Area)]
+    [InlineData("Root/area/Child/data:Collection")]
+    [InlineData("Root/area/Child/content:logo.svg")]
     public void Parse_LegacyColonForm_IsLeftToTheUnifiedResolver(string path)
         => MeshOperations.TryParseAreaRoute(path, out _, out _, out _)
             .Should().BeFalse("a colon at or before the area marker is the legacy colon form");
