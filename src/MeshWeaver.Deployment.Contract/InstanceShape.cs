@@ -888,7 +888,10 @@ public sealed record HostingOperatorSpec
     /// <c>Restart</c>, <c>Recycle</c>, <c>Logs</c> and <c>Sample</c>; rolls and every other kind stay
     /// with the control instance (policy <c>customer-instance-requests</c>). False, the default, keeps
     /// the control-side approval rule unchanged, which is right for every instance Systemorph manages.
-    /// The control plane reads it from the record and nothing renders it into the portal's configuration.
+    /// The control plane reads it from the record. The flag itself is not rendered into the portal's
+    /// configuration; what it changes there is how the instance reads the record's <c>ai</c> block:
+    /// with a model named in it, the record SEEDS the instance's model settings and is their CEILING
+    /// (<see cref="DeploymentPortalConfig.ModelGovernanceKey"/>, policy <c>model-settings-seed-and-ceiling</c>).
     /// </summary>
     [Description("Customer-governed: the instance's own global administrators approve the actions it requests")]
     public bool CustomerGoverned { get; init; }

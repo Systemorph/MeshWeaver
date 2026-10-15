@@ -52,6 +52,24 @@ The chart templates these in `deploy/helm/templates/memex-portal/config.yaml` (+
 
 **Best for:** the org-wide default catalog + agent tier mapping. Anthropic/Claude is intentionally **not** wired here — Claude is per-user Claude Code (Option D).
 
+### On a customer-governed instance the record is a seed and a ceiling
+
+Everything above describes the default reading, where the record's model list IS the instance's. A
+deployment record that sets `operator.customerGoverned: true` and names at least one model in its `ai`
+block renders one more key, `AI__ModelGovernance=SeedAndCeiling`, and the instance then reads the
+same lists differently (policy `model-settings-seed-and-ceiling`, see [Policy Not Prose](../PolicyNotProse)):
+
+| | Default reading | `SeedAndCeiling` |
+|---|---|---|
+| A model the record names | seeded, and always offered | seeded; the instance's administrator may switch it off |
+| A model the record does not name | pruned from the record's providers | refused when a person writes it, hidden, skipped, and refused by a round |
+| The model per tier | labels, then the record's `ModelTier__*` | the instance's choice on the tier node, within the ceiling, then labels, then the record's `ModelTier__*` |
+| The record drops a model | its node is pruned | the same, and an instance choice that named it is clamped back to the record's seed |
+
+The key is reserved for the typed fields: an `extraPortalConfig` entry cannot impose a ceiling a record
+does not declare, nor lift one it does. The instance side is described on MeshWeaver.Plugins
+`AI/ModelConfiguration` → "Customer-governed instances".
+
 ## Option C — Secrets via Key Vault + CSI (keyless, no committed keys)
 
 The real `AzureFoundry` key lives in Key Vault, mounted by the CSI add-on and synced into a K8s Secret the portal reads via `envFrom`.
