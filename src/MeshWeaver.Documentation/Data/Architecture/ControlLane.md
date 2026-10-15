@@ -233,6 +233,34 @@ Wiring a target (Systemorph/Memex record): the lane key as above, plus
 `ControlLane__EventTargets__0` naming the inbox owner (build: `Hosting/Babysitter`). The node must
 exist on the target, or the event is refused.
 
+### The consumers, and the one exception to "a trigger"
+
+| event (`source` / `name`) | target inbox | consumer (MeshWeaver.Plugins) | what it takes from the payload |
+|---|---|---|---|
+| `github` / `pull_request`, `check_suite`, … | `Hosting/Babysitter` | the PR steward's heal/observe half (`Hosting/PrBabysitter`) | the repository and pull-request numbers — a TRIGGER; it re-reads GitHub |
+| `control` / `feedback-issue-status` | `Feedback/Inbox` | `FeedbackIssueStatus` (`Feedback/Feedback`) | the control instance's STATEMENT of one handed-over feedback's GitHub issue and its state |
+
+🚨 **The second is a deliberate, narrow exception to the trigger-only rule.** A portal holds no GitHub
+credential, so it cannot re-read the issue a feedback it handed over became; the control instance,
+which filed it and follows its state, states it instead (MeshWeaver.Plugins `Hosting/Triage` →
+*Feedback submitted on another portal*). What keeps the exception narrow:
+
+- **The statement is signed twice.** Inside the envelope the payload is `{statement, signature}`, the
+  statement signed with the SAME deployment key. The lane verified the envelope before it stored the
+  event, but a stored inbox node is dumb, so the consumer verifies the inner signature itself with
+  `ControlLane:Key`. The statement carries its own discriminator (`"kind": "feedback-issue-status"`),
+  so no request, event or report signed with that key reads as one.
+- **One node, one field.** It must name this deployment and a path `Feedback/_Submissions/<id>`; the
+  node there must be a `Feedback/Feedback` this portal handed over, with the message the control
+  instance received (bound by its SHA-256). Only `issue` and `issueUrl` move, never backwards.
+- **Only where the lane is enabled and the target declared.** Nothing new is armed: the deployment's
+  record must claim a lane key, the control instance must hold it, and the portal must list
+  `Feedback/Inbox` under `ControlLane:EventTargets`. A portal no deployment record of the control
+  instance names gets nothing.
+
+No other forwarded event may be acted on by its word. A new exception is a design decision of its
+own, recorded here with what bounds it.
+
 ## Audited on both sides
 
 - **Target:** the ledger node carries the verified request, every status and step, and whether each
