@@ -212,8 +212,13 @@ public sealed class ModuleLiveUpdater : IDisposable
     private static string ModuleName(string entryLocation) => Path.GetFileNameWithoutExtension(entryLocation);
 
     /// <summary>One module of a swap after steps 1–3: refused (with its outcome), or committed and its
-    /// services handed over, waiting for the swap's ONE recycle wave.</summary>
-    private sealed record Prepared(ModuleSwapOutcome? Refused, string Name, SwapPlan? Plan);
+    /// services handed over, waiting for the swap's ONE recycle wave. <see cref="HandOverFault"/> names
+    /// a hand-over that faulted AFTER the commit: the module is current all the same, so it still
+    /// joins the wave.</summary>
+    private sealed record Prepared(ModuleSwapOutcome? Refused, string Name, SwapPlan? Plan)
+    {
+        public string? HandOverFault { get; init; }
+    }
 
     private IObservable<ImmutableList<ModuleSwapOutcome>> Run(ImmutableList<string> entryLocations, string reason) =>
         // Concat over Defer: module N+1's checks read the registry AFTER module N committed (it may be
@@ -236,7 +241,23 @@ public sealed class ModuleLiveUpdater : IDisposable
                 });
             });
 
+    /// <summary>
+    /// Steps 1–3 for one module of a swap. 🚨 <b>Never faults</b> (#6800 review): <see cref="Run"/>
+    /// collects every module before its ONE wave, so a fault here would drop the wave for the modules
+    /// committed BEFORE this one, whose old activations would keep serving the old bindings while the
+    /// swap reported them failed. A fault before the commit is this module's own Failed outcome — the
+    /// running generation keeps serving; a hand-over fault after the commit keeps the plan, so the
+    /// committed module still joins the wave and its outcome names the fault.
+    /// </summary>
     private IObservable<Prepared> Prepare(string entryLocation) =>
+        PrepareOrFault(entryLocation)
+            .Catch((Exception ex) => Observable.Return(Refused(new ModuleSwapOutcome(
+                ModuleName(entryLocation), ModuleSwapKind.Failed,
+                $"the live swap of {ModuleName(entryLocation)} faulted before it committed and the running generation "
+                + $"keeps serving — {ex.GetType().Name}: {ex.Message}")
+            { ToLocation = entryLocation })));
+
+    private IObservable<Prepared> PrepareOrFault(string entryLocation) =>
         Observable.Defer(() =>
         {
             var name = ModuleName(entryLocation);
@@ -264,7 +285,12 @@ public sealed class ModuleLiveUpdater : IDisposable
             return pool.InvokeBlocking(_ => LoadAndCommit(name, old, target))
                 .SelectMany(plan => plan.Outcome is { } refused
                     ? Observable.Return(Refused(refused))
-                    : HandOver(plan).Select(_ => new Prepared(null, name, plan)));
+                    : HandOver(plan).Select(_ => new Prepared(null, name, plan))
+                        // Committed already: N+1 IS current, so the module joins the wave regardless.
+                        .Catch((Exception ex) => Observable.Return(new Prepared(null, name, plan)
+                        {
+                            HandOverFault = $"its hand-over to the new generation faulted after the commit: {ex.GetType().Name}: {ex.Message}",
+                        })));
         });
 
     private static Prepared Refused(ModuleSwapOutcome outcome) => new(outcome, outcome.Module, null);
@@ -446,7 +472,7 @@ public sealed class ModuleLiveUpdater : IDisposable
     /// </summary>
     private IObservable<ImmutableList<ModuleSwapOutcome>> RecycleThenRetire(ImmutableList<Prepared> committed, string reason)
     {
-        var plans = committed.Select(p => (p.Name, Plan: p.Plan!)).ToImmutableList();
+        var plans = committed.Select(p => (p.Name, Plan: p.Plan!, p.HandOverFault)).ToImmutableList();
         var hubs = plans
             .SelectMany(p => HubsToRecycle(p.Plan))
             .Distinct(ReferenceEqualityComparer.Instance)
@@ -457,9 +483,14 @@ public sealed class ModuleLiveUpdater : IDisposable
                       + string.Join("; ", plans.Select(p => $"{p.Name} swapped live to {p.Plan.To}"))
                       + $" — {reason}";
         var origin = WaveOrigin + string.Join(",", plans.Select(p => p.Name));
-        foreach (var hub in hubs)
+        // ONE request per ADDRESS (#6800 review). Each plan's HubsToRecycle takes its own snapshot of
+        // the live registry, so a hub an unrelated recycle replaced between two snapshots appears as
+        // two activations of one path. Every captured hub is still waited for below; but a second
+        // address-targeted request would reach whatever activation lives there when it is delivered
+        // — the successor — and tear it down, which is the double recycle this wave exists to avoid.
+        foreach (var path in hubs.Select(ActivationRecycle.PathOf).Distinct(StringComparer.OrdinalIgnoreCase))
             issuing.Post(new DisposeRequest { Reason = because, CascadedFrom = origin },
-                o => o.WithTarget(new Address(ActivationRecycle.PathOf(hub))));
+                o => o.WithTarget(new Address(path)));
 
         var dead = hubs.Count == 0
             ? Observable.Return(Unit.Default)
@@ -475,7 +506,8 @@ public sealed class ModuleLiveUpdater : IDisposable
             return new ModuleSwapOutcome(p.Name, ModuleSwapKind.Live,
                 $"{p.Name} swapped live to {p.Plan.To}{(swapped.Count > 1 ? $" with {string.Join(", ", swapped.Skip(1))}" : "")}"
                 + (others.IsEmpty ? "" : $" in one swap with {string.Join(", ", others)}")
-                + $"; {hubs.Count} hub(s) recycled")
+                + $"; {hubs.Count} hub(s) recycled"
+                + (p.HandOverFault is { } fault ? $"; {fault}" : ""))
             {
                 FromLocation = p.Plan.From,
                 ToLocation = p.Plan.To,

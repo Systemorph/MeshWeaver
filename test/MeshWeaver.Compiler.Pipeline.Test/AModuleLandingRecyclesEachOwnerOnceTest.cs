@@ -117,15 +117,13 @@ public sealed class AModuleLandingRecyclesEachOwnerOnceTest : MonolithMeshTestBa
         // A live reader of the probe — the subscriber that re-activates it the moment it goes.
         using var reader = Mesh.GetMeshNodeStream(ProbePath).Subscribe(_ => { }, _ => { });
 
-        // Every probe activation seen while the swap runs. An activation lives at least until the
-        // next wave would have computed its set, so a 5 ms sample cannot miss one that a wave killed.
+        // Every probe activation created while the swap runs, recorded SYNCHRONOUSLY as the registry
+        // adds it (#6800 review): a timer sample could miss a successor created and torn down between
+        // two ticks, and the count below would then pass over a double recycle.
         var seen = ImmutableHashSet.Create<IMessageHub>(ReferenceEqualityComparer.Instance, first);
-        using var sampler = Observable.Interval(TimeSpan.FromMilliseconds(5))
-            .Subscribe(_ =>
-            {
-                if (HostedProbe() is { } hub)
-                    ImmutableInterlocked.Update(ref seen, s => s.Add(hub));
-            });
+        using var sampler = Mesh.ServiceProvider.GetRequiredService<HostedHubsCollection>().HubAdded
+            .Where(IsProbe)
+            .Subscribe(hub => ImmutableInterlocked.Update(ref seen, s => s.Add(hub)));
 
         var outcomes = await Updater.SwapAll(
                 [Write(ModuleA, "g2", SourceA(version: 2)), Write(ModuleB, "g2", SourceB(reachesEveryHub: true))],
@@ -146,6 +144,36 @@ public sealed class AModuleLandingRecyclesEachOwnerOnceTest : MonolithMeshTestBa
             + $"(#6729). Torn down: {killed.Count} activation(s)");
     }
 
+    /// <summary>
+    /// A later module that FAULTS while it is prepared does not cost the modules committed before it
+    /// their wave (#6800 review). The swap collects every module before its one recycle, so a fault
+    /// that escaped the second module's preparation used to fail the whole swap: module A was already
+    /// current, yet its probe was never recycled and kept serving the old generation, and A was
+    /// reported Failed. The fault here is a path no file system accepts (an embedded NUL), which
+    /// throws inside the preparation itself.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task ALaterModuleThatFaults_DoesNotCostTheCommittedOnesTheirWave()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await LiveProbe(ct);
+
+        var outcomes = await Updater.SwapAll(
+                [Write(ModuleA, "g2", SourceA(version: 2)), Path.Combine(root, "faulting\0module.dll")],
+                "test: the second module of one landing faults")
+            .Timeout(Budget).Await(ct);
+
+        Output.WriteLine(string.Join(" | ", outcomes.Select(o => $"{o.Module}: {o.Kind} — {o.Reason}")));
+        outcomes.Should().HaveCount(2);
+        outcomes[0].Kind.Should().Be(ModuleSwapKind.Live,
+            "module A committed before the second module faulted — it is current and must be recycled: "
+            + outcomes[0].Reason);
+        outcomes[0].Recycled.Should().BeGreaterThan(0, "the probe is bound to module A's node");
+        outcomes[1].Kind.Should().Be(ModuleSwapKind.Failed, "the faulting module is its own failure: " + outcomes[1].Reason);
+        (await ReadNode(ProbePath).Timeout(Budget).Await(ct))?.Name.Should().Be("v2",
+            "the probe was recycled onto module A's new generation, not left serving the old one");
+    }
+
     /// <summary>Activates the probe and returns its live hub.</summary>
     private async Task<IMessageHub> LiveProbe(CancellationToken ct)
     {
@@ -156,8 +184,10 @@ public sealed class AModuleLandingRecyclesEachOwnerOnceTest : MonolithMeshTestBa
 
     private IMessageHub? HostedProbe() =>
         Mesh.ServiceProvider.GetRequiredService<HostedHubsCollection>().Hubs
-            .FirstOrDefault(h => string.Equals(ActivationRecycle.PathOf(h), ProbePath, StringComparison.OrdinalIgnoreCase)
-                                 && h.RunLevel is MessageHubRunLevel.Starting or MessageHubRunLevel.Started);
+            .FirstOrDefault(h => IsProbe(h) && h.RunLevel is MessageHubRunLevel.Starting or MessageHubRunLevel.Started);
+
+    private static bool IsProbe(IMessageHub hub) =>
+        string.Equals(ActivationRecycle.PathOf(hub), ProbePath, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Hangs the instrument on <paramref name="hub"/>: the framework's own cascade seam,
     /// recording every request that ran it.</summary>

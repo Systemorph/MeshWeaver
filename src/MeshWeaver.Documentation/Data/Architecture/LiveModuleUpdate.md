@@ -170,6 +170,15 @@ the swapped generations, or every per-node hub when a generation reaches them al
 wave IS the dependency network. Hubs of other processes are not this wave's to recycle, because each
 process swaps its own module contexts and recycles its own hubs.
 
+**One module's fault never costs the others their wave.** Because the swap collects every module before
+it recycles, the preparation of one module never faults the swap. A fault before that module commits is
+its own `Failed` outcome, and its running generation keeps serving. A hand-over fault after it commits
+keeps the module in the wave, because its new generation is current, and its outcome names the fault.
+The wave also posts ONE `DisposeRequest` per address. Each committed module's hub set is a separate
+snapshot of the live registry, so a hub that an unrelated recycle replaced between two snapshots shows
+up as two activations of one path. Both are waited for, but a second request to that address would tear
+down the successor.
+
 **Why both rules exist.** It was measured on memex-cloud on 2026-10-15 at 00:49Z, on pods already
 running the #6756 fix. One landing swapped `MeshWeaver.OgCard` and `MeshWeaver.Markdown.Export`, and
 both pods' sync streams gave up on "4 DISTINCT owner activations" for unrelated owners
@@ -193,7 +202,11 @@ monolith mesh, the framework's own `RecycleCascade` seam as the instrument):
 - A direct recycle of the same kind of hub does. This is the negative control that the instrument
   fires.
 - Two modules landing together, with a live reader holding the probe open, tear the probe down exactly
-  once.
+  once. Every probe activation is recorded as the registry adds it (`HostedHubsCollection.HubAdded`),
+  so a successor that is created and torn down quickly cannot be missed.
+- A second module that faults while it is prepared leaves the first one `Live`, recycled onto its new
+  generation, and is reported `Failed` itself. With the fault left to escape, both modules are reported
+  `Failed` and the probe is never recycled.
 
 Against the pre-fix updater (one swap per module, no `CascadedFrom`), the first and third cases are red.
 

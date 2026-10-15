@@ -156,7 +156,7 @@ public class RetiredContextCollectedSignalTest
     {
         var unloads = new CollectibleContextUnloads();
         unloads.Retire("already-collected").Collected();
-        await unloads.AllCollected.Timeout(TimeSpan.FromSeconds(30)).Await(TestContext.Current.CancellationToken);
+        await unloads.AllCollected.Timeout(TestTimeouts.Quick).Await(TestContext.Current.CancellationToken);
         unloads.Pending.Should().Be(0, "the arrangement: the one retired context is already collected");
 
         var outcome = await CollectibleUnloadDrain.WaitUntilCollectedAsync(unloads);
