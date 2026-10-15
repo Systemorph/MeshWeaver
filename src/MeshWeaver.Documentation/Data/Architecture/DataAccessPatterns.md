@@ -109,6 +109,7 @@ registered):
 |---|---|
 | `path:<path>` | Anchor path (combine with `scope:` to walk) |
 | `namespace:<path>` | Anchor namespace; implies `scope:children` unless `scope:` is given |
+| `basePath:<path>` | Everything under the path — `namespace:<path> scope:descendants` unless `scope:` is given. A leading `@` on any location value is resolved (`namespace:@acme` = `namespace:acme`) |
 | `scope:<exact\|children\|descendants\|subtree\|ancestors\|selfAndAncestors\|hierarchy\|nextLevel>` | How to walk from the anchor |
 | `select:<fields>` | Column projection — `content` is loaded **only** if named |
 | `sort:<field>[-desc]` · `limit:<n>` | Ordering and cap |
