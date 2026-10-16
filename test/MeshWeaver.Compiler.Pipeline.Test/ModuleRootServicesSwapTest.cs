@@ -9,6 +9,7 @@ using MeshWeaver.Mesh.Threading;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Xunit;
 
 namespace MeshWeaver.Graph.Test;
@@ -166,6 +167,78 @@ public sealed class ModuleRootServicesSwapTest : MonolithMeshTestBase
         outcome.Reason.Should().Contain("changed shape");
         consumer.Ask().Should().Be("hello v1 (options v1)", "never a half-swapped state");
         greeter.Greet().Should().Be("hello v1 (options v1)", "the boot proxy still resolves N's registration at its own index");
+    }
+
+    /// <summary>
+    /// MeshWeaver#6847, the readiness half — the NEGATIVE control: a module that booted, and one that then
+    /// swapped live, keep every root forwarder resolvable, so <c>module_forwarders</c> is Healthy and its
+    /// census says how many it measured (never a silent "nothing to say").
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task EveryForwarderResolves_AfterBootAndAfterALiveSwap_SoReadinessHolds()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var booted = ModuleForwarderHealthCheck.Evaluate(Contexts);
+        booted.Status.Should().Be(HealthStatus.Healthy, booted.Description ?? "");
+        booted.Description.Should().MatchRegex(@"^[1-9]\d* root forwarder\(s\) over [1-9]\d* module\(s\)",
+            "the clean reading is a census: it names what it measured");
+        HeldGeneration(Module).Services!.ForwarderLayout.Should().NotBeEmpty("the arrangement: the module forwards platform services");
+
+        var outcome = await Updater.Swap(Write("g2", ModuleSource(2, extraHosted: true)), "test: a live swap keeps the forwarders")
+            .Timeout(Budget).Await(ct);
+
+        outcome.Kind.Should().Be(ModuleSwapKind.Live, outcome.Reason);
+        Contexts.UnresolvableForwarders().Should().BeEmpty();
+        ModuleForwarderHealthCheck.Evaluate(Contexts).Status.Should().Be(HealthStatus.Healthy);
+    }
+
+    /// <summary>
+    /// MeshWeaver#6847, the readiness half — the INCIDENT state. The swap is refused now (the index is part
+    /// of the shape), so the state the 2026-10-16 swap left behind is assembled from the swap's own parts
+    /// without that check: N+1, which inserts a registration of its own type ahead of the forwarded ones,
+    /// is made current while the root keeps the forwarders N laid out. Every lease through the moved
+    /// forwarder then fails — asserted first, so the arrangement is the defect and not a stand-in — and
+    /// the readiness check is Unhealthy, naming the module and the scope key. Mutation-checked: with
+    /// <see cref="ModuleContexts.UnresolvableForwarders"/> answering empty the check stays Healthy over
+    /// this very state, which is the six-and-a-half-hour outage.
+    /// </summary>
+    [Fact]
+    public void AGenerationWhoseForwarderMoved_FailsReadiness_NamingTheModuleAndTheService()
+    {
+        var greeter = Mesh.ServiceProvider.GetRequiredService<ILiveGreeter>();
+        greeter.Greet().Should().Be("hello v1 (options v1)", "the arrangement starts healthy");
+
+        CommitWithoutTheShapeCheck(Write("g2", ModuleSource(2, ownedFirst: true)));
+
+        Action lease = () => greeter.Greet();
+        lease.Should().Throw<Exception>("the arrangement must reproduce the defect: the boot forwarder now asks N+1 for the wrong registration");
+        var gaps = Contexts.UnresolvableForwarders();
+        gaps.Should().NotBeEmpty();
+        gaps.Should().OnlyContain(g => g.Module == Module);
+        var verdict = ModuleForwarderHealthCheck.Evaluate(Contexts);
+        verdict.Status.Should().Be(HealthStatus.Unhealthy, "a replica whose forwarders cannot resolve must leave the Service");
+        verdict.Description.Should().Contain(Module).And.Contain("mw-module-service:")
+            .And.Contain(nameof(ILiveGreeter), "the forwarded service whose lease now fails is named")
+            .And.Contain("restarts", "the remedy is stated");
+    }
+
+    /// <summary>The 2026-10-16 swap as it ran before the index joined the shape: N+1 prepared against the
+    /// boot prefix, built before published and committed — every step but the shape comparison.</summary>
+    private void CommitWithoutTheShapeCheck(string path)
+    {
+        var old = HeldGeneration(Module);
+        var stage = new ModuleSwapStage();
+        var fresh = Contexts.LoadStaged(path, stage);
+        var contributions = ModuleContributions.Of(fresh.Assembly);
+        var services = ModuleServices.Probe(fresh.Name, fresh.Context, contributions.ServiceConfigurations, old.Services!.Prefix);
+        services.Blockers.Should().BeEmpty();
+        services.Stage = fresh.Context.Stage;
+        services.InheritForwarderLayout(old.Services);
+        fresh.Services = services;
+        Contexts.SetContributions(fresh, contributions);
+        stage.Add(fresh);
+        Contexts.BuildBeforePublish(fresh).Should().BeNull();
+        Contexts.CommitAll(stage);
     }
 
     [Fact]

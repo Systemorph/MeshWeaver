@@ -177,6 +177,25 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
     private IServiceProvider Root => root ?? throw new InvalidOperationException(
         "The module registry is not attached to its mesh's container yet — a module service was resolved before the mesh was built.");
 
+    /// <summary>
+    /// 🚨 Every root forwarder, of every module's CURRENT generation, that no lease can resolve —
+    /// empty when all of them resolve, and while the registry is not yet attached (nothing can lease
+    /// before then). The reading behind the <c>module_forwarders</c> readiness check
+    /// (<see cref="ModuleForwarderHealthCheck"/>, MeshWeaver#6847); see
+    /// <see cref="ModuleServices.UnresolvableForwarders"/> for why one reading is already sustained.
+    /// </summary>
+    public ImmutableList<ModuleForwarderGap> UnresolvableForwarders()
+    {
+        if (root is not { } attached)
+            return [];
+        return current.Values
+            .OrderBy(g => g.Name, StringComparer.Ordinal)
+            .SelectMany(g => g.Services is { } services
+                ? services.UnresolvableForwarders(attached).Select(gap => new ModuleForwarderGap(g.Name, g.Location, gap))
+                : [])
+            .ToImmutableList();
+    }
+
     /// <summary>The instance behind forwarded registration <paramref name="index"/> of
     /// <paramref name="module"/>'s CURRENT generation — what every root forwarder resolves.</summary>
     public object ResolveModuleService(string module, int index) => ResolveModuleService(module, index, null);
@@ -419,12 +438,17 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
         }
         if (!fresh.Blockers.IsEmpty)
             return "the new generation's root services cannot be served from its own scope: " + string.Join("; ", fresh.Blockers);
-        if (!fresh.Shape.SequenceEqual(old.Shape))
+        // Compared against the forwarders the root ACTUALLY holds — laid out at boot and inherited by
+        // every generation since — never merely against the generation being replaced.
+        if (!fresh.Shape.SequenceEqual(old.ForwarderLayout))
             return "the new generation's root services changed shape (the platform services it forwards to the root differ) — "
-                   + $"was [{string.Join(", ", old.Shape)}], is [{string.Join(", ", fresh.Shape)}]";
+                   + $"was [{string.Join(", ", old.ForwarderLayout)}], is [{string.Join(", ", fresh.Shape)}]";
         // Its container is built before the swap commits (BuildBeforePublish), so it binds the other
         // generations of the same swap, not the ones it is replacing.
         fresh.Stage = to.Context.Stage;
+        // The root's forwarders are the BOOT generation's, whatever generation serves them now
+        // (UnresolvableForwarders, the module_forwarders readiness check — MeshWeaver#6847).
+        fresh.InheritForwarderLayout(old);
         to.Services = fresh;
         return null;
     }
