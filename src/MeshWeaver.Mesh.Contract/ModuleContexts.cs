@@ -183,17 +183,54 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
     /// before then). The reading behind the <c>module_forwarders</c> readiness check
     /// (<see cref="ModuleForwarderHealthCheck"/>, MeshWeaver#6847); see
     /// <see cref="ModuleServices.UnresolvableForwarders"/> for why one reading is already sustained.
+    ///
+    /// <para>🚨 Each generation is inspected under the SAME leases a forwarder's resolve takes
+    /// (<see cref="TryLeaseCurrent"/>, as <see cref="TryLeaseModuleService"/>): its context and its
+    /// services are leased, and its currency re-checked, BEFORE its container is read — so a live swap
+    /// that retires it mid-scan defers the disposal to the scan's release instead of pulling the
+    /// container from under it (an <see cref="ObjectDisposedException"/> read as a transient Unhealthy).
+    /// A generation that is no longer current, or already retiring, is skipped: it is not what any
+    /// forwarder resolves, and the generation that replaced it is read by the next probe.</para>
     /// </summary>
     public ImmutableList<ModuleForwarderGap> UnresolvableForwarders()
     {
         if (root is not { } attached)
             return [];
-        return current.Values
-            .OrderBy(g => g.Name, StringComparer.Ordinal)
-            .SelectMany(g => g.Services is { } services
-                ? services.UnresolvableForwarders(attached).Select(gap => new ModuleForwarderGap(g.Name, g.Location, gap))
-                : [])
-            .ToImmutableList();
+        var gaps = ImmutableList.CreateBuilder<ModuleForwarderGap>();
+        foreach (var name in current.Keys.OrderBy(n => n, StringComparer.Ordinal))
+        {
+            if (TryLeaseCurrent(name) is not { } leased)
+                continue;
+            using (leased.Release)
+                gaps.AddRange(leased.Services.UnresolvableForwarders(attached)
+                    .Select(gap => new ModuleForwarderGap(leased.Generation.Name, leased.Generation.Location, gap)));
+        }
+        return gaps.ToImmutable();
+    }
+
+    /// <summary>
+    /// <paramref name="module"/>'s CURRENT generation and its services, with a lease on both its context and
+    /// its services — or null when it has none, when its services are already retiring, or when it stopped
+    /// being current before the leases were taken (MeshWeaver#6715). The generation is read ONCE; its
+    /// context is leased BEFORE its currency is re-checked, so a <see cref="Retire"/> that removes it after
+    /// that check finds the lease and defers the services' disposal (and the unload) to its release.
+    /// </summary>
+    /// <param name="module">The module's entry-assembly name.</param>
+    private (ModuleGeneration Generation, ModuleServices Services, IDisposable Release)? TryLeaseCurrent(string module)
+    {
+        if (Current(module) is not { Services: { } services } generation)
+            return null;
+        var context = Leases.Enter(generation.Context);
+        var held = services.TryLease();
+        if (held is null || !ReferenceEquals(Current(module), generation))
+        {
+            held?.Dispose();
+            context.Dispose();
+            return null;
+        }
+        // Released in this order: the services first — their disposal, when this is the last lease of a
+        // retiring generation, runs module code — and the context lease after it.
+        return (generation, services, new System.Reactive.Disposables.CompositeDisposable(held, context));
     }
 
     /// <summary>The instance behind forwarded registration <paramref name="index"/> of
@@ -241,22 +278,12 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
     /// <param name="caller">The root-side scope resolving, or null.</param>
     internal (object Instance, IDisposable Release)? TryLeaseModuleService(string module, int index, Autofac.ILifetimeScope? caller)
     {
-        if (Current(module) is not { Services: { } services } generation)
+        if (TryLeaseCurrent(module) is not { } leased)
             return null;
-        var context = Leases.Enter(generation.Context);
-        var held = services.TryLease();
-        if (held is null || !ReferenceEquals(Current(module), generation))
-        {
-            held?.Dispose();
-            context.Dispose();
-            return null;
-        }
-        // Released in this order: the services first — their disposal, when this is the last lease of a
-        // retiring generation, runs module code — and the context lease after it.
-        var release = new System.Reactive.Disposables.CompositeDisposable(held, context);
+        var release = leased.Release;
         try
         {
-            return (services.Resolve(Root, index, caller), release);
+            return (leased.Services.Resolve(Root, index, caller), release);
         }
         catch
         {

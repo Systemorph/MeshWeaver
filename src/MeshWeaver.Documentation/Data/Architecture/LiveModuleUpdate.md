@@ -748,13 +748,16 @@ Three pieces close that, each built on the refusal rather than beside it:
 - **Readiness reads it.** `ModuleContexts.UnresolvableForwarders` asks each current generation, for
   every forwarder in its layout, whether it can answer: the registration at that index exists, is the
   forwarded one the forwarder was laid out for, and its container holds the scope key. The
-  `module_forwarders` health check (`ModuleForwarderHealthCheck`, readiness + census tags in
-  `Memex.Portal.ServiceDefaults`) is Unhealthy on any gap, naming module, generation, key and service,
+  `module_forwarders` health check (`ModuleForwarderHealthCheck`, readiness + roll-gate + census tags
+  in `Memex.Portal.ServiceDefaults`, so it holds `/ready` and never fails the startup probe) is Unhealthy on any gap, naming module, generation, key and service,
   and prints its clean census otherwise. One reading is enough — a built container never changes —
   so it cannot flap on a transient lease failure and needs no window
   (`ModuleRootServicesSwapTest.AGenerationWhoseForwarderMoved_FailsReadiness_NamingTheModuleAndTheService`,
   arranged as the pre-refusal swap committed it and mutation-checked; its negative control
-  `EveryForwarderResolves_AfterBootAndAfterALiveSwap_SoReadinessHolds`).
+  `EveryForwarderResolves_AfterBootAndAfterALiveSwap_SoReadinessHolds`). Each generation is read under
+  the same context and services leases a forwarder's resolve takes, currency re-checked, so a live swap
+  that retires it mid-scan defers the disposal to the scan's release
+  (`ModuleRootServicesSwapTest.ARetirementDuringTheForwarderScan_IsDeferredToTheScansRelease`).
 - **The fleet watch alarms on it.** `Hosting/Issue/Source/ModuleLeaseAlarms` (MeshWeaver.Plugins) reads
   every replica's `/health` — unready ones included, since this check is what makes them unready —
   for a `module_forwarders` finding or the raw `mw-module-service:… has not been registered` text an

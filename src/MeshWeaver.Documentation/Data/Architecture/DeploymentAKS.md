@@ -563,6 +563,7 @@ different questions, and only one of them may kill the container over a verdict 
   THIS replica that its siblings do not share: `token_validation` (the replica cannot authenticate an
   API token) and `module_forwarders` (a root forwarder of a module cannot be resolved in that module's
   current generation, so every activation that leases it fails — MeshWeaver#6847, below).
+  `module_forwarders` is also a roll gate, so its Unhealthy verdict never fails the startup probe.
 - **`module_forwarders` is deterministic, so it needs no failure count.** It reads, for every module's
   current generation, whether each forwarder the root was laid out with at boot still resolves there
   (`ModuleContexts.UnresolvableForwarders`). A built container never changes, so one Unhealthy reading

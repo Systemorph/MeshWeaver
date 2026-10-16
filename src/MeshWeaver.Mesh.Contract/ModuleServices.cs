@@ -175,6 +175,10 @@ public sealed class ModuleServices : IDisposable
     /// generation becomes current (or the process restarts). Reads the registry; resolves nothing, so it
     /// runs no module code and cannot wait on a module container's lock. A disposed generation answers
     /// empty — it is no longer what any forwarder resolves.</para>
+    ///
+    /// <para>🚨 The caller holds a lease on this generation (<see cref="TryLease"/>) for the whole call —
+    /// <see cref="ModuleContexts.UnresolvableForwarders"/> does — so a retirement that lands while the
+    /// container is read is deferred to the lease's release and never disposes it mid-read.</para>
     /// </summary>
     /// <param name="root">The mesh's root provider.</param>
     internal ImmutableList<string> UnresolvableForwarders(IServiceProvider root)

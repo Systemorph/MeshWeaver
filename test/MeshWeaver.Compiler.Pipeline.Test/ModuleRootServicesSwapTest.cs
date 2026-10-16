@@ -222,6 +222,59 @@ public sealed class ModuleRootServicesSwapTest : MonolithMeshTestBase
             .And.Contain("restarts", "the remedy is stated");
     }
 
+    /// <summary>
+    /// MeshWeaver#6847 review — the readiness scan holds the generation's LEASES while it reads the
+    /// container. The race, made deterministic with a controlled switch: the module container's
+    /// <see cref="Autofac.ILifetimeScope.ResolveOperationBeginning"/> fires when the scan reads that
+    /// container, and the armed action RETIRES the generation right there — the step a concurrent live
+    /// swap takes. Under the scan's lease the retirement removes the generation from the current set
+    /// but DEFERS its services' disposal to the scan's release, so the scan completes on a live container
+    /// (no <see cref="ObjectDisposedException"/>, no transient Unhealthy) and the disposal follows.
+    /// Mutation-checked: without the leases the retirement disposes the container mid-read.
+    /// </summary>
+    [Fact]
+    public void ARetirementDuringTheForwarderScan_IsDeferredToTheScansRelease()
+    {
+        var generation = HeldGeneration(Module);
+        var services = generation.Services!;
+        services.ForwarderLayout.Should().NotBeEmpty("the arrangement: the module forwards platform services, so the scan reads its container");
+        var container = Contexts.ModuleScope(Module)!.GetRequiredService<Autofac.ILifetimeScope>();
+        var scanThread = Environment.CurrentManagedThreadId;
+        var armed = 1;
+        bool? disposedWhenRetired = null;
+        Exception? retireFault = null;
+        EventHandler<Autofac.Core.Resolving.ResolveOperationBeginningEventArgs> fire = (_, _) =>
+        {
+            // Only the scan's own read on this thread, and only once: nothing else the mesh resolves
+            // from this container concurrently can trip the switch.
+            if (Environment.CurrentManagedThreadId != scanThread || Interlocked.Exchange(ref armed, 0) == 0)
+                return;
+            Contexts.Retire(generation, Budget).Subscribe(_ => { }, ex => retireFault = ex);
+            disposedWhenRetired = services.IsDisposed;
+        };
+        container.ResolveOperationBeginning += fire;
+        ImmutableList<ModuleForwarderGap> gaps;
+        try
+        {
+            gaps = Contexts.UnresolvableForwarders();
+        }
+        finally
+        {
+            container.ResolveOperationBeginning -= fire;
+        }
+
+        Volatile.Read(ref armed).Should().Be(0, "the switch must have fired inside the scan, or this test checked nothing");
+        retireFault.Should().BeNull("the retirement itself must not fault");
+        Contexts.Current(Module).Should().BeNull("the retirement ran: the generation left the current set mid-scan");
+        disposedWhenRetired.Should().Be(false,
+            "a retirement that lands while the scan reads the container must find the scan's lease and DEFER the "
+            + "disposal — disposing the container mid-read is the ObjectDisposedException the review found");
+        gaps.Should().BeEmpty("the scan completed on live services: every forwarder of the generation it leased resolves");
+        services.IsDisposed.Should().BeTrue("the scan's release was the last lease of a retiring generation, so it disposed the services");
+        ModuleForwarderHealthCheck.Evaluate(Contexts).Status.Should().Be(HealthStatus.Healthy,
+            "a module with no current generation forwards nothing that could fail");
+    }
+
     /// <summary>The 2026-10-16 swap as it ran before the index joined the shape: N+1 prepared against the
     /// boot prefix, built before published and committed — every step but the shape comparison.</summary>
     private void CommitWithoutTheShapeCheck(string path)
