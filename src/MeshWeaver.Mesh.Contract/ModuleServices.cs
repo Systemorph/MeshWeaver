@@ -114,14 +114,26 @@ public sealed class ModuleServices : IDisposable
     /// <summary>Why these services cannot be served from a module scope — empty when they can.</summary>
     public ImmutableList<string> Blockers { get; }
 
-    /// <summary>The shape a swap must preserve (see <see cref="ModuleServiceRegistration.Shape"/>).</summary>
+    /// <summary>The shape a swap must preserve (see <see cref="ModuleServiceRegistration.Shape"/>), each
+    /// forwarded registration prefixed with its <see cref="ModuleServiceRegistration.Index"/>.</summary>
     public ImmutableList<string> Shape => Registrations
         // Hosted services are NOT part of the shape: the root holds no per-registration forwarder for
         // them — one ModuleHostedServicesHost starts whatever the CURRENT generation registers — so a
         // generation may add or drop a background service and still swap live (measured: the AI
-        // update behind the 2026-10-05 incident added exactly one hosted service and nothing else).
+        // update behind the 2026-10-05 incident added exactly one hosted service and nothing else),
+        // as long as it does so AFTER the forwarded registrations (see the index below).
         .Where(r => r.Route is ModuleServiceRoute.Proxy or ModuleServiceRoute.Current)
-        .Select(r => r.Shape)
+        // 🚨 The INDEX is part of the shape (MeshWeaver#6847). Every root forwarder captured the boot
+        // generation's index (ModuleServiceForwarders.AddForwarders) and resolves THAT index in whatever
+        // generation is current. A generation that inserts ANY registration — a module-owned one, a
+        // private one, a hosted service — ahead of a forwarded one keeps the forwarded subsequence
+        // identical but moves every index after it, and the root then asks the new generation for the
+        // wrong registration: WhatsApp 1.3.2 → 1.4.2 went live that way on 2026-10-16, a root forwarder
+        // laid out at boot for index 10 resolved the new generation's index 10 — the module-owned
+        // IWhatsAppRecentChats, held unkeyed, so "mw-module-service:10 has not been registered" — and every
+        // hub activation that leased it (API-token validation among them) faulted until the pods
+        // restarted. Such a generation is restart-required, never a live swap.
+        .Select(r => $"#{r.Index} {r.Shape}")
         .ToImmutableList();
 
     /// <summary>

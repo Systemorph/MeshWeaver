@@ -253,7 +253,7 @@ implementation must swap a reload's modules as one wave, through `SwapAll`.
 | `ModuleServiceProvider` (`MeshWeaver.ServiceProvider`) | The module's services live in an Autofac container of their OWN, which reaches the root only for types that do not name the module — through ONE stand-in **per root registration**, so `IEnumerable<T>` in the module is the root's whole list in the root's order and a single resolve still answers the root's LAST. Each stand-in resolves in a root CHILD scope owned by the asking module scope (`RootResolutionScope`), never in the root itself: a scoped root service built in the root is shared there for the life of the process, under the root's lock — the silo-wide wedge of [Reading a Silo Eviction](../ReadingASiloEviction) (MeshWeaver#6432); a closed generic over a module type (`IOptions<ItsOptions>`, `ILogger<ItsType>`) is closed in the module's container from the root's open-generic registration. |
 | Module types, wherever asked | A type a module DECLARES is answered from the modules wherever it is asked — `ModuleServices.RegistrationsElsewhere`: the declaring module's registrations (`ModuleServiceProvider.ResolveAt`, one per registration) plus every **contribution** another module made of it (`ModuleServiceRoute.Contributed`). The ROOT serves it through `ModuleOwnedRootSource` (so the mesh hub and every per-node hub, which are scopes under the root, see it), and another module's container through `ModuleFallbackSource`. |
 | Contributions | A registration of a type ANOTHER module declares (`ModuleServiceRoute.Contributed` — every AI provider registering MeshWeaver.AI's `LanguageModelCatalogSource` and `IChatClientFactory`) is never put in the root: a root forwarder would pin the declaring module, and a `DispatchProxy` cannot be built over a collectible interface at all ("A non-collectible assembly may not reference a collectible assembly"). It is served to the declaring module's container after that module's own registrations, and to the root's list. |
-| The swap | `ModuleContexts.PrepareServices` re-runs N+1's delegates against the SAME boot prefix and requires the same routes and shape — the root's forwarders were laid out at boot; a changed shape is refused by name and N keeps serving. |
+| The swap | `ModuleContexts.PrepareServices` re-runs N+1's delegates against the SAME boot prefix and requires the same routes and shape — the root's forwarders were laid out at boot; a changed shape is refused by name and N keeps serving. 🚨 The shape includes each forwarded registration's INDEX: every forwarder resolves the boot generation's index in the current generation, so an N+1 that inserts any registration (module-owned, private, hosted) ahead of a forwarded one is restart-required, never live (MeshWeaver#6847 — see below). |
 
 🚨 **A "copy of the root collection" copies the DESCRIPTORS, so a registry that registration code writes
 into must be copied too.** `AddHttpClient<T>()` records "client name → `T`" in the `HttpClientMappingRegistry`
@@ -722,6 +722,19 @@ made that true, each found by running it:
    A keyed registration of a type the module DECLARES is answered by key from the root too
    (`ModuleOwnedRootSource` → `ModuleServices.KeyedRegistrationsElsewhere`), and never counted among
    the type's unkeyed registrations.
+
+**2026-10-16 — the index is part of the shape (MeshWeaver#6847).** The shape compared only the
+forwarded subsequence (route, type, lifetime), while every root forwarder holds the BOOT generation's
+absolute registration index. WhatsApp 1.3.2 → 1.4.2 added its inbox registrations, among them the
+module-owned `IWhatsAppRecentChats`, which moved the forwarded indices without changing that
+subsequence: the swap went live on the company instance's three running pods at 00:15Z, a root forwarder
+then resolved `mw-module-service:10` in N+1 — the unkeyed module-owned registration — and every hub
+activation leasing it faulted (API-token validation included) until the pods restarted; pods that
+BOOTED on 1.4.2 were unaffected. `ModuleServices.Shape` now prefixes each forwarded registration with
+its index, so such an N+1 is `RestartRequired` with N serving
+(`ModuleRootServicesSwapTest.AnUpdateThatMovesAForwardedRegistrationsIndex_IsRefused_AndNKeepsServing`;
+mutation-checked — without the index the swap answers `Live`). An addition AFTER the forwarded
+registrations (the hosted-service case above) still swaps live.
 
 **Measured over all 41 shipped modules** (Plugins with its slice converting the view packs and fixing
 Acp, built against this core; the three whose Debug output lacks NuGet dependencies measured from a

@@ -143,6 +143,31 @@ public sealed class ModuleRootServicesSwapTest : MonolithMeshTestBase
         consumer.Ask().Should().Be("hello v1 (options v1)", "never a half-swapped state");
     }
 
+    /// <summary>
+    /// MeshWeaver#6847 — the root's forwarders hold the BOOT generation's registration index. An N+1 that
+    /// forwards the very same platform services but inserts a registration of its OWN type ahead of them
+    /// (WhatsApp 1.4.2 added its inbox reader that way) moves every forwarded index, so a live swap would
+    /// make the root resolve the wrong registration of N+1 — measured in production as
+    /// "mw-module-service:10 … has not been registered" on every hub activation. Refused by name; N keeps
+    /// serving through the same proxy. Its negative control is the hosted-service swap above: an addition
+    /// AFTER the forwarded registrations still swaps live.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task AnUpdateThatMovesAForwardedRegistrationsIndex_IsRefused_AndNKeepsServing()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var consumer = Mesh.ServiceProvider.GetRequiredService<CachingGreeterConsumer>();
+        var greeter = Mesh.ServiceProvider.GetRequiredService<ILiveGreeter>();
+
+        var outcome = await Updater.Swap(Write("g2", ModuleSource(2, ownedFirst: true)), "test: a module-owned registration inserted first")
+            .Timeout(Budget).Await(ct);
+
+        outcome.Kind.Should().Be(ModuleSwapKind.RestartRequired, outcome.Reason);
+        outcome.Reason.Should().Contain("changed shape");
+        consumer.Ask().Should().Be("hello v1 (options v1)", "never a half-swapped state");
+        greeter.Greet().Should().Be("hello v1 (options v1)", "the boot proxy still resolves N's registration at its own index");
+    }
+
     [Fact]
     public void AClassTypedRootServiceTheModuleImplements_IsABlocker_ThatTheGuardNames()
     {
@@ -261,7 +286,7 @@ public sealed class ModuleRootServicesSwapTest : MonolithMeshTestBase
         consumer.Ask().Should().Be("hello v2 (options v2)", "N+1 is current and serves");
     }
 
-    private static string ModuleSource(int version, bool extraGreeter = false, bool classService = false, bool extraHosted = false, string greeterClass = "Greeter", bool brokenSingleton = false, bool circuitBound = false) => $$"""
+    private static string ModuleSource(int version, bool extraGreeter = false, bool classService = false, bool extraHosted = false, string greeterClass = "Greeter", bool brokenSingleton = false, bool circuitBound = false, bool ownedFirst = false) => $$"""
         using Microsoft.Extensions.DependencyInjection;
         using Microsoft.Extensions.Options;
         [assembly: MeshWeaver.Test.LiveServices.Module]
@@ -294,6 +319,7 @@ public sealed class ModuleRootServicesSwapTest : MonolithMeshTestBase
                 [new MeshWeaver.Mesh.MeshNode("LiveServicesProbe") { Name = "v{{version}}", NodeType = "Markdown" }
                     .WithGlobalServiceRegistry(services =>
                     {
+                        {{(ownedFirst ? "services.AddSingleton<IOwnGreeter, OwnGreeter>();" : "")}}
                         services.AddOptions<GreeterOptions>().Configure(o => o.Version = "v{{version}}");
                         services.AddSingleton<MeshWeaver.Graph.Test.ILiveGreeter, {{greeterClass}}>();
                         services.AddKeyedSingleton<MeshWeaver.Graph.Test.ILiveGreeter, {{greeterClass}}>("keyed-greeter");
