@@ -26,8 +26,8 @@ public interface ISiloDrainNoticeGrain : IGrainWithStringKey
     /// <param name="drainingSilo">The draining silo's parsable address.</param>
     /// <returns>
     /// <c>true</c> when the activation is on the silo its key names and the drain is now recorded
-    /// there; <c>false</c> when it landed anywhere else (the recipient was not placeable), in which
-    /// case nothing was recorded and the activation steps aside.
+    /// there; <c>false</c> when it landed anywhere else, in which case the activation migrates to the
+    /// recipient and records the notice on arrival.
     /// </returns>
     Task<bool> Draining(string drainingSilo);
 }

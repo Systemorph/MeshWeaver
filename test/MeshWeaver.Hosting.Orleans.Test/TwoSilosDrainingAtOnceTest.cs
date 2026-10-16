@@ -127,7 +127,7 @@ public class TwoSilosDrainingAtOnceTest(ThreeSiloDrainFixture fixture) : IClassF
 
         await Observable.Interval(TimeSpan.FromMilliseconds(100))
             .Where(_ => singletons.All(p => !DrainTestSteps.Hosts(siloB, p)))
-            .Should().Within(TimeSpan.FromSeconds(30))
+            .Should().Within(TestTimeouts.Convergence)
             .Emit("every singleton leaves the draining silo B", ct);
 
         var accessA = siloA.GetRequiredService<AccessService>();
@@ -230,6 +230,52 @@ public class DrainHandOffTargetTest
             backward.Should().Be(forward, $"every process ranks the candidates for '{key}' the same way");
         }
         DrainHandOffTarget.Choose("k", []).Should().BeNull("no candidate, no target — the address stays put");
+    }
+}
+
+/// <summary>
+/// #6875 review: a drain notice whose activation lands on the WRONG silo (a stale directory entry, or a
+/// placement that did not honour the hint) must still reach the recipient — with membership held
+/// unchanged, so no re-announcement can rescue it. The activation migrates to the silo its key names
+/// and records the carried notice there.
+/// </summary>
+public class AMisplacedDrainNoticeReachesItsRecipientTest(TwoSiloCacheUpdateFixture fixture)
+    : IClassFixture<TwoSiloCacheUpdateFixture>
+{
+    /// <summary>The notice for silo A is placed on silo B; A's roster still records it.</summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ANoticeThatLandsOnTheWrongSilo_IsCarriedToTheRecipient()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var cluster = fixture.Cluster;
+        var siloA = DrainTestSteps.SiloServices(cluster, 0);
+        var siloB = DrainTestSteps.SiloServices(cluster, 1);
+        var recipient = cluster.Silos[0].SiloAddress;
+        var draining = SiloAddress.FromParsableString("10.9.9.9:11111@1");
+
+        // Placed on B: the hint names B, not the recipient its key names — the misplacement under test.
+        var grain = siloB.GetRequiredService<IGrainFactory>()
+            .GetGrain<MeshWeaver.Connection.Orleans.ISiloDrainNoticeGrain>(recipient.ToParsableString());
+        var hintKey = global::Orleans.Runtime.Placement.IPlacementDirector.PlacementHintKey;
+        bool recordedOnTheSpot;
+        RequestContext.Set(hintKey, cluster.Silos[1].SiloAddress);
+        try
+        {
+            recordedOnTheSpot = await grain.Draining(draining.ToParsableString());
+        }
+        finally
+        {
+            RequestContext.Remove(hintKey);
+        }
+        recordedOnTheSpot.Should().BeFalse("the precondition: the notice landed on silo B, not on its recipient A");
+
+        await siloA.GetRequiredService<ClusterDrainRoster>().Changes
+            .Where(set => set.Contains(draining))
+            .Should().Within(TestTimeouts.CrossSilo)
+            .Emit("🚨 the misplaced notice is carried to silo A and recorded there — membership never changed, "
+                  + "so nothing else would ever tell A", ct);
+        siloB.GetRequiredService<ClusterDrainRoster>().IsDraining(draining)
+            .Should().BeFalse("it is recorded on the recipient, not on the silo it landed on");
     }
 }
 

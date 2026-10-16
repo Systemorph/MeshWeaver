@@ -82,8 +82,9 @@ internal sealed class ClusterDrainAnnouncer(
                 {
                     if (!recorded)
                         logger.LogInformation(
-                            "[DRAIN] peer {Peer} did not record this silo's drain (not placeable there, or this "
-                            + "host is stopping) — the next membership change announces again",
+                            "[DRAIN] peer {Peer} did not record this silo's drain on the spot — the notice "
+                            + "landed elsewhere and is being carried to it by migration, or this host is "
+                            + "stopping; the next membership change announces again",
                             peer);
                 })
                 // Per-peer: a peer that leaves while it is being told must not stop the others from
