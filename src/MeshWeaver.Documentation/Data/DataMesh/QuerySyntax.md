@@ -159,6 +159,8 @@ nodeType:Organization|Project
 
 The `|` form mirrors `grep -E` alternation. Choose whichever reads more naturally in context.
 
+Inside the parentheses `OR` (any case) is the separator only as a **whole word**: a value that merely starts with those letters is a value, so `-namespace:(acme/a OR orders)` excludes both `acme/a` and `orders`, and a negated list excludes every value it names, quoted or not (#6844).
+
 #### Multi-value `path:` — routing-layer batch lookups
 
 When the parser sees `path:a|b|c`, it builds a multi-value path filter that pushes down as a single `WHERE path IN (...)` round-trip. The canonical use is the routing layer's "longest matching prefix" lookup:
