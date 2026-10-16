@@ -28,7 +28,8 @@ public static class OrleansServerRegistryExtensions
     /// <param name="configurePubSubStore">Optional DURABLE backing for the streaming pub-sub
     /// subscription registry — see <see cref="ConfigureMeshWeaverServer"/>. A host that can ever run
     /// more than one silo MUST supply this; leaving it null keeps the single-silo-only in-memory
-    /// store.</param>
+    /// store. Supplying it also requires the persistence to declare
+    /// <see cref="CrossProcessChangeDelivery"/>, or the silo refuses to start (#4802).</param>
     /// <returns>The configured mesh host application builder for further chaining.</returns>
     public static MeshHostApplicationBuilder UseOrleansMeshServer(
         this IHostApplicationBuilder hostBuilder,
@@ -122,7 +123,9 @@ public static class OrleansServerRegistryExtensions
     /// <param name="configurePubSubStore">Registers the grain storage named
     /// <see cref="StreamProviders.PubSubStore"/>. When null, an in-memory store is registered —
     /// single-silo hosts only. The delegate is invoked INSTEAD of the memory registration, so the
-    /// store has exactly one provider and no accidental last-one-wins shadowing.</param>
+    /// store has exactly one provider and no accidental last-one-wins shadowing. A non-null delegate
+    /// marks a multi-silo host, and such a silo refuses to start unless its persistence declares
+    /// <see cref="CrossProcessChangeDelivery"/> (#4802; see <c>CrossProcessChangeDeliveryValidator</c>).</param>
     /// <returns>The same silo builder for further chaining.</returns>
     public static ISiloBuilder ConfigureMeshWeaverServer(
         this ISiloBuilder silo,
@@ -199,6 +202,12 @@ public static class OrleansServerRegistryExtensions
             // supplied: it is harmless without a stream, and its presence is what marks this host
             // multi-silo.
             configurePubSubStore(silo);
+            // 🚨 #4802: a durable PubSubStore is this host saying "I run as one of several silos",
+            // and several silos are correct only over a store whose change feed reaches every
+            // process. The silo REFUSES to start unless its persistence declares that — see
+            // CrossProcessChangeDeliveryValidator. Single-process hosts (null above) never meet it.
+            silo.Services.AddSingleton<global::Orleans.IConfigurationValidator,
+                CrossProcessChangeDeliveryValidator>();
         }
 
         return silo.AddIncomingGrainCallFilter<AccessContextGrainCallFilter>();
