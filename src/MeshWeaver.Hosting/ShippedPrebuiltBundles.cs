@@ -1418,7 +1418,6 @@ public static class ShippedPrebuiltBundles
                                 mesh, bundlePath, manifest.FrameworkMvid,
                                 payload.Assemblies, alreadyCurrent, logger, onCovered,
                                 decision, context, ClosureOf(manifest), FileNamesOf(manifest),
-                                manifest.Version,
                                 // The bytes' platform RANGE (policy
                                 // platform-backwards-compatibility) — floor and ceiling as the
                                 // producer stated them; the seeder declines outside it, loudly.
@@ -1540,7 +1539,6 @@ public static class ShippedPrebuiltBundles
         AdoptionContext? context = null,
         ImmutableHashSet<string>? closure = null,
         ImmutableDictionary<string, string>? fileNames = null,
-        string? moduleVersion = null,
         string? producerPlatformVersion = null,
         string? platformCeiling = null)
         => assemblies
@@ -1587,8 +1585,10 @@ public static class ShippedPrebuiltBundles
                                 ? PrebuiltAdoptionPolicy.LiveStampOf(a.Dependencies, context!.LiveDependencyIdOf, context.LiveToolchainId)
                                 : a.Dependencies,
                             a.SourceFingerprint,
-                            // #3583 — the manifest's released SemVer, for the owner's compatibility rule.
-                            moduleVersion,
+                            // #3583 — the module version these bytes were built at, for the owner's
+                            // compatibility rule, as the reader resolved it (#6831): per assembly
+                            // when the producer states it, else the manifest's released SemVer.
+                            a.ModuleVersion,
                             // #4280 — the paths (and @@-includes) the bytes were built from, for
                             // the owner's arriving-vs-moved distinction.
                             a.SourcePaths,

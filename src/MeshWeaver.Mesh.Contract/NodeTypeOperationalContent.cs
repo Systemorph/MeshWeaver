@@ -142,6 +142,11 @@ public static class NodeTypeOperationalContent
         // declare its own build compatible.
         "adoptedModuleVersion",
         "currentModuleVersion",
+        // #6831 — the module version of the bytes the record names, keyed to their MVID. Operational
+        // for the same reason: an authored value would let a repo file state what version a
+        // registry advertises its served bytes at.
+        "builtModuleVersion",
+        "builtModuleVersionMvid",
         // #6832 — WHY the record is in a delivery hold (the gate's named reason). Operational for
         // the same reason compilationError is: an authored value would claim a hold this mesh
         // never measured, and an authored null would erase the one readable trace of why a

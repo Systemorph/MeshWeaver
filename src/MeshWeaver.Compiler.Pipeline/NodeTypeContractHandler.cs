@@ -682,8 +682,32 @@ internal static class NodeTypeContractHandler
         GetCompilationPathResponse response,
         bool freshCompile,
         MeshNode curr)
+        => ApplyResolvedSuccess(
+            def, response, freshCompile, curr,
+            ServedBuildIdentity.OfFile(response.AssemblyLocation) ?? def.LatestAssemblyMvid);
+
+    private static NodeTypeDefinition ApplyResolvedSuccess(
+        NodeTypeDefinition def,
+        GetCompilationPathResponse response,
+        bool freshCompile,
+        MeshNode curr,
+        string? resolvedMvid)
         => def with
         {
+            // 🚨 #6831 — the module version travels with the bytes it describes. This writer can
+            // name NEW bytes: the store-miss and foreign-identity branches of Handle compile here
+            // directly. It cannot establish what version those bytes were built at, so it records
+            // UNKNOWN keyed to them — never leaving a standing pair (or, on a record written before
+            // the pair existed, an adoption's AdoptedModuleVersion, which survives this write with
+            // the adopted BuildProvenance) to be read as these bytes' version. Same bytes — a
+            // hydrate of what the record already names — keep the pair, so the hydrate stays the
+            // no-op #2895 requires.
+            BuiltModuleVersion = SameBytes(resolvedMvid, def.LatestAssemblyMvid)
+                ? def.BuiltModuleVersion
+                : null,
+            BuiltModuleVersionMvid = SameBytes(resolvedMvid, def.LatestAssemblyMvid)
+                ? def.BuiltModuleVersionMvid
+                : resolvedMvid,
             DispatchedBuildInputs = null,   // terminal ⇒ no compile in flight (#3390)
             CompilationStatus = CompilationStatus.Ok,
             CompilationError = null,
@@ -731,9 +755,7 @@ internal static class NodeTypeContractHandler
             // note below), so it has to stamp the same shape — a success
             // write that omitted the MVID would leave whichever writer won
             // deciding whether the served build is checkable at all.
-            LatestAssemblyMvid =
-                ServedBuildIdentity.OfFile(response.AssemblyLocation)
-                ?? def.LatestAssemblyMvid,
+            LatestAssemblyMvid = resolvedMvid,
             // 🚨 The version the BYTES are stored under — never curr.Version.
             // LastCompiledVersion is one half of the IAssemblyStore key
             // (nodeTypePath, version); the response echoes that key's version
@@ -800,6 +822,12 @@ internal static class NodeTypeContractHandler
             // Settled Ok: the failure verdict, and the build it was formed on, are gone.
             FailedPlatformVersion = null,
         };
+
+    /// <summary>Whether <paramref name="resolved"/> names the bytes the record already names
+    /// (#6831). An absent record MVID with a readable resolved one is NEW bytes as far as the record
+    /// can tell, so its version is unknown.</summary>
+    private static bool SameBytes(string? resolved, string? recorded)
+        => string.Equals(resolved, recorded, StringComparison.OrdinalIgnoreCase);
 
 
     /// <summary>
