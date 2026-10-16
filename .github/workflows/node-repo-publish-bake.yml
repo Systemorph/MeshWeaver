@@ -2037,79 +2037,9 @@ jobs:
           ref: ${{ inputs.scripts-ref || inputs.platform-ref }}
           path: mw-platform
           sparse-checkout: .github/scripts
-      # ───────────── KEEP THE PUBLICATION COMPLETE (the reason the bake used to be full) ─────────────
-      # A narrowed bake wrote bundles only for what it rebuilt. The publish below uploads exactly
-      # the local bundle set and seals a `_complete` listing exactly it — and a portal seeds only
-      # what that sentinel lists. So publishing the delta would not ADD bundles, it would REPLACE
-      # the sentinel and shrink what every portal adopts, silently putting every other module back
-      # to compiling at boot.
-      #
-      # This step re-hydrates every bundle the sealed publication lists that this bake did not
-      # produce, so the publish script runs COMPLETELY UNCHANGED over a full set and the resulting
-      # publication is indistinguishable from a full bake's. A bundle that can neither be rebuilt
-      # nor fetched is FATAL here — the alternative is publishing less than is published today,
-      # which is the silent failure this whole lane exists to remove. Nothing has been written at
-      # that point, so the existing publication stays sealed and intact.
-      # ───────────── THE PUBLICATION SEALS PER PACKAGE (MeshWeaver.Plugins#3507) ─────────────
-      # A withheld package (its lock unsettled, its floor unstamped, or a dependency in that state)
-      # must never be sealed from THIS tree — and must not drop out of the publication either. So its
-      # fresh bundle and module package are deleted here, and the carry below fetches the build the
-      # sealed publication already holds for it, with the same verification a narrowed bake's carry
-      # has. One the publication never sealed stays out, and every package requiring it waits with it
-      # (`--content` reads their `requires`); a waiting package that bakes no bundle at all is sealed
-      # by no publication and blocks nothing (Plugins run 38527548962). An unreadable publication is
-      # RED, nothing written. Runs whenever the bake ran; with nothing withheld it says so.
-      - name: "Per-package seal: replace every withheld package's fresh bytes by its sealed build"
-        id: withhold
-        if: steps.scope.outputs.scope != 'none'
-        env:
-          WITHHOLD_PACKAGES: ${{ inputs.withhold-packages }}
-        run: >
-          python3 mw-platform-gate/.github/scripts/seal-packages.py withhold
-          --bake "$BAKE_DIR" --withhold "$WITHHOLD_PACKAGES" --content "$GITHUB_WORKSPACE"
-          --state "${{ runner.temp }}/bake-scope" --github-output "$GITHUB_OUTPUT"
-      # Both carries are BOUND to the publication bake-scope.sh read (its `_complete` stamp,
-      # published-publication.txt): each re-resolves the pointer, and without the binding a seal
-      # that lands in between would let either carry — or each of the two, over different
-      # publications — take bytes the listing and the per-package entries do not describe.
-      - name: Carry forward the bundles this bake did not rebuild (or must not seal fresh)
-        if: steps.scope.outputs.scope == 'narrowed' || steps.withhold.outputs.carry == 'true'
-        env:
-          EXPECT_PUBLICATION_FILE: ${{ runner.temp }}/bake-scope/published-publication.txt
-        run: >
-          mw-platform/.github/scripts/carry-forward-bundles.sh
-          "$BAKE_DIR"
-          "${{ runner.temp }}/bake-scope/published-bundles.txt"
-          "$BAKE_CARRY_TARGET"
-          "${{ steps.identity.outputs.identity }}"
-          "${{ inputs.bake-source }}"
-      - name: "Per-package seal: carry each withheld package's sealed module package"
-        if: steps.withhold.outputs.carry-modules == 'true'
-        env:
-          CARRY_SUBDIR: modules
-          EXPECT_PUBLICATION_FILE: ${{ runner.temp }}/bake-scope/published-publication.txt
-        run: >
-          mw-platform/.github/scripts/carry-forward-bundles.sh
-          "$BAKE_DIR/modules"
-          "${{ runner.temp }}/bake-scope/carry-modules.txt"
-          "$BAKE_CARRY_TARGET"
-          "${{ steps.identity.outputs.identity }}"
-          "${{ inputs.bake-source }}"
-      # The per-package listing — and the refusal of a seal whose own dependency floors are unmet
-      # (the class of MeshWeaver#6192: a dependent sealed at a version requiring a dependency the
-      # same publication holds only at an older one, refused wholesale by every portal). A GATE: no
-      # `continue-on-error`, no input-shaped `if:` — it runs exactly when the bake ran.
-      - name: "Per-package seal: write the listing, refuse an unmet dependency floor"
-        if: steps.scope.outputs.scope != 'none'
-        env:
-          WITHHOLD_PACKAGES: ${{ inputs.withhold-packages }}
-          CONTENT_SHA: ${{ steps.content.outputs.sha }}
-        run: >
-          python3 mw-platform-gate/.github/scripts/seal-packages.py listing
-          --bake "$BAKE_DIR" --content "$GITHUB_WORKSPACE" --commit "$CONTENT_SHA"
-          --withhold "$WITHHOLD_PACKAGES" --state "${{ runner.temp }}/bake-scope"
       # 🚨 THE PYTHON THIS JOB USES MUST BUILD A VENV, and the three steps below PROVE it can
-      # rather than assuming it. publish-bake-bundles.sh builds its own venv and installs its
+      # rather than assuming it. publish-bake-bundles.sh (and, since MeshWeaver.Plugins#1785, rebind-bake-scope.sh
+      # just below — which runs BEFORE the carry) build their own venv and install the
       # PINNED Azure SDKs into it (the script owns that install on purpose — see its header: a
       # workflow-side install would leave a satellite whose ref is newer than its pin running a
       # script whose dependency nobody installed). An UNCONDITIONAL `actions/setup-python` stood
@@ -2173,9 +2103,116 @@ jobs:
           fi
           rm -rf "$probe"
           echo "The healed interpreter builds a venv ($(python3 --version 2>&1)); publication may proceed."
+      # ───────────── HOLD THE PREFIX, AND RE-BIND THE CARRY TO WHAT IS LIVE (MeshWeaver.Plugins#1785) ─────────────
+      # The scope above read the sealed publication BEFORE the ~15-minute compile; the carry below
+      # binds to exactly that reading, and refuses — correctly — when a sibling sealed in between
+      # ("The publication moved between the read and the carry"; three times on one day). From HERE
+      # to the seal this run holds the per-prefix publication lock on every target (MeshWeaver#6877;
+      # released by the `if: always()` step after the publish), re-runs the scope decision against
+      # the shelf as it is NOW, and decides:
+      #   unchanged   → carry and publish as before
+      #   superseded  → the live publication already holds this content: publish NOTHING (green)
+      #   rebound     → every module now affected was rebuilt by this bake: carry from the LIVE one
+      #   refused     → anything else (a revert between the baselines is the measured shape): RED
+      # Only when the scope step RAN and baked something — a lane without `narrow-by-affected` has
+      # no early reading to re-bind, and publish-bake-bundles.sh takes the lock itself.
+      - name: "Hold the publication lock, and re-bind the carry to the live publication"
+        id: rebind
+        if: steps.scope.outputs.scope == 'narrowed' || steps.scope.outputs.scope == 'full'
+        env:
+          BAKE_PUBLISH_TARGETS: ${{ inputs.bake-publish-targets }}
+          IDENTITY: ${{ steps.identity.outputs.identity }}
+          SOURCE: ${{ inputs.bake-source }}
+          HEAD_SHA: ${{ github.sha }}
+          REPO_DIR: ${{ github.workspace }}
+          EVENT_NAME: ${{ github.event_name }}
+          STATE_DIR: ${{ runner.temp }}/bake-scope
+          WITHHOLD_PACKAGES: ${{ inputs.withhold-packages }}
+          ORIGINAL_SCOPE: ${{ steps.scope.outputs.scope }}
+        run: mw-platform/.github/scripts/rebind-bake-scope.sh
+      - name: "Superseded while baking — nothing to publish"
+        if: steps.rebind.outputs.publish == 'false'
+        env:
+          REASON: ${{ steps.rebind.outputs.reason }}
+        run: |
+          set -euo pipefail
+          echo "no publish: $REASON"
+          echo "A VERIFIED outcome, not a skipped gate: the live publication was re-read under the"
+          echo "publication lock from every target and already holds this content."
+      # ───────────── KEEP THE PUBLICATION COMPLETE (the reason the bake used to be full) ─────────────
+      # A narrowed bake wrote bundles only for what it rebuilt. The publish below uploads exactly
+      # the local bundle set and seals a `_complete` listing exactly it — and a portal seeds only
+      # what that sentinel lists. So publishing the delta would not ADD bundles, it would REPLACE
+      # the sentinel and shrink what every portal adopts, silently putting every other module back
+      # to compiling at boot.
+      #
+      # This step re-hydrates every bundle the sealed publication lists that this bake did not
+      # produce, so the publish script runs COMPLETELY UNCHANGED over a full set and the resulting
+      # publication is indistinguishable from a full bake's. A bundle that can neither be rebuilt
+      # nor fetched is FATAL here — the alternative is publishing less than is published today,
+      # which is the silent failure this whole lane exists to remove. Nothing has been written at
+      # that point, so the existing publication stays sealed and intact.
+      # ───────────── THE PUBLICATION SEALS PER PACKAGE (MeshWeaver.Plugins#3507) ─────────────
+      # A withheld package (its lock unsettled, its floor unstamped, or a dependency in that state)
+      # must never be sealed from THIS tree — and must not drop out of the publication either. So its
+      # fresh bundle and module package are deleted here, and the carry below fetches the build the
+      # sealed publication already holds for it, with the same verification a narrowed bake's carry
+      # has. One the publication never sealed stays out, and every package requiring it waits with it
+      # (`--content` reads their `requires`); a waiting package that bakes no bundle at all is sealed
+      # by no publication and blocks nothing (Plugins run 38527548962). An unreadable publication is
+      # RED, nothing written. Runs whenever the bake ran; with nothing withheld it says so.
+      - name: "Per-package seal: replace every withheld package's fresh bytes by its sealed build"
+        id: withhold
+        if: steps.scope.outputs.scope != 'none' && steps.rebind.outputs.publish != 'false'
+        env:
+          WITHHOLD_PACKAGES: ${{ inputs.withhold-packages }}
+        run: >
+          python3 mw-platform-gate/.github/scripts/seal-packages.py withhold
+          --bake "$BAKE_DIR" --withhold "$WITHHOLD_PACKAGES" --content "$GITHUB_WORKSPACE"
+          --state "${{ runner.temp }}/bake-scope" --github-output "$GITHUB_OUTPUT"
+      # Both carries are BOUND to the publication bake-scope.sh read (its `_complete` stamp,
+      # published-publication.txt): each re-resolves the pointer, and without the binding a seal
+      # that lands in between would let either carry — or each of the two, over different
+      # publications — take bytes the listing and the per-package entries do not describe.
+      - name: Carry forward the bundles this bake did not rebuild (or must not seal fresh)
+        if: (steps.scope.outputs.scope == 'narrowed' || steps.withhold.outputs.carry == 'true') && steps.rebind.outputs.publish != 'false'
+        env:
+          EXPECT_PUBLICATION_FILE: ${{ runner.temp }}/bake-scope/published-publication.txt
+        run: >
+          mw-platform/.github/scripts/carry-forward-bundles.sh
+          "$BAKE_DIR"
+          "${{ runner.temp }}/bake-scope/published-bundles.txt"
+          "$BAKE_CARRY_TARGET"
+          "${{ steps.identity.outputs.identity }}"
+          "${{ inputs.bake-source }}"
+      - name: "Per-package seal: carry each withheld package's sealed module package"
+        if: steps.withhold.outputs.carry-modules == 'true' && steps.rebind.outputs.publish != 'false'
+        env:
+          CARRY_SUBDIR: modules
+          EXPECT_PUBLICATION_FILE: ${{ runner.temp }}/bake-scope/published-publication.txt
+        run: >
+          mw-platform/.github/scripts/carry-forward-bundles.sh
+          "$BAKE_DIR/modules"
+          "${{ runner.temp }}/bake-scope/carry-modules.txt"
+          "$BAKE_CARRY_TARGET"
+          "${{ steps.identity.outputs.identity }}"
+          "${{ inputs.bake-source }}"
+      # The per-package listing — and the refusal of a seal whose own dependency floors are unmet
+      # (the class of MeshWeaver#6192: a dependent sealed at a version requiring a dependency the
+      # same publication holds only at an older one, refused wholesale by every portal). A GATE: no
+      # `continue-on-error`, no input-shaped `if:` — it runs exactly when the bake ran.
+      - name: "Per-package seal: write the listing, refuse an unmet dependency floor"
+        if: steps.scope.outputs.scope != 'none' && steps.rebind.outputs.publish != 'false'
+        env:
+          WITHHOLD_PACKAGES: ${{ inputs.withhold-packages }}
+          CONTENT_SHA: ${{ steps.content.outputs.sha }}
+        run: >
+          python3 mw-platform-gate/.github/scripts/seal-packages.py listing
+          --bake "$BAKE_DIR" --content "$GITHUB_WORKSPACE" --commit "$CONTENT_SHA"
+          --withhold "$WITHHOLD_PACKAGES" --state "${{ runner.temp }}/bake-scope"
       - name: Publish bundles to every portal target
         id: publish
-        if: steps.scope.outputs.scope != 'none'
+        if: steps.scope.outputs.scope != 'none' && steps.rebind.outputs.publish != 'false'
         env:
           BAKE_PUBLISH_TARGETS: ${{ inputs.bake-publish-targets }}
           # 🚨 The CONTENT repository, exactly as the checkout above resolves it — NOT
@@ -2209,6 +2246,9 @@ jobs:
           # The exact publication, materialised locally AFTER every share sealed — the directory
           # the fleet-registry push below publishes (Doc/Architecture/PluginBundlesInTheRegistry).
           BAKE_PUBLICATION_DIR: ${{ runner.temp }}/publication
+          # BAKE_PUBLISH_LOCK_HOLDER and PUBLISH_BAKE_PYTHON arrive through GITHUB_ENV from the
+          # re-bind step when it ran: the script then PROVES it holds every target's lock instead
+          # of acquiring, and reuses the venv. Without it the script takes the lock itself.
         # Contract: layout <base>/prebuilt-bundles/<framework-identity>/<source>/<bundle>.zip,
         # every bundle first, the `_complete` sentinel strictly LAST; an already-sealed identity
         # with the same source sha skips (the surface identity is breaking-change-keyed, so
@@ -2238,6 +2278,8 @@ jobs:
       # — the three move together (the publisher expects the layout the share script materialises).
       # ORAS is installed PINNED by the platform's install-oras.sh (the harness executes the
       # publisher with the same pin); the login is docker's, so ORAS reads the same credential.
+      # Also on the SUPERSEDED path (publish=false): it publishes nothing, but its registry guard below
+      # reads the tag.
       - name: Install ORAS (pinned, from the platform checkout)
         if: steps.scope.outputs.scope != 'none'
         run: bash mw-platform/.github/scripts/install-oras.sh
@@ -2248,12 +2290,19 @@ jobs:
         run: bash mw-platform/.github/scripts/registry-login.sh "${{ inputs.bundle-registry }}" "${{ inputs.bundle-registry-publisher }}"
       - name: "Push the sealed publication to the fleet registry (plugins/<source>:<identity>)"
         id: registry
-        if: steps.scope.outputs.scope != 'none'
+        if: steps.scope.outputs.scope != 'none' && steps.rebind.outputs.publish != 'false'
         env:
           BAKE_PUBLICATION_DIR: ${{ runner.temp }}/publication
           BUNDLE_REGISTRY: ${{ inputs.bundle-registry }}
           SOURCE: ${{ inputs.bake-source }}
           IDENTITY: ${{ steps.identity.outputs.identity }}
+          # The same pair the publish step orders commits with: the registry tag never moves to an
+          # OLDER commit than the one it names (push-bundle-publication.sh).
+          GH_TOKEN: ${{ steps.content-token.outputs.token || github.token }}
+          BAKE_CONTENT_REPOSITORY: ${{ inputs.content-repository || github.repository }}
+          # The prefix lock (MeshWeaver#6877): proved held when the re-bind step took it
+          # (BAKE_PUBLISH_LOCK_HOLDER arrives through GITHUB_ENV), taken here otherwise.
+          BAKE_PUBLISH_TARGETS: ${{ inputs.bake-publish-targets }}
         run: |
           set -euo pipefail
           [ -d "$BAKE_PUBLICATION_DIR" ] || { echo "::error::publish-bake-bundles.sh left no materialised publication at $BAKE_PUBLICATION_DIR — the share seal did not complete, so nothing is pushed to $BUNDLE_REGISTRY. (A platform-ref older than the publisher does not write it: move platform-ref forward.)"; exit 1; }
@@ -2261,7 +2310,7 @@ jobs:
           LOG="${RUNNER_TEMP:-/tmp}/registry-publication.log"
           # `set -o pipefail` above: the publisher's exit code survives the tee. Its
           # `index_digest` output lands in $GITHUB_OUTPUT (this step's id is `registry`).
-          mw-platform/.github/scripts/push-bundle-publication.sh \
+          mw-platform/.github/scripts/bake-publication-lock.sh -- mw-platform/.github/scripts/push-bundle-publication.sh \
             --registry "$BUNDLE_REGISTRY" --source "$SOURCE" --identity "$IDENTITY" \
             --dir "$BAKE_PUBLICATION_DIR" --tag-run "$GITHUB_RUN_ID" --skip-if-published 2>&1 | tee "$LOG"
           index=$(sed -n 's/^bundle-publication: index=\([^ ]*\).*/\1/p' "$LOG" | tail -n 1)
@@ -2269,6 +2318,35 @@ jobs:
           source_lc=$(printf '%s' "$SOURCE" | tr '[:upper:]' '[:lower:]')
           echo "- fleet registry: \`$BUNDLE_REGISTRY/plugins/$source_lc:$IDENTITY\` = \`$index\` (immutable tag \`$IDENTITY-$GITHUB_RUN_ID\`)" >> "$GITHUB_STEP_SUMMARY"
 
+      # The SUPERSEDED path (MeshWeaver.Plugins#1785) publishes nothing, so it must not turn green over
+      # a registry that does not carry what the shares serve: under the lock it still holds, the tag
+      # is READ, and anything but the live share publication's commit (current layout) or a newer one
+      # containing it is RED, naming both. It repairs nothing — that is a separate change.
+      - name: "Superseded: the registry must name the live publication"
+        if: steps.rebind.outputs.publish == 'false'
+        env:
+          BAKE_PUBLISH_TARGETS: ${{ inputs.bake-publish-targets }}
+          IDENTITY: ${{ steps.identity.outputs.identity }}
+          SOURCE: ${{ inputs.bake-source }}
+          BUNDLE_REGISTRY: ${{ inputs.bundle-registry }}
+          LIVE_COMMIT: ${{ steps.rebind.outputs.live-commit }}
+          GH_TOKEN: ${{ steps.content-token.outputs.token || github.token }}
+          BAKE_CONTENT_REPOSITORY: ${{ inputs.content-repository || github.repository }}
+        run: mw-platform/.github/scripts/bake-publication-lock.sh -- mw-platform/.github/scripts/check-registry-names-live.sh
+      # The lock the re-bind step took is held THROUGH the publish AND the registry push (the
+      # registry's read–decide–tag must not interleave with another publisher's either) and
+      # released here, on every
+      # outcome — GitHub runs `always()` on failure and cancellation too. Gated on the re-bind step
+      # having STARTED (a skipped one took nothing; the mw-platform checkout may not exist then).
+      # A release that fails is RED: a lease left behind is infinite (MeshWeaver#6877).
+      - name: Release the publication lock
+        if: always() && (steps.rebind.outcome == 'success' || steps.rebind.outcome == 'failure' || steps.rebind.outcome == 'cancelled')
+        env:
+          BAKE_PUBLISH_TARGETS: ${{ inputs.bake-publish-targets }}
+          IDENTITY: ${{ steps.identity.outputs.identity }}
+          SOURCE: ${{ inputs.bake-source }}
+          STATE_DIR: ${{ runner.temp }}/bake-scope
+        run: mw-platform/.github/scripts/rebind-bake-scope.sh --release
       # ────────────────── NO DEPENDENT DISPATCH: the wave is PULLED ──────────────────
       # This used to POST an upstream-published event to repos named by `dependent-repos`,
       # using a token with write access to each of them. Both are gone.

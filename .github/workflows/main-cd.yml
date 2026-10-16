@@ -3547,6 +3547,13 @@ jobs:
           # repository. Stated explicitly rather than left to the script's fallback, so no live
           # publisher depends on a default that is only right by coincidence (MeshWeaver#3583).
           BAKE_CONTENT_REPOSITORY: ${{ github.repository }}
+          # Read-only (`contents: read` is this job's whole grant): publish-bake-bundles.sh orders the
+          # sealed commit against this bake's through the compare API and refuses to seal an OLDER
+          # commit over a NEWER one. Without a token every comparison read "could not order …
+          # republishing as before" (both runs of the MeshWeaver#6877 incident), so the guard was a
+          # no-op in this lane. The content repository IS this repository, so the run's own token
+          # can read it.
+          GH_TOKEN: ${{ github.token }}
           # The exact publication, materialised locally AFTER every share sealed — the directory
           # the fleet-registry push below publishes (Doc/Architecture/PluginBundlesInTheRegistry).
           BAKE_PUBLICATION_DIR: ${{ runner.temp }}/publication
@@ -3595,13 +3602,23 @@ jobs:
           RELEASE_VERSION: ${{ steps.release.outputs.version }}
           EXPECTED_DB_VERSION: ${{ needs.portal-image.outputs.expected_db_version }}
           BAKE_PUBLICATION_DIR: ${{ runner.temp }}/publication
+          # Read-only: push-bundle-publication.sh refuses to move the identity tag to an OLDER commit
+          # than the one it names, exactly as the share publisher refuses to seal backwards.
+          GH_TOKEN: ${{ github.token }}
+          BAKE_CONTENT_REPOSITORY: ${{ github.repository }}
+          # The prefix lock (MeshWeaver#6877) is taken around the registry push too: the publisher
+          # reads the tag, decides, and moves it LAST, and two overlapping runs could otherwise each
+          # read it before the other moved it — the older one then moves it back.
+          BAKE_PUBLISH_TARGETS: ${{ vars.BAKE_PUBLISH_TARGETS }}
+          SOURCE: meshweaver-content
         run: |
           set -euo pipefail
           [ -d "$BAKE_PUBLICATION_DIR" ] || { echo "::error::publish-bake-bundles.sh left no materialised publication at $BAKE_PUBLICATION_DIR — the share seal did not complete, so nothing is pushed to ${{ env.REGISTRY }}."; exit 1; }
           IDENTITY=$(cat "$BAKE_DIR/framework-mvid.txt")
+          export IDENTITY
           LOG="${RUNNER_TEMP:-/tmp}/registry-publication.log"
           # `set -o pipefail` above: the publisher's exit code survives the tee.
-          .github/scripts/push-bundle-publication.sh \
+          .github/scripts/bake-publication-lock.sh -- .github/scripts/push-bundle-publication.sh \
             --registry "${{ env.REGISTRY }}" --source meshweaver-content \
             --identity "$IDENTITY" --dir "$BAKE_PUBLICATION_DIR" \
             --tag-run "$GITHUB_RUN_ID" --release "$RELEASE_VERSION" --skip-if-published 2>&1 | tee "$LOG"
