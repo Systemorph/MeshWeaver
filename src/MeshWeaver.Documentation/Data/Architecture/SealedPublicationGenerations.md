@@ -167,6 +167,35 @@ first one's upload, must log that it waited, and must end `targets-already=1` wi
 over exactly one bake's bytes. Against the pre-fix script the same case ends with the first run red
 and the shelf UNSEALED.
 
+#### Holding the prefix across the carry, and re-binding to what is live (MeshWeaver.Plugins#1785)
+
+A narrowed bake in `node-repo-publish-bake.yml` reads the sealed publication **before** it compiles
+(`bake-scope.sh`: the listing to carry forward, the baseline commit, the stamp the carry is bound
+to) and carries and publishes ~15 minutes later. A sibling that seals in between makes
+`carry-forward-bundles.sh` refuse — *"The publication moved between the read and the carry"* —
+which is right, and stays. Holding the lock across the whole bake would serialise ~17-minute jobs
+into the 45-minute cap, so the lane takes it later and **re-decides under it**
+(`rebind-bake-scope.sh`, the step *"Hold the publication lock, and re-bind the carry to the live
+publication"*):
+
+| outcome | when (bake-scope.sh re-run against the shelf as it is now) | what the lane does |
+|---|---|---|
+| `unchanged` | the live publication is the one the scope read | carries and publishes as decided |
+| `superseded` | the fresh scope is `none`: the same commit, a newer one containing it, or nothing between the live baseline and this commit reaches a module | publishes **nothing**, green, and says so |
+| `rebound` | the publication moved and every module the fresh scope calls affected was **rebuilt by this bake** (or the bake was full) | the fresh state replaces the old one; the carry takes the live publication's bundles, bound to its stamp |
+| refused | anything else — the measured shape is a revert between the two baselines, which leaves a module affected from the live baseline that this bake did not rebuild | **red**, naming the module; nothing written |
+
+The subset test is what makes `rebound` sound: a module this bake did not rebuild is carried from
+the live publication, which is right exactly when the selector — same edges, same rules — does not
+call it affected from the live baseline. The lock is taken on every target in
+`BAKE_PUBLISH_TARGETS` order, handed to the publish step as `BAKE_PUBLISH_LOCK_HOLDER`, and released
+by an `if: always()` step after it.
+
+`main-cd.yml`'s platform publish now carries a read-only `GH_TOKEN`, so the never-seal-backwards
+comparison can order two commits instead of reporting *"could not order … republishing as before"*
+(both runs of the #6877 incident). That lane still publishes `meshweaver-content` in the **flat**
+layout; moving it to `generation` is a separate decision.
+
 ## The reader contract
 
 One function resolves the pointer, and **every path is composed under its result**:
