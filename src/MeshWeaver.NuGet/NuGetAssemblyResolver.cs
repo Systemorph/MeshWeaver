@@ -280,114 +280,38 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver
         PackageIdentity root, string packagesRoot, SourceRepository[] sources, PackageSourceMapping mapping,
         NuGetFramework framework, HashSet<SourcePackageDependencyInfo> collected, CancellationToken ct)
     {
-        // Each candidate carries the range that asked for it (null for the root), so a candidate the
-        // feed cannot supply can still be answered by an installed version within that range. It also
-        // carries its SUBSTITUTE origin: the installed stand-in it was reached through, or null on a
-        // required path. A stand-in is only a candidate the resolver MAY pick, so a failure below one
-        // drops that stand-in instead of failing the whole resolution.
-        var queue = new Queue<(PackageIdentity Identity, VersionRange? Range, PackageIdentity? Origin)>();
-        queue.Enqueue((root, null, null));
-        var dropped = new HashSet<PackageIdentity>(PackageIdentityComparer.Default);
-        var substitutions = ImmutableList<(InvalidOperationException Failure, ImmutableArray<PackageIdentity> StandIns)>.Empty;
+        var queue = new Queue<PackageIdentity>();
+        queue.Enqueue(root);
 
         while (queue.Count > 0)
         {
-            var (current, range, origin) = queue.Dequeue();
-            if (origin is not null && dropped.Contains(origin)) continue;
+            var current = queue.Dequeue();
             if (collected.Any(c => PackageIdentityComparer.Default.Equals(c, current))) continue;
 
             // OFFLINE FIRST (#6863): an identity the package folder already holds complete is
             // answered by its own .nuspec. The feed is never asked, so a warm folder resolves —
             // and loads a recorded build — while every feed is down.
-            var info = ReadInstalledDependencyInfo(current, packagesRoot, framework);
-            if (info is null)
-            {
-                var (fromFeed, failure) = await ResolveFromFeedAsync(current, packagesRoot, sources, mapping, framework, ct);
-                if (failure is not null)
-                {
-                    // The feed is down and the folder lacks THIS candidate (a dependency's minimum
-                    // version). A previous online resolution may have selected a HIGHER version
-                    // in the same range and installed only that one — a diamond where another
-                    // package raises the floor. Those installed versions are what the feed would
-                    // have offered next, so they stand in as the candidates; the resolver below
-                    // still chooses among them by the same rules.
-                    var installed = range is null
-                        ? ImmutableArray<PackageIdentity>.Empty
-                        : InstalledVersionsInRange(current.Id, range, packagesRoot, framework);
-                    if (!installed.IsEmpty)
-                    {
-                        MsLogging.LoggerExtensions.LogWarning(logger, failure,
-                            "NuGet package {Id} {Version} is not in the package folder and no feed could supply it; "
-                            + "using the installed version(s) {Installed} within {Range}",
-                            current.Id, current.Version.ToNormalizedString(),
-                            string.Join(", ", installed.Select(i => i.Version.ToNormalizedString())),
-                            range!.ToNormalizedString());
-                        substitutions = substitutions.Add((failure, installed));
-                        // A stand-in reached on a substitute path stays on that path's origin.
-                        foreach (var candidate in installed) queue.Enqueue((candidate, range, origin ?? candidate));
-                        continue;
-                    }
-                    // Nothing can answer this candidate. On a REQUIRED path that is the answer. Below a
-                    // stand-in it only rules that stand-in out: it leaves the candidate set, and the
-                    // resolver picks among the others — never a version whose closure cannot be built.
-                    if (origin is null) throw failure;
-                    MsLogging.LoggerExtensions.LogWarning(logger, failure,
-                        "Installed stand-in {Id} {Version} is not usable offline (its dependency {DependencyId} {DependencyVersion} "
-                        + "cannot be resolved); leaving it out of the candidates",
-                        origin.Id, origin.Version.ToNormalizedString(), current.Id, current.Version.ToNormalizedString());
-                    dropped.Add(origin);
-                    collected.RemoveWhere(c => PackageIdentityComparer.Default.Equals(c, origin));
-                    continue;
-                }
-                info = fromFeed;
-            }
+            // The rule is EXACT identities only: every node of the walk is the exact version a
+            // dependency's range asks for (its minimum), never a different installed version standing
+            // in for it. A candidate the folder does not hold at that exact version needs the feed —
+            // choosing among versions is the feed's job — and fails with the named error while the
+            // feed is down. Substituting installed versions was tried and rejected: it lets unrelated
+            // folder contents change which versions resolve (NuGetRuntimeAssets.md, "Known limit").
+            var info = ReadInstalledDependencyInfo(current, packagesRoot, framework)
+                ?? await ResolveFromFeedAsync(current, packagesRoot, sources, mapping, framework, ct);
             if (info is null) continue;
 
             collected.Add(info);
-            // Reached again on a required path: it is no longer only a stand-in.
-            if (origin is null) dropped.Remove(current);
             foreach (var dep in info.Dependencies)
             {
                 var depIdentity = new PackageIdentity(dep.Id, dep.VersionRange.MinVersion);
                 if (!collected.Any(c => PackageIdentityComparer.Default.Equals(c, depIdentity)))
-                    queue.Enqueue((depIdentity, dep.VersionRange, origin));
+                    queue.Enqueue(depIdentity);
             }
         }
-
-        // Every stand-in for a candidate was ruled out: the feed failure for that candidate is the
-        // answer after all, named, rather than the resolver's "unable to resolve".
-        foreach (var (failure, standIns) in substitutions)
-            if (standIns.All(dropped.Contains))
-                throw failure;
     }
 
-    /// <summary>
-    /// The versions of <paramref name="id"/> installed COMPLETE in the package folder that satisfy
-    /// <paramref name="range"/> — the offline stand-in for a candidate the feed could not supply.
-    /// Folder names that are not versions (a hydration's staging folder) are ignored.
-    /// </summary>
-    private ImmutableArray<PackageIdentity> InstalledVersionsInRange(
-        string id, VersionRange range, string packagesRoot, NuGetFramework framework)
-    {
-        var idFolder = Path.Combine(packagesRoot, id.ToLowerInvariant());
-        if (!Directory.Exists(idFolder)) return ImmutableArray<PackageIdentity>.Empty;
-        return Directory.EnumerateDirectories(idFolder)
-            .Select(Path.GetFileName)
-            .Select(name => NuGetVersion.TryParse(name, out var v) ? v : null)
-            .OfType<NuGetVersion>()
-            .Where(range.Satisfies)
-            .Select(v => new PackageIdentity(id, v))
-            .Where(identity => ReadInstalledDependencyInfo(identity, packagesRoot, framework) is not null)
-            .OrderBy(identity => identity.Version)
-            .ToImmutableArray();
-    }
-
-    /// <summary>
-    /// Asks the configured feeds for <paramref name="current"/>. Returns the dependency info, or
-    /// neither (no feed has it, none failed), or the named failure when no feed supplied it and at
-    /// least one failed — returned, not thrown, so the walk can fall back to installed versions.
-    /// </summary>
-    private async Task<(SourcePackageDependencyInfo? Info, InvalidOperationException? Failure)> ResolveFromFeedAsync(
+    private async Task<SourcePackageDependencyInfo?> ResolveFromFeedAsync(
         PackageIdentity current, string packagesRoot, SourceRepository[] sources, PackageSourceMapping mapping,
         NuGetFramework framework, CancellationToken ct)
     {
@@ -410,22 +334,22 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver
                     MsLogging.LoggerExtensions.LogWarning(logger, error,
                         "NuGet feed {Feed} failed resolving {Id} {Version}; resolved from {Source} instead",
                         feed, current.Id, current.Version.ToNormalizedString(), src.PackageSource.Source);
-                return (info, null);
+                return info;
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 failures = failures.Add((src.PackageSource.Source, ex));
             }
         }
-        if (failures.IsEmpty) return (null, null);
+        if (failures.IsEmpty) return null;
 
         // The folder could not answer, no feed supplied the package, and at least one feed
         // failed. Name what was missing locally and what each failing feed reported.
         var detail = string.Join("; ", failures.Select(f => $"'{f.Feed}': {f.Error.Message}"));
-        return (null, new InvalidOperationException(
+        throw new InvalidOperationException(
             $"NuGet package {current.Id} {current.Version.ToNormalizedString()} is not installed complete in "
             + $"the package folder '{packagesRoot}', and resolving it from the configured feed(s) failed — {detail}",
-            failures.Count == 1 ? failures[0].Error : new AggregateException(failures.Select(f => f.Error))));
+            failures.Count == 1 ? failures[0].Error : new AggregateException(failures.Select(f => f.Error)));
     }
 
     /// <summary>

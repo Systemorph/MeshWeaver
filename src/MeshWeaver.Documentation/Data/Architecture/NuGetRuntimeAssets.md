@@ -235,21 +235,25 @@ answer (#6863):
   feed which version to take. Answering it from the folder would make the version depend on what the
   reading process happens to hold, so the feed stays authoritative for the choice. Pin a version for a
   build that must load without a feed.
-- **A candidate the folder lacks is still asked of the feed first**, so online version selection
-  is unchanged. When every feed fails, installed versions within the dependency's range stand in
-  for that candidate. This covers a diamond: A needs B ≥ 1.0 and C ≥ 1.0, and C raises B to ≥ 2.0.
-  Online resolution installs only B 2.0, never the B 1.0 candidate the walk also met. The installed
-  versions are what the feed would have offered next, and the resolver still chooses among them by
-  the same rules. A stand-in is only a candidate the resolver MAY pick. If a dependency below it
-  cannot be resolved, that stand-in leaves the candidates; the resolution does not fail. The feed
-  failure is the answer when nothing is installed in range, or when every stand-in has been ruled
-  out.
+- **The rule: a closure resolves offline when every node of the walk is an exact version present
+  and complete in the folder.** Each node is the exact version a range asks for (its minimum), never
+  a different installed version standing in for it. Anything that needs the feed to choose among
+  versions still needs the feed, and fails with the named error below while the feed is down.
 - **When the folder cannot answer**, every configured feed the source mapping allows is asked in
   turn. A failing feed does not stop the search: the next feed is asked, and the failure is logged
   against that feed when a later one answers. If no feed supplies the package and at least one
   failed, resolution fails with an `InvalidOperationException`. The error names the package and
   version, the package folder, and each failing feed with what it reported. A feed failure never
   surfaces when the folder could answer, because no feed is asked.
+
+**Known limit: an installed diamond.** A needs B ≥ 1.0 and C ≥ 1.0, and C raises B to ≥ 2.0. Online
+resolution meets the B 1.0 candidate, selects B 2.0, and installs only B 2.0. Offline, the walk still
+needs the B 1.0 candidate, which the folder does not hold, so it fails with the named error. Letting
+installed versions stand in for such a candidate was tried and removed. It made the chosen versions
+depend on unrelated folder contents: an installed B 2.0.1 would win over the B 2.0 chosen online. It
+also needed rules for stand-ins whose own dependencies are missing, and those rules kept growing.
+Closing this limit properly means recording the resolved closure with the build and resolving those
+exact identities. That is a separate change.
 
 The pins: `NuGetOfflineFirstResolutionTest` (offline) lays out packages in a private package folder.
 The first configured feed refuses every connection, and some cases add a local folder feed behind it.
@@ -265,9 +269,9 @@ The first configured feed refuses every connection, and some cases add a local f
 - A cache hydration is paused after writing the nuspec and the marker but before the assembly. A
   second resolver reading in that window must not accept the half-written folder, and it ends with
   the finished package.
-- The diamond above is resolved online from a local feed, then by a fresh resolver with only the
-  unreachable feed. It gives the same versions and assembly paths. It still does so when C pins B
-  exactly and the folder also holds an unrelated B 3.0.0 whose dependency exists nowhere.
+- The known-limit diamond is resolved online from a local feed, then by a fresh resolver with only
+  the unreachable feed. It fails with the named error for the B 1.0 candidate, so the limit is a
+  pinned decision rather than a surprise.
 - A folder that passes the existence checks and is deleted by a concurrent repair before its
   manifest is read counts as a local miss, never a failure: resolution goes on to the feed and the
   install lock.

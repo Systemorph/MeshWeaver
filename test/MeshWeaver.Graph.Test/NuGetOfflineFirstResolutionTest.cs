@@ -323,14 +323,16 @@ public sealed class NuGetOfflineFirstResolutionTest : IDisposable
     }
 
     /// <summary>
-    /// A diamond: A depends on B >= 1.0.0 and C >= 1.0.0, and C 1.0.0 raises the floor to B >= 2.0.0.
-    /// Online resolution selects B 2.0.0 and installs only that, never the B 1.0.0 candidate the
-    /// walk also met. A fresh resolver with the feed unreachable must still resolve the installed
-    /// closure: the B 1.0.0 candidate the feed cannot supply is stood in for by the installed B
-    /// 2.0.0 within the same range, and the result is the one the online resolution produced.
+    /// KNOWN LIMIT, pinned so it is a decision and not a surprise. A diamond: A depends on B >= 1.0.0
+    /// and C >= 1.0.0, and C 1.0.0 raises the floor to B >= 2.0.0. Online resolution meets the
+    /// B 1.0.0 candidate, selects B 2.0.0 and installs only that. Offline, the walk still needs the
+    /// B 1.0.0 candidate, which is not in the folder, so it needs the feed: resolution fails with the
+    /// named error. Installed versions do NOT stand in for it, because that lets unrelated folder
+    /// contents change which versions resolve. Offline resolution covers closures whose every node is
+    /// an exact version present in the folder.
     /// </summary>
     [Fact(Timeout = 120_000)]
-    public async Task InstalledDiamond_ResolvesOfflineToTheSameVersions()
+    public async Task InstalledDiamond_StillNeedsTheFeedForTheCandidateItDidNotInstall()
     {
         Publish("Acme.Offline.A", "1.0.0", ("Acme.Offline.B", "1.0.0"), ("Acme.Offline.C", "1.0.0"));
         Publish("Acme.Offline.B", "1.0.0");
@@ -346,45 +348,12 @@ public sealed class NuGetOfflineFirstResolutionTest : IDisposable
             .Should().BeFalse("online resolution installs only the selected B");
 
         WriteConfig(withLocalFeed: false, withUnreachableFeed: true);
-        var offline = await ColdResolver().ResolveAsync(request, targetFramework: null, ct: ct);
+        var act = () => ColdResolver().ResolveAsync(request, targetFramework: null, ct: ct);
 
-        offline.ResolvedVersions.OrderBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase)
-            .Select(kv => $"{kv.Key} {kv.Value}")
-            .Should().Equal(online.ResolvedVersions.OrderBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase)
-                .Select(kv => $"{kv.Key} {kv.Value}"));
-        offline.AssemblyPaths.Should().Equal(online.AssemblyPaths);
-    }
-
-    /// <summary>
-    /// The same diamond with an EXACT pin (C needs B [2.0.0]) and, in the package folder, an unrelated
-    /// B 3.0.0 whose dependency D is absent. Both installed B versions stand in for the missing B 1.0.0
-    /// candidate, but B 3.0.0 can never be selected, and its unresolvable D must not abort the
-    /// resolution. It drops out of the candidates and the result is the one online resolution chose.
-    /// </summary>
-    [Fact(Timeout = 120_000)]
-    public async Task InstalledDiamond_AnUnselectableStandInWithAMissingDependency_DoesNotBreakIt()
-    {
-        Publish("Acme.Offline.A", "1.0.0", ("Acme.Offline.B", "1.0.0"), ("Acme.Offline.C", "1.0.0"));
-        Publish("Acme.Offline.B", "1.0.0");
-        Publish("Acme.Offline.B", "2.0.0");
-        Publish("Acme.Offline.C", "1.0.0", ("Acme.Offline.B", "[2.0.0]"));
-        var request = new[] { new NuGetPackageReference("Acme.Offline.A", "1.0.0") };
-        var ct = TestContext.Current.CancellationToken;
-
-        WriteConfig(withLocalFeed: true, withUnreachableFeed: false);
-        var online = await ColdResolver().ResolveAsync(request, targetFramework: null, ct: ct);
-        online.ResolvedVersions.Should().ContainKey("Acme.Offline.B").WhoseValue.Should().Be("2.0.0");
-
-        // Installed by something else; never published, and its dependency D exists nowhere.
-        Install("Acme.Offline.B", "3.0.0", "Acme.Offline.D", "1.0.0");
-        WriteConfig(withLocalFeed: false, withUnreachableFeed: true);
-        var offline = await ColdResolver().ResolveAsync(request, targetFramework: null, ct: ct);
-
-        offline.ResolvedVersions.OrderBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase)
-            .Select(kv => $"{kv.Key} {kv.Value}")
-            .Should().Equal(online.ResolvedVersions.OrderBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase)
-                .Select(kv => $"{kv.Key} {kv.Value}"));
-        offline.AssemblyPaths.Should().Equal(online.AssemblyPaths);
+        var thrown = await act.Should().ThrowAsync<InvalidOperationException>();
+        thrown.Which.Message.Should().Contain("Acme.Offline.B 1.0.0")
+            .And.Contain("is not installed")
+            .And.Contain($"'{UnreachableFeed}'");
     }
 
     private int readerRefused;
