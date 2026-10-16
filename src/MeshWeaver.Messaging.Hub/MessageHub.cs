@@ -3394,7 +3394,12 @@ public sealed class MessageHub : IMessageHub
     private string DescribeShutDownBlock()
     {
         var step = shutDownStep;
-        var running = registrantsOnBlock.IsEmpty ? null : registrantsOnBlock.Peek();
+        // ONE read of the volatile stack, and every question below is asked of that snapshot. Two
+        // reads (IsEmpty, then Peek) raced the walk thread: a registrant returning between them
+        // restores the empty stack, Peek throws, and the exception escapes the watchdog callback
+        // instead of the verdict being logged.
+        var blockers = registrantsOnBlock;
+        var running = blockers.IsEmpty ? null : blockers.Peek();
         var callback = callbackOnBlock;
         if (step is null)
             return "The phase recorded no step, so which of its inline steps holds the block was not "
@@ -3408,7 +3413,7 @@ public sealed class MessageHub : IMessageHub
                 + "its Dispose is what blocks — find what it waits on (a lock, a synchronous wait, a teardown "
                 + "joining a turn this block is itself occupying). Registrants=0 below is expected: the "
                 + "composite zeroes its count before it disposes an entry."
-                + DescribeOuterRegistrants(),
+                + DescribeOuterRegistrants(blockers),
             ShutDownSteps.RegistrantWalk =>
                 $"It entered the registrant walk {stepMs}ms ago but no registrant is running at this instant "
                 + "— the walk is between entries, so the time is going to the walk itself, not one cleanup; "
@@ -3442,9 +3447,10 @@ public sealed class MessageHub : IMessageHub
     /// The cleanups a blocked registrant is nested inside (registered while their own Dispose ran),
     /// outermost last — or the empty string when it is not nested.
     /// </summary>
-    private string DescribeOuterRegistrants()
+    /// <param name="blockers">The same stack snapshot the caller described the innermost entry from.</param>
+    private static string DescribeOuterRegistrants(ImmutableStack<RegistrantOnBlock> blockers)
     {
-        var outer = registrantsOnBlock.Skip(1).Select(r => r.Registrant.Describe()).ToArray();
+        var outer = blockers.Skip(1).Select(r => r.Registrant.Describe()).ToArray();
         return outer.Length == 0
             ? string.Empty
             : $" It is nested inside the cleanup(s) [{string.Join(" ← ", outer)}], each still running.";
