@@ -16,6 +16,8 @@
     <!-- VersionEndpointTest drives GET /api/version over a real HTTP pipeline (TestServer) to
          prove it answers with NO authenticated session — the whole point of the endpoint. -->
     <PackageReference Include="Microsoft.AspNetCore.TestHost" />
+    <!-- ComboVerificationDeadlineTest drives the verdict endpoint's deadline on virtual time (#6790). -->
+    <PackageReference Include="Microsoft.Reactive.Testing" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\memex\Memex.Portal.Shared\Memex.Portal.Shared.csproj" />
