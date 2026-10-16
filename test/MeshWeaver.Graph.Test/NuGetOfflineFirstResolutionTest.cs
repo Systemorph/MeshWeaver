@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.NuGet;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -218,5 +219,58 @@ public sealed class NuGetOfflineFirstResolutionTest : IDisposable
         result.AssemblyPaths.Should().NotContain(p => p.EndsWith("Acme.Intruder.dll", StringComparison.Ordinal));
         Directory.EnumerateFiles(InstallFolder("Acme.Offline.B", "1.0.0"), "*.dll", SearchOption.AllDirectories)
             .Select(Path.GetFileName).Should().Equal("Acme.Offline.B.dll");
+    }
+
+    private int secondParked;
+    private int releaseSecond;
+
+    /// <summary>
+    /// Two resolutions (two resolvers, as two processes or two reference sets would be) share a
+    /// dependency whose folder starts incomplete. The second is parked right after its lock-free check
+    /// refused the folder; the first then installs the package and returns its paths; then the
+    /// second resumes. It must find, under the install lock, the folder the first completed, and use
+    /// it. Deleting and reinstalling it would remove the assemblies the first caller already
+    /// returned. A sentinel written into the folder after the first returns detects any reinstall.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ConcurrentResolutions_SharingAnIncompleteDependency_NeverDeleteEachOthersInstall()
+    {
+        WriteConfig(withLocalFeed: true);
+        Install("Acme.Offline.A", "1.0.0", "Acme.Offline.B", "1.0.0");
+        Install("Acme.Offline.B", "1.0.0", complete: false);
+        Publish("Acme.Offline.B", "1.0.0");
+        var request = new[] { new NuGetPackageReference("Acme.Offline.A", "1.0.0") };
+        var ct = TestContext.Current.CancellationToken;
+
+        var first = ColdResolver();
+        var second = ColdResolver();
+        second.OnInstallFolderRefused = identity =>
+        {
+            if (identity.Id != "Acme.Offline.B") return;
+            Volatile.Write(ref secondParked, 1);
+            SpinWait.SpinUntil(() => Volatile.Read(ref releaseSecond) == 1, TimeSpan.FromSeconds(60));
+        };
+
+        var secondRun = Task.Run(() => second.ResolveAsync(request, targetFramework: null, ct: ct), ct);
+        string sentinel;
+        ResolvedPackageSet firstResult;
+        try
+        {
+            SpinWait.SpinUntil(() => Volatile.Read(ref secondParked) == 1, TimeSpan.FromSeconds(60))
+                .Should().BeTrue("the second resolution reaches the refused-folder window");
+            firstResult = await first.ResolveAsync(request, targetFramework: null, ct: ct);
+            sentinel = Path.Combine(InstallFolder("Acme.Offline.B", "1.0.0"), "returned-to-first.txt");
+            File.WriteAllText(sentinel, "the first caller holds paths into this folder");
+        }
+        finally
+        {
+            Volatile.Write(ref releaseSecond, 1);
+        }
+        var secondResult = await secondRun;
+
+        File.Exists(sentinel).Should().BeTrue("the folder the first caller returned must not be reinstalled");
+        firstResult.AssemblyPaths.Should().Contain(p => p.EndsWith("Acme.Offline.B.dll", StringComparison.Ordinal))
+            .And.OnlyContain(p => File.Exists(p));
+        secondResult.AssemblyPaths.Should().Contain(p => p.EndsWith("Acme.Offline.B.dll", StringComparison.Ordinal));
     }
 }

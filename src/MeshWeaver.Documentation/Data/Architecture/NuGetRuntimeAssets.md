@@ -213,7 +213,14 @@ answer (#6863):
   exactly that id and version. ONE check (`ReadCompleteInstall`) decides this for the dependency walk
   AND for the install step. A folder it refuses (half-extracted, empty, or holding another package)
   is never handed to asset selection: it is deleted and the package is installed again, from the
-  persistent cache first and then the feed.
+  persistent cache first and then the feed. A folder hydrated from the persistent cache must pass
+  the same check before it is used.
+- **Repair runs under one lock per package**, shared by every resolution in the process and every
+  process on the same package folder. The lock is NuGet's own file lock
+  (`ConcurrencyUtilities.ExecuteWithFileLockedAsync`, named by the install directory), the primitive
+  its restore and extractor use. The check runs again INSIDE the lock, so a folder another
+  resolution completed while this one waited is used, never deleted. A complete folder is never
+  deleted, which is why the check before the lock may skip the lock.
 - **A floating or ranged ROOT request** (`#r "nuget: Id"`, `#r "nuget: Id, [1.0,2.0)"`) still asks the
   feed which version to take. Answering it from the folder would make the version depend on what the
   reading process happens to hold, so the feed stays authoritative for the choice. Pin a version for a
@@ -233,6 +240,9 @@ The first configured feed refuses every connection, and some cases add a local f
 - With the unreachable feed first, the local feed behind it still supplies the missing package.
 - A half-extracted folder, and a folder whose nuspec and assembly belong to another package, are both
   reinstalled from the feed. The wrong assembly never reaches the compile set.
+- Two resolvers share a dependency whose folder starts incomplete. One is parked between its check
+  and the lock while the other installs the package and returns. The parked one then resumes and
+  must use that install, never reinstall it.
 
 ## What pins it
 

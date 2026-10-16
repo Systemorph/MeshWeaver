@@ -415,16 +415,51 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver
         }
     }
 
+    /// <summary>
+    /// Test seam: called with the package identity after the lock-free check refused its folder
+    /// and before the install lock is taken. That is the window in which a second resolution can
+    /// complete the same package, so a test parks one caller here to make that interleaving
+    /// deterministic. Null in production.
+    /// </summary>
+    internal Action<PackageIdentity>? OnInstallFolderRefused { get; set; }
+
     private async Task<string> EnsureInstalledAsync(SourcePackageDependencyInfo info, string packagesRoot, CancellationToken ct)
     {
-        var versionString = info.Version.ToNormalizedString();
+        var identity = new PackageIdentity(info.Id, info.Version);
         // The v3 layout lower-cases the id AND the version folder — the same path the install
         // below writes and the offline walk reads (VersionFolderPathResolver).
         var installedPath = new VersionFolderPathResolver(packagesRoot).GetInstallPath(info.Id, info.Version);
-        if (ReadCompleteInstall(new PackageIdentity(info.Id, info.Version), packagesRoot) is not null)
+        // Lock-free fast path: a COMPLETE folder is never deleted by anyone (only a refused one is,
+        // and only under the lock below), so using it without the lock is safe.
+        if (ReadCompleteInstall(identity, packagesRoot) is not null)
             return installedPath;
-        // A folder exists but is refused — half-extracted, or holding another identity. Asset
-        // selection must never read it, so it is removed and the package installed afresh below
+
+        OnInstallFolderRefused?.Invoke(identity);
+
+        // Everything that inspects, deletes or writes this package's folder runs under ONE lock per
+        // package identity, shared by every resolution in this process AND every process on this
+        // package folder: NuGet's own file lock (ConcurrencyUtilities), the primitive its restore
+        // and PackageExtractor install under. The lock name is the install DIRECTORY; the extractor
+        // takes its own lock on the package file inside it, so the two never nest on one name.
+        return await ConcurrencyUtilities.ExecuteWithFileLockedAsync(
+            installedPath,
+            lockedCt => InstallUnderLockAsync(info, identity, packagesRoot, installedPath, lockedCt),
+            ct);
+    }
+
+    private async Task<string> InstallUnderLockAsync(
+        SourcePackageDependencyInfo info, PackageIdentity identity, string packagesRoot, string installedPath,
+        CancellationToken ct)
+    {
+        var versionString = info.Version.ToNormalizedString();
+        // Re-check INSIDE the lock: another resolution may have completed this package while we
+        // waited. A folder it completed is used as it stands — deleting it would pull assemblies
+        // out from under a caller that already returned their paths.
+        if (ReadCompleteInstall(identity, packagesRoot) is not null)
+            return installedPath;
+
+        // Still refused under the lock — half-extracted, or holding another identity — so nobody is
+        // using it: asset selection only ever reads complete folders. Remove it and install afresh
         // (persistent cache first, then the feed). Leaving it would hand partial or WRONG
         // assemblies to the compile and the load.
         if (Directory.Exists(installedPath))
@@ -436,16 +471,16 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver
         }
 
         // Try to hydrate from the persistent cache (e.g., Azure Blob) before hitting the feed.
-        // After hydration, validate that the package's own .nuspec (the
-        // canonical NuGet source of truth) declares the (id, version) we
-        // expected. A poisoned cache — different package stored under the
-        // wrong key, accidental cross-tenant blob, drift after a manual
-        // copy — would otherwise silently load wrong assemblies into a
-        // NodeType compile.
+        // The hydrated folder must pass the SAME check as any installed folder: the package's own
+        // .nuspec (the canonical NuGet source of truth) declares the (id, version) we expected, and
+        // the completion marker is there. A poisoned cache — different package stored under the
+        // wrong key, accidental cross-tenant blob, drift after a manual copy — would otherwise
+        // silently load wrong assemblies into a NodeType compile; and a folder returned without the
+        // marker would be refused, and replaced, by the next resolution while this one loads it.
         Directory.CreateDirectory(installedPath);
         if (await _packageCache.TryHydrateAsync(info.Id, versionString, installedPath, ct))
         {
-            if (TryValidateHydratedPackage(installedPath, info.Id, info.Version, out var validationError))
+            if (ReadCompleteInstall(identity, packagesRoot) is not null)
             {
                 MsLogging.LoggerExtensions.LogInformation(logger,
                     "Hydrated NuGet package {Id} {Version} from persistent cache", info.Id, versionString);
@@ -453,8 +488,8 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver
             }
 
             MsLogging.LoggerExtensions.LogWarning(logger,
-                "Hydrated package at {Path} failed identity check ({Error}); discarding and falling back to feed",
-                installedPath, validationError);
+                "Hydrated package at {Path} is not a complete install of {Id} {Version}; discarding and falling back to feed",
+                installedPath, info.Id, versionString);
             try { Directory.Delete(installedPath, recursive: true); }
             catch (Exception delEx)
             {
@@ -540,44 +575,6 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver
             .OrderBy(r => r.Id, StringComparer.OrdinalIgnoreCase)
             .Select(r => $"{r.Id}|{r.VersionRange ?? "*"}");
         return $"{framework.DotNetFrameworkName}::{string.Join(";", parts)}";
-    }
-
-    /// <summary>
-    /// Verifies that the package directory hydrated by
-    /// <see cref="INuGetPackageCache.TryHydrateAsync"/> actually contains the
-    /// (id, version) we asked for. Reads the package's own .nuspec via
-    /// <see cref="PackageFolderReader"/> — that's the canonical NuGet
-    /// source of truth, and a tampered/wrong-keyed cache entry can't
-    /// fake it without also rewriting the nuspec to claim the wrong
-    /// identity (which a static check at hydration time would catch).
-    /// Case-insensitive id compare; exact <see cref="NuGetVersion"/>
-    /// equality on version (normalised round-trip).
-    /// </summary>
-    private static bool TryValidateHydratedPackage(
-        string packageFolder, string expectedId, NuGetVersion expectedVersion, out string? error)
-    {
-        try
-        {
-            var reader = new PackageFolderReader(packageFolder);
-            var actual = reader.GetIdentity();
-            if (!string.Equals(actual.Id, expectedId, StringComparison.OrdinalIgnoreCase))
-            {
-                error = $"nuspec id '{actual.Id}' does not match expected '{expectedId}'";
-                return false;
-            }
-            if (actual.Version != expectedVersion)
-            {
-                error = $"nuspec version '{actual.Version.ToNormalizedString()}' does not match expected '{expectedVersion.ToNormalizedString()}'";
-                return false;
-            }
-            error = null;
-            return true;
-        }
-        catch (Exception ex)
-        {
-            error = $"could not read .nuspec: {ex.Message}";
-            return false;
-        }
     }
 
     private sealed class NuGetLogger(MsLogging.ILogger logger) : LoggerBase
