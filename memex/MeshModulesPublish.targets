@@ -192,6 +192,39 @@
     <MeshModulesGuardPublishAppRoot Condition="'$(MeshModulesGuardPublishAppRoot)' == ''">true</MeshModulesGuardPublishAppRoot>
   </PropertyGroup>
 
+  <!--
+    🚨 A multi-arch container publish of a host that imports this file runs its per-RID inner
+    publishes ONE AFTER THE OTHER (#6889).
+
+    `-t:PublishContainer` with ContainerRuntimeIdentifiers=linux-x64;linux-arm64 makes the SDK's
+    _PublishMultiArchContainers re-invoke Publish once per RID, by default with
+    BuildInParallel=true (Microsoft.NET.Build.Containers.targets reads ContainerPublishInParallel,
+    default true). Each inner publish runs BOTH closure lanes below with a RID-SPECIFIC
+    destination — PublishDir=<host>/bin/<cfg>/<tfm>/<rid>/modules/<Name>/ — so the two RIDs'
+    `Publish` requests on the same closure module are DIFFERENT build configurations: MSBuild
+    cannot merge them, and it schedules them concurrently. But a class library's publish writes
+    its RID-agnostic obj/ — the package assets cache and, from GenerateDepsFile, the
+    obj/<cfg>/<tfm>/<Name>.deps.json (IntermediateDepsFilePath) — so the two lanes race one file.
+    Measured on main-cd run 38964235557 (control image): the linux-arm64 and linux-x64 host builds
+    finished 0.8 s apart, then
+
+        Unable to use package assets cache due to I/O error. This can occur when the same project
+        is built more than once in parallel.
+        error MSB4018: The "GenerateDepsFile" task failed unexpectedly. System.IO.IOException: The
+        process cannot access the file '…/MeshWeaver.Hosting.Instance/obj/Release/net10.0/
+        MeshWeaver.Hosting.Instance.deps.json' because it is being used by another process.
+
+    The portal-ai lane hit the same class earlier (MSB3030 over a shared non-RID bin/, run
+    36357110477) and fixed it with `-p:ContainerPublishInParallel=false` on its ONE call site,
+    which left the control lane — the same host, the same layout — racing. The serialisation
+    belongs here, beside the RID-specific lanes that need it, so every multi-arch publish of every
+    importing host gets it whichever workflow calls it. A host may still opt back in explicitly
+    (it then owns proving its inner publishes share no output).
+  -->
+  <PropertyGroup>
+    <ContainerPublishInParallel Condition="'$(ContainerPublishInParallel)' == ''">false</ContainerPublishInParallel>
+  </PropertyGroup>
+
   <Target Name="PublishMeshModules" AfterTargets="Publish" Condition="'$(PublishMeshModules)' != 'false'">
     <PropertyGroup>
       <!-- EnsureTrailingSlash: GetFullPath does not guarantee one, and every use below
