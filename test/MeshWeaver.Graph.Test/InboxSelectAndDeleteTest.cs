@@ -241,6 +241,14 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
         grid.ItemsPerPage?.ToString().Should().Be("50", "the inbox is paged");
         grid.IsClickable.Should().BeTrue("a click on a row opens it");
 
+        // The page SCROLLS (owner, 2026-10-16: "i cannot scroll the mailbox now"): the splitter flows
+        // at its content height — never pinned to the viewport, which clipped the list below the fold.
+        var page = (await stream.GetControlStream(InboxLayoutArea.AreaName).Should().Within(TestTimeouts.Convergence)
+            .Match(c => c is SplitterControl, "the page is the side-menu splitter", ct))!;
+        page.Style?.ToString().Should().Be(InboxLayoutArea.FlowingSplitterStyle, "the splitter flows and the page scrolls");
+        page.Skins.OfType<SplitterSkin>().Should().AllSatisfy(skin => (skin.Height?.ToString() ?? string.Empty)
+            .Should().NotContain("vh", "a viewport-pinned height clips the list with nothing to scroll"));
+
         foreach (var (area, what) in new[] { ("Folders", "the side menu's folders"), ("Tags", "the side menu's tags") })
         {
             var menu = (RadioGroupControl)(await stream.GetControlStream($"{InboxLayoutArea.AreaName}/Categories/{area}")
