@@ -111,6 +111,9 @@ public static class InboxLayoutArea
                 .LogError("Inbox leg {Source} ({Band}) refused: it does not read exactly the viewer's own partition: {Query}",
                     refused.Source, refused.Band, refused.Query);
         var zone = access.ViewerZoneId();
+        // An item named in the address: its reading view, inside the portal (InboxReadingView).
+        if (host.Reference.Id is { } id && LayoutAreaReference.NormalizeScalar(id) is { Length: > 0 })
+            return InboxReadingView.Render(host, owner, zone, InboxReadingView.PathOf(id));
         // The TEMPLATE, at once: every source's toggle and switch is declared, each with its style
         // BOUND to data. Whether a source is connected is DATA the rows feed publishes
         // (PublishConnected) — a source the viewer has not connected is hidden and never read
@@ -672,9 +675,9 @@ public static class InboxLayoutArea
             grid = grid.WithColumn(new PropertyColumnControl<string> { Property = property.ToCamelCase() }
                 .WithTitle(host.Localize(key)).WithSortable(false));
         return grid
-            // A click on a row OPENS it, as in a mail client: a mail in its provider's own client, a
-            // mesh item at its page. (Ticking a box and shift/cmd-clicks are selection gestures the
-            // grid keeps to itself.) Paged, newest first.
+            // A click on a row OPENS it, as in a mail client — always INSIDE the portal, in the
+            // inbox's reading view (InboxReadingView), never the provider's own client. (Ticking a box
+            // and shift/cmd-clicks are selection gestures the grid keeps to itself.) Paged, newest first.
             .WithClickAction(OpenRow)
             .WithShowHover()
             .WithItemsPerPage(50)
@@ -682,30 +685,28 @@ public static class InboxLayoutArea
             .Resizable();
     }
 
-    /// <summary>Opens the clicked row: its external link when it has one, else its node's page.</summary>
+    /// <summary>Opens the clicked row in the owner's reading view.</summary>
     private static void OpenRow(UiActionContext ctx)
     {
         var options = ctx.Hub.JsonSerializerOptions;
+        var owner = UserNodeType.OwnerOf(ctx.Host.Hub.Address.ToString());
         // The payload is an object boundary: it may arrive typed or as JSON, so it is read through
         // the shared accessor, never a CLR pattern that drops the JSON envelope.
-        if (OpenTarget(ctx.Payload.As<DataGridCellClick>(options)?.Item, options) is { } target)
-            ctx.NavigateTo(target.Url, forceLoad: target.External);
+        if (OpenTarget(ctx.Payload.As<DataGridCellClick>(options)?.Item, options, owner) is { } url)
+            ctx.NavigateTo(url);
     }
 
     /// <summary>
-    /// Where a clicked row goes: its https <see cref="InboxRow.Link"/> (a full page load — it leaves the
-    /// portal), else <c>/{path}</c>; null for a row without either, or one that cannot be read as a row.
-    /// The row arrives typed or as JSON (read with the shared <c>As</c> accessor). Pure.
+    /// Where a clicked row goes: the owner's reading view of its path (<see cref="InboxReadingView.Url"/>)
+    /// — ALWAYS inside the portal, whatever <see cref="InboxRow.Link"/> the row carries (that link is
+    /// offered on the reading view, never followed by the click). Null for a row without a path, or
+    /// one that cannot be read as a row. The row arrives typed or as JSON (read with the shared
+    /// <c>As</c> accessor). Pure.
     /// </summary>
-    internal static (string Url, bool External)? OpenTarget(object? item, System.Text.Json.JsonSerializerOptions options)
-    {
-        var row = item.As<InboxRow>(options);
-        if (row is null)
-            return null;
-        if (Uri.TryCreate(row.Link, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps)
-            return (row.Link, true);
-        return row.Path is { Length: > 0 } path ? ("/" + path.TrimStart('/'), false) : null;
-    }
+    internal static string? OpenTarget(object? item, System.Text.Json.JsonSerializerOptions options, string owner)
+        => item.As<InboxRow>(options) is { Path: { Length: > 0 } path } && owner.Length > 0
+            ? InboxReadingView.Url(owner, path)
+            : null;
 
     /// <summary>
     /// Delete: every ticked row that the OWNER's own feed lists right now, confined to the owner's

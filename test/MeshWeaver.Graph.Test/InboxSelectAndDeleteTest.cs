@@ -35,6 +35,42 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
         => base.ConfigureClient(configuration).AddLayoutClient();
 
+    /// <summary>A reader for the reserved namespace <c>{user}/_Fake</c> — a source no store holds.</summary>
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+        => base.ConfigureMesh(builder)
+            .ConfigureServices(services => services.AddSingleton<IInboxItemReader>(new FakeSourceReader()));
+
+    /// <summary>
+    /// The reading view end to end, as its owner: the address names a row no store holds, the
+    /// reader that handles its path reads it, and the page shows its subject under a Back link. A
+    /// path in someone else's partition reads "not in your inbox" and is never handed to a reader.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task TheReadingView_ShowsWhatTheReaderRead_AndOnlyTheOwnersItems()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string owner = "inbox-read";
+        await CreateUserAsync(owner, ct);
+        TestUsers.DevLogin(Mesh, new AccessContext { ObjectId = owner, Name = owner, Email = $"{owner}@meshweaver.io" });
+
+        var item = $"{owner}/_Fake/m1";
+        var stream = GetClient().GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new Address(owner), new LayoutAreaReference(InboxLayoutArea.AreaName) { Id = InboxReadingView.ItemId(item) });
+        (await stream.GetControlStream($"{InboxLayoutArea.AreaName}/Item/Subject").Should().Within(TestTimeouts.Convergence)
+            .Match(c => c is LabelControl { Data: string subject } && subject == item, "the reader's answer is shown", ct))
+            .Should().NotBeNull();
+        (await stream.GetControlStream($"{InboxLayoutArea.AreaName}/Back").Should().Within(TestTimeouts.Convergence)
+            .Match(c => c is NavLinkControl { Url: string url } && url == $"/{owner}/{InboxLayoutArea.AreaName}", "back to the list", ct))
+            .Should().NotBeNull();
+
+        var foreign = GetClient().GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new Address(owner), new LayoutAreaReference(InboxLayoutArea.AreaName) { Id = InboxReadingView.ItemId("bob/_Fake/m1") });
+        (await foreign.GetControlStream($"{InboxLayoutArea.AreaName}/Item").Should().Within(TestTimeouts.Convergence)
+            .Match(c => c is MarkdownControl { Markdown: string text } && text.Contains("not in your inbox"),
+                "an item outside the owner's partition is not opened — though a reader would handle its path", ct))
+            .Should().NotBeNull();
+    }
+
     /// <summary>
     /// The page end to end, as its owner: the grid lists three notifications, the viewer ticks TWO,
     /// Delete puts exactly those away and says so, and Undo brings them back. The writes are issued
@@ -738,23 +774,118 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
     }
 
     /// <summary>
-    /// A click on a row opens it: a mail at its https link in its provider's own client (a full page
-    /// load), a mesh item at its page. A link that is not https never leaves the portal, and the row
-    /// arrives typed or as JSON.
+    /// A click on a row ALWAYS opens it inside the portal, in the owner's reading view — a mail with
+    /// an https link in its provider's own client too (the link is offered on the reading view, never
+    /// followed by the click). The row arrives typed or as JSON.
     /// </summary>
     [Fact]
-    public void AClickedRow_OpensItsLink_ElseItsPage()
+    public void AClickedRow_AlwaysOpensTheReadingView()
     {
         var options = Mesh.JsonSerializerOptions;
         var mail = new InboxRow { Path = "alice/_Mailbox/outlook/m1", Link = "https://outlook.office.com/mail/id/m1" };
-        InboxLayoutArea.OpenTarget(mail, options).Should().Be(("https://outlook.office.com/mail/id/m1", true));
-        InboxLayoutArea.OpenTarget(JsonSerializer.SerializeToElement(mail, options), options)
-            .Should().Be(("https://outlook.office.com/mail/id/m1", true), "the row as it comes back over the wire");
-        InboxLayoutArea.OpenTarget(new InboxRow { Path = "alice/_Thread/t1" }, options).Should().Be(("/alice/_Thread/t1", false));
-        InboxLayoutArea.OpenTarget(new InboxRow { Path = "alice/_Thread/t1", Link = "javascript:alert(1)" }, options)
-            .Should().Be(("/alice/_Thread/t1", false), "only an https link leaves the portal");
-        InboxLayoutArea.OpenTarget(new InboxRow(), options).Should().BeNull();
-        InboxLayoutArea.OpenTarget(null, options).Should().BeNull();
+        var mailUrl = "/alice/Inbox/" + InboxReadingView.ItemId("alice/_Mailbox/outlook/m1");
+        InboxLayoutArea.OpenTarget(mail, options, "alice").Should().Be(mailUrl, "a click never leaves the portal");
+        InboxLayoutArea.OpenTarget(JsonSerializer.SerializeToElement(mail, options), options, "alice")
+            .Should().Be(mailUrl, "the row as it comes back over the wire");
+        InboxLayoutArea.OpenTarget(new InboxRow { Path = "alice/_Thread/t1" }, options, "alice")
+            .Should().Be("/alice/Inbox/" + InboxReadingView.ItemId("alice/_Thread/t1"));
+        InboxLayoutArea.OpenTarget(new InboxRow(), options, "alice").Should().BeNull();
+        InboxLayoutArea.OpenTarget(null, options, "alice").Should().BeNull();
+    }
+
+    /// <summary>
+    /// The reading view's address names the item's path in ONE url-safe segment and gives it back
+    /// exactly; anything that is not such a segment names nothing.
+    /// </summary>
+    [Fact]
+    public void AnItemId_RoundTripsThePath()
+    {
+        foreach (var path in new[] { "alice/_Mailbox/outlook/AAMk-_x==", "alice/_Chats/teams/19:abc@thread.v2", "alice/_Thread/t1" })
+        {
+            var id = InboxReadingView.ItemId(path);
+            id.Should().NotContain("/").And.NotContain("+").And.NotContain("=");
+            InboxReadingView.PathOf(id).Should().Be(path);
+        }
+        InboxReadingView.PathOf(null).Should().BeNull();
+        InboxReadingView.PathOf("").Should().BeNull();
+        InboxReadingView.PathOf("not base64!").Should().BeNull();
+    }
+
+    /// <summary>
+    /// Only the owner's own items are opened: a path in someone else's partition — a prefix that is
+    /// not a whole segment, or one with a dot segment — is refused whatever the address says.
+    /// </summary>
+    [Fact]
+    public void TheReadingView_OpensOnlyTheOwnersItems()
+    {
+        InboxReadingView.IsOwnersItem("alice", "alice/_Mailbox/outlook/m1").Should().BeTrue();
+        InboxReadingView.IsOwnersItem("alice", "Alice/_Thread/t1").Should().BeTrue("a partition is case-insensitive");
+        InboxReadingView.IsOwnersItem("alice", "bob/_Mailbox/outlook/m1").Should().BeFalse();
+        InboxReadingView.IsOwnersItem("alice", "alice2/_Mailbox/outlook/m1").Should().BeFalse("a prefix is not the partition");
+        InboxReadingView.IsOwnersItem("alice", "alice").Should().BeFalse("the partition root is not an item");
+        InboxReadingView.IsOwnersItem("alice", "alice/../bob/x").Should().BeFalse();
+        InboxReadingView.IsOwnersItem("", "alice/x").Should().BeFalse();
+    }
+
+    /// <summary>The reader is chosen by the item's path: the first reader that handles it, else none.</summary>
+    [Fact]
+    public void AReader_IsChosenByThePath()
+    {
+        var outlook = new PrefixReader("alice/_Mailbox/outlook/");
+        var teams = new PrefixReader("alice/_Chats/teams/");
+        InboxReadingView.ReaderFor([outlook, teams], "alice/_Chats/teams/c1").Should().BeSameAs(teams);
+        InboxReadingView.ReaderFor([outlook, teams], "alice/_Mailbox/outlook/m1").Should().BeSameAs(outlook);
+        InboxReadingView.ReaderFor([outlook, teams], "alice/_Thread/t1").Should().BeNull("a stored item is shown by its own page");
+    }
+
+    /// <summary>
+    /// A read item renders as plain text: a body that carries markup is shown as text (a label),
+    /// never as HTML; a conversation lists its messages; the provider's link is offered last and only
+    /// when it is https; a refusal is shown alone.
+    /// </summary>
+    [Fact]
+    public void AReadItem_RendersAsTextWithTheProviderLinkLast()
+    {
+        var texts = new InboxReadingView.Texts("…", "failed", "From", "Account", "Received", "Open", p => "Open in " + p);
+        var content = new InboxItemContent
+        {
+            Subject = "Hello", From = "Bob", Account = "alice@example.com",
+            ReceivedAt = new DateTimeOffset(2026, 10, 16, 8, 0, 0, TimeSpan.Zero),
+            Body = "<script>alert(1)</script>\nsecond line",
+            Messages = [new InboxItemMessage("Carol", null, "hi")],
+            WebLink = "https://outlook.office.com/mail/id/m1", Provider = "Outlook",
+        };
+        var parts = InboxReadingView.Parts(content, "Europe/Zurich", System.Globalization.CultureInfo.InvariantCulture, texts);
+        var areas = parts.Select(p => p.Id).ToList();
+        areas.Should().Equal("Subject", "Meta", "Body", "Message0", "OpenIn");
+        UiControl ViewOf(string id) => parts.Single(p => p.Id == id).View;
+        ViewOf("Body").Should().BeOfType<LabelControl>("markup in a mail is shown as text, never rendered")
+            .Which.Data.Should().Be("<script>alert(1)</script>\nsecond line");
+        ((LabelControl)ViewOf("Meta")).Data!.ToString().Should().Contain("10/16/2026 10:00", "the time is the VIEWER's zone (CEST = UTC+2)");
+        ViewOf("OpenIn").Should().BeOfType<NavLinkControl>().Which.Title.Should().Be("Open in Outlook");
+
+        InboxReadingView.Parts(content with { WebLink = "javascript:alert(1)" }, null,
+                System.Globalization.CultureInfo.InvariantCulture, texts)
+            .Select(p => p.Id).Should().NotContain("OpenIn", "only an https link is offered");
+
+        InboxReadingView.Content(new InboxItemContent { Refusal = "Outlook is not connected" }, null,
+                System.Globalization.CultureInfo.InvariantCulture, texts)
+            .Should().BeOfType<LabelControl>().Which.Data.Should().Be("Outlook is not connected");
+    }
+
+    /// <summary>Handles every <c>…/_Fake/…</c> path, whoever's partition it is in — the page must refuse a foreign one.</summary>
+    private sealed class FakeSourceReader : IInboxItemReader
+    {
+        public bool Handles(string path) => path.Contains("/_Fake/", StringComparison.Ordinal);
+        public IObservable<InboxItemContent> Read(IMessageHub hub, string path, string viewer)
+            => System.Reactive.Linq.Observable.Return(new InboxItemContent { Subject = path, Body = "text" });
+    }
+
+    private sealed class PrefixReader(string prefix) : IInboxItemReader
+    {
+        public bool Handles(string path) => path.StartsWith(prefix, StringComparison.Ordinal);
+        public IObservable<InboxItemContent> Read(IMessageHub hub, string path, string viewer)
+            => System.Reactive.Linq.Observable.Return(new InboxItemContent { Subject = path });
     }
 
     /// <summary>
