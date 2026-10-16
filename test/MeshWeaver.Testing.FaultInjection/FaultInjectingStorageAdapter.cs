@@ -222,6 +222,10 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
     public IObservable<bool> DeleteIfExists(string path) => _inner.DeleteIfExists(path);
 
     /// <inheritdoc />
+    public IObservable<bool> DeleteIfVersionAtMost(string path, long maxVersion, JsonSerializerOptions options)
+        => _inner.DeleteIfVersionAtMost(path, maxVersion, options);
+
+    /// <inheritdoc />
     public IObservable<IReadOnlyList<string>> DeleteMany(IReadOnlyCollection<string> paths) => _inner.DeleteMany(paths);
 
     /// <inheritdoc />

@@ -111,6 +111,12 @@ internal sealed class HeldWriteStorageAdapter(InMemoryStorageAdapter inner) : IS
     public IObservable<bool> DeleteIfExists(string path) => HoldDelete([path], () => inner.DeleteIfExists(path));
 
     /// <inheritdoc />
+    /// <remarks>Held like every delete, then decided ATOMICALLY by the inner store once released —
+    /// the default would read before the hold and delete after it.</remarks>
+    public IObservable<bool> DeleteIfVersionAtMost(string path, long maxVersion, JsonSerializerOptions options)
+        => HoldDelete([path], () => inner.DeleteIfVersionAtMost(path, maxVersion, options));
+
+    /// <inheritdoc />
     public IObservable<IReadOnlyList<string>> DeleteMany(IReadOnlyCollection<string> paths)
         => HoldDelete(paths, () => ((IStorageAdapter)inner).DeleteMany(paths));
 

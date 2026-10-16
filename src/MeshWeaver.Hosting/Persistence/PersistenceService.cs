@@ -455,6 +455,17 @@ public sealed class PersistenceService : IStorageAdapter
             .Aggregate(false, (any, deleted) => any || deleted);
 
     /// <summary>
+    /// Fan-out OR across every writable provider's <see cref="IStorageAdapter.DeleteIfVersionAtMost"/>
+    /// (#6856) — the same shape as <see cref="DeleteIfExists"/>: each provider decides atomically for
+    /// the row it holds, and a provider that holds none answers <c>false</c>.
+    /// </summary>
+    public IObservable<bool> DeleteIfVersionAtMost(string path, long maxVersion, JsonSerializerOptions options)
+        => _writable
+            .Select(p => p.Adapter.DeleteIfVersionAtMost(path, maxVersion, options))
+            .Merge()
+            .Aggregate(false, (any, deleted) => any || deleted);
+
+    /// <summary>
     /// Fan-out OR: any adapter reporting true wins. Implemented via
     /// <see cref="Observable.Any{TSource}(IObservable{TSource})"/> over the merged stream so the chain
     /// completes as soon as the first true lands.

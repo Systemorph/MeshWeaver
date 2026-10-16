@@ -339,11 +339,26 @@ hub.Observe(request, o => o.WithTarget(hub.NodeOperationTarget()))
 - **An absent node** still answers the idempotent success `AlreadyAbsent`
   ([Deleting What Is Already Gone](/Doc/Architecture/IdempotentDelete)). The postcondition holds,
   whatever version the node last had.
+- **And checked again by the store, in the delete itself.** The root row is removed with a
+  compare-and-delete (`IStorageAdapter.DeleteIfVersionAtMost`; on Postgres
+  `DELETE … WHERE version <= $expected` and the row count). A row newer than the confirmed version was
+  written after the owner's check, by a writer the seal did not stop (another process, or anything
+  that writes the store without passing the owner). The store refuses to remove it, and the delete
+  answers `Conflict` naming the stored version. A row at or below the confirmed version is the node
+  the deleter read, one sampler flush behind, so it is removed. The guarantee therefore no longer
+  depends on the seal alone, which is held only in the deleting process.
 - **Root only.** For a recursive delete, only the node at `Path` is checked. The cascade's
-  per-descendant requests never carry the value.
+  per-descendant requests never carry the value. The cascade removes children before their parent,
+  so when the store refuses the root, the descendants are already gone. The response names them, and
+  the root survives.
 - **Which version to name.** The version you read, from the node stream or from an acknowledged
   write. It is compared with what the owner holds, so a version that is acknowledged but not yet
-  stored matches.
+  stored matches. The node a cross-hub `GetMeshNodeStream(path).Update(...)` emits carries the version
+  the owner committed (`PatchDataResponse.CommittedVersion`), so it can be named directly. Its content
+  is still your writer's view: fields that a concurrent writer merged in on the owner are not in it.
+  An owner on an image older than this field does not send it, and the emitted node then carries
+  your base version, one behind the owner. Naming that version is refused as `Conflict`; re-read the
+  node stream and use its version.
 - **No verdict is a refusal.** If the owner cannot be asked and the node is still stored, the delete
   answers `Unavailable` and removes nothing. It never treats an unanswered check as a match. The
   same holds when the storage read that would tell "gone" from "unreachable" fails as well.
@@ -355,9 +370,14 @@ hub.Observe(request, o => o.WithTarget(hub.NodeOperationTarget()))
 - **A recycling owner is asked again.** If the owner's activation is torn down while it compares,
   it answers `ShuttingDown`, as it does for an ordinary delete check. The delete then asks the next
   activation, within the same time budget.
-- **Not covered yet** (tracked on #6673): the seal is held in the deleting process. When the owning
-  activation runs on another silo, an own write there after the comparison is not sealed. The final
-  storage delete is also not yet a compare-and-delete.
+- **Not covered yet** (tracked on #6856): the seal is still held only in the deleting process. When
+  the owning activation runs on another silo, that silo can acknowledge an own write after the
+  comparison. The store refuses the delete only if that write was flushed before it. If the delete
+  reaches the store first, the later flush stores the node again: nothing acknowledged is lost, but
+  the delete has reported success for a node that exists again. Postgres implements
+  `DeleteIfVersionAtMost` in the MeshWeaver.Plugins repository. Until it does, a Postgres deployment
+  uses the interface default: it reads, compares, then deletes. The default checks the version, but
+  not atomically.
 - **Omitted** (`null`, the default), the delete removes whatever version is there, exactly as before.
 
 ---

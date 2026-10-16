@@ -565,6 +565,43 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
         });
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Atomic: the comparison and the removal run in ONE <c>Mutate</c> section, and the removal is the
+    /// conditional <see cref="ConcurrentDictionary{TKey,TValue}.TryRemove(KeyValuePair{TKey,TValue})"/>
+    /// against the exact row compared — so a writer that does not take the section (the
+    /// <see cref="WriteIfVersion"/> fast path) and replaces the row in between makes the remove fail
+    /// instead of deleting the newer row. The in-memory twin of the Postgres
+    /// <c>DELETE … WHERE version &lt;= $2</c> row count (#6856).
+    /// </remarks>
+    public IObservable<bool> DeleteIfVersionAtMost(string path, long maxVersion, JsonSerializerOptions options)
+        => Observable.Defer(() =>
+        {
+            var key = Norm(path);
+            MeshNode? removed = null;
+            var won = false;
+            lock (_index.Mutate)
+            {
+                if (_nodes.TryGetValue(key, out var existing)
+                    && existing.Version <= maxVersion
+                    && _nodes.TryRemove(new KeyValuePair<string, MeshNode>(key, existing)))
+                {
+                    won = true;
+                    removed = existing;
+                    Removed(key);
+                }
+            }
+            if (!won)
+            {
+                _logger?.LogDebug(
+                    "[InMemoryAdapter#{Id:X}] DeleteIfVersionAtMost {Path} REFUSED — max v{Max}, stored v{Stored}",
+                    GetHashCode(), key, maxVersion, _nodes.TryGetValue(key, out var stored) ? stored.Version : (long?)null);
+                return Observable.Return(false);
+            }
+            _changes.OnNext(DataChangeNotification.Deleted(key, removed).WithPriorState(removed));
+            return Observable.Return(true);
+        });
+
+    /// <inheritdoc />
     public override IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)>
         ListChildPaths(string? parentPath)
         => Observable.Defer(() =>
