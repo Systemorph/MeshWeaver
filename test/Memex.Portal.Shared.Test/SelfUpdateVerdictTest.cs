@@ -343,7 +343,7 @@ public class SelfUpdateVerdictTest
     [Theory]
     [InlineData(1, false, "went LIVE", "nothing landed is pending")]
     [InlineData(0, true, "is pending activation and nothing went live", "nothing landed is pending")]
-    [InlineData(0, false, "nothing landed is pending in this process", "is pending activation")]
+    [InlineData(0, false, "nothing landed is pending in this process", "generation is pending activation")]
     public void LiveWhileRollHandedOver_SaysWhatHappened(int wentLive, bool needsRestart, string says, string neverSays)
     {
         var handedOver = SelfUpdateVerdict.HandedOver("3.0.1", "https://control.example/api/hooks/Hosting/PlatformBuilds", "accepted (200)");

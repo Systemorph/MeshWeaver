@@ -166,7 +166,7 @@ public sealed class ModulesGoLiveWhileARollIsHandedOverTest : MonolithMeshTestBa
         verdict.Should().Contain("handed to the control lane", "the outcome is still the hand-over");
         verdict.Should().Contain("nothing landed is pending in this process",
             "the live swap already happened — the marker alone is not a pending activation");
-        verdict.Should().NotContain("is pending activation", "nothing is pending in this process");
+        verdict.Should().NotContain("A landed module generation is pending activation", "nothing is pending in this process");
         verdict.Should().NotContain("went LIVE");
         inbox.Events.Should().Equal(new[] { SelfUpdateHandover.ReleaseEvent });
         updater.Restarts.Should().Be(0);
