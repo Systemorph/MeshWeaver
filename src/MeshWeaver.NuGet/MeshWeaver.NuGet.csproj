@@ -17,6 +17,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The offline-first test pins a private package folder and an unreachable feed through the
+         resolver's internal settings constructor (#6863). -->
+    <InternalsVisibleTo Include="MeshWeaver.Graph.Test" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- NoReplaceMove: the package cache publishes its archives with a rename that cannot degrade into
          a copy (MeshWeaver#2190). Utils has no dependencies of its own. -->
     <ProjectReference Include="..\MeshWeaver.Utils\MeshWeaver.Utils.csproj" />
