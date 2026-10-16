@@ -205,10 +205,12 @@ internal sealed class CellSurfaceAssemblyProvider(
                 // a kernel session can join a pack this process never compiled (BuildPackageProbing).
                 var bound = serviceProvider.GetService<Microsoft.Extensions.Options.IOptions<CompilationCacheOptions>>()
                     ?.Value?.AssemblyLoadTimeout ?? TimeSpan.FromMinutes(2);
-                return BuildPackageProbing.Arm(
-                        localPath!, BuildPackageProbing.RecordedReferences(localPath),
+                var httpPool = serviceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Http)
+                    ?? IoPool.Unbounded;
+                return BuildPackageProbing.ReadAndArm(
+                        localPath!, pool,
                         cacheService, serviceProvider.GetService<MeshWeaver.NuGet.INuGetAssemblyResolver>(),
-                        pool, bound, logger)
+                        httpPool, bound, logger)
                     .SelectMany(_ => pool.InvokeBlocking(_ => LoadLeased(node.Path, localPath!, cacheService)));
             })
             // A single pack's failure (evicted context, corrupt bytes) must not take the whole

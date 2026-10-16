@@ -291,3 +291,43 @@ public class NuGetBuildRecordTest
         NuGetBuildRecord.Read(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".dll")).Should().BeEmpty();
     }
 }
+
+/// <summary>
+/// The build's recorded closure takes precedence over the node-wide registration (whatever this
+/// process last compiled, possibly another generation) — also when the context was created before
+/// the build's resolution answered.
+/// </summary>
+public class BuildProbingPrecedenceTest
+{
+    /// <summary>A context created on the node-wide fallback is given its build's closure when it lands.</summary>
+    [Fact]
+    public void TheBuildsRecordedClosure_ReplacesTheNodeWideFallback()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mw-probe-precedence-" + Guid.NewGuid().ToString("N"));
+        var cache = new CompilationCacheService(
+            Options.Create(new CompilationCacheOptions { CacheDirectory = root }),
+            NullLogger<CompilationCacheService>.Instance);
+        try
+        {
+            var dll = Path.Combine(root, "store", "v1-build.dll");
+            cache.RegisterProbingDirectories("type_Probe", [Path.Combine(root, "other-generation")]);
+            var context = cache.GetOrCreateLoadContextForPath("type_Probe", dll);
+            context.HasProbingDirectories.Should().BeTrue("the node-wide fallback applies until the build's own closure is known");
+            context.HasBuildProbingDirectories.Should().BeFalse();
+
+            cache.RegisterBuildProbingDirectories(dll, [Path.Combine(root, "this-build")]);
+            context.HasBuildProbingDirectories.Should().BeTrue(
+                "the build's recorded closure must replace the fallback, which may name another generation");
+
+            // …and the node-wide registration never displaces it again.
+            cache.RegisterProbingDirectories("type_Probe", [Path.Combine(root, "yet-another")]);
+            cache.GetOrCreateLoadContextForPath("type_Probe", dll).HasBuildProbingDirectories.Should().BeTrue();
+        }
+        finally
+        {
+            cache.Dispose();
+            try { Directory.Delete(root, recursive: true); }
+            catch (IOException) { }
+        }
+    }
+}

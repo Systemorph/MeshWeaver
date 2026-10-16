@@ -179,8 +179,13 @@ The fix makes the closure part of the BUILD, not of the process that built it:
 2. **Re-resolved before every load.** `BuildPackageProbing` reads the record from the file's metadata
    (a header read, nothing loaded), resolves it through `INuGetAssemblyResolver` (memoized per process;
    a warm package folder answers without the network), and registers the probing directories for THAT
-   path (`ICompilationCacheService.RegisterBuildProbingDirectories`, ahead of the node-wide
-   registration). It runs on every load of an already-built assembly: the post-compile scan in
+   path (`ICompilationCacheService.RegisterBuildProbingDirectories`). The build's closure REPLACES
+   directories a context got from the node-wide registration (whatever this process last compiled,
+   possibly another generation) and is never displaced by it. The metadata read runs on a blocking
+   pool, never the caller's signalling thread; the resolution runs on the HTTP lane through the pool's
+   cold `Invoke`, so its bound cancels the wait and frees the slot, and it never queues behind the
+   Compile lane a kernel script holds while waiting for a NodeType to activate. Resolution still asks
+   the feed for dependency metadata even when the package folder is warm (#6863). It runs on every load of an already-built assembly: the post-compile scan in
    `CompileAndGetConfigurations`, the hydration shortcut `GetConfigurationsFromExistingAssembly` (the
    funnel for start-up registration, `EnrichWithNodeType`, the data-model and contract areas and adopted
    builds), and the cell surface. The load context then binds exactly as in the compiling process —

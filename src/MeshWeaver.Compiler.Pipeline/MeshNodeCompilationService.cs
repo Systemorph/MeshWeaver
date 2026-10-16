@@ -64,6 +64,13 @@ internal class MeshNodeCompilationService(
         hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem)
         ?? IoPool.Unbounded;
 
+    // The HTTP lane: package resolution for a LOAD (BuildPackageProbing). Not the Compile lane — a
+    // kernel script holds a Compile slot while it waits for a NodeType to activate, and activation
+    // must never queue behind its own callers.
+    private readonly IIoPool _httpPool =
+        hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Http)
+        ?? IoPool.Unbounded;
+
     /// <summary>
     /// Arms the package probe for the build at <paramref name="assemblyLocation"/> from the
     /// references it recorded (<see cref="BuildPackageProbing"/>) — on EVERY load of an already-built
@@ -72,7 +79,7 @@ internal class MeshNodeCompilationService(
     private IObservable<Unit> ArmPackageProbing(
         string assemblyLocation, IReadOnlyList<NuGetPackageReference> recorded)
         => BuildPackageProbing.Arm(
-            assemblyLocation, recorded, cacheService, nugetResolver, _ioPool,
+            assemblyLocation, recorded, cacheService, nugetResolver, _httpPool,
             _cacheOptions.AssemblyLoadTimeout, logger);
 
     // 🚨 Offload the compile to the ThreadPool via Task.Run — NOT the IoPool. Two reasons the
@@ -1352,8 +1359,9 @@ internal class MeshNodeCompilationService(
                 // the abandoned load thread is the honest cost.
                 // The build's recorded package closure, armed BEFORE the load: a cache-hit attempt
                 // (no emit in this process) never ran the emit's registration.
-                .SelectMany(snapshot => ArmPackageProbing(
-                        assemblyLocation, BuildPackageProbing.RecordedReferences(assemblyLocation))
+                .SelectMany(snapshot => BuildPackageProbing.ReadAndArm(
+                        assemblyLocation, _fileSystemPool, cacheService, nugetResolver, _httpPool,
+                        _cacheOptions.AssemblyLoadTimeout, logger)
                     .Select(_ => snapshot))
                 .SelectMany(snapshot => BoundLeg(
                     _ => OnThreadPool(() =>

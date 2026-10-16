@@ -39,9 +39,30 @@ internal static class BuildPackageProbing
             : NuGetBuildRecord.Read(assemblyLocation);
 
     /// <summary>
+    /// <see cref="RecordedReferences"/> read on <paramref name="readPool"/> (it opens the file, so it
+    /// never runs on the caller's signalling thread), then <see cref="Arm"/>.
+    /// </summary>
+    public static IObservable<Unit> ReadAndArm(
+        string assemblyLocation,
+        IIoPool readPool,
+        ICompilationCacheService cacheService,
+        INuGetAssemblyResolver? resolver,
+        IIoPool resolvePool,
+        TimeSpan bound,
+        ILogger logger)
+        => readPool.InvokeBlocking(_ => RecordedReferences(assemblyLocation))
+            .SelectMany(recorded => Arm(
+                assemblyLocation, recorded, cacheService, resolver, resolvePool, bound, logger));
+
+    /// <summary>
     /// Resolves <paramref name="references"/> (the build's recorded set) and registers the probing
     /// directories for <paramref name="assemblyLocation"/>; emits one <see cref="Unit"/> and completes.
     /// Emits immediately when there is nothing to resolve.
+    ///
+    /// <para>The resolution runs on <paramref name="resolvePool"/> — the HTTP lane, independent of the
+    /// Compile lane a kernel script holds while it waits for a NodeType to activate — through the
+    /// pool's COLD <see cref="IIoPool.Invoke{T}"/>, so the bound (or the caller's disposal) cancels the
+    /// wait and frees its slot; the resolver's own memoized resolution continues independently.</para>
     ///
     /// <para>A resolution that fails or does not answer within <paramref name="bound"/> is logged as
     /// a WARNING naming the packages and the cause, and the load goes ahead: it then fails with the
@@ -52,7 +73,7 @@ internal static class BuildPackageProbing
         IReadOnlyList<NuGetPackageReference> references,
         ICompilationCacheService cacheService,
         INuGetAssemblyResolver? resolver,
-        IIoPool pool,
+        IIoPool resolvePool,
         TimeSpan bound,
         ILogger logger)
     {
@@ -68,7 +89,7 @@ internal static class BuildPackageProbing
             return Observable.Return(Unit.Default);
         }
 
-        return pool.Run(ct => resolver.ResolveAsync(references, targetFramework: null, ct))
+        return resolvePool.Invoke(ct => resolver.ResolveAsync(references, targetFramework: null, ct))
             .Timeout(bound)
             .Do(resolved =>
             {
