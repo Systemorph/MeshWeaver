@@ -219,6 +219,12 @@ the anchor path, never the `In` alternation filter or the `LIKE` pattern. The `c
 `"a|b"` and `"x*y"` in `NegationCorpus` pin it on both executors, each beside the decoy an
 alternation or glob reading would return.
 
+The list separator is the parser's too. Inside `field:(A OR B)` the word `OR` separates values only
+when it stands alone; matching the two letters at the head of any value turned
+`-namespace:(acme/a OR orders)` into `NotIn [acme/a, ders]`, so the second value was never excluded
+on either executor (#6844). The `name:(Alpha OR Orion)` cases in `NegationCorpus`, positive and
+negated, pin every listed value on both executors.
+
 ## What is still divergent
 
 The fallback closes the case where a selector is unknown to **both** providers. It does not close
