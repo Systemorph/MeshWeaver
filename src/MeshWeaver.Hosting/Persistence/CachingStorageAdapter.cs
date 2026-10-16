@@ -321,15 +321,18 @@ public class CachingStorageAdapter : IStorageAdapter
     /// (single-writer dev host); the cache entry is dropped only when the row was removed.
     /// </remarks>
     public IObservable<bool> DeleteIfVersionAtMost(string path, long maxVersion, JsonSerializerOptions options)
-    {
-        IStorageAdapter innerAdapter =
-            new FileSystemStorageAdapter(_baseDirectory, _ioPoolRegistry, _writeOptionsModifier, _logger, _contributedParsers);
-        return innerAdapter.Read(path, options)
-            .Take(1)
-            .SelectMany(stored => stored is null || stored.Version > maxVersion
-                ? Observable.Return(false)
-                : Delete(path).Select(_ => true));
-    }
+        // Deferred: the file-system Read starts eagerly and replays, so a comparison read taken when
+        // the delete was BUILT would compare a version that may be overwritten before it runs.
+        => Observable.Defer(() =>
+        {
+            IStorageAdapter innerAdapter =
+                new FileSystemStorageAdapter(_baseDirectory, _ioPoolRegistry, _writeOptionsModifier, _logger, _contributedParsers);
+            return innerAdapter.Read(path, options)
+                .Take(1)
+                .SelectMany(stored => stored is null || stored.Version > maxVersion
+                    ? Observable.Return(false)
+                    : Delete(path).Select(_ => true));
+        });
 
     /// <inheritdoc />
     public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPaths(string? parentPath)

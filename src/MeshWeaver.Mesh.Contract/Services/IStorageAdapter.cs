@@ -239,11 +239,14 @@ public interface IStorageAdapter
     /// <param name="options">Serializer options for the default's comparison read.</param>
     /// <returns>Whether this call removed a stored row.</returns>
     IObservable<bool> DeleteIfVersionAtMost(string path, long maxVersion, JsonSerializerOptions options)
-        => System.Reactive.Linq.Observable.SelectMany(
+        // 🚨 Deferred: the comparison read runs per SUBSCRIPTION. Some Reads start their I/O eagerly
+        // and replay it (the file-system adapter's I/O pool), so a read taken when the delete was
+        // BUILT could compare a version that was overwritten before the delete ran.
+        => System.Reactive.Linq.Observable.Defer(() => System.Reactive.Linq.Observable.SelectMany(
             System.Reactive.Linq.Observable.Take(Read(path, options), 1),
             stored => stored is null || stored.Version > maxVersion
                 ? System.Reactive.Linq.Observable.Return(false)
-                : DeleteIfExists(path));
+                : DeleteIfExists(path)));
 
     /// <summary>
     /// Deletes many nodes in as few round-trips as the backend allows, emitting the paths this

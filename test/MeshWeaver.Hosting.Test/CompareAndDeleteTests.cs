@@ -37,7 +37,7 @@ public sealed class CompareAndDeleteTests : IDisposable
         System.IO.Path.GetTempPath(), "mw-compare-and-delete-" + Guid.NewGuid().ToString("N"));
     private readonly MeshWeaver.Mesh.Threading.IoPoolRegistry _ioPools = new();
 
-    public static TheoryData<string> Stores => ["in-memory-chain", "file-system"];
+    public static TheoryData<string> Stores => ["in-memory-chain", "file-system", "file-system-default"];
 
     private IStorageAdapter Build(string kind)
     {
@@ -45,6 +45,13 @@ public sealed class CompareAndDeleteTests : IDisposable
         {
             Directory.CreateDirectory(_dir);
             return new CachingStorageAdapter(_dir, _ioPools);
+        }
+        if (kind == "file-system-default")
+        {
+            // The bare file-system adapter does not override the primitive: this is the interface
+            // DEFAULT, over a Read that starts its I/O eagerly.
+            Directory.CreateDirectory(_dir);
+            return new FileSystemStorageAdapter(_dir, _ioPools);
         }
         var services = new ServiceCollection();
         services.AddInMemoryPersistence(new InMemoryStorageAdapter());
@@ -116,6 +123,28 @@ public sealed class CompareAndDeleteTests : IDisposable
         deletions.Should().BeEmpty("nothing was deleted, so nothing may be announced as deleted");
     }
 
+    /// <summary>
+    /// COLD: the comparison is taken when the delete is SUBSCRIBED, never when it is built. A delete
+    /// built while v3 is stored, then v4 written, then the delete subscribed, must see v4 and refuse.
+    /// A comparison read started eagerly (the file-system Read runs on an eager, replaying I/O pool)
+    /// captured v3 at build time and removed v4.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Stores))]
+    public async Task TheComparison_IsTakenAtSubscription_NotWhenTheDeleteIsBuilt(string kind)
+    {
+        var store = Build(kind);
+        await Seed(store, 3);
+
+        var delete = store.DeleteIfVersionAtMost(Path, 3, JsonOptions);
+        // Give an eager comparison read every chance to complete against v3 before the write.
+        (await Stored(store))!.Version.Should().Be(3);
+        await Seed(store, 4);
+
+        (await delete.FirstAsync().Await()).Should().BeFalse("v4 is stored when the delete runs");
+        (await Stored(store))!.Version.Should().Be(4, "the newer row survives");
+    }
+
     /// <summary>No row: nothing removed, and the call says so rather than claiming the delete.</summary>
     [Theory]
     [MemberData(nameof(Stores))]
@@ -172,14 +201,21 @@ public sealed class CompareAndDeleteTests : IDisposable
                         return; // the row is gone: the delete removed it
                 }
             });
-            System.Threading.SpinWait.SpinUntil(() => System.Threading.Volatile.Read(ref writing) == 1,
-                TimeSpan.FromSeconds(5)).Should().BeTrue("the writer started");
-
             var removed = false;
-            ((IStorageAdapter)store).DeleteIfVersionAtMost(Path, long.MaxValue, JsonOptions)
-                .Subscribe(r => removed = r);
-            System.Threading.Volatile.Write(ref stop, 1);
-            await writer.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            try
+            {
+                System.Threading.SpinWait.SpinUntil(() => System.Threading.Volatile.Read(ref writing) == 1,
+                    TimeSpan.FromSeconds(5)).Should().BeTrue("the writer started");
+                ((IStorageAdapter)store).DeleteIfVersionAtMost(Path, long.MaxValue, JsonOptions)
+                    .Subscribe(r => removed = r);
+            }
+            finally
+            {
+                // Stopped and joined whatever happened above, so a failed start assertion cannot
+                // leave the writer replacing the row after the test has ended.
+                System.Threading.Volatile.Write(ref stop, 1);
+                await writer.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            }
             if (!removed)
                 spurious++;
         }
