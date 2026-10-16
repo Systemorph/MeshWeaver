@@ -1485,9 +1485,13 @@ publish_to_target() { # <target> — called in a SUBSHELL by the loop below: `ex
     "$PYTHON" "$HELPER" lock check --account "$ACCOUNT" --share "$SHARE" --path "$LOCK_PATH" \
       --holder "$BAKE_PUBLISH_LOCK_HOLDER" < /dev/null
   else
+    # The release is armed BEFORE the acquire (Copilot's review of #6878): an acquire whose lease
+    # landed but which failed before reporting success would otherwise exit this subshell with no
+    # cleanup installed, leaving an infinite lease behind. The release names this holder's own lease
+    # id, so on a lease this run never got it is a named no-op.
+    trap release_lock_on_exit EXIT
     "$PYTHON" "$HELPER" lock acquire --account "$ACCOUNT" --share "$SHARE" --path "$LOCK_PATH" \
       --holder "$LOCK_HOLDER" < /dev/null
-    trap release_lock_on_exit EXIT
   fi
   # 🚨 WHICH DIRECTORY IS ALREADY PUBLISHED, resolved by the SAME rules the portal readers use
   # (MeshWeaver#3461). Every question below — which architecture published, is it sealed, from which

@@ -2274,6 +2274,15 @@ def run_lock_cases(h: "Harness", work: Path, expect_defect: bool) -> None:
           r.returncode != 0 and not h.shelf().sealed() and lease_file.is_file()
           and "Publication lock not acquired" in (r.stdout + r.stderr), f"rc={r.returncode}")
 
+    # ── Copilot on #6878: the publisher's release is armed BEFORE its acquire — a lease that landed in
+    # ── an acquire that then failed to report success must not be left behind. ──
+    print("\nan acquire interrupted after its lease landed leaves no lease behind:")
+    h.reset()
+    r = h.publish(push, "Systemorph/MeshWeaver", "6883", {"MOCK_LEASE_ACQUIRED_THEN_LOST": SHARE})
+    check("the target fails, publishes nothing, and its lease is released by the armed EXIT trap",
+          r.returncode != 0 and not h.shelf().sealed() and leases_held(h) == [],
+          f"rc={r.returncode}, leases left {leases_held(h)}")
+
     # ── Copilot on #6878: a release the service refuses must fail the target, never print a receipt. ──
     print("\na publication lock that cannot be released fails the target:")
     h.reset()
