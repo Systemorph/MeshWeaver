@@ -28,7 +28,29 @@ metadata:
     # asked cert-manager for nothing and the controller served its fallback certificate.
     # A hand-written `cert-manager.io/cluster-issuer` in `annotations` still wins, so a record that
     # names its own issuer renders byte-identically to before.
-    {{- $ann := .Values.ingress.annotations | default dict }}
+    {{- /* ---- Sticky sessions (ingress.sessionAffinity, MeshWeaver#6825) ----------------------
+         A Blazor circuit and its per-circuit hubs live on ONE pod, so a client bouncing between
+         replicas loses its session. The record renders its typed affinity here
+         (HelmValues.IngressValues → ingress.sessionAffinity.*) and values.aks.yaml states the same
+         block — and until this merge the chart read NEITHER: a record-only render dropped cookie
+         affinity from every multi-replica portal. Enabled ⇒ `affinity: cookie`, the cookie name
+         when stated, then nginxAnnotations over both; ingress.annotations over ALL of it, so a
+         hand-written annotation still wins. Disabled or absent renders nothing. The AGIC map is
+         not merged: every ingress this chart renders is nginx-shaped. */}}
+    {{- $affinity := .Values.ingress.sessionAffinity | default dict }}
+    {{- $ann := dict }}
+    {{- if $affinity.enabled }}
+    {{- $_ := set $ann "nginx.ingress.kubernetes.io/affinity" "cookie" }}
+    {{- with $affinity.cookieName }}
+    {{- $_ := set $ann "nginx.ingress.kubernetes.io/session-cookie-name" . }}
+    {{- end }}
+    {{- range $k, $v := ($affinity.nginxAnnotations | default dict) }}
+    {{- $_ := set $ann $k $v }}
+    {{- end }}
+    {{- end }}
+    {{- range $k, $v := (.Values.ingress.annotations | default dict) }}
+    {{- $_ := set $ann $k $v }}
+    {{- end }}
     {{- if and $issuer (ne $issuer "none") (not $handWritten) }}
     cert-manager.io/cluster-issuer: {{ $issuer | quote }}
     {{- end }}

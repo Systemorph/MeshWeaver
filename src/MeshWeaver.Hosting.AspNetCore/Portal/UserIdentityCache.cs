@@ -229,6 +229,15 @@ public sealed class UserIdentityCache : IDisposable
     private bool _hydrated;
 
     /// <summary>
+    /// Set the first time ANY snapshot is applied, and never cleared — unlike
+    /// <see cref="_hydrated"/>, which a <c>Reset</c> or a re-open lowers again. It is what tells
+    /// "this process has never been able to identify anybody" (the boot state readiness gates on,
+    /// #6850) from "the directory is being rebuilt after it had already answered" (a transient that
+    /// <see cref="Lookup"/> already reports as Unavailable and repairs on its own).
+    /// </summary>
+    private bool _everHydrated;
+
+    /// <summary>
     /// Set when the backing query subscription FAILS. A faulted index never hydrates, so every
     /// later lookup is unavailable rather than silently, permanently "unknown" — which would make
     /// a dead subscription look exactly like an empty user directory.
@@ -378,6 +387,15 @@ public sealed class UserIdentityCache : IDisposable
         _connections.Add(subscription);
         subscription.Disposable = _mesh
             .Query<MeshNode>(DirectoryQuery)
+            // 🚨 A snapshot that is a FLOOR is not a snapshot (#6850 review). The fan-in folds a
+            // provider that completed without answering, and a provider's own dropped read
+            // (SnapshotIncomplete), into SilentProviders; Apply would treat such an Initial/Reset
+            // as authoritative, raise _hydrated/_everHydrated and release readiness while users
+            // may be missing — and a miss off it is a definitive "no such user", the false verdict
+            // #974 exists to prevent. Refuse it HERE, in the pipeline, so it reaches the error
+            // handler below: the failure is recorded and named, the chain is dropped, and the
+            // next lookup or readiness probe opens a fresh read.
+            .SelectMany(change => RejectIncompleteSnapshot(change))
             .Subscribe(
                 change =>
                 {
@@ -409,6 +427,29 @@ public sealed class UserIdentityCache : IDisposable
                         + "— dropped, so the next lookup opens a fresh directory read");
                     ReleaseSubscription(subscription);
                 });
+    }
+
+    /// <summary>
+    /// Passes every frame through EXCEPT an <c>Initial</c>/<c>Reset</c> that is a floor — one naming
+    /// <see cref="QueryResultChange{T}.SilentProviders"/> or carrying
+    /// <see cref="QueryResultChange{T}.SnapshotIncomplete"/> — which becomes an error, so the
+    /// directory never hydrates off a snapshot that may be missing users.
+    /// </summary>
+    internal static IObservable<QueryResultChange<MeshNode>> RejectIncompleteSnapshot(
+        QueryResultChange<MeshNode> change)
+    {
+        if (change.ChangeType is not (QueryChangeType.Initial or QueryChangeType.Reset))
+            return Observable.Return(change);
+        if (change.SilentProviders is { Count: > 0 } silent)
+            return Observable.Throw<QueryResultChange<MeshNode>>(new InvalidOperationException(
+                $"the directory snapshot is INCOMPLETE: query provider(s) [{string.Join(", ", silent)}] "
+                + $"did not answer, so its {change.Items.Count} user(s) are a floor and a miss would "
+                + "be a false \"no such user\""));
+        if (change.SnapshotIncomplete)
+            return Observable.Throw<QueryResultChange<MeshNode>>(new InvalidOperationException(
+                $"the directory snapshot is INCOMPLETE: a provider dropped part of its read, so its "
+                + $"{change.Items.Count} user(s) are a floor and a miss would be a false \"no such user\""));
+        return Observable.Return(change);
     }
 
     /// <summary>Retires a terminated directory chain and re-arms <see cref="_opening"/> so the next
@@ -445,6 +486,7 @@ public sealed class UserIdentityCache : IDisposable
                 // User node carries this email". Set LAST, after the snapshot is applied, so a
                 // concurrent reader never sees "hydrated" over a half-built index.
                 Volatile.Write(ref _hydrated, true);
+                Volatile.Write(ref _everHydrated, true);
                 break;
             case QueryChangeType.Added:
             case QueryChangeType.Updated:
@@ -494,8 +536,7 @@ public sealed class UserIdentityCache : IDisposable
         // opens a fresh read instead of the failure standing for the life of the process. A no-op
         // whenever a chain is live, which is every ordinary call. See OpenDirectorySubscription: no
         // timer and no retry loop, the caller IS the trigger.
-        if (Volatile.Read(ref _subscriptionFailure) is not null)
-            OpenDirectorySubscription();
+        EnsureOpen();
 
         _byEmail.TryGetValue(email, out var node);
         return UserIdentityLookup.Classify(
@@ -503,6 +544,30 @@ public sealed class UserIdentityCache : IDisposable
             Volatile.Read(ref _hydrated),
             Volatile.Read(ref _subscriptionFailure));
     }
+
+    /// <summary>
+    /// Re-opens the directory read when the last one TERMINATED; a no-op while a read is live.
+    /// <see cref="Lookup"/> calls it on every question, and readiness
+    /// (<see cref="UserDirectoryReadiness"/>) calls it on every probe — a pod held out of the
+    /// Service receives no lookups, so without the probe a read that failed before its first
+    /// snapshot would never be retried. No timer and no retry loop: a caller is the trigger.
+    /// </summary>
+    public void EnsureOpen()
+    {
+        if (Volatile.Read(ref _subscriptionFailure) is not null)
+            OpenDirectorySubscription();
+    }
+
+    /// <summary>
+    /// What the directory can answer RIGHT NOW, as one consistent reading — for readiness
+    /// (<see cref="UserDirectoryReadiness"/>), never for a lookup decision: a caller resolving a user
+    /// asks <see cref="Lookup"/>, which classifies the same fields per question.
+    /// </summary>
+    public UserDirectoryReading Reading => new(
+        Hydrated: Volatile.Read(ref _hydrated),
+        EverHydrated: Volatile.Read(ref _everHydrated),
+        Failure: Volatile.Read(ref _subscriptionFailure),
+        IndexedUsers: _byEmail.Count);
 
     /// <summary>
     /// The email of the mesh <c>User</c> node whose <c>Id</c> is <paramref name="id"/>, or

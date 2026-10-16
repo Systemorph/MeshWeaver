@@ -1,6 +1,6 @@
 ---
 Name: "NuGet Runtime Assets"
-Abstract: "How a NodeType's #r \"nuget:...\" packages bind at run time: compile against lib/, load the runtimes/<rid>/lib group for the running RID, resolve runtimes/<rid>/native for DllImports, and bind any dependency the host already ships to the host's copy. Motivated by Microsoft.Data.SqlClient, whose lib/ assembly is a platform stub."
+Abstract: "How a NodeType's #r \"nuget:...\" packages bind at run time: compile against lib/, load the runtimes/<rid>/lib group for the running RID, resolve runtimes/<rid>/native for DllImports, and bind any dependency the host already ships to the host's copy; the build records its packages so every load path, on any replica, re-resolves them. Motivated by Microsoft.Data.SqlClient, whose lib/ assembly is a platform stub."
 Authors:
   - "Roland Buergi"
 Tags:
@@ -152,6 +152,50 @@ inference errors and hundreds of `CS1701`s. Three defects, three rules:
    bytes (so the emit-failure capture rereads the image Roslyn used); a host carrying another build
    keeps its own file.
 
+## Every load path: the build carries its package closure
+
+Compiling is one process; loading is every process. Measured on an enterprise client portal (platform
+3.1.10992, which carries the host-wins compile fix above) on 2026-10-16: a NodeType declaring
+`#r "nuget: Microsoft.Data.SqlClient, 6.1.1"` compiled Ok, and then on BOTH replicas, dozens of times,
+`Failed to extract NodeTypeConfigurations from /data/assembly-cache/…/v33-….dll: Could not load file or
+assembly 'Microsoft.Data.SqlClient, Version=6.0.0.0'` — at the start-up registration pass
+(`DynamicContentTypeRegistration`), at `EnrichWithNodeType` and after a recompile attempt. The probing
+directories were registered IN MEMORY by the emit alone (`RegisterProbingDirectories`), so every other
+reader of the same bytes — a replica that never compiled the type, the compiling one after a restart,
+a portal adopting a CI bake, a compile attempt that hit an existing build instead of emitting — loaded it
+with nothing to probe, and `GetTypes()` failed.
+
+The fix makes the closure part of the BUILD, not of the process that built it:
+
+1. **Recorded in the bytes.** Both producers (the runtime compile's `PrepareGeneratedSource` and the
+   bake's `NodeSetCompiler.ResolveInputs`) stamp one
+   `[assembly: System.Reflection.AssemblyMetadata("MeshWeaver.NuGetPackage", "Id, Version")]` per
+   `#r "nuget:"` into the generated skeleton (`NuGetBuildRecord.Stamp`). The bytes travel wherever a
+   build travels — assembly store, blob, bundle — so the record does too. Package PATHS are deliberately
+   not recorded: they name the compiling process's package folder, which another replica does not share.
+   The stamp is part of the generated text, so the content key covers it: a build of the same sources
+   from before the stamp has a different key and is REBUILT rather than adopted. A NodeType with no
+   `#r "nuget:"` gets a byte-identical source and keeps its key and its builds.
+2. **Re-resolved before every load.** `BuildPackageProbing` reads the record from the file's metadata
+   (a header read, nothing loaded), resolves it through `INuGetAssemblyResolver` (memoized per process;
+   a warm package folder answers without the network), and registers the probing directories for THAT
+   path (`ICompilationCacheService.RegisterBuildProbingDirectories`). The build's closure REPLACES
+   directories a context got from the node-wide registration (whatever this process last compiled,
+   possibly another generation) and is never displaced by it. The metadata read runs on a blocking
+   pool, never the caller's signalling thread; the resolution runs on the HTTP lane through the pool's
+   cold `Invoke`, so its bound cancels the wait and frees the slot, and it never queues behind the
+   Compile lane a kernel script holds while waiting for a NodeType to activate. Resolution still asks
+   the feed for dependency metadata even when the package folder is warm (#6863). It runs on every load of an already-built assembly: the post-compile scan in
+   `CompileAndGetConfigurations`, the hydration shortcut `GetConfigurationsFromExistingAssembly` (the
+   funnel for start-up registration, `EnrichWithNodeType`, the data-model and contract areas and adopted
+   builds), and the cell surface. The load context then binds exactly as in the compiling process —
+   platform first, host unification, the package's `runtimes/<rid>/lib` asset (never the `lib/`
+   placeholder) — so the host-wins rule holds unchanged.
+3. **A resolution that fails or does not answer within `AssemblyLoadTimeout`** is a WARNING naming the
+   packages and the cause, and the load goes ahead and fails with the loader's own message — the verdict
+   the record carries. A version-less `#r "nuget: Id"` re-resolves to whatever is newest on the reading
+   process; pin a version when the build must load the same package everywhere.
+
 ## What pins it
 
 - `NuGetRuntimeAssetTest` (offline): RID chains; the SqlClient layout selects `runtimes/unix` on
@@ -170,6 +214,14 @@ inference errors and hundreds of `CS1701`s. Three defects, three rules:
   compile service, then RUN: the emitted image references the host's System.Text.Json and
   DependencyInjection.Abstractions, SqlClient loads from `runtimes/`, and the default context never
   holds a package's compile asset. Its offline case compiles `Enumerable.MaxBy` against the host set.
+- `NuGetPackagesLoadOnAFreshReplicaTest` (live feed, skips when unreachable): a SqlClient NodeType whose
+  type DERIVES from a package type is built by the runtime compile and by the bake, copied to a path
+  this process never loaded (the store copy another replica reads), and loaded through a FRESH
+  compilation cache + compilation service — an empty probing registry and resolver memo, which is what a
+  replica or a restart has. The configuration scan succeeds, `SqlConnection` is constructed and
+  SqlClient is the `runtimes/` asset. Red before the fix with the production message.
+  `NuGetBuildRecordTest` (offline): no package ⇒ byte-identical source; each reference round-trips
+  through an emitted image.
 
 ## Related
 

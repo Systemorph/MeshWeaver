@@ -58,6 +58,30 @@ internal class MeshNodeCompilationService(
         hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.CompileCpu)
         ?? IoPool.Unbounded;
 
+    // The file-system lane: where the hydration shortcut's load (blocking file IO + reflection) runs
+    // when it first has to wait for a package resolution — see GetConfigurationsFromExistingAssembly.
+    private readonly IIoPool _fileSystemPool =
+        hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem)
+        ?? IoPool.Unbounded;
+
+    // The HTTP lane: package resolution for a LOAD (BuildPackageProbing). Not the Compile lane — a
+    // kernel script holds a Compile slot while it waits for a NodeType to activate, and activation
+    // must never queue behind its own callers.
+    private readonly IIoPool _httpPool =
+        hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Http)
+        ?? IoPool.Unbounded;
+
+    /// <summary>
+    /// Arms the package probe for the build at <paramref name="assemblyLocation"/> from the
+    /// references it recorded (<see cref="BuildPackageProbing"/>) — on EVERY load of an already-built
+    /// assembly, so it loads on a replica that never compiled it and after a restart.
+    /// </summary>
+    private IObservable<Unit> ArmPackageProbing(
+        string assemblyLocation, IReadOnlyList<NuGetPackageReference> recorded)
+        => BuildPackageProbing.Arm(
+            assemblyLocation, recorded, cacheService, nugetResolver, _httpPool,
+            _cacheOptions.AssemblyLoadTimeout, logger);
+
     // 🚨 Offload the compile to the ThreadPool via Task.Run — NOT the IoPool. Two reasons the
     // IoPool ("the correct abstraction") fails for this leaf:
     //   1. Its SemaphoreSlim gate serialises the compile against itself (activity-driven +
@@ -1333,6 +1357,12 @@ internal class MeshNodeCompilationService(
                 // here is cancellable (a running type initializer cannot be interrupted), so
                 // the bound settles the state machine with a terminal Error naming the leg and
                 // the abandoned load thread is the honest cost.
+                // The build's recorded package closure, armed BEFORE the load: a cache-hit attempt
+                // (no emit in this process) never ran the emit's registration.
+                .SelectMany(snapshot => BuildPackageProbing.ReadAndArm(
+                        assemblyLocation, _fileSystemPool, cacheService, nugetResolver, _httpPool,
+                        _cacheOptions.AssemblyLoadTimeout, logger)
+                    .Select(_ => snapshot))
                 .SelectMany(snapshot => BoundLeg(
                     _ => OnThreadPool(() =>
                         CompileResultFromAssembly(
@@ -1499,6 +1529,21 @@ internal class MeshNodeCompilationService(
         if (string.IsNullOrEmpty(localPath))
             return Observable.Return((NodeCompilationResult?)null);
 
+        // 🚨 The build's recorded package closure (#r "nuget:") is resolved and its probing
+        // directories registered for THIS path before anything is loaded — this shortcut is how a
+        // replica that never compiled the type, and every process after a restart, reads a build
+        // (BuildPackageProbing). A build with no recorded package keeps the eager contract callers
+        // rely on: the work happens when CALLED, inside the caller's pool slot. One that has to wait
+        // for the resolution loads on the file-system lane once it answers.
+        var recorded = BuildPackageProbing.RecordedReferences(localPath);
+        if (recorded.Count == 0)
+            return Observable.Return(LoadExistingAssembly(localPath, nodeTypePath));
+        return ArmPackageProbing(localPath, recorded)
+            .SelectMany(_ => _fileSystemPool.InvokeBlocking(_ => LoadExistingAssembly(localPath, nodeTypePath)));
+    }
+
+    private NodeCompilationResult? LoadExistingAssembly(string localPath, string nodeTypePath)
+    {
         // Synthesise a minimal MeshNode for CompileResultFromAssembly's ALC bookkeeping.
         // The Path is what determines the cache key — the rest of the node is irrelevant
         // for this path because we're not running Roslyn.
@@ -1521,7 +1566,7 @@ internal class MeshNodeCompilationService(
                 Log = (result.Log ?? log).FinishByOutcome((int)hub.Version)
             };
         }
-        return Observable.Return(result);
+        return result;
     }
 
     /// <summary>
@@ -1932,7 +1977,11 @@ internal class MeshNodeCompilationService(
         var nugetRefList = extractedRefs.ToList();
         GeneratorPipeline.StripBuiltInScopeGeneratorRef(
             nugetRefList, builtInPresent: GeneratorPipeline.BuiltInGeneratorPaths.Count > 0);
-        return (source, [.. nugetRefList]);
+        // 🚨 The references are RECORDED in the build (NuGetBuildRecord): every reader of the bytes —
+        // another replica, this one after a restart, the start-up registration pass — resolves the
+        // package closure from them before it loads (EnsureBuildPackageProbing). Stamped into the
+        // TEXT, so the content key covers it and a build from before the stamp is rebuilt, not adopted.
+        return (NuGetBuildRecord.Stamp(source, nugetRefList), [.. nugetRefList]);
     }
 
     /// <summary>

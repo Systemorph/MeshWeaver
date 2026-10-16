@@ -154,6 +154,12 @@ COMBOS=(
   # opt-out shape is here too, because "no issuer" must be a statement, never an omission.
   "a public host issued by cert-manager (fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.ingress-issuer.yaml"
   "a host whose TLS Secret is pre-provisioned (fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.ingress-preprovisioned.yaml"
+  # 🚨 Cookie session affinity as the RECORD renders it (MeshWeaver#6825): HelmValues writes the typed
+  # block under ingress.sessionAffinity.*, which the chart did not read, so a record-only render
+  # dropped affinity from every multi-replica Blazor portal. The evidence check below the loop reads
+  # both renders by name: enabled merges in order, disabled renders none of it.
+  "cookie session affinity from the record's typed block (fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.ingress-session-affinity.yaml"
+  "cookie session affinity switched off (fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.ingress-session-affinity-disabled.yaml"
   # 🚨 The instance's OWN database release (Doc/Architecture/InClusterDatabases): a CloudNativePG
   # Cluster beside the portal release, named by database.release. The only combination whose
   # connection strings are COMPOSED in the containers' env from a Secret the chart does not render.
@@ -334,6 +340,52 @@ if [ -f "$source_render" ] && [ -f "$defaults_render" ] \
   ok "a plugin source's own credential reaches the ConfigMap by reference — stated renders trimmed, a blank tokenKey renders blank, absent and null render no key, the defaults render none"
 else
   report "plugin source credentials: the fixture must render exactly Sources__1__TokenKey=\"PluginCatalog:SourceTokens:Extensions\" and Sources__2__InstallationOwner=\"fabrikam\" (trimmed), Sources__3__TokenKey=\"\" (a blank tokenKey is a DECLARATION the portal refuses — dropping it reads the repository with the instance's App or anonymously), NO credential key for the undeclared source 0 and the null tokenKey of source 4, and the chart defaults must render none"
+fi
+
+# The session-affinity evidence (MeshWeaver#6825). Read by NAME: the record's typed block must reach
+# the portal Ingress — `affinity: cookie` and the cookie name derived from the typed fields,
+# nginxAnnotations over both, ingress.annotations over everything, the AGIC map NOT rendered — and a
+# disabled block must render none of it. The AKS overlay states the same block, so its render must
+# carry the affinity too. The plugin-registry identity rides the affinity fixture:
+# pluginCatalog.instanceId renders PluginCatalog__InstanceId and a HomeUrl derived from the host.
+affinity_annotations() {
+  python3 - "$1" <<'PY'
+import sys, yaml, json
+for doc in yaml.safe_load_all(open(sys.argv[1])):
+    if doc and doc.get("kind") == "Ingress" and doc["metadata"]["name"] == "memex-portal":
+        print(json.dumps(doc["metadata"].get("annotations") or {}, sort_keys=True))
+        break
+else:
+    print("NO-INGRESS")
+PY
+}
+affinity_on="$(affinity_annotations "$(render_of "cookie session affinity from the record's typed block (fixture)")")"
+affinity_off="$(affinity_annotations "$(render_of "cookie session affinity switched off (fixture)")")"
+affinity_aks="$(affinity_annotations "$(render_of "AKS overlay (the layer every AKS install shares)")")"
+affinity_render="$(render_of "cookie session affinity from the record's typed block (fixture)")"
+if python3 - "$affinity_on" "$affinity_off" "$affinity_aks" <<'PY'
+import sys, json
+on, off, aks = (json.loads(a) for a in sys.argv[1:4])
+p = "nginx.ingress.kubernetes.io/"
+assert on.get(p + "affinity") == "cookie", on
+assert on.get(p + "session-cookie-name") == "MEMEX_AFFINITY", on
+assert on.get(p + "affinity-mode") == "persistent", on
+assert on.get(p + "session-cookie-max-age") == "3600", on            # ingress.annotations wins
+assert on.get("cert-manager.io/cluster-issuer") == "letsencrypt-prod", on
+assert not any(k.startswith("appgw.") for k in on), on               # AGIC is not rendered
+assert not any(k in off for k in (p + "affinity", p + "session-cookie-name", p + "affinity-mode")), off
+assert aks.get(p + "affinity") == "cookie" and aks.get(p + "session-cookie-name") == "MEMEX_AFFINITY", aks
+PY
+then
+  if [ -f "$affinity_render" ] \
+     && grep -q '^  PluginCatalog__InstanceId: "instance-at-registry"$' "$affinity_render" \
+     && grep -q '^  PluginCatalog__HomeUrl: "https://instance.example.com"$' "$affinity_render"; then
+    ok "cookie session affinity reaches the portal Ingress from ingress.sessionAffinity (typed, then nginxAnnotations, then ingress.annotations; AGIC not rendered; disabled renders none), and pluginCatalog.instanceId renders PluginCatalog__InstanceId and HomeUrl"
+  else
+    report "pluginCatalog.instanceId: the session-affinity fixture must render PluginCatalog__InstanceId=\"instance-at-registry\" and PluginCatalog__HomeUrl=\"https://instance.example.com\" — a record-driven deploy otherwise loses the deployment-config principal"
+  fi
+else
+  report "ingress.sessionAffinity: the portal Ingress must carry affinity=cookie and the cookie name when the block is enabled, nginxAnnotations over them, ingress.annotations over all, no AGIC annotation, and NONE of it when disabled — a record-only render otherwise drops cookie affinity (MeshWeaver#6825)"
 fi
 
 # The bake-gate evidence (MeshWeaver#4588, #5544). Invariant 10b — an armed PreWarm__GateReadiness
