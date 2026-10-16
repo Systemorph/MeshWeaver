@@ -4,13 +4,13 @@ Command-line interface for MeshWeaver / Memex. Operates a portal's mesh over the
 
 ## Run it
 
-Install it as a dotnet tool. nuget.org's newest stable `MeshWeaver.Cli` is the CLI of the platform
-build `3-latest` names — CD publishes it, as `3.<minor>.<run>`, every time it arms a set
+Install it as a dotnet tool. Like `gh`, it is a thin client with its own version, released when the
+CLI changes rather than with every platform build
 ([NuGet Package Retirement](../MeshWeaver.Documentation/Data/Architecture/NuGetPackageRetirement.md)):
 
 ```bash
-dotnet tool install -g MeshWeaver.Cli            # the newest = the CLI of 3-latest
-dotnet tool install -g MeshWeaver.Cli --version 3.1.10936   # the CLI of one exact platform build
+dotnet tool install -g MeshWeaver.Cli
+dotnet tool update -g MeshWeaver.Cli
 ```
 
 Or run it from a checkout: `dotnet run --project src/MeshWeaver.Cli -- <command>`.
