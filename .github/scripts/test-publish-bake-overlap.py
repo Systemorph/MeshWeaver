@@ -264,8 +264,27 @@ if action == "list":
             emit("%s\t%d" % (p.name, p.stat().st_size))
     sys.exit(0)
 
-# `show` is deliberately NOT modelled: the per-file read-back is the launch storm this harness's
-# subject retired (46 processes per target). A script that reaches for it again dies here.
+# `show` is NOT modelled for the publisher: the per-file read-back is the launch storm this
+# harness's subject retired (46 processes per target), and a publish that reaches for it again dies
+# here. The re-bind cases (MeshWeaver.Plugins#1785) run the two READERS that do use it —
+# bake-scope.sh (the `_complete` publication stamp) and carry-forward-bundles.sh (each carried
+# file's digest + stamp) — and opt in with MOCK_AZ_ALLOW_SHOW=1, for exactly those two queries.
+if action == "show" and os.environ.get("MOCK_AZ_ALLOW_SHOW") == "1":
+    q = opts.get("--query", [None])[0]
+    if not out_tsv:
+        die("only `-o tsv` is modelled for file show: " + raw)
+    f = share_root() / path
+    if not f.is_file():
+        sys.stderr.write("stub-az: ResourceNotFound %s\n" % path); sys.exit(1)
+    mp = meta_path(path)
+    md = json.loads(mp.read_text()) if mp.exists() else {}
+    if q == "[[metadata.publication || '-']]":
+        emit(md.get("publication") or "-")
+    elif q == "[[metadata.digest || '-', metadata.publication || '-']]":
+        emit((md.get("digest") or "-") + "\t" + (md.get("publication") or "-"))
+    else:
+        die("unmodelled --query for file show: " + raw)
+    sys.exit(0)
 die("unmodelled file action %r" % action)
 '''
 
@@ -2070,6 +2089,8 @@ def run_cases(script: Path, work: Path, expect_defect: bool) -> None:
               "WITHIN one lane" in r.stdout)
 
     run_lock_cases(h, work, expect_defect)
+    if not expect_defect:
+        run_rebind_cases(h, work)
 
 
 LOCK_PATH = f"prebuilt-bundles/{IDENTITY}/_publishing.{SOURCE}"
@@ -2308,6 +2329,277 @@ def run_lock_cases(h: "Harness", work: Path, expect_defect: bool) -> None:
     check("a missing share is named as missing, with the removal advice",
           r.returncode != 0 and "does NOT exist" in out and "EXISTS and answers" not in out,
           f"rc={r.returncode}")
+
+
+REBIND = HERE / "rebind-bake-scope.sh"
+BAKE_SCOPE = HERE / "bake-scope.sh"
+CARRY = HERE / "carry-forward-bundles.sh"
+MODULE_DIRS = ["Alpha", "Beta", "Gamma"]
+
+# The CALLER's selector (scripts/affected-modules.py), reduced to what bake-scope.sh reads from it:
+# every top-level module directory the range touches is affected, nothing else is mounted, and the
+# rest is skipped. The real selector's own semantics are pinned by its own --self-test in the repo
+# that owns it; what is under test here is what the lane DOES with its answer.
+SELECTOR_STUB = """#!/usr/bin/env python3
+import json, subprocess, sys
+args = sys.argv[1:]
+rng = args[args.index('--range') + 1]
+base, head = rng.split('...')
+names = subprocess.run(['git', 'diff', '--name-only', base, head], check=True,
+                       capture_output=True, text=True).stdout.split()
+modules = %s
+affected = sorted({n.split('/')[0] for n in names if n.split('/')[0] in modules})
+print(json.dumps({'runAll': False, 'affected': affected, 'mount': affected, 'support': [],
+                  'skipped': [m for m in modules if m not in affected]}))
+""" % MODULE_DIRS
+
+
+def git(repo: Path, *args: str) -> str:
+    return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True,
+                          text=True).stdout.strip()
+
+
+def content_repo(work: Path, name: str, changes: list[tuple[str, str]]) -> tuple[Path, list[str]]:
+    """A linear history: c0 holds every module and the selector; then one commit per change
+    (`(module, text)` — the module's file is rewritten to `text`). Returns the repo and its shas."""
+    repo = work / name
+    if repo.exists():
+        shutil.rmtree(repo)
+    (repo / "scripts").mkdir(parents=True)
+    git(repo, "init", "-q")
+    git(repo, "config", "user.email", "harness@example.com")
+    git(repo, "config", "user.name", "harness")
+    (repo / "scripts" / "affected-modules.py").write_text(SELECTOR_STUB)
+    for m in MODULE_DIRS:
+        (repo / m).mkdir()
+        (repo / m / "module.txt").write_text(f"{m} v0\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "c0")
+    shas = [git(repo, "rev-parse", "HEAD")]
+    for module, text in changes:
+        (repo / module / "module.txt").write_text(text)
+        git(repo, "commit", "-q", "-am", f"{module}: {text.strip()}")
+        shas.append(git(repo, "rev-parse", "HEAD"))
+    return repo, shas
+
+
+def plant_publication(h: "Harness", commit: str, stamp: str) -> None:
+    """A SEALED flat publication of every module at <commit>, every file stamped by <stamp> exactly
+    as publish-bake-bundles.sh stamps it — what a sibling run leaves on the shelf."""
+    dest = h.shelf_root / ACCOUNT / SHARE / DEST
+    meta = h.shelf_root / ".meta" / ACCOUNT / SHARE / DEST
+    if dest.exists():
+        shutil.rmtree(dest)
+    if meta.exists():
+        shutil.rmtree(meta)
+    dest.mkdir(parents=True)
+    meta.mkdir(parents=True)
+
+    def put(name: str, text: str) -> None:
+        (dest / name).write_text(text)
+        digest = hashlib.sha256(text.encode()).hexdigest()
+        (meta / (name + ".json")).write_text(json.dumps({"digest": digest, "publication": stamp}))
+
+    for m in MODULE_DIRS:
+        put(f"{m}.zip", f"{m}.zip sealed by {stamp} at {commit}\n")
+    put("source-commit.txt", commit + "\n")
+    put(SENTINEL, "".join(f"{m}.zip\n" for m in MODULE_DIRS))
+
+
+class Lane:
+    """One run of the lane's three steps — scope, re-bind under the lock, carry — over the shared
+    fake share, as the workflow runs them."""
+
+    def __init__(self, h: "Harness", work: Path, repo: Path, head: str, run_id: str):
+        self.h, self.repo, self.head, self.run_id = h, repo, head, run_id
+        self.root = work / f"lane-{run_id}"
+        if self.root.exists():
+            shutil.rmtree(self.root)
+        self.state = self.root / "bake-scope"
+        self.bake = self.root / "bake"
+        self.bake.mkdir(parents=True)
+        self.output = self.root / "github-output"
+        self.genv = self.root / "github-env"
+
+    def env(self, **extra: str) -> dict[str, str]:
+        env = dict(os.environ)
+        env["PATH"] = f"{self.h.bin}{os.pathsep}{env['PATH']}"
+        env.update(self.h.base_env())
+        for k in ("MOCK_LEASE_IGNORE", "MOCK_SHARE_MISSING", "GITHUB_STEP_SUMMARY", "RUNNER_TEMP",
+                  "WITHHOLD_PACKAGES"):
+            env.pop(k, None)
+        env.update({
+            "MOCK_AZ_ALLOW_SHOW": "1",
+            "IDENTITY": IDENTITY, "SOURCE": SOURCE, "HEAD_SHA": self.head,
+            "REPO_DIR": str(self.repo), "EVENT_NAME": "push", "STATE_DIR": str(self.state),
+            "GITHUB_REPOSITORY": "Systemorph/MeshWeaver.Plugins", "GITHUB_RUN_ID": self.run_id,
+            "GITHUB_OUTPUT": str(self.output), "GITHUB_ENV": str(self.genv),
+        })
+        env.update(extra)
+        return env
+
+    def scope(self) -> tuple[subprocess.CompletedProcess, str]:
+        self.output.write_text("")
+        r = subprocess.run(["bash", str(BAKE_SCOPE)], capture_output=True, text=True, env=self.env())
+        return r, self.outputs().get("scope", "")
+
+    def bake_what_scope_rebuilt(self, scope: str) -> None:
+        """The narrowed bake's output: a bundle for every module the scope rebuilt, at this head."""
+        rebuilt = MODULE_DIRS if scope == "full" else json.loads(
+            (self.state / "affected.json").read_text())["affected"]
+        for m in rebuilt:
+            (self.bake / f"{m}.zip").write_text(f"{m}.zip baked by run {self.run_id} at {self.head}\n")
+
+    def rebind(self, original_scope: str) -> subprocess.CompletedProcess:
+        self.output.write_text("")
+        return subprocess.run(["bash", str(REBIND)], capture_output=True, text=True,
+                              env=self.env(ORIGINAL_SCOPE=original_scope))
+
+    def release(self) -> subprocess.CompletedProcess:
+        return subprocess.run(["bash", str(REBIND), "--release"], capture_output=True, text=True,
+                              env=self.env())
+
+    def carry(self) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["bash", str(CARRY), str(self.bake), str(self.state / "published-bundles.txt"), TARGET,
+             IDENTITY, SOURCE], capture_output=True, text=True,
+            env=self.env(EXPECT_PUBLICATION_FILE=str(self.state / "published-publication.txt")))
+
+    def outputs(self) -> dict[str, str]:
+        out: dict[str, str] = {}
+        if self.output.is_file():
+            for line in self.output.read_text().splitlines():
+                k, _, v = line.partition("=")
+                out[k] = v
+        return out
+
+
+def run_rebind_cases(h: "Harness", work: Path) -> None:
+    # MeshWeaver.Plugins#1785: a narrowed bake reads the publication BEFORE its ~15-minute compile
+    # and carries from it AFTER; a sibling that seals in between makes the carry refuse ("The
+    # publication moved between the read and the carry") — three times on one day. Under the lock
+    # the lane now re-reads and decides (a) superseded, (b) re-bound, or (c) refused, as before.
+    repo, (c0, c1, c2, c3) = content_repo(work, "content", [
+        ("Alpha", "Alpha v1\n"), ("Beta", "Beta v2\n"), ("Gamma", "Gamma v3\n")])
+
+    # ── CONTROL: nothing moved — the re-bind changes nothing, holds the lock, and releases it. ──
+    print("\n#1785 control: the publication did not move while the bake ran:")
+    h.reset()
+    plant_publication(h, c0, "Plugins-run-P0")
+    lane = Lane(h, work, repo, c2, "7001")
+    r, scope = lane.scope()
+    check("the fixture narrows: c0…c2 rebuilds Alpha and Beta, carries Gamma",
+          scope == "narrowed"
+          and json.loads((lane.state / "affected.json").read_text())["affected"] == ["Alpha", "Beta"],
+          f"scope={scope!r}; {r.stdout[-300:]!r}")
+    lane.bake_what_scope_rebuilt(scope)
+    r = lane.rebind(scope)
+    o = lane.outputs()
+    check("an unmoved publication is re-bound to nothing: rebind=unchanged, publish=true",
+          r.returncode == 0 and o.get("rebind") == "unchanged" and o.get("publish") == "true",
+          f"rc={r.returncode}, outputs={o}; {(r.stdout + r.stderr)[-400:]!r}")
+    check("…the lock is held from here to the publish, and its token is handed to the publish step",
+          leases_held(h) != [] and "BAKE_PUBLISH_LOCK_HOLDER=Systemorph-MeshWeaver.Plugins-7001-1"
+          in (lane.genv.read_text() if lane.genv.is_file() else ""), " ".join(leases_held(h)))
+    c = lane.carry()
+    check("…and the carry runs exactly as before", c.returncode == 0 and "carried forward: Gamma.zip" in c.stdout,
+          f"rc={c.returncode}; {(c.stdout + c.stderr)[-300:]!r}")
+    rel = lane.release()
+    check("the always() release frees every lease it took", rel.returncode == 0 and leases_held(h) == [],
+          f"rc={rel.returncode}; {rel.stderr[-200:]!r}")
+
+    # ── (b) moved to an OLDER publication this bake covers — re-bound, and the carry then succeeds. ──
+    print("\n#1785 (b): a sibling sealed c1 while this run baked c2 from the c0 publication:")
+    h.reset()
+    plant_publication(h, c0, "Plugins-run-P0")
+    lane = Lane(h, work, repo, c2, "7002")
+    _, scope = lane.scope()
+    lane.bake_what_scope_rebuilt(scope)
+    plant_publication(h, c1, "Plugins-run-P1")
+    before = lane.carry()
+    check("NEGATIVE CONTROL (the defect): without the re-bind the carry refuses — the publication moved",
+          before.returncode != 0 and "The publication moved between the read and the carry" in before.stdout,
+          f"rc={before.returncode}")
+    for f in lane.bake.glob("Gamma.zip"):
+        f.unlink()   # what the refused carry fetched is not part of this bake
+    r = lane.rebind(scope)
+    o = lane.outputs()
+    check("re-read under the lock, c1…c2 affects only Beta, which this bake rebuilt: rebind=rebound",
+          r.returncode == 0 and o.get("rebind") == "rebound" and o.get("publish") == "true"
+          and (lane.state / "published-commit.txt").read_text().strip() == c1
+          and (lane.state / "published-publication.txt").read_text().strip() == "Plugins-run-P1",
+          f"rc={r.returncode}, outputs={o}; {(r.stdout + r.stderr)[-500:]!r}")
+    c = lane.carry()
+    check("…and the carry then takes Gamma from the LIVE publication, bound to its stamp",
+          c.returncode == 0 and "carried forward: Gamma.zip" in c.stdout
+          and "Plugins-run-P1" in (lane.bake / "Gamma.zip").read_text(),
+          f"rc={c.returncode}; {(c.stdout + c.stderr)[-400:]!r}")
+    lane.release()
+
+    # ── (a) moved to a publication that already holds this content — nothing to publish, green. ──
+    for live, label in ((c2, "the same commit"), (c3, "a NEWER commit containing it")):
+        print(f"\n#1785 (a): a sibling sealed {label} while this run baked c2:")
+        h.reset()
+        plant_publication(h, c0, "Plugins-run-P0")
+        lane = Lane(h, work, repo, c2, "7003")
+        _, scope = lane.scope()
+        lane.bake_what_scope_rebuilt(scope)
+        plant_publication(h, live, "Plugins-run-Plive")
+        r = lane.rebind(scope)
+        o = lane.outputs()
+        check(f"a live publication of {label} supersedes this run: green, publish=false",
+              r.returncode == 0 and o.get("rebind") == "superseded" and o.get("publish") == "false",
+              f"rc={r.returncode}, outputs={o}; {(r.stdout + r.stderr)[-400:]!r}")
+        check("…and the state the scope read is left as it was (nothing is carried or published)",
+              (lane.state / "published-commit.txt").read_text().strip() == c0)
+        lane.release()
+
+    # ── (c) moved to a publication this bake does NOT cover — refused, as before. ──
+    # The measured shape: a REVERT between the two baselines. c0…r2 nets out Gamma (changed, then
+    # reverted), so the narrowed bake did not rebuild it; the sibling sealed r1, where Gamma IS
+    # changed, so carrying the live Gamma would seal r1's Gamma under r2.
+    rrepo, (r0, r1, r2) = content_repo(work, "content-revert", [
+        ("Gamma", "Gamma v1\n"), ("Gamma", "Gamma v0\n")])
+    (rrepo / "Beta" / "module.txt").write_text("Beta v2\n")
+    git(rrepo, "commit", "-q", "-am", "Beta v2")
+    r3 = git(rrepo, "rev-parse", "HEAD")
+    print("\n#1785 (c): a sibling sealed a commit whose Gamma this bake did not rebuild:")
+    h.reset()
+    plant_publication(h, r0, "Plugins-run-P0")
+    lane = Lane(h, work, rrepo, r3, "7004")
+    _, scope = lane.scope()
+    check("the fixture narrows to Beta alone (Gamma's change was reverted before this head)",
+          scope == "narrowed"
+          and json.loads((lane.state / "affected.json").read_text())["affected"] == ["Beta"],
+          f"scope={scope!r}")
+    lane.bake_what_scope_rebuilt(scope)
+    plant_publication(h, r1, "Plugins-run-P1")
+    r = lane.rebind(scope)
+    o = lane.outputs()
+    check("re-read under the lock, Gamma is affected and was NOT rebuilt: refused, red, named",
+          r.returncode != 0 and "Carry-forward refused" in r.stdout and "Gamma" in r.stdout
+          and o.get("publish") != "true",
+          f"rc={r.returncode}, outputs={o}; {(r.stdout + r.stderr)[-500:]!r}")
+    check("…the original state is untouched (nothing re-bound, nothing written)",
+          (lane.state / "published-commit.txt").read_text().strip() == r0)
+    rel = lane.release()
+    check("…and the release still frees the lock after the refusal", rel.returncode == 0 and leases_held(h) == [],
+          f"rc={rel.returncode}")
+
+    # ── (b) for a FULL bake: everything was rebuilt, so any moved publication is followed. ──
+    print("\n#1785 (b, full bake): the publication moved under a bake that rebuilt everything:")
+    h.reset()
+    plant_publication(h, r0, "Plugins-run-P0")
+    lane = Lane(h, work, rrepo, r3, "7005")
+    lane.scope()
+    lane.bake_what_scope_rebuilt("full")
+    plant_publication(h, r1, "Plugins-run-P1")
+    r = lane.rebind("full")
+    o = lane.outputs()
+    check("a full bake follows the live publication: rebind=rebound, publish=true",
+          r.returncode == 0 and o.get("rebind") == "rebound" and o.get("publish") == "true",
+          f"rc={r.returncode}, outputs={o}; {(r.stdout + r.stderr)[-400:]!r}")
+    lane.release()
 
 
 def main() -> int:

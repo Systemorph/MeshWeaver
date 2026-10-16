@@ -3547,6 +3547,13 @@ jobs:
           # repository. Stated explicitly rather than left to the script's fallback, so no live
           # publisher depends on a default that is only right by coincidence (MeshWeaver#3583).
           BAKE_CONTENT_REPOSITORY: ${{ github.repository }}
+          # Read-only (`contents: read` is this job's whole grant): publish-bake-bundles.sh orders the
+          # sealed commit against this bake's through the compare API and refuses to seal an OLDER
+          # commit over a NEWER one. Without a token every comparison read "could not order …
+          # republishing as before" (both runs of the MeshWeaver#6877 incident), so the guard was a
+          # no-op in this lane. The content repository IS this repository, so the run's own token
+          # can read it.
+          GH_TOKEN: ${{ github.token }}
           # The exact publication, materialised locally AFTER every share sealed — the directory
           # the fleet-registry push below publishes (Doc/Architecture/PluginBundlesInTheRegistry).
           BAKE_PUBLICATION_DIR: ${{ runner.temp }}/publication
