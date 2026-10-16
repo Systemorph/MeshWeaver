@@ -248,6 +248,11 @@ The first configured feed refuses every connection, and some cases add a local f
 - A cache hydration is paused after writing the nuspec and the marker but before the assembly. A
   second resolver reading in that window must not accept the half-written folder, and it ends with
   the finished package.
+- A folder that passes the existence checks and is deleted by a concurrent repair before its
+  manifest is read counts as a local miss, never a failure: resolution goes on to the feed and the
+  install lock.
+- Every interleaving wait in these tests is asserted. A missed window fails the test instead of
+  passing without having exercised it.
 
 ## What pins it
 

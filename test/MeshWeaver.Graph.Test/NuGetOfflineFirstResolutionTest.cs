@@ -248,7 +248,9 @@ public sealed class NuGetOfflineFirstResolutionTest : IDisposable
         {
             if (identity.Id != "Acme.Offline.B") return;
             Volatile.Write(ref secondParked, 1);
-            SpinWait.SpinUntil(() => Volatile.Read(ref releaseSecond) == 1, TimeSpan.FromSeconds(60));
+            if (!SpinWait.SpinUntil(() => Volatile.Read(ref releaseSecond) == 1, TimeSpan.FromSeconds(60)))
+                throw new InvalidOperationException(
+                    "the parked resolution was never released — the interleaving under test did not happen");
         };
 
         var secondRun = Task.Run(() => second.ResolveAsync(request, targetFramework: null, ct: ct), ct);
@@ -272,6 +274,39 @@ public sealed class NuGetOfflineFirstResolutionTest : IDisposable
         firstResult.AssemblyPaths.Should().Contain(p => p.EndsWith("Acme.Offline.B.dll", StringComparison.Ordinal))
             .And.OnlyContain(p => File.Exists(p));
         secondResult.AssemblyPaths.Should().Contain(p => p.EndsWith("Acme.Offline.B.dll", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// A lock-free reader passes the existence checks of a folder that a concurrent repair deletes
+    /// before the reader opens its manifest. The vanished folder is a local MISS: resolution goes on
+    /// to the feed and the install, it does not abort with the file-system exception.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task FolderDeletedBetweenCheckAndManifestRead_IsAMissNotAFailure()
+    {
+        WriteConfig(withLocalFeed: true);
+        Install("Acme.Offline.A", "1.0.0", "Acme.Offline.B", "1.0.0");
+        Install("Acme.Offline.B", "1.0.0", declaredId: "Acme.Intruder");
+        Publish("Acme.Offline.B", "1.0.0");
+        var folderB = InstallFolder("Acme.Offline.B", "1.0.0");
+        var deleted = 0;
+
+        var resolver = ColdResolver();
+        resolver.OnBeforeManifestRead = path =>
+        {
+            // The repair another resolution runs under the install lock, landing in the window.
+            if (string.Equals(path, folderB, StringComparison.Ordinal) && Interlocked.Exchange(ref deleted, 1) == 0)
+                Directory.Delete(path, recursive: true);
+        };
+
+        var result = await resolver.ResolveAsync(
+            [new NuGetPackageReference("Acme.Offline.A", "1.0.0")],
+            targetFramework: null,
+            ct: TestContext.Current.CancellationToken);
+
+        Volatile.Read(ref deleted).Should().Be(1, "the folder vanished inside the window under test");
+        result.AssemblyPaths.Should().Contain(p => p.EndsWith("Acme.Offline.B.dll", StringComparison.Ordinal))
+            .And.OnlyContain(p => File.Exists(p));
     }
 
     private int readerRefused;
@@ -314,7 +349,9 @@ public sealed class NuGetOfflineFirstResolutionTest : IDisposable
             // The reader either refuses the folder (and will queue on the install lock) or, if the
             // half-written folder is visible, completes with it. Either way the hydration resumes.
             SpinWait.SpinUntil(() => Volatile.Read(ref readerRefused) == 1 || reading.IsCompleted,
-                TimeSpan.FromSeconds(60));
+                    TimeSpan.FromSeconds(60))
+                .Should().BeTrue("the reader decides about the folder WHILE the hydration is paused — "
+                    + "otherwise this test never exercised the window");
         }
         finally
         {
@@ -359,7 +396,9 @@ public sealed class NuGetOfflineFirstResolutionTest : IDisposable
             File.WriteAllText(Path.Combine(targetPackageFolder, ".nupkg.metadata"),
                 """{ "version": 2, "contentHash": "fixture", "source": null }""");
             Volatile.Write(ref paused, 1);
-            SpinWait.SpinUntil(() => Volatile.Read(ref resume) == 1, TimeSpan.FromSeconds(60));
+            if (!SpinWait.SpinUntil(() => Volatile.Read(ref resume) == 1, TimeSpan.FromSeconds(60)))
+                throw new InvalidOperationException(
+                    "the paused hydration was never resumed — the interleaving under test did not happen");
             File.WriteAllBytes(Path.Combine(targetPackageFolder, "lib", "net10.0", packageId + ".dll"), [0x4D, 0x5A]);
             return Task.FromResult(true);
         }

@@ -403,6 +403,7 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver
 
         try
         {
+            OnBeforeManifestRead?.Invoke(installPath);
             var nuspec = new NuspecReader(nuspecPath);
             var declared = nuspec.GetIdentity();
             if (string.Equals(declared.Id, identity.Id, StringComparison.OrdinalIgnoreCase)
@@ -413,6 +414,17 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver
                 installPath, declared.Id, declared.Version.ToNormalizedString(), identity.Id, version);
             return null;
         }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            // The folder passed the existence checks and was gone by the time the manifest was read:
+            // another resolution is repairing it under the install lock (a refused folder is deleted
+            // there). That is a local MISS, exactly as if the folder had never been there — the
+            // caller goes on to the feed and the install lock, which waits for that repair.
+            MsLogging.LoggerExtensions.LogDebug(logger, ex,
+                "Package folder {Path} for {Id} {Version} disappeared while it was read; treating it as not installed",
+                installPath, identity.Id, version);
+            return null;
+        }
         catch (Exception ex) when (ex is InvalidDataException or System.Xml.XmlException or PackagingException)
         {
             MsLogging.LoggerExtensions.LogWarning(logger, ex,
@@ -421,6 +433,13 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver
             return null;
         }
     }
+
+    /// <summary>
+    /// Test seam: called with a package folder after it passed the existence checks and before its
+    /// manifest is read. A concurrent repair can delete the folder in exactly that window, so a test
+    /// deletes it here to make the interleaving deterministic. Null in production.
+    /// </summary>
+    internal Action<string>? OnBeforeManifestRead { get; set; }
 
     /// <summary>
     /// Test seam: called with the package identity after the lock-free check refused its folder
