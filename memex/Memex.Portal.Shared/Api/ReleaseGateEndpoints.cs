@@ -1,3 +1,4 @@
+using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using System.Text.Json;
 using Memex.Portal.Shared.SelfUpdate;
@@ -379,30 +380,99 @@ public static class ReleaseGateEndpoints
                         { error = "A complete, internally consistent combo verification is required." }));
 
                 var expected = JsonSerializer.Serialize(verdict, InstanceComboAssembler.Json);
-                return UpdatePolicyNodeType.RecordVerification(hub, verdict)
-                    // Update is optimistic across hubs. A 200 promises that the owning node has
-                    // recorded this exact verdict, so observe its reconciled state before replying.
-                    .SelectMany(_ => Observable.Create<IResult>(observer =>
-                    {
-                        using (AccessContextScope.AsSystem(hub.ServiceProvider.GetRequiredService<AccessService>()))
-                            return hub.GetWorkspace().GetMeshNodeStream(UpdatePolicyNodeType.NodePath)
-                                .Select(node => UpdatePolicyNodeType.Parse(node, hub.JsonSerializerOptions)
-                                    .VerificationFor(verdict.CandidateTag))
-                                .Where(recorded => JsonSerializer.Serialize(recorded,
-                                    InstanceComboAssembler.Json) == expected)
-                                .Take(1)
-                                .Select(_ => (IResult)Results.Ok(new
-                                    { recorded = true, candidateTag = verdict.CandidateTag }))
-                                .Subscribe(observer);
-                    }))
-                    .Timeout(TimeSpan.FromSeconds(30))
-                    .Do(_ => logger?.LogInformation(
-                        "Build {Repository} run {RunId} recorded combo verdict {Verdict} for {Candidate}",
-                        build.Repository, build.Claims.RunId, verdict.Verdict, verdict.CandidateTag));
+                return RecordAndConfirm(
+                        UpdatePolicyNodeType.RecordVerification(hub, verdict),
+                        // Update is optimistic across hubs. A 200 promises that the owning node has
+                        // recorded this exact verdict, so observe its reconciled state before replying.
+                        () => Observable.Create<IResult>(observer =>
+                        {
+                            using (AccessContextScope.AsSystem(hub.ServiceProvider.GetRequiredService<AccessService>()))
+                                return hub.GetWorkspace().GetMeshNodeStream(UpdatePolicyNodeType.NodePath)
+                                    .Select(node => UpdatePolicyNodeType.Parse(node, hub.JsonSerializerOptions)
+                                        .VerificationFor(verdict.CandidateTag))
+                                    .Where(recorded => JsonSerializer.Serialize(recorded,
+                                        InstanceComboAssembler.Json) == expected)
+                                    .Take(1)
+                                    .Do(_ => logger?.LogInformation(
+                                        "Build {Repository} run {RunId} recorded combo verdict {Verdict} for {Candidate}",
+                                        build.Repository, build.Claims.RunId, verdict.Verdict, verdict.CandidateTag))
+                                    .Select(_ => (IResult)Results.Ok(new
+                                        { recorded = true, candidateTag = verdict.CandidateTag }))
+                                    .Subscribe(observer);
+                        }),
+                        VerificationDeadline,
+                        Scheduler.Default,
+                        phase => VerificationTimedOut(phase, verdict, build, logger));
             })
             .Catch<IResult, JsonException>(_ => Observable.Return(Results.BadRequest(new
                 { error = "The combo verification body is not valid JSON." })));
     }
+
+    /// <summary>How long a verdict's write and its confirmation may take, together.</summary>
+    internal static readonly TimeSpan VerificationDeadline = TimeSpan.FromSeconds(30);
+
+    /// <summary>The verdict's write to <c>Admin/UpdatePolicy</c> had not completed when the deadline expired.</summary>
+    internal const string WritePhase = "write";
+
+    /// <summary>The write completed, but <c>Admin/UpdatePolicy</c> never showed this exact verdict.</summary>
+    internal const string ConfirmPhase = "confirm";
+
+    /// <summary>
+    /// Records a verdict and confirms it, under ONE deadline, and answers an expired deadline as a
+    /// response naming the phase that had not completed (MeshWeaver#6790).
+    ///
+    /// <para>🚨 The deadline used to escape as a bare <see cref="TimeoutException"/>: Rx creates it
+    /// without throwing it, so it has no frames, and the endpoint's <see cref="Task"/> faulted into
+    /// an unhandled 500 that named neither the route nor which of the two waits had stalled. Measured
+    /// on 2026-10-15: the CI verifier's POST for one candidate answered 500 after 31 s, and the
+    /// node's version history shows the verdict was not written — the stall was in the write, which
+    /// nothing in the response or the log could say. The expiry is now a 504 carrying
+    /// <c>phase</c> = <see cref="WritePhase"/> or <see cref="ConfirmPhase"/>.</para>
+    ///
+    /// <para>🚨 Only THIS deadline is answered: it is <c>Timeout</c>'s FALLBACK, never a
+    /// <c>Catch</c> of <see cref="TimeoutException"/>. A <see cref="TimeoutException"/> raised
+    /// upstream (a write's own initial-state bound, say) is a fault, not this route's deadline, and
+    /// still propagates to the exception handler like every other fault.</para>
+    ///
+    /// <para>🚨 A 504 does NOT say the verdict is absent: unsubscribing detaches this request from a
+    /// write already queued, it does not cancel it, so the verdict may still land after the answer.
+    /// The outcome is UNKNOWN; the caller re-reads <c>Admin/UpdatePolicy</c> or re-posts (the record
+    /// is an upsert by candidate tag, so a re-post is idempotent).</para>
+    /// </summary>
+    internal static IObservable<IResult> RecordAndConfirm(
+        IObservable<System.Reactive.Unit> write,
+        Func<IObservable<IResult>> confirmed,
+        TimeSpan deadline,
+        IScheduler scheduler,
+        Func<string, IResult> timedOut) =>
+        Observable.Defer(() =>
+        {
+            // Per subscription: which wait the deadline found unfinished.
+            var phase = WritePhase;
+            return write
+                .Do(_ => Volatile.Write(ref phase, ConfirmPhase))
+                .SelectMany(_ => confirmed())
+                .Timeout(deadline,
+                    Observable.Defer(() => Observable.Return(timedOut(Volatile.Read(ref phase)))),
+                    scheduler);
+        });
+
+    private static IResult VerificationTimedOut(
+        string phase, ComboVerification verdict, AuthenticatedBuild build, ILogger? logger)
+    {
+        var seconds = VerificationDeadline.TotalSeconds;
+        var what = phase == WritePhase
+            ? $"the write to {UpdatePolicyNodeType.NodePath} had not completed within {seconds:0} s"
+            : $"the write completed, but {UpdatePolicyNodeType.NodePath} did not show this exact verdict within {seconds:0} s";
+        what += $"; whether the verdict is recorded is UNKNOWN (a queued write may still land) — re-read {UpdatePolicyNodeType.NodePath}, or re-post (an upsert by candidate tag, so idempotent)";
+        logger?.LogWarning(
+            "Combo verdict {Verdict} for {Candidate} from {Repository} run {RunId}: {Phase} phase did not complete — answered 504: {What}",
+            verdict.Verdict, verdict.CandidateTag, build.Repository, build.Claims.RunId, phase, what);
+        return Results.Json(
+            new { error = $"Timed out: {what}.", phase, candidateTag = verdict.CandidateTag },
+            statusCode: StatusCodes.Status504GatewayTimeout);
+    }
+
 
     private static IObservable<IResult> StateCombo(HttpContext http, ILogger? logger) =>
         http.RequestServices.GetRequiredService<InstanceComboReader>().Read()
