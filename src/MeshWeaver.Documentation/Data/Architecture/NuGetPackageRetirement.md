@@ -1,6 +1,6 @@
 ---
 Name: "NuGet Package Retirement"
-Abstract: "Three packages survive — the Aspire integration, the dotnet new template and the memex CLI (restored, following 3-latest). Everything else under the MeshWeaver prefix is retired and unlisted. Why, what unlisting does and does not do, where the retirement tool lives, and the ground rule that keeps the survivor count at two."
+Abstract: "Three packages survive — the Aspire integration, the dotnet new template and the memex CLI (restored, with its own version). Everything else under the MeshWeaver prefix is retired and unlisted. Why, what unlisting does and does not do, where the retirement tool lives, and the ground rule that keeps the survivor count at two."
 Icon: "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><rect width='24' height='24' rx='4' fill='#455a64'/><path d='M12 5l5 2.75v5.5L12 16l-5-2.75v-5.5z' fill='none' stroke='white' stroke-width='1.5' stroke-linejoin='round'/><path d='M7 7.75L12 10.5l5-2.75M12 10.5V16' stroke='white' stroke-width='1.5' fill='none' stroke-linejoin='round'/><path d='M5 19h14' stroke='#ef5350' stroke-width='2' stroke-linecap='round'/></svg>"
 Authors:
   - "Roland Buergi"
@@ -85,24 +85,29 @@ offering consumers packages nobody builds against and nobody patches.
 
 ---
 
-### 1a. The `memex` CLI is published again, and it follows `3-latest`
+### 1a. The `memex` CLI is published again, with its own version
 
-Policy [`cli-on-nuget-follows-3-latest`](../PolicyNotProse) — the register carries its date and who set it.
+Policy [`cli-thin-wrapper-own-version`](../PolicyNotProse) — the register carries its date and who set it.
 
 `MeshWeaver.Cli` was retired with the rest on 2026-09-07 (its `3.0.0-rc1`…`rc13` stay unlisted).
 It comes back because a customer's **dedicated build server** needs the `memex` verbs without a
-MeshWeaver checkout and without pulling the `mw-plugin-test` image first. Like the two survivors it
-is an entry point, not platform bytes: it references `System.CommandLine` and no framework assembly.
+MeshWeaver checkout. Like the two survivors it is an entry point, not platform bytes: it references
+`System.CommandLine` and no framework assembly.
+
+It is distributed the way `gh` is: a thin client with its own version line, released when the client
+changes, not with every server build. The mesh verbs go over the REST API and `memex build …` runs
+the platform's builder inside the platform image, so a new platform build does not need a new CLI.
 
 | | |
 |---|---|
-| Version | the **armed** `3.<minor>.<run>` — the build `3-latest` names. `dotnet tool install -g MeshWeaver.Cli` without `--version` takes nuget.org's highest stable, which is that build's CLI |
-| When | every time main-cd's `arm` arms a set: its `publish-cli` job dispatches `publish-packages.yml` with `packages=cli`, `version=<armed version>`, `ref=<armed core commit>`. A release tag publishes it beside the Aspire integration |
-| Bytes | packed by `publish-packages.yml` at the armed commit (`-p:Version`, the publishable string only, #3022), asserted to be a `DotnetTool` package carrying `tools/net10.0/any/memex.dll`, then verified LISTED |
-| Why the run number is safe on nuget.org | `3.<minor>.<run>` sorts as SemVer exactly as the fleet ranks builds (policy `platform-semver-versioning`); the `-ci.<n>` label that made `rc9` outrank `rc13` is refused by the lane |
-| When it fails | main-cd's `publish-cli` waits for the run it dispatched and is red unless it is green. The alert is the `cli-publish-failure` sentinel, **not** CD's `ci-failure` (which `verify-images` closes on any image promotion), and it is **derived, not reported**: `.github/scripts/cli-publish-alert.sh` reads the version `3-latest` names (the GHCR image label) and whether nuget.org lists `MeshWeaver.Cli` at it, then opens, keeps or closes the issue from those two facts, waiting while a publication of that version is in flight. It runs after every CLI publication and every arming, under one concurrency group, so a reconcile that is dropped, late or out of order loses nothing |
-| Concurrency | one group per (packages, version, dry-run): nothing supersedes a CLI publication, every armed version publishes, and a cancelled run counts as a failure |
+| Version | its own: `<Version>` in `src/MeshWeaver.Cli/MeshWeaver.Cli.csproj`, starting at `3.0.0`. Bumped by pull request when the CLI changes |
+| When | on demand: dispatch `publish-packages.yml` with `packages=cli`. The lane reads the csproj version and refuses any other; a version already on nuget.org is skipped |
+| Bytes | packed by `publish-packages.yml`, asserted to be a `DotnetTool` package carrying `tools/net10.0/any/memex.dll`, then verified LISTED |
 | Retirement sweep | `src/MeshWeaver.Cli` is packable again, so `orphaned-nuget-packages.py` derives `MeshWeaver.Cli` as packed and never unlists it; `PackableProjectReadmeTest` holds the packable set at two projects |
+
+A first design (2026-10-15, `cli-on-nuget-follows-3-latest`) published the CLI on every CD arming at
+the platform's `3.<minor>.<run>`. It was withdrawn the next day, before it ever published: a thin
+client does not need hundreds of versions.
 
 CI still reaches the verbs through the `mw-plugin-test` image; nothing in the fleet installs the
 tool. The package is for people and build servers outside it.

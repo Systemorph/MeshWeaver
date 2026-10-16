@@ -8,14 +8,13 @@
     <RootNamespace>MeshWeaver.Cli</RootNamespace>
     <AssemblyName>memex</AssemblyName>
 
-    <!-- 🚨 A NuGet TOOL AGAIN, following `3-latest` (policy `cli-on-nuget-follows-3-latest`,
-         Doc/Architecture/PolicyNotProse; Doc/Architecture/NuGetPackageRetirement §1a). Retired with
-         the other packages, restored because a customer's dedicated build server needs
-         `dotnet tool install -g MeshWeaver.Cli` without a MeshWeaver checkout. Every time main-cd's
-         `arm` arms a set it dispatches publish-packages.yml with packages=cli, the ARMED version
-         (3.<minor>.<run>) and the armed core commit, so nuget.org's highest stable MeshWeaver.Cli is
-         the CLI of the build `3-latest` names. Lanes still run the verbs through the mw-plugin-test
-         image; this package is for people and build servers outside the fleet. -->
+    <!-- 🚨 A NuGet TOOL with its OWN VERSION (policy `cli-thin-wrapper-own-version`,
+         Doc/Architecture/PolicyNotProse; Doc/Architecture/NuGetPackageRetirement §1a). Like `gh`, the
+         CLI is a thin client — REST for the mesh verbs, the platform IMAGE for build and test — so
+         it is released rarely and NOT with every platform build: bump <Version> when the CLI itself
+         changes, then dispatch publish-packages.yml with packages=cli. A customer's dedicated build
+         server installs it with `dotnet tool install -g MeshWeaver.Cli` and needs no checkout. -->
+    <Version>3.0.0</Version>
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>memex</ToolCommandName>
     <PackageId>MeshWeaver.Cli</PackageId>

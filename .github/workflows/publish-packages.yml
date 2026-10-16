@@ -9,18 +9,17 @@ name: Publish the surviving NuGet packages
 #   MeshWeaver.Aspire.Hosting.Memex   memex/aspire/Memex.Aspire.Hosting  (THIS repo)  ← published here, on a release tag
 #   MeshWeaver.MemexTemplate          tools/MeshWeaver.MemexTemplate.Pack (MeshWeaver.Plugins)
 #
-# 🆕 A THIRD, RESTORED — the `memex` CLI, following `3-latest` (policy `cli-on-nuget-follows-3-latest`):
+# 🆕 A THIRD, RESTORED — the `memex` CLI, with its OWN version (policy `cli-thin-wrapper-own-version`):
 #
-#   MeshWeaver.Cli                    src/MeshWeaver.Cli                  (THIS repo)  ← published here, on every ARMING
+#   MeshWeaver.Cli                    src/MeshWeaver.Cli                  (THIS repo)  ← published here, on a dispatch with packages=cli
 #
-# policy `cli-on-nuget-follows-3-latest` (Doc/Architecture/PolicyNotProse): a customer's dedicated build server installs the CLI with
-# `dotnet tool install` and has no MeshWeaver checkout. main-cd's `arm` dispatches THIS lane with
-# packages=cli, version=<the armed 3.<minor>.<run>> and ref=<the armed core commit> whenever it arms
-# a set, so the highest stable MeshWeaver.Cli on nuget.org is always the CLI of the build `3-latest`
-# names. The SemVer-era notation is what makes that safe: `3.<minor>.<run>` sorts on nuget.org
-# exactly as the fleet ranks it (the `-ci.<n>` defect described below cannot recur — that label is
-# refused here). The CLI references no MeshWeaver framework assembly (System.CommandLine only), so
-# packing it at the armed commit is the same "entry point, not platform bytes" case as the adapter.
+# policy `cli-thin-wrapper-own-version` (Doc/Architecture/PolicyNotProse): a customer's dedicated build server installs the CLI
+# with `dotnet tool install` and has no MeshWeaver checkout. Like `gh`, the CLI is a thin client (REST
+# for the mesh verbs, the platform IMAGE for build and test), so it is versioned by its own csproj
+# <Version> and released RARELY — when the CLI changes, never with every platform build. A dispatch
+# with packages=cli publishes the version MeshWeaver.Cli.csproj declares and refuses any other.
+# The CLI references no MeshWeaver framework assembly (System.CommandLine only) — the same
+# "entry point, not platform bytes" case as the adapter.
 #
 # 🚨 ONLY THE FIRST IS PUBLISHED BY THIS LANE, and that is deliberate — see "the template is
 # blocked" below. Both survive the retirement; only one can ship without a product decision.
@@ -90,10 +89,8 @@ name: Publish the surviving NuGet packages
 # nuget.org is reached by Trusted Publishing (GitHub OIDC via NuGet/login — no stored NuGet secret), exactly as unlist-orphaned-packages.yml does. The App token replaces
 # the stored GitHub PAT, which is the one this repository could actually stop storing.
 
-# The run-name is how main-cd's `publish-cli` finds the run it dispatched ("Publish cli <version>")
-# and how the CLI alert sees a publication in flight. A dry run says so in its title, so neither can
-# ever take a dry run — which pushes nothing — for a publication (#6843 review).
-run-name: "Publish ${{ inputs.packages || 'all' }} ${{ inputs.version || github.ref_name }}${{ inputs.dry-run && ' (dry run)' || '' }}"
+# The run-name says what is published, and a dry run — which pushes nothing — says so in its title.
+run-name: "Publish ${{ inputs.packages || 'aspire' }} ${{ inputs.version || github.ref_name }}${{ inputs.dry-run && ' (dry run)' || '' }}"
 
 on:
   push:
@@ -102,18 +99,18 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to publish (e.g. 3.1.0, or an armed build 3.1.10936). Required on a dispatch; the tag supplies it otherwise."
+        description: "Version to publish (e.g. 3.1.0). Required for the Aspire integration on a dispatch (the tag supplies it otherwise); for the CLI, empty = the <Version> MeshWeaver.Cli.csproj declares, and any other value is refused."
         type: string
         default: ""
       ref:
-        description: "Commit to pack (main-cd's `arm` passes the ARMED core commit). Empty = the dispatched ref."
+        description: "Commit to pack. Empty = the dispatched ref."
         type: string
         default: ""
       packages:
-        description: "all = the Aspire integration + the CLI (a release); cli = the CLI alone (an arming)"
+        description: "aspire = the Aspire integration (a release); cli = the memex CLI, at its own csproj version"
         type: choice
-        options: [all, cli]
-        default: all
+        options: [aspire, cli]
+        default: aspire
       dry-run:
         description: "Pack and verify, but do not push to nuget.org"
         type: boolean
@@ -122,15 +119,10 @@ on:
 permissions:
   contents: read
 
-# 🚨 ONE GROUP PER (packages, version, dry-run) — never one shared group (#6843 review). A shared
-# group keeps one running + ONE pending run, so every later dispatch — a newer arming, or merely a
-# dry run — silently CANCELLED the pending CLI publication, and main-cd's `publish-cli` could not tell
-# "superseded by a newer publication" from "replaced by a dry run that pushed nothing". Keyed this
-# way, nothing ever supersedes a CLI publication: every armed version publishes, and a cancelled
-# run is a failure. Two runs of the SAME version still serialise (`--skip-duplicate` makes the
-# second a no-op), and different versions push in parallel, which nuget.org accepts.
+# One group per (packages, version, dry-run): a dry run never cancels a publication, and two runs of
+# the SAME version serialise (`--skip-duplicate` makes the second a no-op).
 concurrency:
-  group: publish-packages-${{ inputs.packages || 'all' }}-${{ inputs.version || github.ref_name }}${{ inputs.dry-run && '-dry' || '' }}
+  group: publish-packages-${{ inputs.packages || 'aspire' }}-${{ inputs.version || github.ref_name }}${{ inputs.dry-run && '-dry' || '' }}
   cancel-in-progress: false
 
 jobs:
@@ -204,7 +196,13 @@ jobs:
         id: version
         run: |
           set -euo pipefail
-          if [ -n "${{ inputs.version }}" ]; then
+          packages="${{ inputs.packages || 'aspire' }}"
+          if [ "$packages" = cli ]; then
+            # The CLI has its OWN version (policy `cli-thin-wrapper-own-version`): the csproj's, and only that.
+            declared=$(dotnet msbuild meshweaver/src/MeshWeaver.Cli/MeshWeaver.Cli.csproj -getProperty:Version)
+            version="${{ inputs.version }}"; version="${version:-$declared}"
+            [ "$version" = "$declared" ] || { echo "::error::version '$version' is not the <Version> MeshWeaver.Cli.csproj declares ('$declared') — bump the csproj by pull request, then publish"; exit 1; }
+          elif [ -n "${{ inputs.version }}" ]; then
             version="${{ inputs.version }}"
           else
             version="${GITHUB_REF#refs/tags/v}"
@@ -215,12 +213,12 @@ jobs:
           [ "$(echo "$version" | tr -cd '.' | wc -c)" -eq 2 ] || { echo "::error::'$version' is not X.Y.Z"; exit 1; }
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "publishing version $version"
-          # WHICH packages: a tag is a release (both); a dispatch says so. The list drives the pack,
+          # WHICH package: a tag is an Aspire release; a dispatch says so. The list drives the pack,
           # the count assertion and the LISTED verification, so the three can never disagree.
-          case "${{ inputs.packages || 'all' }}" in
-            all) ids="MeshWeaver.Aspire.Hosting.Memex MeshWeaver.Cli" ;;
-            cli) ids="MeshWeaver.Cli" ;;
-            *)   echo "::error::packages='${{ inputs.packages }}' — expected all or cli"; exit 1 ;;
+          case "$packages" in
+            aspire) ids="MeshWeaver.Aspire.Hosting.Memex" ;;
+            cli)    ids="MeshWeaver.Cli" ;;
+            *)      echo "::error::packages='$packages' — expected aspire or cli"; exit 1 ;;
           esac
           echo "ids=$ids" >> "$GITHUB_OUTPUT"
           echo "packages: $ids (from $(git -C meshweaver rev-parse HEAD))"
@@ -247,14 +245,7 @@ jobs:
             -p:PlatformVersion=${{ steps.version.outputs.version }} \
             --output "$RUNNER_TEMP/nupkgs"
 
-      # The CLI takes the version as the publishable string ONLY (-p:Version, #3022: it overrides
-      # $(Version) and no compiled attribute). PlatformVersion is NOT moved to 3.<minor>.<run>,
-      # because PlatformVersionSchemeGuard holds it to a clean line; the armed run number is the
-      # package version, which is all `dotnet tool install` reads.
-      # 🚨 The TOOL properties are passed too (#6843 review): `ref` may be an armed commit from
-      # BEFORE the CLI was packable again (policy `cli-on-nuget-follows-3-latest`), whose csproj inherits IsPackable=false and
-      # would pack nothing. Passing them makes any armed commit publishable; on a current commit
-      # they equal what MeshWeaver.Cli.csproj declares.
+      # The CLI's version is its csproj <Version>, checked equal above; -p:Version restates it.
       - name: Pack the CLI
         if: contains(steps.version.outputs.ids, 'MeshWeaver.Cli')
         run: |
@@ -262,7 +253,6 @@ jobs:
           dotnet pack meshweaver/src/MeshWeaver.Cli/MeshWeaver.Cli.csproj \
             -c Release \
             -p:Version=${{ steps.version.outputs.version }} \
-            -p:IsPackable=true -p:PackAsTool=true -p:ToolCommandName=memex -p:PackageId=MeshWeaver.Cli \
             --output "$RUNNER_TEMP/nupkgs"
 
       # 🚨 A POSITIVE, SPECIFIC signal: the id, at this exact version, and nothing else. `dotnet
@@ -375,37 +365,3 @@ jobs:
             echo "decision recorded in Doc/Architecture/NuGetPackageRetirement."
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # ──────────────── THE CLI'S OWN ALERT, RECONCILED FROM THE TRUTH ────────────────
-  # Not CD's `ci-failure`: `verify-images` closes that after any image promotion, which proves
-  # nothing about nuget.org (#6843 review). The `cli-publish-failure` sentinel is DERIVED, not
-  # reported: .github/scripts/cli-publish-alert.sh reads the version `3-latest` names and whether
-  # nuget.org lists MeshWeaver.Cli at it, and opens or closes the issue from those two facts. So
-  # this job passes no outcome, and a reconcile that is dropped (the group keeps one pending),
-  # late or out of order loses nothing — the next one reads the same truth. One group across both
-  # workflows (main-cd's `cli-alert` too), so no two interleave a lookup with a create.
-  cli-alert:
-    name: "CLI publish alert (reconciled: 3-latest vs nuget.org)"
-    needs: [preflight, publish]
-    if: always() && !inputs.dry-run
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    concurrency:
-      group: cli-publish-alert
-      cancel-in-progress: false
-    permissions:
-      issues: write
-      actions: read     # is a publication of the target in flight
-      contents: read
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          sparse-checkout: |
-            .github/scripts
-            scripts/check-issue-taxonomy.py
-          sparse-checkout-cone-mode: false
-      - name: Reconcile the cli-publish-failure sentinel
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          SELF_RUN_ID: ${{ github.run_id }}
-        run: bash .github/scripts/cli-publish-alert.sh "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
