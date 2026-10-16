@@ -482,12 +482,30 @@ public static class InstanceReboot
             ? current with
             {
                 Status = InstanceRebootStatus.Failed,
-                Failure = current.Failure is null ? $"stalled: {why}" : $"{current.Failure}; stalled: {why}",
+                Failure = current.Failure is null ? $"{StalledMarker}{why}" : $"{current.Failure}; {StalledMarker}{why}",
                 CompletedAt = now,
                 RequestedEndIfStalledAt = null,
                 Log = current.Log.Add($"{now:u} ended as Failed — stalled: {why}"),
             }
             : current with { RequestedEndIfStalledAt = null };
+
+    /// <summary>The marker <see cref="EndIfStalled"/> writes into <see cref="InstanceRebootRequest.Failure"/>,
+    /// before the stall's sentence — what <see cref="EndedAsStalled"/> reads back.</summary>
+    public const string StalledMarker = "stalled: ";
+
+    /// <summary>
+    /// Why <paramref name="request"/> was ENDED as stalled — read back from the persisted
+    /// <see cref="InstanceRebootRequest.Failure"/> marker (<see cref="StalledMarker"/>) — or null when it
+    /// was not (still open, Done, or Failed for another reason). Pure. Whoever ended it (the reconcile
+    /// pass's question, another process's watchdog), any reader can still name it.
+    /// </summary>
+    public static string? EndedAsStalled(InstanceRebootRequest request)
+    {
+        if (!string.Equals(request.Status, InstanceRebootStatus.Failed, StringComparison.Ordinal) || request.Failure is not { } failure)
+            return null;
+        var at = failure.IndexOf(StalledMarker, StringComparison.Ordinal);
+        return at < 0 ? null : failure[(at + StalledMarker.Length)..];
+    }
 
     /// <summary>
     /// Asks the owner of the request at <paramref name="path"/> to end it if it is stalled: writes

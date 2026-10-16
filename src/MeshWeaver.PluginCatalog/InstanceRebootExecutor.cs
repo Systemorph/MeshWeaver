@@ -274,7 +274,18 @@ public static class InstanceRebootExecutor
 
         private IObservable<Unit> StepModules() =>
             Mark(InstanceRebootSteps.Modules, InstanceRebootStepOutcome.Running, "resolving and landing the newest compatible version of every installed module")
-                .SelectMany(_ => ModuleReloadExecutor.ResolveAndLand(hub, module: null))
+                // Each module whose reload ended is recorded as progress at once (#6625 review), and a write
+                // refused because the request ended answers false: no further module is reloaded.
+                .SelectMany(_ => ModuleReloadExecutor.ResolveAndLandReporting(hub, module: null, (module, outcome) =>
+                    Write(r => r, Line($"module {module}: {(outcome.Failure is { } f ? $"not landed — {f}" : $"landed {outcome.LandedVersion ?? outcome.ServedVersion ?? "?"}")}"))
+                        .Select(_ => true)
+                        .DefaultIfEmpty(false)
+                        .Catch((Exception ex) =>
+                        {
+                            logger?.LogWarning(ex, "[Reboot] {Path}: the progress of module {Module} could not be recorded ({Reason})",
+                                ModuleReloadExecutor.PathOf(hub), module, ex.Message);
+                            return Observable.Return(true);
+                        })))
                 .SelectMany(landed =>
                 {
                     if (landed.Problem is { } problem)

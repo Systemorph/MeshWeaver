@@ -617,6 +617,60 @@ public class InstanceRebootEndedMidStepTest(ITestOutputHelper output) : Instance
     }
 }
 
+/// <summary>
+/// 🚨 MeshWeaver#6625 review: the reboot's Modules step reloads its modules one after another, so a long
+/// batch must be progress all the way through — each module is REPORTED the moment its reload ended,
+/// before the next one starts (<see cref="ModuleReloadExecutor.ResolveAndLandReporting"/>) — and a
+/// report answering <c>false</c> (the reboot ended) reloads no further module.
+/// </summary>
+public class ModuleLandingReportingTest(ITestOutputHelper output) : ModuleReloadScenario(output)
+{
+    private async Task<int> TwoModulesWithANewerVersion(CancellationToken ct)
+    {
+        FloorFixture.AssertTheFloorHolds(Mesh);
+        Registry.ServesSecond = true;
+        Registry.Serve("1.1.0", floor: null);
+        await InstallRunning(Package, Module, ct);
+        await InstallRunning(SecondPackage, SecondModule, ct);
+        Registry.Serve("1.2.0", floor: FloorFixture.Below);
+        return Registry.Downloads.Count;
+    }
+
+    [Fact(Timeout = 240_000)]
+    public async Task EachModuleIsReported_AsItsReloadEnds_BeforeTheNextStarts()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var before = await TwoModulesWithANewerVersion(ct);
+        var reported = ImmutableList<(string Module, int Downloads)>.Empty;
+
+        var landing = await ModuleReloadExecutor.ResolveAndLandReporting(Mesh, module: null, (module, _) => Observable.Defer(() =>
+            {
+                ImmutableInterlocked.Update(ref reported, r => r.Add((module, Registry.Downloads.Count - before)));
+                return Observable.Return(true);
+            }))
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+
+        landing.Problem.Should().BeNull();
+        reported.Select(r => r.Module).Should().Equal([Module, SecondModule], "every module is reported, in order");
+        reported[0].Downloads.Should().Be(1, "the first module is reported before the second module's bundle was fetched");
+        reported[1].Downloads.Should().Be(2);
+        landing.Items.Select(i => i.Module).Should().Equal([Module, SecondModule]);
+    }
+
+    [Fact(Timeout = 240_000)]
+    public async Task AReportAnsweringFalse_ReloadsNoFurtherModule()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var before = await TwoModulesWithANewerVersion(ct);
+
+        var landing = await ModuleReloadExecutor.ResolveAndLandReporting(Mesh, module: null, (_, _) => Observable.Return(false))
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+
+        landing.Items.Select(i => i.Module).Should().Equal([Module], "the reboot ended after the first module");
+        (Registry.Downloads.Count - before).Should().Be(1, "the second module's bundle is never fetched");
+    }
+}
+
 /// <summary>The rollout rule, pure — each refusal with its control.</summary>
 public class RolloutStrategyRuleTest
 {

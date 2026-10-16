@@ -33,7 +33,12 @@ public static class RebootWatchdogDecision
 /// <param name="Decision">A <see cref="RebootWatchdogDecision"/> value.</param>
 /// <param name="Detail">The evidence and, when not fired, why.</param>
 /// <param name="Path">The reboot request it filed, or null.</param>
-public sealed record RebootWatchdogPass(string Decision, string Detail, string? Path = null);
+public sealed record RebootWatchdogPass(string Decision, string Detail, string? Path = null)
+{
+    /// <summary>The reboot requests this pass found ENDED as stalled (recently) — each one also a
+    /// <c>Critical</c> line, once per request per process. Empty when none (MeshWeaver#6625).</summary>
+    public ImmutableList<string> EndedStalled { get; init; } = ImmutableList<string>.Empty;
+}
 
 /// <summary>
 /// 🚨 The instance's own watchdog (<c>Doc/Architecture/InstanceReboot</c> → "Self-trigger"): every
@@ -116,13 +121,18 @@ public sealed class RebootWatchdog
                 {
                     // 🚨 A stalled request no longer holds the self-reboot back (MeshWeaver#6625) — and that is
                     // never silent: each one is a Critical line naming it and why.
-                    foreach (var stalled in previous.Where(r => r.Terminal && r.Stalled is not null))
+                    var endedStalled = previous.Where(r => r.Terminal && r.Stalled is not null).ToImmutableList();
+                    foreach (var stalled in endedStalled)
                         AlarmStalled(logger, stalled);
+                    var named = endedStalled.Select(r => r.Path).ToImmutableList();
                     var (fire, why) = RebootWatchdogRules.Admit(verdict, previous, now, options);
                     if (!fire)
                     {
                         Alarm(logger, verdict, $"WEDGED, self-reboot NOT taken — {why}");
-                        return Observable.Return(new RebootWatchdogPass(RebootWatchdogDecision.Suppressed, $"{verdict.Evidence} — {why}"));
+                        return Observable.Return(new RebootWatchdogPass(RebootWatchdogDecision.Suppressed, $"{verdict.Evidence} — {why}")
+                        {
+                            EndedStalled = named,
+                        });
                     }
                     return InstanceReboot.Request(meshHub, new InstanceRebootRequest
                         {
@@ -138,7 +148,10 @@ public sealed class RebootWatchdog
                             if (!ticket.Accepted)
                             {
                                 Alarm(logger, verdict, $"WEDGED, and the self-reboot could not be filed — {ticket.Refusal}");
-                                return new RebootWatchdogPass(RebootWatchdogDecision.Refused, $"{verdict.Evidence} — {ticket.Refusal}");
+                                return new RebootWatchdogPass(RebootWatchdogDecision.Refused, $"{verdict.Evidence} — {ticket.Refusal}")
+                                {
+                                    EndedStalled = named,
+                                };
                             }
                             Interlocked.Exchange(ref lastFiredTicks, now.UtcTicks);
                             // Always said, never deduplicated: a self-reboot is the event an operator must see.
@@ -146,7 +159,10 @@ public sealed class RebootWatchdog
                                 "[RebootWatchdog] WEDGED — SELF-REBOOT filed at {Path}: {Evidence} (fingerprint {Fingerprint}; "
                                 + "at most one per {Hours} h)", ticket.Path, verdict.Evidence, verdict.Fingerprint,
                                 options.WatchdogMinInterval.TotalHours);
-                            return new RebootWatchdogPass(RebootWatchdogDecision.Fired, verdict.Evidence, ticket.Path);
+                            return new RebootWatchdogPass(RebootWatchdogDecision.Fired, verdict.Evidence, ticket.Path)
+                            {
+                                EndedStalled = named,
+                            };
                         });
                 });
             });
@@ -221,7 +237,7 @@ public sealed class RebootWatchdog
                 .FirstAsync()
                 .Timeout(ActivationRecycle.ReadBudget))
             .Select(answered => InstanceRebootStatus.IsTerminal(answered!.Status)
-                ? record(path, answered) with { Stalled = stalled.Stalled }
+                ? record(path, answered)
                 : record(path, answered) with { Stalled = null })
             .Catch((Exception _) => Observable.Return(stalled with { Stalled = null }));
 
@@ -234,7 +250,14 @@ public sealed class RebootWatchdog
         RebootRecord Record(string path, InstanceRebootRequest request) =>
             new(path, request.Trigger, request.RequestedAt, request.WedgeFingerprint, InstanceRebootStatus.IsTerminal(request.Status))
             {
-                Stalled = InstanceReboot.Stalled(request, now, options.ExecutionWindow, retryUnit),
+                // Open: whether it looks stalled now. Ended: whether it was ENDED as stalled — read from the
+                // persisted marker, so a request ended by the reconcile pass or another process before this
+                // watchdog read it is still named (#6625 review); only a recent end is alarmed on.
+                Stalled = InstanceRebootStatus.IsTerminal(request.Status)
+                    ? request.CompletedAt is { } completed && now - completed <= options.WatchdogRepeatWindow
+                        ? InstanceReboot.EndedAsStalled(request)
+                        : null
+                    : InstanceReboot.Stalled(request, now, options.ExecutionWindow, retryUnit),
             };
         return access.RunAsSystem(() => mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(
                     $"namespace:{InstanceRebootRequest.Namespace} scope:children nodeType:{InstanceRebootRequest.NodeType}"))
@@ -252,7 +275,8 @@ public sealed class RebootWatchdog
                     // open — Take(1) would complete normally and ToList would silently drop it.
                     : access.RunAsSystem(() => meshHub.GetMeshNodeStream(x.Path).FirstAsync().Timeout(ActivationRecycle.ReadBudget))
                         .SelectMany(node => node.ContentAs<InstanceRebootRequest>(meshHub.JsonSerializerOptions) is { } live
-                            ? Record(x.Path, live) is { Stalled: not null } stalled
+                            // Only an OPEN request that looks stalled goes to its owner; an ended one is final.
+                            ? Record(x.Path, live) is { Terminal: false, Stalled: not null } stalled
                                 ? OwnerConfirmed(meshHub, access, x.Path, stalled, now, Record)
                                 : Observable.Return(Record(x.Path, live))
                             : Observable.Return(Record(x.Path, x.Request) with { Stalled = null }))

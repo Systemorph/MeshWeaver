@@ -197,6 +197,26 @@ public class InstanceRebootWatchdogRulesTest
             .Should().Contain("its last step is Sync (Running)");
     }
 
+    /// <summary>#6625 review: an ENDED request is named as stalled from its persisted marker, whoever ended it.</summary>
+    [Fact]
+    public void AnEndedRequest_IsNamedAsStalled_FromItsPersistedMarker()
+    {
+        var ended = InstanceReboot.EndIfStalled(new InstanceRebootRequest
+        {
+            Reason = "x",
+            RequestedAt = Now.AddHours(-5),
+            Status = InstanceRebootStatus.AwaitingRestart,
+            RestartRequestedAt = Now.AddHours(-4),
+            ProgressAt = Now.AddHours(-4),
+            ExecutionWindow = TimeSpan.FromHours(3),
+        }, Now, Options.ExecutionWindow, RetryUnit);
+        InstanceReboot.EndedAsStalled(ended).Should().Contain("no process booted after it has reported");
+        // Controls: Failed for another reason, Done, and an open request are not "ended as stalled".
+        InstanceReboot.EndedAsStalled(ended with { Failure = "Verify: smoke red" }).Should().BeNull();
+        InstanceReboot.EndedAsStalled(ended with { Status = InstanceRebootStatus.Done }).Should().BeNull();
+        InstanceReboot.EndedAsStalled(ended with { Status = InstanceRebootStatus.AwaitingRestart }).Should().BeNull();
+    }
+
     /// <summary>
     /// #6625 review: the end is decided by the OWNER, against its current state. A replica report that
     /// landed after a reader judged the request stalled keeps it open; without it, the owner ends it.
@@ -495,6 +515,29 @@ public class InstanceRebootWatchdogTest(ITestOutputHelper output) : MonolithMesh
         answered.Status.Should().Be(InstanceRebootStatus.Faulted, "the owner saw the late report — not stalled");
         answered.Failure.Should().NotContain("stalled:");
         answered.Replicas.Should().ContainKey("late-pod");
+    }
+
+    /// <summary>
+    /// 🚨 #6625 review — the request was ENDED (by the reconcile pass's question) BEFORE this watchdog read
+    /// it. It is terminal, so it never goes to its owner again — but it is still NAMED: the pass lists it,
+    /// read back from the persisted marker, and the Critical line is written for it.
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task ARequestEndedBeforeTheWatchdogReadIt_IsStillNamed()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var stalled = await FileFaulted("ended-first-6625", DateTimeOffset.UtcNow.AddHours(-5), ct);
+        var asked = await InstanceReboot.FailStalled(Mesh, TimeSpan.FromHours(3), TimeSpan.FromMinutes(30), DateTimeOffset.UtcNow)
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        asked.Should().Equal([stalled]);
+        (await Read(stalled, r => InstanceRebootStatus.IsTerminal(r.Status))).Status.Should().Be(InstanceRebootStatus.Failed);
+
+        for (var i = 0; i < 3; i++)
+            Mesh.ReportWedgeFault(WedgeSignalKinds.ThreadStart, "Hosting/TriageIntake",
+                new MissingMethodException("MeshWeaver.AI.ThreadPreparation", "set_Group")).Should().BeTrue();
+        var pass = await Watchdog.Evaluate(Mesh).Timeout(TestTimeouts.Convergence).Await(ct);
+        pass.Decision.Should().Be(RebootWatchdogDecision.Fired, pass.Detail);
+        pass.EndedStalled.Should().Contain(stalled, "a request another reader ended as stalled is still named");
     }
 
     /// <summary>The control: the same request, faulted a minute ago (its re-arm still ahead), IS in progress —

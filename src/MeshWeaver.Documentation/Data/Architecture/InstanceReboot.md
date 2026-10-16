@@ -159,7 +159,10 @@ Two readers act on that, and neither runs a timer of its own:
   asks the request's OWNER to end it (the same `requestedEndIfStalledAt` question as below) and
   waits, within the read budget, for the owner's answer. Only an owner-confirmed `Failed` releases
   the self-reboot, and that is never silent: a `Critical` line names the request, its trigger and
-  why it stalled, once per request per process. A request the owner kept open, or an answer that did
+  why it stalled, once per request per process. A request that something else ended first (the
+  reconcile pass's question, another process's watchdog) is named the same way. Its reason is read
+  back from the persisted `failure` marker (`InstanceReboot.EndedAsStalled`), for ends within
+  `WatchdogRepeatWindow`, and the pass lists it in `EndedStalled`. A request the owner kept open, or an answer that did
   not come in time, still holds the self-reboot back. The rate limit's other two rules still hold.
   The read also activates the request's own hub, which resumes its executor if the process that
   drove it is gone.
@@ -191,7 +194,9 @@ A batch of many healthy imports is progress all the way through. The reboot's an
 also says whether the batch may go on: a request that has ended starts no further import, so
 nothing is imported beside its replacement, and the remaining sources read `Skipped`, saying so. A
 fault from that reporting reaches the reboot. It is never folded into the "could not be listed"
-row.
+row. The Modules step works the same way (`ModuleReloadExecutor.ResolveAndLandReporting`): each
+module is recorded as progress the moment its reload ends, and a request that has ended reloads
+no further module.
 
 ## Who can start one
 
