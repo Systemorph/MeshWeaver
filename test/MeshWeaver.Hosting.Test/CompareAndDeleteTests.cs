@@ -143,8 +143,93 @@ public sealed class CompareAndDeleteTests : IDisposable
         (await Stored(store)).Should().BeNull();
     }
 
+    /// <summary>
+    /// A row that is ELIGIBLE throughout — every version it passes through is at or below the limit
+    /// — must be removed even while a compare-and-set writer keeps replacing it. The in-memory store
+    /// used to replace a row on the <see cref="IStorageAdapter.WriteIfVersion"/> path outside its
+    /// mutation section, so a replacement landing between the delete's comparison and its pair
+    /// removal made the removal miss, and the delete answered "refused" for a row it was entitled
+    /// to remove (reported upstream as a Conflict naming the confirmed version itself).
+    /// </summary>
+    [Fact]
+    public async Task AnEligibleRow_IsRemoved_WhileACompareAndSetWriterReplacesIt()
+    {
+        var spurious = 0;
+        for (var trial = 0; trial < 300; trial++)
+        {
+            var store = new InMemoryStorageAdapter();
+            store.Write(Node(1, "v1"), JsonOptions).Subscribe();
+            var writing = 0;
+            var stop = 0;
+            var writer = Task.Run(() =>
+            {
+                for (long v = 1; System.Threading.Volatile.Read(ref stop) == 0; v++)
+                {
+                    bool? applied = null;
+                    store.WriteIfVersion(Node(v + 1, $"v{v + 1}"), v, JsonOptions).Subscribe(a => applied = a);
+                    System.Threading.Volatile.Write(ref writing, 1);
+                    if (applied != true)
+                        return; // the row is gone: the delete removed it
+                }
+            });
+            System.Threading.SpinWait.SpinUntil(() => System.Threading.Volatile.Read(ref writing) == 1,
+                TimeSpan.FromSeconds(5)).Should().BeTrue("the writer started");
+
+            var removed = false;
+            ((IStorageAdapter)store).DeleteIfVersionAtMost(Path, long.MaxValue, JsonOptions)
+                .Subscribe(r => removed = r);
+            System.Threading.Volatile.Write(ref stop, 1);
+            await writer.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            if (!removed)
+                spurious++;
+        }
+
+        spurious.Should().Be(0,
+            "every version the row passed through was within the limit, so no delete may be refused");
+    }
+
+    /// <summary>
+    /// Two writable providers each hold a copy: v3 in one, v4 in the other. A guarded delete naming 3
+    /// removes the v3 copy and must refuse the v4 one — and the COMPOSITE must answer "not removed",
+    /// because the node still exists. An OR over the providers answered <c>true</c>, and the delete
+    /// pipeline then announced the root deleted while the newer row survived.
+    /// Control: when every copy is within the limit, the composite answers <c>true</c>.
+    /// </summary>
+    [Fact]
+    public async Task ACompositeRemoval_DoesNotHideAnotherProvidersRefusal()
+    {
+        var older = new InMemoryStorageAdapter();
+        var newer = new InMemoryStorageAdapter();
+        await Seed(older, 3);
+        await Seed(newer, 4);
+        IStorageAdapter composite = new PersistenceService(
+            [new WritableProvider("older", older), new WritableProvider("newer", newer)]);
+
+        (await Guarded(composite, 3)).Should().BeFalse(
+            "the v4 copy survives, so the node was not deleted whatever the other provider removed");
+        (await Stored(newer))!.Version.Should().Be(4, "the newer copy was refused and kept");
+
+        var a = new InMemoryStorageAdapter();
+        var b = new InMemoryStorageAdapter();
+        await Seed(a, 3);
+        await Seed(b, 2);
+        IStorageAdapter control = new PersistenceService(
+            [new WritableProvider("a", a), new WritableProvider("b", b)]);
+        (await Guarded(control, 3)).Should().BeTrue("every copy was within the limit and was removed");
+        (await Stored(a)).Should().BeNull();
+        (await Stored(b)).Should().BeNull();
+    }
+
+    private sealed class WritableProvider(string name, IStorageAdapter adapter) : IPartitionStorageProvider
+    {
+        public string Name => name;
+        public bool IsReadOnly => false;
+        public IStorageAdapter Adapter => adapter;
+    }
+
     public void Dispose()
     {
+        _ioPools.Dispose();
         if (Directory.Exists(_dir))
             Directory.Delete(_dir, recursive: true);
     }

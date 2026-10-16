@@ -4778,6 +4778,15 @@ public static class MeshExtensions
                             "[DeleteNode] version-conflict-at-store path={Path} expected={Expected} stored={Stored} "
                             + "descendants-removed={Removed} — the root row was not deleted",
                             path, conflict.ExpectedVersion, conflict.StoredVersion, removedFirst.Count);
+                        // The delete pass tombstoned the root BEFORE its commit ("delete wins"),
+                        // and the commit was refused: the row lives on at StoredVersion. Left as it
+                        // is, the tombstone keeps the surviving node "gone for good" for its whole
+                        // TTL and every save to it is refused as NotFound — unless a change
+                        // notification for the newer row happens to arrive AFTER the mark, which a
+                        // write from another process need not do. Superseding at the stored
+                        // version is the fact itself: a durable row exists there. Descendant
+                        // tombstones stay — those rows really were removed.
+                        recentlyDeleted?.Supersede(path, conflict.StoredVersion);
                         // The same sentence (and key) as the owner's refusal: the ROOT was not deleted.
                         var conflictMsg = $"Did not delete '{path}': it changed since it was read "
                             + $"(expected version {conflict.ExpectedVersion}, found {conflict.StoredVersion}). "

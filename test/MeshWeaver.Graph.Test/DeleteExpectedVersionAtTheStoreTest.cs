@@ -31,9 +31,19 @@ namespace MeshWeaver.Graph.Test;
 /// </summary>
 public class DeleteExpectedVersionAtTheStoreTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private readonly InMemoryStorageAdapter _storeOfRecord = new();
+    // ONE database, two processes: this mesh's adapter, and a second adapter over the same rows with
+    // its OWN change feed — the shape of a writer in another process whose notification has not
+    // reached this one. Nothing it writes is announced to this mesh.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, MeshNode> _rows =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, System.Collections.Generic.List<object>> _objects =
+        new(StringComparer.OrdinalIgnoreCase);
+    private InMemoryStorageAdapter? _thisProcess;
+    private InMemoryStorageAdapter? _otherProcess;
+    private InMemoryStorageAdapter StoreOfRecord => _thisProcess ??= new InMemoryStorageAdapter(_rows, _objects);
+    private InMemoryStorageAdapter OtherProcess => _otherProcess ??= new InMemoryStorageAdapter(_rows, _objects);
     private HeldWriteStorageAdapter? _storage;
-    private HeldWriteStorageAdapter Storage => _storage ??= new HeldWriteStorageAdapter(_storeOfRecord);
+    private HeldWriteStorageAdapter Storage => _storage ??= new HeldWriteStorageAdapter(StoreOfRecord);
 
     /// <inheritdoc />
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
@@ -51,7 +61,7 @@ public class DeleteExpectedVersionAtTheStoreTest(ITestOutputHelper output) : Mon
             .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: Ct);
 
     private async Task<MeshNode?> Stored(string path) =>
-        await _storeOfRecord.Read(path, Mesh.JsonSerializerOptions).Should().Within(TestTimeouts.Convergence)
+        await StoreOfRecord.Read(path, Mesh.JsonSerializerOptions).Should().Within(TestTimeouts.Convergence)
             .Emit(cancellationToken: Ct);
 
     /// <summary>
@@ -94,7 +104,7 @@ public class DeleteExpectedVersionAtTheStoreTest(ITestOutputHelper output) : Mon
         var response = await PausedGuardedDelete(node.Path, read, async () =>
         {
             var current = (await Stored(node.Path))!;
-            await _storeOfRecord
+            await OtherProcess
                 .Write(current with { Name = "written by another process", Version = read + 1 }, Mesh.JsonSerializerOptions)
                 .Should().Within(TestTimeouts.Convergence).Emit("the foreign write lands", cancellationToken: Ct);
         });
@@ -107,6 +117,13 @@ public class DeleteExpectedVersionAtTheStoreTest(ITestOutputHelper output) : Mon
         survivor.Should().NotBeNull("a refused compare-and-delete removes nothing");
         survivor!.Name.Should().Be("written by another process");
         survivor.Version.Should().Be(read + 1);
+
+        // The delete pass tombstoned the root before its commit. The foreign write was announced to
+        // NOBODY here, so no notification can lift that tombstone: the refused delete itself must, or
+        // the surviving node reads as "gone for good" and every save to it is refused for the TTL.
+        Mesh.ServiceProvider.GetRequiredService<RecentlyDeletedRegistry>()
+            .IsRecentlyDeleted(node.Path)
+            .Should().BeFalse("the node survived the refused delete and must not stay tombstoned");
     }
 
     /// <summary>
@@ -145,7 +162,7 @@ public class DeleteExpectedVersionAtTheStoreTest(ITestOutputHelper output) : Mon
         acked.Version.Should().BeGreaterThan(before,
             "the owner minted a new version for the applied patch, and the acknowledgement names it");
         var stored = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
-            .SelectMany(_ => _storeOfRecord.Read(node.Path, Mesh.JsonSerializerOptions).Take(1))
+            .SelectMany(_ => StoreOfRecord.Read(node.Path, Mesh.JsonSerializerOptions).Take(1))
             .Where(n => n?.Name == "changed across hubs")
             .Should().Within(TestTimeouts.Convergence).Emit("the write is stored", cancellationToken: Ct);
         acked.Version.Should().Be(stored!.Version, "the acknowledged version is the version the owner committed");

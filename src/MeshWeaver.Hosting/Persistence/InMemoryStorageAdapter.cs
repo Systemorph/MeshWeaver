@@ -489,7 +489,13 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
             }
             // TryUpdate compares against the instance we just read; a concurrent winner replaced it,
             // so the CAS fails and this caller learns it lost instead of clobbering the winner.
-            if (!_nodes.TryUpdate(path, node, existing))
+            // 🚨 Inside the Mutate section like every other row mutation (#6856): replaced outside
+            // it, a row could change between DeleteIfVersionAtMost's comparison and its pair removal,
+            // and an eligible row was then refused as though it had moved past the limit.
+            bool updated;
+            lock (_index.Mutate)
+                updated = _nodes.TryUpdate(path, node, existing);
+            if (!updated)
                 return Observable.Return<bool?>(false);
 
             _changes.OnNext(DataChangeNotification.Updated(path, node).WithPriorState(existing));
