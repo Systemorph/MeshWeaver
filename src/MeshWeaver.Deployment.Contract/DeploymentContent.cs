@@ -581,6 +581,17 @@ public record DeploymentContent
     [Description("Container registry this instance hosts (the public instance only)")]
     public RegistrySpec? Registry { get; init; }
 
+    /// <summary>
+    /// The registry this instance pulls its sealed NodeType publications from before the portal
+    /// starts — the chart's <c>bundles</c> section (see <see cref="BundlesSpec"/>). Null, or a blank
+    /// <see cref="BundlesSpec.Registry"/>, renders nothing and no bundle fetch runs. When stated, the
+    /// pre-warm root (<c>PreWarm__PrebuiltBundleRoot</c>) renders from <see cref="BundlesSpec.Root"/>
+    /// through <see cref="DeploymentPortalConfig.BundleRoot"/>, so the shelf the init container fills
+    /// is the one the portal reads.
+    /// </summary>
+    [Description("Sealed NodeType bundles fetched from a registry before the portal starts")]
+    public BundlesSpec? Bundles { get; init; }
+
     /// <summary>OpenTelemetry export.</summary>
     [Description("Telemetry")]
     public TelemetrySpec? Telemetry { get; init; }

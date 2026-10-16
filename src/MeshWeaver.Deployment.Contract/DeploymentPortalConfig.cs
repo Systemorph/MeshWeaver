@@ -314,6 +314,35 @@ public static class DeploymentPortalConfig
     }
 
     /// <summary>
+    /// The bundle registry a record declares (<see cref="DeploymentContent.Bundles"/>), trimmed, or
+    /// null when it declares none — the ONE test for "this record fetches bundles", shared by the
+    /// pre-warm root below and the Helm renderer's <c>bundles</c> section. Pure.
+    /// </summary>
+    public static string? BundleRegistry(DeploymentContent d) =>
+        string.IsNullOrWhiteSpace(d.Bundles?.Registry) ? null : d.Bundles!.Registry!.Trim();
+
+    /// <summary>
+    /// The bundle sources a record declares, trimmed, blanks dropped, in the record's order. Empty
+    /// when it declares none. Pure.
+    /// </summary>
+    public static ImmutableList<string> BundleSources(DeploymentContent d) =>
+        (d.Bundles?.Sources ?? ImmutableList<string>.Empty)
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Select(s => s.Trim())
+            .ToImmutableList();
+
+    /// <summary>
+    /// <c>PreWarm__PrebuiltBundleRoot</c> for a record that fetches bundles: its
+    /// <see cref="BundlesSpec.Root"/>, else <see cref="BundlesSpec.DefaultRoot"/>; null for a record
+    /// that fetches none, so every other record renders as before. The chart's <c>bundles.root</c>
+    /// defaults to this key, so the shelf the init container fills and the directory the pre-warm
+    /// reads come from one value (MeshWeaver#6825). Pure.
+    /// </summary>
+    public static string? BundleRoot(DeploymentContent d) =>
+        BundleRegistry(d) is null ? null
+        : string.IsNullOrWhiteSpace(d.Bundles!.Root) ? BundlesSpec.DefaultRoot : d.Bundles.Root!.Trim();
+
+    /// <summary>
     /// <c>SelfUpdate__PortalRepository</c> for a record: the repository its pods pull
     /// (<see cref="DeploymentContent.ImageRepository"/>), or null when that IS the image's default —
     /// so a record on <c>memex-portal-ai</c> renders exactly as before. Pure.
@@ -877,6 +906,9 @@ public static class DeploymentPortalConfig
         Set("Storage__SourceType", s.ContentSourceType);
         Set("Storage__BasePath", s.ContentPath);
         Set("ClaudeCode__ConfigDirRoot", s.ClaudeCodeConfigDirRoot);
+        // The bundle shelf (MeshWeaver#6825): rendered only for a record that fetches bundles, and
+        // from the same value the chart's bundle-fetch init container fills — one source for both.
+        Set("PreWarm__PrebuiltBundleRoot", BundleRoot(d));
 
         Set("Deployment__Orleans__Clustering", OrleansClustering(d));
         Set("SelfUpdate__MinRollInterval", string.IsNullOrWhiteSpace(d.MinRollInterval) ? DefaultMinRollInterval : d.MinRollInterval!.Trim());
