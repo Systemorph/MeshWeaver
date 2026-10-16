@@ -206,9 +206,11 @@ public class UserDirectoryOpensAtStartTest(ITestOutputHelper output) : MonolithM
         rejected.EverHydrated.Should().BeFalse("a floor must never count as the first snapshot");
         rejected.Hydrated.Should().BeFalse();
 
-        // The probe re-opens the terminated read; the replacement's snapshot is complete.
-        (await Probe(readiness, ct)).Status.Should().Be(HealthStatus.Unhealthy,
-            "no complete snapshot has landed yet");
+        // A probe re-opens the terminated read; the replacement's snapshot is complete. The provider
+        // is already released, so the replacement may hydrate before this probe samples. Its verdict
+        // is therefore not asserted (it only triggers the re-open); the `rejected` assertions above
+        // already prove the incomplete snapshot did not hydrate.
+        await Probe(readiness, ct);
         await Observable.Interval(TestTimeouts.Quick / 100).StartWith(0L)
             .Select(_ => cache.Reading)
             .Where(r => r.EverHydrated)
