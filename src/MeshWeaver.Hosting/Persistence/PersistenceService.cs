@@ -455,6 +455,50 @@ public sealed class PersistenceService : IStorageAdapter
             .Aggregate(false, (any, deleted) => any || deleted);
 
     /// <summary>
+    /// Fans <see cref="IStorageAdapter.DeleteIfVersionAtMost"/> out to every writable provider
+    /// (#6856). Each provider decides atomically for the row it holds. Answers <c>true</c> only when
+    /// at least one provider removed a row AND no provider still holds one: a provider whose refusal
+    /// left a NEWER row in place must not be hidden by another provider's removal, or the caller
+    /// would announce a delete of a node that still exists. A provider that answered <c>false</c> is
+    /// asked once whether it still holds the row — that tells "nothing there" from "refused".
+    ///
+    /// <para>🚨 <b>A copy newer than the limit refuses the WHOLE delete before any copy is
+    /// removed.</b> Each provider's removal publishes <c>Deleted</c> on its own feed, which this
+    /// composite merges into <see cref="Changes"/>; removing an older copy while a newer one survives
+    /// announced a delete of a node that still exists, and a live owner marks its own node deleted on
+    /// that event. So every writable provider is read first, and a newer copy anywhere answers
+    /// <c>false</c> with nothing removed. The read and the per-provider removals are separate steps —
+    /// a newer copy written into a SECOND provider between them is still refused by that provider and
+    /// reported by the aggregate below, but the older copy's removal is not undone. Atomicity across
+    /// providers is beyond what separate stores can give.</para>
+    /// </summary>
+    public IObservable<bool> DeleteIfVersionAtMost(string path, long maxVersion, JsonSerializerOptions options)
+        // Deferred: provider reads may start eagerly, and the probe must read storage as it is when
+        // the delete RUNS (see the interface default).
+        => Observable.Defer(() => _writable
+            .Select(p => p.Adapter.Read(path, options).Take(1).DefaultIfEmpty(null))
+            .Merge()
+            .Any(stored => stored is not null && stored.Version > maxVersion)
+            .SelectMany(newerSomewhere => newerSomewhere
+                ? Observable.Return(false)
+                : RemoveCopiesAtMost(path, maxVersion, options)));
+
+    private IObservable<bool> RemoveCopiesAtMost(string path, long maxVersion, JsonSerializerOptions options)
+        => _writable
+            .Select(p => p.Adapter.DeleteIfVersionAtMost(path, maxVersion, options)
+                .Take(1)
+                .SelectMany(removed => removed
+                    ? Observable.Return((Removed: true, Survives: false))
+                    : p.Adapter.Read(path, options)
+                        .Take(1)
+                        .DefaultIfEmpty(null)
+                        .Select(stored => (Removed: false, Survives: stored is not null))))
+            .Merge()
+            .Aggregate((Removed: false, Survives: false),
+                (acc, one) => (acc.Removed || one.Removed, acc.Survives || one.Survives))
+            .Select(outcome => outcome.Removed && !outcome.Survives);
+
+    /// <summary>
     /// Fan-out OR: any adapter reporting true wins. Implemented via
     /// <see cref="Observable.Any{TSource}(IObservable{TSource})"/> over the merged stream so the chain
     /// completes as soon as the first true lands.

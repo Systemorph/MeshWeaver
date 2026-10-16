@@ -612,6 +612,18 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                     : node);
 
     /// <summary>
+    /// The owner's committed version off a patch ack's object-typed payload (#6856). Read through
+    /// <see cref="ObjectAsExtensions.As{T}"/>, never a cast: an ack that arrives as JSON
+    /// (<c>JsonElement</c> / <c>JsonObject</c>) still carries the field, and a cast would drop it and
+    /// emit the writer's base version.
+    /// </summary>
+    /// <param name="message">The ack's payload, as delivered.</param>
+    /// <param name="options">The hub's serializer options.</param>
+    /// <param name="logger">Optional; names an unconvertible payload.</param>
+    internal static long? CommittedVersionOf(object? message, JsonSerializerOptions options, ILogger? logger = null)
+        => message.As<PatchDataResponse>(options, logger, nameof(PatchDataResponse))?.CommittedVersion;
+
+    /// <summary>
     /// 🚨 The base a re-attempt spawned by a <b>"the patch NEVER applied"</b> NACK is allowed to
     /// diff against — issue #3477, and the last fail-open exit of this write path.
     ///
@@ -2397,20 +2409,34 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                             // 🚨 This is the SUCCESS terminal and it is now reached from exactly
                             // one place: the owner's ACK, early or late. It is no longer reachable
                             // from a timeout — see UpdateResponseWaitBound.
-                            void EmitTerminal()
+                            //
+                            // 🚨 The emitted node carries the OWNER's committed version when the ack
+                            // names it (PatchDataResponse.CommittedVersion, #6856) — never the
+                            // writer's base version, which is one behind what the owner holds. A
+                            // caller that names the acknowledged version as a precondition
+                            // (DeleteNodeRequest.ExpectedVersion) was otherwise refused as a conflict
+                            // that never happened. Only the VERSION is the owner's: the content is
+                            // this writer's view, without fields a concurrent writer merged in. The
+                            // queue hand-off (onLocalState) deliberately keeps the base version —
+                            // PatchBaseSource compares it with the mirror, and a hand-off claiming the
+                            // owner's version would outrank a mirror carrying another writer's commit.
+                            void EmitTerminal(long? committedVersion = null)
                             {
                                 if (!ClaimTerminal()) return;
+                                var acknowledged = committedVersion is { } v && v != updated.Version
+                                    ? updated with { Version = v }
+                                    : updated;
                                 if (accessServiceAtEntry is not null && capturedContextAtEntry is not null)
                                 {
                                     using (accessServiceAtEntry.SwitchAccessContext(capturedContextAtEntry))
                                     {
-                                        observer.OnNext(updated);
+                                        observer.OnNext(acknowledged);
                                         observer.OnCompleted();
                                     }
                                 }
                                 else
                                 {
-                                    observer.OnNext(updated);
+                                    observer.OnNext(acknowledged);
                                     observer.OnCompleted();
                                 }
                             }
@@ -2522,7 +2548,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                         _workspace.Hub.Address, _path, corr);
                                     // The owner COMMITTED. That — not the elapsed bound — is what
                                     // "saved" means, so this is the caller's success terminal.
-                                    EmitTerminal();
+                                    EmitTerminal(resp.CommittedVersion);
                                     return;
                                 }
                                 var lateErr = resp.NodeError ?? new MeshNodeError(
@@ -2728,7 +2754,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                         // Owner posted a structured rejection (deserialization /
                                         // validation gate) as PatchDataResponse.NodeError, or a
                                         // non-success ack → surface as a typed exception (fail-fast).
-                                        if (d.Message is PatchDataResponse resp
+                                        if (d.Message.As<PatchDataResponse>(_jsonOptions, diagLogger, "PatchDataResponse") is { } resp
                                             && (resp.NodeError is not null || !resp.Success))
                                         {
                                             var err = resp.NodeError ?? new MeshNodeError(
@@ -2859,7 +2885,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                             // the successor waits on the hand-off, which is issued
                                             // right here, on the ack.
                                             onLocalState?.Invoke(updated);
-                                            EmitTerminal();
+                                            EmitTerminal(CommittedVersionOf(d.Message, _jsonOptions, diagLogger));
                                         }
                                     },
                                     ex =>

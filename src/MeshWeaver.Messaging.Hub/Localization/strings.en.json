@@ -1528,6 +1528,7 @@
   "activity.delete.keepDescendantsNotNodeType": "Cannot delete '{path}' alone (KeepDescendants): only a NodeType definition may be removed without the nodes under it, and this node is of type '{nodeType}'. Nothing was deleted.",
   "activity.delete.hasChildren":"Node at '{path}' has children. Use recursive delete to remove it.",
   "activity.delete.versionConflict": "Did not delete '{path}': it changed since it was read (expected version {expected}, found {actual}). Nothing was deleted; re-read the node and decide again.",
+  "activity.delete.versionConflictRootKept": "Did not delete '{path}': it changed since it was read (expected version {expected}, found {actual}). The node itself was kept; re-read it and decide again.",
   "activity.delete.versionUnestablished": "Did not delete '{path}': its expected version could not be checked against the owning hub ({detail}). Nothing was deleted; this is an availability failure, not a verdict about the node.",
   "activity.delete.blockedByDescendant": "Cannot delete '{path}': {error}",
   "activity.delete.cancelled": "Delete of '{path}' was cancelled before any node was removed.",

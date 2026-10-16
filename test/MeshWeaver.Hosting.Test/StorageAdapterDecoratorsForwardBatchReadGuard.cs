@@ -147,6 +147,54 @@ public class StorageAdapterDecoratorsForwardBatchReadGuard
             "it publishes no feed, so it has no gap to hide and is out of this rule's scope");
     }
 
+    /// <summary>Does <paramref name="type"/> declare the METHOD <paramref name="method"/> itself (either spelling)?</summary>
+    private static bool DeclaresMethod(Type type, string method) =>
+        type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic
+                        | BindingFlags.Instance | BindingFlags.DeclaredOnly)
+            .Any(m => m.Name == method || m.Name.EndsWith("." + method, StringComparison.Ordinal));
+
+    /// <summary>
+    /// 🚨 The same hazard on the compare-and-delete (#6856). A decorator that forwards the strict
+    /// <see cref="IStorageAdapter.DeleteIfExists"/> but inherits
+    /// <see cref="IStorageAdapter.DeleteIfVersionAtMost"/> downgrades every version-guarded delete
+    /// below it to a non-atomic read-compare-delete — a newer row written between the read and the
+    /// delete is removed, which is the exact defect the primitive exists to close. Scoped to the
+    /// decorators that forward the strict delete at all: one that does not is non-strict already.
+    /// </summary>
+    [Fact]
+    public void EveryDecoratorThatForwardsTheStrictDelete_ForwardsTheCompareAndDelete()
+    {
+        var strict = Decorators()
+            .Where(t => DeclaresMethod(t, nameof(IStorageAdapter.DeleteIfExists)))
+            .ToList();
+        strict.Count.Should().BeGreaterThanOrEqualTo(3,
+            "the production chain's SubtreeDeletionGuard, MonotonicWriteGuard and VersionWriting all "
+            + "forward DeleteIfExists; fewer means the predicate stopped matching and this rule is vacuous. "
+            + $"Saw: {string.Join(", ", strict.Select(t => t.Name))}");
+
+        var downgrading = strict
+            .Where(t => !DeclaresMethod(t, nameof(IStorageAdapter.DeleteIfVersionAtMost)))
+            .Select(t => $"{t.FullName} forwards DeleteIfExists but declares no DeleteIfVersionAtMost")
+            .ToList();
+        downgrading.Should().BeEmpty(
+            "a decorator that forwards the strict delete must forward the compare-and-delete too, or "
+            + "every version-guarded delete below it loses its atomicity. Offenders:\n  "
+            + string.Join("\n  ", downgrading));
+
+        // Mutation arms through the same predicate: a decorator inheriting the default is flagged,
+        // and one that declares it is cleared.
+        DeclaresMethod(typeof(ForgetfulDouble), nameof(IStorageAdapter.DeleteIfVersionAtMost)).Should().BeFalse();
+        DeclaresMethod(typeof(CompareAndDeleteForwardingDouble), nameof(IStorageAdapter.DeleteIfVersionAtMost))
+            .Should().BeTrue();
+    }
+
+    /// <summary>Forwards the compare-and-delete — the shape that rule wants.</summary>
+    private sealed class CompareAndDeleteForwardingDouble(IStorageAdapter inner) : InertDecorator(inner)
+    {
+        public IObservable<bool> DeleteIfVersionAtMost(string path, long maxVersion, JsonSerializerOptions options)
+            => Inner.DeleteIfVersionAtMost(path, maxVersion, options);
+    }
+
     private static bool ForwardsTheFeed(Type type) => DeclaresProperty(type, nameof(IStorageAdapter.Changes));
 
     private static bool HidesTheGaps(Type type) => !DeclaresProperty(type, nameof(IStorageAdapter.ChangeFeedGaps));
