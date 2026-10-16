@@ -294,7 +294,7 @@ public class NuGetPackageHostWinsTest(ITestOutputHelper output) : MonolithMeshTe
 
     /// <summary>The live-feed gate of <c>NuGetAssemblyResolverTest</c> (#679): an outage is a SKIP
     /// with its cause, never a red pointing at NuGet internals.</summary>
-    private static async Task SkipUnlessNuGetOrgReachable(CancellationToken ct)
+    internal static async Task SkipUnlessNuGetOrgReachable(CancellationToken ct)
     {
         Assert.SkipWhen(Environment.GetEnvironmentVariable("MESHWEAVER_SKIP_NUGET") == "1",
             "NuGet end-to-end tests disabled via MESHWEAVER_SKIP_NUGET=1");

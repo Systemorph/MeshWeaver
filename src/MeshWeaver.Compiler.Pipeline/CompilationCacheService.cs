@@ -320,6 +320,17 @@ internal interface ICompilationCacheService
     /// of resolved NuGet packages can be loaded at runtime.
     /// </summary>
     void RegisterProbingDirectories(string nodeName, System.Collections.Generic.IReadOnlyList<string> directories);
+
+    /// <summary>
+    /// Registers the NuGet probing directories of ONE build — the assembly at
+    /// <paramref name="dllPath"/> — re-resolved from the package references the build recorded
+    /// (<c>NuGetBuildRecord</c>). Every context resolved for that path afterwards probes them, and a
+    /// live context for it that holds only the node-wide fallback is given them; they take precedence over the node-wide
+    /// <see cref="RegisterProbingDirectories"/>, which names whatever this process last compiled.
+    /// This is what lets a build load in a process that never compiled it (another replica, a
+    /// restart, an adopted bake).
+    /// </summary>
+    void RegisterBuildProbingDirectories(string dllPath, System.Collections.Generic.IReadOnlyList<string> directories);
 }
 
 /// <summary>
@@ -404,7 +415,29 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
     public void SetProbingDirectories(System.Collections.Generic.IReadOnlyList<string> dirs)
     {
         _probingDirs = dirs.ToImmutableArray();
+        _probingFromBuildRecord = false;
     }
+
+    /// <summary>
+    /// Sets the probing directories resolved from the package references THIS context's build
+    /// recorded (<c>NuGetBuildRecord</c>). They replace directories the context got from the
+    /// node-wide registration (which names whatever this process last compiled, possibly another
+    /// generation), and are never themselves replaced by that registration. An assembly the context
+    /// already bound stays bound — the replacement governs every bind from here on.
+    /// </summary>
+    public void SetBuildProbingDirectories(System.Collections.Generic.IReadOnlyList<string> dirs)
+    {
+        _probingDirs = dirs.ToImmutableArray();
+        _probingFromBuildRecord = true;
+    }
+
+    /// <summary>Whether this context has any NuGet probing directory to resolve package assemblies from.</summary>
+    public bool HasProbingDirectories => !_probingDirs.IsDefaultOrEmpty;
+
+    /// <summary>Whether this context's probing directories came from its own build's record.</summary>
+    public bool HasBuildProbingDirectories => _probingFromBuildRecord;
+
+    private volatile bool _probingFromBuildRecord;
 
     /// <summary>
     /// Gets the node name associated with this context.
@@ -1075,6 +1108,11 @@ internal class CompilationCacheService(
     private readonly CompilationCacheOptions _options = options.Value ?? new CompilationCacheOptions();
     private readonly ConcurrentDictionary<string, NodeAssemblyLoadContext> _loadContexts = new();
     private readonly ConcurrentDictionary<string, System.Collections.Immutable.ImmutableArray<string>> _probingDirs = new();
+    // Per BUILD (keyed by dll path), from the package references the build recorded — see
+    // RegisterBuildProbingDirectories. Ahead of _probingDirs, which is per node name and names
+    // whatever THIS process last compiled.
+    private readonly ConcurrentDictionary<string, System.Collections.Immutable.ImmutableArray<string>> _buildProbingDirs =
+        new(StringComparer.Ordinal);
     // Sticky invalidation set: a node name in here forces IsCacheValid to return false
     // on the NEXT call (and then clears itself). Needed because InvalidateCache's
     // File.Delete can silently fail when the DLL is still mapped by a live ALC — in
@@ -1093,6 +1131,27 @@ internal class CompilationCacheService(
         _probingDirs[nodeName] = directories.ToImmutableArray();
         if (_loadContexts.TryGetValue(nodeName, out var ctx))
             ctx.SetProbingDirectories(directories);
+    }
+
+    /// <inheritdoc />
+    public void RegisterBuildProbingDirectories(string dllPath, System.Collections.Generic.IReadOnlyList<string> directories)
+    {
+        if (string.IsNullOrEmpty(dllPath) || directories.Count == 0) return;
+        _buildProbingDirs[dllPath] = directories.ToImmutableArray();
+        if (_loadContexts.TryGetValue(dllPath, out var ctx))
+            ApplyBuildProbing(ctx, dllPath);
+    }
+
+    /// <summary>
+    /// Gives <paramref name="context"/> the probing directories recorded for the build at
+    /// <paramref name="dllPath"/>, replacing any it holds from the node-wide fallback (which may name
+    /// another generation's closure). A context already holding a BUILD record keeps it.
+    /// </summary>
+    private void ApplyBuildProbing(NodeAssemblyLoadContext context, string dllPath)
+    {
+        if (!context.HasBuildProbingDirectories
+            && _buildProbingDirs.TryGetValue(dllPath, out var dirs) && !dirs.IsDefaultOrEmpty)
+            context.SetBuildProbingDirectories(dirs);
     }
 
     /// <inheritdoc />
@@ -1458,7 +1517,10 @@ internal class CompilationCacheService(
             // enumerated before our key existed. Never hand a retired context to a new caller:
             // drop OUR alias (only if it is still ours) and resolve normally below.
             if (!aliased.IsRetired)
+            {
+                ApplyBuildProbing(aliased, dllPath);
                 return aliased;
+            }
             _loadContexts.TryRemove(new KeyValuePair<string, NodeAssemblyLoadContext>(dllPath, aliased));
         }
 
@@ -1468,10 +1530,16 @@ internal class CompilationCacheService(
             created = true;
             logger.LogDebug("Creating new path-keyed AssemblyLoadContext for {NodeName} at {DllPath}", nodeName, path);
             var c = new NodeAssemblyLoadContext(nodeName, path, logger, modules);
-            if (_probingDirs.TryGetValue(nodeName, out var dirs) && !dirs.IsDefaultOrEmpty)
+            // The BUILD's own recorded closure first; the node-wide registration (what this process
+            // last compiled) only when the build recorded none.
+            if (_buildProbingDirs.TryGetValue(path, out var buildDirs) && !buildDirs.IsDefaultOrEmpty)
+                c.SetBuildProbingDirectories(buildDirs);
+            else if (_probingDirs.TryGetValue(nodeName, out var dirs) && !dirs.IsDefaultOrEmpty)
                 c.SetProbingDirectories(dirs);
             return c;
         });
+        if (!created)
+            ApplyBuildProbing(ctx, dllPath);
 
         // A PUBLISHED build supersedes every prior assembly for this NodeType. Each recompile
         // writes to a unique {nodeName}_{timestamp}_{guid} directory (see EmitToDiskWithRetry), so
