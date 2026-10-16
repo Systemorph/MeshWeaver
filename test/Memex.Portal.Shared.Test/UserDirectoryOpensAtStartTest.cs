@@ -257,6 +257,14 @@ public class UserDirectoryOpensAtStartTest(ITestOutputHelper output) : MonolithM
         // Once it has answered, a rebuild or a terminated read is printed but holds no traffic.
         UserDirectoryReadiness.Classify(new(false, true, null, 3), null, null).Status.Should().Be(HealthStatus.Degraded);
         UserDirectoryReadiness.Classify(new(false, true, "boom", 3), null, null).Status.Should().Be(HealthStatus.Degraded);
+        // A read that terminated after hydrating publishes its failure before Hydrated drops.
+        UserDirectoryReadiness.Classify(new(true, true, "boom", 3), null, null).Status.Should().Be(HealthStatus.Degraded,
+            "a recorded failure must never print Healthy");
+        // A concurrent probe's losing retry can publish an opening failure after the winner opened
+        // the directory; once a reading exists that failure is stale.
+        UserDirectoryReadiness.Classify(new(true, true, null, 3), null, "threw").Status.Should().Be(HealthStatus.Healthy,
+            "an opening failure must not outlive an open directory");
+        UserDirectoryReadiness.Classify(new(false, false, null, 0), null, "threw").Description.Should().Contain("first snapshot");
         // A host with no directory has nothing to measure.
         UserDirectoryReadiness.Classify(null, "no directory", null).Status.Should().Be(HealthStatus.Healthy);
     }

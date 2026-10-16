@@ -54,7 +54,11 @@ a health check. The portal's service defaults register it (`AddDefaultHealthChec
   snapshot is retried that way, with no timer and no retry loop. An **open that threw** at
   ApplicationStarted is retried the same way: the next probe after ApplicationStarted opens the
   directory again and clears the recorded failure once that succeeds, so one transient fault while
-  resolving the directory cannot keep a replica Unhealthy for the life of the process.
+  resolving the directory cannot keep a replica Unhealthy for the life of the process. A recorded opening failure counts
+  only while no directory is open: two probes can retry at once, and the loser may publish its
+  failure after the winner opened the directory. A recorded
+  opening failure counts only while no directory is open: two probes can retry at once, and the
+  loser may publish its failure after the winner opened the directory.
 - **An incomplete snapshot is not a snapshot.** An `Initial` or `Reset` frame that names
   `SilentProviders` or carries `SnapshotIncomplete` is a floor: a provider did not answer, or
   dropped part of its read, so users may be missing and a miss would be a false "no such user".

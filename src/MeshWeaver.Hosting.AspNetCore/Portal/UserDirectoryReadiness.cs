@@ -151,20 +151,28 @@ public sealed class UserDirectoryReadiness(IServiceProvider services, ILogger<Us
     {
         if (absent is not null)
             return HealthCheckResult.Healthy(absent);
-        if (openFailure is not null)
-            return HealthCheckResult.Unhealthy(
-                $"the user directory could not be opened ({openFailure}) — this replica cannot identify a signed-in user; the next probe retries");
+        // An opening failure only describes a replica that HAS no directory. Once a reading exists
+        // the directory is open, and a failure published by a concurrent probe's losing retry is
+        // stale: honouring it would hold readiness forever, because no later probe retries an open
+        // that has already succeeded.
         if (reading is not { } r)
-            return HealthCheckResult.Unhealthy(
-                "the user directory is not open yet (it opens when the application has started) — not ready");
+            return HealthCheckResult.Unhealthy(openFailure is not null
+                ? $"the user directory could not be opened ({openFailure}) — this replica cannot identify a signed-in user; the next probe retries"
+                : "the user directory is not open yet (it opens when the application has started) — not ready");
         if (!r.EverHydrated)
             return HealthCheckResult.Unhealthy(r.Failure is null
                 ? "the user directory has not received its first snapshot yet — not ready until it has"
                 : $"the user directory failed before its first snapshot ({r.Failure}) — not ready; the next lookup re-opens it");
+        // A recorded Failure is Degraded even while Hydrated still reads true: the read's error and
+        // completion handlers publish the failure without lowering Hydrated (the next open clears
+        // the index), so a probe sampling between the two would otherwise print Healthy over a dead
+        // read. Degraded reports it without taking an already-hydrated replica out of service.
+        if (r.Failure is not null)
+            return HealthCheckResult.Degraded(
+                $"the user directory read terminated ({r.Failure}); the next lookup re-opens it");
         if (!r.Hydrated)
-            return HealthCheckResult.Degraded(r.Failure is null
-                ? $"the user directory is being rebuilt; lookups answer Unavailable until it lands (last snapshot held {r.IndexedUsers} user(s))"
-                : $"the user directory read terminated ({r.Failure}); the next lookup re-opens it");
+            return HealthCheckResult.Degraded(
+                $"the user directory is being rebuilt; lookups answer Unavailable until it lands (last snapshot held {r.IndexedUsers} user(s))");
         return HealthCheckResult.Healthy($"user directory hydrated: {r.IndexedUsers} user(s) indexed by email");
     }
 }
