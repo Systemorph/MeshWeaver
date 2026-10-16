@@ -502,6 +502,16 @@ finalizable. The "already unloading" marker is a long weak reference in an immut
 that keeps being read stays loaded until a successor registers: at most one superseded generation
 per name.
 
+**A context is tracked once, atomically.** The serialization `TypeRegistry` has no lock: it
+subscribes to a context's `Unloading` only when `ConditionalWeakTable.TryAdd` claims that context,
+so however many threads register types from one generation at once, one handler is subscribed and
+none of them throws. It used to check the table and then `Add`, and two concurrent first
+registrations from one context both passed the check; the second `Add` threw "An item with the same
+key has already been added" out of `WithType` and failed a portal activation inside
+`LayoutClientConfiguration.WithView` (MeshWeaver#6891). Pinned by
+`TypeRegistryTest.ConcurrentFirstRegistrations_FromOneCollectibleContext_AllSucceed`
+(MeshWeaver.Messaging.Hub.Test), which fails in its first round without the fix.
+
 **Pinned by** `ContentTypeRegistryReleasesAnUnloadedGenerationTest` (MeshWeaver.Compiler.Pipeline.Test:
 a type whose context began unloading still resolves while an object of it is held; a successor
 displaces it; a late registration is never rooted; a context that is finalized instead of unloaded

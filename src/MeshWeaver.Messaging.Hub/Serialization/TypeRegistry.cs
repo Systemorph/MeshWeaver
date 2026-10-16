@@ -241,12 +241,13 @@ internal class TypeRegistry : ITypeRegistry
         var context = AssemblyLoadContext.GetLoadContext(type.Assembly);
         if (context is null || !context.IsCollectible)
             return;
-        // AddOrUpdate would re-subscribe on every registration; Add throws on a duplicate key, so
-        // TryAdd-shaped semantics via TryGetValue keeps it to one handler per context.
-        if (trackedContexts.TryGetValue(context, out _))
-            return;
-        trackedContexts.Add(context, Sentinel);
-        context.Unloading += EvictLoadContext;
+        // ONE atomic claim per context, and only its winner subscribes — so exactly one handler per
+        // context however many threads register its types at once. Never TryGetValue-then-Add: that
+        // check-then-act let two concurrent FIRST registrations from one context both miss the
+        // check, and the second Add threw "An item with the same key has already been added" out
+        // of WithType (issue #6891 — it killed a PortalApplication activation in WithView).
+        if (trackedContexts.TryAdd(context, Sentinel))
+            context.Unloading += EvictLoadContext;
     }
 
     private static readonly object Sentinel = new();
