@@ -17,31 +17,70 @@ namespace MeshWeaver.NuGet;
 /// <summary>
 /// Resolves NuGet packages to assembly paths using pure NuGet client libraries.
 /// No MSBuild, no dotnet CLI, no SDK — safe to run on a runtime-only container.
+/// Resolution is OFFLINE-FIRST (#6863): a package identity already installed — complete —
+/// in the global-packages folder is resolved from its own <c>.nuspec</c>, and a feed is asked
+/// only for an identity the folder cannot answer. A floating or ranged root request still asks
+/// the feed which version to take; an exact version never does.
 /// </summary>
-public sealed class NuGetAssemblyResolver(
-    MsLogging.ILogger<NuGetAssemblyResolver> logger,
-    INuGetPackageCache? packageCache = null) : INuGetAssemblyResolver
+public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver
 {
     private static readonly NuGetFramework DefaultFramework = NuGetFramework.Parse("net10.0");
 
     private readonly ConcurrentDictionary<string, Task<ResolvedPackageSet>> _cache = new();
     private readonly SourceCacheContext _sourceCache = new();
-    // Anchor settings discovery to the ASSEMBLY directory, NOT the ambient CWD. With
-    // root: null, NuGet loads ONLY the user/machine-wide configs and does NOT walk a
-    // directory tree — so the repo/app nuget.config (which declares the `mesh-local`
-    // feed + the packageSourceMapping that pins MeshWeaver.*/Memex.* to it) is never
-    // seen. A version-LESS `#r "nuget:MeshWeaver.BusinessRules.Generator"` then resolves
-    // off nuget.org, where the stale 3.0.0-preview1 ships analyzers/ only (no lib/<tfm>) —
-    // the generator never loads and scope nodes compile but generate nothing (PensionFund
-    // renders empty; NuGetAssemblyResolverTest fails the lib/ assertion). Passing the
-    // assembly dir as root makes NuGet walk UP the tree to find it: in tests bin/.../net10.0
-    // → repo root nuget.config; in the published container the app dir, where the csproj
-    // ships nuget.config NEXT TO the baked dist/packages feed. CWD is whatever launched the
-    // process and can't be relied on; the assembly location can.
-    private readonly ISettings _settings =
-        Settings.LoadDefaultSettings(root: AppContext.BaseDirectory);
-    private readonly NuGetLogger _nugetLogger = new(logger);
-    private readonly INuGetPackageCache _packageCache = packageCache ?? NullNuGetPackageCache.Instance;
+    private readonly MsLogging.ILogger<NuGetAssemblyResolver> logger;
+    private readonly ISettings _settings;
+    private readonly string? _globalPackagesFolder;
+    private readonly NuGetLogger _nugetLogger;
+    private readonly INuGetPackageCache _packageCache;
+
+    /// <summary>
+    /// Creates a resolver reading the NuGet settings found from the application directory upward.
+    /// </summary>
+    /// <param name="logger">Logger for resolution and install outcomes.</param>
+    /// <param name="packageCache">Optional persistent cache hydrated before a feed download.</param>
+    public NuGetAssemblyResolver(
+        MsLogging.ILogger<NuGetAssemblyResolver> logger,
+        INuGetPackageCache? packageCache = null)
+        // Anchor settings discovery to the ASSEMBLY directory, NOT the ambient CWD. With
+        // root: null, NuGet loads ONLY the user/machine-wide configs and does NOT walk a
+        // directory tree — so the repo/app nuget.config (which declares the `mesh-local`
+        // feed + the packageSourceMapping that pins MeshWeaver.*/Memex.* to it) is never
+        // seen. A version-LESS `#r "nuget:MeshWeaver.BusinessRules.Generator"` then resolves
+        // off nuget.org, where the stale 3.0.0-preview1 ships analyzers/ only (no lib/<tfm>) —
+        // the generator never loads and scope nodes compile but generate nothing (PensionFund
+        // renders empty; NuGetAssemblyResolverTest fails the lib/ assertion). Passing the
+        // assembly dir as root makes NuGet walk UP the tree to find it: in tests bin/.../net10.0
+        // → repo root nuget.config; in the published container the app dir, where the csproj
+        // ships nuget.config NEXT TO the baked dist/packages feed. CWD is whatever launched the
+        // process and can't be relied on; the assembly location can.
+        : this(logger, Settings.LoadDefaultSettings(root: AppContext.BaseDirectory), null, packageCache)
+    {
+    }
+
+    /// <summary>
+    /// Creates a resolver over explicit NuGet <paramref name="settings"/> (the feeds and the source
+    /// mapping) and, optionally, an explicit <paramref name="globalPackagesFolder"/>. Used where the
+    /// caller owns the configuration: tests pin a private package folder and an unreachable feed
+    /// this way. The folder is a parameter rather than a setting because <c>NUGET_PACKAGES</c> in
+    /// the environment overrides any configured <c>globalPackagesFolder</c>.
+    /// </summary>
+    /// <param name="logger">Logger for resolution and install outcomes.</param>
+    /// <param name="settings">The NuGet settings naming the feeds.</param>
+    /// <param name="globalPackagesFolder">The package folder to read and install into; <c>null</c> takes it from the settings.</param>
+    /// <param name="packageCache">Optional persistent cache hydrated before a feed download.</param>
+    internal NuGetAssemblyResolver(
+        MsLogging.ILogger<NuGetAssemblyResolver> logger,
+        ISettings settings,
+        string? globalPackagesFolder = null,
+        INuGetPackageCache? packageCache = null)
+    {
+        this.logger = logger;
+        _settings = settings;
+        _globalPackagesFolder = globalPackagesFolder;
+        _nugetLogger = new NuGetLogger(logger);
+        _packageCache = packageCache ?? NullNuGetPackageCache.Instance;
+    }
 
     /// <summary>
     /// Resolves the <paramref name="requested"/> packages (and their transitive dependencies) to
@@ -80,7 +119,7 @@ public sealed class NuGetAssemblyResolver(
         NuGetFramework framework,
         CancellationToken ct)
     {
-        var packagesRoot = SettingsUtility.GetGlobalPackagesFolder(_settings);
+        var packagesRoot = _globalPackagesFolder ?? SettingsUtility.GetGlobalPackagesFolder(_settings);
         var providers = Repository.Provider.GetCoreV3();
         var packageSourceProvider = new PackageSourceProvider(_settings);
         var sources = packageSourceProvider.LoadPackageSources()
@@ -112,7 +151,7 @@ public sealed class NuGetAssemblyResolver(
             var identity = await ResolveIdentityAsync(
                 req, FilterSourcesForPackage(req.Id, sources, sourceMapping), framework, ct);
             targets.Add(identity);
-            await WalkDependenciesAsync(identity, sources, sourceMapping, framework, available, ct);
+            await WalkDependenciesAsync(identity, packagesRoot, sources, sourceMapping, framework, available, ct);
         }
 
         var resolverContext = new PackageResolverContext(
@@ -238,8 +277,8 @@ public sealed class NuGetAssemblyResolver(
     }
 
     private async Task WalkDependenciesAsync(
-        PackageIdentity root, SourceRepository[] sources, PackageSourceMapping mapping, NuGetFramework framework,
-        HashSet<SourcePackageDependencyInfo> collected, CancellationToken ct)
+        PackageIdentity root, string packagesRoot, SourceRepository[] sources, PackageSourceMapping mapping,
+        NuGetFramework framework, HashSet<SourcePackageDependencyInfo> collected, CancellationToken ct)
     {
         var queue = new Queue<PackageIdentity>();
         queue.Enqueue(root);
@@ -249,16 +288,11 @@ public sealed class NuGetAssemblyResolver(
             var current = queue.Dequeue();
             if (collected.Any(c => PackageIdentityComparer.Default.Equals(c, current))) continue;
 
-            SourcePackageDependencyInfo? info = null;
-            // Each package id is restricted to its mapped source(s) too, so a transitive
-            // MeshWeaver.* dependency can't silently slip in from nuget.org either.
-            foreach (var src in FilterSourcesForPackage(current.Id, sources, mapping))
-            {
-                var resource = await src.GetResourceAsync<DependencyInfoResource>(ct);
-                if (resource is null) continue;
-                info = await resource.ResolvePackage(current, framework, _sourceCache, _nugetLogger, ct);
-                if (info is not null) break;
-            }
+            // OFFLINE FIRST (#6863): an identity the package folder already holds complete is
+            // answered by its own .nuspec. The feed is never asked, so a warm folder resolves —
+            // and loads a recorded build — while every feed is down.
+            var info = ReadInstalledDependencyInfo(current, packagesRoot, framework)
+                ?? await ResolveFromFeedAsync(current, packagesRoot, sources, mapping, framework, ct);
             if (info is null) continue;
 
             collected.Add(info);
@@ -271,10 +305,93 @@ public sealed class NuGetAssemblyResolver(
         }
     }
 
+    private async Task<SourcePackageDependencyInfo?> ResolveFromFeedAsync(
+        PackageIdentity current, string packagesRoot, SourceRepository[] sources, PackageSourceMapping mapping,
+        NuGetFramework framework, CancellationToken ct)
+    {
+        // Each package id is restricted to its mapped source(s) too, so a transitive
+        // MeshWeaver.* dependency can't silently slip in from nuget.org either.
+        var candidates = FilterSourcesForPackage(current.Id, sources, mapping);
+        try
+        {
+            foreach (var src in candidates)
+            {
+                var resource = await src.GetResourceAsync<DependencyInfoResource>(ct);
+                if (resource is null) continue;
+                var info = await resource.ResolvePackage(current, framework, _sourceCache, _nugetLogger, ct);
+                if (info is not null) return info;
+            }
+            return null;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // The folder could not answer, so the feed is the only way left — and it failed.
+            // Name both halves: what was missing locally, and which feeds were tried.
+            throw new InvalidOperationException(
+                $"NuGet package {current.Id} {current.Version.ToNormalizedString()} is not installed in the "
+                + $"package folder '{packagesRoot}', and the feed(s) "
+                + $"{string.Join(", ", candidates.Select(c => $"'{c.PackageSource.Source}'"))} could not be "
+                + $"reached to resolve it: {ex.Message}", ex);
+        }
+    }
+
+    /// <summary>
+    /// Reads the dependency info of <paramref name="identity"/> from the package folder when the
+    /// package is installed there COMPLETE — the completion markers NuGet's own restore trusts
+    /// (<c>.nupkg.metadata</c>, or the older <c>.nupkg.sha512</c>), written after extraction —
+    /// and its <c>.nuspec</c> declares exactly that identity. Dependencies come from the nuspec's
+    /// group nearest to <paramref name="framework"/>, as a feed's dependency info would.
+    /// Returns <c>null</c> when the folder cannot answer, which sends the caller to the feed.
+    /// </summary>
+    private SourcePackageDependencyInfo? ReadInstalledDependencyInfo(
+        PackageIdentity identity, string packagesRoot, NuGetFramework framework)
+    {
+        var pathResolver = new VersionFolderPathResolver(packagesRoot);
+        var installPath = pathResolver.GetInstallPath(identity.Id, identity.Version);
+        if (!Directory.Exists(installPath)) return null;
+        var complete = File.Exists(pathResolver.GetNupkgMetadataPath(identity.Id, identity.Version))
+            || File.Exists(pathResolver.GetHashPath(identity.Id, identity.Version));
+        var nuspecPath = pathResolver.GetManifestFilePath(identity.Id, identity.Version);
+        if (!complete || !File.Exists(nuspecPath)) return null;
+
+        try
+        {
+            var nuspec = new NuspecReader(nuspecPath);
+            var declared = nuspec.GetIdentity();
+            if (!string.Equals(declared.Id, identity.Id, StringComparison.OrdinalIgnoreCase)
+                || declared.Version != identity.Version)
+            {
+                MsLogging.LoggerExtensions.LogWarning(logger,
+                    "Installed package folder {Path} declares {DeclaredId} {DeclaredVersion}, not {Id} {Version}; asking the feed",
+                    installPath, declared.Id, declared.Version.ToNormalizedString(), identity.Id,
+                    identity.Version.ToNormalizedString());
+                return null;
+            }
+
+            var group = NuGetFrameworkUtility.GetNearest(
+                nuspec.GetDependencyGroups(), framework, g => g.TargetFramework);
+            var dependencies = group?.Packages ?? [];
+            MsLogging.LoggerExtensions.LogDebug(logger,
+                "NuGet package {Id} {Version} resolved from the package folder (no feed call)",
+                identity.Id, identity.Version.ToNormalizedString());
+            return new SourcePackageDependencyInfo(
+                new PackageIdentity(declared.Id, identity.Version), dependencies, listed: true, source: null, downloadUri: null, packageHash: null);
+        }
+        catch (Exception ex) when (ex is InvalidDataException or System.Xml.XmlException or PackagingException)
+        {
+            MsLogging.LoggerExtensions.LogWarning(logger, ex,
+                "Installed package {Id} {Version} has an unreadable nuspec at {Path}; asking the feed",
+                identity.Id, identity.Version.ToNormalizedString(), nuspecPath);
+            return null;
+        }
+    }
+
     private async Task<string> EnsureInstalledAsync(SourcePackageDependencyInfo info, string packagesRoot, CancellationToken ct)
     {
         var versionString = info.Version.ToNormalizedString();
-        var installedPath = Path.Combine(packagesRoot, info.Id.ToLowerInvariant(), versionString);
+        // The v3 layout lower-cases the id AND the version folder — the same path the install
+        // below writes and the offline walk reads (VersionFolderPathResolver).
+        var installedPath = new VersionFolderPathResolver(packagesRoot).GetInstallPath(info.Id, info.Version);
         if (Directory.Exists(installedPath) && Directory.EnumerateFileSystemEntries(installedPath).Any())
             return installedPath;
 

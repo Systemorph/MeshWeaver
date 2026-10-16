@@ -184,8 +184,9 @@ The fix makes the closure part of the BUILD, not of the process that built it:
    possibly another generation) and is never displaced by it. The metadata read runs on a blocking
    pool, never the caller's signalling thread; the resolution runs on the HTTP lane through the pool's
    cold `Invoke`, so its bound cancels the wait and frees the slot, and it never queues behind the
-   Compile lane a kernel script holds while waiting for a NodeType to activate. Resolution still asks
-   the feed for dependency metadata even when the package folder is warm (#6863). It runs on every load of an already-built assembly: the post-compile scan in
+   Compile lane a kernel script holds while waiting for a NodeType to activate. Resolution is
+   offline-first (see [Offline-first resolution](#offline-first-resolution) below), so a pinned build
+   whose packages are on disk loads during a feed outage. It runs on every load of an already-built assembly: the post-compile scan in
    `CompileAndGetConfigurations`, the hydration shortcut `GetConfigurationsFromExistingAssembly` (the
    funnel for start-up registration, `EnrichWithNodeType`, the data-model and contract areas and adopted
    builds), and the cell surface. The load context then binds exactly as in the compiling process —
@@ -195,6 +196,35 @@ The fix makes the closure part of the BUILD, not of the process that built it:
    packages and the cause, and the load goes ahead and fails with the loader's own message — the verdict
    the record carries. A version-less `#r "nuget: Id"` re-resolves to whatever is newest on the reading
    process; pin a version when the build must load the same package everywhere.
+
+## Offline-first resolution
+
+`NuGetAssemblyResolver` asks the package folder first and a feed only for what the folder cannot
+answer (#6863):
+
+- **An exact version** (`#r "nuget: Id, 1.2.3"`, and every transitive dependency, which the walk takes
+  at its range's minimum version) is looked up in the global-packages folder at its v3 path
+  (`{id}/{version}`, both lower-cased). When the package is installed COMPLETE there, its own `.nuspec`
+  answers: the identity must match, and the dependencies are the nuspec group nearest the target
+  framework, which is what a feed's dependency info would have returned. No feed is contacted, so the
+  same closure resolves online and offline.
+- **Complete** means NuGet's own completion marker is present: `.nupkg.metadata`, or the older
+  `{id}.{version}.nupkg.sha512`. Both are written after extraction, so a half-extracted folder, an
+  empty directory or a folder whose nuspec names another identity is not trusted. The resolver then
+  asks the feed for that one identity.
+- **A floating or ranged ROOT request** (`#r "nuget: Id"`, `#r "nuget: Id, [1.0,2.0)"`) still asks the
+  feed which version to take. Answering it from the folder would make the version depend on what the
+  reading process happens to hold, so the feed stays authoritative for the choice. Pin a version for a
+  build that must load without a feed.
+- **When the folder cannot answer and the feed fails**, resolution fails with an
+  `InvalidOperationException` naming the package and version, the package folder it was missing from,
+  and each feed tried. A feed failure never surfaces when the folder could answer, because no feed is
+  asked.
+
+The pins: `NuGetOfflineFirstResolutionTest` (offline) lays out a two-package closure in a private
+package folder, configures one feed that refuses every connection, and resolves the closure with a
+fresh resolver. Its negative control removes the dependency from the folder and requires the named
+error. Without the folder read, the warm case fails with that error too, because the feed is asked.
 
 ## What pins it
 
