@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
@@ -163,10 +164,11 @@ public class NuGetPackagesLoadOnAFreshReplicaTest(ITestOutputHelper output) : Mo
         var freshCache = new CompilationCacheService(cacheOptions, NullLogger<CompilationCacheService>.Instance);
         try
         {
+            var replicaLog = new CapturingLogger<MeshNodeCompilationService>();
             var freshReplica = new MeshNodeCompilationService(
                 freshCache, cacheOptions, Mesh,
                 new NuGetAssemblyResolver(NullLogger<NuGetAssemblyResolver>.Instance),
-                NullLogger<MeshNodeCompilationService>.Instance);
+                replicaLog);
 
             var loaded = await freshReplica.GetConfigurationsFromExistingAssembly(storeCopy, TypePath)
                 .Take(1)
@@ -178,6 +180,13 @@ public class NuGetPackagesLoadOnAFreshReplicaTest(ITestOutputHelper output) : Mo
                 "a replica that never compiled the type must load its build — the loader said: "
                 + string.Join("; ", loaded.Log?.Messages.Select(m => m.Message) ?? []));
             loaded.NodeTypeConfigurations.Should().NotBeEmpty("the configuration scan realised every type");
+            // The positive evidence an operator greps for: the probe was armed on THIS process, at
+            // Information — on 2026-10-16 an image without the lane and one with it read the same.
+            replicaLog.Entries.Should().Contain(e =>
+                    e.Level == Microsoft.Extensions.Logging.LogLevel.Information
+                    && e.Message.Contains("Armed the package probe", StringComparison.Ordinal)
+                    && e.Message.Contains("Microsoft.Data.SqlClient, 6.1.1", StringComparison.Ordinal),
+                "loading a build that records a package must say, at Information, that its probe was armed");
 
             var assembly = AssemblyLoadContext.All
                 .SelectMany(c => c.Assemblies)
@@ -330,4 +339,21 @@ public class BuildProbingPrecedenceTest
             catch (IOException) { }
         }
     }
+}
+
+/// <summary>Records every log entry with its level and rendered message.</summary>
+internal sealed class CapturingLogger<T> : Microsoft.Extensions.Logging.ILogger<T>
+{
+    private readonly System.Collections.Concurrent.ConcurrentQueue<(Microsoft.Extensions.Logging.LogLevel Level, string Message)> _entries = new();
+
+    /// <summary>Everything logged so far, in order.</summary>
+    public IReadOnlyList<(Microsoft.Extensions.Logging.LogLevel Level, string Message)> Entries => _entries.ToArray();
+
+    public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+    public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+    public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId,
+        TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        => _entries.Enqueue((logLevel, formatter(state, exception)));
 }
