@@ -136,6 +136,86 @@ public sealed class ModuleServices : IDisposable
         .Select(r => $"#{r.Index} {r.Shape}")
         .ToImmutableList();
 
+    private ImmutableList<(int Index, string Entry)>? forwarderLayout;
+
+    /// <summary>
+    /// The forwarders the ROOT holds for this module — one <see cref="Shape"/> entry each, laid out by the
+    /// generation that BOOTED the module (<c>ModuleServiceForwarding.AddForwarders</c>) and inherited by
+    /// every generation swapped in after it (<see cref="ModuleContexts.PrepareServices"/>). Root
+    /// forwarders are fixed once the root container is built, so this — not the current generation's own
+    /// <see cref="Shape"/> — is what every lease through the root asks the current generation for. Strings
+    /// and indices only: a descriptor would name the boot generation's implementation types and pin it.
+    /// </summary>
+    public ImmutableList<string> ForwarderLayout => Layout.Select(slot => slot.Entry).ToImmutableList();
+
+    private ImmutableList<(int Index, string Entry)> Layout => forwarderLayout ??= Registrations
+        .Where(r => r.Route is ModuleServiceRoute.Proxy or ModuleServiceRoute.Current)
+        .Select(r => (r.Index, $"#{r.Index} {r.Shape}"))
+        .ToImmutableList();
+
+    /// <summary>Takes over <paramref name="booted"/>'s <see cref="ForwarderLayout"/> — the root's
+    /// forwarders were laid out for it, not for this generation.</summary>
+    internal void InheritForwarderLayout(ModuleServices booted) => forwarderLayout = booted.Layout;
+
+    /// <summary>
+    /// 🚨 Every root forwarder of this module that CANNOT be resolved in this generation — one sentence
+    /// each, naming the scope key, the service and why; empty when every forwarder resolves (MeshWeaver#6847).
+    ///
+    /// <para>A forwarder resolves registration <c>#i</c> of whatever generation is current under
+    /// <see cref="ModuleServiceRegistration.Key"/> (or the registration's own key). It cannot when the
+    /// current generation has no registration <c>#i</c>, when its <c>#i</c> is not the forwarded
+    /// registration the forwarder was laid out for (a different route, type or lifetime), or when this
+    /// generation's container holds nothing under that key — the incident's
+    /// <c>'mw-module-service:10 (…IWhatsAppRecentChats)' has not been registered</c>.</para>
+    ///
+    /// <para>🚨 <b>A positive, deterministic reading — never a count of failures over a window.</b> A
+    /// built container's registrations never change, and neither does <see cref="Registrations"/>, so a
+    /// forwarder that cannot be resolved in this generation now cannot be resolved by ANY lease while this
+    /// generation is current: one reading is already "sustained", and it clears exactly when a different
+    /// generation becomes current (or the process restarts). Reads the registry; resolves nothing, so it
+    /// runs no module code and cannot wait on a module container's lock. A disposed generation answers
+    /// empty — it is no longer what any forwarder resolves.</para>
+    /// </summary>
+    /// <param name="root">The mesh's root provider.</param>
+    internal ImmutableList<string> UnresolvableForwarders(IServiceProvider root)
+    {
+        var container = TryScope(root);
+        if (container is null)
+            return [];
+        var registry = container.GetService<Autofac.ILifetimeScope>();
+        var gaps = ImmutableList.CreateBuilder<string>();
+        foreach (var (index, entry) in Layout)
+        {
+            var current = Registrations.ElementAtOrDefault(index);
+            if (current is null)
+            {
+                gaps.Add($"the root's forwarder for registration #{index} was laid out for [{entry}], and this "
+                         + $"generation has no registration #{index} (it registers {Registrations.Count}) — every lease "
+                         + $"of 'mw-module-service:{index}' fails");
+                continue;
+            }
+            var type = current.Descriptor.ServiceType;
+            var key = current.Descriptor.IsKeyedService ? current.Descriptor.ServiceKey : current.Key;
+            if (current.Route is not (ModuleServiceRoute.Proxy or ModuleServiceRoute.Current)
+                || !string.Equals($"#{current.Index} {current.Shape}", entry, StringComparison.Ordinal))
+            {
+                gaps.Add($"the root's forwarder for registration #{index} was laid out for [{entry}], and this "
+                         + $"generation's registration #{index} is [{current.Route}:{type.FullName}] — every lease "
+                         + $"resolves '{key} ({type.FullName})' here, which is not the service it forwards"
+                         + (Holds(registry, key, type) ? "" : " and is not registered"));
+                continue;
+            }
+            if (!Holds(registry, key, type))
+                gaps.Add($"'{key} ({type.FullName})' (registration #{index}) has not been registered in this "
+                         + "generation's container — every lease of it fails");
+        }
+        return gaps.ToImmutable();
+    }
+
+    private static bool Holds(Autofac.ILifetimeScope? registry, object? key, Type type) =>
+        // No Autofac scope to ask is no evidence of a gap: say nothing rather than guess.
+        registry is null || key is null || Autofac.ResolutionExtensions.IsRegisteredWithKey(registry, key, type);
+
     /// <summary>
     /// Runs <paramref name="configurations"/> against a copy of <paramref name="prefix"/> and routes what
     /// they added. Throws what a delegate throws — the caller treats that as the generation failing.

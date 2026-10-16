@@ -736,6 +736,31 @@ its index, so such an N+1 is `RestartRequired` with N serving
 mutation-checked — without the index the swap answers `Live`). An addition AFTER the forwarded
 registrations (the hosted-service case above) still swaps live.
 
+**The class is loud now, not only the instance refused.** The swap refusal above is the root fix; what
+let the incident run six and a half hours is that nothing READ the broken state — `/health` said
+Degraded (the exception quoted inside two unrelated entries), every pod stayed READY, nothing paged.
+Three pieces close that, each built on the refusal rather than beside it:
+
+- **The layout is explicit.** `ModuleServices.ForwarderLayout` is the boot generation's forwarded
+  registrations (index + shape) and every swapped-in generation INHERITS it
+  (`ModuleContexts.PrepareServices`); the swap compares N+1's shape against that layout — the
+  forwarders the root actually holds — never merely against the generation it replaces.
+- **Readiness reads it.** `ModuleContexts.UnresolvableForwarders` asks each current generation, for
+  every forwarder in its layout, whether it can answer: the registration at that index exists, is the
+  forwarded one the forwarder was laid out for, and its container holds the scope key. The
+  `module_forwarders` health check (`ModuleForwarderHealthCheck`, readiness + census tags in
+  `Memex.Portal.ServiceDefaults`) is Unhealthy on any gap, naming module, generation, key and service,
+  and prints its clean census otherwise. One reading is enough — a built container never changes —
+  so it cannot flap on a transient lease failure and needs no window
+  (`ModuleRootServicesSwapTest.AGenerationWhoseForwarderMoved_FailsReadiness_NamingTheModuleAndTheService`,
+  arranged as the pre-refusal swap committed it and mutation-checked; its negative control
+  `EveryForwarderResolves_AfterBootAndAfterALiveSwap_SoReadinessHolds`).
+- **The fleet watch alarms on it.** `Hosting/Issue/Source/ModuleLeaseAlarms` (MeshWeaver.Plugins) reads
+  every replica's `/health` — unready ones included, since this check is what makes them unready —
+  for a `module_forwarders` finding or the raw `mw-module-service:… has not been registered` text an
+  older image quotes, and raises `ModuleServiceLease`: a Warning on the first pass, Critical (a platform
+  notification to global admins) once it holds on the next.
+
 **Measured over all 41 shipped modules** (Plugins with its slice converting the view packs and fixing
 Acp, built against this core; the three whose Debug output lacks NuGet dependencies measured from a
 published closure; measured in an ASP.NET Core test host): **41 live, 0 blocked, 0 declarations

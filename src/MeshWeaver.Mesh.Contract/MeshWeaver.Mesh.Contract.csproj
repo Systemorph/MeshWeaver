@@ -25,6 +25,10 @@
     <!-- #3862: the array-traversal regressions exercise the SetField/EvaluateField write primitives
          directly, as the issue asks, rather than through a live hub + node stream. -->
     <InternalsVisibleTo Include="MeshWeaver.Layout.Test" />
+    <!-- MeshWeaver#6847: the module_forwarders readiness check is proven against the exact state the
+         pre-#6849 swap committed (N+1 made current with the boot forwarders intact), which the shape
+         check now refuses to reach — so the test assembles that commit from the swap's own parts. -->
+    <InternalsVisibleTo Include="MeshWeaver.Compiler.Pipeline.Test" />
   </ItemGroup>
 
   <ItemGroup>
