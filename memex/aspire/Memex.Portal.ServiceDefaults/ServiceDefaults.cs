@@ -435,7 +435,21 @@ public static class ServiceDefaults
         builder.Services.AddSingleton<TokenValidationReadiness>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<TokenValidationReadiness>());
 
+        // 🚦 Readiness = this replica can identify a signed-in user (MeshWeaver#6850). The user
+        // directory used to be opened BY the first signed-in request, which then asked it before its
+        // first snapshot: one degraded identity per pod, by construction. It now opens when the
+        // application has started, and the pod is not Ready until it has hydrated. A ROLL GATE (see
+        // RollGateChecks): a directory that never hydrates keeps the pod out of the Service and never
+        // kills it. Healthy with "nothing to measure" in a host that registers no directory.
+        builder.Services.AddSingleton<MeshWeaver.Hosting.AspNetCore.Portal.UserDirectoryReadiness>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<MeshWeaver.Hosting.AspNetCore.Portal.UserDirectoryReadiness>());
+
         builder.Services.AddHealthChecks()
+            .Add(new HealthCheckRegistration(
+                MeshWeaver.Hosting.AspNetCore.Portal.UserDirectoryReadiness.HealthCheckName,
+                sp => sp.GetRequiredService<MeshWeaver.Hosting.AspNetCore.Portal.UserDirectoryReadiness>(),
+                failureStatus: null,
+                tags: [ProbeEndpoints.CensusTag]))
             .Add(new HealthCheckRegistration(
                 TokenValidationReadiness.HealthCheckName,
                 sp => sp.GetRequiredService<TokenValidationReadiness>(),
@@ -530,7 +544,9 @@ public static class ServiceDefaults
     /// their verdict is read by <see cref="ProbeEndpoints.Ready"/> alone, never by the startup
     /// probe on <see cref="ProbeEndpoints.Health"/>.
     ///
-    /// <para>Two checks: the NodeType bake gate (policy <c>bake-gate-readiness-only</c>) and the
+    /// <para>Three checks: the user directory's first snapshot (<c>user_directory</c>, MeshWeaver#6850 —
+    /// a replica that cannot identify anybody must not take traffic, and killing it would not hydrate
+    /// a shared directory read), the NodeType bake gate (policy <c>bake-gate-readiness-only</c>) and the
     /// required-modules check (policy <c>required-modules-readiness-only</c>). Its Unhealthy verdict
     /// (a required module absent or not installable here) is a property of what the pod's shelf was
     /// given, and when the registry cannot serve the module it is missing for every image — so on
@@ -543,7 +559,8 @@ public static class ServiceDefaults
     internal static readonly ImmutableHashSet<string> RollGateChecks =
         ImmutableHashSet.Create(StringComparer.Ordinal,
             NodeTypeBakeGateExtensions.HealthCheckName,
-            ProbeEndpoints.RequiredModulesCheckName);
+            ProbeEndpoints.RequiredModulesCheckName,
+            MeshWeaver.Hosting.AspNetCore.Portal.UserDirectoryReadiness.HealthCheckName);
 
     /// <summary>
     /// Adds <see cref="ProbeEndpoints.RollGateTag"/> to every registration named in
