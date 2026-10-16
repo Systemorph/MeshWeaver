@@ -774,23 +774,32 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
     }
 
     /// <summary>
-    /// A click on a row ALWAYS opens it inside the portal, in the owner's reading view — a mail with
-    /// an https link in its provider's own client too (the link is offered on the reading view, never
-    /// followed by the click). The row arrives typed or as JSON.
+    /// A click on a row opens it inside the portal, in the owner's reading view — a mail with an https
+    /// link in its provider's own client too, once its source brought a reader (the link is offered
+    /// on the reading view, never followed by the click). Only a row outside the mesh whose source
+    /// has NO reader yet keeps its provider link — the reading view would have nothing to show. The
+    /// row arrives typed or as JSON.
     /// </summary>
     [Fact]
-    public void AClickedRow_AlwaysOpensTheReadingView()
+    public void AClickedRow_OpensTheReadingView_WheneverItCanBeRead()
     {
         var options = Mesh.JsonSerializerOptions;
+        static bool Readable(string path) => path.Contains("/_Mailbox/", StringComparison.Ordinal);
+        static bool NoReader(string _) => false;
         var mail = new InboxRow { Path = "alice/_Mailbox/outlook/m1", Link = "https://outlook.office.com/mail/id/m1" };
         var mailUrl = "/alice/Inbox/" + InboxReadingView.ItemId("alice/_Mailbox/outlook/m1");
-        InboxLayoutArea.OpenTarget(mail, options, "alice").Should().Be(mailUrl, "a click never leaves the portal");
-        InboxLayoutArea.OpenTarget(JsonSerializer.SerializeToElement(mail, options), options, "alice")
-            .Should().Be(mailUrl, "the row as it comes back over the wire");
-        InboxLayoutArea.OpenTarget(new InboxRow { Path = "alice/_Thread/t1" }, options, "alice")
-            .Should().Be("/alice/Inbox/" + InboxReadingView.ItemId("alice/_Thread/t1"));
-        InboxLayoutArea.OpenTarget(new InboxRow(), options, "alice").Should().BeNull();
-        InboxLayoutArea.OpenTarget(null, options, "alice").Should().BeNull();
+        InboxLayoutArea.OpenTarget(mail, options, "alice", Readable).Should().Be((mailUrl, false), "a readable row never leaves the portal");
+        InboxLayoutArea.OpenTarget(JsonSerializer.SerializeToElement(mail, options), options, "alice", Readable)
+            .Should().Be((mailUrl, false), "the row as it comes back over the wire");
+        InboxLayoutArea.OpenTarget(mail, options, "alice", NoReader)
+            .Should().Be(("https://outlook.office.com/mail/id/m1", true), "no reader yet: the provider's client, never an empty page");
+        var thread = "/alice/Inbox/" + InboxReadingView.ItemId("alice/_Thread/t1");
+        InboxLayoutArea.OpenTarget(new InboxRow { Path = "alice/_Thread/t1" }, options, "alice", NoReader)
+            .Should().Be((thread, false), "a stored item opens in the reading view, which shows its own page");
+        InboxLayoutArea.OpenTarget(new InboxRow { Path = "alice/_Thread/t1", Link = "javascript:alert(1)" }, options, "alice", NoReader)
+            .Should().Be((thread, false), "only an https link ever leaves the portal");
+        InboxLayoutArea.OpenTarget(new InboxRow(), options, "alice", Readable).Should().BeNull();
+        InboxLayoutArea.OpenTarget(null, options, "alice", Readable).Should().BeNull();
     }
 
     /// <summary>
@@ -871,6 +880,17 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
         InboxReadingView.Content(new InboxItemContent { Refusal = "Outlook is not connected" }, null,
                 System.Globalization.CultureInfo.InvariantCulture, texts)
             .Should().BeOfType<LabelControl>().Which.Data.Should().Be("Outlook is not connected");
+    }
+
+    /// <summary>
+    /// The provider link is worded in the VIEWER's language from a locale captured on the render turn
+    /// — the read answers on another thread, where the ambient language is no longer the viewer's.
+    /// </summary>
+    [Fact]
+    public void TheProviderLink_IsWordedInTheViewersLanguage()
+    {
+        MeshWeaver.Messaging.LocalizationCatalog.Get("inbox.read.openInProvider", "de", "Outlook").Should().Be("In Outlook öffnen");
+        MeshWeaver.Messaging.LocalizationCatalog.Get("inbox.read.openInProvider", "en", "Teams").Should().Be("Open in Teams");
     }
 
     /// <summary>Handles every <c>…/_Fake/…</c> path, whoever's partition it is in — the page must refuse a foreign one.</summary>

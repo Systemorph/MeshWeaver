@@ -90,7 +90,8 @@ public static class InboxReadingView
             return Observable.Return<UiControl?>(Page(Controls.LayoutArea(new Address(path), MeshNodeLayoutAreas.OverviewArea)));
 
         // Resolved ONCE, on the render turn: the read answers on another thread.
-        var culture = InboxLayoutArea.ViewerCulture(host.ViewerLocale());
+        var locale = host.ViewerLocale();
+        var culture = InboxLayoutArea.ViewerCulture(locale);
         var texts = new Texts(
             Loading: host.Localize("inbox.read.loading"),
             Failed: host.Localize("inbox.read.failed"),
@@ -98,7 +99,9 @@ public static class InboxReadingView
             Account: host.Localize("inbox.read.account"),
             Received: host.Localize("inbox.read.received"),
             OpenIn: host.Localize("inbox.read.openIn"),
-            OpenInProvider: provider => host.Localize("inbox.read.openInProvider", provider));
+            // The read answers on another thread, where the viewer's language is no longer ambient:
+            // the locale is captured HERE and the provider's name filled in with it.
+            OpenInProvider: provider => LocalizationCatalog.Get("inbox.read.openInProvider", locale, provider));
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(InboxReadingView));
         IObservable<InboxItemContent> read;
         try

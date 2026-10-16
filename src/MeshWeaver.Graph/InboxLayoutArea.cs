@@ -690,23 +690,38 @@ public static class InboxLayoutArea
     {
         var options = ctx.Hub.JsonSerializerOptions;
         var owner = UserNodeType.OwnerOf(ctx.Host.Hub.Address.ToString());
+        var readers = ctx.Hub.ServiceProvider.GetServices<IInboxItemReader>().ToImmutableArray();
         // The payload is an object boundary: it may arrive typed or as JSON, so it is read through
         // the shared accessor, never a CLR pattern that drops the JSON envelope.
-        if (OpenTarget(ctx.Payload.As<DataGridCellClick>(options)?.Item, options, owner) is { } url)
-            ctx.NavigateTo(url);
+        if (OpenTarget(ctx.Payload.As<DataGridCellClick>(options)?.Item, options, owner,
+                path => InboxReadingView.ReaderFor(readers, path) is not null) is { } target)
+            ctx.NavigateTo(target.Url, forceLoad: target.External);
     }
 
     /// <summary>
     /// Where a clicked row goes: the owner's reading view of its path (<see cref="InboxReadingView.Url"/>)
-    /// — ALWAYS inside the portal, whatever <see cref="InboxRow.Link"/> the row carries (that link is
-    /// offered on the reading view, never followed by the click). Null for a row without a path, or
-    /// one that cannot be read as a row. The row arrives typed or as JSON (read with the shared
-    /// <c>As</c> accessor). Pure.
+    /// — inside the portal. The row's <see cref="InboxRow.Link"/> is offered ON the reading view, never
+    /// followed by the click, with ONE transitional exception: a row that lives OUTSIDE the mesh (it
+    /// carries an https link) whose source has not yet brought an <see cref="IInboxItemReader"/>
+    /// (<paramref name="readable"/> says no) still opens in its provider's own client, because the
+    /// reading view would have nothing to show for it — no store holds it. Once the source's package
+    /// ships its reader, that row opens inside the portal too. Null for a row without a path, or one
+    /// that cannot be read as a row. The row arrives typed or as JSON (read with the shared <c>As</c>
+    /// accessor). Pure.
     /// </summary>
-    internal static string? OpenTarget(object? item, System.Text.Json.JsonSerializerOptions options, string owner)
-        => item.As<InboxRow>(options) is { Path: { Length: > 0 } path } && owner.Length > 0
-            ? InboxReadingView.Url(owner, path)
-            : null;
+    /// <param name="item">The clicked row.</param>
+    /// <param name="options">How the row is read.</param>
+    /// <param name="owner">The inbox's owner.</param>
+    /// <param name="readable">Whether a reader handles a path.</param>
+    internal static (string Url, bool External)? OpenTarget(object? item, System.Text.Json.JsonSerializerOptions options, string owner,
+        Func<string, bool> readable)
+    {
+        if (item.As<InboxRow>(options) is not { Path: { Length: > 0 } path } row || owner.Length == 0)
+            return null;
+        return InboxReadingView.IsHttps(row.Link) && !readable(path)
+            ? (row.Link, true)
+            : (InboxReadingView.Url(owner, path), false);
+    }
 
     /// <summary>
     /// Delete: every ticked row that the OWNER's own feed lists right now, confined to the owner's
