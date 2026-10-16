@@ -235,6 +235,12 @@ answer (#6863):
   feed which version to take. Answering it from the folder would make the version depend on what the
   reading process happens to hold, so the feed stays authoritative for the choice. Pin a version for a
   build that must load without a feed.
+- **A candidate the folder lacks is still asked of the feed first**, so online version selection
+  is unchanged. When every feed fails, installed versions within the dependency's range stand in
+  for that candidate. This covers a diamond: A needs B ≥ 1.0 and C ≥ 1.0, and C raises B to ≥ 2.0.
+  Online resolution installs only B 2.0, never the B 1.0 candidate the walk also met. The installed
+  versions are what the feed would have offered next, and the resolver still chooses among them by
+  the same rules. With nothing installed in range, the feed failure is the answer.
 - **When the folder cannot answer**, every configured feed the source mapping allows is asked in
   turn. A failing feed does not stop the search: the next feed is asked, and the failure is logged
   against that feed when a later one answers. If no feed supplies the package and at least one
@@ -256,6 +262,8 @@ The first configured feed refuses every connection, and some cases add a local f
 - A cache hydration is paused after writing the nuspec and the marker but before the assembly. A
   second resolver reading in that window must not accept the half-written folder, and it ends with
   the finished package.
+- The diamond above is resolved online from a local feed, then by a fresh resolver with only the
+  unreachable feed. It gives the same versions and assembly paths.
 - A folder that passes the existence checks and is deleted by a concurrent repair before its
   manifest is read counts as a local miss, never a failure: resolution goes on to the feed and the
   install lock.

@@ -6,6 +6,8 @@ using System.Threading.Tasks;
 using MeshWeaver.NuGet;
 using Microsoft.Extensions.Logging.Abstractions;
 using NuGet.Configuration;
+using NuGet.Frameworks;
+using NuGet.Packaging.Core;
 using NuGet.Packaging;
 using NuGet.Versioning;
 using Xunit;
@@ -40,16 +42,19 @@ public sealed class NuGetOfflineFirstResolutionTest : IDisposable
     }
 
     /// <summary>The unreachable feed always comes FIRST; the local feed, when present, second.</summary>
-    private void WriteConfig(bool withLocalFeed)
+    private void WriteConfig(bool withLocalFeed, bool withUnreachableFeed = true)
     {
         Directory.CreateDirectory(LocalFeed);
         var local = withLocalFeed ? $"""<add key="local" value="{LocalFeed}" />""" : string.Empty;
+        var unreachable = withUnreachableFeed
+            ? $"""<add key="unreachable" value="{UnreachableFeed}" />"""
+            : string.Empty;
         File.WriteAllText(Path.Combine(root, "nuget.config"), $"""
             <?xml version="1.0" encoding="utf-8"?>
             <configuration>
               <packageSources>
                 <clear />
-                <add key="unreachable" value="{UnreachableFeed}" />
+                {unreachable}
                 {local}
               </packageSources>
             </configuration>
@@ -100,9 +105,9 @@ public sealed class NuGetOfflineFirstResolutionTest : IDisposable
     }
 
     /// <summary>Publishes a real .nupkg of <paramref name="id"/> into the local folder feed.</summary>
-    private void Publish(string id, string version)
+    private void Publish(string id, string version, params (string Id, string Range)[] dependencies)
     {
-        var dll = Path.Combine(root, id + ".dll");
+        var dll = Path.Combine(root, $"{id}.{version}.dll");
         File.WriteAllBytes(dll, [0x4D, 0x5A]);
         var builder = new PackageBuilder
         {
@@ -112,6 +117,10 @@ public sealed class NuGetOfflineFirstResolutionTest : IDisposable
         };
         builder.Authors.Add("test");
         builder.Files.Add(new PhysicalPackageFile { SourcePath = dll, TargetPath = $"lib/net10.0/{id}.dll" });
+        if (dependencies.Length > 0)
+            builder.DependencyGroups.Add(new PackageDependencyGroup(
+                NuGetFramework.Parse("net8.0"),
+                dependencies.Select(d => new PackageDependency(d.Id, VersionRange.Parse(d.Range))).ToArray()));
         using var stream = File.Create(Path.Combine(LocalFeed, $"{id.ToLowerInvariant()}.{version}.nupkg"));
         builder.Save(stream);
     }
@@ -311,6 +320,39 @@ public sealed class NuGetOfflineFirstResolutionTest : IDisposable
         Volatile.Read(ref deleted).Should().Be(1, "the folder vanished inside the window under test");
         result.AssemblyPaths.Should().Contain(p => p.EndsWith("Acme.Offline.B.dll", StringComparison.Ordinal))
             .And.OnlyContain(p => File.Exists(p));
+    }
+
+    /// <summary>
+    /// A diamond: A depends on B >= 1.0.0 and C >= 1.0.0, and C 1.0.0 raises the floor to B >= 2.0.0.
+    /// Online resolution selects B 2.0.0 and installs only that, never the B 1.0.0 candidate the
+    /// walk also met. A fresh resolver with the feed unreachable must still resolve the installed
+    /// closure: the B 1.0.0 candidate the feed cannot supply is stood in for by the installed B
+    /// 2.0.0 within the same range, and the result is the one the online resolution produced.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task InstalledDiamond_ResolvesOfflineToTheSameVersions()
+    {
+        Publish("Acme.Offline.A", "1.0.0", ("Acme.Offline.B", "1.0.0"), ("Acme.Offline.C", "1.0.0"));
+        Publish("Acme.Offline.B", "1.0.0");
+        Publish("Acme.Offline.B", "2.0.0");
+        Publish("Acme.Offline.C", "1.0.0", ("Acme.Offline.B", "2.0.0"));
+        var request = new[] { new NuGetPackageReference("Acme.Offline.A", "1.0.0") };
+        var ct = TestContext.Current.CancellationToken;
+
+        WriteConfig(withLocalFeed: true, withUnreachableFeed: false);
+        var online = await ColdResolver().ResolveAsync(request, targetFramework: null, ct: ct);
+        online.ResolvedVersions.Should().ContainKey("Acme.Offline.B").WhoseValue.Should().Be("2.0.0");
+        Directory.Exists(InstallFolder("Acme.Offline.B", "1.0.0"))
+            .Should().BeFalse("online resolution installs only the selected B");
+
+        WriteConfig(withLocalFeed: false, withUnreachableFeed: true);
+        var offline = await ColdResolver().ResolveAsync(request, targetFramework: null, ct: ct);
+
+        offline.ResolvedVersions.OrderBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(kv => $"{kv.Key} {kv.Value}")
+            .Should().Equal(online.ResolvedVersions.OrderBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(kv => $"{kv.Key} {kv.Value}"));
+        offline.AssemblyPaths.Should().Equal(online.AssemblyPaths);
     }
 
     private int readerRefused;
