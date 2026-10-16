@@ -4103,29 +4103,66 @@ internal static class NodeTypeCompilationHelpers
 
     /// <summary>
     /// MeshWeaver#6831 — the module version a successful compile's bytes were built at, as
-    /// <see cref="NodeTypeDefinition.BuiltModuleVersion"/> records it: the live
-    /// <see cref="NodeTypeDefinition.CurrentModuleVersion"/> when the record's live source snapshot
-    /// is still exactly the one compiled, null (unknown) when it has moved since. Bytes whose MVID
-    /// the record already carries a version for keep it — a disk-cache reload of the same build —
-    /// and an unreadable MVID keeps the standing pair, whose MVID then still names the old bytes.
+    /// <see cref="NodeTypeDefinition.BuiltModuleVersion"/> records it. It is the
+    /// <see cref="NodeTypeDefinition.CurrentModuleVersion"/> of <paramref name="compiledInput"/> —
+    /// the record the compile was HANDED (its configuration is what Roslyn compiled) — and only
+    /// when that version provably belongs to these bytes:
+    /// <list type="bullet">
+    ///   <item>the source files the compile read are exactly the ones the input described
+    ///   (<paramref name="compiledSources"/> equals its <c>CurrentSourceVersions</c>), and</item>
+    ///   <item>no compile input moved while it ran: the record the stamp settles onto
+    ///   (<paramref name="def"/>) still carries the input's <c>Configuration</c>,
+    ///   <c>CurrentModuleVersion</c>, <c>CurrentSourceVersions</c>,
+    ///   <c>CurrentSourceFingerprint</c> and <c>CurrentSourceIncludes</c>. The source-version
+    ///   dictionaries exclude <c>@@</c>-includes and the configuration, so a configuration- or
+    ///   include-only update landing mid-compile is visible ONLY here; the compile read one side
+    ///   of it or the other and nothing records which, so the version is unknown.</item>
+    /// </list>
+    /// Otherwise — including when the caller cannot name its input — null (unknown), never the
+    /// live record's version, which may already be the NEXT one. Bytes whose MVID the record already
+    /// carries a version for keep it (a disk-cache reload of the same build), and an unreadable MVID
+    /// keeps the standing pair, whose MVID then still names the old bytes.
     /// </summary>
-    /// <param name="def">The record the compile is settling onto.</param>
+    /// <param name="def">The record the compile is settling onto (live at the stamp).</param>
+    /// <param name="compiledInput">The record the compile was handed, or null when unknown.</param>
     /// <param name="compiledSources">The source snapshot the compile recorded.</param>
     /// <param name="assemblyMvid">The MVID of the bytes the compile produced, or null if unreadable.</param>
     internal static string? BuiltModuleVersionOfCompile(
-        NodeTypeDefinition def, IReadOnlyDictionary<string, long>? compiledSources, string? assemblyMvid)
+        NodeTypeDefinition def, NodeTypeDefinition? compiledInput,
+        IReadOnlyDictionary<string, long>? compiledSources, string? assemblyMvid)
     {
         if (assemblyMvid is null)
             return def.BuiltModuleVersion;
         if (def.BuiltModuleVersion is not null
             && string.Equals(assemblyMvid, def.BuiltModuleVersionMvid, StringComparison.Ordinal))
             return def.BuiltModuleVersion;
-        var compiled = def with
+        if (compiledInput is null)
+            return null;
+        var readWhatTheInputDescribed = !(compiledInput with
         {
             CompiledSources = compiledSources ?? System.Collections.Immutable.ImmutableDictionary<string, long>.Empty,
-        };
-        return compiled.IsDirty ? null : def.CurrentModuleVersion;
+        }).IsDirty;
+        return readWhatTheInputDescribed && NoCompileInputMoved(compiledInput, def)
+            ? compiledInput.CurrentModuleVersion
+            : null;
     }
+
+    /// <summary>Whether every compile input that the source-version dictionaries do NOT cover is
+    /// the same on <paramref name="input"/> and <paramref name="live"/> (#6831).</summary>
+    private static bool NoCompileInputMoved(NodeTypeDefinition input, NodeTypeDefinition live)
+        => string.Equals(input.Configuration, live.Configuration, StringComparison.Ordinal)
+           && string.Equals(input.CurrentModuleVersion, live.CurrentModuleVersion, StringComparison.Ordinal)
+           && string.Equals(input.CurrentSourceFingerprint, live.CurrentSourceFingerprint, StringComparison.Ordinal)
+           && SameSequence(input.CurrentSourceIncludes, live.CurrentSourceIncludes)
+           && SameVersions(input.CurrentSourceVersions, live.CurrentSourceVersions);
+
+    private static bool SameSequence(IReadOnlyList<string>? a, IReadOnlyList<string>? b)
+        => a is null || b is null ? a is null && b is null : a.SequenceEqual(b, StringComparer.Ordinal);
+
+    private static bool SameVersions(IReadOnlyDictionary<string, long>? a, IReadOnlyDictionary<string, long>? b)
+        => (a is null || a.Count == 0) && (b is null || b.Count == 0)
+           || a is not null && b is not null && a.Count == b.Count
+              && a.All(kv => b.TryGetValue(kv.Key, out var v) && v == kv.Value);
 
     /// <summary>
     /// THE terminal stamp of a SUCCESSFUL compile — the exact field set
@@ -4159,6 +4196,12 @@ internal static class NodeTypeCompilationHelpers
     /// stamp: the stamp describes THIS build, never an earlier one.
     /// </param>
     /// <param name="unreleasedBuildReason">Why, in the attempt's own words; travels with the path.</param>
+    /// <param name="compiledInput">
+    /// 🚨 #6831 — the definition the compile was HANDED (the pending node it compiled). The module
+    /// version stamped on the bytes is THIS record's, never <paramref name="def"/>'s: a
+    /// configuration- or include-only update landing during the compile moves the live version
+    /// without making the type dirty. Null = unknown, and the bytes' version is then unknown too.
+    /// </param>
     internal static NodeTypeDefinition ApplyCompileSuccess(
         NodeTypeDefinition def,
         NodeCompilationResult result,
@@ -4167,7 +4210,8 @@ internal static class NodeTypeCompilationHelpers
         string? releasePath,
         string? modulesHash = null,
         string? unreleasedBuildPath = null,
-        string? unreleasedBuildReason = null)
+        string? unreleasedBuildReason = null,
+        NodeTypeDefinition? compiledInput = null)
     {
         var assemblyMvid = ServedBuildIdentity.OfFile(result.AssemblyLocation);
         var dependencies = result.CompiledDependencies;
@@ -4273,9 +4317,9 @@ internal static class NodeTypeCompilationHelpers
             // 🚨 #6831 — the module version THESE bytes were built at, keyed to their MVID, so a
             // later delivery hold (which relabels the provenance, not the bytes) or a later
             // include-only edit (which moves CurrentModuleVersion without making the type dirty)
-            // cannot relabel them. Only when the record's live snapshot is still the one compiled:
-            // otherwise the version moved during the compile and the bytes' version is unknown.
-            BuiltModuleVersion = BuiltModuleVersionOfCompile(def, result.CompiledSources, assemblyMvid),
+            // cannot relabel them. The version is the compiled INPUT's, and only while no input
+            // moved during the compile; otherwise the bytes' version is unknown.
+            BuiltModuleVersion = BuiltModuleVersionOfCompile(def, compiledInput, result.CompiledSources, assemblyMvid),
             BuiltModuleVersionMvid = assemblyMvid ?? def.BuiltModuleVersionMvid,
             // The framework the assembly bound against — HasUsableBuild compares this to the
             // live FrameworkVersion so a MeshWeaver redeploy forces a recompile instead of
@@ -5244,7 +5288,11 @@ internal static class NodeTypeCompilationHelpers
                                 SettleHub().ServiceProvider.GetService<InstalledModulesFingerprint>()?.Hash,
                                 // #5057 — a build that ends with no release is STAMPED as such,
                                 // not only logged at the moment of the settle.
-                                settle.UnreleasedBuildPath, settle.UnreleasedBuildReason);
+                                settle.UnreleasedBuildPath, settle.UnreleasedBuildReason,
+                                // #6831 — the record the compile READ, so the bytes carry its
+                                // module version and not one that landed while it ran.
+                                compiledInput: outcome.PendingNode.ContentAs<NodeTypeDefinition>(
+                                    SettleHub().JsonSerializerOptions, logger));
                             lifted = BuildDeliveryHold.EventOf(def, succeeded);
                             liftedDef = succeeded;
                             return curr with { Content = succeeded };

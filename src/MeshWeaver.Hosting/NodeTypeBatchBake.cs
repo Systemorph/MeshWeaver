@@ -1553,7 +1553,10 @@ internal static class NodeTypeBatchBake
                         ? NodeTypeCompilationHelpers.ApplyCompileSuccess(
                             def, result!, typeNode.Version, activityPath: null, releasePath,
                             mesh.ServiceProvider.GetService<InstalledModulesFingerprint>()?.Hash,
-                            unreleasedBuildPath, unreleasedBuildReason)
+                            unreleasedBuildPath, unreleasedBuildReason,
+                            // #6831 — the node the compiler was handed, whose module version
+                            // the bytes carry.
+                            compiledInput: typeNode.ContentAs<NodeTypeDefinition>(options, logger))
                         : NodeTypeCompilationHelpers.ApplyCompileFailure(
                             def, result, error, activityPath: null,
                             mesh.ServiceProvider.GetService<InstalledModulesFingerprint>()?.Hash,

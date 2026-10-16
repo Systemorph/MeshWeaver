@@ -355,11 +355,26 @@ The registry therefore states each assembly's own version:
   bytes by `PrebuiltAssemblySeeder.ModuleVersionOfBuild`:
   - the version is `BuiltModuleVersion`, recorded in the same write that names the bytes: an
     adoption records the producer's stated version, and a local compile records the
-    `CurrentModuleVersion` of exactly the source snapshot it compiled, or nothing when that
-    snapshot moved during the compile;
+    `CurrentModuleVersion` of the definition the compile was HANDED — never the live record's at
+    the stamp. When any compile input moved while the compile ran (configuration, module version,
+    source fingerprint, `@@`-include list or source versions — the source-version dictionaries
+    see neither the configuration nor the includes), the compile read one side of that update or
+    the other and nothing records which, so the version is **unknown**;
+  - the contract handler's resolve write (`ApplyResolvedSuccess`), which compiles locally on a
+    store miss or a foreign identity, names new bytes without being able to establish their
+    version: it records **unknown** keyed to them, so a record adopted before the pair existed
+    no longer advertises the adoption's `AdoptedModuleVersion` over bytes compiled here. A hydrate
+    of the bytes the record already names keeps the pair;
   - it counts only while its `BuiltModuleVersionMvid` is the record's `LatestAssemblyMvid`, so a
     writer that names new bytes without their version yields **unknown**, never the old bytes'
     version;
+  - the endpoint serves, on its own lane, the build the record NAMES — by its content-hashed
+    `LatestAssemblyPath` and `LatestAssemblyMvid` (`IAssemblyStore.TryGetBuildPath`), the bytes the
+    next activation binds — never the newest file under the store key, which several builds can
+    share. And it states the record's version only when the served file's MVID IS the record's
+    `LatestAssemblyMvid`: `TryGetBuildPath` falls back to the key's newest file when it cannot find
+    the named bytes, and that file's version is **unknown**. Off the lane the Release artifact is
+    selected as before, under the same MVID rule;
   - a record written before that pair existed says only what an adoption it was judged on says
     (`AdoptedVerified`/`AdoptedUnverified` → `AdoptedModuleVersion`); every other historical
     record is unknown.
@@ -377,7 +392,8 @@ The registry therefore states each assembly's own version:
 - The consumers (`PluginBundleClient`, `ShippedPrebuiltBundles`) stamp `Payload.ModuleVersion`.
 
 Pinned by `test/Memex.Portal.Shared.Test/RegistryStatesTheServedBuildsModuleVersionTest.cs` and,
-for the compile-to-hold and include-only transitions,
+for the compile-to-hold, include-only, update-during-compile and compile-after-old-adoption
+transitions,
 `test/MeshWeaver.Compiler.Pipeline.Test/BuiltModuleVersionFollowsTheBytesTest.cs`.
 
 ### Three refusals the lookup carries, and why each is not optional

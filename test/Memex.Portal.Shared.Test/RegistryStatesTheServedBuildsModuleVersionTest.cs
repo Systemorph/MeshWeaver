@@ -47,6 +47,8 @@ public class RegistryStatesTheServedBuildsModuleVersionTest(ITestOutputHelper ou
     private const string BuiltVersion = "1.0.1";
     private const string AdoptedType = Plugin + "/PersonalApp";
     private const string CompiledType = Plugin + "/Fresh";
+    private const string SameKeyType = Plugin + "/SameKey";
+    private const string UnmatchedType = Plugin + "/Unmatched";
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder).AddPluginCatalog();
@@ -89,6 +91,63 @@ public class RegistryStatesTheServedBuildsModuleVersionTest(ITestOutputHelper ou
         Assert.Equal(AdvertisedVersion, compiled.ModuleVersion);
     }
 
+    /// <summary>
+    /// Review thread 4287471936: several builds share one store key, and the endpoint served the
+    /// NEWEST file under it while labelling it with the version the record states for the build it
+    /// NAMES. The record's build must be the one served (by its content path and MVID), and a file
+    /// whose MVID is not the record's must never carry the record's version.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task ASameKeyBuildWithAnotherMvid_IsNeverServedUnderTheRecordsVersion()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await InstallRecord(ct);
+        var store = Mesh.ServiceProvider.GetRequiredService<IAssemblyStore>();
+        var named = await File.ReadAllBytesAsync(typeof(BundleReader).Assembly.Location, ct);
+        var other = await File.ReadAllBytesAsync(typeof(PluginBundleEndpoints).Assembly.Location, ct);
+        var namedMvid = ServedBuildIdentity.OfBytes(named);
+        Assert.NotEqual(namedMvid, ServedBuildIdentity.OfBytes(other));
+
+        // SameKey: the record names build A at 1.0.1; build B lands later under the SAME key and is
+        // the newest file there.
+        await CreateTypeWithBuild(SameKeyType, storeVersion: 1, new NodeTypeDefinition
+        {
+            BuildProvenance = BuildProvenance.AdoptedUnverified,
+            AdoptedModuleVersion = BuiltVersion,
+            BuiltModuleVersion = BuiltVersion,
+            CurrentModuleVersion = AdvertisedVersion,
+        }, ct);
+        await PutNewest(store, SameKeyType, other, ct);
+
+        // Unmatched: the record names bytes this store does not hold, so the lookup falls back to the
+        // key's newest file — which is not the record's build, so its version is unknown.
+        await CreateTypeWithBuild(UnmatchedType, storeVersion: 1, new NodeTypeDefinition
+        {
+            BuildProvenance = BuildProvenance.AdoptedUnverified,
+            AdoptedModuleVersion = BuiltVersion,
+            BuiltModuleVersion = BuiltVersion,
+            CurrentModuleVersion = AdvertisedVersion,
+        }, ct, recordedMvid: "ffffffffffffffffffffffffffffffff", bytes: other);
+
+        var key = await RegisterInstance(ct);
+        await using var app = await StartBundleHost(ct);
+        var (_, payloads) = BundleReader.Read(await Bundle(app, AdvertisedVersion, key, ct));
+
+        var sameKey = Assert.Single(payloads, p => p.NodePath == SameKeyType);
+        Assert.Equal(namedMvid, ServedBuildIdentity.OfBytes(sameKey.Assembly));
+        Assert.Equal(BuiltVersion, sameKey.ModuleVersion);
+
+        var unmatched = Assert.Single(payloads, p => p.NodePath == UnmatchedType);
+        Assert.Null(unmatched.ModuleVersion);
+    }
+
+    private static async Task PutNewest(IAssemblyStore store, string path, byte[] bytes, CancellationToken ct)
+    {
+        var location = await store.PutWithLocation(path, 1, bytes, null)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        File.SetLastWriteTimeUtc(location.LocalPath, DateTime.UtcNow.AddHours(1));
+    }
+
     /// <summary>The pure rule the registry reads the version through, for a record written BEFORE
     /// the version was keyed to the bytes' MVID: only a judged adoption can still say; every other
     /// historical record is unknown, never a guess from the live source. The transitions that write
@@ -127,10 +186,12 @@ public class RegistryStatesTheServedBuildsModuleVersionTest(ITestOutputHelper ou
     }
 
     private async Task CreateTypeWithBuild(
-        string path, long storeVersion, NodeTypeDefinition shape, CancellationToken ct)
+        string path, long storeVersion, NodeTypeDefinition shape, CancellationToken ct,
+        string? recordedMvid = null, byte[]? bytes = null)
     {
         var store = Mesh.ServiceProvider.GetRequiredService<IAssemblyStore>();
-        var bytes = await File.ReadAllBytesAsync(typeof(BundleReader).Assembly.Location, ct);
+        bytes ??= await File.ReadAllBytesAsync(typeof(BundleReader).Assembly.Location, ct);
+        var mvid = recordedMvid ?? ServedBuildIdentity.OfBytes(bytes);
         var location = await store.PutWithLocation(path, storeVersion, bytes, null)
             .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
         var node = MeshNode.FromPath(path) with
@@ -144,9 +205,10 @@ public class RegistryStatesTheServedBuildsModuleVersionTest(ITestOutputHelper ou
                 CompilationStatus = CompilationStatus.Ok,
                 LastCompiledVersion = storeVersion,
                 LatestAssemblyCollection = location.Collection,
-                LatestAssemblyPath = location.ContentPath,
-                LatestAssemblyMvid = ServedBuildIdentity.OfBytes(bytes),
-                BuiltModuleVersionMvid = shape.BuiltModuleVersion is null ? null : ServedBuildIdentity.OfBytes(bytes),
+                // A record naming bytes the store does not hold names no path either.
+                LatestAssemblyPath = recordedMvid is null ? location.ContentPath : null,
+                LatestAssemblyMvid = mvid,
+                BuiltModuleVersionMvid = shape.BuiltModuleVersion is null ? null : mvid,
                 CompiledFrameworkVersion = PrebuiltAssemblySeeder.LiveFrameworkMvid,
             },
         };

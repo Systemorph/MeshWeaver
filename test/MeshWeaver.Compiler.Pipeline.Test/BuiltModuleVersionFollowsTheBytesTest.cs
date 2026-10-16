@@ -56,7 +56,8 @@ public class BuiltModuleVersionFollowsTheBytesTest
 
     private static NodeTypeDefinition CompileAt111()
         => NodeTypeCompilationHelpers.ApplyCompileSuccess(
-            AdoptedAt101(), CompiledHere(CompiledSet), currentNodeVersion: 3, activityPath: null, releasePath: null);
+            AdoptedAt101(), CompiledHere(CompiledSet), currentNodeVersion: 3, activityPath: null, releasePath: null,
+            compiledInput: AdoptedAt101());
 
     [Fact]
     public void ACompile_LabelsItsOwnBytesWithTheVersionItCompiled()
@@ -108,9 +109,116 @@ public class BuiltModuleVersionFollowsTheBytesTest
         };
 
         var compiled = NodeTypeCompilationHelpers.ApplyCompileSuccess(
-            movedDuringCompile, CompiledHere(CompiledSet), currentNodeVersion: 3, activityPath: null, releasePath: null);
+            movedDuringCompile, CompiledHere(CompiledSet), currentNodeVersion: 3, activityPath: null, releasePath: null,
+            compiledInput: AdoptedAt101());
 
         Assert.Null(PrebuiltAssemblySeeder.ModuleVersionOfBuild(compiled));
+    }
+
+    /// <summary>
+    /// Review thread 4287471990: a configuration- or include-only update to 1.1.2 lands WHILE the
+    /// 1.1.1 compile runs. The source-version dictionaries exclude both, so the compiled set still
+    /// equals the live one and the type is not dirty — and reading the version off the LIVE record
+    /// at the stamp labelled the 1.1.1 bytes 1.1.2. The compile read one side of the update or the
+    /// other and nothing records which, so the version is unknown.
+    /// </summary>
+    [Theory]
+    [InlineData("configuration")]
+    [InlineData("include")]
+    public void AnUpdateLandingDuringTheCompile_IsNeverAttachedToTheBytes(string moved)
+    {
+        var input = AdoptedAt101() with
+        {
+            CurrentSourceFingerprint = "fp-111",
+            CurrentSourceIncludes = ["T/Shared/Inc.cs"],
+        };
+        var live = moved == "configuration"
+            ? input with { CurrentModuleVersion = NextVersion, Configuration = "config => config.WithType<int>()" }
+            : input with { CurrentModuleVersion = NextVersion, CurrentSourceFingerprint = "fp-112" };
+        Assert.False((live with { CompiledSources = CompiledSet }).IsDirty,
+            "the case only exists when the source dictionaries cannot see the update");
+
+        var compiled = NodeTypeCompilationHelpers.ApplyCompileSuccess(
+            live, CompiledHere(CompiledSet), currentNodeVersion: 3, activityPath: null, releasePath: null,
+            compiledInput: input);
+
+        Assert.Equal(compiled.LatestAssemblyMvid, compiled.BuiltModuleVersionMvid);
+        Assert.NotEqual(NextVersion, PrebuiltAssemblySeeder.ModuleVersionOfBuild(compiled));
+        Assert.Null(PrebuiltAssemblySeeder.ModuleVersionOfBuild(compiled));
+    }
+
+    /// <summary>The control for the theory above: with no input moving during the compile, the
+    /// compiled input's version IS the bytes' version.</summary>
+    [Fact]
+    public void ACompileNothingMovedUnder_StatesTheInputsVersion()
+    {
+        var input = AdoptedAt101() with { CurrentSourceFingerprint = "fp-111" };
+
+        var compiled = NodeTypeCompilationHelpers.ApplyCompileSuccess(
+            input, CompiledHere(CompiledSet), currentNodeVersion: 3, activityPath: null, releasePath: null,
+            compiledInput: input);
+
+        Assert.Equal(CompiledVersion, PrebuiltAssemblySeeder.ModuleVersionOfBuild(compiled));
+    }
+
+    /// <summary>
+    /// Review thread 4291278201: a record ADOPTED at 1.0.1 before the version was keyed to the bytes
+    /// (no <c>BuiltModuleVersionMvid</c>) is compiled here by the contract handler's store-miss or
+    /// foreign-identity branch. That writer names the new bytes and keeps the adopted provenance and
+    /// <c>AdoptedModuleVersion</c>, so the historical fallback advertised the locally compiled bytes
+    /// as 1.0.1. It must replace the adoption's claim — with unknown, since it cannot establish one.
+    /// </summary>
+    [Fact]
+    public void ALocalCompileAfterAnOldAdoption_NoLongerAdvertisesTheAdoptedVersion()
+    {
+        var historical = new NodeTypeDefinition
+        {
+            Configuration = "config => config",
+            BuildProvenance = BuildProvenance.AdoptedVerified,
+            AdoptedModuleVersion = AdoptedVersion,
+            LatestAssemblyMvid = AdoptedMvid,
+            CurrentModuleVersion = CompiledVersion,
+            CurrentSourceVersions = CompiledSet,
+            LastCompiledVersion = 2,
+        };
+        Assert.Equal(AdoptedVersion, PrebuiltAssemblySeeder.ModuleVersionOfBuild(historical));
+
+        var localCompile = new MeshWeaver.Mesh.GetCompilationPathResponse(
+                Success: true,
+                AssemblyLocation: typeof(BuildDeliveryHold).Assembly.Location,
+                Collection: "local",
+                Version: "3",
+                Error: null,
+                HubConfiguration: null)
+            { ContentPath = "T/v3-built.dll" };
+        var stamped = NodeTypeContractHandler.ApplyResolvedSuccess(
+            historical, localCompile, freshCompile: true,
+            new MeshWeaver.Mesh.MeshNode("T", "P") { Content = historical });
+
+        Assert.NotEqual(AdoptedMvid, stamped.LatestAssemblyMvid);
+        Assert.Equal(BuildProvenance.AdoptedVerified, stamped.BuildProvenance);
+        Assert.Null(PrebuiltAssemblySeeder.ModuleVersionOfBuild(stamped));
+    }
+
+    /// <summary>The control: the same writer HYDRATING the bytes the record already names keeps the
+    /// version pair (and so stays the #2895 no-op).</summary>
+    [Fact]
+    public void AHydrateOfTheNamedBytes_KeepsTheirVersion()
+    {
+        var compiled = CompileAt111();
+        var hydrate = new MeshWeaver.Mesh.GetCompilationPathResponse(
+                Success: true,
+                AssemblyLocation: typeof(BuildDeliveryHold).Assembly.Location,
+                Collection: "local",
+                Version: "3",
+                Error: null,
+                HubConfiguration: null)
+            { ContentPath = "T/v3-built.dll" };
+
+        var stamped = NodeTypeContractHandler.ApplyResolvedSuccess(
+            compiled, hydrate, freshCompile: false, new MeshWeaver.Mesh.MeshNode("T", "P") { Content = compiled });
+
+        Assert.Equal(CompiledVersion, PrebuiltAssemblySeeder.ModuleVersionOfBuild(stamped));
     }
 
     [Fact]
