@@ -229,6 +229,15 @@ public sealed class UserIdentityCache : IDisposable
     private bool _hydrated;
 
     /// <summary>
+    /// Set the first time ANY snapshot is applied, and never cleared — unlike
+    /// <see cref="_hydrated"/>, which a <c>Reset</c> or a re-open lowers again. It is what tells
+    /// "this process has never been able to identify anybody" (the boot state readiness gates on,
+    /// #6850) from "the directory is being rebuilt after it had already answered" (a transient that
+    /// <see cref="Lookup"/> already reports as Unavailable and repairs on its own).
+    /// </summary>
+    private bool _everHydrated;
+
+    /// <summary>
     /// Set when the backing query subscription FAILS. A faulted index never hydrates, so every
     /// later lookup is unavailable rather than silently, permanently "unknown" — which would make
     /// a dead subscription look exactly like an empty user directory.
@@ -445,6 +454,7 @@ public sealed class UserIdentityCache : IDisposable
                 // User node carries this email". Set LAST, after the snapshot is applied, so a
                 // concurrent reader never sees "hydrated" over a half-built index.
                 Volatile.Write(ref _hydrated, true);
+                Volatile.Write(ref _everHydrated, true);
                 break;
             case QueryChangeType.Added:
             case QueryChangeType.Updated:
@@ -494,8 +504,7 @@ public sealed class UserIdentityCache : IDisposable
         // opens a fresh read instead of the failure standing for the life of the process. A no-op
         // whenever a chain is live, which is every ordinary call. See OpenDirectorySubscription: no
         // timer and no retry loop, the caller IS the trigger.
-        if (Volatile.Read(ref _subscriptionFailure) is not null)
-            OpenDirectorySubscription();
+        EnsureOpen();
 
         _byEmail.TryGetValue(email, out var node);
         return UserIdentityLookup.Classify(
@@ -503,6 +512,30 @@ public sealed class UserIdentityCache : IDisposable
             Volatile.Read(ref _hydrated),
             Volatile.Read(ref _subscriptionFailure));
     }
+
+    /// <summary>
+    /// Re-opens the directory read when the last one TERMINATED; a no-op while a read is live.
+    /// <see cref="Lookup"/> calls it on every question, and readiness
+    /// (<see cref="UserDirectoryReadiness"/>) calls it on every probe — a pod held out of the
+    /// Service receives no lookups, so without the probe a read that failed before its first
+    /// snapshot would never be retried. No timer and no retry loop: a caller is the trigger.
+    /// </summary>
+    public void EnsureOpen()
+    {
+        if (Volatile.Read(ref _subscriptionFailure) is not null)
+            OpenDirectorySubscription();
+    }
+
+    /// <summary>
+    /// What the directory can answer RIGHT NOW, as one consistent reading — for readiness
+    /// (<see cref="UserDirectoryReadiness"/>), never for a lookup decision: a caller resolving a user
+    /// asks <see cref="Lookup"/>, which classifies the same fields per question.
+    /// </summary>
+    public UserDirectoryReading Reading => new(
+        Hydrated: Volatile.Read(ref _hydrated),
+        EverHydrated: Volatile.Read(ref _everHydrated),
+        Failure: Volatile.Read(ref _subscriptionFailure),
+        IndexedUsers: _byEmail.Count);
 
     /// <summary>
     /// The email of the mesh <c>User</c> node whose <c>Id</c> is <paramref name="id"/>, or
