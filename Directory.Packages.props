@@ -183,6 +183,13 @@
          needs a Satellite-pins: declaration. -->
     <PackageVersion Include="System.Security.Cryptography.Pkcs" Version="10.0.13" />
     <PackageVersion Include="System.Security.Cryptography.Xml" Version="10.0.13" />
+    <!-- Security override for a TRANSITIVE package, same shape as the two above:
+           - MessagePack: 2.5.302 via Aspire.Hosting -> StreamJsonRpc 2.25.29 — GHSA-qhrr-8q5h-9q3h
+             (Moderate; first patched 2.5.303). No parent fixes it yet: StreamJsonRpc 2.25.29 is the
+             newest and still depends on 2.5.302.
+         Lifted only in the projects whose graph carries it (the scoped ItemGroup in the root
+         Directory.Build.props); remove both once StreamJsonRpc ships against a patched MessagePack. -->
+    <PackageVersion Include="MessagePack" Version="2.5.303" />
     <!-- The portal's own passkey rung of the approval step-up (Doc/Architecture/ApprovalStepUp):
          attestation and assertion verification by the maintained FIDO2 library, never by hand. -->
     <PackageVersion Include="Fido2" Version="4.2.0" />
