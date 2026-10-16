@@ -220,7 +220,7 @@ public sealed class NodeRepoPackageSource : IPackageSource
 
     /// <inheritdoc />
     public IObservable<IReadOnlyList<PackageFile>> FetchPackageFiles(PackageManifest package, string gitRef) =>
-        FetchFolder(package, gitRef, null);
+        FetchFolder(package, gitRef, null).Select(fetched => fetched.Files);
 
     /// <inheritdoc />
     /// <remarks>An EXPLICIT implementation, so the class's public surface keeps ONE
@@ -228,7 +228,29 @@ public sealed class NodeRepoPackageSource : IPackageSource
     /// unambiguous (CS0419 under <c>-warnaserror</c>).</remarks>
     IObservable<IReadOnlyList<PackageFile>> IPackageSource.FetchPackageFiles(
         PackageManifest package, string gitRef, IReadOnlyCollection<string>? paths) =>
+        FetchFolder(package, gitRef, paths).Select(fetched => fetched.Files);
+
+    /// <inheritdoc />
+    /// <remarks>The commit is the snapshot's own — the one the transport resolved
+    /// <paramref name="gitRef"/> to — so a registry serving this source can name it in its install
+    /// response (MeshWeaver#3848).</remarks>
+    IObservable<PackageFetch> IPackageSource.FetchPackage(
+        PackageManifest package, string gitRef, IReadOnlyCollection<string>? paths) =>
         FetchFolder(package, gitRef, paths);
+
+    /// <summary>
+    /// The ancestry test behind <see cref="IPackageSource.PublishesCommit"/> — the transport's
+    /// <see cref="IGitHubRepoClient.IsAncestor"/> (repository url, ancestor sha, descendant ref,
+    /// token). Absent (a test stub, a local directory source) ⇒ ancestry is never established and a
+    /// registry over this source serves only its configured ref (MeshWeaver#6718).
+    /// </summary>
+    public Func<string, string, string, string, IObservable<bool>>? IsAncestor { get; init; }
+
+    /// <inheritdoc />
+    IObservable<bool> IPackageSource.PublishesCommit(string commit, string gitRef) =>
+        !PackageFetch.IsCommitSha(commit) || IsAncestor is not { } isAncestor
+            ? Observable.Return(false)
+            : tokenProvider().SelectMany(token => isAncestor(repoUrl, commit, gitRef, token));
 
     /// <summary>
     /// Fetches the package's files — every file of its <c>&lt;Plugin&gt;/</c> folder, or only
@@ -254,16 +276,16 @@ public sealed class NodeRepoPackageSource : IPackageSource
     /// <param name="package">The package whose folder is read.</param>
     /// <param name="gitRef">The ref to read at.</param>
     /// <param name="paths">Repo-relative paths to restrict to, or <c>null</c> for the whole folder.</param>
-    /// <returns>The package's files, carrying binary blobs as bytes.</returns>
-    private IObservable<IReadOnlyList<PackageFile>> FetchFolder(
+    /// <returns>The package's files, carrying binary blobs as bytes, and the snapshot's commit.</returns>
+    private IObservable<PackageFetch> FetchFolder(
         PackageManifest package, string gitRef, IReadOnlyCollection<string>? paths)
     {
         var selects = PackageFileFilter(package, paths);
         return tokenProvider().SelectMany(token => NarrowFetch is { } narrow
                 ? narrow(repoUrl, gitRef, null, token, selects)
                 : fetch(repoUrl, gitRef, null, token))
-            .Select(snapshot =>
-                (IReadOnlyList<PackageFile>)snapshot.Files
+            .Select(snapshot => new PackageFetch(
+                snapshot.Files
                     // 🚨 Carry `Binary` too. A non-UTF-8 blob (a course video/poster under
                     // `<Plugin>/content/**`) has an EMPTY `Content` by design — RepoFileCodec puts
                     // its bytes on `RepoFile.Binary` so a UTF-8 round-trip cannot corrupt them.
@@ -274,7 +296,8 @@ public sealed class NodeRepoPackageSource : IPackageSource
                     // the answer must not depend on which of the two reads served it.
                     .Where(f => selects(f.Path))
                     .Select(f => new PackageFile(f.Path, f.Content, f.Binary))
-                    .ToList());
+                    .ToImmutableList(),
+                snapshot.CommitSha));
     }
 
     /// <summary>

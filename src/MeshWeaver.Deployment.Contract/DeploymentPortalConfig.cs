@@ -23,6 +23,24 @@ public static class DeploymentPortalConfig
     /// </summary>
     public const string MaintainerSignsAloneKey = "Hosting__Operator__MaintainerSignsAlone";
 
+    /// <summary>
+    /// The portal key that tells the instance how its model settings relate to this record (policy
+    /// <c>model-settings-seed-and-ceiling</c>): rendered as <see cref="ModelGovernanceSeedAndCeiling"/>
+    /// on a customer-governed record (<see cref="HostingOperatorSpec.CustomerGoverned"/>) whose
+    /// <c>ai</c> block names at least one model, and not at all otherwise — an absent key is the
+    /// instance's default, where the record's model list IS the instance's. Reserved for the typed
+    /// fields: an <c>ExtraPortalConfig</c> entry naming it, in any case, is never passed through, so no
+    /// extra can lift a record's ceiling or impose one the record does not declare.
+    /// </summary>
+    public const string ModelGovernanceKey = "AI__ModelGovernance";
+
+    /// <summary>
+    /// The value of <see cref="ModelGovernanceKey"/> on a customer-governed record: the record SEEDS the
+    /// instance's model settings and is their CEILING. The instance's own administrator may narrow
+    /// within it (switch a declared model off, choose a declared model per tier) and never exceed it.
+    /// </summary>
+    public const string ModelGovernanceSeedAndCeiling = "SeedAndCeiling";
+
     /// <summary>The configuration key prefix the portal reads its catalog wiring from.</summary>
     public const string CatalogSection = "PluginCatalog";
 
@@ -296,6 +314,35 @@ public static class DeploymentPortalConfig
     }
 
     /// <summary>
+    /// The bundle registry a record declares (<see cref="DeploymentContent.Bundles"/>), trimmed, or
+    /// null when it declares none — the ONE test for "this record fetches bundles", shared by the
+    /// pre-warm root below and the Helm renderer's <c>bundles</c> section. Pure.
+    /// </summary>
+    public static string? BundleRegistry(DeploymentContent d) =>
+        string.IsNullOrWhiteSpace(d.Bundles?.Registry) ? null : d.Bundles!.Registry!.Trim();
+
+    /// <summary>
+    /// The bundle sources a record declares, trimmed, blanks dropped, in the record's order. Empty
+    /// when it declares none. Pure.
+    /// </summary>
+    public static ImmutableList<string> BundleSources(DeploymentContent d) =>
+        (d.Bundles?.Sources ?? ImmutableList<string>.Empty)
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Select(s => s.Trim())
+            .ToImmutableList();
+
+    /// <summary>
+    /// <c>PreWarm__PrebuiltBundleRoot</c> for a record that fetches bundles: its
+    /// <see cref="BundlesSpec.Root"/>, else <see cref="BundlesSpec.DefaultRoot"/>; null for a record
+    /// that fetches none, so every other record renders as before. The chart's <c>bundles.root</c>
+    /// defaults to this key, so the shelf the init container fills and the directory the pre-warm
+    /// reads come from one value (MeshWeaver#6825). Pure.
+    /// </summary>
+    public static string? BundleRoot(DeploymentContent d) =>
+        BundleRegistry(d) is null ? null
+        : string.IsNullOrWhiteSpace(d.Bundles!.Root) ? BundlesSpec.DefaultRoot : d.Bundles.Root!.Trim();
+
+    /// <summary>
     /// <c>SelfUpdate__PortalRepository</c> for a record: the repository its pods pull
     /// (<see cref="DeploymentContent.ImageRepository"/>), or null when that IS the image's default —
     /// so a record on <c>memex-portal-ai</c> renders exactly as before. Pure.
@@ -536,6 +583,91 @@ public static class DeploymentPortalConfig
     }
 
     /// <summary>
+    /// The registration-seed grants a record declares (<see cref="DeploymentContent.DefaultGrants"/>),
+    /// trimmed, blanks dropped, duplicates kept once, in declared order — the ONE normalisation every
+    /// renderer uses, so the Helm values, the boot file and the Aspire keys of a record cannot disagree.
+    /// Two entries are duplicates only when they GRANT the same thing (<see cref="GrantIdentity"/>): the
+    /// source and the plan compare case-insensitively, the package id ordinally, as the grant matches
+    /// (<c>PluginGrantEntry.Matches</c>) — so <c>Plugins/Foo</c> and <c>Plugins/foo</c> are two grants
+    /// and both are kept (issue #6744). Empty for none. Pure.
+    /// </summary>
+    public static ImmutableList<string> DefaultGrantPatterns(IEnumerable<string>? grants)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        return (grants ?? Enumerable.Empty<string>())
+            .Where(g => !string.IsNullOrWhiteSpace(g))
+            .Select(g => g.Trim())
+            .Where(g => seen.Add(GrantIdentity(g)))
+            .ToImmutableList();
+    }
+
+    /// <summary>
+    /// The registration-seed grants a record renders: <see cref="DefaultGrantPatterns"/> of its
+    /// <see cref="DeploymentContent.DefaultGrants"/> for a plugin REGISTRY, and NONE for any other record —
+    /// a consumer registers AT a registry and never seeds grants, so rendering its list would only be
+    /// inert, misleading configuration (issue #6744). Every renderer reads the record through this.
+    /// </summary>
+    public static ImmutableList<string> RegistrySeedPatterns(DeploymentContent? record) =>
+        record is { IsPluginRegistry: true }
+            ? DefaultGrantPatterns(record.DefaultGrants)
+            : ImmutableList<string>.Empty;
+
+    /// <summary>
+    /// What a <c>Source/Package[@plan]</c> grant grants, as a comparable key: the source and the plan
+    /// upper-cased invariantly, the package id as written, and a bare source read as <c>Source/*</c>.
+    /// </summary>
+    private static string GrantIdentity(string pattern)
+    {
+        var at = pattern.LastIndexOf('@');
+        var plan = at < 0 ? "" : pattern[(at + 1)..].Trim().ToUpperInvariant();
+        var body = at < 0 ? pattern : pattern[..at].Trim();
+        var slash = body.IndexOf('/');
+        var source = (slash < 0 ? body : body[..slash]).Trim().ToUpperInvariant();
+        var package = slash < 0 ? "*" : body[(slash + 1)..].Trim();
+        return $"{source}/{package}@{plan}";
+    }
+
+    /// <summary>
+    /// The flat <c>PluginCatalog:DefaultGrants:N=pattern</c> entries for the declared grants
+    /// (<see cref="DefaultGrantPatterns"/>). Empty for none — nothing renders, so the portal's
+    /// default (no seed) stands. Pure.
+    /// </summary>
+    public static ImmutableList<string> DefaultGrantEntries(IEnumerable<string>? grants) =>
+        Entries(DefaultGrantPatterns(grants));
+
+    /// <summary>
+    /// The flat <c>PluginCatalog:DefaultGrants:N=pattern</c> entries a RECORD renders
+    /// (<see cref="RegistrySeedPatterns"/>) — none for a record that is not a
+    /// plugin registry. Pure.
+    /// </summary>
+    public static ImmutableList<string> RegistrySeedEntries(DeploymentContent? record) =>
+        Entries(RegistrySeedPatterns(record));
+
+    private static ImmutableList<string> Entries(ImmutableList<string> patterns) =>
+        patterns.Select((g, i) => $"{CatalogSection}:DefaultGrants:{i}={g}").ToImmutableList();
+
+    /// <summary>
+    /// The single-registry URL a record declares (<see cref="DeploymentContent.RegistryUrl"/>),
+    /// trimmed and without a trailing slash — the same rule as <see cref="PluginRepoMount.NormalizedUrl"/>
+    /// and the ONE normalisation every renderer uses. Null for a blank or absent value. Pure.
+    /// </summary>
+    public static string? NormalizedRegistryUrl(string? url)
+    {
+        var u = (url ?? "").Trim().TrimEnd('/');
+        return u.Length == 0 ? null : u;
+    }
+
+    /// <summary>
+    /// The flat <c>PluginCatalog:RegistryUrl=url</c> entry for the declared registry URL
+    /// (<see cref="NormalizedRegistryUrl"/>). Empty for none — nothing renders, so the portal's
+    /// default (no single registry) stands. Pure.
+    /// </summary>
+    public static ImmutableList<string> RegistryUrlEntries(string? url) =>
+        NormalizedRegistryUrl(url) is { } u
+            ? ImmutableList.Create($"{CatalogSection}:RegistryUrl={u}")
+            : ImmutableList<string>.Empty;
+
+    /// <summary>
     /// The FULL flat configuration a new instance is born with: the catalog wiring plus the
     /// module policy — one deterministic list, so "what will this instance boot with" is
     /// answerable from the record alone.
@@ -545,6 +677,13 @@ public static class DeploymentPortalConfig
         var entries = ConfigurationEntries(record?.PluginRepos, record?.PreInstall);
         if (record is null)
             return entries;
+
+        // The registration seed a REGISTRY hands every new instance (Memex#116) — declared on the
+        // record, so the boot file carries it exactly as the Helm values and the Aspire keys do.
+        entries = entries.AddRange(RegistrySeedEntries(record));
+
+        // The single-registry URL (Memex#116) — likewise declared on the record, never only an overlay.
+        entries = entries.AddRange(RegistryUrlEntries(record.RegistryUrl));
 
         // 🚨 ModuleSlots, NOT ModuleEntries: the same slots PortalConfig emits. This route used to
         // render the contiguous list alone and drop every explicit RequiredModuleSlots entry, so
@@ -767,6 +906,9 @@ public static class DeploymentPortalConfig
         Set("Storage__SourceType", s.ContentSourceType);
         Set("Storage__BasePath", s.ContentPath);
         Set("ClaudeCode__ConfigDirRoot", s.ClaudeCodeConfigDirRoot);
+        // The bundle shelf (MeshWeaver#6825): rendered only for a record that fetches bundles, and
+        // from the same value the chart's bundle-fetch init container fills — one source for both.
+        Set("PreWarm__PrebuiltBundleRoot", BundleRoot(d));
 
         Set("Deployment__Orleans__Clustering", OrleansClustering(d));
         Set("SelfUpdate__MinRollInterval", string.IsNullOrWhiteSpace(d.MinRollInterval) ? DefaultMinRollInterval : d.MinRollInterval!.Trim());
@@ -829,7 +971,9 @@ public static class DeploymentPortalConfig
         // rather than the portal ConfigMap, so it is emitted here only for a renderer with no second
         // file — the Aspire adapter.
         if (options.IncludeBootEntries)
-            foreach (var entry in ConfigurationEntries(d.PluginRepos, d.PreInstall))
+            foreach (var entry in ConfigurationEntries(d.PluginRepos, d.PreInstall)
+                         .AddRange(RegistrySeedEntries(d))
+                         .AddRange(RegistryUrlEntries(d.RegistryUrl)))
             {
                 var eq = entry.IndexOf('=');
                 Set(entry[..eq].Replace(":", "__"), entry[(eq + 1)..]);
@@ -879,6 +1023,9 @@ public static class DeploymentPortalConfig
             Set("ModelTier__Standard", ai.Tiers?.Standard);
             Set("ModelTier__Light", ai.Tiers?.Light);
             Set("ModelTier__Utility", ai.Tiers?.Utility);
+            // Policy model-settings-seed-and-ceiling: on a customer-governed record that names models,
+            // the record's model lists and tiers are the instance's SEED and CEILING, not its value.
+            Set(ModelGovernanceKey, IsModelCeiling(d) ? ModelGovernanceSeedAndCeiling : null);
         }
 
         if (d.Email is { } email)
@@ -926,13 +1073,41 @@ public static class DeploymentPortalConfig
         foreach (var (key, value) in d.ExtraPortalConfig)
             // 🚨 The sole-signer flag is RESERVED for the typed field, rendered or not: an extra must
             // never re-enable it (in any case) on a record whose operator.maintainerSignsAlone is false —
-            // on the Aspire route there is no other guard (policy sole-maintainer-approval).
-            if (!c.Keys.Contains(key, StringComparer.OrdinalIgnoreCase)
-                && !string.Equals(key, MaintainerSignsAloneKey, StringComparison.OrdinalIgnoreCase))
+            // on the Aspire route there is no other guard (policy sole-maintainer-approval). The same
+            // holds for the model-governance key (policy model-settings-seed-and-ceiling). Compared as
+            // CONFIGURATION keys, not strings: .NET reads `AI:ModelGovernance` and `AI__ModelGovernance`
+            // as one setting, so a colon-spelled extra is the same key and is refused the same way.
+            if (!c.Keys.Any(rendered => SameConfigKey(rendered, key))
+                && !SameConfigKey(key, MaintainerSignsAloneKey)
+                && !SameConfigKey(key, ModelGovernanceKey))
                 c[key] = value ?? "";
 
         return c;
     }
+
+    /// <summary>
+    /// Whether two environment-variable names address the same configuration setting: case-insensitive,
+    /// with <c>__</c> and <c>:</c> as the same section separator — exactly as the .NET environment
+    /// configuration provider reads them. Pure.
+    /// </summary>
+    private static bool SameConfigKey(string a, string b) =>
+        string.Equals(a.Replace("__", ":", StringComparison.Ordinal), b.Replace("__", ":", StringComparison.Ordinal),
+            StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Whether <paramref name="d"/> makes its model settings the instance's SEED and CEILING (policy
+    /// <c>model-settings-seed-and-ceiling</c>): the record is customer-governed
+    /// (<see cref="HostingOperatorSpec.CustomerGoverned"/>) AND its <c>ai</c> block names at least one
+    /// model under a provider. A customer record that names no model carries no model settings to cap
+    /// with, so it stays on the default reading. Pure.
+    /// </summary>
+    /// <param name="d">The deployment record.</param>
+    /// <returns>True when the record renders <see cref="ModelGovernanceKey"/>.</returns>
+    public static bool IsModelCeiling(DeploymentContent d) =>
+        d.Operator is { CustomerGoverned: true }
+        && d.Ai is { } ai
+        && new[] { ai.Anthropic, ai.AzureAis, ai.AzureFoundry, ai.OpenRouter, ai.OpenRouterEU }
+            .Any(p => p is not null && p.Models.Any(m => !string.IsNullOrWhiteSpace(m)));
 
     private static void Provider(SortedDictionary<string, string> c, string section, ModelProvider? p, string? flagKey)
     {

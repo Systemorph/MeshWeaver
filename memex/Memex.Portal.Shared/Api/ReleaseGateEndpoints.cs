@@ -1,3 +1,4 @@
+using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using System.Text.Json;
 using Memex.Portal.Shared.SelfUpdate;
@@ -145,16 +146,27 @@ public static class ReleaseGateEndpoints
                 ct)!;
     }
 
-    private static IObservable<IResult> Choose(HttpContext http, string? current) =>
-        http.RequestServices.GetRequiredService<ReleaseAvailabilityService>()
-            // 🚨 The running version is READ HERE, not taken from the caller: "different from
-            // current ⇒ update" is a claim about what this instance runs, and a caller that could
-            // assert it could ask for a rollback by lying. The query parameter is a diagnostic
-            // override for an operator asking "what would you pick from there", never the default.
-            .SelectRollTarget(
-                string.IsNullOrWhiteSpace(current)
-                    ? ShippedReleaseSeed.InstalledPlatformVersion
-                    : current)
+    /// <summary>
+    /// 🚨 The answer is the POLLER's own selection (#4413) — the registry's portal tag listing under
+    /// this instance's update policy, walked by the availability gate — never a second selection
+    /// over the published root's <c>_releases</c> markers. A marker exists for a set the fleet has
+    /// not armed yet, so that universe named releases with no portal image, and combo verification
+    /// (the route's one automated caller) then pulled an image that does not exist. A host without
+    /// the poller has no roll target and says so as <see cref="RollSelectionKind.Indeterminate"/>.
+    /// </summary>
+    internal static IObservable<IResult> Choose(HttpContext http, string? current) =>
+        (http.RequestServices.GetService<SelfUpdateHostedService>() is { } poller
+            // 🚨 The running version is READ by the poller, not taken from the caller: "different
+            // from current ⇒ update" is a claim about what this instance runs, and a caller that
+            // could assert it could ask for a rollback by lying. The query parameter is a
+            // diagnostic override for an operator asking "what would you pick from there", never
+            // the default.
+            ? poller.SelectRollTarget(current)
+            : Observable.Return(new RollSelectionOutcome(
+                RollSelectionKind.Indeterminate, null,
+                string.IsNullOrWhiteSpace(current) ? ShippedReleaseSeed.InstalledPlatformVersion : current,
+                0, 0, [],
+                "this host runs no self-update poller, so it has no roll target to name.")))
             .Select(outcome => Results.Json(new
             {
                 environment = outcome.Summary,
@@ -352,6 +364,13 @@ public static class ReleaseGateEndpoints
                         || !Enum.IsDefined(m.Outcome) || m.Failures is null)
                     || verdict.Modules.Select(m => m.ModuleId).Distinct(StringComparer.OrdinalIgnoreCase)
                         .Count() != verdict.Modules.Count
+                    // Retired modules (#3848) are reported apart and never ALSO verified.
+                    || verdict.RetiredModules is null
+                    || verdict.RetiredModules.Any(r => r is null || string.IsNullOrWhiteSpace(r.ModuleId)
+                        || verdict.Modules.Any(m => string.Equals(m.ModuleId, r.ModuleId,
+                            StringComparison.OrdinalIgnoreCase)))
+                    || verdict.RetiredModules.Select(r => r.ModuleId).Distinct(StringComparer.OrdinalIgnoreCase)
+                        .Count() != verdict.RetiredModules.Count
                     || (verdict.Verdict == ComboVerdictKind.Green
                         && (verdict.Modules.Count == 0 || string.IsNullOrWhiteSpace(verdict.ImageDigest)
                             || string.IsNullOrWhiteSpace(verdict.VerifiedPlatform)
@@ -361,30 +380,99 @@ public static class ReleaseGateEndpoints
                         { error = "A complete, internally consistent combo verification is required." }));
 
                 var expected = JsonSerializer.Serialize(verdict, InstanceComboAssembler.Json);
-                return UpdatePolicyNodeType.RecordVerification(hub, verdict)
-                    // Update is optimistic across hubs. A 200 promises that the owning node has
-                    // recorded this exact verdict, so observe its reconciled state before replying.
-                    .SelectMany(_ => Observable.Create<IResult>(observer =>
-                    {
-                        using (AccessContextScope.AsSystem(hub.ServiceProvider.GetRequiredService<AccessService>()))
-                            return hub.GetWorkspace().GetMeshNodeStream(UpdatePolicyNodeType.NodePath)
-                                .Select(node => UpdatePolicyNodeType.Parse(node, hub.JsonSerializerOptions)
-                                    .VerificationFor(verdict.CandidateTag))
-                                .Where(recorded => JsonSerializer.Serialize(recorded,
-                                    InstanceComboAssembler.Json) == expected)
-                                .Take(1)
-                                .Select(_ => (IResult)Results.Ok(new
-                                    { recorded = true, candidateTag = verdict.CandidateTag }))
-                                .Subscribe(observer);
-                    }))
-                    .Timeout(TimeSpan.FromSeconds(30))
-                    .Do(_ => logger?.LogInformation(
-                        "Build {Repository} run {RunId} recorded combo verdict {Verdict} for {Candidate}",
-                        build.Repository, build.Claims.RunId, verdict.Verdict, verdict.CandidateTag));
+                return RecordAndConfirm(
+                        UpdatePolicyNodeType.RecordVerification(hub, verdict),
+                        // Update is optimistic across hubs. A 200 promises that the owning node has
+                        // recorded this exact verdict, so observe its reconciled state before replying.
+                        () => Observable.Create<IResult>(observer =>
+                        {
+                            using (AccessContextScope.AsSystem(hub.ServiceProvider.GetRequiredService<AccessService>()))
+                                return hub.GetWorkspace().GetMeshNodeStream(UpdatePolicyNodeType.NodePath)
+                                    .Select(node => UpdatePolicyNodeType.Parse(node, hub.JsonSerializerOptions)
+                                        .VerificationFor(verdict.CandidateTag))
+                                    .Where(recorded => JsonSerializer.Serialize(recorded,
+                                        InstanceComboAssembler.Json) == expected)
+                                    .Take(1)
+                                    .Do(_ => logger?.LogInformation(
+                                        "Build {Repository} run {RunId} recorded combo verdict {Verdict} for {Candidate}",
+                                        build.Repository, build.Claims.RunId, verdict.Verdict, verdict.CandidateTag))
+                                    .Select(_ => (IResult)Results.Ok(new
+                                        { recorded = true, candidateTag = verdict.CandidateTag }))
+                                    .Subscribe(observer);
+                        }),
+                        VerificationDeadline,
+                        Scheduler.Default,
+                        phase => VerificationTimedOut(phase, verdict, build, logger));
             })
             .Catch<IResult, JsonException>(_ => Observable.Return(Results.BadRequest(new
                 { error = "The combo verification body is not valid JSON." })));
     }
+
+    /// <summary>How long a verdict's write and its confirmation may take, together.</summary>
+    internal static readonly TimeSpan VerificationDeadline = TimeSpan.FromSeconds(30);
+
+    /// <summary>The verdict's write to <c>Admin/UpdatePolicy</c> had not completed when the deadline expired.</summary>
+    internal const string WritePhase = "write";
+
+    /// <summary>The write completed, but <c>Admin/UpdatePolicy</c> never showed this exact verdict.</summary>
+    internal const string ConfirmPhase = "confirm";
+
+    /// <summary>
+    /// Records a verdict and confirms it, under ONE deadline, and answers an expired deadline as a
+    /// response naming the phase that had not completed (MeshWeaver#6790).
+    ///
+    /// <para>🚨 The deadline used to escape as a bare <see cref="TimeoutException"/>: Rx creates it
+    /// without throwing it, so it has no frames, and the endpoint's <see cref="Task"/> faulted into
+    /// an unhandled 500 that named neither the route nor which of the two waits had stalled. Measured
+    /// on 2026-10-15: the CI verifier's POST for one candidate answered 500 after 31 s, and the
+    /// node's version history shows the verdict was not written — the stall was in the write, which
+    /// nothing in the response or the log could say. The expiry is now a 504 carrying
+    /// <c>phase</c> = <see cref="WritePhase"/> or <see cref="ConfirmPhase"/>.</para>
+    ///
+    /// <para>🚨 Only THIS deadline is answered: it is <c>Timeout</c>'s FALLBACK, never a
+    /// <c>Catch</c> of <see cref="TimeoutException"/>. A <see cref="TimeoutException"/> raised
+    /// upstream (a write's own initial-state bound, say) is a fault, not this route's deadline, and
+    /// still propagates to the exception handler like every other fault.</para>
+    ///
+    /// <para>🚨 A 504 does NOT say the verdict is absent: unsubscribing detaches this request from a
+    /// write already queued, it does not cancel it, so the verdict may still land after the answer.
+    /// The outcome is UNKNOWN; the caller re-reads <c>Admin/UpdatePolicy</c> or re-posts (the record
+    /// is an upsert by candidate tag, so a re-post is idempotent).</para>
+    /// </summary>
+    internal static IObservable<IResult> RecordAndConfirm(
+        IObservable<System.Reactive.Unit> write,
+        Func<IObservable<IResult>> confirmed,
+        TimeSpan deadline,
+        IScheduler scheduler,
+        Func<string, IResult> timedOut) =>
+        Observable.Defer(() =>
+        {
+            // Per subscription: which wait the deadline found unfinished.
+            var phase = WritePhase;
+            return write
+                .Do(_ => Volatile.Write(ref phase, ConfirmPhase))
+                .SelectMany(_ => confirmed())
+                .Timeout(deadline,
+                    Observable.Defer(() => Observable.Return(timedOut(Volatile.Read(ref phase)))),
+                    scheduler);
+        });
+
+    private static IResult VerificationTimedOut(
+        string phase, ComboVerification verdict, AuthenticatedBuild build, ILogger? logger)
+    {
+        var seconds = VerificationDeadline.TotalSeconds;
+        var what = phase == WritePhase
+            ? $"the write to {UpdatePolicyNodeType.NodePath} had not completed within {seconds:0} s"
+            : $"the write completed, but {UpdatePolicyNodeType.NodePath} did not show this exact verdict within {seconds:0} s";
+        what += $"; whether the verdict is recorded is UNKNOWN (a queued write may still land) — re-read {UpdatePolicyNodeType.NodePath}, or re-post (an upsert by candidate tag, so idempotent)";
+        logger?.LogWarning(
+            "Combo verdict {Verdict} for {Candidate} from {Repository} run {RunId}: {Phase} phase did not complete — answered 504: {What}",
+            verdict.Verdict, verdict.CandidateTag, build.Repository, build.Claims.RunId, phase, what);
+        return Results.Json(
+            new { error = $"Timed out: {what}.", phase, candidateTag = verdict.CandidateTag },
+            statusCode: StatusCodes.Status504GatewayTimeout);
+    }
+
 
     private static IObservable<IResult> StateCombo(HttpContext http, ILogger? logger) =>
         http.RequestServices.GetRequiredService<InstanceComboReader>().Read()

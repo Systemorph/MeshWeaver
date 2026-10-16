@@ -111,6 +111,21 @@ roll_code=$(curl -sS -o "$roll" -w '%{http_code}' --connect-timeout 15 --max-tim
 
 CANDIDATE=$(jq -r '.selected // ""' <"$roll")
 CURRENT=$(jq -r '.current // "?"' <"$roll")
+# 🚨 The selection is the POLLER's own (#4413): the registry's portal tags under this instance's
+# update policy, so a named candidate has a portal image by construction. An instance on an image
+# from before that fix still selects over the published root's `_releases` markers, which name a
+# set the fleet promoted but has not armed (no `memex-portal-ai:<version>` yet); the pull below then
+# goes red naming the image, which is the truth about that instance until it rolls.
+#
+# An INDETERMINATE selection is "the instance could not look", never "nothing to roll to" — passing
+# it as "nothing to verify" would green a slot on no evidence while the poller may still roll.
+if [ "$(jq -r '.indeterminate // false' <"$roll")" = "true" ]; then
+  if [ "$PRIVATE" = false ]; then
+    fail "the instance could not select a roll target (indeterminate): $(jq -r '.environment // ""' <"$roll") — nothing was verified."
+  else
+    fail "the instance could not select a roll target (indeterminate; text withheld: private roster row) — nothing was verified."
+  fi
+fi
 if [ -z "$CANDIDATE" ] || [ "$CANDIDATE" = "null" ]; then
   # A real, reportable outcome — and deliberately NOT silence. The instance has nothing to roll to,
   # so there is nothing to verify; the summary says so by name.
@@ -152,11 +167,51 @@ src_args=()
 IFS=' ' read -r -a source_pairs <<<"$SOURCES"
 for s in "${source_pairs[@]}"; do src_args+=(--source "$s"); done
 
+# 🚨 THE GATE HOST — the candidate PORTAL's /app with the candidate set's tester CLI beside it,
+# started by the portal image's own `dotnet`: the host every node-repo lane runs since #3022
+# (compose-gate-host.sh's header has the argument). Neither image alone is the gate. The portal image
+# ships NO /app/mw-plugin-test, so running the tester "inside the candidate image" died in tini with
+# exit 127, wrote no report, and landed a NotVerifiable on every live instance as though the candidate
+# had been examined (#3848, run 38688576426). The tester image alone is a strict subset of the portal
+# (it lacks the AI, Maps, Blazor halves…), so a gate run there reds content that binds them.
+# `mw-plugin-test:<version>` is written by the SAME CD run as the portal's `<version>`, in promote's
+# phase A — before phase C writes the portal tag a roll-target can name — so it exists whenever the
+# candidate does (Doc/Architecture/ImageTagContract). Every docker call is pinned to $PLATFORM.
+PORTAL_IMAGE="$ACR/memex-portal-ai:$CANDIDATE"
+TESTER_IMAGE="$ACR/mw-plugin-test:$CANDIDATE"
+host_root="$WORK_ROOT/host-$tag"
+rm -rf "$host_root"
+mkdir -p "$host_root"
+extract_app() {  # extract_app <image> <dest>
+  local cid
+  docker pull -q --platform "$PLATFORM" "$1" >/dev/null \
+    || fail "docker pull $1 ($PLATFORM) failed — the candidate set's image is not available here, so nothing can be verified and nothing is landed."
+  cid=$(docker create --platform "$PLATFORM" "$1") \
+    || fail "docker create $1 ($PLATFORM) failed, so its /app cannot be read."
+  docker cp -q "$cid:/app" "$2" || { docker rm "$cid" >/dev/null; fail "could not copy /app out of $1 ($PLATFORM)."; }
+  docker rm "$cid" >/dev/null
+}
+extract_app "$PORTAL_IMAGE" "$host_root/portal-app"
+extract_app "$TESTER_IMAGE" "$host_root/tester-app"
+# 🚨 ONE BUILD, asserted — the same assertion node-repo-gate.yml makes before it trusts a composition:
+# the tester's `framework-identity` verb reads the portal's /app and refuses unless both resolve one
+# framework identity, naming the canonical assemblies each side lacks.
+id_line=$(docker run --rm --init --platform "$PLATFORM" --entrypoint /app/mw-plugin-test "$TESTER_IMAGE" --print-framework-identity) \
+  || fail "the tester image $TESTER_IMAGE ($PLATFORM) could not print its framework identity — the instrument does not start, so nothing was verified and nothing is landed."
+tester_identity="${id_line#*identity=}"; tester_identity="${tester_identity%% *}"
+[ -n "$tester_identity" ] || fail "could not read a framework identity from the tester image $TESTER_IMAGE (got: '$id_line')."
+docker run --rm --init --platform "$PLATFORM" -v "$host_root/portal-app:/portal:ro" \
+  --entrypoint /app/mw-plugin-test "$TESTER_IMAGE" framework-identity /portal --expect "$tester_identity" \
+  || fail "$TESTER_IMAGE and $PORTAL_IMAGE do NOT resolve one framework identity (the verb's output above names what each side lacks) — they are not one build, so a gate composed from them would judge neither. Nothing was verified and nothing is landed."
+bash .github/scripts/compose-gate-host.sh "$host_root/portal-app" "$host_root/tester-app" "$host_root/host"
+note "gate host: $PORTAL_IMAGE /app + the $TESTER_IMAGE CLI, framework identity $tester_identity ($PLATFORM)"
+
 # 🚨 A private row's verifier output names every module it materialises, so it goes to a file that
 # is never uploaded and only its line count is printed. The verdict below carries the counts.
 verifier_cmd=(dotnet run --project tools/MeshWeaver.ComboVerifier/MeshWeaver.ComboVerifier.csproj
   -c Release --no-build --
-  "$combo" "$ACR/memex-portal-ai:$CANDIDATE"
+  "$combo" "$PORTAL_IMAGE"
+  --host "$host_root/host"
   --tag "$CANDIDATE"
   --verdict "$verdict"
   --work-root "$WORK_ROOT/$tag"
@@ -174,6 +229,13 @@ verify_exit=$?
 set -e
 [ "$PRIVATE" = false ] || note "verifier output withheld (private roster row): $(awk 'END { print NR + 0 }' "$WORK_ROOT/verifier-$tag.log") line(s)"
 
+# 🚨 A missing tester is a broken INSTRUMENT, not a verdict about the candidate: the verifier asserts
+# its gate host before assembling anything, writes no verdict, and exits TESTER_MISSING_EXIT
+# (DockerImageGate.TesterMissingExitCode). Nothing is landed — an instance must never read "the
+# instrument was absent" as "the candidate was examined and could not be verified".
+TESTER_MISSING_EXIT=3
+[ "$verify_exit" -ne "$TESTER_MISSING_EXIT" ] \
+  || fail "the composed gate host for $CANDIDATE ($PLATFORM) is not runnable — it lacks the tester CLI, its runtimeconfig or the portal's manifest — so there is no instrument to run: nothing was verified and NOTHING was landed. The verifier's message names the missing file(s) (above, or in its withheld log for a private row)."
 [ -f "$verdict" ] || fail "mw-combo-verify exited $verify_exit and wrote no verdict file — nothing was verified, so there is nothing to land."
 KIND=$(jq -r '.verdict' <"$verdict")
 note "verdict=$KIND for $CANDIDATE (tool exit $verify_exit)"

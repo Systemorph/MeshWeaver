@@ -7,6 +7,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -129,6 +130,10 @@ public static class ActivationRecycle
                 HubConfiguration = config => config
                     .AddMeshDataSource(source => source.WithContentType<ActivationRecycleReport>()),
             });
+        // Mesh-scoped singleton, read once from the host's configuration: how long a request and its
+        // reports are kept (Doc/Architecture/StaleStateUntilRecycle → "Recycling a type").
+        builder.ConfigureServices(services => services
+            .AddSingleton(sp => ActivationRecycleRetention.FromConfiguration(sp.GetService<IConfiguration>())));
         builder.ConfigureHub(c => c
             .WithType<ActivationRecycleRequest>(nameof(ActivationRecycleRequest))
             .WithType<ActivationRecycleReport>(nameof(ActivationRecycleReport))
@@ -200,24 +205,9 @@ public static class ActivationRecycle
             access.RunAsSystem(() => mesh.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{path}")).Take(1).Timeout(ReadBudget))
                 .Select(change => change.Items.Any(n => string.Equals(n.Path, path, StringComparison.OrdinalIgnoreCase)));
 
-        // A NodeType is either a framework built-in (a static node — no NodeType stamp of its own)
-        // or a node of type NodeType (a compiled, imported or installed definition).
-        IObservable<bool> TypeExists(string type) =>
-            hub.ServiceProvider.FindStaticNode(type) is not null
-                ? Observable.Return(true)
-                : access.RunAsSystem(() => mesh.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{type}"))
-                    .Take(1)
-                    .Timeout(ReadBudget))
-                .Select(change => change.Items.Any(n => string.Equals(n.Path, type, StringComparison.OrdinalIgnoreCase)
-                                                        && string.Equals(n.NodeType, MeshNode.NodeTypePath, StringComparison.OrdinalIgnoreCase)));
-
-        return request.NodeTypes.ToObservable()
-            .Select(t => TypeExists(t).Select(ok => (Type: t, Ok: ok)))
-            .Concat()
-            .ToList()
-            .SelectMany(checks =>
+        return UnknownNodeTypes(hub, request.NodeTypes)
+            .SelectMany(unknown =>
             {
-                var unknown = checks.Where(c => !c.Ok).Select(c => c.Type).ToList();
                 if (unknown.Count > 0)
                     return Observable.Return(new ActivationRecycleTicket(null,
                         $"unknown NodeType(s): {string.Join(", ", unknown)} — nothing was recycled"));
@@ -228,12 +218,132 @@ public static class ActivationRecycle
                     Content = request with { RequestedAt = request.RequestedAt == default ? DateTimeOffset.UtcNow : request.RequestedAt },
                 };
                 // The id is the dedupe key: an existing request is the answer, never a second write.
+                // A NEW request is the moment the rows grow, so it is also when the expired ones go
+                // (ActivationRecycleRetention): the writer prunes, no timer does. The prune is its
+                // OWN subscription, started once the request is committed: the ticket is answered
+                // the moment the write lands and never waits for the listing or the deletes.
                 return Exists().SelectMany(there => there
                     ? Observable.Return(new ActivationRecycleTicket(path, null))
                     : access.RunAsSystem(() => mesh.CreateNode(node).Take(1))
+                        .Do(_ => StartPrune(hub, path))
                         .Select(_ => new ActivationRecycleTicket(path, null)));
             })
             .Take(1);
+    }
+
+    /// <summary>
+    /// The names in <paramref name="types"/> that are NOT a NodeType this mesh serves — the
+    /// refusal <see cref="Request"/> answers "unknown NodeType(s)" for. Cold; emits once.
+    ///
+    /// <para>A NodeType is either a framework built-in (a static node, which carries no NodeType
+    /// stamp of its own) or a node whose own type is <c>NodeType</c> — a compiled, imported,
+    /// installed or embedded definition. The second kind is read from the STORE
+    /// (<see cref="StoredNodeReads.ReadStoredNodes"/>): the same source the type's own activation
+    /// loads its node from, read in one batch and without activating any hub.</para>
+    ///
+    /// <para>🚨 <b>Never from a QUERY</b> (#6826). This check used to ask
+    /// <c>mesh.Query("path:{type}")</c>, i.e. the query READ MODEL, whether a specific path exists
+    /// — the use the CQRS rule forbids, because a query's negative is not the store's. On a portal
+    /// whose <c>Doc</c> partition is served from the embedded documentation, while the database
+    /// holds only a derived search index of it, every Doc NodeType was refused as unknown on every
+    /// replica although each was live, compiled and served: the cascade fired from the type's own
+    /// live activation, and the read model answered "nothing there". A store read can only answer
+    /// what an activation would load, and a store FAULT propagates rather than reading as
+    /// "unknown".</para>
+    /// </summary>
+    /// <param name="hub">Any surviving hub of the mesh.</param>
+    /// <param name="types">The NodeType paths a request names.</param>
+    public static IObservable<ImmutableList<string>> UnknownNodeTypes(IMessageHub hub, IReadOnlyCollection<string> types)
+    {
+        var stored = types
+            .Where(t => hub.ServiceProvider.FindStaticNode(t) is null)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToImmutableArray();
+        if (stored.IsEmpty)
+            return Observable.Return(ImmutableList<string>.Empty);
+        return hub.ReadStoredNodes(stored)
+            .Timeout(ReadBudget)
+            .Select(found => types
+                .Where(t => stored.Contains(t, StringComparer.OrdinalIgnoreCase)
+                            && !(found.TryGetValue(t, out var node)
+                                 && node.State != MeshNodeState.Deleted
+                                 && string.Equals(node.NodeType, MeshNode.NodeTypePath, StringComparison.OrdinalIgnoreCase)))
+                .ToImmutableList());
+    }
+
+    /// <summary>
+    /// Starts the prune that follows a newly committed request as a subscription of its own, so the
+    /// request's ticket never waits for it. <see cref="Prune"/> already maps every fault to a logged
+    /// zero; the error handler here is the backstop for anything that escapes it.
+    /// </summary>
+    private static void StartPrune(IMessageHub hub, string keepPath)
+    {
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(ActivationRecycle));
+        Prune(hub, hub.ServiceProvider.GetRequiredService<ActivationRecycleRetention>(), DateTimeOffset.UtcNow, keepPath)
+            .Subscribe(
+                _ => { },
+                ex => logger?.LogWarning(ex,
+                    "[ActivationRecycle] retention: the prune after {Path} faulted; expired requests stay until the next request prunes them",
+                    keepPath));
+    }
+
+    /// <summary>
+    /// Removes the requests <paramref name="retention"/> calls expired at <paramref name="now"/>,
+    /// each with its per-process reports, never <paramref name="keepPath"/>. Cold; emits once, the
+    /// number of requests removed.
+    ///
+    /// <para>The listing is a QUERY, which is a valid use here: it lists children, and a stale answer
+    /// is harmless — a row the index has not seen yet is a NEWER row and is kept, a row already gone
+    /// is an idempotent delete. Each removal goes through <see cref="IMeshService.DeleteNode"/>,
+    /// which cascades, so the <c>{request}/{process}</c> reports leave with their request. It runs as
+    /// System, as the request's own create did: infrastructure acting on records it wrote.</para>
+    ///
+    /// <para>A failed removal is per ROW, and a failed listing costs this prune only: each is logged,
+    /// the rows stay, and the next request's prune tries again. The request that triggered the prune
+    /// is already written and acted on, so its caller's ticket never depends on the prune.</para>
+    /// </summary>
+    /// <param name="hub">Any surviving hub of the mesh.</param>
+    /// <param name="retention">The policy to prune to.</param>
+    /// <param name="now">The cutoff instant.</param>
+    /// <param name="keepPath">The request just written; always kept.</param>
+    public static IObservable<int> Prune(IMessageHub hub, ActivationRecycleRetention retention, DateTimeOffset now, string? keepPath = null)
+    {
+        if (!retention.Enabled)
+            return Observable.Return(0);
+        var mesh = hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var access = hub.ServiceProvider.GetRequiredService<AccessService>();
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(ActivationRecycle));
+        return access.RunAsSystem(() => mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(retention.WindowQuery))
+                .Where(change => change.ChangeType == QueryChangeType.Initial)
+                .Take(1)
+                .Timeout(ReadBudget))
+            .Select(change => retention.SelectForPruning(change.Items, now, keepPath))
+            .SelectMany(paths =>
+            {
+                if (paths.IsEmpty)
+                    return Observable.Return(0);
+                // Information on purpose: the platform is removing audit rows, and an operator must be
+                // able to see that. One line per prune, and only when something is removed.
+                logger?.LogInformation(
+                    "[ActivationRecycle] retention: removing {Count} recycle request(s) older than {MaxAge}, with their reports",
+                    paths.Count, retention.MaxAge);
+                return paths
+                    .Select(p => access.RunAsSystem(() => mesh.DeleteNode(p))
+                        .Take(1)
+                        .Select(removed => removed ? 1 : 0)
+                        .Catch((Exception ex) =>
+                        {
+                            logger?.LogWarning(ex, "[ActivationRecycle] retention: {Path} was not removed; the next request's prune retries it", p);
+                            return Observable.Return(0);
+                        }))
+                    .Concat()
+                    .Sum();
+            })
+            .Catch((Exception ex) =>
+            {
+                logger?.LogWarning(ex, "[ActivationRecycle] retention: the request window could not be read; nothing was pruned, the next request retries");
+                return Observable.Return(0);
+            });
     }
 
     /// <summary>The reports written so far for a request, read as System. Cold; one snapshot.</summary>
@@ -290,8 +400,10 @@ public static class ActivationRecycle
     /// Recycles this PROCESS's live activations that <paramref name="request"/> selects: one
     /// <see cref="DisposeRequest"/> each, with the request's reason, posted from the mesh's
     /// node-operation issuing hub (a survivor, never the router — #4463), in batches of
-    /// <see cref="BatchSize"/> spaced by <see cref="BatchInterval"/>. Each target goes through its
-    /// own normal quiesce. Cold; emits the report once the last batch is posted.
+    /// <see cref="BatchSize"/> spaced by <see cref="BatchInterval"/>, each carrying
+    /// <see cref="DisposeRequest.CascadedFrom"/> = the request's path so none sets off a cascade of
+    /// its own. Each target goes through its own normal quiesce. Cold; emits the report once the last
+    /// batch is posted.
     /// </summary>
     public static IObservable<ActivationRecycleReport> RecycleLocal(
         IMessageHub meshHub, ActivationRecycleRequest request, string requestPath, IScheduler? scheduler = null)
@@ -316,7 +428,11 @@ public static class ActivationRecycle
                         .Select(h =>
                         {
                             var target = PathOf(h);
-                            issuing.Post(new DisposeRequest { Reason = reason }, o => o.WithTarget(new Address(target)));
+                            // CascadedFrom: one wave of THIS request, which already names every
+                            // type it reaches — a disposal it posts never fans out again
+                            // (MessageHub.HandleDispose), whatever seam the target carries.
+                            issuing.Post(new DisposeRequest { Reason = reason, CascadedFrom = requestPath },
+                                o => o.WithTarget(new Address(target)));
                             return target;
                         })
                         .ToImmutableList()))

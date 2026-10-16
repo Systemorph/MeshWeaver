@@ -6,8 +6,20 @@ name: Publish the surviving NuGet packages
 # package and the aspire integration". Everything else under the MeshWeaver prefix is retired and
 # unlisted (Doc/Architecture/NuGetPackageRetirement; scripts/orphaned-nuget-packages.py).
 #
-#   MeshWeaver.Aspire.Hosting.Memex   memex/aspire/Memex.Aspire.Hosting  (THIS repo)  ← published here
+#   MeshWeaver.Aspire.Hosting.Memex   memex/aspire/Memex.Aspire.Hosting  (THIS repo)  ← published here, on a release tag
 #   MeshWeaver.MemexTemplate          tools/MeshWeaver.MemexTemplate.Pack (MeshWeaver.Plugins)
+#
+# 🆕 A THIRD, RESTORED — the `memex` CLI, with its OWN version (policy `cli-thin-wrapper-own-version`):
+#
+#   MeshWeaver.Cli                    src/MeshWeaver.Cli                  (THIS repo)  ← published here, on a dispatch with packages=cli
+#
+# policy `cli-thin-wrapper-own-version` (Doc/Architecture/PolicyNotProse): a customer's dedicated build server installs the CLI
+# with `dotnet tool install` and has no MeshWeaver checkout. Like `gh`, the CLI is a thin client (REST
+# for the mesh verbs, the platform IMAGE for build and test), so it is versioned by its own csproj
+# <CliVersion> and released RARELY — when the CLI changes, never with every platform build. A dispatch
+# with packages=cli publishes the version MeshWeaver.Cli.csproj declares and refuses any other.
+# The CLI references no MeshWeaver framework assembly (System.CommandLine only) — the same
+# "entry point, not platform bytes" case as the adapter.
 #
 # 🚨 ONLY THE FIRST IS PUBLISHED BY THIS LANE, and that is deliberate — see "the template is
 # blocked" below. Both survive the retirement; only one can ship without a product decision.
@@ -77,6 +89,9 @@ name: Publish the surviving NuGet packages
 # nuget.org is reached by Trusted Publishing (GitHub OIDC via NuGet/login — no stored NuGet secret), exactly as unlist-orphaned-packages.yml does. The App token replaces
 # the stored GitHub PAT, which is the one this repository could actually stop storing.
 
+# The run-name says what is published, and a dry run — which pushes nothing — says so in its title.
+run-name: "Publish ${{ inputs.packages || 'aspire' }} ${{ inputs.version || github.ref_name }}${{ inputs.dry-run && ' (dry run)' || '' }}"
+
 on:
   push:
     tags:
@@ -84,9 +99,18 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to publish (e.g. 3.0.0). Required on a dispatch; the tag supplies it otherwise."
+        description: "Version to publish (e.g. 3.1.0). Required for the Aspire integration on a dispatch (the tag supplies it otherwise); for the CLI, empty = the <Version> MeshWeaver.Cli.csproj declares, and any other value is refused."
         type: string
         default: ""
+      ref:
+        description: "Commit to pack. Empty = the dispatched ref."
+        type: string
+        default: ""
+      packages:
+        description: "aspire = the Aspire integration (a release); cli = the memex CLI, at its own csproj version"
+        type: choice
+        options: [aspire, cli]
+        default: aspire
       dry-run:
         description: "Pack and verify, but do not push to nuget.org"
         type: boolean
@@ -95,8 +119,10 @@ on:
 permissions:
   contents: read
 
+# One group per (packages, version, dry-run): a dry run never cancels a publication, and two runs of
+# the SAME version serialise (`--skip-duplicate` makes the second a no-op).
 concurrency:
-  group: publish-packages
+  group: publish-packages-${{ inputs.packages || 'aspire' }}-${{ inputs.version || github.ref_name }}${{ inputs.dry-run && '-dry' || '' }}
   cancel-in-progress: false
 
 jobs:
@@ -137,14 +163,8 @@ jobs:
         with:
           user: ${{ vars.NUGET_TRUSTED_USER }}
 
-      - name: A dispatch must name the version
-        if: github.event_name == 'workflow_dispatch' && inputs.version == ''
-        run: |
-          echo "::error::workflow_dispatch needs a version input (e.g. 3.0.0) — there is no tag to read it from."
-          exit 1
-
   publish:
-    name: Pack + push the two survivors
+    name: Pack + push the surviving packages
     needs: preflight
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -152,10 +172,11 @@ jobs:
       id-token: write       # NuGet/login — the short-lived push key
       contents: read
     steps:
-      - name: Checkout MeshWeaver (the platform, and the Aspire adapter)
+      - name: Checkout MeshWeaver (the platform, the Aspire adapter and the CLI)
         uses: actions/checkout@v7
         with:
           path: meshweaver
+          ref: ${{ inputs.ref || github.sha }}
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v6
@@ -169,8 +190,20 @@ jobs:
         id: version
         run: |
           set -euo pipefail
-          if [ -n "${{ inputs.version }}" ]; then
+          packages="${{ inputs.packages || 'aspire' }}"
+          if [ "$packages" = cli ]; then
+            # The CLI has its OWN version (policy `cli-thin-wrapper-own-version`): the csproj's, and only that.
+            declared=$(dotnet msbuild meshweaver/src/MeshWeaver.Cli/MeshWeaver.Cli.csproj -getProperty:Version)
+            version="${{ inputs.version }}"; version="${version:-$declared}"
+            [ "$version" = "$declared" ] || { echo "::error::version '$version' is not the <Version> MeshWeaver.Cli.csproj declares ('$declared') — bump the csproj by pull request, then publish"; exit 1; }
+          elif [ -n "${{ inputs.version }}" ]; then
             version="${{ inputs.version }}"
+          elif [ "${{ github.event_name }}" = workflow_dispatch ]; then
+            # An Aspire dispatch has no tag to read the version from. This is the ONE place the
+            # version rule lives — a second copy in `preflight` once refused every dispatch with an
+            # empty version, the CLI's csproj default included (#6860 review).
+            echo "::error::an Aspire workflow_dispatch needs a version input (e.g. 3.0.0) — there is no tag to read it from. (packages=cli may omit it: the csproj <Version> is used.)"
+            exit 1
           else
             version="${GITHUB_REF#refs/tags/v}"
           fi
@@ -180,12 +213,22 @@ jobs:
           [ "$(echo "$version" | tr -cd '.' | wc -c)" -eq 2 ] || { echo "::error::'$version' is not X.Y.Z"; exit 1; }
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "publishing version $version"
+          # WHICH package: a tag is an Aspire release; a dispatch says so. The list drives the pack,
+          # the count assertion and the LISTED verification, so the three can never disagree.
+          case "$packages" in
+            aspire) ids="MeshWeaver.Aspire.Hosting.Memex" ;;
+            cli)    ids="MeshWeaver.Cli" ;;
+            *)      echo "::error::packages='$packages' — expected aspire or cli"; exit 1 ;;
+          esac
+          echo "ids=$ids" >> "$GITHUB_OUTPUT"
+          echo "packages: $ids (from $(git -C meshweaver rev-parse HEAD))"
 
       - name: Say what is being published
         run: |
           {
             echo "### Publishing MeshWeaver ${{ steps.version.outputs.version }}"
-            echo "- core: \`${GITHUB_SHA}\`"
+            echo "- core: \`$(git -C meshweaver rev-parse HEAD)\`"
+            echo "- packages: ${{ steps.version.outputs.ids }}"
             echo "- \`MeshWeaver.MemexTemplate\` is NOT published by this lane — the step is not built yet; see the header."
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -193,6 +236,7 @@ jobs:
       # $(PlatformVersion)-ci.<run> (Directory.Build.props §2). PlatformVersion is passed too so a
       # tag can never publish a version the props does not agree with.
       - name: Pack the Aspire integration
+        if: contains(steps.version.outputs.ids, 'MeshWeaver.Aspire.Hosting.Memex')
         run: |
           set -euo pipefail
           dotnet pack meshweaver/memex/aspire/Memex.Aspire.Hosting/Memex.Aspire.Hosting.csproj \
@@ -201,25 +245,49 @@ jobs:
             -p:PlatformVersion=${{ steps.version.outputs.version }} \
             --output "$RUNNER_TEMP/nupkgs"
 
+      # The CLI's version is its csproj <Version>, checked equal above; -p:Version restates it.
+      - name: Pack the CLI
+        if: contains(steps.version.outputs.ids, 'MeshWeaver.Cli')
+        run: |
+          set -euo pipefail
+          dotnet pack meshweaver/src/MeshWeaver.Cli/MeshWeaver.Cli.csproj \
+            -c Release \
+            -p:Version=${{ steps.version.outputs.version }} \
+            --output "$RUNNER_TEMP/nupkgs"
+
       # 🚨 A POSITIVE, SPECIFIC signal: the id, at this exact version, and nothing else. `dotnet
       # pack` exiting 0 having produced no package (or one under a version nobody asked for) is
       # precisely the shape of false pass this repository has paid for. The count also catches a
       # project silently regaining packability, which Directory.Build.props defaults to false.
-      - name: The package exists, at this version, and it is the only one
+      - name: Each package exists, at this version, and nothing else was packed
         run: |
           set -euo pipefail
           V="${{ steps.version.outputs.version }}"
+          IDS="${{ steps.version.outputs.ids }}"
           ls -1 "$RUNNER_TEMP/nupkgs"
-          [ -f "$RUNNER_TEMP/nupkgs/MeshWeaver.Aspire.Hosting.Memex.$V.nupkg" ] \
-            || { echo "::error::MeshWeaver.Aspire.Hosting.Memex.$V.nupkg was not produced"; exit 1; }
+          expected=0
+          for id in $IDS; do
+            [ -f "$RUNNER_TEMP/nupkgs/$id.$V.nupkg" ] || { echo "::error::$id.$V.nupkg was not produced"; exit 1; }
+            expected=$((expected + 1))
+          done
           count="$(find "$RUNNER_TEMP/nupkgs" -name '*.nupkg' | wc -l | tr -d ' ')"
-          [ "$count" -eq 1 ] || { echo "::error::expected exactly 1 package, found $count — a project has regained packability; see Directory.Build.props"; exit 1; }
+          [ "$count" -eq "$expected" ] || { echo "::error::expected exactly $expected package(s) ($IDS), found $count — a project has regained packability; see Directory.Build.props"; exit 1; }
+          if [ -f "$RUNNER_TEMP/nupkgs/MeshWeaver.Cli.$V.nupkg" ]; then
+            # A tool package that is not a TOOL installs as a library and gives no `memex` command.
+            unzip -p "$RUNNER_TEMP/nupkgs/MeshWeaver.Cli.$V.nupkg" MeshWeaver.Cli.nuspec | grep -q '<packageType name="DotnetTool"' \
+              || { echo "::error::MeshWeaver.Cli.$V.nupkg is not a DotnetTool package — PackAsTool is missing from MeshWeaver.Cli.csproj"; exit 1; }
+            unzip -l "$RUNNER_TEMP/nupkgs/MeshWeaver.Cli.$V.nupkg" | grep -q 'tools/net10.0/any/memex.dll' \
+              || { echo "::error::MeshWeaver.Cli.$V.nupkg carries no tools/net10.0/any/memex.dll"; exit 1; }
+          fi
+          if [ ! -f "$RUNNER_TEMP/nupkgs/MeshWeaver.Aspire.Hosting.Memex.$V.nupkg" ]; then
+            echo "$expected package(s) at $V: $IDS"; exit 0
+          fi
           # The Deployment record assembly is BUNDLED into this package (Memex.Aspire.Hosting.csproj,
           # PackContractAssembly) — a customer AppHost builds its record from one reference. A nupkg
           # without it installs, compiles nothing, and cannot be recalled.
           unzip -l "$RUNNER_TEMP/nupkgs/MeshWeaver.Aspire.Hosting.Memex.$V.nupkg" | grep -q 'lib/net10.0/MeshWeaver.Deployment.Contract.dll' \
             || { echo "::error::MeshWeaver.Deployment.Contract.dll is not inside the nupkg — the PackContractAssembly target in Memex.Aspire.Hosting.csproj no longer bundles it"; exit 1; }
-          echo "1 package at $V, with the Deployment record assembly bundled"
+          echo "$expected package(s) at $V ($IDS), the adapter with the Deployment record assembly bundled"
 
       - name: Log in to nuget.org (Trusted Publishing — a short-lived key, nothing stored)
         if: ${{ !inputs.dry-run }}
@@ -245,17 +313,18 @@ jobs:
       # fifty-five "unlisted" lines were printed over versions that still read listed=true.
       # Registration blobs rebuild asynchronously, so a not-yet-listed reading is inconclusive and
       # is polled, never reported as either outcome.
-      - name: Verify both versions read as LISTED on nuget.org
+      - name: Verify every published version reads as LISTED on nuget.org
         if: ${{ !inputs.dry-run }}
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          IDS: ${{ steps.version.outputs.ids }}
         run: |
           set -euo pipefail
           python3 - <<'PY'
           import gzip, json, os, sys, time, urllib.request
 
           version = os.environ["VERSION"]
-          pending = ["MeshWeaver.Aspire.Hosting.Memex"]
+          pending = os.environ["IDS"].split()
 
           def listed(package_id: str) -> bool | None:
               url = ("https://api.nuget.org/v3/registration5-gz-semver2/"
@@ -290,8 +359,9 @@ jobs:
         run: |
           {
             echo "### Published to nuget.org"
-            echo "- \`MeshWeaver.Aspire.Hosting.Memex\` ${{ steps.version.outputs.version }}"
+            for id in ${{ steps.version.outputs.ids }}; do echo "- \`$id\` ${{ steps.version.outputs.version }}"; done
             echo ""
             echo "\`MeshWeaver.MemexTemplate\` was NOT published — this lane has no step for it yet (the GUI question is answered; see the header)"
             echo "decision recorded in Doc/Architecture/NuGetPackageRetirement."
           } >> "$GITHUB_STEP_SUMMARY"
+

@@ -123,8 +123,11 @@ nothing the owner will keep. That turn is cancelled on entry, so a hung initiali
 the block at once instead of holding its whole ancestry pending for a stall budget; whatever was
 parked behind its gates is answered `ShuttingDown` and reported (`[DISPOSE-DISCARD]`). The report
 is an Error only when a waiter may take that answer as final. A self-addressed delivery, a
-`[ReaskedOnShutdown]` request (`SubscribeRequest`) or a message the routing layer may not answer
-(`[CanBeIgnored]`, a `DeliveryFailure`) is re-asked or owed to nobody, and reports at Debug. The table is in [Retiring an Activation](../RetiringAnActivation) → *What is NOT a retirement*.
+`[ReaskedOnShutdown]` request (`SubscribeRequest`), a request whose producer stamped
+`ReasksOnShutdown` on it (`PostOptions.ReaskingOnShutdown()`: the node point read, every node
+write's `PatchDataRequest`), a message the routing layer may not answer
+(`[CanBeIgnored]`, a `DeliveryFailure`) or a REPLY to a request this address issued (#6791) is
+re-asked or owed to nobody, and reports at Debug. The table is in [Retiring an Activation](../RetiringAnActivation) → *What is NOT a retirement*.
 
 ---
 
@@ -150,6 +153,39 @@ until the grace period ran out.
 - **Every other hub stays.** The drain is waiting for exactly the sessions that hold the pod open.
   That is why this is not folded into `IsLeaving()`.
 
+### Never onto another draining pod (#6865)
+
+Orleans membership cannot tell a draining pod from a healthy one: a pod in its `preStop` drain stays
+`Active` for the whole grace period. So when two old pods drained at once (memex-cloud, 2026-10-16,
+12:25–12:49Z) `Hosting/PlatformBuilds` was handed from one draining pod to the other and straight back,
+about every 2.2 s for 24 minutes. Each copy began a fresh FleetWatch pass, and its writes died with it
+(`HubDisposedBeforeResponseException`, `DeliveryFailureException … RunLevel=Quiescing`), so the
+`Ops/Status` rows went stale for the whole drain. Two defects combined:
+
+1. **The target was chosen from membership alone**, so the other draining pod counted as a survivor.
+2. **The target was spread with `string.GetHashCode`**, which .NET randomises per process. The two
+   draining pods had no reason to agree, so each could keep choosing the other.
+
+The fix is a cluster-wide drain signal plus a fixed ranking:
+
+- **A draining silo announces it.** When `HostDrainSignal` begins, `ClusterDrainAnnouncer` calls
+  `ISiloDrainNoticeGrain` once for every other Active silo. The grain is keyed by the recipient and
+  placed on it with a placement hint. The silo announces again on every membership change while it
+  drains, so a pod that joins mid-drain learns it too. That re-announcement fires on the real event
+  and never on a timer. The call goes through the router's gated seam, so a host that has begun
+  STOPPING asks Orleans for nothing.
+- **Each silo keeps a `ClusterDrainRoster`**, the peers that announced their drain. It is pruned on
+  membership changes.
+- **`MessageHubGrain.AnotherActiveSilo` excludes every draining peer.** It ranks the rest by
+  rendezvous hashing with a fixed hash (`DrainHandOffTarget`: FNV-1a 64 plus a mixer, over the
+  address and the silo identity). Every process ranks the candidates for one address the same way.
+- **When every other silo drains too, there is nowhere to go.** The address STAYS and keeps serving,
+  the same as with no survivor at all. It does not move onto a pod that is also leaving. SIGTERM's
+  `IsLeaving()` takes over from there.
+
+Remaining limit: pods that SIGTERM together without a `preStop` drain announce nothing. There the
+hop is bounded and loud, as before.
+
 Pinned by:
 
 - `AnInstanceSingletonLeavesADrainingSiloTest`, a two-silo test. The singleton leaves the draining
@@ -157,6 +193,13 @@ Pinned by:
   ordinary hub on the same silo stays. The test fails when the grain's check is removed.
 - `AnInstanceSingletonWithNowhereToGoKeepsServingTest` — one silo, drain begun: the singleton stays
   and answers.
+- `TwoSilosDrainingAtOnceTest`, a three-silo test. Two silos drain, and eight singletons on one of
+  them settle on the survivor. None is ever placed on the other draining silo, and none moves again
+  for four drain-watch ticks. With the fix reverted it fails.
+- `AllSilosDrainingKeepTheirSingletonTest` — both silos drain, and the singleton stays where it is
+  and answers. With the fix reverted it ping-pongs.
+- `DrainHandOffTargetTest` — the score is a pinned constant, so it is the same in every process.
+  The pick does not depend on the candidates' order.
 - `RelocateOnDrainRegistersItsHubTest` — the opt-in registers its hub with the process's one signal.
 - `DrainEndpointTest.TheFirstInPodDrainProbe_BeginsTermination_ForTheSingletonsToLeave` and
   `ADrainProbeFromOutsideThePod_Reports_ButNeverBeginsTermination`.

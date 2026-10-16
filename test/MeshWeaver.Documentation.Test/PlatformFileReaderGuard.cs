@@ -88,6 +88,28 @@ public class PlatformFileReaderGuard
             Assert.NotEqual(0, missing.Exit);
             Assert.Equal("", missing.Stdout);
             Assert.Contains("does not exist", missing.Stderr, StringComparison.Ordinal);
+            // #6633: the two causes are told apart. A path absent at a FETCHED ref is exit 3 — the only
+            // case a lane may read as "a pin older than the file" — and is never called infrastructure…
+            Assert.Equal(3, missing.Exit);
+            Assert.DoesNotContain("INFRASTRUCTURE", missing.Stderr, StringComparison.Ordinal);
+            // …while a ref that cannot be FETCHED (here: an origin that does not answer, as a refused or
+            // throttled read does not) is exit 1 and says it is infrastructure, not the caller's pin.
+            var unreachable = Read(Path.Combine(work.FullName, "unreachable-job"),
+                new Uri(Path.Combine(work.FullName, "no-such-origin")).AbsoluteUri, "main", ".github/scripts/x.py");
+            Assert.Equal(1, unreachable.Exit);
+            Assert.Equal("", unreachable.Stdout);
+            Assert.Contains("INFRASTRUCTURE", unreachable.Stderr, StringComparison.Ordinal);
+            Assert.Contains("not a fault in the caller's code or its pin", unreachable.Stderr, StringComparison.Ordinal);
+            // …and a ref the server answers it does NOT HAVE — a mistyped branch, a full sha that is not in
+            // the repository — is the caller's pin, never called infrastructure (#6633 review).
+            foreach (var absentRef in new[] { "no-such-branch", "0123456789012345678901234567890123456789" })
+            {
+                var notFound = Read(Path.Combine(work.FullName, $"absent-ref-job-{absentRef[..4]}"), url, absentRef, ".github/scripts/x.py");
+                Assert.Equal(1, notFound.Exit);
+                Assert.Equal("", notFound.Stdout);
+                Assert.Contains("REF NOT FOUND", notFound.Stderr, StringComparison.Ordinal);
+                Assert.DoesNotContain("INFRASTRUCTURE", notFound.Stderr, StringComparison.Ordinal);
+            }
         }
         finally
         {

@@ -459,6 +459,27 @@ public record DeleteNodeRequest(string Path)
     public bool Recursive { get; init; }
 
     /// <summary>
+    /// If true, delete the node at <see cref="Path"/> ALONE and leave everything under it in place:
+    /// the has-children refusal is skipped, no subtree-deletion scope is opened, and the drain
+    /// verifies the root's removal only — never deleting a descendant. The node still goes through
+    /// the full lifecycle: the Delete permission check, the delete-validator chain, the
+    /// <c>Deleted</c> change event, the stream-cache invalidation and the disposal of the per-node
+    /// hub hosted at the path.
+    ///
+    /// <para>For a row whose path prefixes nodes that are not its children in the lifecycle sense —
+    /// a NodeType definition, whose path prefixes its own <c>Source/</c> and, for a leaf-shaped
+    /// type, its instances (#6627: the closed-type-set installer removes such a row and must keep
+    /// the records under it). Contradicts <see cref="Recursive"/>; a request carrying both is
+    /// refused.</para>
+    ///
+    /// <para>🚨 <b>Only for a NodeType definition</b> (#6751): the handler refuses it, before any
+    /// side effect, unless the stored target's <c>NodeType</c> is <c>NodeType</c>. On any other node
+    /// the post-deletion handlers would still run — a partition root's would drop the store the
+    /// request asked to keep — and an ordinary parent's children would be orphaned.</para>
+    /// </summary>
+    public bool KeepDescendants { get; init; }
+
+    /// <summary>
     /// If true, also delete satellite nodes (e.g. _Comment, _Activity, _Thread). By default
     /// satellites are preserved so an undo / restore can find prior activity. Set to <c>true</c>
     /// for hard-delete operations such as the Delete step inside a Move.
@@ -489,6 +510,37 @@ public record DeleteNodeRequest(string Path)
     /// not a security boundary: the leaf's own Delete permission check still applies.
     /// </summary>
     public string? CascadeRootPath { get; init; }
+
+    /// <summary>
+    /// Optional precondition: delete only if the node is STILL at this <see cref="MeshNode.Version"/>
+    /// — the version the caller read when it decided the node may go (#6621). Null (the default)
+    /// deletes whatever version is there, exactly as before.
+    ///
+    /// <para>🚨 <b>Checked by the owning node hub, in its commit turn, against its LIVE version.</b>
+    /// A read-then-delete on a shared node cannot be made safe from outside: another writer can add
+    /// to the node after the caller's last read and before the delete lands. So the delete seals the
+    /// path against the owner's own writes and opens the subtree-deletion scope, then asks the owner
+    /// (a <see cref="ValidateDeleteRequest"/> carrying <see cref="ValidateDeleteRequest.ExpectedVersion"/>)
+    /// to compare. The owner compares on the turn its own writes and cross-hub patches commit on, so
+    /// every write it has acknowledged is in the compared version, including an own write it has not
+    /// stored yet (#6673). Any later write is refused rather than acknowledged. Check and delete are
+    /// therefore one step.</para>
+    ///
+    /// <para>A mismatch answers <see cref="NodeDeletionRejectionReason.Conflict"/> and removes
+    /// nothing; re-read the node and decide again. A node that is already gone still answers the
+    /// idempotent success <see cref="DeleteNodeResponse.AlreadyAbsent"/>. An owner that cannot be
+    /// asked while the node is still stored answers <see cref="NodeDeletionRejectionReason.Unavailable"/>
+    /// and removes nothing.</para>
+    ///
+    /// <para>Not covered yet (#6673): the seal lives in the deleting process, so an owning activation
+    /// on ANOTHER silo is not sealed after the comparison, and the storage delete itself is not a
+    /// compare-and-delete.</para>
+    ///
+    /// <para><b>Root only.</b> For a <see cref="Recursive"/> delete the check applies to the node at
+    /// <see cref="DeleteNodeRequest.Path"/>; descendants are not version-checked (the cascade's leaf
+    /// requests never carry it).</para>
+    /// </summary>
+    public long? ExpectedVersion { get; init; }
 }
 
 /// <summary>
@@ -613,7 +665,14 @@ public enum NodeDeletionRejectionReason
     /// The delete was NOT evaluated: a check it depends on could not be established (#1446).
     /// See <see cref="NodeCreationRejectionReason.Unavailable"/>.
     /// </summary>
-    Unavailable
+    Unavailable,
+
+    /// <summary>
+    /// The node is no longer at <see cref="DeleteNodeRequest.ExpectedVersion"/>: someone changed it
+    /// after the caller read it. Nothing was deleted. The same optimistic-concurrency fact as
+    /// <c>MeshNodeErrorCode.Conflict</c> on an update — re-read the node and decide again (#6621).
+    /// </summary>
+    Conflict
 }
 
 /// <summary>

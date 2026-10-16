@@ -900,6 +900,7 @@ jobs:
           # irrelevant files, so the reconcile branch skips it too instead of "healing" it back
           # into a build every tick.
           relevant=true
+          superseded=false
           # `--detail` is load-bearing: WITHOUT it show-tags returns an array of plain STRINGS,
           # so `[].name` matches nothing and newest_short is ALWAYS empty. Every gate log has read
           # `Newest published set: <none>` for as long as this step has existed. It fails open
@@ -924,15 +925,29 @@ jobs:
                   relevant=false
                 fi
               fi
+              # 🚨 NEVER PUBLISH A COMMIT OLDER THAN THE NEWEST PUBLISHED SET. The same compare
+              # says whether this target is strictly BEHIND that set; the Decide step declines
+              # it, because the version is this RUN's number and every consumer takes the
+              # highest one. Measured 2026-10-14: CD #10796 published 6b9944c (the parent) as
+              # 3.1.10796 right after #10795 had published 04d56c7, and every
+              # MeshWeaver.Plugins main run resolved the older code. `cd-superseded.py` holds
+              # the rule and its self-test; an unreadable compare is `superseded=false`.
+              sverdict=$(python3 .github/scripts/cd-superseded.py --target "$SHA" --newest "$base" --compare "$cmp" || echo "superseded=false")
+              printf '%s\n' "$sverdict"
+              if [ "$(printf '%s\n' "$sverdict" | tail -1)" = "superseded=true" ]; then
+                superseded=true
+              fi
             fi
           fi
-          echo "Newest published set: ${newest_short:-<none>}; image-relevant changes since: $relevant"
-          echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
+          echo "Newest published set: ${newest_short:-<none>}; image-relevant changes since: $relevant; target superseded by it: $superseded"
+          { echo "relevant=$relevant"; echo "superseded=$superseded"; echo "newest_short=${newest_short:-}"; } >> "$GITHUB_OUTPUT"
       - name: "Decide"
         id: decide
         env:
           GH_TOKEN: ${{ github.token }}
           RELEVANT: ${{ steps.relevance.outputs.relevant }}
+          SUPERSEDED: ${{ steps.relevance.outputs.superseded }}
+          NEWEST_SHORT: ${{ steps.relevance.outputs.newest_short }}
           SHORT: ${{ steps.target.outputs.short_sha }}
           REASON: ${{ steps.target.outputs.reason }}
           GREEN: ${{ steps.required.outputs.green }}
@@ -1007,6 +1022,20 @@ jobs:
             # dispatches one if not. Say that, because a reader acting on the old sentence would
             # wait an hour for a heal that was never coming.
             decision false "⏳ An older run of this workflow is still publishing \`$SHORT\`: $INFLIGHT — deferring, so one commit yields ONE image set (MeshWeaver#3376). That run may instead be DISCARDED by the one-pending-slot rule without executing anything; either way the run that ends up holding the lane hands HEAD on when it releases it (\`handoff\`, MeshWeaver#4652), so this deferral does not rest on the queued run surviving."
+            exit 0
+          fi
+
+          # ── NEVER BEHIND THE NEWEST PUBLISHED SET ─────────────────────────────────────────────
+          # Both paths, before every other verdict: a target strictly behind the newest published
+          # set would be published under THIS run's higher number, and every consumer — each
+          # install's self-updater and every satellite lane resolving "the newest sealed platform"
+          # — would roll onto older code. `workflow_run` delivers in BUILD-COMPLETION order, which
+          # is not commit order: on 2026-10-14 CD #10796 published 6b9944c, the parent of the set
+          # #10795 had just published, and MeshWeaver.Plugins main resolved the older code
+          # (NU1109 on every portal-hosts unit) until a later set superseded it. Nothing is lost by
+          # declining: the newer set already contains every change of this commit.
+          if [ "${SUPERSEDED:-false}" = "true" ]; then
+            decision false "⏭️ \`$SHORT\` is OLDER than the newest published set \`${NEWEST_SHORT}\` (an ancestor of it) — not publishing: this run's number is higher, so every consumer would roll back onto older code. The newer set already carries every change in \`$SHORT\`."
             exit 0
           fi
 
@@ -2494,38 +2523,21 @@ jobs:
       # else. This image publishes BOTH architectures from ONE x64 host, so both copies are staged
       # and the builder picks the one for the RID it is running on.
       #
-      # The arm64 copy comes from the dotnet/sdk image of the EXACT SAME SDK VERSION the runner is
-      # using — one source of truth, no second pin to drift — and `docker create` + `docker cp`
-      # reads it out without ever executing an arm64 binary, so no qemu is needed.
+      # The arm64 copy comes from the SDK FEED — the linux-arm64 tarball of the EXACT SAME SDK
+      # VERSION, checked against the SHA-512 the release metadata publishes, generator directory
+      # only, nothing executed. NOT from mcr.microsoft.com/dotnet/sdk:<version>: setup-dotnet's
+      # `10.0.x` takes a new SDK the moment the metadata names it, MCR tags its image hours later,
+      # and in between this leg failed `manifest unknown` and withheld the whole set from the seal
+      # (10.0.402 release day: runs 38469625713, 38476972766, 38477708481). The feed is published
+      # with the metadata setup-dotnet resolved from, so it cannot lag the host SDK. Every RID is
+      # then checked for the compiler built FOR it (PE machine), not merely present. Self-tested
+      # in dotnet-test.yml; the script's header carries the measurement.
       - name: Stage the Razor source generator for linux-x64 and linux-arm64
         id: razor
         run: |
           set -euo pipefail
-          test "$(uname -m)" = "x86_64" \
-            || { echo "::error::this step assumes an x64 runner (it takes the host SDK's copy as the linux-x64 one)"; exit 1; }
-          SDK_VERSION="$(dotnet --version)"
-          SDK_ROOT="$(dotnet --list-sdks | sed -n "s|^${SDK_VERSION} \[\(.*\)\]$|\1|p" | head -1)"
-          HOST_SOURCE="$SDK_ROOT/$SDK_VERSION/Sdks/Microsoft.NET.Sdk.Razor/source-generators"
           ROOT="$RUNNER_TEMP/razor-generators"
-          echo "SDK $SDK_VERSION; host source-generators: $HOST_SOURCE"
-
-          mkdir -p "$ROOT/linux-x64" "$ROOT/linux-arm64"
-          cp "$HOST_SOURCE"/*.dll "$ROOT/linux-x64/"
-
-          IMAGE="mcr.microsoft.com/dotnet/sdk:$SDK_VERSION"
-          docker pull --platform linux/arm64 "$IMAGE"
-          CID="$(docker create --platform linux/arm64 "$IMAGE")"
-          trap 'docker rm -f "$CID" >/dev/null 2>&1 || true' EXIT
-          docker cp "$CID:/usr/share/dotnet/sdk/$SDK_VERSION/Sdks/Microsoft.NET.Sdk.Razor/source-generators/." \
-            "$ROOT/linux-arm64/"
-
-          # 🚨 Fail closed. An empty or half-staged RID ships an image whose Razor builds fail on
-          # exactly one architecture — which nothing in this pipeline would notice.
-          for rid in linux-x64 linux-arm64; do
-            test -f "$ROOT/$rid/Microsoft.CodeAnalysis.Razor.Compiler.dll" \
-              || { echo "::error::no Razor compiler staged for $rid"; exit 1; }
-            echo "$rid: $(ls "$ROOT/$rid" | tr '\n' ' ')"
-          done
+          python3 .github/scripts/stage-razor-generators.py "$ROOT"
           echo "root=$ROOT" >> "$GITHUB_OUTPUT"
       # The module-libraries SHELF: the curated additional libraries a container-built module may
       # bind (tools/MeshWeaver.ModuleLibraries). One publish — the assemblies are AnyCPU IL, so
@@ -3172,13 +3184,14 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ needs.gate.outputs.sha }}
-      # 🚨 The plugins are BUILT HERE, in the same run and against the same image as the platform's
-      # own content — maintainer decision 2026-08-26 ("run full plugin build in main memex build";
-      # "plugins should not have a lane in this sense"). One run, one framework identity, one
-      # sealed publish: a plugin bundle can no longer carry bytes from a framework that is not the
-      # one shipping (#1814's class), and its version is the version THIS run computed (#695's
-      # class — see the publish step). Same repo as portal-image's checkout; PlatformBakeLaneGuard
-      # asserts it is the only foreign repository in this file.
+      # 🚨 This job bakes and publishes the PLATFORM's own content (`meshweaver-content`) and
+      # nothing else. Core CD no longer builds, bakes or seals any MeshWeaver.Plugins content: the
+      # `plugins-modules` / `plugins-bake` / `report-plugins-seal` legs were removed by #6143
+      # (policy `platform-module-deploy-separate`, Doc/Architecture/PlatformAndModuleDeploy). The
+      # ONLY writer of the `plugins` publication is MeshWeaver.Plugins' own CI, through
+      # `node-repo-publish-bake.yml`; this run merely READS that sealed publication in
+      # `published-modules` below. Sealing it per package instead of per commit is in flight
+      # (Systemorph/MeshWeaver.Plugins#3507). The checkout is this repository at the gate's sha.
       - name: "Preflight: the publish targets must be provisioned"
         run: |
           set -euo pipefail
@@ -3534,6 +3547,13 @@ jobs:
           # repository. Stated explicitly rather than left to the script's fallback, so no live
           # publisher depends on a default that is only right by coincidence (MeshWeaver#3583).
           BAKE_CONTENT_REPOSITORY: ${{ github.repository }}
+          # Read-only (`contents: read` is this job's whole grant): publish-bake-bundles.sh orders the
+          # sealed commit against this bake's through the compare API and refuses to seal an OLDER
+          # commit over a NEWER one. Without a token every comparison read "could not order …
+          # republishing as before" (both runs of the MeshWeaver#6877 incident), so the guard was a
+          # no-op in this lane. The content repository IS this repository, so the run's own token
+          # can read it.
+          GH_TOKEN: ${{ github.token }}
           # The exact publication, materialised locally AFTER every share sealed — the directory
           # the fleet-registry push below publishes (Doc/Architecture/PluginBundlesInTheRegistry).
           BAKE_PUBLICATION_DIR: ${{ runner.temp }}/publication
@@ -3582,13 +3602,23 @@ jobs:
           RELEASE_VERSION: ${{ steps.release.outputs.version }}
           EXPECTED_DB_VERSION: ${{ needs.portal-image.outputs.expected_db_version }}
           BAKE_PUBLICATION_DIR: ${{ runner.temp }}/publication
+          # Read-only: push-bundle-publication.sh refuses to move the identity tag to an OLDER commit
+          # than the one it names, exactly as the share publisher refuses to seal backwards.
+          GH_TOKEN: ${{ github.token }}
+          BAKE_CONTENT_REPOSITORY: ${{ github.repository }}
+          # The prefix lock (MeshWeaver#6877) is taken around the registry push too: the publisher
+          # reads the tag, decides, and moves it LAST, and two overlapping runs could otherwise each
+          # read it before the other moved it — the older one then moves it back.
+          BAKE_PUBLISH_TARGETS: ${{ vars.BAKE_PUBLISH_TARGETS }}
+          SOURCE: meshweaver-content
         run: |
           set -euo pipefail
           [ -d "$BAKE_PUBLICATION_DIR" ] || { echo "::error::publish-bake-bundles.sh left no materialised publication at $BAKE_PUBLICATION_DIR — the share seal did not complete, so nothing is pushed to ${{ env.REGISTRY }}."; exit 1; }
           IDENTITY=$(cat "$BAKE_DIR/framework-mvid.txt")
+          export IDENTITY
           LOG="${RUNNER_TEMP:-/tmp}/registry-publication.log"
           # `set -o pipefail` above: the publisher's exit code survives the tee.
-          .github/scripts/push-bundle-publication.sh \
+          .github/scripts/bake-publication-lock.sh -- .github/scripts/push-bundle-publication.sh \
             --registry "${{ env.REGISTRY }}" --source meshweaver-content \
             --identity "$IDENTITY" --dir "$BAKE_PUBLICATION_DIR" \
             --tag-run "$GITHUB_RUN_ID" --release "$RELEASE_VERSION" --skip-if-published 2>&1 | tee "$LOG"

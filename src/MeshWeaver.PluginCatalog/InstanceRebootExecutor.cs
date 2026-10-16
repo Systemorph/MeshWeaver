@@ -112,15 +112,31 @@ public static class InstanceRebootExecutor
     /// <summary>How many log lines a request keeps.</summary>
     public const int MaxLogLines = 150;
 
+    /// <summary>
+    /// One module adopt, as the reboot's audit line says it — pure. 🚨 Only files that LANDED are a
+    /// landing: a decision that refused the bundle (a floor above the platform, nothing newer, no bundle)
+    /// answers no failure, no files and a SERVED version, and a served version is not evidence of
+    /// landing (#6625 review). Such an adopt reads "not landed", naming the decision and what keeps running.
+    /// </summary>
+    /// <param name="outcome">What the adopt answered.</param>
+    public static string DescribeAdopt(ModuleAdoptOutcome outcome) =>
+        outcome.Failure is { } failure
+            ? $"not landed — {failure}"
+            : outcome.FilesLanded > 0
+                ? $"landed {outcome.LandedVersion ?? outcome.ServedVersion ?? "?"} ({outcome.FilesLanded} file(s))"
+                : $"not landed — {outcome.Verdict?.Action.ToString() ?? "no decision"}: {outcome.Verdict?.Reason ?? "no reason recorded"} "
+                  + $"(served {outcome.ServedVersion ?? "none"}; {outcome.LandedBefore ?? "nothing"} keeps running)";
+
     /// <summary>Arms the executor on a request node's own hub. Registered as the node type's initialization.</summary>
     public static IObservable<Unit> Arm(IMessageHub hub)
     {
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(InstanceRebootExecutor));
         var run = new Run(hub, logger);
-        hub.RegisterForDisposal(hub.RunLevelChanged
+        var started = hub.RunLevelChanged
             .Where(level => level >= MessageHubRunLevel.Started)
             .Take(1)
-            .Where(level => level == MessageHubRunLevel.Started)
+            .Where(level => level == MessageHubRunLevel.Started);
+        hub.RegisterForDisposal(started
             .SelectMany(_ => hub.GetWorkspace().GetMeshNodeStream())
             .Select(node => run.Step(node))
             .Concat()
@@ -129,7 +145,47 @@ public static class InstanceRebootExecutor
                 ex => logger?.LogError(ex,
                     "[Reboot] the executor on {Path} stopped — the request keeps its last status; "
                     + "the next activation of this node resumes it", hub.Address)));
+        // 🚨 The OWNER answers "end it if it stalled" (MeshWeaver#6625) — a separate subscription, so a
+        // step that never returns (the very thing that stalls a request) cannot hold the answer back
+        // behind the Concat above. The judgement and the terminal transition happen in ONE update on
+        // this hub, against this hub's own state (InstanceReboot.EndIfStalled).
+        hub.RegisterForDisposal(started
+            .SelectMany(_ => hub.GetWorkspace().GetMeshNodeStream())
+            .Where(node => node.ContentAs<InstanceRebootRequest>(hub.JsonSerializerOptions)?.RequestedEndIfStalledAt is not null)
+            .Select(_ => AnswerEndIfStalled(hub, logger))
+            .Concat()
+            .Subscribe(
+                _ => { },
+                ex => logger?.LogError(ex,
+                    "[Reboot] the stall answer on {Path} stopped — the next activation of this node answers again", hub.Address)));
         return Observable.Return(Unit.Default);
+    }
+
+    /// <summary>Applies <see cref="InstanceReboot.EndIfStalled"/> to this hub's own request, in one update.</summary>
+    private static IObservable<Unit> AnswerEndIfStalled(IMessageHub hub, ILogger? logger)
+    {
+        var options = hub.ServiceProvider.GetService<InstanceRebootOptions>() ?? new InstanceRebootOptions();
+        var catalog = hub.ServiceProvider.GetService<PluginCatalogOptions>() ?? new PluginCatalogOptions();
+        var retryUnit = catalog.ReconcileSafetyNetInterval > TimeSpan.Zero ? catalog.ReconcileSafetyNetInterval : TimeSpan.Zero;
+        var access = hub.ServiceProvider.GetService<AccessService>();
+        return access.RunAsSystem(() => hub.GetWorkspace().GetMeshNodeStream()
+                .Update<InstanceRebootRequest>(current => current.RequestedEndIfStalledAt is null
+                    ? current
+                    : InstanceReboot.EndIfStalled(current, DateTimeOffset.UtcNow, options.ExecutionWindow, retryUnit)))
+            .Take(1)
+            .Do(node =>
+            {
+                if (node.ContentAs<InstanceRebootRequest>(hub.JsonSerializerOptions) is { Status: InstanceRebootStatus.Failed } ended
+                    && ended.Failure?.Contains("stalled:", StringComparison.Ordinal) == true)
+                    logger?.LogWarning("[Reboot] {Path}: ended as Failed — {Failure}", ModuleReloadExecutor.PathOf(hub), ended.Failure);
+            })
+            .Select(_ => Unit.Default)
+            .Catch((Exception ex) =>
+            {
+                logger?.LogWarning(ex, "[Reboot] {Path}: the stall question could not be answered ({Reason}) — the next ask answers again",
+                    ModuleReloadExecutor.PathOf(hub), ex.Message);
+                return Observable.Empty<Unit>();
+            });
     }
 
     /// <summary>One activation's state: which steps it has started. Instance state, never static.</summary>
@@ -197,13 +253,31 @@ public static class InstanceRebootExecutor
                 .SelectMany(_ => hub.ServiceProvider.GetService<GitHubSyncService>() is null
                     ? Mark(InstanceRebootSteps.Sync, InstanceRebootStepOutcome.Skipped,
                         "this host registers no GitSync service — no module source can be synced here")
-                    : ModuleSourceUpdate.UpdateAll(hub).SelectMany(rows =>
+                    // Each finished source is recorded as progress on the request at once (MeshWeaver#6625): a
+                    // batch of many healthy imports must not read as one silence longer than the window.
+                    // A write REFUSED because the request ended emits nothing → false: no further source is
+                    // imported beside whatever replaced this reboot (#6625 review).
+                    : ModuleSourceUpdate.UpdateAllReporting(hub, row => Write(r => r, Line($"sync {row.ConfigPath}: {row.Outcome} — {row.Detail}"))
+                        .Select(_ => true)
+                        .DefaultIfEmpty(false)
+                        .Catch((Exception ex) =>
+                        {
+                            // The progress could not be recorded, but the request has not ended: the batch goes on.
+                            logger?.LogWarning(ex, "[Reboot] {Path}: the progress of {Source} could not be recorded ({Reason})",
+                                ModuleReloadExecutor.PathOf(hub), row.ConfigPath, ex.Message);
+                            return Observable.Return(true);
+                        })).SelectMany(rows =>
                     {
                         var updated = rows.Where(r => r.Outcome == ModuleSourceUpdateOutcome.Updated).ToImmutableList();
                         var failed = rows.Where(r => r.Outcome == ModuleSourceUpdateOutcome.Failed).ToImmutableList();
-                        var lines = rows.Select(r => $"sync {r.ConfigPath}: {r.Outcome} — {r.Detail}").ToArray();
+                        // Rows reported as they finished are already on the log; only the ones never started
+                        // (behind an unfinished import) are written here.
+                        var lines = rows.Where(r => r.Outcome == ModuleSourceUpdateOutcome.Skipped && r.Detail.StartsWith("not started:", StringComparison.Ordinal))
+                            .Select(r => $"sync {r.ConfigPath}: {r.Outcome} — {r.Detail}").ToArray();
                         var summary = $"{updated.Count} module source(s) updated, {failed.Count} failed, "
-                                      + $"{rows.Count - updated.Count - failed.Count} skipped (not module sources)"
+                                      // Reason-neutral: a row is skipped as not a module source OR as not
+                                      // started behind an unfinished import (#6625) — each sync line says which.
+                                      + $"{rows.Count - updated.Count - failed.Count} skipped (each sync line names why)"
                                       + (failed.IsEmpty ? "" : ": " + string.Join("; ", failed.Select(f => $"{f.ConfigPath} — {f.Detail}")));
                         var outcome = !failed.IsEmpty ? InstanceRebootStepOutcome.Failed
                             : updated.IsEmpty ? InstanceRebootStepOutcome.Skipped
@@ -215,7 +289,18 @@ public static class InstanceRebootExecutor
 
         private IObservable<Unit> StepModules() =>
             Mark(InstanceRebootSteps.Modules, InstanceRebootStepOutcome.Running, "resolving and landing the newest compatible version of every installed module")
-                .SelectMany(_ => ModuleReloadExecutor.ResolveAndLand(hub, module: null))
+                // Each module whose reload ended is recorded as progress at once (#6625 review), and a write
+                // refused because the request ended answers false: no further module is reloaded.
+                .SelectMany(_ => ModuleReloadExecutor.ResolveAndLandReporting(hub, module: null, (module, outcome) =>
+                    Write(r => r, Line($"module {module}: {DescribeAdopt(outcome)}"))
+                        .Select(_ => true)
+                        .DefaultIfEmpty(false)
+                        .Catch((Exception ex) =>
+                        {
+                            logger?.LogWarning(ex, "[Reboot] {Path}: the progress of module {Module} could not be recorded ({Reason})",
+                                ModuleReloadExecutor.PathOf(hub), module, ex.Message);
+                            return Observable.Return(true);
+                        })))
                 .SelectMany(landed =>
                 {
                     if (landed.Problem is { } problem)
@@ -349,18 +434,39 @@ public static class InstanceRebootExecutor
             }, Line(failure));
         }
 
+        /// <summary>
+        /// One write on the request's own node. 🚨 A terminal request is final (MeshWeaver#6625): a write
+        /// that meets one changes nothing AND emits nothing, so the step chain behind it ends there — a late
+        /// Sync result cannot start the module landing, and a request ended before the restart stamp cannot
+        /// go on to ask for the restart.
+        /// </summary>
         private IObservable<Unit> Write(Func<InstanceRebootRequest, InstanceRebootRequest> change, params string[] lines)
         {
-            foreach (var line in lines)
-                logger?.LogInformation("[Reboot] {Path}: {Line}", ModuleReloadExecutor.PathOf(hub), line);
+            var refused = 0;
             return Access.RunAsSystem(() => hub.GetWorkspace().GetMeshNodeStream()
                     .Update<InstanceRebootRequest>(current =>
                     {
+                        // Judged on THIS hub's state, inside the update — the owner's serialized step.
+                        var ended = InstanceRebootStatus.IsTerminal(current.Status);
+                        Volatile.Write(ref refused, ended ? 1 : 0);
+                        if (ended)
+                            return current;
                         var next = change(current);
                         var log = next.Log.AddRange(lines);
-                        return next with { Log = log.Count > MaxLogLines ? log.RemoveRange(0, log.Count - MaxLogLines) : log };
+                        return next with
+                        {
+                            // Every write is progress: the request's declared execution window runs from here.
+                            ProgressAt = DateTimeOffset.UtcNow,
+                            Log = log.Count > MaxLogLines ? log.RemoveRange(0, log.Count - MaxLogLines) : log,
+                        };
                     }))
                 .Take(1)
+                .Where(_ => Volatile.Read(ref refused) == 0)
+                .Do(_ =>
+                {
+                    foreach (var line in lines)
+                        logger?.LogInformation("[Reboot] {Path}: {Line}", ModuleReloadExecutor.PathOf(hub), line);
+                })
                 .Select(_ => Unit.Default);
         }
 

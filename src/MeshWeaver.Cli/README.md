@@ -4,16 +4,19 @@ Command-line interface for MeshWeaver / Memex. Operates a portal's mesh over the
 
 ## Run it
 
-`MeshWeaver.Cli` is **not** published as a dotnet tool — MeshWeaver publishes two NuGet packages and
-this is not one of them ([NuGet Package Retirement](../MeshWeaver.Documentation/Data/Architecture/NuGetPackageRetirement.md)).
-Run it from a checkout:
+Install it as a dotnet tool. Like `gh`, it is a thin client with its own version, released when the
+CLI changes rather than with every platform build
+([NuGet Package Retirement](../MeshWeaver.Documentation/Data/Architecture/NuGetPackageRetirement.md)):
 
 ```bash
-dotnet run --project src/MeshWeaver.Cli -- <command>
+dotnet tool install -g MeshWeaver.Cli
+dotnet tool update -g MeshWeaver.Cli
 ```
 
+Or run it from a checkout: `dotnet run --project src/MeshWeaver.Cli -- <command>`.
+
 In CI the same verbs come from the `mw-plugin-test` container image: every lane in this repository
-and in every satellite invokes the image's entrypoint directly, so nothing installs the CLI.
+and in every satellite invokes the image's entrypoint directly, so no lane installs the CLI.
 
 ## Log in
 

@@ -121,9 +121,15 @@ public class Workspace : IWorkspace
     {
         // Snapshot NOW: the streams (and with them these registry entries) are torn down by the
         // disposal we are about to precede.
-        var orphaned = _clientSubscriptions
+        var snapshot = _clientSubscriptions.ToArray();
+        var orphaned = snapshot
             .Select(kv => (kv.Value.Subscriber, kv.Key.StreamId))
             .ToArray();
+        // What is POSTED: one end per (owner, subscriber) for a subscriber that can split it, one per
+        // stream for every other; see CoalesceRecycleEnds (#5532). Built from the same snapshot.
+        var ends = CoalesceRecycleEnds(snapshot
+            .Select(kv => (kv.Value.Subscriber, kv.Key.StreamId, kv.Value.AcceptsCoalescedEnd))
+            .ToArray());
         if (orphaned.Length == 0)
             return;
 
@@ -213,11 +219,14 @@ public class Workspace : IWorkspace
                 return;
             }
 
-            foreach (var (subscriber, streamId) in orphaned)
+            foreach (var (subscriber, ended) in ends)
             {
                 try
                 {
-                    carrier.Post(new StreamEndedEvent(streamId), o => o.WithTarget(subscriber));
+                    // The activation token rides every end, coalesced or not (#6602), so the
+                    // subscriber's re-arm budget counts this teardown once.
+                    carrier.Post(ended with { Activation = ShutdownNack.ActivationToken(Hub) },
+                        o => o.WithTarget(subscriber));
                 }
                 catch (Exception ex)
                 {
@@ -226,7 +235,8 @@ public class Workspace : IWorkspace
                     // is dropped by routing rather than NACKed.
                     _logger.LogDebug(ex,
                         "Workspace {WorkspaceId}: could not announce the recycle of stream "
-                        + "{StreamId} to {Subscriber}", Id, streamId, subscriber);
+                        + "{StreamId} (and {More} more) to {Subscriber}", Id, ended.StreamId,
+                        ended.AlsoEndedStreamIds?.Count ?? 0, subscriber);
                 }
             }
         }
@@ -249,6 +259,52 @@ public class Workspace : IWorkspace
                         Id);
                     Announce();
                 });
+    }
+
+    /// <summary>
+    /// The ends a recycle announces: ONE <see cref="StreamEndedEvent"/> per (owner, subscriber
+    /// address) for a subscriber that declared <c>SubscribeRequest.AcceptsCoalescedStreamEnd</c>, its
+    /// first stream as <c>StreamId</c> and the rest in <c>AlsoEndedStreamIds</c>, and one per stream
+    /// for every other subscriber, exactly as before (Systemorph/MeshWeaver#5532).
+    ///
+    /// <para><b>Why per subscriber.</b> Every end goes through ONE carrier: for a hub under the mesh
+    /// router, the router's spokesman (<c>portal/nodeops-{meshId}</c> on a mesh), which is also the
+    /// hub that issues a recycle cascade. The owner keys a subscription on the subscribing WORKSPACE
+    /// hub (<c>Subscriber = delivery.Sender</c>), so a circuit or a cache hub holding many streams of
+    /// this owner is one address, and one end per stream told it once per stream. A cascade over many
+    /// owners put the sum of all their streams on that one single-threaded queue inside a second:
+    /// memex-cloud, 2026-10-11T19:21:35Z, a live module swap recycled LinkedIn, Edu, Reinsurance,
+    /// Hosting and more on one pod, and 0.66 s later <c>portal/nodeops-...</c> crossed its aggregate
+    /// watermark at depth 30907, shedding <c>StreamEndedEvent</c>. The subscriber's
+    /// <c>RouteStreamMessage</c> splits a coalesced end back into one end per stream before anything
+    /// reaches a <c>sync/{id}</c> sub-hub, so the same ends reach the same mirrors; nothing is
+    /// bounded, paced or dropped. Pinned by <c>RecycleCascadeAnnouncementFanOutTest</c>.</para>
+    /// </summary>
+    /// <param name="subscriptions">Every live client subscription: its subscriber address, its stream
+    /// id, and whether the subscribe that opened it declared it can split a coalesced end.</param>
+    /// <returns>The ends to post, each with the address it is posted to.</returns>
+    internal static (Address Subscriber, StreamEndedEvent Ended)[] CoalesceRecycleEnds(
+        (Address Subscriber, string StreamId, bool AcceptsCoalescedEnd)[] subscriptions)
+    {
+        var ends = new List<(Address Subscriber, StreamEndedEvent Ended)>();
+        foreach (var group in subscriptions.GroupBy(s => s.Subscriber.ToString(), StringComparer.Ordinal))
+        {
+            var subscriber = group.First().Subscriber;
+            var coalesced = new List<string>();
+            foreach (var (_, streamId, acceptsCoalescedEnd) in group)
+            {
+                if (acceptsCoalescedEnd)
+                    coalesced.Add(streamId);
+                else
+                    ends.Add((subscriber, new StreamEndedEvent(streamId)));
+            }
+            if (coalesced.Count > 0)
+                ends.Add((subscriber, new StreamEndedEvent(coalesced[0])
+                {
+                    AlsoEndedStreamIds = coalesced.Count > 1 ? coalesced.Skip(1).ToArray() : null,
+                }));
+        }
+        return ends.ToArray();
     }
 
     private static IDisposable? TrySubscribeToChangeFeed(
@@ -1533,7 +1589,8 @@ public class Workspace : IWorkspace
     // record wrapper around one stack-overflows the process the moment the dictionary hashes
     // or compares it. See the _evictedRemoteStreams field note.
     private sealed class ClientSubscription(
-        Address subscriber, WorkspaceReference reference, ISynchronizationStream stream)
+        Address subscriber, WorkspaceReference reference, ISynchronizationStream stream,
+        bool acceptsCoalescedEnd)
     {
         /// <summary>
         /// The subscriber's ADDRESS, kept alongside the string that keys the dictionary: a recycle
@@ -1543,6 +1600,12 @@ public class Workspace : IWorkspace
         public Address Subscriber { get; } = subscriber;
         public WorkspaceReference Reference { get; } = reference;
         public ISynchronizationStream Stream { get; } = stream;
+
+        /// <summary>
+        /// Whether the SubscribeRequest that opened this stream declared
+        /// <c>AcceptsCoalescedStreamEnd</c>, read by <c>CoalesceRecycleEnds</c> (#5532).
+        /// </summary>
+        public bool AcceptsCoalescedEnd { get; } = acceptsCoalescedEnd;
     }
 
     /// <summary>
@@ -1660,12 +1723,13 @@ public class Workspace : IWorkspace
     /// stream is disposed, so the entry can never outlive what it points at.
     /// </summary>
     internal void RegisterClientSubscription(
-        Address? subscriber, string? streamId, WorkspaceReference reference, ISynchronizationStream stream)
+        Address? subscriber, string? streamId, WorkspaceReference reference, ISynchronizationStream stream,
+        bool acceptsCoalescedEnd = false)
     {
         if (subscriber is null || string.IsNullOrEmpty(streamId))
             return;
         var key = (subscriber.ToString(), streamId);
-        _clientSubscriptions[key] = new ClientSubscription(subscriber, reference, stream);
+        _clientSubscriptions[key] = new ClientSubscription(subscriber, reference, stream, acceptsCoalescedEnd);
         // Pair-exact removal by REFERENCE identity (never value equality — see ClientSubscription):
         // a later stream that legitimately took over this key must not be unregistered by an
         // earlier stream's teardown.

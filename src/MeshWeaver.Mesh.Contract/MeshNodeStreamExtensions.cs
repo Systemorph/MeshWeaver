@@ -612,6 +612,18 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                     : node);
 
     /// <summary>
+    /// The owner's committed version off a patch ack's object-typed payload (#6856). Read through
+    /// <see cref="ObjectAsExtensions.As{T}"/>, never a cast: an ack that arrives as JSON
+    /// (<c>JsonElement</c> / <c>JsonObject</c>) still carries the field, and a cast would drop it and
+    /// emit the writer's base version.
+    /// </summary>
+    /// <param name="message">The ack's payload, as delivered.</param>
+    /// <param name="options">The hub's serializer options.</param>
+    /// <param name="logger">Optional; names an unconvertible payload.</param>
+    internal static long? CommittedVersionOf(object? message, JsonSerializerOptions options, ILogger? logger = null)
+        => message.As<PatchDataResponse>(options, logger, nameof(PatchDataResponse))?.CommittedVersion;
+
+    /// <summary>
     /// 🚨 The base a re-attempt spawned by a <b>"the patch NEVER applied"</b> NACK is allowed to
     /// diff against — issue #3477, and the last fail-open exit of this write path.
     ///
@@ -1674,6 +1686,10 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                 throw new InvalidOperationException("No data source registered for MeshNode");
             var dsStream = dataSource.GetStreamForPartition(null)
                 ?? throw new InvalidOperationException("No stream for MeshNode partition");
+            // Resolved on the subscribing thread, while the hub is alive — never inside the commit
+            // turn (a DI touch from a turn that can run at teardown throws). See the #6673 gate below.
+            var versionGuard = _workspace.Hub.ServiceProvider
+                .GetService<MeshWeaver.Mesh.Services.RecentlyDeletedRegistry>();
 
             // 🚨 Single-emit guard shared by the post-write stream echo AND the no-op
             // short-circuit below. Without it a no-op write would either hang (echo never
@@ -1826,6 +1842,16 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                     }
                     else
                     {
+                        // 🚨 A VERSION-GUARDED DELETE OF THIS NODE IS IN FLIGHT (#6673) — refuse
+                        // the write IN THIS TURN. An own write is acknowledged from this commit,
+                        // before the persistence sampler stores it, so letting it commit here would
+                        // acknowledge a change the guarded delete — whose version comparison this
+                        // turn is serialised behind — is about to remove. Refused, the caller hears
+                        // "being deleted" and nothing was acknowledged. Checked AFTER the no-op gate
+                        // (an unchanged node acknowledges nothing) and never for an adoption (an
+                        // observation of state that is already durable).
+                        if (versionGuard?.IsVersionGuardedDeletionInFlight(current.Path) == true)
+                            throw new SubtreeDeletionInFlightException(current.Path, current.Path);
                         // 🚨 THE AUDIT STAMP applies to an OWN write exactly as to a cross-hub one
                         // (Plugins#2229, defect D). Without it an own-stream write — a thread hub's
                         // claim, rollback and commit, a NodeType's compile bookkeeping — minted a
@@ -2344,7 +2370,19 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                             };
                             Func<PostOptions, PostOptions> patchPostOptions = o =>
                             {
+                                // This write rides a ShuttingDown answer out — both arms below
+                                // (OWNER_SHUTTING_DOWN_REENQUEUE, LATE_SHUTTING_DOWN_REENQUEUE)
+                                // re-run the update against the next activation — so it says so on
+                                // the request. A teardown that discards it parked behind a young
+                                // activation's gates is then teardown-normal, not an Error naming
+                                // lost work (MeshWeaver#6733). The TYPE stays unmarked: other
+                                // producers of PatchDataRequest may not re-ask. Nor does the LAST
+                                // attempt: once MaxOwnerDisposingReenqueues is spent, a ShuttingDown
+                                // answer is the caller's terminal failure, so that discard stays an
+                                // Error and the claim is never made for it.
                                 o = o.WithTarget(new Address(_path!));
+                                if (attempt < MaxOwnerDisposingReenqueues)
+                                    o = o.ReaskingOnShutdown();
                                 return capturedContext is null
                                     ? o
                                     : o.WithAccessContext(capturedContext);
@@ -2371,20 +2409,34 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                             // 🚨 This is the SUCCESS terminal and it is now reached from exactly
                             // one place: the owner's ACK, early or late. It is no longer reachable
                             // from a timeout — see UpdateResponseWaitBound.
-                            void EmitTerminal()
+                            //
+                            // 🚨 The emitted node carries the OWNER's committed version when the ack
+                            // names it (PatchDataResponse.CommittedVersion, #6856) — never the
+                            // writer's base version, which is one behind what the owner holds. A
+                            // caller that names the acknowledged version as a precondition
+                            // (DeleteNodeRequest.ExpectedVersion) was otherwise refused as a conflict
+                            // that never happened. Only the VERSION is the owner's: the content is
+                            // this writer's view, without fields a concurrent writer merged in. The
+                            // queue hand-off (onLocalState) deliberately keeps the base version —
+                            // PatchBaseSource compares it with the mirror, and a hand-off claiming the
+                            // owner's version would outrank a mirror carrying another writer's commit.
+                            void EmitTerminal(long? committedVersion = null)
                             {
                                 if (!ClaimTerminal()) return;
+                                var acknowledged = committedVersion is { } v && v != updated.Version
+                                    ? updated with { Version = v }
+                                    : updated;
                                 if (accessServiceAtEntry is not null && capturedContextAtEntry is not null)
                                 {
                                     using (accessServiceAtEntry.SwitchAccessContext(capturedContextAtEntry))
                                     {
-                                        observer.OnNext(updated);
+                                        observer.OnNext(acknowledged);
                                         observer.OnCompleted();
                                     }
                                 }
                                 else
                                 {
-                                    observer.OnNext(updated);
+                                    observer.OnNext(acknowledged);
                                     observer.OnCompleted();
                                 }
                             }
@@ -2496,7 +2548,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                         _workspace.Hub.Address, _path, corr);
                                     // The owner COMMITTED. That — not the elapsed bound — is what
                                     // "saved" means, so this is the caller's success terminal.
-                                    EmitTerminal();
+                                    EmitTerminal(resp.CommittedVersion);
                                     return;
                                 }
                                 var lateErr = resp.NodeError ?? new MeshNodeError(
@@ -2647,8 +2699,8 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                 diagLogger?.LogWarning(
                                     "[UpdateRemote] LATE_DELIVERY_FAILURE hub={Hub} target={Path} errorType={ErrorType} msg={Msg}",
                                     _workspace.Hub.Address, _path, failure.ErrorType, failure.Message);
-                                FailTerminal(new MeshNodeStreamException(new MeshNodeError(
-                                    MeshNodeErrorCode.Unknown, _path!,
+                                FailTerminal(new MeshNodeStreamException(ClassifyPatchDeliveryFailure(
+                                    failure, _path!,
                                     failure.Message ?? $"Update of '{_path}' failed: {failure.ErrorType}")));
                             });
 
@@ -2702,7 +2754,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                         // Owner posted a structured rejection (deserialization /
                                         // validation gate) as PatchDataResponse.NodeError, or a
                                         // non-success ack → surface as a typed exception (fail-fast).
-                                        if (d.Message is PatchDataResponse resp
+                                        if (d.Message.As<PatchDataResponse>(_jsonOptions, diagLogger, "PatchDataResponse") is { } resp
                                             && (resp.NodeError is not null || !resp.Success))
                                         {
                                             var err = resp.NodeError ?? new MeshNodeError(
@@ -2833,7 +2885,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                             // the successor waits on the hand-off, which is issued
                                             // right here, on the ack.
                                             onLocalState?.Invoke(updated);
-                                            EmitTerminal();
+                                            EmitTerminal(CommittedVersionOf(d.Message, _jsonOptions, diagLogger));
                                         }
                                     },
                                     ex =>
@@ -2998,7 +3050,8 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                                 ? (d2.Failure?.Message ?? ex.Message)
                                                 : ex.Message;
                                             FailTerminal(new MeshNodeStreamException(
-                                                new MeshNodeError(MeshNodeErrorCode.Unknown, _path!, msg)));
+                                                ClassifyPatchDeliveryFailure(
+                                                    (ex as DeliveryFailureException)?.Failure, _path!, msg)));
                                         }
                                     });
                             composite.Add(responseSub);
@@ -3038,6 +3091,32 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
             composite.Add(initialSub);
             return composite;
         });
+    /// <summary>
+    /// Classifies a <see cref="DeliveryFailure"/> that answered an update's
+    /// <c>PatchDataRequest</c> instead of the owner's <c>PatchDataResponse</c> — the failure
+    /// the early and the late response arms of <c>UpdateRemote</c> both fall through to once
+    /// RLS denials and shutting-down refusals have been handled.
+    ///
+    /// <para>A failure the sender stamped <see cref="DeliveryFailure.NodeAbsent"/> — the
+    /// router found no node at the exact path, or the address carries a delete tombstone —
+    /// is the node-level <see cref="MeshNodeErrorCode.NotFound"/>, the same verdict the
+    /// owner gives for a patch that reaches a deleted node. That is the update-racing-a-delete
+    /// shape of #6626: the delete wins before the patch is routed, so the router — not the
+    /// owner — answers, and the writer used to mint <see cref="MeshNodeErrorCode.Unknown"/>
+    /// around the router's "No node found" sentence. The classification reads the typed stamp,
+    /// never the message text. Everything else stays <see cref="MeshNodeErrorCode.Unknown"/>.</para>
+    /// </summary>
+    /// <param name="failure">The failure, or null when the error was not a delivery failure.</param>
+    /// <param name="path">The path the update targeted.</param>
+    /// <param name="message">The human-readable message the error carries.</param>
+    /// <returns>The structured error the caller's <see cref="MeshNodeStreamException"/> carries.</returns>
+    internal static MeshNodeError ClassifyPatchDeliveryFailure(
+        DeliveryFailure? failure, string path, string message) =>
+        new(failure is { NodeAbsent: true }
+                ? MeshNodeErrorCode.NotFound
+                : MeshNodeErrorCode.Unknown,
+            path, message);
+
     /// <summary>
     /// 🚨 <b>THE AUDIT STAMP, IN ONE PLACE.</b> <c>LastModified</c> and <c>LastModifiedBy</c> are
     /// stamped here for EVERY <c>stream.Update</c> write, whoever owns the node.
@@ -3670,7 +3749,11 @@ public static class MeshNodeStreamExtensions
                             new GetDataRequest(new MeshNodeReference()),
                             o =>
                             {
-                                o = o.WithTarget(new Address(path));
+                                // This read rides a ShuttingDown answer out (the arm below re-issues
+                                // it against the next activation), so it says so on the request: a
+                                // teardown that discards it parked is then teardown-normal, not an
+                                // Error naming lost work (MeshWeaver#5718).
+                                o = o.WithTarget(new Address(path)).ReaskingOnShutdown();
                                 return caller is null ? o : o.WithAccessContext(caller);
                             })
                         .Subscribe(

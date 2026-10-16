@@ -369,5 +369,16 @@ public sealed class PackageListingCache : IDisposable
         public IObservable<IReadOnlyList<PackageFile>> FetchPackageFiles(
             PackageManifest package, string gitRef, IReadOnlyCollection<string>? paths) =>
             inner.FetchPackageFiles(package, gitRef, paths);
+
+        // Forwarded, never left to the interface default: the default answers no commit, so the
+        // registry's install response would lose the one its source served (#3848).
+        public IObservable<PackageFetch> FetchPackage(
+            PackageManifest package, string gitRef, IReadOnlyCollection<string>? paths) =>
+            inner.FetchPackage(package, gitRef, paths);
+
+        // Forwarded for the same reason: the default establishes no ancestry, so the registry
+        // would never honour a consumer's snapshot token (#6718).
+        public IObservable<bool> PublishesCommit(string commit, string gitRef) =>
+            inner.PublishesCommit(commit, gitRef);
     }
 }

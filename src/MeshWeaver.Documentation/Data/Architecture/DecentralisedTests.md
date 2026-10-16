@@ -337,9 +337,25 @@ differently. Conflating them is the main way this design goes wrong.
 `PluginGateRunner` + `AreaProbe`: stands up a mesh, imports content, renders each type's `Tests`
 layout area over the ordinary client sync stream, and classifies the frames
 (`AreaProbe.ClassifyTestsFrame`): compile-progress, a streamed Tests progress frame
-(`tests-running`, see [Writing Tests](../WritingTests)) and *"Area not found"* are transient; `❌` is red;
-`N/M passed` is green iff `N == M`; **no verdict inside the timeout is RED** — *"a Tests area that
-reports nothing is a broken gate, never a silent pass."*
+(`tests-running`, see [Writing Tests](../WritingTests)) and *"Area not found"* are transient; a case
+whose **result** is `❌`, or a `❌` in the verdict's own title or markdown, is red; `N/M passed` (read
+from the title or markdown) is green iff `N == M`; **no verdict inside the timeout is RED** — *"a Tests
+area that reports nothing is a broken gate, never a silent pass."*
+
+The frame is read column-wise through `TestsAreaFrame.Read`, never as "a `❌` anywhere". A case's
+**output** is free text the case wrote — a nested report, a copied line — and a passing case may carry a
+`❌` or an `N/M passed` sentence there; the runner keeps that output in the verdict grid. Sniffing every
+cell turned such a green row into a red gate that named the green case as the failure
+([#6714](https://github.com/Systemorph/MeshWeaver/issues/6714)). Pinned by
+`AreaProbeTest.GreenGridRow_WithARedGlyphInItsOutput_IsPassed` and
+`RedVerdict_NamesOnlyTheFailingResultRows` (MeshWeaver.PluginTester.Test); both fail on the any-cell
+classification.
+
+A red verdict names **every failing case with its reason**, then the `N/M passed` summary. The streaming
+runner's verdict is a data grid, so the `❌` is one cell of a row whose sibling cells carry the class, the
+case and the output (the failing assertion or exception); the gate reports the whole row
+(`ActionLinkLiveTests · PublishResolveContinueRevoke · ❌ FAIL · 3.2s · Expected …`). It used to report
+the `❌` cell alone, and a failing streaming suite printed a bare `❌ FAIL` that named nothing.
 
 The suites it runs are hand-rolled. `Store/Catalog/Test/CatalogTestsArea.cs` is the canonical shape:
 

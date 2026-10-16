@@ -28,8 +28,8 @@
     <InternalsVisibleTo Include="MeshWeaver.AI.Test" />
     <InternalsVisibleTo Include="MeshWeaver.Graph.Test" />
     <InternalsVisibleTo Include="MeshWeaver.Threading.Test" />
-    <!-- #2469: pins FieldsLandedIn (the Patch/Update landed-write check) directly against a
-         hand-built fixture — same "internal primitive, not the tool surface" pattern as above. -->
+    <!-- Pins internal write-verdict primitives (IsWriteDenial) directly against hand-built
+         fixtures — same "internal primitive, not the tool surface" pattern as above. -->
     <InternalsVisibleTo Include="Memex.Portal.Shared.Test" />
   </ItemGroup>
 

@@ -6,7 +6,6 @@
   "category": "Business Units",
   "description": "FutuRe Group holding company — consolidated group reporting in CHF",
   "icon": "/api/content/FutuRe/icon.svg",
-  "isPersistent": true,
   "content": {
     "$type": "BusinessUnit",
     "id": "Group",

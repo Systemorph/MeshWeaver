@@ -275,7 +275,7 @@ public record SubscribeRequest(string StreamId, WorkspaceReference Reference)
     public string? Identity { get; init; }
 
     /// <summary>
-    /// 🚨 THE ONE NEGOTIATED WIRE CAPABILITY of the owner→subscriber fan-out: this subscriber can
+    /// 🚨 THE FIRST NEGOTIATED WIRE CAPABILITY of the owner→subscriber fan-out: this subscriber can
     /// apply a <c>splice</c> operation — a changed string leaf carried as
     /// <c>{ "$sd": [start, removed, "inserted"], "$sdb": [baseLength, "fingerprint"] }</c> instead
     /// of the whole new string. Default <c>false</c>, and that default is load-bearing.
@@ -303,6 +303,17 @@ public record SubscribeRequest(string StreamId, WorkspaceReference Reference)
     /// new owner never sets it.</para>
     /// </summary>
     public bool AcceptsStringSplice { get; init; }
+
+    /// <summary>
+    /// The second negotiated capability: this subscriber splits a <see cref="StreamEndedEvent"/>
+    /// carrying <see cref="StreamEndedEvent.AlsoEndedStreamIds"/> into one end per stream, so a
+    /// recycled owner may tell it ONCE about every stream it held there instead of once per stream
+    /// (Systemorph/MeshWeaver#5532). Default <c>false</c>: a subscriber that does not say so (a JS or
+    /// Python client, a pod still on the previous image) keeps receiving one
+    /// <see cref="StreamEndedEvent"/> per stream, exactly as today. Safe in both rolling-deploy
+    /// directions for the reason <see cref="AcceptsStringSplice"/> is.
+    /// </summary>
+    public bool AcceptsCoalescedStreamEnd { get; init; }
 }
 
 /// <summary>
@@ -369,7 +380,41 @@ public record StreamErrorEvent(string StreamId, string Message) : StreamMessage(
 /// </summary>
 [SystemMessage]
 [CanBeIgnored]
-public record StreamEndedEvent(string StreamId) : StreamMessage(StreamId);
+public record StreamEndedEvent(string StreamId) : StreamMessage(StreamId)
+{
+    /// <summary>
+    /// More streams of the SAME owner, held by the SAME subscriber address, that ended at the same
+    /// moment. Set only by an owner's recycle announcement, and only to a subscriber that declared
+    /// <see cref="SubscribeRequest.AcceptsCoalescedStreamEnd"/> (Systemorph/MeshWeaver#5532);
+    /// <c>null</c> on every other end, which then serialises exactly as before.
+    ///
+    /// <para><b>Why.</b> A recycled owner told its subscribers one message PER STREAM, all through
+    /// the same carrier, so a subscriber holding many streams of one owner (a circuit, a cache hub)
+    /// was told once per stream, and a recycle cascade over many owners put the sum of all their
+    /// streams on the carrier's single-threaded queue: memex-cloud, 2026-10-11T19:21:35Z, depth
+    /// 30907 on <c>portal/nodeops-{meshId}</c>, shedding this message. One message per
+    /// (owner, subscriber) carries the same ends.</para>
+    ///
+    /// <para>The subscriber's <c>RouteStreamMessage</c> splits it back into one end per stream id
+    /// BEFORE anything is forwarded to a <c>sync/{id}</c> sub-hub, so every mirror receives exactly
+    /// the end it receives today and re-asks once. Negotiated, never simply sent: a subscriber that
+    /// does not know this property skips it as unmapped, handles <c>StreamId</c> alone and strands
+    /// every other mirror on a dead activation, the rule
+    /// <see cref="SubscribeRequest.AcceptsStringSplice"/> states for the fan-out.</para>
+    /// </summary>
+    public IReadOnlyList<string>? AlsoEndedStreamIds { get; init; }
+
+    /// <summary>
+    /// The announcing owner ACTIVATION's token (<c>ShutdownNack.ActivationToken</c>), or null when
+    /// the owner runs an image that does not stamp one.
+    ///
+    /// <para>🚨 Why it rides here (#6602). The subscriber's recycle re-arm budget counts DISTINCT
+    /// refusing activations. Without an identity every announcement read as a new activation, so
+    /// ONE owner teardown — its announcement plus the <c>ShuttingDown</c> NACK of the re-ask that
+    /// raced it — was charged twice, and two ordinary recycles in a roll spent the whole budget.</para>
+    /// </summary>
+    public string? Activation { get; init; }
+}
 
 /// <summary>
 /// Request to get data by reference (collection or entity), similar to SubscribeRequest but for one-time data retrieval

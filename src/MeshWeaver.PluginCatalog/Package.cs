@@ -400,7 +400,16 @@ public record PackageManifest
 
     // ── install-record metadata (null on catalog entries; set when written to the registry) ──
 
-    /// <summary>The git ref (commit/branch) this package was installed from. Null until installed.</summary>
+    /// <summary>
+    /// The git ref this package was installed from. Null until installed.
+    ///
+    /// <para>🚨 An install records the EXACT COMMIT the source served
+    /// (<see cref="PackageFetch.Commit"/> — the registry's install response carries it), so the
+    /// combo verifier checks the installed content against that commit rather than the source
+    /// repository's moving <c>HEAD</c> (MeshWeaver#3848). Only when the source cannot name a
+    /// commit is the requested ref (a branch, <c>HEAD</c>) recorded instead — the shape every
+    /// record written before the decision carries until its next update restamps it.</para>
+    /// </summary>
     public string? InstalledFromRef { get; init; }
 
     /// <summary>When the package was installed (UTC). Null until installed.</summary>
@@ -496,6 +505,25 @@ public record PackageManifest
     /// ninety-eight (Copilot review).</para>
     /// </summary>
     public ImmutableSortedSet<string>? UnreadableFiles { get; init; }
+
+    /// <summary>
+    /// 🚨 The declared files that ARE nodes but that this host deliberately does not hold: a
+    /// package's NodeType definition rows (<c>nodeType: NodeType</c>) on a CLOSED TYPE SET
+    /// (<c>Mesh:ClosedTypeSet=true</c>, <c>Doc/Architecture/ClosedTypeSet</c>, #6627). There a row
+    /// can never define a type — it could only ever settle at the closed-set refusal and read as
+    /// <c>Error</c> in every NodeType sweep — so the installer writes none and removes the ones it
+    /// left before.
+    ///
+    /// <para><b>Why the record carries it.</b> The install-completeness sweep derives what a package
+    /// owes the mesh from <see cref="InstalledFiles"/>; without this set every withheld row would be
+    /// reported ABSENT and handed to the heal, which would reinstall the package to restore a node
+    /// the installer will never write. Recorded by the writer, merged like
+    /// <see cref="UnreadableFiles"/> (an incremental update only examined what it fetched), and
+    /// excluded from the declared population and from the restore widening.</para>
+    ///
+    /// <para><c>null</c> on an open mesh and on every record written before this field existed.</para>
+    /// </summary>
+    public ImmutableSortedSet<string>? WithheldFiles { get; init; }
 
     /// <summary>
     /// Opt IN to unattended updates for this installed package: when the source repo's CI goes
@@ -736,6 +764,80 @@ public interface IPackageSource
                         .Where(f => wanted.Contains(f.RelativePath))
                         .ToList();
                 });
+
+    /// <summary>
+    /// The same read as
+    /// <see cref="FetchPackageFiles(PackageManifest, string, IReadOnlyCollection{string})"/>,
+    /// together with the exact commit the files were read at — what an install record stores
+    /// (<see cref="PackageManifest.InstalledFromRef"/>) so the combo verifier can fetch the
+    /// content the instance installed instead of whatever the source's moving ref says now
+    /// (MeshWeaver#3848, decision "Record commit on install").
+    ///
+    /// <para>The default answers <see cref="PackageFetch.Commit"/> = <c>null</c>: a source that
+    /// cannot name a commit says so, and the installer then records the ref it asked for, exactly
+    /// as before. Sources that resolve a commit (a git snapshot, a registry that reports the one
+    /// it served) override it, and so must every decorator that forwards to one.</para>
+    /// </summary>
+    /// <param name="package">The package whose folder is read.</param>
+    /// <param name="gitRef">The ref to read at.</param>
+    /// <param name="paths">Repo-relative paths to restrict to, or <c>null</c> for the whole folder.</param>
+    /// <returns>The files and, when the source knows it, the commit they were read at.</returns>
+    IObservable<PackageFetch> FetchPackage(
+        PackageManifest package, string gitRef, IReadOnlyCollection<string>? paths) =>
+        FetchPackageFiles(package, gitRef, paths).Select(files => new PackageFetch([.. files], null));
+
+    /// <summary>
+    /// Whether <paramref name="commit"/> was PUBLISHED on <paramref name="gitRef"/> — the ref
+    /// itself or one of its ancestors — so a registry may serve a package's files at it.
+    ///
+    /// <para>A registry serves its own configured ref, never a ref a consumer names, with ONE
+    /// exception: a snapshot token (MeshWeaver#6718). An incremental install reads the manifest,
+    /// then the delta; the manifest read names the commit it was served at, and the delta asks for
+    /// exactly that commit, so the two reads cannot straddle a ref that moved in between. The
+    /// registry honours the token only when this answers <c>true</c>, so it can never become a way
+    /// to read a package at a commit that exists only on an unmerged branch.</para>
+    ///
+    /// <para>The default answers <c>false</c> — ancestry not established, the token is not
+    /// honoured, the registry serves its configured ref, and the consumer refuses the mismatched
+    /// snapshot and installs in full. Sources backed by a git transport override it, and so must
+    /// every decorator that forwards to one.</para>
+    /// </summary>
+    /// <param name="commit">The full commit sha the consumer asks for.</param>
+    /// <param name="gitRef">The ref this source publishes (the registry's configured ref).</param>
+    /// <returns>One value: whether the commit is reachable from the ref.</returns>
+    IObservable<bool> PublishesCommit(string commit, string gitRef) => Observable.Return(false);
+}
+
+/// <summary>
+/// One package read: its files and the exact commit the source served them at, when the source
+/// can name it (<see cref="IPackageSource.FetchPackage"/>).
+/// </summary>
+/// <param name="Files">The package's files. Held as an immutable snapshot (copied unless it
+/// already is one), so the files a commit is stated for cannot change after the read; the
+/// parameter keeps its <see cref="IReadOnlyList{T}"/> type because modules bind this record's
+/// constructor exactly (the record-signature gate).</param>
+/// <param name="Commit">The full commit sha the files were read at; <c>null</c> when the source
+/// does not know it (an old registry, a source with no git snapshot behind it).</param>
+public sealed record PackageFetch(IReadOnlyList<PackageFile> Files, string? Commit)
+{
+    /// <summary>The package's files, as an immutable snapshot taken when the read was recorded.</summary>
+    public IReadOnlyList<PackageFile> Files { get; init => field = value.ToImmutableList(); } = Files.ToImmutableList();
+
+    /// <summary>
+    /// The ref an install record states for this read: the served <see cref="Commit"/> when it is
+    /// a full commit sha, else <paramref name="requestedRef"/> — the pre-decision behaviour, which
+    /// an existing install keeps until its next update restamps it. Pure.
+    /// </summary>
+    /// <param name="requestedRef">The ref the install asked the source for (a branch, <c>HEAD</c>).</param>
+    /// <returns>What <see cref="PackageManifest.InstalledFromRef"/> records.</returns>
+    public string InstalledFromRef(string requestedRef) =>
+        IsCommitSha(Commit) ? Commit! : requestedRef;
+
+    /// <summary>A 40- or 64-character hex string — a full git commit sha. Pure.</summary>
+    /// <param name="value">The candidate.</param>
+    /// <returns>Whether <paramref name="value"/> names one commit.</returns>
+    public static bool IsCommitSha(string? value) =>
+        value is { Length: 40 or 64 } && value.All(char.IsAsciiHexDigit);
 }
 
 /// <summary>

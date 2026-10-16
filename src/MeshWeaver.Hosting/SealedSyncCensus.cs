@@ -41,7 +41,12 @@ public sealed record SealedPublicationReading(
     private static string Describe(SealedSource source) =>
         $"'{source.Source}' ← {source.Repository ?? "an unrecorded repository"} @ "
         + $"{(source.SourceCommit is { Length: > 0 } c ? Short(c) : "an unknown commit")}"
-        + (source.IsSealed ? " (sealed)" : $" (NOT sealed: {source.Refusal ?? "no reason recorded"})");
+        + (source.IsSealed
+            ? source.Carried.Count == 0
+                ? " (sealed)"
+                : $" (sealed; {source.Carried.Count} of {source.Packages.Count} package(s) carried at an older "
+                  + "sealed build because they wait at this commit)"
+            : $" (NOT sealed: {source.Refusal ?? "no reason recorded"})");
 
     private static string Short(string sha) => sha.Length > 8 ? sha[..8] : sha;
 }

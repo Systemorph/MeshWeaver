@@ -66,19 +66,34 @@ public enum MaterializationPin
     Moving,
 }
 
-/// <summary>One module's assembly outcome.</summary>
-public enum ModuleAssemblyStatus
+/// <summary>
+/// One module's assembly outcome — an OPEN vocabulary of string constants (policy
+/// <c>open-vocabulary-string-constants</c>), spelled exactly as the enum it replaced, so the
+/// manifest's wire form (<c>"Materialized"</c>, …) is unchanged. A value a reader does not know
+/// is not one of its own: it is never read as <see cref="Materialized"/>.
+/// </summary>
+public static class ModuleAssemblyStatus
 {
     /// <summary>Not attempted, by POLICY: a moving/unrecorded ref without the explicit allow flag,
     /// or an id that cannot be a directory. The error names the module and the way out.</summary>
-    Refused,
+    public const string Refused = nameof(Refused);
 
     /// <summary>Attempted and failed: an unresolvable source, a fetch error/timeout, an empty or
     /// unsafe file set, or a failed module-version proof. The error is specific to this module.</summary>
-    Failed,
+    public const string Failed = nameof(Failed);
 
     /// <summary>The module's files are on disk under its folder, hashed and counted.</summary>
-    Materialized,
+    public const string Materialized = nameof(Materialized);
+
+    /// <summary>
+    /// <b>Retired, not verifiable</b> (MeshWeaver#3848): the module's source folder no longer
+    /// exists — not at the ref it was recorded at, and not at the source repository's
+    /// <c>HEAD</c> — so its content can never be re-materialised and nothing about it can be
+    /// verified. Policy <c>record-served-commit-on-install</c>: such a module is REPORTED, and it does NOT fail the
+    /// verification. A folder missing at the recorded ref but still present at <c>HEAD</c> is
+    /// <see cref="Failed"/>, never this — the record is wrong, the package is not gone.
+    /// </summary>
+    public const string Retired = nameof(Retired);
 }
 
 /// <summary>
@@ -91,8 +106,8 @@ public sealed record ModuleAssembly
     /// work root when materialised.</summary>
     public string ModuleId { get; init; } = "";
 
-    /// <summary>The outcome.</summary>
-    public ModuleAssemblyStatus Status { get; init; }
+    /// <summary>The outcome — a <see cref="ModuleAssemblyStatus"/> value.</summary>
+    public string Status { get; init; } = "";
 
     /// <summary>The repository the module was (or would have been) fetched from.</summary>
     public string? RepositoryUrl { get; init; }
@@ -119,8 +134,10 @@ public sealed record ModuleAssembly
     public string? FetchedModuleVersion { get; init; }
 
     /// <summary>Whether recorded and fetched module versions agree; <c>null</c> when either side is
-    /// missing so no comparison is possible. A mismatch on an exact-commit fetch is DIVERGENCE
-    /// (the space synced past the install), reported here rather than failing the module.</summary>
+    /// missing so no comparison is possible. A mismatch on a SYNC entry's exact commit is
+    /// DIVERGENCE (the space synced past the install), reported here rather than failing the
+    /// module; a mismatch at the commit the INSTALL RECORD names fails it — the installed content
+    /// is then not what that commit holds (MeshWeaver#3848).</summary>
     public bool? ModuleVersionMatches { get; init; }
 
     /// <summary>Number of files written for this module.</summary>
@@ -175,12 +192,22 @@ public sealed record ComboAssemblyReport
     /// nothing was fetched or written except this manifest.</summary>
     public string? FatalError { get; init; }
 
-    /// <summary>All green: no fatal error, at least one module, every module materialised.</summary>
+    /// <summary>
+    /// All green: no fatal error, at least one module materialised, and every module either
+    /// materialised or <see cref="ModuleAssemblyStatus.Retired">retired</see> — a retired module is
+    /// reported and does not fail the run (MeshWeaver#3848). A run whose every module is retired
+    /// is NOT a success: the gate would run over an empty root and pass vacuously.
+    /// </summary>
     [JsonIgnore]
     public bool Success =>
         FatalError is null
-        && Modules.Count > 0
-        && Modules.All(m => m.Status == ModuleAssemblyStatus.Materialized);
+        && Modules.Any(m => m.Status == ModuleAssemblyStatus.Materialized)
+        && Modules.All(m => m.Status is ModuleAssemblyStatus.Materialized or ModuleAssemblyStatus.Retired);
+
+    /// <summary>The modules reported as retired, not verifiable.</summary>
+    [JsonIgnore]
+    public ImmutableList<ModuleAssembly> RetiredModules =>
+        [.. Modules.Where(m => m.Status == ModuleAssemblyStatus.Retired)];
 
     /// <summary>Process exit code: 0 all green, 1 anything else.</summary>
     [JsonIgnore]
@@ -194,7 +221,12 @@ public sealed record ComboAssemblyReport
             output.WriteLine($"FATAL: {FatalError}");
         foreach (var module in Modules)
         {
-            var mark = module.Status == ModuleAssemblyStatus.Materialized ? "ok " : "RED";
+            var mark = module.Status switch
+            {
+                ModuleAssemblyStatus.Materialized => "ok ",
+                ModuleAssemblyStatus.Retired => "-- ",
+                _ => "RED",
+            };
             var detail = module.Status == ModuleAssemblyStatus.Materialized
                 ? $"{module.Pin} @ {Shorten(module.ResolvedCommit)} — {module.FileCount} file(s), " +
                   $"hash {Shorten(module.ContentHash)}" +
@@ -208,9 +240,11 @@ public sealed record ComboAssemblyReport
         var materialized = Modules.Count(m => m.Status == ModuleAssemblyStatus.Materialized);
         var failed = Modules.Count(m => m.Status == ModuleAssemblyStatus.Failed);
         var refused = Modules.Count(m => m.Status == ModuleAssemblyStatus.Refused);
+        var retired = Modules.Count(m => m.Status == ModuleAssemblyStatus.Retired);
         output.WriteLine(
             $"combo assembly: {Modules.Count} module(s) — {materialized} materialised, " +
-            $"{failed} failed, {refused} refused → {(Success ? "GREEN" : "RED")}");
+            $"{failed} failed, {refused} refused, {retired} retired (not verifiable) → " +
+            $"{(Success ? "GREEN" : "RED")}");
     }
 
     private static string Shorten(string? value) =>

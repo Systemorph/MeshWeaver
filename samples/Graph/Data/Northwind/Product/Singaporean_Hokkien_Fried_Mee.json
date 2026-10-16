@@ -6,7 +6,6 @@
   "category": "Products",
   "description": "Singaporean Hokkien Fried Mee - 32 - 1 kg pkgs.",
   "icon": "/static/NodeTypeIcons/shopping-bag.svg",
-  "isPersistent": true,
   "content": {
     "$type": "ProductContent",
     "productId": 42,

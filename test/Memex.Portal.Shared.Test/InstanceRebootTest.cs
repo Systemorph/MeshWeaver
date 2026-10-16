@@ -101,6 +101,32 @@ public class InstanceRebootRulesTest
         green.Detail.Should().Contain("health:nodetype_bake not measured");
     }
 
+    /// <summary>
+    /// #6625 review: the Modules step's audit line says "landed" only when files LANDED. A decision that
+    /// refused the bundle answers no failure, no files and a served version — that is "not landed", naming
+    /// the decision and what keeps running; a served version is not evidence of landing.
+    /// </summary>
+    [Fact]
+    public void TheModuleAuditLine_SaysLandedOnlyWhenFilesLanded()
+    {
+        var declined = new ModuleAdoptOutcome
+        {
+            Verdict = new ModuleUpdateVerdict(ModuleUpdateAction.SkipPlatformBelowFloor, "the floor 9.0.0 is above the running platform"),
+            ServedVersion = "1.2.0",
+            LandedBefore = "1.1.0",
+        };
+        var line = InstanceRebootExecutor.DescribeAdopt(declined);
+        line.Should().StartWith("not landed").And.Contain("SkipPlatformBelowFloor").And.Contain("the floor 9.0.0")
+            .And.Contain("1.1.0 keeps running");
+        line.Should().NotContain("landed 1.2.0");
+
+        // Controls: files that landed are a landing; a failure is named.
+        InstanceRebootExecutor.DescribeAdopt(declined with { FilesLanded = 3, LandedVersion = "1.2.0" })
+            .Should().StartWith("landed 1.2.0");
+        InstanceRebootExecutor.DescribeAdopt(declined with { Failure = "link probe refused" })
+            .Should().Be("not landed — link probe refused");
+    }
+
     [Fact]
     public void TheBakeCheck_IsRedOnlyForACriticalNamespace()
     {
@@ -545,6 +571,129 @@ public class InstanceRebootControlSelfHandoverTest(ITestOutputHelper output) : I
                     LocalSecretKey = LocalSecretKey,
                 };
         }
+    }
+}
+
+/// <summary>
+/// 🚨 MeshWeaver#6625 review: a request that ENDED (here: ended while its Modules step was in flight, as
+/// the owner does for a stalled request) must not start the steps after the one in flight. A write that
+/// meets a terminal request changes nothing AND emits nothing, so the late Modules result does not go on
+/// to the Image step — nor, beyond it, to the restart.
+/// </summary>
+public class InstanceRebootEndedMidStepTest(ITestOutputHelper output) : InstanceRebootScenario(output)
+{
+    private readonly System.Reactive.Subjects.AsyncSubject<System.Reactive.Unit> imageSelected = new();
+
+    protected override IInstanceRebootActivation CreateActivation(IServiceProvider sp) =>
+        new Watched(base.CreateActivation(sp), imageSelected);
+
+    [Fact(Timeout = 240_000)]
+    public async Task ARequestEndedWhileAStepRuns_StartsNoLaterStep()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await RunningVersionOne(ct);
+        await PolicyExists(ct);
+        await Mesh.ServiceProvider.GetRequiredService<RegistryUpdateReconciler>().BootReconciled
+            .DefaultIfEmpty().Timeout(TestTimeouts.Convergence).Await(ct);
+        Registry.Serve("1.2.0", floor: FloorFixture.Below);
+        Registry.ParkNextIndex();
+        try
+        {
+            var path = await Reboot(ct);
+            await Registry.IndexParked.Should().Within(TestTimeouts.Convergence)
+                .Emit("the Modules step reads the bundle index — parked there", ct);
+            await AwaitReboot(path, r => r.Steps.Any(s => s.Name == InstanceRebootSteps.Modules && s.Outcome == InstanceRebootStepOutcome.Running), ct);
+
+            // The request ends while the Modules step is in flight.
+            await Access.RunAsSystem(() => Mesh.GetMeshNodeStream(path).Update<InstanceRebootRequest>(r => r with
+                {
+                    Status = InstanceRebootStatus.Failed,
+                    Failure = "ended while the Modules step ran",
+                    CompletedAt = DateTimeOffset.UtcNow,
+                }))
+                .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+            await AwaitReboot(path, r => r.Status == InstanceRebootStatus.Failed, ct);
+            Registry.ReleaseIndex();
+
+            await imageSelected.Should().NotEmit(TestTimeouts.Quick,
+                "a step that ends after its request ended must not start the next step", ct);
+            var after = await AwaitReboot(path, _ => true, ct);
+            after.Status.Should().Be(InstanceRebootStatus.Failed);
+            after.Failure.Should().Be("ended while the Modules step ran");
+            InstanceRebootTest.Step(after, InstanceRebootSteps.Image).Outcome.Should().Be(InstanceRebootStepOutcome.Pending);
+            Updater.Restarts.Should().Be(0);
+        }
+        finally
+        {
+            Registry.ReleaseIndex();
+        }
+    }
+
+    private sealed class Watched(IInstanceRebootActivation inner, System.Reactive.Subjects.AsyncSubject<System.Reactive.Unit> selected)
+        : IInstanceRebootActivation
+    {
+        public IObservable<RebootImageChoice> SelectImage(bool wedged) => Observable.Defer(() =>
+        {
+            selected.OnNext(System.Reactive.Unit.Default);
+            selected.OnCompleted();
+            return inner.SelectImage(wedged);
+        });
+
+        public IObservable<RebootActivationOutcome> Activate(RebootImageChoice choice, string reason) => inner.Activate(choice, reason);
+    }
+}
+
+/// <summary>
+/// 🚨 MeshWeaver#6625 review: the reboot's Modules step reloads its modules one after another, so a long
+/// batch must be progress all the way through — each module is REPORTED the moment its reload ended,
+/// before the next one starts (<see cref="ModuleReloadExecutor.ResolveAndLandReporting"/>) — and a
+/// report answering <c>false</c> (the reboot ended) reloads no further module.
+/// </summary>
+public class ModuleLandingReportingTest(ITestOutputHelper output) : ModuleReloadScenario(output)
+{
+    private async Task<int> TwoModulesWithANewerVersion(CancellationToken ct)
+    {
+        FloorFixture.AssertTheFloorHolds(Mesh);
+        Registry.ServesSecond = true;
+        Registry.Serve("1.1.0", floor: null);
+        await InstallRunning(Package, Module, ct);
+        await InstallRunning(SecondPackage, SecondModule, ct);
+        Registry.Serve("1.2.0", floor: FloorFixture.Below);
+        return Registry.Downloads.Count;
+    }
+
+    [Fact(Timeout = 240_000)]
+    public async Task EachModuleIsReported_AsItsReloadEnds_BeforeTheNextStarts()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var before = await TwoModulesWithANewerVersion(ct);
+        var reported = ImmutableList<(string Module, int Downloads)>.Empty;
+
+        var landing = await ModuleReloadExecutor.ResolveAndLandReporting(Mesh, module: null, (module, _) => Observable.Defer(() =>
+            {
+                ImmutableInterlocked.Update(ref reported, r => r.Add((module, Registry.Downloads.Count - before)));
+                return Observable.Return(true);
+            }))
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+
+        landing.Problem.Should().BeNull();
+        reported.Select(r => r.Module).Should().Equal([Module, SecondModule], "every module is reported, in order");
+        reported[0].Downloads.Should().Be(1, "the first module is reported before the second module's bundle was fetched");
+        reported[1].Downloads.Should().Be(2);
+        landing.Items.Select(i => i.Module).Should().Equal([Module, SecondModule]);
+    }
+
+    [Fact(Timeout = 240_000)]
+    public async Task AReportAnsweringFalse_ReloadsNoFurtherModule()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var before = await TwoModulesWithANewerVersion(ct);
+
+        var landing = await ModuleReloadExecutor.ResolveAndLandReporting(Mesh, module: null, (_, _) => Observable.Return(false))
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+
+        landing.Items.Select(i => i.Module).Should().Equal([Module], "the reboot ended after the first module");
+        (Registry.Downloads.Count - before).Should().Be(1, "the second module's bundle is never fetched");
     }
 }
 

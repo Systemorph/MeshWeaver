@@ -43,6 +43,20 @@ public sealed record DependencyNetworkResult(
 }
 
 /// <summary>
+/// The NodeTypes a recycle of one type reaches: its dependents — or why they could not be read.
+/// </summary>
+/// <param name="Dependents">From <see cref="NodeTypeRecycleCascade.DependentsOf"/> — empty when
+/// <paramref name="Failure"/> is set.</param>
+/// <param name="Failure">Why the NodeType definitions could not be enumerated, or <c>null</c> when
+/// they were. 🚨 An empty <paramref name="Dependents"/> list means "a leaf type" ONLY when this is
+/// <c>null</c>.</param>
+public sealed record NetworkTypes(ImmutableList<string> Dependents, string? Failure = null)
+{
+    /// <summary>True when the definitions were read, so <see cref="Dependents"/> is the whole set.</summary>
+    public bool IsComplete => Failure is null;
+}
+
+/// <summary>
 /// The one real <see cref="RecycleCascade"/>: a routed <see cref="DisposeRequest"/> on a NodeType
 /// DEFINITION's hub tears down the definition's whole dependency network, so an operator recycles
 /// the main bit and nothing else.
@@ -56,17 +70,25 @@ public sealed record DependencyNetworkResult(
 /// until it is torn down, and until this cascade existed each was recycled by hand — or not, which is
 /// how "the grain keeps serving old state" turned into image pins.</para>
 ///
-/// <para><b>Only what was instantiated.</b> The set is computed from the INDEX (every instance the
-/// mesh knows), not from what is live: which activations exist is a fact of the routing layer, and
-/// that is where it is answered — a cascaded request reaching an address with no live hub is a no-op
-/// (<c>MonolithRoutingService.RouteImpl</c>, <c>MessageHubGrain.DeliverMessage</c>) and instantiates
-/// nothing. So a type with ten thousand instances and three open pages recycles three hubs.</para>
+/// <para>🚨 <b>Only what is LIVE, found where it lives — one <see cref="ActivationRecycle"/> request
+/// (#6520).</b> The cascade asks NO index for instances. It used to: one <c>nodeType:{type}</c>
+/// query across every partition per type of the network, then one <see cref="DisposeRequest"/> per
+/// stored instance, most of them to cold addresses. On a portal pod one wave of that issued ~200
+/// concurrent cross-partition reads and logged 289 "recycle is INCOMPLETE" lines in 52 s, stalling
+/// the PostgreSQL query provider for every other reader. Which activations exist is a fact of each
+/// PROCESS, so the cascade now writes ONE <see cref="ActivationRecycleRequest"/> naming the type and
+/// its dependents; every process hears it on its invalidation feed and disposes only the hubs IT
+/// hosts whose bound NodeType is in the request — paced, off the router, with an audit row per
+/// process. A type with ten thousand stored instances and three open pages recycles three hubs, and
+/// a cold address is never touched, let alone activated.</para>
 ///
-/// <para><b>Once, from a survivor.</b> The set is derived once, at the main node, and every fanned-out
-/// request carries <see cref="DisposeRequest.CascadedFrom"/>, which <c>MessageHub.HandleDispose</c>
-/// never cascades again — a cycle among NodeTypes cannot turn one recycle into a storm. The requests
-/// are posted from the mesh's node-operation issuing hub, never from the definition hub itself: a
-/// dying hub cannot deliver its own last frame.</para>
+/// <para><b>Once, from a survivor.</b> The network is derived once, at the main node. The dependent
+/// definitions' own hubs are disposed with <see cref="DisposeRequest.CascadedFrom"/> set, and the
+/// instance disposals <see cref="ActivationRecycle"/> posts carry it too, so
+/// <c>MessageHub.HandleDispose</c> never cascades any of them again — a cycle among NodeTypes cannot
+/// turn one recycle into a storm. Everything is issued from the mesh hub and its node-operation
+/// issuing hub, never from the definition hub itself: a dying hub cannot deliver its own last
+/// frame.</para>
 ///
 /// <para>🚨 <b>…and the READ comes from a survivor too, which is the half that was missed (#5099).</b>
 /// The seam runs on the recycle's turn, strictly before <c>Dispose()</c> — so "derive it while the
@@ -80,11 +102,13 @@ public sealed record DependencyNetworkResult(
 /// cascade's own success. <see cref="DependencyNetwork"/> therefore enumerates through the mesh's
 /// read-issuing hub, which the definition hub's teardown cannot reach.</para>
 ///
-/// <para>🚨 <b>And a leg that could not be read is never silence.</b> Every enumeration answers an
-/// <see cref="EnumerationLeg"/>, and a failed one is carried to the end as
-/// <see cref="DependencyNetworkResult.Incomplete"/> rather than collapsing into an empty list. The
-/// cascade still fans out to what it DID find — those activations really are stale — but it says, at
-/// <c>Error</c>, that the recycle did not reach everything and names which leg it lost.</para>
+/// <para>🚨 <b>And a read that failed is never silence.</b> The one read the cascade still makes — the
+/// NodeType definitions, for the dependents — answers <see cref="DependentTypes"/> with its
+/// <see cref="NetworkTypes.Failure"/> kept. A failed read still recycles the type's own activations
+/// (that half needs no read), and the cascade says, at <c>Error</c>, that the dependents were NOT
+/// reached. <see cref="DependencyNetwork"/> — the ADDRESS enumeration a control-lane plan binds its
+/// blast radius to — keeps the same rule per leg (<see cref="EnumerationLeg"/>); the cascade itself no
+/// longer runs it.</para>
 /// </summary>
 public static class NodeTypeRecycleCascade
 {
@@ -273,6 +297,36 @@ public static class NodeTypeRecycleCascade
                     return Observable.Return(new EnumerationLeg(type, ImmutableList<string>.Empty, Describe(ex)));
                 });
 
+        return DependentTypes(hub, nodeTypePath)
+            .SelectMany(head => head.Dependents.Prepend(nodeTypePath)
+                .Select(Instances)
+                .Concat()
+                .ToList()
+                .Select(legs => Compose(nodeTypePath, head.Dependents, head.Failure, legs.ToImmutableList())));
+    }
+
+    /// <summary>
+    /// The dependents of <paramref name="nodeTypePath"/> — the NodeTypes sharing its sources,
+    /// transitively — from ONE read of the mesh's NodeType definitions, as system, through the
+    /// mesh's read-issuing hub (a survivor, #5099), joining a read already in flight
+    /// (<see cref="RecycleCascadeReads"/>). Emits ONE <see cref="NetworkTypes"/> and completes; never
+    /// errors — a failed read is answered as <see cref="NetworkTypes.Failure"/>, never as "no
+    /// dependents". Asks the index for NO instances.
+    /// </summary>
+    /// <param name="hub">Any hub of the mesh — in production the definition hub being recycled.
+    /// Nothing is read THROUGH it; it only names the mesh.</param>
+    /// <param name="nodeTypePath">The type being recycled.</param>
+    public static IObservable<NetworkTypes> DependentTypes(IMessageHub hub, string nodeTypePath)
+    {
+        ArgumentNullException.ThrowIfNull(hub);
+        ArgumentException.ThrowIfNullOrWhiteSpace(nodeTypePath);
+        // A SURVIVOR reads — see DependencyNetwork and the remarks on this class (#5099).
+        var reader = hub.GetMeshHub().ReadIssuingHub();
+        var logger = reader.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(NodeTypeRecycleCascade));
+        var meshService = reader.ServiceProvider.GetRequiredService<IMeshService>();
+        var accessService = reader.ServiceProvider.GetService<AccessService>();
+        var reads = reader.ServiceProvider.GetRequiredService<RecycleCascadeReads>();
+
         return reads.Definitions(reader, () => accessService.RunAsSystem(() => meshService
                     .Query<MeshNode>(MeshQueryRequest.FromQuery(MeshWideQuery.OfType(MeshNode.NodeTypePath))))
                 .Select(change => change.Items
@@ -283,24 +337,37 @@ public static class NodeTypeRecycleCascade
                         g => g.First().ContentAs<NodeTypeDefinition>(reader.JsonSerializerOptions, logger),
                         StringComparer.OrdinalIgnoreCase)))
             .Timeout(EnumerationBudget)
-            .Select(types => new DependentsLeg(DependentsOf(types, nodeTypePath), null))
-            .Catch<DependentsLeg, Exception>(ex =>
+            .Select(types => new NetworkTypes(DependentsOf(types, nodeTypePath)))
+            .Catch<NetworkTypes, Exception>(ex =>
             {
                 logger?.LogError(ex,
                     "[RecycleCascade] Enumerating the NodeTypes failed — the dependents of {Type} are "
-                    + "not recycled; its own instances still are. This leg is reported as INCOMPLETE "
+                    + "not recycled; its own live activations still are. This is reported as INCOMPLETE "
                     + "rather than as 'no dependents'", nodeTypePath);
-                return Observable.Return(new DependentsLeg(ImmutableList<string>.Empty, Describe(ex)));
-            })
-            .SelectMany(head => head.Dependents.Prepend(nodeTypePath)
-                .Select(Instances)
-                .Concat()
-                .ToList()
-                .Select(legs => Compose(nodeTypePath, head.Dependents, head.Failure, legs.ToImmutableList())));
+                return Observable.Return(new NetworkTypes(ImmutableList<string>.Empty, Describe(ex)));
+            });
     }
 
-    /// <summary>The NodeType enumeration's answer: the dependents, or why they could not be read.</summary>
-    private sealed record DependentsLeg(ImmutableList<string> Dependents, string? Failure);
+    /// <summary>
+    /// The ONE <see cref="ActivationRecycleRequest"/> a recycle of <paramref name="nodeTypePath"/>
+    /// writes: the type and each dependent, once each, in order, minus the types
+    /// <see cref="ActivationRecycle.RefusedNodeTypes"/> refuses (a recycle of the definition type
+    /// itself would name <c>NodeType</c>, i.e. every definition hub of the mesh). Pure.
+    /// </summary>
+    /// <param name="nodeTypePath">The type being recycled.</param>
+    /// <param name="dependents">From <see cref="DependentTypes"/>.</param>
+    /// <param name="reason">The reason the recycle that started this carried — passed through.</param>
+    public static ActivationRecycleRequest RecycleRequest(
+        string nodeTypePath, IReadOnlyList<string> dependents, string reason) =>
+        new()
+        {
+            NodeTypes = dependents.Prepend(nodeTypePath)
+                .Where(t => !string.IsNullOrWhiteSpace(t) && !ActivationRecycle.RefusedNodeTypes.Contains(t))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToImmutableList(),
+            Reason = string.IsNullOrWhiteSpace(reason) ? DisposeRequest.ReasonNotStated : reason,
+            RequestedBy = $"RecycleCascade from '{nodeTypePath}'",
+        };
 
     /// <summary>
     /// What an incomplete leg is reported AS. The exception type is kept: a
@@ -310,57 +377,83 @@ public static class NodeTypeRecycleCascade
     private static string Describe(Exception ex) => $"{ex.GetType().Name}: {ex.Message}";
 
     /// <summary>
-    /// What the seam runs on the recycle's turn: derive the network off-turn and post one cascaded
-    /// <see cref="DisposeRequest"/> per address from the mesh's node-operation issuing hub — a
-    /// survivor — with the reason the main request carried.
+    /// What the seam runs on the recycle's turn: read the dependents off-turn, dispose the dependent
+    /// definitions' own hubs (each with <see cref="DisposeRequest.CascadedFrom"/>, so none cascades
+    /// again), and write ONE <see cref="ActivationRecycleRequest"/> for the type and its dependents —
+    /// every process then disposes the live activations IT hosts. Everything is issued from the mesh
+    /// hub (a survivor), with the reason the main request carried. Asks the index for NO instances.
     /// </summary>
     internal static void Cascade(IMessageHub definitionHub, DisposeRequest request)
     {
         var nodeTypePath = definitionHub.Address.ToString();
-        var logger = definitionHub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(NodeTypeRecycleCascade));
-        // 🚨 The SURVIVOR issues the requests. The definition hub is on its way out; the mesh hub's
-        // node-operation hub outlives it and is the one seam every documented recycle posts from
-        // (HubRecycleExtensions, MeshOperations.Recycle).
+        // 🚨 The SURVIVOR issues everything. The definition hub is on its way out; the mesh hub and
+        // its node-operation hub outlive it, and the latter is the one seam every documented
+        // recycle posts from (HubRecycleExtensions, MeshOperations.Recycle). Resolved HERE, on the
+        // recycle's turn, while the definition hub is still whole (#5099).
         var mesh = definitionHub.GetMeshHub();
         var issuing = mesh.NodeOperationIssuingHub();
-        var reason = $"RecycleCascade from '{nodeTypePath}': {request.Reason ?? DisposeRequest.ReasonNotStated}";
+        var logger = mesh.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(NodeTypeRecycleCascade));
+        var origin = string.IsNullOrWhiteSpace(request.Reason) ? DisposeRequest.ReasonNotStated : request.Reason;
+        var reason = $"RecycleCascade from '{nodeTypePath}': {origin}";
 
-        DependencyNetwork(definitionHub, nodeTypePath)
+        DependentTypes(definitionHub, nodeTypePath)
+            .SelectMany(network =>
+            {
+                // A dependent's DEFINITION hub is bound from `NodeType`, which an activation recycle
+                // refuses to name (it would reach every definition hub of the mesh) — so the few
+                // dependent definitions are disposed by address. A cold one is a no-op at the router
+                // and instantiates nothing.
+                foreach (var dependent in network.Dependents)
+                    issuing.Post(
+                        new DisposeRequest { Reason = reason, CascadedFrom = nodeTypePath },
+                        o => o.WithTarget(new Address(dependent)));
+
+                var recycle = RecycleRequest(nodeTypePath, network.Dependents, origin);
+                return recycle.NodeTypes.IsEmpty
+                    ? Observable.Return((Network: network, Request: recycle, Ticket: (ActivationRecycleTicket?)null))
+                    : ActivationRecycle.Request(mesh, recycle)
+                        .Select(ticket => (Network: network, Request: recycle, Ticket: (ActivationRecycleTicket?)ticket));
+            })
             .Subscribe(
-                result =>
+                outcome =>
                 {
-                    // Fan out to what WAS derived first: those activations are stale whatever
-                    // happened on another leg, and a partial recycle beats none.
-                    foreach (var path in result.Addresses)
-                        issuing.Post(
-                            new DisposeRequest { Reason = reason, CascadedFrom = nodeTypePath },
-                            o => o.WithTarget(new Address(path)));
-
-                    if (result.IsComplete)
+                    var (network, recycle, ticket) = outcome;
+                    if (ticket is { Accepted: false })
                     {
-                        logger?.LogInformation(
-                            "[RecycleCascade] {Type}: {Count} address(es) in its dependency network — each "
-                            + "live activation among them is recycled; the rest are no-ops at the router "
-                            + "and instantiate nothing", nodeTypePath, result.Addresses.Count);
+                        // 🚨 Error: nothing below the definition was recycled, and from the outside
+                        // this reads exactly like a recycle that worked.
+                        logger?.LogError(
+                            "[RecycleCascade] {Type}: the activation recycle for {Types} was REFUSED ({Refusal}) — "
+                            + "no live activation of the type or its dependents was recycled; each keeps the "
+                            + "build it was born with until recycled by hand",
+                            nodeTypePath, string.Join(", ", recycle.NodeTypes), ticket.Refusal);
                         return;
                     }
 
-                    // 🚨 Error, not Information with a smaller number. An incomplete cascade reads
-                    // EXACTLY like a complete one from the outside — the operator's recycle returns,
-                    // the definition hub goes down, and some instance hubs quietly go on serving the
-                    // assembly they were born with. The only thing that distinguishes the two is
-                    // this line, so it names every leg that was lost.
+                    if (network.IsComplete)
+                    {
+                        logger?.LogInformation(
+                            "[RecycleCascade] {Type}: {Dependents} dependent NodeType(s); one activation recycle "
+                            + "{Request} for {Types} — every process disposes the live activations it hosts, "
+                            + "cold addresses are not touched",
+                            nodeTypePath, network.Dependents.Count, ticket?.Path ?? "(none: no recyclable type)",
+                            string.Join(", ", recycle.NodeTypes));
+                        return;
+                    }
+
+                    // 🚨 Error, not Information with a smaller number: the type's own live
+                    // activations were recycled, but its DEPENDENTS are unknown, and their live hubs
+                    // keep serving the assembly they were born with. Only this line says so.
                     logger?.LogError(
-                        "[RecycleCascade] {Type}: the recycle is INCOMPLETE. {Count} address(es) were "
-                        + "recycled, but {FailedCount} enumeration leg(s) could not be read, so an "
-                        + "unknown number of live hubs keep serving the assembly they were born with "
-                        + "and must be recycled by hand: {Legs}",
-                        nodeTypePath, result.Addresses.Count, result.Incomplete.Count,
-                        string.Join(" | ", result.Incomplete));
+                        "[RecycleCascade] {Type}: the recycle is INCOMPLETE. Its own live activations are "
+                        + "recycled ({Request}), but the NodeType definitions could not be read ({Failure}), so "
+                        + "its DEPENDENTS — and their live activations — are NOT recycled and must be recycled "
+                        + "by hand",
+                        nodeTypePath, ticket?.Path ?? "(none)", network.Failure);
                 },
                 ex => logger?.LogError(ex,
-                    "[RecycleCascade] {Type}: deriving the dependency network faulted — NOTHING in its "
-                    + "dependency network was recycled, and its live activations keep serving until each "
-                    + "is recycled by hand", nodeTypePath));
+                    "[RecycleCascade] {Type}: the recycle faulted — NOTHING in its dependency network was "
+                    + "recycled, and its live activations keep serving until each is recycled by hand",
+                    nodeTypePath));
     }
 }

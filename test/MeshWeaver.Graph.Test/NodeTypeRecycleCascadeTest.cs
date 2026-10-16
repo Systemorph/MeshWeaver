@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
+using MeshWeaver.Messaging;
 using Xunit;
 
 namespace MeshWeaver.Graph.Test;
@@ -60,6 +61,28 @@ public class NodeTypeRecycleCascadeTest
         NodeTypeRecycleCascade.DependentsOf(cyclic, "A").Should().Equal(["B", "C"],
             "each type appears once: the network is a SET derived at the main node, and every "
             + "fanned-out request carries CascadedFrom so it never fans out again");
+    }
+
+    /// <summary>
+    /// The cascade's ONE activation recycle (#6520): the type and every dependent, once each, the
+    /// dispose's reason carried through, and the definition type itself never named — a request for
+    /// <c>NodeType</c> would reach every definition hub of the mesh.
+    /// </summary>
+    [Fact]
+    public void TheRecycleRequest_NamesTheTypeAndItsDependents_Once_WithTheReason()
+    {
+        var request = NodeTypeRecycleCascade.RecycleRequest(
+            "Store/Core", NodeTypeRecycleCascade.DependentsOf(Types, "Store/Core"), "Store/Core released a new build");
+
+        request.NodeTypes.Should().Equal("Store/Core", "Store/Catalog", "Store/Licensing", "Store/Order");
+        request.Reason.Should().Be("Store/Core released a new build");
+        request.RequestedBy.Should().Be("RecycleCascade from 'Store/Core'");
+        ActivationRecycle.Validate(request).Should().BeNull("the request the cascade writes must be one ActivationRecycle accepts");
+
+        var degenerate = NodeTypeRecycleCascade.RecycleRequest(MeshNode.NodeTypePath, ["store/core", "Store/Core"], " ");
+        degenerate.NodeTypes.Should().Equal(["store/core"],
+            "the definition type is refused and a duplicate differing only in case is one type");
+        degenerate.Reason.Should().Be(DisposeRequest.ReasonNotStated, "a blank reason is an UNSTATED one");
     }
 
     [Fact]

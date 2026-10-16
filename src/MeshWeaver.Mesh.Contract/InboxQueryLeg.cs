@@ -103,4 +103,44 @@ public record InboxQueryLeg
     /// name is empty) — a toggle is never blank.
     /// </summary>
     public string? SourceIcon { get; init; }
+
+    /// <summary>
+    /// The CONTENT property (camelCase, a stored UTC instant) the leg's rows are timed by — shown as
+    /// their "when" and used by the page's newest-first order — instead of the node's
+    /// <c>LastModified</c>. Left empty, the rows are timed by <c>LastModified</c>.
+    /// <para>🚨 Name one when a write that is NOT news touches the node: a read-state write (opening a
+    /// conversation clears its unread mark) refreshes <c>LastModified</c>, and timing by it would move
+    /// the item ahead of genuinely newer ones. The page keeps <c>content</c> in such a leg's
+    /// projection, and a row whose field is missing or unreadable falls back to <c>LastModified</c>.</para>
+    /// <para>🚨 The leg's own <c>sort:</c> still decides WHICH rows its bound keeps. Sort on the field
+    /// only when every node carries it: a descending sort puts a missing value FIRST on Postgres
+    /// (nulls first), and nodes stored before the field existed would crowd newer ones out of the
+    /// bound. Otherwise keep <c>sort:LastModified-desc</c> — the rows are still SHOWN and ordered by the field.</para>
+    /// </summary>
+    public string? TimeField { get; init; }
+
+    /// <summary>
+    /// The category the leg's rows are filed under in the inbox's side menu — a KIND of item, as a mail
+    /// client's folders: <c>Approvals</c>, <c>Mail</c>, <c>Conversations</c>, <c>Notifications</c>,
+    /// <c>Activities</c>. Several sources may share one (WhatsApp, Teams and a portal chat are all
+    /// conversations). Left empty, the leg's <see cref="Source"/> is its category.
+    /// </summary>
+    public string? Category { get; init; }
+
+    /// <summary>The catalog key of the category's display name; when empty, the source's label is used.</summary>
+    public string? CategoryLabelKey { get; init; }
+
+    /// <summary>
+    /// The query that finds the source's CONNECTION in the viewer's partition — a credential, an
+    /// account record, a first message over the channel — with <c>{viewer}</c> where the viewer's
+    /// partition belongs. When set, the inbox lists the source only for a viewer for whom it finds a
+    /// node: a mailbox nobody connected gets no switch, no menu entry and no read. Left empty, the
+    /// source is always listed (the platform's own approvals, notifications, chats).
+    /// <para>🚨 Anchored exactly as <see cref="Query"/> is — one partition, the viewer's own — and
+    /// cheap: it is asked for ONE node when the page opens. Never point it at a live provider's
+    /// folder; that would ask the provider before the page knows it is connected.</para>
+    /// <para>Every leg of one source should agree; the inbox lists a source when ANY of its legs'
+    /// connection queries finds a node, or when one of its legs names none.</para>
+    /// </summary>
+    public string? ConnectedWhen { get; init; }
 }

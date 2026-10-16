@@ -89,8 +89,10 @@ against:
 | `az storage directory` | create · delete · exists · list · show |
 
 There is **no `rename`** in either, `directory delete` is documented *"Delete the specified **empty**
-directory"*, and there is no `lease` command under either group — so a lease per identity is not
-reachable from this lane either. And even in the REST API, where `Rename Directory` has existed
+directory"*, and there is no `lease` command under either group. (The Azure SDK the publisher's
+helper runs on *does* offer a file lease, and since #6877 every publication takes one — see
+*One publisher per prefix* below — but a lease
+orders WRITERS; it does not make a multi-file replace atomic for READERS.) And even in the REST API, where `Rename Directory` has existed
 since API version 2021-04-10, a rename cannot **replace** an existing directory: the swap would be
 rename-away plus rename-in, two operations with a gap in which the live path does not exist at all.
 
@@ -117,6 +119,119 @@ size — from "a sealed mix nobody can detect" to "read it again". Where the bac
 rename (Azure Files' `Rename File`, present in the REST API since 2021-04-10 though not exposed by
 every `az storage file` build), the writer phase should publish the pointer that way and remove even
 that.
+
+### One publisher per prefix — the publication lock (#6877)
+
+Everything above keeps READERS safe from a writer. It does not keep two WRITERS from each other: the
+byte-level postcondition (`verify_publication`) and the convergence verdict can only *refuse* an
+interleaving after the fact, so two overlapping runs could never both succeed — one of them went red
+over a target that was perfectly alive.
+
+**Measured (core CD, 2026-10-16):** push run 38916358387 and scheduled reconcile 38916674091 both
+baked `meshweaver-content` at the same source for identity `c003e001` and published to the same two
+shares. On the second share both read *"sealed from an older source — republish"*; the push run
+removed `_complete` at 14:57:04.7Z, and the reconcile's own unseal 1.6 s later failed
+`ResourceNotFound`. The failure message then told the reader to remove the target from
+`BAKE_PUBLISH_TARGETS` — while the other run was sealing that very share successfully.
+
+**The fix is mutual exclusion, not another postcondition.** `publish-bake-bundles.sh` takes a lease
+on ONE file per prefix, `prebuilt-bundles/<identity>/_publishing.<source>`, BEFORE its first read of
+the prefix and releases it on every exit path. Every decision — which publication is live, is it
+sealed, from which source, skip / supersede / republish — is therefore made on a shelf no other
+current publisher is changing, and the second run of the incident simply reads the first one's seal
+and reports `targets-already=1`.
+
+| property | how |
+|---|---|
+| primitive | an Azure Files **file lease** (`ShareLeaseClient`, in `publish-bake-files.py lock`) — not reachable through `az storage`, which is why the earlier design had none |
+| where | beside the source directories, outside every publication and generation: no reader lists it (readers resolve `<identity>/<source>/`; retention attributes only files under a source directory) |
+| holder and lease id | the holder is unique per INVOCATION — the run's publication token plus this process and a random part — because two jobs of one run (main-cd's two bake legs) share the run token and must not read each other's lease as their own; the lease id is derived from the holder (uuid5), so a caller holding the lock across steps (which names its holder in `BAKE_PUBLISH_LOCK_HOLDER`) can prove possession and release it from another process |
+| waiting | bounded (`PUBLISH_BAKE_LOCK_WAIT_SECONDS`, default 900 s) and **red** when exceeded, naming the holder — never a silent proceed, never a cancelled run |
+| abandoned holder | recovered only on evidence, and only by releasing THAT holder's own lease (ids derive from the holder token) — never a break, which could revoke whoever holds it now; a lease with no recorded holder is never judged abandoned. Evidence: the holder's own workflow run attempt has COMPLETED (asked of the GitHub API when a token is present), or the lease is older than any CI job can live (every job is hard-capped at 45 minutes) |
+| holding across steps | a workflow that must read the prefix before the script runs (a carry-forward) takes the lock itself and passes its token as `BAKE_PUBLISH_LOCK_HOLDER`; the script then PROVES possession instead of acquiring, and leaves the release to the workflow's `if: always()` step |
+
+**Why not a GitHub `concurrency:` group.** A group keeps ONE pending run and cancels the older
+pending one on every arrival, so a third overlapping run would silently cancel a queued publication
+(and its release marker) — the shape `main-cd.yml` already documents as having starved delivery.
+Runs on `main` are never cancelled; the lease makes the second one wait and then re-read.
+
+**What it does not change.** The postconditions stay: they are the guard against a writer that takes
+no lease (a satellite whose scripts ref predates it) and against a lease recovered as abandoned. And
+the failure summary now probes each failed target's SHARE before advising anything: *"does NOT
+exist"* is the only case that recommends removing a target from `BAKE_PUBLISH_TARGETS`; a share that
+answers is named as live, with the target's own failure to fix instead.
+
+The regression is `test-publish-bake-overlap.py` → *"#6877: two current publishers of the same
+content over an older seal"*: the second publisher is started in the background from inside the
+first one's upload, must log that it waited, and must end `targets-already=1` with the shelf sealed
+over exactly one bake's bytes. Against the pre-fix script the same case ends with the first run red
+and the shelf UNSEALED.
+
+#### Holding the prefix across the carry, and re-binding to what is live (MeshWeaver.Plugins#1785)
+
+A narrowed bake in `node-repo-publish-bake.yml` reads the sealed publication **before** it compiles
+(`bake-scope.sh`: the listing to carry forward, the baseline commit, the stamp the carry is bound
+to) and carries and publishes ~15 minutes later. A sibling that seals in between makes
+`carry-forward-bundles.sh` refuse — *"The publication moved between the read and the carry"* —
+which is right, and stays. Holding the lock across the whole bake would serialise ~17-minute jobs
+into the 45-minute cap, so the lane takes it later and **re-decides under it**
+(`rebind-bake-scope.sh`, the step *"Hold the publication lock, and re-bind the carry to the live
+publication"*):
+
+| outcome | when (bake-scope.sh re-run against the shelf as it is now) | what the lane does |
+|---|---|---|
+| `unchanged` | the live publication is the one the scope read | carries and publishes as decided |
+| `superseded` | the fresh scope is `none`: the same commit, a newer one containing it, or nothing between the live baseline and this commit reaches a module | publishes **nothing**, green, and says so |
+| `rebound` | the publication moved and every module the fresh scope calls affected was **rebuilt by this bake** (or the bake was full) | the fresh state replaces the old one; the carry takes the live publication's bundles, bound to its stamp |
+| refused | anything else — the measured shape is a revert between the two baselines, which leaves a module affected from the live baseline that this bake did not rebuild | **red**, naming the module; nothing written |
+
+The subset test is what makes `rebound` sound: a module this bake did not rebuild is carried from
+the live publication, which is right exactly when the selector — same edges, same rules — does not
+call it affected from the live baseline. The lock is taken on every target in
+`BAKE_PUBLISH_TARGETS` order under an invocation-unique holder (persisted beside the scope's state
+directory, since the release is another process), handed to the publish step as
+`BAKE_PUBLISH_LOCK_HOLDER`, and released by an `if: always()` step after it. Four properties the
+review of #6878 made explicit:
+
+- **One global lock order.** Targets are locked sorted and de-duplicated, never in the caller's
+  order, so two runs listing `A B` and `B A` cannot each hold one lease and wait on the other.
+- **Per-target isolation survives.** A target whose lock cannot be taken (a share that is gone, a
+  holder that outlasts the bound) is recorded, not fatal: the healthy targets are still published,
+  the publish step fails the unlocked one by name, and the run ends red.
+- **The release covers every configured target**, not only those the ledger recorded — a
+  cancellation between a lease and its ledger line must not leave an infinite lease behind; the
+  release names this holder's lease id, so it is a no-op wherever this run holds nothing.
+- **A live baseline newer than the checkout is fetched** (objects only) before the decision, so a
+  sibling that sealed a commit pushed after this runner checked out is recognised as `superseded`
+  instead of refusing as an unreachable baseline.
+
+The registry follows the same ordering: `push-bundle-publication.sh` never moves the identity tag to
+an OLDER commit than the one it names (`skipped=superseded`, the release identity still recorded),
+so a run the share publisher skipped as superseded cannot roll the registry back. And because that
+comparison is only as fresh as the tag it READ, the registry's whole read–decide–tag runs under the
+same prefix lock (`bake-publication-lock.sh`, around the push in both `main-cd.yml` and the lane,
+which holds its re-bind lock through the registry push): two overlapping publishers can no longer
+each read the tag before the other moves it. The wrapper locks EVERY configured target (sorted), not
+the first one, so callers whose target lists differ — a list change in flight, or two repositories
+publishing one prefix — still exclude each other on any share they have in common; two publishers
+with DISJOINT target sets share no lease and are not excluded. A target whose lock cannot be taken
+REFUSES the wrapped command — it may belong to a live publisher — unless its share is confirmed gone,
+and the wrapper's release visits every configured target, so an acquire interrupted after its lease
+landed leaves nothing behind.
+
+**The superseded path does not stay green over a stale registry.** A run superseded under the lock
+publishes nothing, so if the sibling that sealed the shares failed its registry push, a green here
+would hide it. Under the lock it still holds, that run reads the tag
+(`push-bundle-publication.sh --published-commit`) and `check-registry-names-live.sh` goes RED unless
+the tag names the live share publication's commit in the current layout, or a newer commit
+containing it. It repairs nothing. The older `scope=none` path has the same blind spot and predates
+this work; delivering the live share publication from a run that did not bake it is a separate
+change, filed to triage rather than folded in here.
+
+`main-cd.yml`'s platform publish now carries a read-only `GH_TOKEN`, so the never-seal-backwards
+comparison can order two commits instead of reporting *"could not order … republishing as before"*
+(both runs of the #6877 incident). That lane still publishes `meshweaver-content` in the **flat**
+layout; moving it to `generation` is a separate decision.
 
 ## The reader contract
 
@@ -230,7 +345,7 @@ Every row was read off the producing repository's own `ci.yml` (or `main-cd.yml`
 
 | producer | prefix (`bake-source`) | which `publish-bake-bundles.sh` it runs (`platform-ref`) | behind core `main` |
 |---|---|---|---|
-| core CD `plugins-bake` (`main-cd.yml`) | `plugins` | **this run's own core commit** (`needs.gate.outputs.sha`) | 0 — it IS the tip |
+| core CD `plugins-bake` (`main-cd.yml`; removed by #6143) | `plugins` | **this run's own core commit** (`needs.gate.outputs.sha`) | 0 — it IS the tip |
 | MeshWeaver.Plugins `ci.yml` | `plugins` | `aa40758329216d57dcefc2d8e8a52101efd5f225` | 231 commits |
 | MeshWeaver.Reinsurance | `reinsurance` | `1b5350d547473a5e2ca81e793e774cc962acfeb3` | 284 commits |
 | MeshWeaver.SocialMedia | `socialmedia` | `1b5350d5…` | 284 commits |
@@ -394,7 +509,7 @@ flat. Core CD needs no pin move; the satellites move theirs the way they always 
 
 Set `publication-layout: generation` on every producer of one prefix. The multi-producer prefix is
 `plugins` and nothing else: core CD's `plugins-bake` and MeshWeaver.Plugins' `publish-bake`. Every
-other prefix has exactly one producer.
+other prefix has exactly one producer — and since #6143 removed core's leg, so does `plugins`.
 
 #### What is landed, and the precondition that was measured before it was
 

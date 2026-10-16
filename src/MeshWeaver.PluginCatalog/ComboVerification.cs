@@ -80,6 +80,26 @@ public sealed record ModuleVerification
 }
 
 /// <summary>
+/// A module of the combo whose source folder no longer exists, so nothing about it can be
+/// verified (<see cref="ComboVerification.RetiredModules"/>).
+/// </summary>
+public sealed record RetiredModule
+{
+    /// <summary>The module (mesh partition) this entry describes.</summary>
+    public string ModuleId { get; init; } = "";
+
+    /// <summary>The status — <see cref="ModuleAssemblyStatus.Retired"/>, an open-vocabulary
+    /// value: a reader that meets one it does not know reports it as stated.</summary>
+    public string Status { get; init; } = ModuleAssemblyStatus.Retired;
+
+    /// <summary>The repository the module's folder was looked for in.</summary>
+    public string? RepositoryUrl { get; init; }
+
+    /// <summary>The speaking reason: where the folder was looked for and not found.</summary>
+    public string? Reason { get; init; }
+}
+
+/// <summary>
 /// The recorded verdict of verifying ONE candidate image against THIS instance's combo — the
 /// record the Candidate Release Protocol's item "report the verdict where an admin looks" lands on
 /// <c>Admin/UpdatePolicy</c> (<c>UpdatePolicyContent.ComboVerifications</c>). Produced by
@@ -139,6 +159,19 @@ public sealed record ComboVerification
     /// this whole protocol exists to prevent.
     /// </summary>
     public ImmutableList<string> Caveats { get; init; } = [];
+
+    /// <summary>
+    /// The modules this instance carries whose source folder has been RETIRED — reported as
+    /// <b>retired, not verifiable</b> (<see cref="ModuleAssemblyStatus.Retired"/>), and, under policy
+    /// <c>record-served-commit-on-install</c> (MeshWeaver#3848), NOT failing the verification: they are absent from
+    /// <see cref="Modules"/>, so they neither turn a verdict Red nor make it NotVerifiable.
+    ///
+    /// <para>A SEPARATE list rather than a new <see cref="ModuleVerificationOutcome"/> member on
+    /// purpose: a portal still running an older image deserializes this verdict when the build
+    /// posts it, and an unknown enum member would refuse the whole verdict there, while an unknown
+    /// property is simply ignored. Empty on a verdict produced before the decision.</para>
+    /// </summary>
+    public ImmutableList<RetiredModule> RetiredModules { get; init; } = [];
 
     /// <summary>The failing modules, for reporting surfaces.</summary>
     [JsonIgnore]

@@ -43,6 +43,9 @@ System. This is the same trust rule as [Module Reload](../ModuleReload).
 | `restartRequestedAt` | stamped BEFORE the roll or restart is requested, so a resumed executor never asks twice |
 | `replicas{process}` | what each process that booted after the stamp reported from its own checks |
 | `failure`, `completedAt`, `log[]` | the red steps by name, when it ended, and the audit trail |
+| `executionWindow` | DECLARED when the request is filed (`Reboot:ExecutionWindow`, default 3 h): the longest the request may go without recording progress and still count as in progress. See "A request that stops moving" |
+| `progressAt` | when it last recorded progress: stamped on every executor write (including each finished sync source) and on a re-arm |
+| `requestedEndIfStalledAt` | a reader that saw the request stalled asks its owner to end it; the owner answers and clears it |
 
 ## The five steps
 
@@ -57,7 +60,27 @@ process drives a request.
    the running platform, or a dependency the loaded build does not meet, is declined by name
    (`ModuleSyncDecision`). A source counts as a module source when its config has recorded a
    module-bearing tree. Content-only spaces are not re-imported, and the step lists them as
-   skipped, with the reason.
+   skipped, with the reason. 🚨 Each import is bounded by `ModuleSourceUpdate.ActivityBudget`
+   **from the moment its activity is created** (MeshWeaver#6625). `RunActivity` emits the activity
+   path only when the run is terminal, and the budget used to be composed after that emission, so
+   it bounded nothing: an import that never finished held the Sync step — and the request,
+   non-terminal, which suppresses every pod's self-reboot — indefinitely. Observed: one instance
+   held in `Preparing` at the Sync step; another held a reboot request open for ~21 h, but its step
+   state could not be read, so the Sync stall is the mechanism that FITS it, not one measured
+   there. Now the row reads `Failed` — *"did not finish within … its outcome is NOT established"* —
+   the import's cancellation is requested through the Activity Control Plane (as System, at the
+   write), and the reboot goes on to the next step. Because that import may still be running, no
+   later source's import is started behind it in the same pass: those rows read `Skipped`, naming
+   the import they wait behind, since two sources can target one Space. The same holds for every
+   other way the watch on an import's activity can end without a terminal status once that activity
+   exists (MeshWeaver#6753): a watch that faults (its gate query, or the point read meeting a
+   routing error), throws while it is being built, or ends early proves nothing about the import,
+   so the row reads `Failed` with *"… may still be running … its outcome is NOT established"* and
+   the later sources read `Skipped`. The step's summary therefore counts skipped rows without
+   naming one reason for all of them — each sync line says why its source was skipped. A
+   non-positive budget is refused before any source is listed. Only a failure from before the activity exists lets the pass go on to the next
+   source, because then no import is running. Why an import hangs is the import's own
+   defect and is not answered by this bound (`AHungImportCannotHoldTheRebootTest`).
 2. **Modules.** The executor lands the newest COMPATIBLE published version of every installed
    module through `ModuleReloadExecutor.ResolveAndLand`, which is the module reload's own
    resolve-and-land and is not forked. Compatibility means the declared floor is at or below the
@@ -114,6 +137,67 @@ the pass interval doubled per attempt). The re-arm keeps steps 1–3 and clears 
 stamp, so the executor asks for the ONE restart again; the one-restart rule holds per attempt. An
 activation outcome the reboot lane does not name is reported `Unavailable` and logged by name.
 
+## A request that stops moving
+
+🚨 A reboot request that never reaches a terminal state used to suppress every pod's self-reboot for
+as long as it existed (MeshWeaver#6625: one instance held a request open for ~21 h while its
+critical NodeTypes stayed in compile Error). A request now counts as "in progress" only while it is
+**progressing**, judged by its own record (`InstanceReboot.Stalled`, pure):
+
+- its **last progress** (`InstanceReboot.LastProgressAt`) is the latest instant it carries:
+  `progressAt`, `requestedAt`, each step's `at`, `restartRequestedAt`, each replica's `reportedAt`.
+  A `Faulted` request is waiting for its scheduled re-arm, so its retry's due time counts too;
+- it is **stalled** when it is not terminal and that last progress is older than its declared
+  `executionWindow`. A request filed before the field existed is judged by the reader's
+  `Reboot:ExecutionWindow`.
+
+Two readers act on that, and neither runs a timer of its own:
+
+- **The watchdog** reads each open request from its own node stream (never a stale listing deciding
+  a reboot). 🚨 A stalled request is never simply ignored. It would stay eligible for the
+  faulted-restart re-arm, and then the original and its replacement could both roll. The watchdog
+  asks the request's OWNER to end it (the same `requestedEndIfStalledAt` question as below) and
+  waits, within the read budget, for the owner's answer. Only an owner-confirmed `Failed` releases
+  the self-reboot, and that is never silent: a `Critical` line names the request, its trigger and
+  why it stalled, once per request per process. A request that something else ended first (the
+  reconcile pass's question, another process's watchdog) is named the same way. Its reason is read
+  back from the persisted `failure` marker (`InstanceReboot.EndedAsStalled`), for ends within
+  `WatchdogRepeatWindow`, and the pass lists it in `EndedStalled`. A request the owner kept open, or an answer that did
+  not come in time, still holds the self-reboot back. The rate limit's other two rules still hold.
+  The read also activates the request's own hub, which resumes its executor if the process that
+  drove it is gone.
+- **The plugin catalog's reconcile pass** asks the OWNER of every request that looks stalled to end
+  it (`InstanceReboot.FailStalled`, which writes the `requestedEndIfStalledAt` control field). It
+  runs right after the faulted-restart re-arm, so a `Faulted` request due for its retry is retried,
+  not ended. 🚨 The decision is never made on the reconcile pass's own copy of the node. A
+  cross-hub write is a merge patch, and the owner guards only the keys it carries, so a replica
+  report landing between that evaluation and the commit would not stop a `Failed` from landing.
+  The request's own hub answers instead (`InstanceReboot.EndIfStalled`): in ONE update, against its
+  own current state, it ends the request as `Failed` naming the stall, or leaves it open. Either
+  way it clears the field. That answer runs on its own subscription, so a step that never returns
+  cannot hold it back.
+- **A terminal request is final.** An executor write that meets one changes nothing AND emits
+  nothing, so the step chain behind it ends there. A late Sync result cannot start the module
+  landing, and a request ended before the restart stamp cannot go on to ask for the restart.
+
+The common ways a request stops moving, each now ended by name: the restart handed to the control
+lane never happened, so no process booted after the stamp and nothing reported (`AwaitingRestart`);
+a `Faulted` restart that nothing re-armed (the reconcile safety net is off); a step that never
+returned. The Sync step's own per-import bound is described under step 1.
+
+The window is longer than any single wait: one source import is bounded at 10 minutes, and the
+verification after a restart waits at most `SingletonResumeBudget` (35 minutes) beside the bake
+settle (15 minutes). The Sync step imports its sources one after another, so a long batch could
+exceed the window as a whole. Each source's row is therefore recorded on the request as progress
+the moment that import ends, before the next one starts (`ModuleSourceUpdate.UpdateAllReporting`).
+A batch of many healthy imports is progress all the way through. The reboot's answer to each row
+also says whether the batch may go on: a request that has ended starts no further import, so
+nothing is imported beside its replacement, and the remaining sources read `Skipped`, saying so. A
+fault from that reporting reaches the reboot. It is never folded into the "could not be listed"
+row. The Modules step works the same way (`ModuleReloadExecutor.ResolveAndLandReporting`): each
+module is recorded as progress the moment its reload ends, and a request that has ended reloads
+no further module.
+
 ## Who can start one
 
 | surface | authorisation | how |
@@ -145,7 +229,8 @@ holds when EITHER leg holds:
 
 The rate limit is `RebootWatchdogRules.Admit`. It refuses to fire in three cases:
 
-- while any reboot is still open;
+- while any reboot is still open. A stalled one is first ended by its owner (see "A request that
+  stops moving"); until then it counts as open;
 - when a self-reboot was taken within `WatchdogMinInterval` (default 6 hours). The process also
   remembers its own last firing, so a pass right after a firing never fires again;
 - when the SAME evidence, by fingerprint, already survived a self-reboot within
@@ -166,6 +251,7 @@ Setting `Reboot:WatchdogEnabled` to `false` turns the self-trigger off.
 | `ThreadStartFaultThreshold` / `ThreadStartWindow` | 3 / 15 min |
 | `CompileErrorFor` | 20 min |
 | `WatchdogMinInterval` / `WatchdogRepeatWindow` | 6 h / 24 h |
+| `ExecutionWindow` | 3 h, stamped on each request when it is filed |
 
 ## Operating lessons the reboot must respect
 
@@ -238,7 +324,14 @@ These lessons come from the control-instance recovery attempts on the day this w
   `Continuous` it is the newest continuous build the record's pattern admits.
 - **A roll handed to the control lane** is subject to the control plane's own handling of
   `self-update-available`: approval on a gated record, and its dedupe. Until that roll lands, the
-  reboot waits in `AwaitingRestart` and is not retried.
+  reboot waits in `AwaitingRestart` and is not retried. A roll that waits for approval longer than
+  the request's execution window ends the request as `Failed` (stalled); a roll approved after that
+  still happens, but its verification is not recorded on the ended request.
+- **"Executor gone" is not a separate leg.** The executor runs on the request node's own hub, and
+  any read of the request re-activates it, so the watchdog's own read resumes an orphaned request.
+  An executor that is resumed and still makes no progress is caught by the execution window.
+- **The build-instance request in MeshWeaver#6625 was never read**, so which of the shapes above held
+  it open there is not established.
 - **The compile leg reads a shared field.** The `compilationStatus` is one field over every replica's
   compile, so the leg does not see a failure on a single replica only.
 - **Two replicas' watchdogs** could both fire within the seconds the request listing trails the

@@ -154,14 +154,49 @@ public class SystemOwnedSweepRetractsTheLastAdminTest(ITestOutputHelper output)
     public async Task ABijectiveSync_RetractsNothing()
     {
         var space = await ASpaceWithAHumanAdmin();
+        var before = await StoredWriteGrants(space);
 
         await WireSync(space, twoWay: true);
 
         // The negative shape: the set must NOT empty out. A bijective sync preserves and commits
         // back server-side edits, so the mesh nodes are these admins' working copy and retracting
         // their write access would make the feature unusable by everyone but the importer.
-        await NoWriteGrantRemains(space).Should().NotEmit(TestTimeouts.Quick,
+        //
+        // 🚨 Read AFTER a positive settled signal, never over a fixed window (#6817). The sweep is a
+        // post-creation handler of the config node, and the create is answered Ok only once its
+        // post-creation handlers have completed — every retraction issued and answered — so
+        // WireSync returning IS the sweep having run. The STORE is read, as the sweep reads it:
+        // the query index trails the store and could still show a grant the sweep had deleted.
+        //
+        // 🚨 And the assertion is "NOTHING was retracted" — the set is unchanged — not "the set did
+        // not empty". A sweep that wrongly ran here retracts every grant it CAN and is refused only
+        // the last admin's (the last-admin invariant holds on a partition that is not system-owned),
+        // so the set never empties and the weaker assertion passed against exactly that defect
+        // (measured while writing #6817: one of two grants retracted, the old NotEmit still green).
+        var standing = await StoredWriteGrants(space);
+        before.Should().NotBeEmpty("the fixture wrote write-conferring grants, or there is nothing to keep");
+        standing.Should().Equal(before,
             "a bijective sync does not make a Space system-owned, so its administrators keep write "
             + "access — the sweep keys on the DIRECTION, not on the presence of a sync");
+    }
+
+    /// <summary>
+    /// The write-conferring grants the STORE holds under <c>{space}/_Access</c> right now — the same
+    /// listing and batch read <see cref="SystemOwnedAccessRetractionHandler"/> sweeps.
+    /// </summary>
+    private Task<string[]> StoredWriteGrants(string space)
+    {
+        var storage = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
+        return storage.ListChildPaths($"{space}/_Access")
+            .Take(1)
+            .SelectMany(children => storage.ReadMany(children.NodePaths.ToArray(), Mesh.JsonSerializerOptions).ToList())
+            .Select(grants => grants
+                .Where(n => AccessAssignmentGuard.ConfersWriteAccess(
+                    n.ContentAs<AccessAssignment>(Mesh.JsonSerializerOptions)))
+                .Select(n => n.Path)
+                .OrderBy(p => p, StringComparer.Ordinal)
+                .ToArray())
+            .Should().Within(Budget).Emit("the store's grants under the Space must be readable",
+                cancellationToken: TestContext.Current.CancellationToken);
     }
 }

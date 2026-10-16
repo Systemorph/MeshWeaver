@@ -29,6 +29,21 @@ public sealed record ModuleLiveActivationResult(
     /// <summary>The modules that still need the restart, with their reasons.</summary>
     public ImmutableList<ModuleSwapOutcome> StillPending => Outcomes.Where(o => o.NeedsRestart).ToImmutableList();
 
+    /// <summary>
+    /// True when the pass ESTABLISHED that nothing landed is pending in this process — so nothing
+    /// went live and nothing was swapped (#6620). Distinct from a pass that swapped something in.
+    /// </summary>
+    public bool NothingWasPending => Undetermined is null && Outcomes.IsEmpty;
+
+    /// <summary>
+    /// When <see cref="NothingWasPending"/>: the per-process activation report's own line
+    /// (<see cref="ModuleActivationReport.Describe"/>) — which names, for instance, a landed
+    /// generation DECLINED in favour of the image's copy, quarantined, or running a previous
+    /// generation. Those are exactly the states in which a landed generation is "not pending" while
+    /// the old code keeps serving, so a verdict must carry them rather than claim a swap.
+    /// </summary>
+    public string? NothingPendingBecause { get; init; }
+
     /// <summary>One sentence naming what went live and what still needs a restart, and why.</summary>
     public string Describe()
     {
@@ -37,9 +52,16 @@ public sealed record ModuleLiveActivationResult(
         var parts = new List<string>();
         if (!WentLive.IsEmpty)
             parts.Add("went live without a restart: " + string.Join(", ", WentLive.Select(o => o.Module)));
+        var upToDate = Outcomes.Where(o => o.Kind == ModuleSwapKind.UpToDate).ToImmutableList();
+        if (!upToDate.IsEmpty)
+            parts.Add("already serving the landed generation, so nothing was swapped in: "
+                + string.Join(", ", upToDate.Select(o => o.Module)));
         if (!StillPending.IsEmpty)
             parts.Add("still needs a restart: " + string.Join("; ", StillPending.Select(o => $"{o.Module} ({o.Kind}: {o.Reason})")));
-        return parts.Count == 0 ? "nothing landed is waiting to be activated here" : string.Join("; ", parts);
+        return parts.Count == 0
+            ? "nothing landed is pending activation in this process, so nothing was swapped in"
+              + (string.IsNullOrWhiteSpace(NothingPendingBecause) ? string.Empty : " — " + NothingPendingBecause)
+            : string.Join("; ", parts);
     }
 }
 
@@ -84,12 +106,31 @@ public sealed class ModuleLiveActivation(
                     return Observable.Return(new ModuleLiveActivationResult([], state.Report.UndeterminedReason));
                 var pending = state.Report.Pending;
                 if (pending.IsEmpty)
-                    return Observable.Return(new ModuleLiveActivationResult([]));
+                    return Observable.Return(new ModuleLiveActivationResult([])
+                    {
+                        NothingPendingBecause = state.Report.Describe(),
+                    });
+                // 🚨 ONE swap for the whole pass (#6729): every pending module is committed first and
+                // the hubs bound to any of them are recycled ONCE. A swap per module tore each owner
+                // address down once per module, killing the successor its subscribers had just
+                // re-activated each time — read by every sync stream as an owner recycling in a loop.
                 return pending.ToObservable()
-                    .Select(row => Activate(row, state.List, state.Root, reason))
+                    .Select(row => Resolve(row, state.List, state.Root))
                     .Concat()
                     .ToList()
-                    .Select(outcomes => new ModuleLiveActivationResult([.. outcomes]));
+                    .SelectMany(resolved =>
+                    {
+                        var paths = resolved.Where(r => r.Path is not null).Select(r => r.Path!).ToImmutableList();
+                        return (paths.IsEmpty
+                                ? Observable.Return(ImmutableList<ModuleSwapOutcome>.Empty)
+                                : updater.SwapAll(paths, reason))
+                            .Select(swapped =>
+                            {
+                                var next = 0;
+                                return new ModuleLiveActivationResult(
+                                    [.. resolved.Select(r => r.Outcome ?? swapped[next++])]);
+                            });
+                    });
             })
             .Do(result =>
             {
@@ -99,20 +140,24 @@ public sealed class ModuleLiveActivation(
             .Catch((Exception ex) => Observable.Return(new ModuleLiveActivationResult(
                 [], $"{ex.GetType().Name}: {ex.Message}")));
 
-    private IObservable<ModuleSwapOutcome> Activate(
-        PendingModuleActivation row, ModuleActivationList list, string root, string reason)
+    /// <summary>One pending module, resolved to the pinned generation to swap in — or to the outcome
+    /// that means it is not swapped at all.</summary>
+    private sealed record Resolved(ModuleSwapOutcome? Outcome, string? Path);
+
+    private IObservable<Resolved> Resolve(
+        PendingModuleActivation row, ModuleActivationList list, string root)
     {
         var entry = list.Entries.LastOrDefault(e => e.Enabled
             && string.Equals(e.Name, row.Name, StringComparison.OrdinalIgnoreCase));
         if (entry is null)
-            return Observable.Return(new ModuleSwapOutcome(row.Name, ModuleSwapKind.Failed,
-                $"{row.Name} is reported pending but the activation record names no enabled entry for it"));
+            return Observable.Return(new Resolved(new ModuleSwapOutcome(row.Name, ModuleSwapKind.Failed,
+                $"{row.Name} is reported pending but the activation record names no enabled entry for it"), null));
         if (contexts.Current(entry.Name) is null)
-            return Observable.Return(new ModuleSwapOutcome(entry.Name, ModuleSwapKind.NotHeld,
+            return Observable.Return(new Resolved(new ModuleSwapOutcome(entry.Name, ModuleSwapKind.NotHeld,
                 $"{entry.Name} does not run in its own load context in this process (the image binds it, or it "
-                + "was not installed at boot) — a restart activates the landed generation"));
+                + "was not installed at boot) — a restart activates the landed generation"), null));
         return pool.InvokeBlocking(_ => ModuleGenerationPin.PinnedLoadPath(
                 root, entry, onWarn: warning => logger?.LogWarning("[ModuleLiveUpdate] {Warning}", warning)))
-            .SelectMany(path => updater.Swap(path, reason));
+            .Select(path => new Resolved(null, path));
     }
 }

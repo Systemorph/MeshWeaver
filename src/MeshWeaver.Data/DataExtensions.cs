@@ -176,6 +176,8 @@ public static class DataExtensions
                 // about — see SyncStreamActivationLedger for why "on this activation" is the whole
                 // content of the answer, and NoStaticState for why it can never be static.
                 sc.AddScoped<SyncStreamActivationLedger>();
+                // One per hub: the MeshNode writes waiting for a cold store, in arrival order (#6594).
+                sc.AddScoped<ColdStoreWriteLanes>();
                 sc.TryAddEnumerable(ServiceDescriptor.Scoped<IAutocompleteProvider, DataAutocompleteProvider>());
                 return sc;
             })
@@ -295,6 +297,22 @@ public static class DataExtensions
                 return Observable.Return(request.Failed($"Error deserializing RawJson: {ex}"));
             }
         }
+
+        // A COALESCED recycle announcement (#5532): one StreamEndedEvent naming every stream this
+        // subscriber held on a recycled owner (Workspace.CoalesceRecycleEnds). Split it HERE, before
+        // anything is forwarded, into the one end per stream each sync/{id} sub-hub has always
+        // received, each routed through this same method, so each gets the same sub-hub search, the
+        // same registration grace and the same drop diagnostic as a single end. Only a subscriber
+        // that declared SubscribeRequest.AcceptsCoalescedStreamEnd is sent one, and that declaration
+        // is made by this assembly (JsonSynchronizationStream.MintSubscribeRequest).
+        if (message is StreamEndedEvent { AlsoEndedStreamIds: { Count: > 0 } more } coalesced)
+        {
+            _ = RouteStreamMessage(hub, request.WithMessage(coalesced with { AlsoEndedStreamIds = null }));
+            foreach (var streamId in more)
+                _ = RouteStreamMessage(hub, request.WithMessage(new StreamEndedEvent(streamId) { Activation = coalesced.Activation }));
+            return Observable.Return(request.Forwarded());
+        }
+
         if (message is not StreamMessage streamMessage)
             return Observable.Return(request);
 
@@ -2606,10 +2624,16 @@ public static class DataExtensions
         var lateVerdicts = hub.ServiceProvider.GetService<ILatePatchVerdictSink>();
         var ackLogger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Data.PatchAck");
+        // The writes on this store that are waiting for it to load, in arrival order (#6594).
+        // Resolved on the handler's turn for the same reason as the two services above.
+        var coldLane = hub.ServiceProvider.GetRequiredService<ColdStoreWriteLanes>().For(primary);
         var ackPosted = 0;
         // Detaches the owner-disposing NACK once the gate is claimed here (#3432) — see
         // RegisterOwnerDisposingNack's return value.
         var ownerNackDetach = new SingleAssignmentDisposable();
+        // The version the entity carries once this patch is committed — minted by the merge, or the
+        // live version for a patch that changed nothing. -1 until the merge turn decides.
+        long committedVersion = -1;
         void AckOnce(bool success, MeshNodeError? error = null)
         {
             if (System.Threading.Interlocked.Exchange(ref ackPosted, 1) != 0) return;
@@ -2618,6 +2642,10 @@ public static class DataExtensions
             hub.NoteRequestStage(request.Id,
                 success ? "PATCH_ACK ok" : $"PATCH_ACK nack={error?.Code}");
             var resp = new PatchDataResponse(success, hub.Version);
+            // The entity's committed version rides on a success (#6856), so the writer's
+            // acknowledged node names what the owner holds rather than the writer's base.
+            if (success && System.Threading.Interlocked.Read(ref committedVersion) is var cv and >= 0)
+                resp = resp with { CommittedVersion = cv };
             if (error is not null)
                 resp = resp with { Error = error.Message, NodeError = error };
             // Claim-then-VERIFY (#3196): claiming the gate above is what disables
@@ -2731,12 +2759,30 @@ public static class DataExtensions
             }
         }
 
+        // Releases this write's place in the cold-store lane once it has an answer, so the next
+        // write that queued behind it runs (#6594). Only a write released FROM the lane holds a place.
+        // On a merge turn of the primary, like every other lane access.
+        void DrainColdLane(MeshNodeError? error) => primary.Update(
+            ChangeItem<EntityStore>? (_) =>
+            {
+                coldLane.FailAll(error);
+                return null;
+            },
+            ex => ackLogger?.LogDebug(ex,
+                "[PatchAck] {HubPath}: could not drain the cold-store lane — the store is gone, and each "
+                + "queued write is answered by its own owner-disposing NACK or ack bound", hubPath));
+
         // ATOMIC read-merge-write on the primary action-block turn — a PURE, bounded transform.
         // No ack here (the off-turn identity-gated flush above acks on success), no IO, no
-        // nested subscribe. `deferred` guards the ONE-SHOT cold-store re-arm below.
-        void RunMergeTurn(bool deferred) => primary.Update(
+        // nested subscribe. `deferred` guards the ONE-SHOT cold-store re-arm below. `fromLane` marks
+        // a turn dispatched from the cold-store lane: that write holds the lane's head, and the
+        // writes behind it wait until this turn releases it.
+        void RunMergeTurn(bool deferred, bool fromLane) => primary.Update(
             store =>
             {
+                // True while this write stays at the head of the cold-store lane (it is still
+                // waiting for the store); false releases the head in the finally below.
+                var holdsLaneHead = false;
                 try
                 {
                     // 🚨 The stage that splits #2543's two readings of "HANDLER_EXIT … then nothing":
@@ -2744,6 +2790,20 @@ public static class DataExtensions
                     // means the turn never ran (the executor is behind other work), and its offset
                     // says how long it queued.
                     hub.NoteRequestStage(request.Id, deferred ? "PATCH_MERGE_TURN deferred-retry" : "PATCH_MERGE_TURN entered");
+
+                    // 🚨 #6594: an earlier write is waiting for this store to load. Merging now would
+                    // commit this write BEFORE it — the delayed write is re-run only once the load
+                    // lands, and it would then commit on top of this one. Queue behind it instead;
+                    // the lane re-dispatches this turn when every write ahead has been answered.
+                    if (!fromLane && coldLane.IsHeld)
+                    {
+                        coldLane.Enqueue(new ColdStoreWriteLane.Entry(
+                            () => RunMergeTurn(deferred: false, fromLane: true),
+                            error => AckOnce(false, error)));
+                        hub.NoteRequestStage(request.Id, "PATCH_MERGE_QUEUED behind a cold-store write");
+                        return null;
+                    }
+
                     var s = store ?? new EntityStore();
                     var collection = s.GetCollection(collectionName);
                     var entityId = preReadId;
@@ -2792,8 +2852,19 @@ public static class DataExtensions
                         // counting ack (see postSub comment). Re-arm ONCE when the store first
                         // carries data (the in-flight initial load), bounded; a genuinely absent
                         // node then NotFounds on the deferred attempt against the LOADED store.
+                        //
+                        // 🚨 #6594: the re-arm posts a NEW turn, at the back of the primary's queue,
+                        // so a write that arrives meanwhile would run first and this one would then
+                        // commit on top of it. This write therefore takes the head of the cold-store
+                        // lane, and every later write queues behind it (top of this turn) until the
+                        // lane releases them in order.
                         if (!deferred && (collection is null || collection.Instances.Count == 0))
                         {
+                            if (!fromLane)
+                                coldLane.Enqueue(new ColdStoreWriteLane.Entry(
+                                    () => RunMergeTurn(deferred: false, fromLane: true),
+                                    error => AckOnce(false, error)));
+                            holdsLaneHead = true;
                             // Held on the hub only until the deferred read terminates (#3432).
                             var deferDetach = new SingleAssignmentDisposable();
                             var deferSub = primary
@@ -2819,29 +2890,43 @@ public static class DataExtensions
                                     // Stand aside for a shutting-down owner, exactly as the generic
                                     // path's base read does: the ShutDown-phase disposal NACK owns
                                     // that verdict, on the transport that still reaches the waiter.
+                                    // The writes queued behind this one meet the same store, so
+                                    // they get the same answer (#6594).
                                     if (hub.IsShuttingDown)
+                                    {
+                                        DrainColdLane(null);
                                         return;
-                                    AckOnce(false, new MeshNodeError(
+                                    }
+                                    var storeEnded = new MeshNodeError(
                                         MeshNodeErrorCode.OwnerDisposing, hubPath,
                                         "the owner's store ended before the activation finished "
                                         + "loading — the patch was NOT applied; safe to retry "
-                                        + "against the fresh activation"));
+                                        + "against the fresh activation");
+                                    AckOnce(false, storeEnded);
+                                    DrainColdLane(storeEnded);
                                 })
                                 .Finally(deferDetach.Dispose)
                                 .Subscribe(
-                                    _ => RunMergeTurn(deferred: true),
+                                    // Still the lane's head: the writes behind it run after it.
+                                    _ => RunMergeTurn(deferred: true, fromLane: true),
                                     // 🚨 NOT NotFound (#667): the store never initialized within the
                                     // bound — that is an activation that has not LOADED, not an owner
                                     // answering "no such node". A NotFound here is a false negative
                                     // for a node that exists (it poisons existence checks and the
                                     // stream cache's negative cache); OwnerNotReady states the truth
                                     // — the patch was provably never applied — and is auto-retried
-                                    // by the caller against the loaded activation.
-                                    _ => AckOnce(false, new MeshNodeError(
-                                        MeshNodeErrorCode.OwnerNotReady, hubPath,
-                                        "owner activation has not loaded its state within the bound — "
-                                        + "the patch was NOT applied; safe to retry once the "
-                                        + "activation has loaded")));
+                                    // by the caller against the loaded activation. The writes queued
+                                    // behind it meet the same unloaded store and get the same answer.
+                                    _ =>
+                                    {
+                                        var notLoaded = new MeshNodeError(
+                                            MeshNodeErrorCode.OwnerNotReady, hubPath,
+                                            "owner activation has not loaded its state within the bound — "
+                                            + "the patch was NOT applied; safe to retry once the "
+                                            + "activation has loaded");
+                                        AckOnce(false, notLoaded);
+                                        DrainColdLane(notLoaded);
+                                    });
                             deferDetach.Disposable = hub.RegisterForDisposalDetachable(deferSub);
                             hub.NoteRequestStage(request.Id, "PATCH_MERGE_DEFERRED cold-store");
                             return null; // no write this turn — the deferred attempt commits
@@ -2884,7 +2969,11 @@ public static class DataExtensions
                                 $"cross-hub write refused: {refusedKeys} field(s) changed on the owner "
                                 + "since the writer's base and nothing was applied — re-read and re-apply"));
                         else
+                        {
+                            System.Threading.Interlocked.Exchange(
+                                ref committedVersion, NextMeshNodeVersion(preMergeNode, versionKey) - 1);
                             AckOnce(true);
+                        }
                         return null;
                     }
 
@@ -2931,6 +3020,7 @@ public static class DataExtensions
                     // write, so a load echo / sibling emission can never ack it.
                     System.Threading.Volatile.Write(ref stampedId, entityId);
                     System.Threading.Interlocked.Exchange(ref stampedVersion, minted);
+                    System.Threading.Interlocked.Exchange(ref committedVersion, minted);
                     hub.NoteRequestStage(request.Id, $"PATCH_MERGE_STAMPED v={minted} refused={refusedKeys}");
 
                     var newStore = s.Update(collectionName, c => c.Update(entityId, merged));
@@ -2944,12 +3034,20 @@ public static class DataExtensions
                     AckOnce(false, ClassifyPatchException(ex, hubPath));
                     return null;
                 }
+                finally
+                {
+                    // This write has its answer (or its commit is returned to the turn), so the
+                    // next write queued behind it may run — dispatched only now, which is what keeps
+                    // the lane's order (#6594).
+                    if (fromLane && !holdsLaneHead)
+                        coldLane.ReleaseHead();
+                }
             },
             ex => AckOnce(false, ClassifyPatchException(ex, hubPath)));
 
         // Dispatched to the primary's executor; the next stage is recorded on that executor.
         hub.NoteRequestStage(request.Id, "PATCH_MERGE_DISPATCHED");
-        RunMergeTurn(deferred: false);
+        RunMergeTurn(deferred: false, fromLane: false);
     }
 
     /// <summary>

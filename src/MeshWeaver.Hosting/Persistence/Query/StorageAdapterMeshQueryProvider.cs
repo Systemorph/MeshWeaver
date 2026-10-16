@@ -206,6 +206,22 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         bool useSecurityFilter,
         bool projectSelect = false,
         ReadCompleteness? completeness = null)
+        => RunRankedQueryNodes(request, options, useSecurityFilter, projectSelect, completeness)
+            .Select(ranked => ranked.Rows);
+
+    /// <summary>
+    /// <see cref="RunQueryNodes"/> plus the relevance it ranked by: <c>Scores</c> is one fuzzy
+    /// score per row, in row order, when a free-text term (and no <c>sort:</c>) made relevance the
+    /// ordering, and <see langword="null"/> otherwise. The score is taken from the node as it was
+    /// MATCHED — before a projection or the content drop could change what the scorer reads — so
+    /// the merge re-sorts by exactly the key this provider clipped by (#6830 review).
+    /// </summary>
+    private IObservable<(IReadOnlyList<object> Rows, IReadOnlyList<double>? Scores)> RunRankedQueryNodes(
+        MeshQueryRequest request,
+        JsonSerializerOptions options,
+        bool useSecurityFilter,
+        bool projectSelect,
+        ReadCompleteness? completeness)
         => CollectMatched(request, options, useSecurityFilter, completeness)
             .Select(collected =>
             {
@@ -237,12 +253,19 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                 // it has to be applied HERE, before the load cap — a merge-layer sort over rows this
                 // provider already clipped in path order would order the wrong subset (#4950).
                 IEnumerable<object> sorted;
+                // Set only on the relevance branch: the score each row was ranked by, keyed by the
+                // matched node (reference identity), so it is read BEFORE projection.
+                Dictionary<object, double>? relevance = null;
                 var effectiveOrderBy = parsedQuery.EffectiveOrderBy;
                 if (effectiveOrderBy != null)
                 {
-                    sorted = (effectiveOrderBy.Descending
-                        ? matchedNodes.OrderByDescending(n => GetSortableValue(n, effectiveOrderBy.Property))
-                        : matchedNodes.OrderBy(n => GetSortableValue(n, effectiveOrderBy.Property)))
+                    // The SAME key and comparer as the merge layer (QuerySortKey): typed, nulls
+                    // last, any selector — a content field included. This used to be a fixed map of
+                    // node fields with `_ => node.Name`, so `sort:content.x` clipped the load cap by
+                    // NAME and the merge could only re-order the wrong subset.
+                    sorted = matchedNodes
+                        .OrderBy(n => _evaluator.GetSortKey(n, effectiveOrderBy.Property),
+                            QuerySortKey.Comparer(effectiveOrderBy.Descending))
                         .ThenBy(PathTiebreak, StringComparer.Ordinal);
                 }
                 else if (!string.IsNullOrEmpty(parsedQuery.TextSearch))
@@ -259,8 +282,16 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                     // OrderByDescending is stable — but "keeps the walk order" is exactly the
                     // non-order above, so equal-score ties now break on path instead.
                     // An explicit sort: (OrderBy above) still wins over relevance.
+                    // The score is ALSO handed on (#6830 review): MeshQuery.ClipMergedInitial
+                    // re-sorts every Initial by its Scores and then path, so ranking here without
+                    // reporting the rank made every row 0 there and the merge answered PATH order.
+                    var text = parsedQuery.TextSearch;
+                    relevance = new Dictionary<object, double>(ReferenceEqualityComparer.Instance);
+                    foreach (var n in matchedNodes)
+                        relevance[n] = _evaluator.GetFuzzyScore(n, text);
+                    var scoreOf = relevance;
                     sorted = matchedNodes
-                        .OrderByDescending(n => _evaluator.GetFuzzyScore(n, parsedQuery.TextSearch))
+                        .OrderByDescending(n => scoreOf[n])
                         .ThenBy(PathTiebreak, StringComparer.Ordinal);
                 }
                 else
@@ -287,20 +318,24 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                 //
                 // The row-level SELECT still narrows what the adapter loads, so a projected read costs
                 // only what it asked for; the node simply stays a node for the caller that asked for nodes.
-                IEnumerable<object> projected = sorted.Select(node =>
-                    projectSelect && parsedQuery.Select != null
-                        ? ParsedQuery.ProjectToSelect(node, parsedQuery.Select)
-                        : DropUnprojectedContent(node, parsedQuery));
-
                 // Load cap = (Skip ?? 0) + Limit. request.Skip itself is applied
                 // POST-MERGE in ClipMergedInitial (applying it here too would
                 // double-skip); we only bound the load so a deep walk over a
                 // 10 000-row subtree doesn't materialise everything for a 3-item page.
                 var loadCap = LoadCap(request, parsedQuery);
                 if (loadCap is int cap && cap > 0)
-                    projected = projected.Take(cap);
+                    sorted = sorted.Take(cap);
+                var kept = sorted.ToList();
 
-                return (IReadOnlyList<object>)projected.ToList();
+                IReadOnlyList<object> rows = kept
+                    .Select(node => projectSelect && parsedQuery.Select != null
+                        ? ParsedQuery.ProjectToSelect(node, parsedQuery.Select)
+                        : DropUnprojectedContent(node, parsedQuery))
+                    .ToList();
+                IReadOnlyList<double>? scores = relevance is null
+                    ? null
+                    : kept.Select(node => relevance[node]).ToList();
+                return (rows, scores);
             });
 
 
@@ -333,6 +368,11 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         foreach (var field in select)
             if (field.Equals("content", StringComparison.OrdinalIgnoreCase))
                 return node;
+        // A content sort keeps the content: MeshQuery.ClipMergedInitial re-sorts on it after this
+        // provider returns, and with Content blanked every key ties and path order replaces the
+        // requested one. Postgres keeps it in the projection for the same reason.
+        if (QueryEvaluator.SortReadsContent(parsedQuery.EffectiveOrderBy?.Property))
+            return node;
         return meshNode with { Content = null };
     }
 
@@ -1142,27 +1182,6 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         => item is MeshNode node ? node.Path ?? "" : "";
 
     /// <summary>
-    /// Gets a sortable value from a node for the given property name.
-    /// Maps common property names to MeshNode fields.
-    /// </summary>
-    private static object? GetSortableValue(object item, string property)
-    {
-        if (item is not MeshNode node) return null;
-        return property.ToLowerInvariant() switch
-        {
-            "lastmodified" or "last_modified" => node.LastModified,
-            "name" => node.Name,
-            "order" or "display_order" => node.Order,
-            "path" => node.Path,
-            "nodetype" or "node_type" => node.NodeType,
-            "category" => node.Category,
-            "state" => node.State,
-            "version" => node.Version,
-            _ => node.Name
-        };
-    }
-
-    /// <summary>
     /// Validates a node read operation using INodeValidator instances from DI.
     /// Pure-reactive — no await, no FirstAsync().ToTask() bridge. Each validator's
     /// <see cref="INodeValidator.Validate"/> returns IObservable&lt;NodeValidationResult&gt;
@@ -1621,17 +1640,23 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
             // Per-subscription, never a field — see ReadCompleteness for why a field would mark
             // every other concurrent caller's snapshot incomplete and never clear.
             var completeness = new ReadCompleteness();
-            IObservable<List<(string? Path, T Item)>> RunQuery() =>
-                RunQueryNodes(request, options, useSecurityFilter,
+            IObservable<(List<(string? Path, T Item)> Rows, List<double>? Scores)> RunQuery() =>
+                RunRankedQueryNodes(request, options, useSecurityFilter,
                         projectSelect: typeof(T) != typeof(MeshNode),
                         completeness: completeness)
-                    .Select(nodes =>
+                    .Select(ranked =>
                     {
                         var results = new List<(string?, T)>();
-                        foreach (var item in nodes)
-                            if (item is T typed)
-                                results.Add((GetItemPath(item), typed));
-                        return results;
+                        // Kept parallel to the rows that survive the type filter.
+                        var scores = ranked.Scores is null ? null : new List<double>();
+                        for (var i = 0; i < ranked.Rows.Count; i++)
+                        {
+                            if (ranked.Rows[i] is not T typed)
+                                continue;
+                            results.Add((GetItemPath(typed), typed));
+                            scores?.Add(ranked.Scores![i]);
+                        }
+                        return (results, scores);
                     });
 
             // Subscribe to persistence.Changes BEFORE running the initial query so
@@ -1718,10 +1743,10 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
 
             disposables.Add(
                 RunQuery().Subscribe(
-                    initialResults =>
+                    initial =>
                     {
                         var initialItems = new List<T>();
-                        foreach (var (path, item) in initialResults)
+                        foreach (var (path, item) in initial.Rows)
                         {
                             initialItems.Add(item);
                             if (!string.IsNullOrEmpty(path))
@@ -1805,7 +1830,7 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                             changeBuffer
                                 .CoalesceWhileRunning(RunQuery)
                                 .Subscribe(
-                                    newResults => ProcessBatch(newResults, currentItems, parsedQuery, observer),
+                                    newResults => ProcessBatch(newResults.Rows, currentItems, parsedQuery, observer),
                                     ex => observer.OnError(ex)));
 
                         // Publish the live buffer and flip the gate in ONE critical section, so
@@ -1823,6 +1848,13 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                         {
                             ChangeType = QueryChangeType.Initial,
                             Items = initialItems,
+                            // 🚨 The relevance this provider RANKED by travels with the rows
+                            // (#6830 review). RunQueryNodes orders a free-text read by fuzzy score
+                            // before its load cap, but the merge (MeshQuery.ClipMergedInitial)
+                            // re-sorts by Scores and then path — so a frame without them made every
+                            // row score 0 and handed back PATH order, weaker matches first and Skip
+                            // paging the wrong window.
+                            Scores = initial.Scores,
                             Query = parsedQuery,
                             Version = Interlocked.Increment(ref _version),
                             Timestamp = DateTimeOffset.UtcNow,

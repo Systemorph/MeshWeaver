@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """check-issue-taxonomy — the issue taxonomy's invariant, measured over REST (Doc/Architecture/IssueTaxonomy).
 
-Every OPEN issue carries exactly one TYPE (bug, enhancement, documentation, chore); every `bug` carries
-exactly one SEVERITY (sev:B, sev:H, sev:M, sev:L); nothing else carries a severity, and no `sev:` label
-outside those four exists on an issue. The release gate counts open `sev:B`/`sev:H` bugs, so an issue
-that breaks the invariant is INVISIBLE to it: an untyped issue and a bug without a severity both read as
-"nothing blocking".
+Every OPEN issue carries exactly one TYPE (bug, enhancement, documentation, chore) and exactly one
+SEVERITY (sev:B, sev:H, sev:M, sev:L) — non-bugs included (policy `every-issue-has-a-severity`). The two
+blocking severities, sev:B and sev:H, are reserved for defects: an enhancement, documentation or chore
+issue takes sev:M or sev:L, and a blocking severity on one is a violation, because it would hold a release
+for work that is not a defect. No `sev:` label outside those four exists on an issue. The release gate
+counts open `sev:B`/`sev:H` issues, so an issue that breaks the invariant is INVISIBLE to it: an untyped
+issue and an issue without a severity both read as "nothing blocking".
 
 Three subcommands, one rule:
 
@@ -44,6 +46,8 @@ from urllib.parse import quote
 
 TYPES = ("bug", "enhancement", "documentation", "chore")
 SEVERITIES = ("sev:B", "sev:H", "sev:M", "sev:L")
+# Reserved for defects: only a `bug` may block a release (policy `every-issue-has-a-severity`).
+BLOCKING = ("sev:B", "sev:H")
 
 # The canonical label set — the colours and descriptions core's own labels carry (read 2026-10-11 off
 # Systemorph/MeshWeaver). A missing label is created with exactly these; an existing one is never edited.
@@ -99,12 +103,13 @@ def violation(labels: list) -> Optional[str]:
         return "no type label"
     if len(types) > 1:
         return "more than one type (" + ", ".join(types) + ")"
-    if types[0] == "bug" and not sevs:
-        return "a bug without a severity"
+    if not sevs:
+        return "a bug without a severity" if types[0] == "bug" else f"a {types[0]} without a severity (a non-bug takes sev:M or sev:L)"
     if len(sevs) > 1:
         return "more than one severity (" + ", ".join(sevs) + ")"
-    if types[0] != "bug" and sevs:
-        return f"a severity on non-bug type {types[0]}"
+    if types[0] != "bug" and sevs[0] in BLOCKING:
+        return (f"a blocking severity ({sevs[0]}) on non-bug type {types[0]} — sev:B/sev:H are reserved for "
+                f"defects; a non-bug takes sev:M or sev:L")
     return None
 
 
@@ -191,12 +196,19 @@ def self_test() -> int:
             failures.append(f"{name}: got {got!r}, want {want!r}")
 
     expect("classified bug", violation(["bug", "sev:H", "area:ci"]), None)
-    expect("classified chore", violation(["chore"]), None)
+    expect("classified chore", violation(["chore", "sev:L"]), None)
+    expect("classified enhancement", violation(["enhancement", "sev:M"]), None)
+    expect("classified documentation", violation(["documentation", "sev:L"]), None)
+    expect("chore without severity", violation(["chore"]), "a chore without a severity (a non-bug takes sev:M or sev:L)")
+    expect("documentation without severity", violation(["documentation"]), "a documentation without a severity (a non-bug takes sev:M or sev:L)")
     expect("untyped", violation(["feature:x"]), "no type label")
     expect("bug without severity", violation(["bug"]), "a bug without a severity")
     expect("two types", violation(["bug", "chore", "sev:M"]), "more than one type (bug, chore)")
     expect("two severities", violation(["bug", "sev:H", "sev:L"]), "more than one severity (sev:H, sev:L)")
-    expect("severity on a non-bug", violation(["enhancement", "sev:M"]), "a severity on non-bug type enhancement")
+    expect("sev:H on a non-bug", violation(["enhancement", "sev:H"]),
+           "a blocking severity (sev:H) on non-bug type enhancement — sev:B/sev:H are reserved for defects; "
+           "a non-bug takes sev:M or sev:L")
+    expect("sev:B on a non-bug", (violation(["chore", "sev:B"]) or "").startswith("a blocking severity (sev:B) on non-bug type chore"), True)
     expect("unknown severity", violation(["bug", "sev:critical"]), "a severity outside sev:B/H/M/L (sev:critical)")
     expect("type case-insensitive", violation(["Bug", "sev:M"]), None)
 
@@ -236,7 +248,7 @@ def self_test() -> int:
         return i
 
     # 150 classified issues push the violations onto the SECOND page — a one-page read would miss them.
-    many = [issue(n, ["chore"], 100) for n in range(1, 151)]
+    many = [issue(n, ["chore", "sev:L"], 100) for n in range(1, 151)]
     repo = Fake(many + [issue(200, ["bug"], 48), issue(201, [], 2), issue(202, ["bug"], 48, pr=True)], SEVERITIES)
     old, young, missing = check(repo, ["o/r"], timedelta(hours=24), now)
     expect("old violation found past page one", [(r[1], r[2]) for r in old], [(200, "a bug without a severity")])
@@ -256,9 +268,11 @@ def self_test() -> int:
 
     target = Fake([], ["bug"])
     expect("ensure creates what is missing", ensure(target, "o/r", ["bug", "sev:M"]), ["bug", "sev:M"])
+    expect("ensure accepts a non-bug at sev:L", ensure(Fake([], CANONICAL), "o/r", ["chore", "sev:L"]), ["chore", "sev:L"])
     expect("…with the canonical look", [(c["name"], c["color"]) for c in target.created], [("sev:M", "FBCA04")])
     for bad, why in ((["bug"], "a bug without its severity"), (["bug", "flaky"], "an invented label"),
-                     (["chore", "sev:M"], "a severity on a chore"), (["sev:H"], "no type")):
+                     (["chore", "sev:H"], "a blocking severity on a chore"), (["chore"], "a chore without its severity"),
+                     (["sev:H"], "no type")):
         try:
             ensure(Fake([], CANONICAL), "o/r", bad)
             failures.append(f"ensure must refuse {why}")

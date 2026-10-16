@@ -6,7 +6,6 @@
   "category": "Types",
   "description": "A social media post for LinkedIn, X, or Instagram",
   "icon": "/api/content/Systemorph/Marketing/icons/share.svg",
-  "isPersistent": true,
   "content": {
     "$type": "NodeTypeDefinition",
     "namespace": "Systemorph/Marketing",

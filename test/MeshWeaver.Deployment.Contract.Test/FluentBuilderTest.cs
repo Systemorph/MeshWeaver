@@ -247,12 +247,18 @@ public class FluentBuilderTest
         {
             ExtraPortalConfig = off.ExtraPortalConfig
                 .SetItem("Hosting__Operator__MaintainerSignsAlone", "true")
-                .SetItem("HOSTING__OPERATOR__MAINTAINERSIGNSALONE", "true"),
+                .SetItem("HOSTING__OPERATOR__MAINTAINERSIGNSALONE", "true")
+                // .NET configuration reads ':' and '__' as the same separator — the same setting.
+                .SetItem("Hosting:Operator:MaintainerSignsAlone", "true"),
         };
         foreach (var options in new[] { PortalConfigOptions.Helm, PortalConfigOptions.Aspire("http://localhost:8080") })
             Assert.DoesNotContain(DeploymentPortalConfig.PortalConfig(shadowed, options).Keys,
-                k => string.Equals(k, "Hosting__Operator__MaintainerSignsAlone", StringComparison.OrdinalIgnoreCase));
+                k => SameSetting(k, "Hosting__Operator__MaintainerSignsAlone"));
     }
+
+    // Whether an environment name addresses the given setting as .NET configuration reads it.
+    private static bool SameSetting(string key, string setting) =>
+        string.Equals(key.Replace("__", ":"), setting.Replace("__", ":"), StringComparison.OrdinalIgnoreCase);
 
     [Fact]
     public void ACustomerGovernedRecordSurvivesTheContractAndRendersNothingIntoThePortal()
@@ -279,6 +285,68 @@ public class FluentBuilderTest
         foreach (var options in new[] { PortalConfigOptions.Helm, PortalConfigOptions.Aspire("http://localhost:8080") })
             Assert.DoesNotContain(DeploymentPortalConfig.PortalConfig(governed, options).Keys,
                 k => k.Contains("CustomerGoverned", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void ACustomerGovernedRecordThatNamesModels_RendersTheSeedAndCeilingReading_OnBothRenderers()
+    {
+        // Policy model-settings-seed-and-ceiling (Plugins#2604): on a customer-governed record that
+        // names models, the record SEEDS the instance's model settings and is their CEILING. The
+        // instance learns that from ONE key; the model lists themselves render exactly as before.
+        var governed = new DeploymentContent
+        {
+            Operator = new HostingOperatorSpec { Maintainer = "customer.admin", CustomerGoverned = true },
+            Ai = new AiProviders
+            {
+                OpenRouterEU = new ModelProvider { Models = ["z-ai/glm-5.3", "moonshotai/kimi-k2.6"] },
+                RequiredDataResidency = "Eu",
+                Tiers = new ModelTiers { Heavy = "Provider/OpenRouterEU/z-ai/glm-5.3" },
+            },
+        };
+        Assert.True(DeploymentPortalConfig.IsModelCeiling(governed));
+        foreach (var options in new[] { PortalConfigOptions.Helm, PortalConfigOptions.Aspire("http://localhost:8080") })
+        {
+            var config = DeploymentPortalConfig.PortalConfig(governed, options);
+            Assert.Equal(DeploymentPortalConfig.ModelGovernanceSeedAndCeiling, config[DeploymentPortalConfig.ModelGovernanceKey]);
+            Assert.Equal("z-ai/glm-5.3", config["OpenRouterEU__Models__0"]);
+            Assert.Equal("Provider/OpenRouterEU/z-ai/glm-5.3", config["ModelTier__Heavy"]);
+        }
+
+        // Negative controls: a record that is not customer-governed keeps the default reading (no key),
+        // and so does a customer-governed record that names no model — it has no model settings to cap with.
+        var managed = governed with { Operator = governed.Operator! with { CustomerGoverned = false } };
+        var noModels = governed with { Ai = governed.Ai! with { OpenRouterEU = new ModelProvider { Models = [" "] } } };
+        var noAi = governed with { Ai = null };
+        foreach (var record in new[] { managed, noModels, noAi })
+        {
+            Assert.False(DeploymentPortalConfig.IsModelCeiling(record));
+            Assert.False(DeploymentPortalConfig.PortalConfig(record, PortalConfigOptions.Helm).ContainsKey(DeploymentPortalConfig.ModelGovernanceKey));
+        }
+
+        // The key is RESERVED for the typed fields: an extra can neither impose a ceiling the record does
+        // not declare nor lift one it does — in any case, on either renderer.
+        var imposed = managed with
+        {
+            ExtraPortalConfig = managed.ExtraPortalConfig
+                .SetItem("AI__ModelGovernance", "SeedAndCeiling")
+                .SetItem("ai__modelgovernance", "SeedAndCeiling")
+                // The colon spelling is the same setting to .NET configuration (review of #6809).
+                .SetItem("AI:ModelGovernance", "SeedAndCeiling"),
+        };
+        var lifted = governed with
+        {
+            ExtraPortalConfig = governed.ExtraPortalConfig
+                .SetItem("AI__MODELGOVERNANCE", "Record")
+                .SetItem("ai:modelgovernance", "Record"),
+        };
+        foreach (var options in new[] { PortalConfigOptions.Helm, PortalConfigOptions.Aspire("http://localhost:8080") })
+        {
+            Assert.DoesNotContain(DeploymentPortalConfig.PortalConfig(imposed, options).Keys,
+                k => SameSetting(k, DeploymentPortalConfig.ModelGovernanceKey));
+            var liftedConfig = DeploymentPortalConfig.PortalConfig(lifted, options);
+            Assert.Single(liftedConfig.Keys, k => SameSetting(k, DeploymentPortalConfig.ModelGovernanceKey));
+            Assert.Equal(DeploymentPortalConfig.ModelGovernanceSeedAndCeiling, liftedConfig[DeploymentPortalConfig.ModelGovernanceKey]);
+        }
     }
 
     [Fact]

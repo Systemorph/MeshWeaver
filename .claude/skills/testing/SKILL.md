@@ -34,6 +34,11 @@ observable), wrap the re-query in
 Hand-rolled `while + Task.Delay(50)` poll loops are forbidden. Sanctioned `Task.Delay` uses: forcing
 distinct timestamps for sort assertions, and "wait to confirm nothing happened" negative tests where
 there's no positive signal to filter for. See WritingTests.md → "Polling loops around QueryAsync".
+A negative that HAS a later positive fact to end on (a sentinel through the same pipeline, the owner's
+answer to a follow-up request, a response that follows the work) uses
+`.Should().Within(t).NotEmitBefore(settled)` instead of `NotEmit(window)` — a passing `NotEmit` spends
+its whole window, 36 s on CI at `TestTimeouts.Quick` (#6817). WritingTests.md → "A negative assertion
+that spends a fixed window when a settled signal exists".
 
 **Never assert "exactly N change events"** on a stream backed by pg_notify or any change feed that
 can race the initial-snapshot path. Filter on the emission shape (e.g.

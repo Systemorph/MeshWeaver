@@ -190,8 +190,9 @@ SENTINEL="_complete"
 # delete-batch / download / download-batch / exists / generate-sas / list / resize / show / update /
 # upload / upload-batch / url — and NO `rename`; `az storage directory` offers create / delete /
 # exists / list / show — no `rename`, and its `delete` is documented "Delete the specified EMPTY
-# directory". There is no `lease` command under either group either, so a lease per identity is not
-# reachable from this lane. Even in the REST API, where `Rename Directory` exists (2021-04-10), a
+# directory". There is no `lease` command under either group either (the SDK the helper runs on has
+# one, and since MeshWeaver#6877 it SERIALISES publishers of a prefix — see `publish_to_target` —
+# but a lease orders writers, it does not make a multi-file replace atomic for READERS). Even in the REST API, where `Rename Directory` exists (2021-04-10), a
 # rename cannot REPLACE an existing directory — the swap would be rename-away plus rename-in, two
 # operations with a gap in which the live path does not exist at all. So the smallest write this
 # store actually offers is one small FILE, and that is what the pointer is.
@@ -334,6 +335,26 @@ else
   echo "::warning::$BAKE_DIR carries no $SURFACE_FILE — the bake was taken with a platform image that predates MeshWeaver#3651, so the release gate cannot link a landed module against this identity and reports every such module as 'could not be determined' (reported, not a hold). Move the bake image forward to publish the surface."
 fi
 
+# ══════════════════════ THE PER-PACKAGE LISTING (MeshWeaver.Plugins#3507) ══════════════════════
+# `sealed-packages.json`, written into the bake directory by seal-packages.py: per package, the
+# build this publication seals — bundle, the commit it was baked from, version, requires, and
+# whether it was CARRIED from an earlier publication because the package waits. A marker like the
+# others: written before the sentinel, verified by the postcondition, compared byte-for-byte by the
+# convergence verdict (two bakes of one commit with one withheld set write identical listings).
+# OPTIONAL: a lane at a ref that predates it writes none, and every reader then takes the old
+# single-commit reading — `source-commit.txt` for every bundle `_complete` lists.
+PACKAGES_FILE="sealed-packages.json"
+PACKAGES_LOCAL="$BAKE_DIR/$PACKAGES_FILE"
+if [ -s "$PACKAGES_LOCAL" ]; then
+  HAS_PACKAGES=true
+  if ! python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert isinstance(d.get("packages"), list) and d["packages"]' "$PACKAGES_LOCAL" 2>/dev/null; then
+    echo "::error::$PACKAGES_LOCAL is not a per-package listing (a JSON object with a non-empty 'packages' list) — refusing to seal a listing every reader would have to reject."
+    exit 1
+  fi
+else
+  HAS_PACKAGES=false
+fi
+
 # ══════════════════════ THE TWO-WRITER POSTCONDITION (MeshWeaver#3461) ══════════════════════
 #
 # 🚨 `<identity>/plugins` HAS SEVERAL WRITERS. Core CD's `plugins-bake` job publishes `bake-source:
@@ -389,6 +410,9 @@ fi
 # This is symmetric, which the claim token is not: in a genuine overlap BOTH runs find foreign
 # bytes and BOTH refuse, so no mix is ever sealed. It needs no coordination between the lanes, no
 # lease, no lock, and no staleness heuristic that could deadlock the prefix behind a cancelled run.
+# (Since MeshWeaver#6877 publishers DO take a per-prefix lease first — so two current publishers no
+# longer interleave at all — and this postcondition stays as the guard against any writer that does
+# not: a satellite whose scripts ref predates the lease, or a lease recovered as abandoned.)
 #
 # 🚨 What it does NOT close, stated so the next session does not re-derive it: the interval between
 # the last verification read and the `_complete` upload. A publisher that overwrites a file inside
@@ -610,6 +634,16 @@ PUBLICATION="$(printf '%s-%s-%s' \
   "${GITHUB_REPOSITORY:-local}" "${GITHUB_RUN_ID:-$$}" "${GITHUB_RUN_ATTEMPT:-$(date -u +%s)}" \
   | tr -c 'A-Za-z0-9._-' '-')"
 
+# 🚨 THE LOCK HOLDER IS PER INVOCATION, NOT PER RUN (Copilot's review of #6878). $PUBLICATION names
+# the RUN — repository, run id, attempt — and two jobs of one run share it: main-cd's two bake legs
+# (BAKE_ARM64) publish from one run, and under an architecture-INDEPENDENT identity they meet on one
+# prefix. Holding the lock as $PUBLICATION would let the second leg read the first one's lease as
+# "already held by this publication" and walk in, and either leg's EXIT trap would then release it
+# under the other. So the holder adds this process and a random component: unique per invocation,
+# still readable as the run that made it. A caller that holds the lock ACROSS steps names its own
+# holder in BAKE_PUBLISH_LOCK_HOLDER and keeps it (a later step is another process).
+LOCK_HOLDER="$PUBLICATION-pid$$-r$RANDOM$RANDOM"
+
 # Quoted by every refusal. It names both shapes because BOTH were measured on 2026-09-06, and the
 # more frequent one is the one the issue title does not mention.
 OVERLAP_WRITERS="One prefix, several publishers. ACROSS lanes: core CD's 'plugins-bake' job and the MeshWeaver.Plugins satellite's own 'publish-bake' both publish bake-source 'plugins' and resolve the same identity whenever the core surface has not moved between core's tip and the satellite's pin. WITHIN one lane: several main pushes bake concurrently — four same-identity window overlaps were measured in the satellite's own CI on 2026-09-06 alone, against zero cross-lane ones, so 'let the other repo finish' is not the whole answer. Find the publication named above, let it settle, and re-run this one."
@@ -629,6 +663,7 @@ done
 manifest_add "$MODULES_DIR_NAME/$MODULES_INDEX" "$MODULES_INDEX_LOCAL"
 manifest_add "$SOURCE_MARKER" "$SOURCE_MARKER_LOCAL"
 if [ "$HAS_SURFACE" = "true" ]; then manifest_add "$SURFACE_FILE" "$SURFACE_LOCAL"; fi
+if [ "$HAS_PACKAGES" = "true" ]; then manifest_add "$PACKAGES_FILE" "$PACKAGES_LOCAL"; fi
 manifest_add "$REPO_MARKER" "$REPO_MARKER_LOCAL"
 manifest_add "$ARCH_MARKER" "$ARCH_MARKER_LOCAL"
 # The denominator every verification prints and every refusal quotes. A publication with nothing
@@ -641,6 +676,7 @@ if [ "${MANIFEST_COUNT:-0}" -lt 1 ]; then
 fi
 MARKER_COUNT=4
 if [ "$HAS_SURFACE" = "true" ]; then MARKER_COUNT=5; fi
+if [ "$HAS_PACKAGES" = "true" ]; then MARKER_COUNT=$((MARKER_COUNT + 1)); fi
 # The NON-PAYLOAD half of the manifest: the markers, the module index and the platform surface —
 # everything that describes WHAT was baked rather than the compiled bytes. Two bakes of the same
 # content produce byte-identical files here and DIFFERENT bundle zips (the compile is not
@@ -654,6 +690,10 @@ $MODULES_DIR_NAME/$MODULES_INDEX"
 if [ "$HAS_SURFACE" = "true" ]; then
   MARKER_RELS="$MARKER_RELS
 $SURFACE_FILE"
+fi
+if [ "$HAS_PACKAGES" = "true" ]; then
+  MARKER_RELS="$MARKER_RELS
+$PACKAGES_FILE"
 fi
 is_marker() { # <path-under-dest>
   case "
@@ -688,6 +728,7 @@ for m in ${MODULES[@]+"${MODULES[@]}"}; do plan_add "$MODULES_DIR_NAME/$(basenam
 plan_add "$MODULES_DIR_NAME/$MODULES_INDEX" "$MODULES_INDEX_LOCAL"
 plan_add "$SOURCE_MARKER" "$SOURCE_MARKER_LOCAL"
 if [ "$HAS_SURFACE" = "true" ]; then plan_add "$SURFACE_FILE" "$SURFACE_LOCAL"; fi
+if [ "$HAS_PACKAGES" = "true" ]; then plan_add "$PACKAGES_FILE" "$PACKAGES_LOCAL"; fi
 plan_add "$REPO_MARKER" "$REPO_MARKER_LOCAL"
 plan_add "$ARCH_MARKER" "$ARCH_MARKER_LOCAL"
 PLAN_COUNT=$(grep -c '[^[:space:]]' "$PLAN" || true)
@@ -1295,6 +1336,7 @@ dispose_flat_copy() { # <account> <share> <dest> — ONLY after pointer_is_live 
     --match "$MODULES_DIR_NAME/$MODULES_INDEX" \
     --match "$SOURCE_MARKER" \
     --match "$SURFACE_FILE" \
+    --match "$PACKAGES_FILE" \
     --match "$REPO_MARKER" \
     --match "$ARCH_MARKER" \
     --workers "$PUBLISH_BAKE_UPLOAD_WORKERS" < /dev/null
@@ -1383,6 +1425,20 @@ publish_publication() { # <account> <share> <dest> <live-was-sealed>
 # their blast radius shrinks from "the whole publication" to "this target".
 OUTCOMES="$SENTINEL_LOCAL_DIR/outcomes"
 : > "$OUTCOMES"
+# The per-target subshell's EXIT trap (MeshWeaver#6877). 🚨 A release that FAILS fails the target
+# (Copilot's review of #6878): a lease left behind is infinite, every later publisher of the prefix
+# would wait out its whole bound on it, and a receipt that reads "published" over that is exactly
+# the silent shape this lane refuses. The ORIGINAL failure, when there was one, is preserved.
+release_lock_on_exit() {
+  local rc=$?
+  if ! "$PYTHON" "$HELPER" lock release --account "$ACCOUNT" --share "$SHARE" --path "$LOCK_PATH" \
+       --holder "$LOCK_HOLDER" < /dev/null; then
+    echo "::error::the publication lock $ACCOUNT/$SHARE/$LOCK_PATH could not be released — failing this target: until it is released or recovered as abandoned, every other publisher of this prefix waits on it."
+    [ "$rc" -ne 0 ] || rc=1
+  fi
+  exit "$rc"
+}
+
 publish_to_target() { # <target> — called in a SUBSHELL by the loop below: `exit 1` fails this target only
   local target="$1"
   ACCOUNT="${target%%/*}"
@@ -1404,6 +1460,39 @@ publish_to_target() { # <target> — called in a SUBSHELL by the loop below: `ex
     echo marker >> "$OUTCOMES"
   fi
   DEST="${BASE:+$BASE/}prebuilt-bundles/$IDENTITY/$SOURCE"
+  # 🚨 ONE PUBLISHER PER PREFIX AT A TIME (MeshWeaver#6877) — taken BEFORE the first read of the
+  # prefix, so every decision below (which publication is live, is it sealed, from which source,
+  # skip / supersede / republish) is made on a shelf no other publisher is changing. Everything
+  # further down was single-writer-safe and nothing more, and the postconditions that guard it can
+  # only REFUSE an interleaving, never let two overlapping runs both succeed: on 2026-10-16 two core
+  # CD runs (38916674091, 38916358387) published the SAME content to one target; both read "sealed
+  # from an older source, republish", the faster one removed `_complete`, and the slower one's own
+  # unseal then failed `ResourceNotFound` — a red CD for a target that was alive and, seconds later,
+  # correctly sealed. Serialised, the second run reads the first one's seal and reports `already`.
+  #
+  # The lock is a lease on ONE file beside the source directories, `<identity>/_publishing.<source>`:
+  # outside the publication (no reader lists it: readers resolve `<identity>/<source>/`, retention
+  # attributes only files under a source directory) and outside every generation. Waiting is
+  # bounded and red when exceeded; an abandoned lease is recovered only on evidence, by releasing THAT holder's lease — see `cmd_lock` in
+  # publish-bake-files.py. Released by this subshell's EXIT trap on every path out of this function.
+  #
+  # A workflow that must hold the prefix ACROSS steps (a carry-forward reads the live publication
+  # before this script runs) takes the lock itself and passes its token as BAKE_PUBLISH_LOCK_HOLDER;
+  # this run then PROVES it holds the lock under that token instead of acquiring, and leaves the
+  # release to that workflow.
+  LOCK_PATH="${BASE:+$BASE/}prebuilt-bundles/$IDENTITY/_publishing.$SOURCE"
+  if [ -n "${BAKE_PUBLISH_LOCK_HOLDER:-}" ]; then
+    "$PYTHON" "$HELPER" lock check --account "$ACCOUNT" --share "$SHARE" --path "$LOCK_PATH" \
+      --holder "$BAKE_PUBLISH_LOCK_HOLDER" < /dev/null
+  else
+    # The release is armed BEFORE the acquire (Copilot's review of #6878): an acquire whose lease
+    # landed but which failed before reporting success would otherwise exit this subshell with no
+    # cleanup installed, leaving an infinite lease behind. The release names this holder's own lease
+    # id, so on a lease this run never got it is a named no-op.
+    trap release_lock_on_exit EXIT
+    "$PYTHON" "$HELPER" lock acquire --account "$ACCOUNT" --share "$SHARE" --path "$LOCK_PATH" \
+      --holder "$LOCK_HOLDER" < /dev/null
+  fi
   # 🚨 WHICH DIRECTORY IS ALREADY PUBLISHED, resolved by the SAME rules the portal readers use
   # (MeshWeaver#3461). Every question below — which architecture published, is it sealed, from which
   # source commit, does it carry a module set — is a question about the LIVE publication, and under
@@ -1649,7 +1738,25 @@ ALREADY=$(awk '/^already$/ { c++ } END { print c + 0 }' "$OUTCOMES")
 # nobody can use as a denominator.
 SUPERSEDED=$(awk '/^superseded$/ { c++ } END { print c + 0 }' "$OUTCOMES")
 if [ "${#FAILED[@]}" -gt 0 ]; then
-  echo "::error::bake publication FAILED on ${#FAILED[@]} of $(printf '%s\n' $BAKE_PUBLISH_TARGETS | wc -l | tr -d ' ') target(s): ${FAILED[*]} — identity=$IDENTITY source=$SOURCE. Every OTHER target above was published and sealed; these were not. A target that no longer exists (a torn-down instance's share) belongs OUT of BAKE_PUBLISH_TARGETS — remove it, never route around it."
+  echo "::error::bake publication FAILED on ${#FAILED[@]} of $(printf '%s\n' $BAKE_PUBLISH_TARGETS | wc -l | tr -d ' ') target(s): ${FAILED[*]} — identity=$IDENTITY source=$SOURCE. Every OTHER target above was published and sealed; these were not."
+  # 🚨 WHICH KIND OF FAILURE, asked of the share rather than assumed (MeshWeaver#6877). This line used
+  # to tell every reader to remove the target from BAKE_PUBLISH_TARGETS — right for a torn-down
+  # instance's share (Plugins #2682), and exactly WRONG for the 2026-10-16 incident, where a path
+  # INSIDE a live share vanished under a concurrent publisher while the other run was writing that
+  # same share successfully. Removing a live target would have stopped every later publication from
+  # reaching that portal. So each failed target's SHARE is probed, and the advice follows the answer.
+  for failed_target in "${FAILED[@]}"; do
+    f_account="${failed_target%%/*}"; f_rest="${failed_target#*/}"; f_share="${f_rest%%/*}"
+    share_state=$("$PYTHON" "$HELPER" share-exists --account "$f_account" --share "$f_share" < /dev/null 2>/dev/null || echo unknown)
+    case "$share_state" in
+      false)
+        echo "::error::$failed_target: the share $f_account/$f_share does NOT exist — a torn-down instance's share belongs OUT of BAKE_PUBLISH_TARGETS. Remove it there; never route around it." ;;
+      true)
+        echo "::error::$failed_target: the share $f_account/$f_share EXISTS and answers, so this target is NOT dead — do NOT remove it from BAKE_PUBLISH_TARGETS. The failure is the one named above for this target (a path inside the share, a refusal, a lock not acquired); fix that." ;;
+      *)
+        echo "::error::$failed_target: whether the share $f_account/$f_share still exists could not be established from this job — read the failure above before touching BAKE_PUBLISH_TARGETS." ;;
+    esac
+  done
   exit 1
 fi
 

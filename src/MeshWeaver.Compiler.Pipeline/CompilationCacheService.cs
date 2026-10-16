@@ -320,6 +320,17 @@ internal interface ICompilationCacheService
     /// of resolved NuGet packages can be loaded at runtime.
     /// </summary>
     void RegisterProbingDirectories(string nodeName, System.Collections.Generic.IReadOnlyList<string> directories);
+
+    /// <summary>
+    /// Registers the NuGet probing directories of ONE build — the assembly at
+    /// <paramref name="dllPath"/> — re-resolved from the package references the build recorded
+    /// (<c>NuGetBuildRecord</c>). Every context resolved for that path afterwards probes them, and a
+    /// live context for it that holds only the node-wide fallback is given them; they take precedence over the node-wide
+    /// <see cref="RegisterProbingDirectories"/>, which names whatever this process last compiled.
+    /// This is what lets a build load in a process that never compiled it (another replica, a
+    /// restart, an adopted bake).
+    /// </summary>
+    void RegisterBuildProbingDirectories(string dllPath, System.Collections.Generic.IReadOnlyList<string> directories);
 }
 
 /// <summary>
@@ -404,7 +415,29 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
     public void SetProbingDirectories(System.Collections.Generic.IReadOnlyList<string> dirs)
     {
         _probingDirs = dirs.ToImmutableArray();
+        _probingFromBuildRecord = false;
     }
+
+    /// <summary>
+    /// Sets the probing directories resolved from the package references THIS context's build
+    /// recorded (<c>NuGetBuildRecord</c>). They replace directories the context got from the
+    /// node-wide registration (which names whatever this process last compiled, possibly another
+    /// generation), and are never themselves replaced by that registration. An assembly the context
+    /// already bound stays bound — the replacement governs every bind from here on.
+    /// </summary>
+    public void SetBuildProbingDirectories(System.Collections.Generic.IReadOnlyList<string> dirs)
+    {
+        _probingDirs = dirs.ToImmutableArray();
+        _probingFromBuildRecord = true;
+    }
+
+    /// <summary>Whether this context has any NuGet probing directory to resolve package assemblies from.</summary>
+    public bool HasProbingDirectories => !_probingDirs.IsDefaultOrEmpty;
+
+    /// <summary>Whether this context's probing directories came from its own build's record.</summary>
+    public bool HasBuildProbingDirectories => _probingFromBuildRecord;
+
+    private volatile bool _probingFromBuildRecord;
 
     /// <summary>
     /// Gets the node name associated with this context.
@@ -882,13 +915,28 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
         // from the host's), else to the package's runtime asset from the probing directories —
         // runtimes/<rid>/lib/<tfm> ahead of lib/<tfm>, see RuntimeAssetSelector.
         var name = assemblyName.Name;
-        if (!string.IsNullOrEmpty(name) && !_probingDirs.IsDefaultOrEmpty
-            && MeshWeaver.NuGet.PackageAssemblyProbe.Resolve(this, assemblyName, _probingDirs, _logger) is { } packaged)
-            return packaged;
         // A MODULE (policy module-live-update-default): its current generation, from its own
         // context. Asked explicitly because no default-context binding may ever hand a module out —
         // the default context would cache the first generation it saw for the life of the process.
-        if (!string.IsNullOrEmpty(name) && _modules?.Resolve(name) is { } module)
+        // 🚨 A module is HOST-shipped for a package closure too: when it satisfies the requested
+        // version it binds AHEAD of a package's (older) copy of the same name — exactly the choice
+        // the compile made (CompileReferences.WithPackageAssemblies keeps the host set's module
+        // reference unless the package's copy is newer).
+        // Only a module of the SAME identity (culture, public key token) — a same-named assembly of
+        // another publisher is a different assembly here exactly as in the compile's choice.
+        var module = string.IsNullOrEmpty(name) ? null : _modules?.Resolve(name);
+        if (module is not null
+            && !(MeshWeaver.NuGet.PackageAssemblyProbe.SameIdentityModuloVersion(assemblyName, module.GetName())
+                 && MeshWeaver.NuGet.PackageAssemblyProbe.SameIdentityModuloVersion(module.GetName(), assemblyName)))
+            module = null;
+        if (module is not null
+            && (assemblyName.Version is null || module.GetName().Version is not { } moduleVersion
+                || moduleVersion >= assemblyName.Version))
+            return module;
+        if (!string.IsNullOrEmpty(name) && !_probingDirs.IsDefaultOrEmpty
+            && MeshWeaver.NuGet.PackageAssemblyProbe.Resolve(this, assemblyName, _probingDirs, _logger) is { } packaged)
+            return packaged;
+        if (module is not null)
             return module;
 
         // For other dependencies, delegate to the default context
@@ -1046,7 +1094,8 @@ internal class CompilationCacheService(
     IOptions<CompilationCacheOptions> options,
     ILogger<CompilationCacheService> logger,
     CollectibleContextUnloads? unloads = null,
-    ModuleContexts? modules = null)
+    ModuleContexts? modules = null,
+    IoPoolRegistry? ioPools = null)
     : ICompilationCacheService, IDisposable
 {
     /// <summary>Records <paramref name="context"/> as retired on the mesh's tracker (if any) so the
@@ -1060,6 +1109,48 @@ internal class CompilationCacheService(
     private readonly CompilationCacheOptions _options = options.Value ?? new CompilationCacheOptions();
     private readonly ConcurrentDictionary<string, NodeAssemblyLoadContext> _loadContexts = new();
     private readonly ConcurrentDictionary<string, System.Collections.Immutable.ImmutableArray<string>> _probingDirs = new();
+    // Per BUILD (keyed by dll path), from the package references the build recorded — see
+    // RegisterBuildProbingDirectories. Ahead of _probingDirs, which is per node name and names
+    // whatever THIS process last compiled. Reading it NEVER consumes it: a context evicted between
+    // the arming and the load (UnloadNodeContexts, a superseding publish, a PinForScan retry) is
+    // re-created from it, and a speculative GetOrAdd factory that loses its race cannot take it from
+    // the winner. An entry lives as long as its BUILD FILE does. The file is deleted mostly OUTSIDE
+    // this process (the assembly store's retention sweep runs on a shared volume, from any replica),
+    // so no in-process deletion hook can see it; instead an AMORTIZED sweep on the file-system pool
+    // drops the entries whose file is gone each time the map has doubled since the last sweep
+    // (SweepStaleBuildProbing) — O(1) File.Exists per new registration, none on a re-arm, never on
+    // the arming caller's thread.
+    private readonly ConcurrentDictionary<string, BuildProbingRegistration> _buildProbingDirs =
+        new(StringComparer.Ordinal);
+    // The map size at which the next stale-entry sweep runs; int.MaxValue while one is in flight.
+    private const int BuildProbingSweepFloor = 16;
+    private int _buildProbingSweepAt = BuildProbingSweepFloor;
+    private readonly IIoPool _fileSystemPool = ioPools?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded;
+    private readonly ReplaySubject<int> _buildProbingSweeps = new(1);
+
+    /// <summary>How many stale entries the last <see cref="SweepStaleBuildProbing"/> removed (test seam).</summary>
+    internal IObservable<int> BuildProbingSweeps => _buildProbingSweeps;
+
+    /// <summary>
+    /// Test seam: runs inside the sweep after a build's file was found missing and before its
+    /// registration is removed — where a republish + re-arm can land. Null in production.
+    /// </summary>
+    internal Action<string>? StaleBuildCheckProbe { get; set; }
+
+    /// <summary>Runs the stale-entry sweep now (test seam; production runs it amortized).</summary>
+    internal void SweepStaleBuildProbingNow() => SweepStaleBuildProbing();
+
+    /// <summary>
+    /// One registration of a build's probing directories. A reference type on purpose: the sweep
+    /// removes an entry only while it is still THIS registration, never a re-arm of the same path.
+    /// </summary>
+    private sealed class BuildProbingRegistration(ImmutableArray<string> directories)
+    {
+        public ImmutableArray<string> Directories { get; } = directories;
+    }
+
+    /// <summary>Entries currently registered in the per-build probing map (test seam).</summary>
+    internal int BuildProbingRegistrationCount => _buildProbingDirs.Count;
     // Sticky invalidation set: a node name in here forces IsCacheValid to return false
     // on the NEXT call (and then clears itself). Needed because InvalidateCache's
     // File.Delete can silently fail when the DLL is still mapped by a live ALC — in
@@ -1078,6 +1169,80 @@ internal class CompilationCacheService(
         _probingDirs[nodeName] = directories.ToImmutableArray();
         if (_loadContexts.TryGetValue(nodeName, out var ctx))
             ctx.SetProbingDirectories(directories);
+    }
+
+    /// <inheritdoc />
+    public void RegisterBuildProbingDirectories(string dllPath, System.Collections.Generic.IReadOnlyList<string> directories)
+    {
+        if (string.IsNullOrEmpty(dllPath) || directories.Count == 0) return;
+        _buildProbingDirs[dllPath] = new BuildProbingRegistration(directories.ToImmutableArray());
+        // A live context for the path is given it now; every one created for it later reads it.
+        if (_loadContexts.TryGetValue(dllPath, out var ctx) && !ctx.IsRetired)
+            ApplyBuildProbing(ctx, dllPath);
+
+        // Amortized bound: sweep only once the map has doubled since the last sweep. A re-arm of a
+        // path already registered does not grow the map and so never sweeps.
+        var sweepAt = Volatile.Read(ref _buildProbingSweepAt);
+        if (_buildProbingDirs.Count >= sweepAt
+            && Interlocked.CompareExchange(ref _buildProbingSweepAt, int.MaxValue, sweepAt) == sweepAt)
+            SweepStaleBuildProbing();
+    }
+
+    /// <summary>
+    /// Drops every per-build probing entry whose build file is gone — it can never load again — on
+    /// the file-system pool, then sets the next sweep at twice the surviving size.
+    /// </summary>
+    private void SweepStaleBuildProbing()
+    {
+        _fileSystemPool.InvokeBlocking(ct =>
+            {
+                var removed = 0;
+                // The registration is captured BEFORE the file check and removed only if it is still
+                // the SAME registration: the store can republish the same path (same version and
+                // content), and a re-arm that lands between the check and the removal is a fresh
+                // entry for a file that exists again — removing by key alone would drop it.
+                foreach (var entry in _buildProbingDirs)
+                {
+                    if (File.Exists(entry.Key))
+                        continue;
+                    StaleBuildCheckProbe?.Invoke(entry.Key);
+                    if (_buildProbingDirs.TryRemove(entry))
+                        removed++;
+                }
+                return removed;
+            })
+            .Subscribe(
+                removed =>
+                {
+                    Volatile.Write(ref _buildProbingSweepAt,
+                        Math.Max(BuildProbingSweepFloor, 2 * _buildProbingDirs.Count));
+                    logger.LogDebug(
+                        "Build probing sweep removed {Removed} entr(ies) whose build file is gone; {Remaining} remain",
+                        removed, _buildProbingDirs.Count);
+                    _buildProbingSweeps.OnNext(removed);
+                },
+                ex =>
+                {
+                    Volatile.Write(ref _buildProbingSweepAt,
+                        Math.Max(BuildProbingSweepFloor, 2 * _buildProbingDirs.Count));
+                    logger.LogWarning(ex,
+                        "Build probing sweep failed — stale entries stay until the next sweep");
+                });
+    }
+
+    /// <summary>
+    /// Gives <paramref name="context"/> the probing directories recorded for the build at
+    /// <paramref name="dllPath"/>, replacing any it holds from the node-wide fallback (which may name
+    /// another generation's closure). A context already holding a BUILD record keeps it.
+    /// </summary>
+    private void ApplyBuildProbing(NodeAssemblyLoadContext context, string dllPath)
+    {
+        // Read, never taken — see _buildProbingDirs. Idempotent: a context already holding a build
+        // record keeps it.
+        if (!context.HasBuildProbingDirectories
+            && _buildProbingDirs.TryGetValue(dllPath, out var registration)
+            && !registration.Directories.IsDefaultOrEmpty)
+            context.SetBuildProbingDirectories(registration.Directories);
     }
 
     /// <inheritdoc />
@@ -1405,6 +1570,13 @@ internal class CompilationCacheService(
         return context.LoadNodeAssembly();
     }
 
+    /// <summary>
+    /// Test seam: runs inside the path-keyed context factory, after the context is configured and
+    /// before it is returned — where a concurrent caller can win the <c>GetOrAdd</c> race. Null in
+    /// production.
+    /// </summary>
+    internal Action<string>? ContextFactoryProbe { get; set; }
+
     /// <inheritdoc />
     public NodeAssemblyLoadContext GetOrCreateLoadContextForPath(string nodeName, string dllPath)
         => ResolveLoadContextForPath(nodeName, dllPath, supersedeOlderBuilds: false);
@@ -1443,7 +1615,10 @@ internal class CompilationCacheService(
             // enumerated before our key existed. Never hand a retired context to a new caller:
             // drop OUR alias (only if it is still ours) and resolve normally below.
             if (!aliased.IsRetired)
+            {
+                ApplyBuildProbing(aliased, dllPath);
                 return aliased;
+            }
             _loadContexts.TryRemove(new KeyValuePair<string, NodeAssemblyLoadContext>(dllPath, aliased));
         }
 
@@ -1453,10 +1628,21 @@ internal class CompilationCacheService(
             created = true;
             logger.LogDebug("Creating new path-keyed AssemblyLoadContext for {NodeName} at {DllPath}", nodeName, path);
             var c = new NodeAssemblyLoadContext(nodeName, path, logger, modules);
-            if (_probingDirs.TryGetValue(nodeName, out var dirs) && !dirs.IsDefaultOrEmpty)
+            // The BUILD's own recorded closure first; the node-wide registration (what this process
+            // last compiled) only when the build recorded none.
+            // ConcurrentDictionary may run this factory more than once and keep only one result, so
+            // it READS the registration and never consumes it.
+            if (_buildProbingDirs.TryGetValue(path, out var buildRegistration)
+                && !buildRegistration.Directories.IsDefaultOrEmpty)
+                c.SetBuildProbingDirectories(buildRegistration.Directories);
+            else if (_probingDirs.TryGetValue(nodeName, out var dirs) && !dirs.IsDefaultOrEmpty)
                 c.SetProbingDirectories(dirs);
+            ContextFactoryProbe?.Invoke(path);
             return c;
         });
+        // Whichever factory won — ours or a concurrent caller's, possibly built before the
+        // registration landed — the context we hand out carries the build's closure.
+        ApplyBuildProbing(ctx, dllPath);
 
         // A PUBLISHED build supersedes every prior assembly for this NodeType. Each recompile
         // writes to a unique {nodeName}_{timestamp}_{guid} directory (see EmitToDiskWithRetry), so

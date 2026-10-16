@@ -100,6 +100,35 @@ name:Acme*        # Starts with 'Acme'
 name:*Corp        # Ends with 'Corp'
 ```
 
+**`*` is the only wildcard.** Every other character in a value is literal, on every backend —
+including SQL's `%`, `_` and `\`. `code:50%*` matches `50%off` and not `50xoff`; `code:a_*`
+matches `a_b` and not `axb`. The SQL backends escape those characters before they translate `*`
+into their own wildcard ([Query Provider Parity](/Doc/Architecture/QueryProviderParity)).
+
+### Quoted values are literal
+
+A value in quotes (`"…"` or `'…'`) is taken **exactly as written**: a `|` inside the quotes is not
+alternation and a `*` inside the quotes is not a wildcard. Quotes are also how a value keeps its
+spaces.
+
+```
+namespace:"acme/Docs/a|b"     # exactly the namespace acme/Docs/a|b — not a OR b
+namespace:"acme/report*"      # exactly the namespace acme/report* — not a prefix pattern
+-name:"draft*"                # every node whose name is not literally draft*
+path:"a/b c"|"a"              # the bar BETWEEN quoted values is still alternation
+namespace:("acme/report*")    # a one-value list keeps the quoting: the same literal anchor
+-namespace:("acme/report*")   # ... and its negation stays an exclusion of exactly that namespace
+```
+
+A one-value list is read as its single value: `-namespace:(acme/Docs)` excludes like
+`-namespace:acme/Docs`, never anchors the query at `acme/Docs` (#6752).
+
+So a caller that builds a `namespace:` or `path:` token from a string it does not control (a
+document path, a user-typed name) quotes it and gets exactly that one value — provided the string
+contains no quote character of the same kind, which still ends the value. Both executors, the
+in-memory evaluator and the SQL backends, compare a quoted value literally; the shared
+`NegationCorpus` pins it for both (#6634).
+
 ### Comparison Operators
 
 ```
@@ -129,6 +158,8 @@ nodeType:Organization|Project
 ```
 
 The `|` form mirrors `grep -E` alternation. Choose whichever reads more naturally in context.
+
+Inside the parentheses `OR` (any case) is the separator only as a **whole word**: a value that merely starts with those letters is a value, so `-namespace:(acme/a OR orders)` excludes both `acme/a` and `orders`, and a negated list excludes every value it names, quoted or not (#6844).
 
 #### Multi-value `path:` — routing-layer batch lookups
 
@@ -285,6 +316,34 @@ path:foo/bar/baz scope:ancestorsandself sort:length(path)-desc limit:1
 
 `scope:ancestorsandself` expands the candidate set to self and ancestors; `sort:length(path)-desc limit:1` collapses it to the deepest match. Both clauses are required. Callers that want the full ancestor chain (breadcrumbs, parent navigation) simply omit `limit:1`.
 
+### `basePath`, and the `@` reference prefix
+
+`basePath:X` is the query-text spelling of the search tools' `basePath` argument: everything
+**under** `X` — `namespace:X scope:descendants`, unless the query states its own `scope:`. That
+holds for every positive single-location form: a one-value list `basePath:(@acme)` is the same as
+`basePath:@acme`, and a wildcard `basePath:acme/*/Contacts` is `namespace:acme/*/Contacts
+scope:descendants` (the pattern and everything below it). A multi-value list `basePath:A|B` stays
+exact membership, as `namespace:A|B` does.
+
+A location value may carry the `@` reference prefix that tool arguments, markdown links and
+autocomplete use; it is resolved before the query runs, so these three are the same query:
+
+```
+name:"Jane Doe" basePath:@acme
+namespace:@acme scope:descendants name:"Jane Doe"
+namespace:acme scope:descendants name:"Jane Doe"
+```
+
+This applies to `path:`, `namespace:` and `basePath:` values (each alternative of `path:@a|@b`
+too). Only a LEADING `@` is a prefix — a partition named after an address
+(`namespace:jane@example.com`) keeps its `@`. Before #6828 the prefix was kept, so `namespace:@acme`
+anchored at a partition literally called `@acme`, and `basePath:` was not a qualifier but a filter
+on a property no node has: both answered `count: 0` for nodes that exist.
+
+`name:` itself is a case-insensitive **exact** match on the node's `Name`, quoted multi-word
+values included (`name:"Jane Doe"` matches `jane doe`, not `Jane Q. Doe`); use `name:*Doe*` for a
+contains-match.
+
 ### `partitions` — say where to look
 
 Every partition is its own store. A query that names no partition (`path:`/`namespace:` with a
@@ -317,7 +376,40 @@ Specifies sort order. Default is ascending; append `-desc` for descending:
 sort:name               # Name ascending
 sort:name-desc          # Name descending
 sort:lastModified-desc  # Most recently modified first
+sort:content.inception  # A content field, earliest first
+sort:content.terms.renewal-desc   # A nested content field, latest first
 ```
+
+#### Sorting on a content field
+
+`sort:content.<field>` (and `content.a.b` for a nested one) orders by the field's **typed** value,
+on every backend, and before `limit:` / paging is applied — the backend's own `ORDER BY` decides
+which rows survive the cap, and the merge across partitions (`namespace:(A/X OR B/X)`) orders the
+union by the same rule:
+
+| Value | Compares as |
+|---|---|
+| Number | Numerically — `9 < 10 < 100`, never as text |
+| Date, date-time | Its ISO-8601 text (`2027-07-01`, `2027-07-01T09:30:00.0000000Z`) — chronological, and the same key whether the content is a compiled type or as-written JSON |
+| Text, boolean, anything else | Text, case-insensitively |
+| Null or absent | **Last, in both directions** |
+
+Numbers rank before text when a field holds both. Nulls go last for `sort:x` *and* `sort:x-desc`
+so that a row without the field is never the first answer either way (Postgres's own default would
+put them first in a descending sort; the generator says `NULLS LAST` explicitly). The same rules
+apply to every `sort:` selector, node fields included; an enum node field (`state`, `syncBehavior`)
+orders by its number, as its column does. An enum inside content keys on its wire value, as JSON
+stores it: a declared member's `[EnumMember]` spelling, even one that starts with a digit (`1st`)
+or is empty. Only a value with no member name (undefined, or an unnamable flags combination) keys
+as its number. Date-times are reduced to one fixed-width form before
+they compare — the serializer trims fractional seconds, so `…08:30:00Z` and `…08:30:00.1Z` sit in
+one field, and raw text would put the later one first. Postgres does the same rewrite with string
+functions only, for `Z`/`+00:00` and zoneless values, so a value that merely looks like a date
+cannot fail the query. The one residual: a non-UTC offset (`+02:00`) is compared as the instant in
+memory but as text on Postgres, so in a field that mixes offsets the pre-`limit:` window can
+differ. A sort function (`length`, `lower`, `upper`) runs on the value as written. The in-memory
+contract is `QuerySortKey`; the Postgres one is `PostgreSqlSqlGenerator.OrderByTerms`
+(MeshWeaver.Plugins).
 
 #### The default when you write no `sort:`
 
@@ -468,6 +560,20 @@ difference is invisible at the call site:
 |---|---|
 | **untyped** (`Query<object>`, the MCP `search` tool) | each row becomes a `Dictionary<string, object>` of exactly the named fields |
 | **typed on `MeshNode`** (`Query<MeshNode>`, and therefore **every `workspace.GetQuery` / `hub.GetQuery`**) | the row stays a **`MeshNode`** — no dictionary — but the SQL projection is still narrowed |
+
+**The untyped projection happens AFTER the merged sort** (#6830). An untyped read runs through
+every provider and the cross-provider merge as nodes, and only the final, sorted and clipped
+window is turned into dictionaries — so `select:path,name sort:<anything> limit:N` returns the
+mesh's top N in the requested order, and the sort key need not be among the selected fields.
+Before #6830 each provider projected its own rows first; the merge could not read a sort key off a
+dictionary and clipped in provider-arrival order, so a query served by two providers (a store plus
+the seeded static nodes, or several partitions) returned one provider's top N.
+
+A **free-text** read with no `sort:` is ordered by relevance, and the relevance travels with the
+rows: the storage-adapter provider ranks its matches by fuzzy score before its load cap AND
+reports that score on its Initial frame (`QueryResultChange.Scores`), so the merge re-sorts by the
+same key (score, then path) instead of scoring every row 0 and answering path order. That held for
+typed and untyped reads alike, and `Skip` pages the relevance order.
 
 On the typed path only ONE column is actually conditional: **`content`**. Every other field is
 projected regardless, so naming them is documentation rather than optimisation. But when `content`

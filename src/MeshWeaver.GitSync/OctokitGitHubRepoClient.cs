@@ -299,6 +299,33 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
             });
     }
 
+    /// <inheritdoc />
+    /// <remarks>One compare call, <c>ancestor...descendant</c>: GitHub answers <c>ahead</c> or
+    /// <c>identical</c> exactly when the descendant contains the ancestor. <c>behind</c>,
+    /// <c>diverged</c>, an unknown sha or a failed call establish nothing and answer false.</remarks>
+    public IObservable<bool> IsAncestor(
+        string repositoryUrl, string ancestorSha, string descendantRef, string accessToken)
+    {
+        if (string.IsNullOrWhiteSpace(ancestorSha) || string.IsNullOrWhiteSpace(descendantRef))
+            return Observable.Return(false);
+        var (owner, repo) = ParseRepoUrl(repositoryUrl);
+        var client = Client(accessToken);
+        return Http.InvokeObservable(ct => client.Repository.Commit.Compare(owner, repo, ancestorSha, descendantRef))
+            .Select(cmp =>
+            {
+                var status = cmp.Status.ToString();
+                return string.Equals(status, "ahead", StringComparison.OrdinalIgnoreCase)
+                       || string.Equals(status, "identical", StringComparison.OrdinalIgnoreCase);
+            })
+            .Catch<bool, Exception>(ex =>
+            {
+                logger?.LogWarning(ex,
+                    "GitHub compare {Ancestor}...{Descendant} on {Repo} failed — ancestry not established.",
+                    ancestorSha, descendantRef, repositoryUrl);
+                return Observable.Return(false);
+            });
+    }
+
     private static void AddIfUnderPrefix(List<string> into, string? repoPath, string prefix)
     {
         if (string.IsNullOrEmpty(repoPath)) return;

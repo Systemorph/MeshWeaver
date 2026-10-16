@@ -108,8 +108,13 @@ per instance it does exactly the three steps
 
 1. **Ask the instance what it would roll to** — `GET /api/plugins/roll-target`. The candidate is
    asked OF the instance rather than derived in CI, because "the newest tag" is not the question the
-   gate answers: `ReleaseAvailabilityService` already walks the completeness rule and names the
-   release this environment would actually take. Re-deriving it would be a second rule.
+   gate answers: the route returns the poller's own selection (the registry's portal tags under the
+   instance's update policy, walked by `ReleaseAvailabilityService`), so it names the release this
+   environment would actually take, and that release has a portal image. Re-deriving it would be a
+   second rule. An `indeterminate` answer is red, never "nothing to verify". An instance on an
+   image from before #4413 still selects over the `_releases` markers and can name a promoted but
+   unarmed set; the pull then fails naming the absent `memex-portal-ai:<version>` until that
+   instance rolls.
 2. **Ask the instance what it runs** — `GET /api/plugins/combo`, added by #3544 beside its two
    `mwi_`-gated siblings. Its body is an `InstanceCombo` serialized with
    `InstanceComboAssembler.Json`, i.e. it **is** `combo.json`, byte-for-byte what `mw-combo-verify`
@@ -727,10 +732,139 @@ the verdict — so the merge rule exists once, in the portal, instead of being r
 over a raw mesh patch. A 401 from any of the three calls names both halves above for that instance;
 the portal does not tell a refused caller which half is missing.
 
+#### A landing that does not finish in time is a 504 naming the phase
+
+The recording route gives the write and its confirmation **one** 30-second deadline. When it
+expires, the route answers **504** with
+`{ "error": "Timed out: …", "phase": "write" | "confirm", "candidateTag": "…" }` and logs one
+Warning naming the verdict, the candidate, the build's repository and run, and the phase:
+
+- **`write`**: the write to `Admin/UpdatePolicy` had not completed.
+- **`confirm`**: the write completed, but `Admin/UpdatePolicy` never showed this exact verdict.
+
+🚨 In **both** phases, whether the verdict is recorded is **unknown**. Answering ends this request's
+subscription. It does not cancel a write that is already queued, so the verdict can still land
+after the 504. Re-read `Admin/UpdatePolicy`, or re-post: the record is an upsert by candidate tag,
+so a re-post is idempotent.
+
+Only this route's own deadline is answered. It is `Timeout`'s fallback, not a `Catch` of
+`TimeoutException`. Any other fault still reaches the portal's exception handler as a 500. That
+includes a `TimeoutException` raised upstream, for example by a write's own bound. A fault that is
+not this deadline is a defect, and mapping it here would hide it.
+
+Before this change the deadline escaped as a bare `TimeoutException`. Rx creates that exception
+without throwing it, so it carries no stack frames. The result was an unhandled 500 whose log line
+named neither the route nor the phase (#6790). In that incident the verifier's POST answered 500
+after 31 s. The node's version history, read through the version written 9 minutes after the
+POST, shows no write of that verdict. The versions on either side of the POST differ only in the
+poller's `lastCheckedAt`, and the tag kept an earlier run's verdict. So the write was the phase
+that stalled, and nothing in the response could say so. The endpoint's composition
+(`ReleaseGateEndpoints.RecordAndConfirm`) is pinned on virtual time by
+`ComboVerificationDeadlineTest`, which has three controls:
+
+- a confirmed write is answered;
+- a fault that is not a deadline still propagates;
+- a `TimeoutException` raised upstream still propagates.
+
 `check-combo-verify.py` holds this shape: it requires the token request, the audience, the recording
 route, the confirmed landing and a mint before every call, refuses any return of the instance key,
 the admin token or the raw patch, and executes the lander once without an OIDC request URL to prove
 it stops red naming `id-token: write`.
+
+## The recorded commit is the reference, and a retired package is reported, not failed (#3848)
+
+Policy `record-served-commit-on-install` ([Policy Not Prose](../PolicyNotProse)). Before it, every roster instance
+that the run's identity reached came back `NotVerifiable` with **zero modules verified**
+(memex: 86 modules, memex-cloud: 124; run 38416709107). The cause was not the candidate. The
+assembler refuses the whole root when any one module cannot be pinned, and two classes of module
+could never be pinned:
+
+| class | before | now |
+|---|---|---|
+| an install record with a `moduleVersion` but no exact commit | fetched at `HEAD` and proved against the hash, which fails for every package changed since its install | the registry's install response names the commit it served, the record stores it, and the module is fetched **at that commit** |
+| a package whose source folder has left its repository | `Failed`, which refused the whole root | **retired, not verifiable**: reported, and it does not fail the verification |
+
+### How the commit reaches the record
+
+1. `POST /api/plugins/files` answers `{ files, commit }`. `commit` is the snapshot sha the
+   registry's source read the folder at (`IPackageSource.FetchPackage` → `PackageFetch.Commit`).
+   An answer from an older registry carries no `commit`, and a value that is not a full sha is
+   never written.
+2. The install funnel (`CatalogLayoutAreas.InstallOrUpdate`: full install and incremental update
+   alike) records `PackageFetch.InstalledFromRef(sourceRef)` as the record's `installedFromRef`.
+   That value is the served commit when there is one, and otherwise the ref the install asked
+   for, as before. An incremental update that carries only removals still makes the (empty) read,
+   because that read is what names the commit.
+3. `InstanceComboAssembler` already fetched a sha-shaped `installedFromRef` directly. It now also
+   **proves** the recorded `moduleVersion` there. Content that diverges from its recorded commit
+   fails (`moduleVersion mismatch at the recorded commit`), and no `--allow-moving` excuses it,
+   because a commit does not move.
+
+### One snapshot for the manifest and the delta (#6718)
+
+An incremental update reads TWICE: first `manifest.lock`, to diff it against the record, then the
+changed files. Both reads used to ask for the moving ref, so a ref that advanced from commit A to B
+between them produced a record pairing A's module version and file map with B's files and B's
+`installedFromRef`. The verifier then refused the record at B, loudly, but the partition already
+held a mix of two snapshots.
+
+- **The manifest read's commit pins the delta read.** `CatalogLayoutAreas.IncrementalUpdate` takes
+  the commit the first read was served at (`SnapshotOf`) and asks for the delta **at that commit**;
+  the record states it too. A source that names no commit (an older registry) reads the ref twice,
+  as before, because there is nothing to pin to.
+- **A delta served at any other commit is refused** (`SameSnapshot`), naming both commits. The
+  caller falls back to a full install, which reads manifest and files in ONE fetch. So a source that
+  ignores the requested commit can cost a full install, and can never produce a mixed record.
+- **The registry honours the commit as a snapshot token.** `POST /api/plugins/files` reads its
+  configured ref, except when `ref` is a full commit sha **reachable from** that configured ref
+  (`IPackageSource.PublishesCommit`: a GitHub compare `ahead`/`identical`, or
+  `git merge-base --is-ancestor` for a local source). A commit that exists only on another branch,
+  an unknown sha, or a source that cannot establish ancestry reads the configured ref, as before,
+  so the token can never become a way to read a package at an unpublished commit. Every decorator
+  forwards `PublishesCommit`, because the interface default establishes nothing.
+
+Pinned by `IncrementalUpdateReadsOneSnapshotTest`: a source whose ref advances between the two
+reads and that honours the commit (the delta lands on A), the same advance at a source that ignores
+the requested commit (refused, then one full read at B), and the registry's ref choice for a
+reachable sha, an unreachable sha and a branch name.
+
+**No backfill.** A record written before the decision carries the requested ref (`main`, `HEAD`)
+and keeps the old path (fetch the moving ref and prove the hash) until its next update restamps
+it. Nothing rewrites existing records.
+
+### Retired, not verifiable
+
+`ModuleAssemblyStatus` is an open vocabulary of string constants (policy
+`open-vocabulary-string-constants`). It replaced the enum of the same name, and the manifest's
+wire spelling is unchanged. The decision adds `Retired`:
+
+- A module is `Retired` only when its folder is absent at the ref it was fetched at **and** at the
+  source repository's `HEAD`. That takes one extra `HEAD` read per fetch group, and only when a
+  member was absent. A folder absent at the recorded ref but **present at `HEAD`** stays `Failed`:
+  the record is wrong, and the package is not gone. A `HEAD` read that fails proves nothing, so
+  the module stays `Failed` and the line says so.
+- 🚨 **Absence is read only from a COMPLETE listing (#6742).** GitHub truncates a large recursive
+  tree read and still answers HTTP 200; the snapshot then carries `ListingIsComplete: false`, and
+  a folder missing from it may simply be in the part that was not listed. So a module is retired
+  only when BOTH snapshots — at its fetch ref and at `HEAD` — are complete. A folder missing from a
+  truncated tree at either ref stays `Failed` with an `indeterminate listing` reason, so the
+  verdict cannot go Green on a partial listing. The same rule holds when the fetch ref already was
+  `HEAD`: that one snapshot must be complete. This is the rule the importer's prune already
+  follows ([Prune Requires a Complete Listing](../PruneRequiresACompleteListing)).
+- `ComboAssemblyReport.Success` counts a retired module as not failing. A combo whose every module
+  is retired is still **not** a success, because the gate would otherwise run over an empty root.
+- The verdict carries retired modules on their own list, `ComboVerification.RetiredModules`. They
+  are absent from `Modules`, so they make a verdict neither Red nor NotVerifiable. A separate list
+  was chosen deliberately over a new `ModuleVerificationOutcome` member. A portal on an older image
+  deserializes the verdict when the build posts it. An unknown enum member would refuse the whole
+  verdict there, while an unknown property is ignored.
+- Surfaces: the Updates tab lists them under the localized heading `ui.updateRetiredModules`
+  ("Retired, not verifiable" / "Stillgelegt, nicht prüfbar"). The clearance sentence names them.
+  The recording route refuses a verdict that lists a module both as verified and as retired.
+
+Pinned by `ComboVerifiesTheRecordedCommitTest` (the assembler and verifier over an in-memory
+repository whose `HEAD` has moved) and `InstallRecordsTheServedCommitTest` (the registry's answer
+and the install record). Each test file carries its own negative controls.
 
 ## Known boundary: the combo moves
 

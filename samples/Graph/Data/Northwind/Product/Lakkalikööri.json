@@ -6,7 +6,6 @@
   "category": "Products",
   "description": "Lakkalik\u00f6\u00f6ri - 500 ml",
   "icon": "/static/NodeTypeIcons/shopping-bag.svg",
-  "isPersistent": true,
   "content": {
     "$type": "ProductContent",
     "productId": 76,

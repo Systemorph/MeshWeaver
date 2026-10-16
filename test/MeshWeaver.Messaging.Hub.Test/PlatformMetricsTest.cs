@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 #pragma warning disable CS1591
 
 using System;
@@ -117,16 +118,121 @@ public class PlatformMetricsTest(ITestOutputHelper output) : HubTestBase(output)
             "the instance id must never reach a tag");
     }
 
+    /// <summary>Collects one scrape as (value, kind, satellite).</summary>
+    private static List<(long Value, string Kind, string Satellite)> ScrapeSatellites()
+    {
+        var taken = new List<(long, string, string)>();
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (instrument, l) =>
+        {
+            if (instrument.Meter.Name == PlatformMetrics.MeterName)
+                l.EnableMeasurementEvents(instrument);
+        };
+        listener.SetMeasurementEventCallback<long>((_, value, tags, __) =>
+        {
+            string kind = "", satellite = "";
+            foreach (var tag in tags)
+            {
+                if (tag.Key == "kind") kind = tag.Value?.ToString() ?? "";
+                if (tag.Key == "satellite") satellite = tag.Value?.ToString() ?? "";
+            }
+            taken.Add((value, kind, satellite));
+        });
+        listener.Start();
+        listener.RecordObservableInstruments();
+        return taken;
+    }
+
+    /// <summary>
+    /// 🚨 #6632 — the OOM burst of 2026-10-04/05 was thousands of
+    /// <c>Admin/…/_DocumentPart/{index}</c> hubs, and the census folded them into <c>kind=Admin</c>.
+    /// The <c>satellite</c> tag names the LAST <c>_</c> segment — the shape — and never an id; a hub
+    /// with no satellite segment reads <c>none</c> (the negative control: the tag is not stamped on
+    /// everything).
+    /// </summary>
+    [HubFact]
+    public void TheSatelliteTag_NamesTheLastSatelliteSegment_NeverAnId()
+    {
+        var host = GetHost();
+        using var metrics = new PlatformMetrics(host);
+
+        host.GetHostedHub(new Address("victim", "doc-1", "_DocumentPart", "7"), c => c).Should().NotBeNull();
+        host.GetHostedHub(new Address("victim", "doc-2", "_DocumentPart", "8"), c => c).Should().NotBeNull();
+        host.GetHostedHub(new Address("victim", "plain-1"), c => c).Should().NotBeNull();
+
+        var victims = ScrapeSatellites().Where(t => t.Kind == "victim").ToArray();
+
+        victims.Where(t => t.Satellite == "_DocumentPart").Sum(t => t.Value).Should().BeGreaterThanOrEqualTo(2,
+            "both part hubs fold into ONE satellite value");
+        victims.Should().Contain(t => t.Satellite == PlatformMetrics.NoSatellite,
+            "a hub with no satellite segment reads 'none', not a satellite");
+        victims.Should().NotContain(t => t.Satellite.Contains("doc-", StringComparison.Ordinal)
+            || t.Satellite == "7" || t.Satellite == "8", "an id must never reach the tag");
+    }
+
+    /// <summary>
+    /// 🚨 The cardinality bound is the METER's, not the deployment's: nothing enforces that a
+    /// <c>_</c> segment is a declared satellite, so past <see cref="PlatformMetrics.MaxSatelliteValues"/>
+    /// distinct values the rest fold into <see cref="PlatformMetrics.OtherSatellite"/>.
+    /// </summary>
+    /// <summary>
+    /// 🚨 The bound holds across SCRAPES, not only within one (#6632 review): satellite values that
+    /// rotate through the most populous between scrapes must not each mint a series. The union of
+    /// every satellite value ever emitted stays within the bound plus the fold value.
+    /// </summary>
+    [HubFact]
+    public void SatelliteValues_StayBounded_AcrossScrapesThatRotateTheirValues()
+    {
+        var host = GetHost();
+        using var metrics = new PlatformMetrics(host);
+        var emitted = ImmutableHashSet.Create<string>(StringComparer.Ordinal);
+        const int rounds = 3;
+        for (var round = 0; round < rounds; round++)
+        {
+            // Each round brings MaxSatelliteValues NEW values, each more populous than every earlier
+            // one, so a per-scrape top-N would name a fresh set every round.
+            for (var i = 0; i < PlatformMetrics.MaxSatelliteValues; i++)
+                for (var copy = 0; copy <= round + 1; copy++)
+                    host.GetHostedHub(new Address("victim", $"rot-{round}-{i}-{copy}", $"_Rot{round}x{i:00}"), c => c)
+                        .Should().NotBeNull();
+            emitted = emitted.Union(ScrapeSatellites()
+                .Select(t => t.Satellite)
+                .Where(s => s != PlatformMetrics.NoSatellite));
+        }
+
+        emitted.Count.Should().BeLessThanOrEqualTo(PlatformMetrics.MaxSatelliteValues + 1,
+            "over the meter's lifetime at most the bound by name plus the one fold value");
+        emitted.Should().Contain(PlatformMetrics.OtherSatellite, "the values never admitted fold into one");
+    }
+
+    [HubFact]
+    public void SatelliteValues_AreBounded_TheRestFoldIntoOther()
+    {
+        var host = GetHost();
+        using var metrics = new PlatformMetrics(host);
+        var distinct = PlatformMetrics.MaxSatelliteValues + 3;
+        for (var i = 0; i < distinct; i++)
+            host.GetHostedHub(new Address("victim", $"bound-{i}", $"_Shape{i:00}"), c => c).Should().NotBeNull();
+
+        var satellites = ScrapeSatellites()
+            .Select(t => t.Satellite)
+            .Where(s => s != PlatformMetrics.NoSatellite)
+            .Distinct()
+            .ToArray();
+
+        satellites.Should().Contain(PlatformMetrics.OtherSatellite, "the values past the bound fold into one");
+        satellites.Length.Should().BeLessThanOrEqualTo(PlatformMetrics.MaxSatelliteValues + 1,
+            "at most the bound by name plus the one fold value");
+    }
+
     /// <summary>
     /// 🚨 <b>The invariant <c>KindOf</c> rests on, pinned where it is actually decidable.</b>
     ///
     /// <para><c>KindOf</c> first derived the kind by splitting <c>Address.ToString()</c> at its
     /// first <c>/</c>. That is wrong by construction, and this test says why:
-    /// <c>ToString()</c> is <c>Path + '~' + Host</c>, so for a path of ONE segment the first
-    /// <c>/</c> comes out of the HOST chain — the kind becomes <c>solo~portal</c>, host ids are
-    /// back in the tag, and the unbounded cardinality the tag exists to bound is recreated. The
-    /// two-segment case above cannot catch it: there the first <c>/</c> is inside the path, so the
-    /// parse looks right.</para>
+    /// <c>ToString()</c> carries the HOST chain (canonically <c>host~path</c> since #6604; it was
+    /// <c>path~host</c> before), so the first <c>/</c> can come out of the host — host ids are
+    /// back in the tag, and the unbounded cardinality the tag exists to bound is recreated.</para>
     ///
     /// <para>The fix is to stop parsing — <c>Address.Type</c> IS <c>Segments[0]</c>, host-free.
     /// This asserts both halves of that claim on <see cref="Address"/> itself, because a hub whose
@@ -138,11 +244,11 @@ public class PlatformMetricsTest(ITestOutputHelper output) : HubTestBase(output)
     {
         var hosted = new Address("solo") { Host = new Address("portal", "xyz") };
 
-        hosted.ToString().Should().Be("solo~portal/xyz",
-            "PRECONDITION: ToString appends the host, and for a one-segment path the FIRST '/' in "
-            + "it therefore belongs to the host — which is what made the old parse wrong");
-        hosted.ToString().IndexOf('/').Should().Be("solo~portal".Length,
-            "…and precisely there, so splitting on it yielded 'solo~portal' as the kind");
+        hosted.ToString().Should().Be("portal/xyz~solo",
+            "PRECONDITION: ToString carries the host chain, so the FIRST '/' in it belongs to the "
+            + "host — which is what made a parse of ToString() wrong");
+        hosted.ToString().IndexOf('/').Should().Be("portal".Length,
+            "…and precisely there, so splitting on it yields the HOST's type, not the address's");
 
         hosted.Type.Should().Be("solo",
             "Type is Segments[0]: the type segment by construction, with no host and no parsing");

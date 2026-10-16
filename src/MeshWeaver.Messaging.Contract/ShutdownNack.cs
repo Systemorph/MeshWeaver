@@ -37,7 +37,19 @@ public static class ShutdownNack
     /// <param name="activation">The hub instance the NACK is being minted for.</param>
     /// <returns>The tag, e.g. <c>activation #017DA86C</c>.</returns>
     public static string FormatActivationTag(object activation) =>
-        $"{ActivationMarker}{System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(activation):X8}";
+        $"{ActivationMarker}{ActivationToken(activation)}";
+
+    /// <summary>
+    /// The bare hex token for <paramref name="activation"/> — exactly what
+    /// <see cref="ExtractActivationTag"/> pulls out of a <see cref="FormatActivationTag"/> NACK, for
+    /// carriers that hold the identity as a FIELD rather than in message text (a stream's end
+    /// announcement, #6602). One formatter, so a NACK and an announcement from the same
+    /// activation compare equal.
+    /// </summary>
+    /// <param name="activation">The hub instance whose identity IS the activation.</param>
+    /// <returns>The hex token, e.g. <c>017DA86C</c>.</returns>
+    public static string ActivationToken(object activation) =>
+        System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(activation).ToString("X8", System.Globalization.CultureInfo.InvariantCulture);
 
     /// <summary>
     /// Pulls the stable activation token out of a NACK message, or <c>null</c> when the message
@@ -89,7 +101,18 @@ public static class ShutdownNack
     /// subject of "is shutting down" — see <see cref="IsAnsweredByOwner"/>.</para>
     /// </summary>
     /// <param name="address">The owner — an <see cref="Address"/>, or its path.</param>
-    public static string Banner(object address) => $"{BannerOpen}{address}{BannerClose}";
+    /// <remarks>
+    /// The subject is the owner's IDENTITY — <see cref="Address.Path"/>, never the hosted string
+    /// form. The host chain says where the hub is activated, not who it is, and keeping it out of
+    /// the banner is what lets <see cref="IsAnsweredByOwner"/> read a banner from either side of a
+    /// roll: this release writes no <c>~</c> at all, and the previous one wrote <c>path~host</c>,
+    /// whose path is everything before the first <c>~</c> (#6604).
+    /// </remarks>
+    public static string Banner(object address) => $"{BannerOpen}{Subject(address)}{BannerClose}";
+
+    /// <summary>The banner's subject: an <see cref="Address"/>'s path, or the text as given.</summary>
+    private static string Subject(object address) =>
+        address is Address typed ? typed.Path : address.ToString() ?? string.Empty;
 
     /// <summary>
     /// The refusal for a delivery this hub declines HERE AND NOW — it arrived (or was evaluated)
@@ -149,11 +172,13 @@ public static class ShutdownNack
     /// identifies the speaker.</para>
     ///
     /// <para>🚨 It compares the banner's SUBJECT by PATH, not the whole rendered address. A HOSTED
-    /// address renders as <c>path~host</c> (<see cref="Address.ToString"/>), so a producer holding
+    /// address renders with its host chain (<see cref="Address.ToString"/>), so a producer holding
     /// the <see cref="Address"/> and a caller holding the path would otherwise disagree about the
     /// same hub — a false negative that reads as "the routing layer answered", which is the exact
     /// misclassification this predicate exists to prevent. The path IS the address's identity
-    /// (<see cref="Address.Path"/>); the host chain says where it is activated, not who it is.</para>
+    /// (<see cref="Address.Path"/>); the host chain says where it is activated, not who it is.
+    /// <see cref="Banner"/> therefore writes the path alone, and a banner from the previous
+    /// release (<c>path~host</c>) still reads correctly (#6604).</para>
     /// </summary>
     /// <param name="message">A NACK message, typically <c>DeliveryFailure.Message</c>.</param>
     /// <param name="ownerAddress">The owner the caller addressed — an <see cref="Address"/>, or its path.</param>
@@ -187,8 +212,13 @@ public static class ShutdownNack
 
     /// <summary>
     /// The identity half of an address: its <see cref="Address.Path"/>, or — for text lifted out of
-    /// a rendered banner, or a path a caller passed as a string — everything before the <c>~</c>
-    /// that introduces the host chain.
+    /// a rendered banner, or a path a caller passed as a string — the text itself.
+    ///
+    /// <para>A banner written by THIS release never contains <c>~</c> (<see cref="Banner"/> writes
+    /// the path). A <c>~</c> can only come from a banner the PREVIOUS release wrote during a roll,
+    /// whose subject was <c>path~host</c> — so the path is everything before the first <c>~</c>.
+    /// Do not pass the canonical hosted string (<c>host~path</c>) as a string owner: pass the
+    /// <see cref="Address"/> or its <see cref="Address.Path"/>.</para>
     /// </summary>
     private static string PathOf(object address)
     {

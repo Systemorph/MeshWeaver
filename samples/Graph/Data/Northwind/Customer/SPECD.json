@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "Sp\u00e9cialit\u00e9s du monde - Paris, France",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "SPECD",

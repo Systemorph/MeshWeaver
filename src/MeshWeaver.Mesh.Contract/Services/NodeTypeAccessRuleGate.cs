@@ -292,21 +292,8 @@ public static class NodeTypeAccessRuleGate
     /// <param name="path">The node path to read.</param>
     /// <returns>The node, or null when nothing is served at that path.</returns>
     public static IObservable<MeshNode?> ReadSubjectNode(IMessageHub hub, string path)
-    {
-        ArgumentNullException.ThrowIfNull(hub);
-        return Observable.Defer(() =>
-        {
-            var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
-            return persistence is null
-                ? Observable.Return(hub.ServiceProvider.FindServedStaticNode(path))
-                : persistence.Read(path, hub.JsonSerializerOptions)
-                    .Take(1)
-                    .DefaultIfEmpty(null)
-                    // 🚨 The static fallback is resolved LAZILY — `FindServedStaticNode` enumerates
-                    // every registered provider's node list, and this method is on the denial path
-                    // of a hot delivery gate. Storage answers for all but the config-node case, so
-                    // the enumeration must not be paid before the read that usually obviates it.
-                    .Select(node => node ?? hub.ServiceProvider.FindServedStaticNode(path));
-        });
-    }
+        // ONE implementation of "storage first, served static second" — StoredNodeReads, which the
+        // boot sweeps also use to read content without activating a hub (#6623). The static
+        // fallback stays LAZY there: this method is on the denial path of a hot delivery gate.
+        => hub.ReadStoredNode(path);
 }

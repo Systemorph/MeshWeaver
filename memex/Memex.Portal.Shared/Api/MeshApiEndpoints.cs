@@ -457,8 +457,18 @@ public static class MeshApiEndpoints
     /// <c>.FirstAsync().ObserveCompletion(…, ct)</c>, which is the ASP.NET edge itself. Rx's own
     /// <c>.ToTask()</c> is NOT that bridge — it resumes the awaiter inline on the signalling thread,
     /// which on this surface is a mesh hub's action block (forbidden since 2026-08-30).
+    ///
+    /// <para>🚨 A verb's bounded wait that EXPIRES is an answer, not a crash (MeshWeaver#6790). A
+    /// <see cref="TimeoutException"/> that a verb lets escape used to leave this method as a faulted
+    /// <see cref="Task"/>, which ASP.NET reports as an unhandled 500 through
+    /// <c>ExceptionHandlerMiddleware</c> — a line naming neither the verb nor the route, because an
+    /// Rx <c>.Timeout(…)</c> creates its exception without throwing it, so it has no frames. It is
+    /// now answered the way <c>/render-area</c> answers its own deadline: a 504 whose body names the
+    /// route, logged at Warning with the method and route. Every OTHER fault still escapes to the
+    /// exception handler — a fault that is not a deadline is a defect, and turning it into a
+    /// response here would hide it.</para>
     /// </summary>
-    private static Task<IResult> RunString(
+    internal static Task<IResult> RunString(
         HttpContext http,
         IMessageHub rootHub,
         CancellationToken ct,
@@ -466,10 +476,41 @@ public static class MeshApiEndpoints
     {
         var sessionHub = ResolveSession(http, rootHub);
         var ops = new MeshOperations(sessionHub);
+        var timedOut = TimedOut(http);
         return work(ops)
             .Select(Ship)
+            .Catch((TimeoutException ex) => Observable.Return(timedOut(ex)))
             .FirstAsync()
             .ObserveCompletion(LateFault(http, $"{http.Request.Path}"), ct)!;
+    }
+
+    /// <summary>The <see cref="SentinelBody.Kind"/> of a verb whose bounded wait expired.</summary>
+    public const string TimeoutKind = "Timeout";
+
+    /// <summary>
+    /// The answer to a verb whose bounded wait expired: <c>504</c> with
+    /// <c>{ "error": "Timed out: POST /api/mesh/get did not complete in time (…)", "kind": "Timeout" }</c>,
+    /// logged once at Warning naming the method and the route template (never the body, which carries
+    /// the caller's paths).
+    /// <para>Everything it needs from the request is read EAGERLY, like <see cref="LateFault"/>: the
+    /// deadline can expire after a client abort, when <see cref="HttpContext.RequestServices"/> is
+    /// already disposed.</para>
+    /// </summary>
+    private static Func<TimeoutException, IResult> TimedOut(HttpContext http)
+    {
+        var logger = http.RequestServices.GetRequiredService<ILoggerFactory>()
+            .CreateLogger(typeof(MeshApiEndpoints));
+        var method = http.Request.Method;
+        var route = RequestName.Route(http.GetEndpoint());
+        return ex =>
+        {
+            logger.LogWarning(ex,
+                "{RequestMethod} {RequestRoute}: the verb's bounded wait expired — answered 504",
+                method, route);
+            return Results.Json(
+                new SentinelBody($"Timed out: {method} {route} did not complete in time ({ex.Message})", TimeoutKind),
+                statusCode: StatusCodes.Status504GatewayTimeout);
+        };
     }
 
     /// <summary>

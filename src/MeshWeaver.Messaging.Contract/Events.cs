@@ -111,6 +111,22 @@ public record DeliveryFailure(IMessageDelivery Delivery, string? Message = null)
     public bool TargetUnserved { get; init; }
 
     /// <summary>
+    /// True when the SENDER of this failure established that NO NODE exists at the failed
+    /// delivery's target path: the router's path resolution matched only an ancestor (or
+    /// nothing), or the target address carries a delete tombstone. It is the typed form of the
+    /// <c>"No node found at '…'"</c> sentence those sites write into <see cref="Message"/>.
+    ///
+    /// <para>🚨 <b>Distinct from <see cref="ErrorType"/> being
+    /// <see cref="MeshWeaver.Messaging.ErrorType.NotFound"/> alone</b>, which also means "no
+    /// handler for this request" or "no route to that host" — neither of which says anything
+    /// about whether a node exists. A writer maps a failure carrying this stamp to the
+    /// node-level NotFound verdict (<c>MeshNodeErrorCode.NotFound</c>) instead of parsing the
+    /// message text (#6626). Absence of the stamp (older producer, any other NACK site) means
+    /// "not established", never "the node exists".</para>
+    /// </summary>
+    public bool NodeAbsent { get; init; }
+
+    /// <summary>
     /// Builds a delivery failure from a caught exception, capturing its type name,
     /// message, and stack trace under <see cref="MeshWeaver.Messaging.ErrorType.Exception"/>.
     /// </summary>
@@ -320,6 +336,14 @@ public record DisposeRequest
     /// is computed ONCE, at the main node, so a cycle among NodeTypes cannot turn one recycle into
     /// a storm. Only activations that EXIST are torn down — a cascaded request reaching an address
     /// with no live hub is a no-op at the routing layer, and it instantiates nothing.</para>
+    ///
+    /// <para>The other fan-out that has ALREADY computed its whole set is a module live swap's
+    /// recycle wave (<c>ModuleLiveUpdater</c>): it names every hub of its process bound to the
+    /// swapped generations, and carries <c>module:{name}</c> here. Such a request must not cascade
+    /// either (#6729): a NodeType definition hub in that wave would otherwise fan out over the
+    /// mesh-wide index, seconds later, and tear down the SUCCESSOR activations the wave had just made
+    /// room for — once per definition — which a subscriber correctly reads as an owner recycling in
+    /// a loop.</para>
     /// </summary>
     public string? CascadedFrom { get; init; }
 

@@ -1,6 +1,4 @@
 ﻿using Microsoft.Playwright;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.Processing;
 
 namespace MeshWeaver.ThumbnailGenerator;
 
@@ -109,7 +107,7 @@ public static class ThumbnailGenerator
                 Console.WriteLine($"  Detected content size: {contentDimensions.Width}×{contentDimensions.Height}");
 
                 // Calculate final thumbnail dimensions that maintain aspect ratio
-                var (thumbnailFinalWidth, thumbnailFinalHeight) = CalculateScaledDimensions(
+                var (thumbnailFinalWidth, thumbnailFinalHeight) = ThumbnailResizer.CalculateScaledDimensions(
                     contentDimensions.Width,
                     contentDimensions.Height,
                     thumbnailWidth,
@@ -150,11 +148,7 @@ public static class ThumbnailGenerator
                 });
 
                 // Resize to final thumbnail size with high quality
-                using (var image = await SixLabors.ImageSharp.Image.LoadAsync(tempFilePath))
-                {
-                    image.Mutate(x => x.Resize(thumbnailFinalWidth, thumbnailFinalHeight));
-                    await image.SaveAsPngAsync(filePath);
-                }
+                ThumbnailResizer.ResizePng(tempFilePath, filePath, thumbnailFinalWidth, thumbnailFinalHeight);
 
                 // Clean up temp file
                 File.Delete(tempFilePath);
@@ -260,30 +254,5 @@ public static class ThumbnailGenerator
         }");
 
         return (result[0], result[1]);
-    }
-
-    private static (int Width, int Height) CalculateScaledDimensions(int contentWidth, int contentHeight, int maxWidth, int maxHeight)
-    {
-        // Calculate aspect ratio
-        double contentAspectRatio = (double)contentWidth / contentHeight;
-        double targetAspectRatio = (double)maxWidth / maxHeight;
-
-        int scaledWidth, scaledHeight;
-
-        // Scale to fit within max dimensions while preserving aspect ratio
-        if (contentAspectRatio > targetAspectRatio)
-        {
-            // Content is wider - fit to width
-            scaledWidth = maxWidth;
-            scaledHeight = (int)(maxWidth / contentAspectRatio);
-        }
-        else
-        {
-            // Content is taller - fit to height
-            scaledHeight = maxHeight;
-            scaledWidth = (int)(maxHeight * contentAspectRatio);
-        }
-
-        return (scaledWidth, scaledHeight);
     }
 }

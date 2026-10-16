@@ -1,6 +1,6 @@
 ---
 Name: "NuGet Package Retirement"
-Abstract: "Two packages survive — the Aspire integration and the dotnet new template. Everything else under the MeshWeaver prefix is retired and unlisted. Why, what unlisting does and does not do, where the retirement tool lives, and the ground rule that keeps the survivor count at two."
+Abstract: "Three packages survive — the Aspire integration, the dotnet new template and the memex CLI (restored, with its own version). Everything else under the MeshWeaver prefix is retired and unlisted. Why, what unlisting does and does not do, where the retirement tool lives, and the ground rule that keeps the survivor count at two."
 Icon: "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><rect width='24' height='24' rx='4' fill='#455a64'/><path d='M12 5l5 2.75v5.5L12 16l-5-2.75v-5.5z' fill='none' stroke='white' stroke-width='1.5' stroke-linejoin='round'/><path d='M7 7.75L12 10.5l5-2.75M12 10.5V16' stroke='white' stroke-width='1.5' fill='none' stroke-linejoin='round'/><path d='M5 19h14' stroke='#ef5350' stroke-width='2' stroke-linecap='round'/></svg>"
 Authors:
   - "Roland Buergi"
@@ -84,6 +84,33 @@ satellite repositories build inside `mw-plugin-test`
 offering consumers packages nobody builds against and nobody patches.
 
 ---
+
+### 1a. The `memex` CLI is published again, with its own version
+
+Policy [`cli-thin-wrapper-own-version`](../PolicyNotProse) — the register carries its date and who set it.
+
+`MeshWeaver.Cli` was retired with the rest on 2026-09-07 (its `3.0.0-rc1`…`rc13` stay unlisted).
+It comes back because a customer's **dedicated build server** needs the `memex` verbs without a
+MeshWeaver checkout. Like the two survivors it is an entry point, not platform bytes: it references
+`System.CommandLine` and no framework assembly.
+
+It is distributed the way `gh` is: a thin client with its own version line, released when the client
+changes, not with every server build. The mesh verbs go over the REST API and `memex build …` runs
+the platform's builder inside the platform image, so a new platform build does not need a new CLI.
+
+| | |
+|---|---|
+| Version | its own: `<CliVersion>` in `src/MeshWeaver.Cli/MeshWeaver.Cli.csproj` (which sets both `Version` and the `InformationalVersion` that `memex --version` prints), starting at `3.0.0`. Bumped by pull request when the CLI changes |
+| When | on demand: dispatch `publish-packages.yml` with `packages=cli`. The lane reads the csproj version and refuses any other; a version already on nuget.org is skipped |
+| Bytes | packed by `publish-packages.yml`, asserted to be a `DotnetTool` package carrying `tools/net10.0/any/memex.dll`, then verified LISTED |
+| Retirement sweep | `src/MeshWeaver.Cli` is packable again, so `orphaned-nuget-packages.py` derives `MeshWeaver.Cli` as packed and never unlists it; `PackableProjectReadmeTest` holds the packable set at two projects |
+
+A first design (2026-10-15, `cli-on-nuget-follows-3-latest`) published the CLI on every CD arming at
+the platform's `3.<minor>.<run>`. It was withdrawn the next day, before it ever published: a thin
+client does not need hundreds of versions.
+
+CI still reaches the verbs through the `mw-plugin-test` image; nothing in the fleet installs the
+tool. The package is for people and build servers outside it.
 
 ## 2. The ground rule: startup dependencies are Aspire options, never packages
 
@@ -178,8 +205,8 @@ safe to automate at all:
 
 The two consumption paths that unlisting *does* end are both deliberate:
 
-- `dotnet tool install -g MeshWeaver.Cli` (the `memex` CLI) and `-g MeshWeaver.Compiler.Cli`
-  (`mw-compiler`). No lane in this repository or any satellite installed either: CI reaches those
+- `dotnet tool install -g MeshWeaver.Compiler.Cli` (`mw-compiler`) — `-g MeshWeaver.Cli` (the `memex` CLI) was in this list
+  too, and is published again (§1a). No lane in this repository or any satellite installed either: CI reaches those
   verbs through the `mw-plugin-test` **image**, and `MeshWeaver.Plugin.Build` is built from source
   at the pinned platform ref on purpose, because it encodes how a given version compiles.
 - Anything resolving `MeshWeaver.*` by a floating version. Nothing in the fleet does.

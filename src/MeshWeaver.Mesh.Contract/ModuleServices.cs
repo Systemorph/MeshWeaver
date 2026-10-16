@@ -114,15 +114,161 @@ public sealed class ModuleServices : IDisposable
     /// <summary>Why these services cannot be served from a module scope — empty when they can.</summary>
     public ImmutableList<string> Blockers { get; }
 
-    /// <summary>The shape a swap must preserve (see <see cref="ModuleServiceRegistration.Shape"/>).</summary>
+    private ImmutableDictionary<int, string> unservable = ImmutableDictionary<int, string>.Empty;
+
+    /// <summary>
+    /// The forwarded registrations THIS generation could not produce when a consumer leased them, by
+    /// index, each with why (MeshWeaver#6847). A verdict about this generation, never about the module:
+    /// a later generation starts with none. Every consumer that leases a module's service — the query
+    /// fan-out, the access-rule set, the options forwarders — reads such a registration as ABSENT
+    /// (<see cref="ModuleContexts.TryLeaseModuleService(string, int, Autofac.ILifetimeScope?, System.Type?)"/>), so an optional module that cannot serve one
+    /// of its services costs exactly that feature and never a caller that never asked for it.
+    /// </summary>
+    public ImmutableDictionary<int, string> Unservable => Volatile.Read(ref unservable);
+
+    /// <summary>Records registration <paramref name="index"/> as unservable in this generation; true the
+    /// first time, so the verdict is reported once.</summary>
+    internal bool MarkUnservable(int index, string reason) =>
+        ImmutableInterlocked.TryAdd(ref unservable, index, reason);
+
+    private ImmutableHashSet<(int Index, string Cause)> reported = ImmutableHashSet<(int Index, string Cause)>.Empty;
+
+    /// <summary>Notes that a construction fault of registration <paramref name="index"/> with
+    /// <paramref name="cause"/> (the innermost exception type) was reported; true the first time. Not a
+    /// verdict — the registration stays servable — only what keeps a fault that repeats on every lease
+    /// from being reported on every lease (review of #6854).</summary>
+    internal bool MarkReported(int index, string cause) =>
+        ImmutableInterlocked.Update(ref reported, set => set.Add((index, cause)));
+
+    /// <summary>
+    /// Why registration <paramref name="index"/> is not LAID OUT in this generation the way the root's
+    /// forwarder for that index asks for it — this generation has no registration at the index, or its
+    /// container holds nothing under the key the root resolves — or null when it is (MeshWeaver#6847,
+    /// review of #6854). A fault every caller of this generation shares, so it may be recorded as a
+    /// verdict; asked only after a resolve FAILED, so a registration that resolves is never judged by it.
+    /// Null, too, when the container cannot say — then the fault is not known to be generation-wide.
+    /// </summary>
+    /// <param name="root">The mesh's root provider.</param>
+    /// <param name="index">The registration's index.</param>
+    internal string? NotLaidOut(IServiceProvider root, int index)
+    {
+        if (index < 0 || index >= Registrations.Count)
+            return $"this generation has no registration #{index} — it holds {Registrations.Count}";
+        var registration = Registrations[index];
+        var descriptor = registration.Descriptor;
+        var key = descriptor.IsKeyedService ? descriptor.ServiceKey : registration.Key;
+        var container = TryScope(root);
+        var isKeyed = container as IServiceProviderIsKeyedService ?? container?.GetService<IServiceProviderIsKeyedService>();
+        return isKeyed is not null && !isKeyed.IsKeyedService(descriptor.ServiceType, key)
+            ? $"'{key} ({descriptor.ServiceType.Name})' has not been registered in this generation's container"
+            : null;
+    }
+
+    /// <summary>The shape a swap must preserve (see <see cref="ModuleServiceRegistration.Shape"/>), each
+    /// forwarded registration prefixed with its <see cref="ModuleServiceRegistration.Index"/>.</summary>
     public ImmutableList<string> Shape => Registrations
         // Hosted services are NOT part of the shape: the root holds no per-registration forwarder for
         // them — one ModuleHostedServicesHost starts whatever the CURRENT generation registers — so a
         // generation may add or drop a background service and still swap live (measured: the AI
-        // update behind the 2026-10-05 incident added exactly one hosted service and nothing else).
+        // update behind the 2026-10-05 incident added exactly one hosted service and nothing else),
+        // as long as it does so AFTER the forwarded registrations (see the index below).
         .Where(r => r.Route is ModuleServiceRoute.Proxy or ModuleServiceRoute.Current)
-        .Select(r => r.Shape)
+        // 🚨 The INDEX is part of the shape (MeshWeaver#6847). Every root forwarder captured the boot
+        // generation's index (ModuleServiceForwarders.AddForwarders) and resolves THAT index in whatever
+        // generation is current. A generation that inserts ANY registration — a module-owned one, a
+        // private one, a hosted service — ahead of a forwarded one keeps the forwarded subsequence
+        // identical but moves every index after it, and the root then asks the new generation for the
+        // wrong registration: WhatsApp 1.3.2 → 1.4.2 went live that way on 2026-10-16, a root forwarder
+        // laid out at boot for index 10 resolved the new generation's index 10 — the module-owned
+        // IWhatsAppRecentChats, held unkeyed, so "mw-module-service:10 has not been registered" — and every
+        // hub activation that leased it (API-token validation among them) faulted until the pods
+        // restarted. Such a generation is restart-required, never a live swap.
+        .Select(r => $"#{r.Index} {r.Shape}")
         .ToImmutableList();
+
+    private ImmutableList<(int Index, string Entry)>? forwarderLayout;
+
+    /// <summary>
+    /// The forwarders the ROOT holds for this module — one <see cref="Shape"/> entry each, laid out by the
+    /// generation that BOOTED the module (<c>ModuleServiceForwarding.AddForwarders</c>) and inherited by
+    /// every generation swapped in after it (<see cref="ModuleContexts.PrepareServices"/>). Root
+    /// forwarders are fixed once the root container is built, so this — not the current generation's own
+    /// <see cref="Shape"/> — is what every lease through the root asks the current generation for. Strings
+    /// and indices only: a descriptor would name the boot generation's implementation types and pin it.
+    /// </summary>
+    public ImmutableList<string> ForwarderLayout => Layout.Select(slot => slot.Entry).ToImmutableList();
+
+    private ImmutableList<(int Index, string Entry)> Layout => forwarderLayout ??= Registrations
+        .Where(r => r.Route is ModuleServiceRoute.Proxy or ModuleServiceRoute.Current)
+        .Select(r => (r.Index, $"#{r.Index} {r.Shape}"))
+        .ToImmutableList();
+
+    /// <summary>Takes over <paramref name="booted"/>'s <see cref="ForwarderLayout"/> — the root's
+    /// forwarders were laid out for it, not for this generation.</summary>
+    internal void InheritForwarderLayout(ModuleServices booted) => forwarderLayout = booted.Layout;
+
+    /// <summary>
+    /// 🚨 Every root forwarder of this module that CANNOT be resolved in this generation — one sentence
+    /// each, naming the scope key, the service and why; empty when every forwarder resolves (MeshWeaver#6847).
+    ///
+    /// <para>A forwarder resolves registration <c>#i</c> of whatever generation is current under
+    /// <see cref="ModuleServiceRegistration.Key"/> (or the registration's own key). It cannot when the
+    /// current generation has no registration <c>#i</c>, when its <c>#i</c> is not the forwarded
+    /// registration the forwarder was laid out for (a different route, type or lifetime), or when this
+    /// generation's container holds nothing under that key — the incident's
+    /// <c>'mw-module-service:10 (…IWhatsAppRecentChats)' has not been registered</c>.</para>
+    ///
+    /// <para>🚨 <b>A positive, deterministic reading — never a count of failures over a window.</b> A
+    /// built container's registrations never change, and neither does <see cref="Registrations"/>, so a
+    /// forwarder that cannot be resolved in this generation now cannot be resolved by ANY lease while this
+    /// generation is current: one reading is already "sustained", and it clears exactly when a different
+    /// generation becomes current (or the process restarts). Reads the registry; resolves nothing, so it
+    /// runs no module code and cannot wait on a module container's lock. A disposed generation answers
+    /// empty — it is no longer what any forwarder resolves.</para>
+    ///
+    /// <para>🚨 The caller holds a lease on this generation (<see cref="TryLease"/>) for the whole call —
+    /// <see cref="ModuleContexts.UnresolvableForwarders"/> does — so a retirement that lands while the
+    /// container is read is deferred to the lease's release and never disposes it mid-read.</para>
+    /// </summary>
+    /// <param name="root">The mesh's root provider.</param>
+    internal ImmutableList<string> UnresolvableForwarders(IServiceProvider root)
+    {
+        var container = TryScope(root);
+        if (container is null)
+            return [];
+        var registry = container.GetService<Autofac.ILifetimeScope>();
+        var gaps = ImmutableList.CreateBuilder<string>();
+        foreach (var (index, entry) in Layout)
+        {
+            var current = Registrations.ElementAtOrDefault(index);
+            if (current is null)
+            {
+                gaps.Add($"the root's forwarder for registration #{index} was laid out for [{entry}], and this "
+                         + $"generation has no registration #{index} (it registers {Registrations.Count}) — every lease "
+                         + $"of 'mw-module-service:{index}' fails");
+                continue;
+            }
+            var type = current.Descriptor.ServiceType;
+            var key = current.Descriptor.IsKeyedService ? current.Descriptor.ServiceKey : current.Key;
+            if (current.Route is not (ModuleServiceRoute.Proxy or ModuleServiceRoute.Current)
+                || !string.Equals($"#{current.Index} {current.Shape}", entry, StringComparison.Ordinal))
+            {
+                gaps.Add($"the root's forwarder for registration #{index} was laid out for [{entry}], and this "
+                         + $"generation's registration #{index} is [{current.Route}:{type.FullName}] — every lease "
+                         + $"resolves '{key} ({type.FullName})' here, which is not the service it forwards"
+                         + (Holds(registry, key, type) ? "" : " and is not registered"));
+                continue;
+            }
+            if (!Holds(registry, key, type))
+                gaps.Add($"'{key} ({type.FullName})' (registration #{index}) has not been registered in this "
+                         + "generation's container — every lease of it fails");
+        }
+        return gaps.ToImmutable();
+    }
+
+    private static bool Holds(Autofac.ILifetimeScope? registry, object? key, Type type) =>
+        // No Autofac scope to ask is no evidence of a gap: say nothing rather than guess.
+        registry is null || key is null || Autofac.ResolutionExtensions.IsRegisteredWithKey(registry, key, type);
 
     /// <summary>
     /// Runs <paramref name="configurations"/> against a copy of <paramref name="prefix"/> and routes what
@@ -139,8 +285,12 @@ public sealed class ModuleServices : IDisposable
         IReadOnlyList<ServiceDescriptor> prefix)
     {
         var probe = new ServiceCollection();
-        foreach (var descriptor in prefix)
-            ((ICollection<ServiceDescriptor>)probe).Add(descriptor);
+        // What the probe holds at each prefix position: the root's own descriptor, except a
+        // registration-time registry, which the module writes into and so gets a copy of its own
+        // (IsolateRegistrationTimeRegistry).
+        var held = new ServiceDescriptor[prefix.Count];
+        for (var i = 0; i < prefix.Count; i++)
+            ((ICollection<ServiceDescriptor>)probe).Add(held[i] = IsolateRegistrationTimeRegistry(prefix[i]));
         IServiceCollection result = probe;
         foreach (var configure in configurations)
             result = configure(result) ?? result;
@@ -150,7 +300,7 @@ public sealed class ModuleServices : IDisposable
             blockers.Add("a root-service delegate returned a different collection than it was given");
         var intact = probe.Count >= prefix.Count;
         for (var i = 0; intact && i < prefix.Count; i++)
-            intact = ReferenceEquals(probe[i], prefix[i]);
+            intact = ReferenceEquals(probe[i], held[i]);
         if (!intact)
             blockers.Add("a root-service delegate removed or replaced a registration it did not add");
 
@@ -168,6 +318,54 @@ public sealed class ModuleServices : IDisposable
         {
             LoadContext = moduleContext.IsCollectible ? moduleContext : null,
         };
+    }
+
+    /// <summary>The full name of <c>Microsoft.Extensions.Http</c>'s registration-time client registry
+    /// (internal to that package, so it is recognised by name).</summary>
+    internal const string HttpClientMappingRegistryTypeName = "Microsoft.Extensions.DependencyInjection.HttpClientMappingRegistry";
+
+    /// <summary>
+    /// 🚨 A prefix registration whose INSTANCE is a registry that registration code WRITES INTO
+    /// (MeshWeaver.Plugins#3518). <c>AddHttpClient&lt;T&gt;()</c> records "client name → T" in the
+    /// <c>HttpClientMappingRegistry</c> instance registered in the collection, and refuses a second
+    /// type under the same name. The probe copies the root's descriptors BY REFERENCE, so without this
+    /// every generation's <c>AddHttpClient&lt;WebSearchPlugin&gt;()</c> wrote into the ROOT's one
+    /// registry: generation N's type stayed there (pinning its collectible context for the life of the
+    /// process), and generation N+1's — the same name, a different <see cref="Type"/> from a different
+    /// load context — was refused, failing the live swap. The probe therefore gets its own copy of the
+    /// registry, seeded with what the root holds (so a module that collides with a PLATFORM client is
+    /// refused exactly as at boot), and what the module writes stays with its probe.
+    ///
+    /// <para>Matched by name because the type is internal to <c>Microsoft.Extensions.Http</c>; its
+    /// name and shape are pinned by <c>ALiveSwapReRegistersATypedHttpClientTest</c>: a package version
+    /// that renames it fails that test, and one that reshapes it fails here by name, rather than
+    /// silently sharing the root's instance again.</para>
+    /// </summary>
+    private static ServiceDescriptor IsolateRegistrationTimeRegistry(ServiceDescriptor descriptor)
+    {
+        if (descriptor.IsKeyedService
+            || descriptor.ImplementationInstance is not { } registry
+            || descriptor.ServiceType.FullName != HttpClientMappingRegistryTypeName
+            || registry.GetType() != descriptor.ServiceType)
+            return descriptor;
+        const BindingFlags Members = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+        var type = registry.GetType();
+        var copy = Activator.CreateInstance(type, nonPublic: true)
+                   ?? throw new InvalidOperationException($"{type.FullName} could not be instantiated to isolate a module's HttpClient registrations.");
+        foreach (var name in new[] { "NamedClientRegistrations", "KeyedLifetimeMap" })
+        {
+            if (type.GetProperty(name, Members)?.GetValue(registry) is not System.Collections.IDictionary from
+                || type.GetProperty(name, Members)?.GetValue(copy) is not System.Collections.IDictionary to)
+                throw new InvalidOperationException(
+                    $"{type.FullName} no longer exposes the dictionary {name}: a module's HttpClient registrations cannot be isolated from the root's (MeshWeaver.Plugins#3518).");
+            foreach (System.Collections.DictionaryEntry entry in from)
+                to[entry.Key] = entry.Value;
+        }
+        var defaultLifetime = type.GetProperty("DefaultKeyedLifetime", Members)
+            ?? throw new InvalidOperationException(
+                $"{type.FullName} no longer exposes DefaultKeyedLifetime: a module's HttpClient registrations cannot be isolated from the root's (MeshWeaver.Plugins#3518).");
+        defaultLifetime.SetValue(copy, defaultLifetime.GetValue(registry));
+        return new ServiceDescriptor(descriptor.ServiceType, copy);
     }
 
     private static string Route(ServiceDescriptor descriptor, AssemblyLoadContext module, out string? blocker)
@@ -294,12 +492,21 @@ public sealed class ModuleServices : IDisposable
             // has made every generation of the swap current this is the current generations, exactly as
             // for a generation loaded at boot.
             var stage = Stage;
-            return scope = ModuleServiceProvider.Create(
+            return scope = ModuleServiceProvider.CreateForCallers(
                 services, root,
                 type => context is not null && IsOwned(type, context),
                 Prefix.Where(d => d.ServiceType.IsGenericTypeDefinition),
-                type => contexts is null ? [] : ElsewhereSeenFrom(contexts, name, type, null, stage));
+                type => contexts is null ? NoneElsewhere : ElsewhereSeenFrom(contexts, name, type, null, stage));
         }
+    }
+
+    /// <summary>As <see cref="Scope"/>, or null once this generation's services are disposed (a live
+    /// uninstall, a swap's retirement, a boot withdrawal) — the disposal is an answer here, not a fault.</summary>
+    /// <param name="root">The mesh's root provider.</param>
+    internal IServiceProvider? TryScope(IServiceProvider root)
+    {
+        lock (gate)
+            return disposed != 0 ? null : Scope(root);
     }
 
     /// <summary>The live swap this generation was staged in, or null (a generation loaded at boot).</summary>
@@ -317,7 +524,7 @@ public sealed class ModuleServices : IDisposable
     /// waits on this container's.
     ///
     /// <para>NOT built: a SCOPED registration, and a singleton whose constructor graph reaches one
-    /// (<see cref="ModuleServiceProvider.BuildRootReachableSingletons"/>) — their instances belong to a
+    /// (<c>ModuleServiceProvider.BuildRootReachableSingletons</c>) — their instances belong to a
     /// circuit or a request, and the one a boot would build runs against scoped state nobody initialised
     /// (Radzen's <c>DialogService</c> and its <c>NavigationManager</c>, MeshWeaver#6556); a module's
     /// PRIVATE registration unless a built one takes it; and a module's HOSTED services, which are left
@@ -332,8 +539,54 @@ public sealed class ModuleServices : IDisposable
                 or ModuleServiceRoute.ModuleOwned or ModuleServiceRoute.Contributed)
             .Select(RootReachesItAs)
             .ToImmutableHashSet();
-        ModuleServiceProvider.BuildRootReachableSingletons(Scope(root), root, reachable.Contains);
+        var contexts = root.GetService<ModuleContexts>();
+        var stage = Stage;
+        ModuleServiceProvider.BuildRootReachableSingletons(Scope(root), root, reachable.Contains,
+            type => contexts is null ? [] : RegistriesSeenFrom(contexts, type, stage));
     }
+
+    /// <summary>
+    /// EVERY module container that registers module-declared <paramref name="type"/> (unkeyed), and the
+    /// service each holds it under — the registrations <see cref="ElsewhereSeenFrom"/> resolves, in the
+    /// same order: the declaring module's own (under the type), then the contributions modules made of it
+    /// (under their index key). What the boot-time scoped-dependency walk reads, so a singleton over
+    /// another module's SCOPED type is never built at boot (<c>ModuleServiceProvider.BuildRootReachableSingletons</c>).
+    ///
+    /// <para>🚨 No module is excluded HERE. Which container is "elsewhere" changes as the walk recurses:
+    /// once it enters module B's singleton, B's fallback resolves module A's contributions, so a walk that
+    /// started in A must see A's registrations from inside B (A singleton → B singleton → A's scoped
+    /// contribution). The walk excludes only the container it is currently in, by reference
+    /// (<c>ScopedDependencyWalk.RegistrationsOf</c>).</para>
+    /// </summary>
+    internal static IEnumerable<(Autofac.Core.IComponentRegistry Registry, Autofac.Core.Service Service)> RegistriesSeenFrom(
+        ModuleContexts contexts, Type type, ModuleSwapStage? stage)
+    {
+        if (type.IsGenericTypeDefinition)
+            yield break;
+        var generations = contexts.GenerationsSeenFrom(stage)
+            .Where(g => g.Services is not null)
+            .OrderBy(g => g.Name, StringComparer.Ordinal)
+            .ToArray();
+        var owner = generations.FirstOrDefault(g => IsOwned(type, g.Context));
+        if (owner is null)
+            yield break;
+        if (RegistryOf(contexts, owner.Name, stage) is { } ownerRegistry)
+            yield return (ownerRegistry, new Autofac.Core.TypedService(type));
+        foreach (var contributor in generations.Where(g => g.Name != owner.Name))
+        {
+            var contributions = contributor.Services!.Registrations
+                .Where(r => r.Route == ModuleServiceRoute.Contributed && r.Descriptor.ServiceType == type
+                            && !r.Descriptor.IsKeyedService)
+                .ToArray();
+            if (contributions.Length == 0 || RegistryOf(contexts, contributor.Name, stage) is not { } registry)
+                continue;
+            foreach (var registration in contributions)
+                yield return (registry, new Autofac.Core.KeyedService(registration.Key, type));
+        }
+    }
+
+    private static Autofac.Core.IComponentRegistry? RegistryOf(ModuleContexts contexts, string module, ModuleSwapStage? stage) =>
+        contexts.ModuleScopeSeenFrom(module, stage)?.GetService<Autofac.ILifetimeScope>()?.ComponentRegistry;
 
     // The Autofac service a registration is held under in the module container (see Scope): a keyed
     // registration under its own key, an unkeyed forwarded or contributed one under its index key, an
@@ -366,6 +619,18 @@ public sealed class ModuleServices : IDisposable
     /// <param name="requester">The module whose container asks, or null for the root.</param>
     /// <param name="type">The service type asked for.</param>
     public static IReadOnlyList<Func<object>> RegistrationsElsewhere(ModuleContexts contexts, string? requester, Type type)
+        => WithoutCaller(ElsewhereSeenFrom(contexts, requester, type, null, null));
+
+    /// <summary>
+    /// As <see cref="RegistrationsElsewhere(ModuleContexts, string?, Type)"/>, each resolver told the CALLER
+    /// it resolves for — the root-side scope (a Blazor circuit, a request, a hub scope), or null — so a
+    /// scoped registration is that caller's instance, in the module scope the caller owns (MeshWeaver#6584).
+    /// </summary>
+    /// <param name="contexts">The mesh's module registry.</param>
+    /// <param name="requester">The module whose container asks, or null for the root.</param>
+    /// <param name="type">The service type asked for.</param>
+    public static IReadOnlyList<Func<Autofac.ILifetimeScope?, object>> RegistrationsElsewhereForCallers(
+        ModuleContexts contexts, string? requester, Type type)
         => ElsewhereSeenFrom(contexts, requester, type, null, null);
 
     /// <summary>
@@ -381,8 +646,28 @@ public sealed class ModuleServices : IDisposable
     public static IReadOnlyList<Func<object>> KeyedRegistrationsElsewhere(ModuleContexts contexts, string? requester, Type type, object key)
     {
         ArgumentNullException.ThrowIfNull(key);
+        return WithoutCaller(ElsewhereSeenFrom(contexts, requester, type, key, null));
+    }
+
+    /// <summary>
+    /// As <see cref="KeyedRegistrationsElsewhere(ModuleContexts, string?, Type, object)"/>, each resolver told
+    /// the CALLER it resolves for (see <see cref="RegistrationsElsewhereForCallers"/>).
+    /// </summary>
+    /// <param name="contexts">The mesh's module registry.</param>
+    /// <param name="requester">The module whose container asks, or null for the root.</param>
+    /// <param name="type">The service type asked for.</param>
+    /// <param name="key">The service key asked for.</param>
+    public static IReadOnlyList<Func<Autofac.ILifetimeScope?, object>> KeyedRegistrationsElsewhereForCallers(
+        ModuleContexts contexts, string? requester, Type type, object key)
+    {
+        ArgumentNullException.ThrowIfNull(key);
         return ElsewhereSeenFrom(contexts, requester, type, key, null);
     }
+
+    private static readonly IReadOnlyList<Func<Autofac.ILifetimeScope?, object>> NoneElsewhere = [];
+
+    private static IReadOnlyList<Func<object>> WithoutCaller(IReadOnlyList<Func<Autofac.ILifetimeScope?, object>> resolvers) =>
+        resolvers.Select(resolve => (Func<object>)(() => resolve(null))).ToImmutableList();
 
     // key null = the unkeyed registrations. An unkeyed request never sees a keyed registration and a
     // keyed one sees only the registrations under its own key: the module container holds a keyed
@@ -390,7 +675,7 @@ public sealed class ModuleServices : IDisposable
     // past the end of the type's registrations.
     // stage non-null = asked from a container of that swap's STAGED generations: the stage's generations
     // stand in for the current ones of the same name, while the stage is open (BuildBeforePublish).
-    internal static IReadOnlyList<Func<object>> ElsewhereSeenFrom(
+    internal static IReadOnlyList<Func<Autofac.ILifetimeScope?, object>> ElsewhereSeenFrom(
         ModuleContexts contexts, string? requester, Type type, object? key, ModuleSwapStage? stage)
     {
         ArgumentNullException.ThrowIfNull(contexts);
@@ -404,7 +689,7 @@ public sealed class ModuleServices : IDisposable
         var owner = generations.FirstOrDefault(g => IsOwned(type, g.Context));
         if (owner is null)
             return [];
-        var resolvers = ImmutableList.CreateBuilder<Func<object>>();
+        var resolvers = ImmutableList.CreateBuilder<Func<Autofac.ILifetimeScope?, object>>();
         if (owner.Name != requester)
         {
             var ownerName = owner.Name;
@@ -412,8 +697,9 @@ public sealed class ModuleServices : IDisposable
             {
                 if (owner.Services!.Registrations.Any(r => r.Route == ModuleServiceRoute.ModuleOwned
                         && r.Descriptor.ServiceType == type && Matches(r.Descriptor, key)))
-                    resolvers.Add(() => (contexts.ModuleScopeSeenFrom(ownerName, stage)
-                            ?? throw new InvalidOperationException($"Module {ownerName} holds no service scope."))
+                    resolvers.Add(caller => ModuleServiceProvider.InCallerScope(
+                            contexts.ModuleScopeSeenFrom(ownerName, stage)
+                            ?? throw new InvalidOperationException($"Module {ownerName} holds no service scope."), caller)
                         .GetRequiredKeyedService(type, key));
             }
             else
@@ -423,9 +709,9 @@ public sealed class ModuleServices : IDisposable
                 for (var position = 0; position < count; position++)
                 {
                     var at = position;
-                    resolvers.Add(() => ModuleServiceProvider.ResolveAt(
+                    resolvers.Add(caller => ModuleServiceProvider.ResolveAt(
                         contexts.ModuleScopeSeenFrom(ownerName, stage) ?? throw new InvalidOperationException($"Module {ownerName} holds no service scope."),
-                        type, at));
+                        type, at, caller));
                 }
             }
         }
@@ -437,7 +723,7 @@ public sealed class ModuleServices : IDisposable
                              && (key is null ? !r.Descriptor.IsKeyedService : Matches(r.Descriptor, key))))
             {
                 var index = registration.Index;
-                resolvers.Add(() => contexts.ResolveModuleServiceSeenFrom(name, index, stage));
+                resolvers.Add(caller => contexts.ResolveModuleServiceSeenFrom(name, index, stage, caller));
             }
         }
         return resolvers.ToImmutable();
@@ -454,12 +740,47 @@ public sealed class ModuleServices : IDisposable
                 : new ServiceDescriptor(d.ServiceType, key, d.ImplementationType!, d.Lifetime);
 
     /// <summary>The instance behind forwarded registration <paramref name="index"/>.</summary>
-    public object Resolve(IServiceProvider root, int index)
+    public object Resolve(IServiceProvider root, int index) => Resolve(root, index, null);
+
+    /// <summary>
+    /// The instance behind forwarded registration <paramref name="index"/>, for <paramref name="caller"/>:
+    /// a registration that is not a singleton is resolved in the module scope the caller owns — that
+    /// caller's instance, its root dependencies the caller's (MeshWeaver#6584) — and a singleton in this
+    /// generation's container, as before.
+    /// </summary>
+    /// <param name="root">The mesh's root provider.</param>
+    /// <param name="index">The registration's index.</param>
+    /// <param name="caller">The root-side scope resolving (a Blazor circuit's, a request's, a hub's), or null.</param>
+    public object Resolve(IServiceProvider root, int index, Autofac.ILifetimeScope? caller)
     {
         var registration = Registrations[index];
         var descriptor = registration.Descriptor;
-        return Scope(root).GetRequiredKeyedService(
+        var container = Scope(root);
+        var resolveIn = descriptor.Lifetime == ServiceLifetime.Singleton
+            ? container
+            : ModuleServiceProvider.InCallerScope(container, caller);
+        return resolveIn.GetRequiredKeyedService(
             descriptor.ServiceType, descriptor.IsKeyedService ? descriptor.ServiceKey : registration.Key);
+    }
+
+    /// <summary>
+    /// As <see cref="Resolve(IServiceProvider, int)"/>, or null when this generation's scope is disposed — before the resolve
+    /// or while it runs (a live uninstall, a boot withdrawal). Only the disposal of THIS generation
+    /// answers null; any other fault, and an <see cref="ObjectDisposedException"/> raised while this
+    /// generation is still live, propagates.
+    /// </summary>
+    internal object? TryResolve(IServiceProvider root, int index)
+    {
+        if (Volatile.Read(ref disposed) != 0)
+            return null;
+        try
+        {
+            return Resolve(root, index);
+        }
+        catch (ObjectDisposedException) when (Volatile.Read(ref disposed) != 0)
+        {
+            return null;
+        }
     }
 
     /// <summary>Starts hosted registration <paramref name="index"/> from this generation and records
@@ -554,8 +875,75 @@ public sealed class ModuleServices : IDisposable
         })));
     }
 
-    /// <summary>Disposes the scope — this generation's singletons with it.</summary>
+    // Leases held on this generation's services (low bits) and whether its disposal was requested
+    // (Retiring). ONE word, changed only by compare-and-swap, so "may I lease?" and "may I dispose?"
+    // are decided against each other atomically — no lock, no wait (MeshWeaver#6715).
+    private const int Retiring = 1 << 30;
+    private int leaseState;
+
+    /// <summary>
+    /// A lease on this generation's services, or null once their disposal was requested (MeshWeaver#6715).
+    /// While any lease is held, <see cref="Dispose"/> only MARKS the services retiring: no new lease is
+    /// granted, and the scope — this generation's singletons with it — is disposed by whoever releases
+    /// the LAST lease. So a call that leased the generation runs to its end on live services, however a
+    /// retirement interleaves with it; nothing waits and nothing blocks.
+    /// </summary>
+    internal IDisposable? TryLease()
+    {
+        while (true)
+        {
+            var state = Volatile.Read(ref leaseState);
+            if ((state & Retiring) != 0)
+                return null;
+            if (Interlocked.CompareExchange(ref leaseState, state + 1, state) == state)
+                return new ServicesLease(this);
+        }
+    }
+
+    /// <summary>Whether this generation's disposal was requested — it grants no new lease.</summary>
+    internal bool IsRetiring => (Volatile.Read(ref leaseState) & Retiring) != 0;
+
+    /// <summary>Whether this generation's scope has actually been disposed.</summary>
+    internal bool IsDisposed => Volatile.Read(ref disposed) != 0;
+
+    private void ReleaseLease()
+    {
+        // The last lease out after a requested disposal performs it — exactly once: no lease can be
+        // granted once Retiring is set, so the count reaches zero under it only once.
+        if (Interlocked.Decrement(ref leaseState) == Retiring)
+            DisposeNow();
+    }
+
+    private sealed class ServicesLease(ModuleServices owner) : IDisposable
+    {
+        private int released;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref released, 1) == 0)
+                owner.ReleaseLease();
+        }
+    }
+
+    /// <summary>
+    /// Disposes the scope — this generation's singletons with it — now, or, while a lease
+    /// (<see cref="TryLease"/>) is held, when the last one is released. Grants no lease from here on.
+    /// </summary>
     public void Dispose()
+    {
+        int state;
+        do
+        {
+            state = Volatile.Read(ref leaseState);
+            if ((state & Retiring) != 0)
+                return;
+        }
+        while (Interlocked.CompareExchange(ref leaseState, state | Retiring, state) != state);
+        if (state == 0)
+            DisposeNow();
+    }
+
+    private void DisposeNow()
     {
         IServiceProvider? toDispose;
         lock (gate)

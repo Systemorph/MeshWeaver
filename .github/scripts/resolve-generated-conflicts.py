@@ -139,13 +139,14 @@ def is_generated(path: str) -> bool:
 
 def merge_conflicts(root: Path, base: str, head: str, cfg: tuple[str, ...] = GITHUB_VIEW) -> list[str]:
     """The paths GitHub reports as conflicting when merging `head` into `base`. `[]` = clean."""
-    rc, out, err = git(root, ["merge-tree", "--write-tree", "--name-only", "--no-messages", base, head],
+    rc, out, err = git(root, ["merge-tree", "--write-tree", "-z", "--name-only", "--no-messages", base, head],
                        cfg=cfg)
     if rc == 0:
         return []
     if rc == 1:
-        lines = [line for line in out.splitlines() if line.strip()]
-        return sorted(set(lines[1:]))  # line 1 is the (conflicted) tree id
+        # `-z`: the tree id, then each conflicted path, NUL-terminated and never C-quoted.
+        entries = [e for e in out.split("\0") if e]
+        return sorted(set(entries[1:]))  # entry 1 is the (conflicted) tree id
     raise LaneDefect(f"git merge-tree {base[:9]} {head[:9]} failed ({rc}): {err or out}")
 
 
@@ -187,7 +188,7 @@ def resolve_in_worktree(root: Path, head: str, base: str, ref: str,
         if rc == 0:
             raise LaneDefect("the merge completed without a conflict, but it was classified as "
                              "conflicting — the classification and the merge disagree")
-        unmerged = sorted(set(must(wt, ["diff", "--name-only", "--diff-filter=U"]).split()))
+        unmerged = sorted({p for p in must(wt, ["diff", "-z", "--name-only", "--diff-filter=U"]).split("\0") if p})
         if not unmerged or not all(is_generated(p) for p in unmerged):
             raise LaneDefect(f"refusing: the merge left non-generated paths unmerged: "
                              f"{[p for p in unmerged if not is_generated(p)] or unmerged}")
@@ -195,9 +196,9 @@ def resolve_in_worktree(root: Path, head: str, base: str, ref: str,
         # stages every lock the regeneration moved, not just the conflicted ones (#1023).
         run_checker([sys.executable, "scripts/gen-manifests.py", "--resolve"], wt,
                     "gen-manifests.py --resolve")
-        still = must(wt, ["diff", "--name-only", "--diff-filter=U"])
+        still = [p for p in must(wt, ["diff", "-z", "--name-only", "--diff-filter=U"]).split("\0") if p]
         if still:
-            raise LaneDefect(f"paths still unmerged after --resolve: {still.split()}")
+            raise LaneDefect(f"paths still unmerged after --resolve: {still}")
         msg = (f"Merge main into {ref} — only generated manifest.lock files conflicted\n\n"
                f"Regenerated over the merged tree by `gen-manifests.py --resolve`:\n"
                + "".join(f"  {p}\n" for p in unmerged)
@@ -211,8 +212,8 @@ def resolve_in_worktree(root: Path, head: str, base: str, ref: str,
         if platform_checker:
             run_checker([sys.executable, platform_checker, "--check"], wt,
                         "the platform's gen-manifests.py --check (the gate's verdict)")
-        if (dirty := must(wt, ["status", "--porcelain"])):
-            raise LaneDefect(f"the resolution left the tree dirty: {dirty.splitlines()[:5]}")
+        if (dirty := [e for e in must(wt, ["status", "--porcelain", "-z"]).split("\0") if e]):
+            raise LaneDefect(f"the resolution left the tree dirty: {dirty[:5]}")
         parents = must(wt, ["rev-list", "--parents", "-n", "1", "HEAD"]).split()
         if parents[1:] != [head, base]:
             raise LaneDefect(f"the merge commit's parents are {parents[1:]}, expected [{head}, {base}]")

@@ -326,8 +326,15 @@ strings, anchored the same way. The bands differ only in what their legs select:
 | band | selects | glyph |
 |---|---|---|
 | **Needs you** | open obligations addressed to the viewer | `☐` |
-| **Running** | activities in flight (`ActivityStatus.Running`) **and threads executing** | `⏳` |
-| **Last 24 hours** | terminal activities inside a window | `✅` / `❌` |
+| **Running** | marked activities still going (`ActivityStatus.Running`) **and threads executing**; a marked activity that FAILED is in *Needs you* | `⏳` |
+| **Last 24 hours** | *(designed; core feeds no leg into it today)* | `✅` |
+
+🚨 **As built (policy `inbox-activities-need-someone`):** core's own Activities source lists only
+the runs MARKED for the inbox (`ActivityLog.ShowInInbox`, set by the code that starts a run a person
+asked for and waits on, or one that will need their decision) that still need someone: a run still
+going is in *Running*; a run that FAILED is finished, so it is in *Needs you*, dealt with on its own
+page. Background runs (scripts, Tests-area runs, indexing) are never marked, so they never appear.
+A run that finished well is not listed; its own page keeps it.
 
 **Running is its own band because it is neither.** It is not owed by the viewer — pushing it into
 *Needs you* invents an obligation nobody has — and it is not finished, so it cannot carry a tick. It
@@ -335,8 +342,7 @@ is also the band that answers the question people actually open the inbox with w
 slow: *is it still going?*
 
 🚨 **Running is a live band, so it needs no poller.** The rows come from the same node streams
-everything else binds to; an activity that finishes moves itself to the third band on the next
-emission. A timer that re-reads "is it done yet?" is the band's failure mode, not its
+everything else binds to; an activity that finishes well leaves the band on the next emission. A timer that re-reads "is it done yet?" is the band's failure mode, not its
 implementation.
 
 This is also the only place a tick legitimately appears — the third band is *by definition* things
@@ -380,6 +386,9 @@ function of the filter and the legs.
 |---|---|---|
 | search box | `search` | the term goes to the query engine with EVERY leg, as free text (full text and the semantic index), under the owner's identity — never a match over the rows already loaded |
 | one icon toggle per source (`ToggleButtonControl`), beside the search | `sources/{key}` (the id, hex-encoded) | shows or hides what one provider brought, by its symbol (`InboxQueryLeg.SourceIcon`), its name the tooltip; a source with no entry is shown, so a leg a package brings later never arrives switched off — unless its legs say `ShownByDefault: false` (notifications: the feed is long, so it is one click away and the bell still shows it) |
+| the Only select (`SelectControl`), before the toggles | `only` (a source key, empty for all) | Only / Show / Hide per source: picking one source lists that source alone and wins over its switch (so "only Outlook" shows Outlook even while its toggle is off); "All sources" gives the switches back exactly as they were. A side-menu category still wins over both, and what Only hides of the "Needs you" band is counted in the hidden-obligations notice like a switch |
+| the Show ignorable switch (`SwitchControl`) | `showIgnorable` | items a triage judged `ignorable` (`InboxImportance` — spam, promotions, noise) stay out of the list until it is on; the notice above the grid counts what it hides. Items nobody judged are always shown |
+| the side menu's tags (`RadioGroupControl`, below the folders) | `tag` | GitHub's label filter over the triage's tags (`InboxRow.Tags`, read from the content's `tags`): ⭐ Important first (the content's `importance`), then each tag by use, each with its count. A tag narrows the folder and sources shown, and shows its rows even when ignorable — picking `#promo` asks for the promotions. The entries are keyed apart — `importance:important` for what a triage JUDGED important, `tag:<name>` for a tag — so an ordinary tag spelled `important` is its own entry. Importance and tags are read from whatever content a row carries, timed or not; an untimed leg's projection drops content, so a source whose rows carry a triage declares a time field (the timed projection keeps content). The grid's Tags column shows them as `#reply #act` |
 | ⚙︎ settings menu (`MenuItemControl`, icon only) | `order`, `sources/{key}` | the order select — `InboxOrder.Newest` by default, everything by date as a mail client lists it; also oldest, by title, by source, and what needs you first (band rank) — and the same source switches with their names |
 | the grid's checkboxes | `inboxSelection` | the ticked row keys, read by Delete |
 
@@ -408,9 +417,111 @@ are what, from whom and when. A source with read state brings TWO legs — one s
 items (`InboxQueryLeg.Unread`), one the rest — so "unread" is decided by the query, never by
 reading content on the page: unread mail is "not `Read`", an unread notification is "not
 `isRead`". An unread row carries `rowClass: inbox-unread` and the grid applies it per row
-(`DataGridControl.WithRowClassProperty`), so it renders bold.
+(`DataGridControl.WithRowClassProperty`), so it renders bold. A LIVE source that answers read and
+unread items in one leg (a mailbox read from its provider) says so per item instead: a timed row
+reads `isRead`, `from` (the sender, shown in the From column — else the source's name) and
+`webLink` (an https address in the provider's own client) from its content.
 
-The command row's two buttons act on every ticked row; **Backspace or Delete presses Delete**
+**A click on a row opens it — always INSIDE the portal** (`DataGridControl.WithClickAction` →
+`InboxLayoutArea.OpenTarget` → `InboxReadingView`; owner, 2026-10-16: *"when clicking, it should
+always give me a memex view with the content, not redirect me"*). The row goes to the owner's
+reading view, `/{owner}/Inbox/{item}`, where `{item}` is the row's node path base64url-encoded into
+one segment (`InboxReadingView.ItemId`). There:
+
+- an item whose path an **`IInboxItemReader`** handles (`Handles(path)` — a live mailbox or chat
+  row, which no store holds) is READ LIVE by that reader as the owner — subject, sender, account,
+  received time in the viewer's zone, the body and a conversation's messages. Everything a reader
+  returns is PLAIN TEXT and rendered escaped; nothing is stored. A package registers its reader as
+  a singleton service beside its `InboxQueryLeg` and `IInboxItemHandler`;
+- any other (stored) item is shown by its own page, embedded (`Overview`);
+- the provider's own client (`webLink`, https only) is a secondary **Open in …** link under the
+  content — never where the click goes. The one transitional exception: a row with an https
+  `webLink` whose path NO reader handles (its package predates `IInboxItemReader`) still opens in
+  the provider's client, because no store holds it and the reading view would have nothing to show;
+  it opens inside the portal as soon as its package ships a reader;
+- only the owner's own items open: a path outside the owner's partition reads "not in your inbox".
+
+Ticking a box, and shift/cmd-clicks, are selection gestures the grid keeps to itself.
+The grid is paged (50 a page, the size selectable). A source without a symbol is toggled by a
+button that shows its NAME — never a single letter, which the icon renderer read as an icon name
+and drew as an empty button.
+
+**Reading never reorders.** A row is timed by its node's `LastModified` unless its source names a
+content property instead (`InboxQueryLeg.TimeField`, e.g. a conversation's last reply). Name one
+whenever a write that is not news touches the node: clearing an unread mark refreshes
+`LastModified`, and timing by it would move the item ahead of genuinely newer ones. The page keeps
+`content` in such a leg's projection (`InboxQueries.TimedRowProjection`), and a row whose field is
+missing falls back to `LastModified`. 🚨 The leg's own `sort:` still chooses which rows its bound
+keeps: sort on the field only when every node carries it — a descending sort puts a missing value
+FIRST on Postgres, so older nodes without it would crowd newer ones out.
+
+**Approvals are their own source (✅), shown by default.** An approval request is the "approval
+required" notification its flow sends the approver — a document approval, an instance action, a
+governed-activity signature — so the Approvals leg reads the viewer's own `_Notification` partition
+and the notification feed no longer carries them. 🚨 `NotificationType.ApprovalRequired` is the enum
+DEFAULT and is omitted from stored JSON, so the leg NEGATES every stamped type
+(`InboxQueries.StampedNotificationTypes`, pinned against the enum by a test).
+
+**Approve / Reject act on every ticked approval request.** The inbox sends the node the request
+points at (its `TargetNodePath`) a `DecideApprovalRequest` **as the approver** — the decision is
+authored by them and authorized by the node's own type, exactly as its own Approve button is — and
+files the request away once the type answers `Done`. The inbox knows no approval kind: each type
+handles the request on its own hub and answers a refusal with its reason. A decision is not
+undoable from the inbox; it is the approval's own record.
+
+**One step-up for the whole batch.** Where the instance requires a step-up confirmation, a type
+records the decision and answers `StepUpRequired` with the binding its own control plane consumes
+(`DecideApprovalResponse.StepUpBinding`). The item stays in the inbox, and its outcome carries the
+target (`InboxItemOutcome.StepUp`). When the batch ends, the inbox sends the approver to ONE step-up
+covering every held decision (`StepUpPaths.StartUrl` with all targets — the endpoint already stamps
+a receipt per target), then back to the inbox. Each type's control plane consumes its own receipt
+and ratifies, and the request leaves the inbox once its type files it away.
+
+**Categories (policy `inbox-categories-by-kind`).** A side menu — the platform's one-choice
+control (`RadioGroupControl`), its value bound to the filter's `category` and its options fed with
+the live counts (`InboxLayoutArea.CategoryOptions`) — lists All, then each category with its symbol
+and count (unread when it has any, else all): Approvals, Mail, Conversations, Notifications,
+Activities. A source names its category (`InboxQueryLeg.Category` and
+`CategoryLabelKey`; WhatsApp, Teams, iMessage and portal chats share **Conversations**), else its
+source is its category. The picked category lives in the page's filter (`InboxFilter.Category`):
+it shows every item filed under it, even from a source switched off by default, and All leaves the
+source switches in charge. The counts are read before any filter applies
+(`InboxRows.CategoryCounts`). The menu sits in a COLLAPSIBLE splitter pane: the platform
+splitter's own handle hides it and gives the list the width.
+
+**Only connected sources (policy `inbox-connected-sources-only`).** A source names how to tell it is
+connected for a viewer — `InboxQueryLeg.ConnectedWhen`, a query for its credential, its account
+record or a first message over its channel, anchored on the viewer's partition exactly as the leg
+is (an unanchored one is refused and logged with the leg) and asked for one node
+(`InboxQueries.ConnectionProbe`). The page is a TEMPLATE, emitted at once: every source's toggle
+and switch is declared, each with its style BOUND to `InboxLayoutArea.SourceStylesId`. The rows
+feed asks every connection query once (`InboxLayoutArea.Connected`), publishes the styles and the
+Only options, and reads only the connected sources' legs: a mailbox nobody connected is hidden
+(`display: none`), not offered in Only or the side menu, and never read. Until the reads answer,
+only the sources that need none are shown. A source whose legs name no
+connection query (approvals, notifications, portal chats) is listed for everyone. A connection query
+that fails or does not answer within `InboxLayoutArea.ConnectionWait` LISTS its source and is
+logged — an unreadable connection must never hide a mailbox the viewer did connect. So does an
+INCOMPLETE empty answer (a silent provider, an unfinished storage read — `InboxLayoutArea.FoundConnection`):
+only a complete empty answer hides a source. Whatever projection a provider wrote, the query runs for
+the path alone (`InboxQueries.ConnectionQuery`). Every text the feed writes is resolved on the render turn, in the viewer's language — never on
+the thread a connection read answers on. Core's own
+stored-mail source is connected once mail is stored for the viewer. Owner, 2026-10-15: *"i see a lot
+of stuff that's not even configured ==> must get only configured sources"*.
+
+**Which account.** A person reads several mailboxes in one list, so a row names the account the item
+reached when its source stamps one (the content's `account`, `InboxRow.Account`, the Account
+column); a source with a single account per viewer may leave it empty.
+
+**Put away everything before a day.** The order is ALWAYS newest first (policy
+`inbox-newest-first`; `InboxFilter.Order` is no longer read and the settings menu offers no order). The search box also takes date bounds, `before:2026-10-01` (strictly
+before that day) and `after:2026-10-01` (that day or later), in UTC: they narrow the rows by their
+time (`InboxRows.SplitDates`), and only the remaining text goes to the sources. A bound that is not
+a date stays text and is searched for as written. Tick all, then press Delete, to put away
+everything in the range. It reaches the rows the page has read, each source's newest
+`InboxQueries.LegLimit`; the "capped" notice says when a source has more.
+
+The command row's Delete and Undo act on every ticked row; **Backspace or Delete presses Delete**
 (`ButtonControl.WithShortcut`) — never while typing in the search box.
 
 | Button | Does | Never does |
@@ -756,6 +867,9 @@ twice.
 
 ## 11. What is NOT established here
 
+- **Which approval types answer `DecideApprovalRequest`.** The contract and the inbox side ship in
+  core; each approval type handles it in its own package (document approvals and instance actions
+  first). A type that does not answer leaves its requests listed and reports "no answer".
 - **"Done" is judged on the writer's mirror, not on the owner's verdict.** A handler counts an item
   as put away when its update lambda changed the content it was handed and the written result is in
   the asked-for state. If the same item was put away in ANOTHER session a moment earlier and this

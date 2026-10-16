@@ -179,8 +179,13 @@ def make_publication(root: Path, tag: str = "one") -> Path:
     (pub / "modules").mkdir(parents=True)
     (pub / "Pkg.A.zip").write_bytes(f"zip-a-{tag}\n".encode())
     (pub / "Pkg.B.zip").write_bytes(f"zip-b-{tag}\n".encode())
-    (pub / "modules" / "Pkg.A.module.nupkg").write_bytes(f"nupkg-a-{tag}\n".encode())
-    (pub / "modules" / "_index").write_text("Pkg.A.module.nupkg\n")
+    # 🚨 The lanes write module packages under their LOWERCASED name while the bundle keeps the
+    # package's case — the fixture mirrors that, or a case-sensitive lookup passes here and attaches
+    # nothing in production (MeshWeaver.Plugins run 38215076376: 43 bundles, all `module=no`).
+    # `pkg.m` is a module-only package: no bundle to ride in, so it must travel as a sidecar.
+    (pub / "modules" / "pkg.a.module.nupkg").write_bytes(f"nupkg-a-{tag}\n".encode())
+    (pub / "modules" / "pkg.m.module.nupkg").write_bytes(f"nupkg-m-{tag}\n".encode())
+    (pub / "modules" / "_index").write_text("pkg.a.module.nupkg\npkg.m.module.nupkg\n")
     (pub / "source-commit.txt").write_text(f"{tag}0123456789abcdef\n")
     (pub / "repository.txt").write_text("Systemorph/MeshWeaver.Plugins\n")
     (pub / "architecture.txt").write_text("linux-x64\n")
@@ -330,9 +335,9 @@ def case_plain(oras: str, work: Path, containers: Containers, reg_image: str) ->
     pub = make_publication(work, "one")
     env = dict(os.environ, ORAS=oras)
 
-    def push(pubdir: Path, identity: str, *extra: str) -> subprocess.CompletedProcess:
+    def push(pubdir: Path, identity: str, *extra: str, env_extra: dict | None = None) -> subprocess.CompletedProcess:
         return run(["bash", str(PUSH), "--registry", host, "--source", "Plugins", "--identity", identity,
-                    "--dir", str(pubdir), "--plain-http", *extra], env=env)
+                    "--dir", str(pubdir), "--plain-http", *extra], env=dict(env, **(env_extra or {})))
 
     r = push(pub, IDENTITY, "--tag-run", "4242", "--release", "3.1.0")
     expect(r.returncode == 0, f"publisher exits 0 (stderr: {r.stderr.strip()[:300]})")
@@ -373,9 +378,20 @@ def case_plain(oras: str, work: Path, containers: Containers, reg_image: str) ->
     expect(config.get("sourceCommit") == "one0123456789abcdef" and config.get("architecture") == "linux-x64"
            and config.get("release") == "3.1.0" and config.get("identity") == IDENTITY,
            f"the config blob carries the publication's facts ({ {k: config.get(k) for k in ('sourceCommit', 'architecture', 'release')} })")
-    expect(sorted(config.get("files", [])) == ["_complete", "architecture.txt", "modules/_index", "new-sidecar.txt",
-                                                "platform-surface.json", "repository.txt", "source-commit.txt"],
-           f"the config blob lists every sidecar, the unknown one included ({config.get('files')})")
+    expect(sorted(config.get("files", [])) == ["_complete", "architecture.txt", "modules/_index", "modules/pkg.m.module.nupkg",
+                                                "new-sidecar.txt", "platform-surface.json", "repository.txt", "source-commit.txt"],
+           f"the config blob lists every sidecar, the unknown one and the bundle-less module included ({config.get('files')})")
+    # Read off the REGISTRY, not the log: Pkg.A's manifest carries its lowercased module as a module
+    # layer; Pkg.B (no module — the negative control) carries the bundle layer alone.
+    for name, want_titles in (("pkg.a", ["Pkg.A.zip", "modules/pkg.a.module.nupkg"]), ("pkg.b", ["Pkg.B.zip"])):
+        mf = run([oras, "manifest", "fetch", "--plain-http", f"{host}/plugins/plugins/{name}:{IDENTITY}"])
+        layers = json.loads(mf.stdout).get("layers", []) if mf.returncode == 0 else []
+        titles = [l.get("annotations", {}).get("org.opencontainers.image.title") for l in layers]
+        expect(titles == want_titles, f"bundle {name}'s manifest carries exactly {want_titles} ({titles})")
+    expect(next((l.get("mediaType") for l in json.loads(run([oras, "manifest", "fetch", "--plain-http",
+                f"{host}/plugins/plugins/pkg.a:{IDENTITY}"]).stdout)["layers"]
+                if l.get("annotations", {}).get("org.opencontainers.image.title") == "modules/pkg.a.module.nupkg"), "")
+           == "application/vnd.meshweaver.module.v1.nupkg", "…and the attached module layer has the module media type")
     expect([b["package"] for b in config.get("bundles", [])] == ["Pkg.A", "Pkg.B"], "the config blob lists the bundles with digests")
 
     # Idempotence: the same bytes with the same arguments push the same index digest.
@@ -407,6 +423,37 @@ def case_plain(oras: str, work: Path, containers: Containers, reg_image: str) ->
     r5 = push(two, IDENTITY, "--skip-if-published")
     expect(r5.returncode == 0 and "skipped=already-published" in r5.stdout and index_of(r5) == d4,
            "…a repeat of the new content is then skipped against the moved tag")
+    # 🚨 The tag never moves BACKWARDS (Copilot's review of #6878): the share publisher skips an
+    # OLDER commit as `superseded` but still materialises it, and without the same ordering here the
+    # registry would roll back under shares that stayed newer. A stub `gh` answers the compare the
+    # way the real API does: `ahead` when the published commit is newer and contains this one.
+    ghbin = work / "gh-stub"
+    ghbin.mkdir(exist_ok=True)
+    (ghbin / "gh").write_text("#!/usr/bin/env bash\n"
+                              "case \"$2\" in */compare/one0123456789abcdef...two0123456789abcdef) echo ahead ;;"
+                              " *) echo diverged ;; esac\n")
+    (ghbin / "gh").chmod(0o755)
+    ordered = {"GH_TOKEN": "stub", "BAKE_CONTENT_REPOSITORY": "Systemorph/MeshWeaver.Plugins",
+               "PATH": f"{ghbin}{os.pathsep}{os.environ['PATH']}"}
+    r10 = push(pub, IDENTITY, "--tag-run", "4247", "--release", "3.1.1", "--skip-if-published", env_extra=ordered)
+    expect(r10.returncode == 0 and "skipped=superseded" in r10.stdout and index_of(r10) == d4
+           and resolve(f"plugins/plugins:{IDENTITY}") == d4,
+           f"an OLDER commit than the tag names leaves the tag where it is (exit {r10.returncode})")
+    expect(resolve(f"plugins/plugins:{IDENTITY}-4247") == "" and resolve("plugins/releases:3.1.1").startswith("sha256:"),
+           "…writes no run tag, and still records the release identity")
+    # A publication of the SAME content in an OLDER layout (pushed before modules rode with their
+    # bundles case-insensitively — its config carries no "layout") is republished, never skipped:
+    # its commit never moves, so a commit-only skip would keep it torn forever.
+    legacy = push(pub, "slegacy", env_extra={"MW_TEST_PUBLICATION_LAYOUT": "1"})
+    expect(legacy.returncode == 0 and index_of(legacy).startswith("sha256:"), "a publication of layout 1 is staged")
+    r8 = push(pub, "slegacy", "--skip-if-published")
+    expect(r8.returncode == 0 and "skipped=" not in r8.stdout and "layout '1'" in r8.stdout
+           and index_of(r8).startswith("sha256:") and index_of(r8) != index_of(legacy)
+           and resolve("plugins/plugins:slegacy") == index_of(r8),
+           f"--skip-if-published REPUBLISHES same-commit content published in an older layout (exit {r8.returncode})")
+    r9 = push(pub, "slegacy", "--skip-if-published")
+    expect(r9.returncode == 0 and "skipped=already-published" in r9.stdout and index_of(r9) == index_of(r8),
+           "…and once it is in the current layout, the same content is skipped again")
     nocommit = make_publication(work, "nocommit"); (nocommit / "source-commit.txt").write_text("unknown\n")
     r6 = push(nocommit, "snocommit", "--skip-if-published")
     expect(r6.returncode == 1 and "needs a recorded source commit" in r6.stdout and resolve("plugins/plugins:snocommit") == "",
@@ -426,9 +473,15 @@ def case_plain(oras: str, work: Path, containers: Containers, reg_image: str) ->
     r = push(torn, "storn")
     expect(r.returncode == 1 and "Pkg.B.zip" in r.stdout and "absent" in r.stdout, "a _complete listing an absent bundle is refused (exit 1)")
     expect(resolve("plugins/plugins:storn") == "", "…and no tag was written")
-    tornmod = make_publication(work, "tornmod"); (tornmod / "modules" / "Pkg.A.module.nupkg").unlink()
+    tornmod = make_publication(work, "tornmod"); (tornmod / "modules" / "pkg.a.module.nupkg").unlink()
     r = push(tornmod, "stornmod")
     expect(r.returncode == 1 and "modules/_index lists" in r.stdout, "a modules/_index listing an absent module is refused (exit 1)")
+    twocase = make_publication(work, "twocase")
+    (twocase / "modules" / "Pkg.A.module.nupkg").write_bytes(b"second spelling\n")
+    (twocase / "modules" / "_index").write_text("pkg.a.module.nupkg\nPkg.A.module.nupkg\npkg.m.module.nupkg\n")
+    r = push(twocase, "stwocase")
+    expect(r.returncode == 1 and "differing only in case" in r.stdout and resolve("plugins/plugins:stwocase") == "",
+           "two module packages differing only in case for one bundle are refused, before any push")
     r = run(["bash", str(PUSH), "--registry", host, "--source", "Releases", "--identity", IDENTITY, "--dir", str(pub), "--plain-http"], env=env)
     expect(r.returncode == 1 and "reserved" in r.stdout, "the source name 'releases' is refused as reserved")
 
@@ -441,7 +494,7 @@ def case_plain(oras: str, work: Path, containers: Containers, reg_image: str) ->
     expect("unsealed: no publication of 'Education'" in r.stdout, "…the unsealed source is named in the log")
     got = tree(root / IDENTITY / "Plugins") if (root / IDENTITY / "Plugins").is_dir() else {}
     want = tree(pub)
-    expect(got == want and len(want) == 10, f"the materialised layout is byte-identical to the publication ({len(got)} of {len(want)} files)")
+    expect(got == want and len(want) == 11, f"the materialised layout is byte-identical to the publication ({len(got)} of {len(want)} files)")
     expect(not (root / IDENTITY / "Education").exists(), "nothing was written for the unsealed source")
     expect(not (root / ".bundle-fetch").exists(), "the staging directory is gone")
     expect("materialised 'Plugins'" in r.stdout and f"index {index_digest}" in r.stdout, "…the log names the index digest it materialised")

@@ -58,6 +58,30 @@ internal class MeshNodeCompilationService(
         hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.CompileCpu)
         ?? IoPool.Unbounded;
 
+    // The file-system lane: where the hydration shortcut's load (blocking file IO + reflection) runs
+    // when it first has to wait for a package resolution — see GetConfigurationsFromExistingAssembly.
+    private readonly IIoPool _fileSystemPool =
+        hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem)
+        ?? IoPool.Unbounded;
+
+    // The HTTP lane: package resolution for a LOAD (BuildPackageProbing). Not the Compile lane — a
+    // kernel script holds a Compile slot while it waits for a NodeType to activate, and activation
+    // must never queue behind its own callers.
+    private readonly IIoPool _httpPool =
+        hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Http)
+        ?? IoPool.Unbounded;
+
+    /// <summary>
+    /// Arms the package probe for the build at <paramref name="assemblyLocation"/> from the
+    /// references it recorded (<see cref="BuildPackageProbing"/>) — on EVERY load of an already-built
+    /// assembly, so it loads on a replica that never compiled it and after a restart.
+    /// </summary>
+    private IObservable<Unit> ArmPackageProbing(
+        string assemblyLocation, IReadOnlyList<NuGetPackageReference> recorded)
+        => BuildPackageProbing.Arm(
+            assemblyLocation, recorded, cacheService, nugetResolver, _httpPool,
+            _cacheOptions.AssemblyLoadTimeout, logger);
+
     // 🚨 Offload the compile to the ThreadPool via Task.Run — NOT the IoPool. Two reasons the
     // IoPool ("the correct abstraction") fails for this leaf:
     //   1. Its SemaphoreSlim gate serialises the compile against itself (activity-driven +
@@ -684,9 +708,18 @@ internal class MeshNodeCompilationService(
     {
         var bound = _cacheOptions.SourceSnapshotTimeout;
 
-        // A caller-supplied override is already an authoritative point-in-time snapshot.
+        // 🚨 #6631 — every answer, from every leg and from a caller's override, is held against the
+        // type's OWN source-version record: a set carrying an earlier version of a path the record
+        // already names is a view behind the store, and is reported UNESTABLISHED (refused as "not
+        // evaluated", never a verdict). In the race this is what lets the authoritative direct read
+        // win over a cached synced query that missed an update — the cached leg replays
+        // synchronously and used to win instantly, stale or not.
+        var record = ntDef?.CurrentSourceVersions;
+
+        // A caller-supplied override is a point-in-time snapshot — held to the same record.
         if (sourcesOverride is not null)
-            return Observable.Return(SourceSnapshot.Established(sourcesOverride));
+            return Observable.Return(SourceSetFreshness.RefuseIfOlderThanRecord(
+                SourceSnapshot.Established(sourcesOverride), record));
 
         // 🚨 DIRECT READ FIRST — measured, not assumed.
         //
@@ -735,7 +768,8 @@ internal class MeshNodeCompilationService(
         // set (compiling against no sources is worse than the stall this exists to dodge). That
         // filter is also the likeliest reason #682's probe "never fired" — not the delay alone.
         return NodeCompileShaping.RaceSourceSnapshot(
-                DirectSourceProbe(ntDef, selfPath, TimeSpan.Zero),
+                DirectSourceProbe(ntDef, selfPath, TimeSpan.Zero)
+                    .Select(s => SourceSetFreshness.RefuseIfOlderThanRecord(s, record)),
                 // 🚨 The cached leg's FAULT is unestablishment, not emptiness. A synced query
                 // that errors used to propagate straight out of the snapshot as a raw exception
                 // → terminal CompilationStatus.Error → a gating "regression" for a mesh read
@@ -743,6 +777,7 @@ internal class MeshNodeCompilationService(
                 // failed probe leg, and the race decides.
                 Observable.Defer(() => ResolveSources(ntDef, selfPath, null).Take(1))
                     .Select(SourceSnapshot.Established)
+                    .Select(s => SourceSetFreshness.RefuseIfOlderThanRecord(s, record))
                     .Catch((Exception ex) => Observable.Return(SourceSnapshot.Unavailable(
                         $"the synced source query '{NodeSources.CacheId(selfPath)}' faulted "
                         + $"({ex.GetType().Name}: {ex.Message})"))))
@@ -1322,6 +1357,12 @@ internal class MeshNodeCompilationService(
                 // here is cancellable (a running type initializer cannot be interrupted), so
                 // the bound settles the state machine with a terminal Error naming the leg and
                 // the abandoned load thread is the honest cost.
+                // The build's recorded package closure, armed BEFORE the load: a cache-hit attempt
+                // (no emit in this process) never ran the emit's registration.
+                .SelectMany(snapshot => BuildPackageProbing.ReadAndArm(
+                        assemblyLocation, _fileSystemPool, cacheService, nugetResolver, _httpPool,
+                        _cacheOptions.AssemblyLoadTimeout, logger)
+                    .Select(_ => snapshot))
                 .SelectMany(snapshot => BoundLeg(
                     _ => OnThreadPool(() =>
                         CompileResultFromAssembly(
@@ -1488,6 +1529,21 @@ internal class MeshNodeCompilationService(
         if (string.IsNullOrEmpty(localPath))
             return Observable.Return((NodeCompilationResult?)null);
 
+        // 🚨 The build's recorded package closure (#r "nuget:") is resolved and its probing
+        // directories registered for THIS path before anything is loaded — this shortcut is how a
+        // replica that never compiled the type, and every process after a restart, reads a build
+        // (BuildPackageProbing). A build with no recorded package keeps the eager contract callers
+        // rely on: the work happens when CALLED, inside the caller's pool slot. One that has to wait
+        // for the resolution loads on the file-system lane once it answers.
+        var recorded = BuildPackageProbing.RecordedReferences(localPath);
+        if (recorded.Count == 0)
+            return Observable.Return(LoadExistingAssembly(localPath, nodeTypePath));
+        return ArmPackageProbing(localPath, recorded)
+            .SelectMany(_ => _fileSystemPool.InvokeBlocking(_ => LoadExistingAssembly(localPath, nodeTypePath)));
+    }
+
+    private NodeCompilationResult? LoadExistingAssembly(string localPath, string nodeTypePath)
+    {
         // Synthesise a minimal MeshNode for CompileResultFromAssembly's ALC bookkeeping.
         // The Path is what determines the cache key — the rest of the node is irrelevant
         // for this path because we're not running Roslyn.
@@ -1510,7 +1566,7 @@ internal class MeshNodeCompilationService(
                 Log = (result.Log ?? log).FinishByOutcome((int)hub.Version)
             };
         }
-        return Observable.Return(result);
+        return result;
     }
 
     /// <summary>
@@ -1600,10 +1656,14 @@ internal class MeshNodeCompilationService(
         // the generator doesn't emit #r — but handle them for forward-compatibility.)
         var allNugetRefs = new List<NuGetPackageReference>(skeletonNugetRefs);
         var strippedSources = new List<(string Path, string Code, long LastModifiedTicks)>(resolvedPairs.Count);
+        var sourceNugetRefs = ImmutableDictionary.CreateBuilder<string, ImmutableArray<NuGetPackageReference>>(
+            StringComparer.OrdinalIgnoreCase);
         foreach (var p in resolvedPairs)
         {
             var (stripped, refs) = NuGetDirectiveParser.Extract(p.Config.Code ?? string.Empty);
             allNugetRefs.AddRange(refs);
+            if (refs.Length > 0)
+                sourceNugetRefs[p.Path] = [.. refs];
             strippedSources.Add((p.Path, stripped, p.LastModifiedTicks));
         }
 
@@ -1621,8 +1681,10 @@ internal class MeshNodeCompilationService(
         IObservable<ImmutableArray<MetadataReference>> referencesObs =
             allNugetRefs.Count > 0
                 ? _ioPool.Run(ct => nugetResolver.ResolveAsync(allNugetRefs, targetFramework: null, ct))
-                    .Select(resolved => References
-                        .Concat(resolved.AssemblyPaths.Select(p => (MetadataReference)MetadataReference.CreateFromFile(p)))
+                    // One assembly per name (CompileReferences.WithPackageAssemblies) — the same
+                    // composition as the emit path, so diagnostics agree with the compile.
+                    .Select(resolved => CompileReferences
+                        .WithPackageAssemblies(References, resolved.AssemblyPaths)
                         .ToImmutableArray())
                 : Observable.Return(References.ToImmutableArray());
 
@@ -1655,7 +1717,14 @@ internal class MeshNodeCompilationService(
                 References: references,
                 ParseOptions: parseOptions,
                 CompilationOptions: compilationOptions,
-                SourceVersions: versions);
+                SourceVersions: versions)
+            {
+                // What a speculative compile rebuilds the package half from — never `references`,
+                // which already holds this source set's package closure.
+                HostReferences = [.. References],
+                SkeletonNuGetReferences = [.. skeletonNugetRefs],
+                SourceNuGetReferences = sourceNugetRefs.ToImmutable(),
+            };
         });
     }
 
@@ -1687,6 +1756,10 @@ internal class MeshNodeCompilationService(
     {
 
             var nodeName = cacheService.SanitizeNodeName(node.Path);
+            // The context the scan ran in, kept for the failure verdict: whether its package probe
+            // was armed is exactly what tells "the build's packages never reached this process"
+            // from "they did and still do not bind".
+            NodeAssemblyLoadContext? scanned = null;
 
             try
             {
@@ -1718,6 +1791,7 @@ internal class MeshNodeCompilationService(
                         : assemblyLocation,
                     publishesTheBuild);
                 var context = pinned.Context;
+                scanned = context;
                 var assembly = context.LoadNodeAssembly();
                 if (assembly == null)
                 {
@@ -1835,14 +1909,37 @@ internal class MeshNodeCompilationService(
                     ? " — " + EmitPipeline.ProbeEmittedImageLoads()
                     : "";
                 logger.LogWarning(ex,
-                    "Failed to extract NodeTypeConfigurations from {AssemblyLocation}: {Detail}{ProcessProbe}",
-                    assemblyLocation, detail, processProbe);
+                    "Failed to extract NodeTypeConfigurations from {AssemblyLocation}: {Detail}{ProcessProbe} "
+                    + "[NuGet: {PackageProbe}]",
+                    assemblyLocation, detail, processProbe, DescribePackageProbe(assemblyLocation, scanned));
                 return new NodeCompilationResult(null, [],
                     AppendError(log, $"Failed to load the compiled assembly — {detail}",
                         // The loader's own exception text rides verbatim behind a translated lead.
                         "activity.compile.assemblyLoadFailed", ("detail", detail)),
                     compiledSources);
             }
+    }
+
+    /// <summary>
+    /// The package-probe state of a failed scan, for its log line: which <c>#r "nuget:"</c> packages
+    /// the build records (<see cref="NuGetBuildRecord"/>) and where the context's probing directories
+    /// came from. "records none" on a build that needs a package means the bytes predate the record;
+    /// "probe NOT armed" on one that records packages means the probe never reached this context.
+    /// </summary>
+    private static string DescribePackageProbe(string assemblyLocation, NodeAssemblyLoadContext? context)
+    {
+        var recorded = BuildPackageProbing.RecordedReferences(assemblyLocation);
+        var packages = recorded.Count == 0
+            ? "the build records no package"
+            : "the build records " + string.Join("; ", recorded.Select(NuGetBuildRecord.Format));
+        var probe = context switch
+        {
+            null => "no load context",
+            { HasBuildProbingDirectories: true } => "probe armed from the build's record",
+            { HasProbingDirectories: true } => "probe armed from the node-wide registration only",
+            _ => "probe NOT armed",
+        };
+        return packages + "; " + probe;
     }
 
     /// <summary>
@@ -1908,7 +2005,11 @@ internal class MeshNodeCompilationService(
         var nugetRefList = extractedRefs.ToList();
         GeneratorPipeline.StripBuiltInScopeGeneratorRef(
             nugetRefList, builtInPresent: GeneratorPipeline.BuiltInGeneratorPaths.Count > 0);
-        return (source, [.. nugetRefList]);
+        // 🚨 The references are RECORDED in the build (NuGetBuildRecord): every reader of the bytes —
+        // another replica, this one after a restart, the start-up registration pass — resolves the
+        // package closure from them before it loads (EnsureBuildPackageProbing). Stamped into the
+        // TEXT, so the content key covers it and a build from before the stamp is rebuilt, not adopted.
+        return (NuGetBuildRecord.Stamp(source, nugetRefList), [.. nugetRefList]);
     }
 
     /// <summary>
@@ -1930,7 +2031,7 @@ internal class MeshNodeCompilationService(
             EmitPipeline.OptionsFingerprint,
             GeneratedInputIdentity.CompilerIdentity,
             GeneratedInputIdentity.AssemblyFileIdentities(
-                GeneratorPipeline.EffectiveGeneratorPaths(nugetAssemblyPaths)));
+                GeneratorPipeline.DigestedGeneratorPaths(nugetAssemblyPaths)));
 
     /// <summary>
     /// 🚨 THE RE-EVALUATION LANE's regeneration entry point (#1976): the stage-1 CONTENT-KEY
@@ -2083,8 +2184,12 @@ internal class MeshNodeCompilationService(
         if (nugetRefs.Length > 0)
         {
             var resolved = await nugetResolver.ResolveAsync(nugetRefs, targetFramework: null, ct);
-            references = References.Concat(
-                resolved.AssemblyPaths.Select(p => MetadataReference.CreateFromFile(p)));
+            // One assembly per name, the copy the load context binds at run time: a closure assembly
+            // the host set already provides (System.Text.Json,
+            // Microsoft.Extensions.DependencyInjection.Abstractions, …) is not referenced a second
+            // time — CompileReferences.WithPackageAssemblies. The generator candidates and the
+            // content key keep the full resolution, exactly as the bake does.
+            references = CompileReferences.WithPackageAssemblies(References, resolved.AssemblyPaths);
             nugetAssemblyPaths = resolved.AssemblyPaths;
             cacheService.RegisterProbingDirectories(nodeName, resolved.ProbingDirectories);
         }
@@ -2150,18 +2255,22 @@ internal class MeshNodeCompilationService(
             references,
             parsePath: cacheService.IsDiskCacheEnabled && _cacheOptions.EnableSourceDebugging ? sourcePath : "",
             ct);
-        // Option C (Doc/Architecture/InMeshImpersonation): the AUTHORED source's references to
-        // impersonation APIs, judged before generators run (their output is the platform's, not the
-        // author's) and before anything is emitted. LogOnly logs; Enforce refuses an untrusted
-        // NodeType here, which parks it at compilationStatus Error naming the reference.
+        var compilation = GeneratorPipeline.RunSourceGeneratorsWithNodeOutput(
+            authored, nugetAssemblyPaths, logger, ct, out var nodeGeneratedTrees);
+        // Option C (Doc/Architecture/InMeshImpersonation): references to impersonation APIs in the
+        // AUTHORED source AND in what a NODE-SUPPLIED generator (one the node #r'd) emitted — judged
+        // after generation, because such a generator's output is the author's code (#6619 review);
+        // only the platform's built-in generators' output is left out. Before anything is emitted.
+        // LogOnly logs; Enforce refuses an untrusted NodeType here, which parks it at
+        // compilationStatus Error naming the reference.
         // GetRequiredService, not GetService: every hub registers an AccessService
         // (MessageHubConfiguration.ConfigureServices), so a provider without one is a misbuilt host —
         // and a security check that an absent dependency switches off in silence is no check.
         if (hub.ServiceProvider.GetRequiredService<AccessService>().ImpersonationGuard is
             { Mode: not InMeshImpersonationMode.Off } guard)
             guard.CheckCompiled(InMeshImpersonationGuard.NodeTypeLoadContextPrefix + nodeName, node.Path,
-                InMeshImpersonationReferences.Find(authored, ct).Select(r => r.ToString()).ToList());
-        var compilation = GeneratorPipeline.RunSourceGenerators(authored, nugetAssemblyPaths, logger, ct);
+                InMeshImpersonationReferences.Find(compilation, authored.SyntaxTrees.Concat(nodeGeneratedTrees), ct)
+                    .Select(r => r.ToString()).ToList());
         OnEmitStarting?.Invoke(compilation);
 
         string? actualPath;

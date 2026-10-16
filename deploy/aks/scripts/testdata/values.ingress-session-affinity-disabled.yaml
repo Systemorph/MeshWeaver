@@ -1,0 +1,14 @@
+# The negative control for values.ingress-session-affinity.yaml (MeshWeaver#6825): the same typed
+# block with `enabled: false`. A record that switches affinity OFF must render none of it — not the
+# derived `affinity: cookie`, not the cookie name, not its nginxAnnotations.
+ingress:
+  enabled: true
+  className: "webapprouting.kubernetes.azure.com"
+  host: "instance.example.com"
+  tlsSecret: "instance-tls"
+  clusterIssuer: "letsencrypt-prod"
+  sessionAffinity:
+    enabled: false
+    cookieName: "MEMEX_AFFINITY"
+    nginxAnnotations:
+      nginx.ingress.kubernetes.io/affinity-mode: "persistent"

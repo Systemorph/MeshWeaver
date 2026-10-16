@@ -71,6 +71,9 @@ public static class InboxSettingsTab
         LayoutAreaHost host, IObservable<IEnumerable<MailRow>> rows, Action<UiActionContext, MailRow> archive)
         => rows
             .BindGrid(ListDataId, host.Localize("inbox.empty"), message => host.Localize("inbox.listFailed", message))
+            // Each row is its own click: archiving one mail never holds up — or is refused behind —
+            // archiving the next (Doc/GUI/ButtonPendingState → "Idempotence").
+            .WithRowKey("path")
             .WithColumn(new PropertyColumnControl<string> { Property = nameof(MailRow.From).ToCamelCase() }
                 .WithTitle(host.Localize("inbox.column.from")))
             .WithColumn(new PropertyColumnControl<string> { Property = nameof(MailRow.Subject).ToCamelCase() }

@@ -172,25 +172,28 @@ public class FaultInjectionCluster : IAsyncLifetime
 
     /// <summary>
     /// The silo a grain for <paramref name="path"/> on the LINGERING silo <paramref name="leaving"/>
-    /// hands its address off to (<c>MessageHubGrain.AnotherActiveSilo</c>: the other active silos,
-    /// ordered by address, indexed by the key's ordinal string hash — which is per-PROCESS, and every
-    /// silo of this cluster shares the test process). A case uses it to choose a path whose hand-off
-    /// lands where the case needs it, and asserts the landing afterwards, so a change to the
-    /// production rule shows up as a failed precondition rather than as a case that silently measures
-    /// something else.
+    /// hands its address off to — computed by the production rule itself
+    /// (<c>MessageHubGrain.AnotherActiveSilo</c> → <see cref="DrainHandOffTarget.Choose"/>: the other
+    /// active silos that the leaving silo does not know to be draining, ranked by a FIXED hash of the
+    /// key and each silo's identity, #6865). A case uses it to choose a path whose hand-off lands where
+    /// the case needs it, and asserts the landing afterwards, so a change to the production rule shows
+    /// up as a failed precondition rather than as a case that silently measures something else.
     /// </summary>
     /// <param name="path">The grain key (the node path).</param>
     /// <param name="leaving">The lingering silo's index.</param>
     /// <param name="active">The indices of the silos still active.</param>
     public int HandOffTarget(string path, int leaving, IReadOnlyCollection<int> active)
     {
+        var draining = Silo(leaving).GetRequiredService<ClusterDrainRoster>().Current;
         var candidates = active.Where(i => i != leaving)
             .Select(i => (Index: i, Address: Silo(i).GetRequiredService<global::Orleans.Runtime.ILocalSiloDetails>()
-                .SiloAddress.ToParsableString()))
-            .OrderBy(c => c.Address, StringComparer.Ordinal)
+                .SiloAddress))
+            .Where(c => !draining.Contains(c.Address))
             .ToArray();
-        var spread = (uint)StringComparer.Ordinal.GetHashCode(path);
-        return candidates[spread % (uint)candidates.Length].Index;
+        var target = DrainHandOffTarget.Choose(path, candidates.Select(c => c.Address))
+                     ?? throw new InvalidOperationException(
+                         $"no silo for '{path}' to be handed off to from silo {leaving}");
+        return candidates.Single(c => c.Address.Equals(target)).Index;
     }
 
     /// <summary>
@@ -280,10 +283,19 @@ public class FaultInjectionSiloConfigurator : ISiloConfigurator, IHostConfigurat
     /// <param name="builder">The mesh builder.</param>
     protected virtual MeshBuilder ConfigureAdditional(MeshBuilder builder) => builder;
 
+    /// <summary>
+    /// The durable PubSubStore a MULTI-SILO host supplies, or null for the default single-process
+    /// shape. Non-null makes every silo of this cluster configure itself exactly as a multi-silo
+    /// portal does — and since #4802 that means NO Orleans memory stream, so every cross-silo leg is
+    /// a directed grain call. In-process, any store will do: what is under test is the shape the
+    /// marker selects, not the store's durability.
+    /// </summary>
+    protected virtual Action<ISiloBuilder>? PubSubStore => null;
+
     /// <inheritdoc />
     public virtual void Configure(ISiloBuilder siloBuilder)
     {
-        siloBuilder.ConfigureMeshWeaverServer()
+        siloBuilder.ConfigureMeshWeaverServer(PubSubStore)
             .AddMemoryGrainStorageAsDefault()
             .ConfigureLogging(logging => logging.AddXUnitLogger());
         siloBuilder.Configure<ClusterMembershipOptions>(o =>
@@ -298,7 +310,10 @@ public class FaultInjectionSiloConfigurator : ISiloConfigurator, IHostConfigurat
     /// <inheritdoc />
     public virtual void Configure(IHostBuilder hostBuilder)
     {
-        var configured = hostBuilder.UseOrleansMeshServer()
+        // The SAME store marker on the host path as on the silo path above: both run
+        // ConfigureMeshWeaverServer, and a null here would register the memory stream that the
+        // multi-silo shape deliberately omits.
+        var configured = hostBuilder.UseOrleansMeshServer(PubSubStore)
             .ConfigurePortalMesh()
             .AddGraph()
             .ConfigureServices(services => services.Configure<SyncStreamOptions>(o =>

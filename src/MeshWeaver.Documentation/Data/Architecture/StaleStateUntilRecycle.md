@@ -217,9 +217,54 @@ bound NodeType is T"* (optionally narrowed to some addresses, or to the activati
   `ActivationRecycle` / `ActivationRecycleReport` types, and a request id that is not letters, digits
   and `-` (at most 80). An id is a dedupe key: an existing request at that id is answered, not
   rewritten.
+- **"Unknown" is decided by the STORE, never by a query (#6826).** A named type is known when it is a
+  framework built-in (a static node) or when the store holds a node at that path whose own type is
+  `NodeType` — the row the type's activation is loaded from, read in one batch without activating
+  any hub (`ActivationRecycle.UnknownNodeTypes`). The check used to ask the query read model
+  (`path:{type}`); a query's negative is not the store's, and on a portal serving the `Doc` partition
+  from the embedded documentation it refused every live Doc NodeType as unknown, from the type's own
+  recycle cascade, on every replica. A store read that FAULTS now surfaces as a fault — the cascade
+  logs that nothing was recycled because the type could not be read — and is never reported as an
+  unknown type.
 - **Only System's requests are acted on.** Each process re-validates what it reads and refuses a
   request node not created by System — a platform admin, who holds `Admin`, cannot bypass the checks
   by writing `Admin/_Recycle` directly.
+- **The audit is kept for a declared window, then pruned (#6813).** Every NodeType definition recycle
+  issues a request, so without a retention the rows under `Admin/_Recycle` grow with every recycle,
+  module landing and deploy. `ActivationRecycleRetention` is the policy, read from configuration:
+
+  | Key | Default | Meaning |
+  |---|---|---|
+  | `ActivationRecycle:Retention:Enabled` | `true` | `false` turns the prune off (no query is issued) |
+  | `ActivationRecycle:Retention:MaxAge` | `30.00:00:00` | a request untouched for this long is removed with its reports; a configured value below one day — zero and negative included — is clamped to one day; only an absent or unparseable value keeps the default |
+  | `ActivationRecycle:Retention:MaxDeletionsPerRun` | `50` | the most requests one prune removes, so a backlog drains over several requests |
+
+  Thirty days is long enough that the audit of a recent deploy or incident is still there when it
+  is read, whether for a post-incident review or to check which silos recycled after last week's
+  release, and it reaches back a full monthly release cycle. It is short enough that the rows stay
+  bounded by one month of recycle traffic rather than the portal's whole history. **The writer
+  prunes, and no timer does.** Right after `ActivationRecycle.Request` writes a new request it
+  removes the expired ones, as System, through `DeleteNode`. The delete cascades, so each
+  `{request}/{process}` report leaves with its request. This is the same owner-prunes-on-write shape
+  the compile activities use (`CompileActivityRetention`, in
+  [NodeType Compilation](../NodeTypeCompilation)). The rows grow only through that write, so pruning
+  on it bounds them. The request just written is never pruned. The decision is fail-closed: a row
+  that is undated, not a request, or not directly under `Admin/_Recycle` is kept. A failed listing
+  or delete costs that prune only. It is logged, and the next request retries; the caller's ticket
+  never depends on it — nor waits for it: the prune is a subscription of its own, started once the
+  request is committed, so the ticket is answered as soon as the write lands.
+
+- **A recycle of a NodeType DEFINITION is one of these requests (#6520).** A routed `DisposeRequest`
+  on a definition hub (the direct `recycle` verb on a NodeType, a package install, a control-lane
+  plan) runs the definition's recycle cascade, which reads the mesh's NodeType definitions once for
+  the dependents (the types sharing its sources, transitively), disposes the dependent definitions'
+  own hubs by address, and writes ONE request naming the type and every dependent, with the dispose's
+  reason and `RequestedBy: RecycleCascade from '<type>'`. It no longer asks any partition for the
+  type's stored instances — that enumeration, one cross-partition query per network type, was what
+  stalled the PostgreSQL query provider. Every disposal of a request carries `CascadedFrom`, so none
+  of them cascades again ([Hub Disposal Model](../HubDisposalModel) → "A recycle of the main bit").
+  The direct `recycle` verb is otherwise unchanged: it checks `Update`, and on a NodeType it stamps
+  the forced release before the dispose.
 
 The request is a platform write. On the control instance it is issued by the build queue as System:
 the `recycle` job kind (MeshWeaver.Plugins, `Hosting/Queue`) runs it, either when a NodeType of the
@@ -230,7 +275,10 @@ not the admin, holds the rights. The direct `recycle` verb above is unchanged an
 
 Pinned by `ActivationRecycleTest` (monolith: two live activations of T and one of U, exactly the two
 disposed, re-activation on a fresh hub, redelivery, refusals) and `TwoSiloActivationRecycleTest` (both silos' activations,
-one report per silo whose counts match what each hosted).
+one report per silo whose counts match what each hosted). The retention is pinned by
+`ActivationRecycleRetentionTest`: an expired request goes with its report when the next one is
+written, a request inside the window survives with its report, and the decision is oldest first,
+capped and fail-closed.
 
 ### Three rules for posting one, each paid for
 
@@ -348,6 +396,7 @@ suite references the loading, compilation, adoption and disposal projects direct
 | 2 | prebuilt bundle N → N+1 at the SAME store key | `BundleUpdateTest.ABundleAdoptedAtTheSameKey_IsBound_AfterTheDispose` — **red on main before the fix** |
 | 3 | a same-key byte change moves the path; the old bytes stay in place | `BundleUpdateTest.ASameKeyByteChange_MovesThePath_AndLeavesTheOldBytesInPlace` — **red before the fix** |
 | 4 | N+1 fails to compile: N keeps serving, the record says why | `NodeTypeUpdateTest.AFailedNewBuild_KeepsTheOldOneServing_AndSaysWhy` |
+| 4b | …and the MCP write verbs' schema probe validates against N at once, instead of waiting 5 s for an `Ok` that cannot come and then validating nothing (#6635) | `SchemaProbeOnAFailedBuildTest.AFailedNewBuild_StillValidatesAgainstTheLastGoodBuild_WithoutWaitingForOk` — **red before the fix** (5012 ms, `Created:`) |
 | 5 | N+1 unpublished, or built for another framework identity | `NodeTypeUpdateTest.AnUnpublishedNewBuild_IsNamed_AndTheOldOneKeepsServing`, `ForeignIdentityUpdateTest` |
 | 6 | N reads N+1-shaped content, N+1 reads N-shaped content | `ShapeCompatibilityTest.EachBuild_ReadsTheOtherBuildsShape` |
 | 7 | two builds serve side by side on a two-silo cluster | `MixedReplicaUpdateTest` |
@@ -355,6 +404,7 @@ suite references the loading, compilation, adoption and disposal projects direct
 | 9 | content written under N survives N+1 and the rollback | `NodeTypeUpdateTest.ARollback_RebindsTheOldBuild_AndTheDataSurvivesBothWays` |
 | 10 | no dispose, no change | `NodeTypeUpdateTest.WithoutADispose_ALiveHubNeverSwitchesBuilds` |
 | 11 | a record left naming a build the store does not hold (the first-write-wins residue) is rebuilt by the boot sweep, not counted as baked | `RecordNamesABuildTheStoreLacksTest.ARecordNamingABuildTheStoreLacks_IsRebuiltByTheSweep_AndThenRegisters` — **red with a version-keyed bake probe**; see [Dynamic Content Type Registration](../DynamicContentTypeRegistration) |
+| 12 | a live MODULE swap whose N+1 adds, removes or reorders a registration ahead of a forwarded one, or removes a forwarded one: restart-required, N keeps serving through the boot proxy — never a forwarder left at a stale index (MeshWeaver#6847); adding AFTER the forwarded ones still swaps live and the same proxy re-binds to N+1 | `ForwardedRegistrationIndexSwapTest.cs` — `ARegistrationAddedBeforeAForwardedOne`, `ARegistrationRemovedBeforeAForwardedOne`, `ARegistrationReorderedAheadOfAForwardedOne`, `AForwardedRegistrationRemoved`, positive control `ARegistrationAddedAfterTheForwardedOnes` — the first three **red without the fix, with the production sentence** (`… 'mw-module-service:N (…)' has not been registered`); see [Live Module Update](../LiveModuleUpdate) |
 
 The store-level half is pinned in `FileSystemAssemblyStoreTest`
 (`Put_same_version_different_bytes_publishes_the_new_bytes_under_their_own_name`,

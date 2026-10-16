@@ -3,7 +3,6 @@
   "namespace": "FutuRe/EuropeRe/TransactionMapping",
   "name": "EuropeRe: Liability → Casualty (70%)",
   "nodeType": "FutuRe/TransactionMapping",
-  "isPersistent": true,
   "content": {
     "$type": "TransactionMapping",
     "id": "EUR-LIABILITY-CAS",

@@ -181,6 +181,16 @@ public enum SelfUpdateOutcome
     /// never a final <c>Failed</c> (MeshWeaver#6172). Appended, never inserted.
     /// </summary>
     RestartHandoverFailed,
+
+    /// <summary>
+    /// The activation record marks a landed module generation for activation, but the per-process
+    /// reader establishes that NOTHING landed is pending here — so nothing went live, and a restart
+    /// would load nothing new (MeshWeaver#6620). The verdict carries the reader's own line, which names
+    /// why (a generation declined in favour of the image's copy, quarantined, or running a previous
+    /// generation). Before this it was reported as <see cref="ActivatedLive"/> — "went LIVE without a
+    /// restart" — while the old assembly kept serving. Appended, never inserted.
+    /// </summary>
+    NothingToActivate,
 }
 
 /// <summary>
@@ -567,6 +577,55 @@ public sealed record SelfUpdateVerdict(SelfUpdateOutcome Outcome, string Message
     {
         UnresolvedInstalledTag = after.UnresolvedInstalledTag,
     };
+
+    /// <summary>
+    /// A landed generation is marked for activation and NOTHING is pending in this process — nothing
+    /// went live, no restart is taken, and the reader's own line says why (#6620).
+    /// </summary>
+    public static SelfUpdateVerdict NothingToActivate(SelfUpdateVerdict after, string detail) => new(
+        SelfUpdateOutcome.NothingToActivate,
+        $"{after.Message} A landed module generation is marked for activation, but nothing landed is "
+        + $"pending in this process: nothing went live and a restart would load nothing new ({detail}).",
+        after.Tag)
+    {
+        UnresolvedInstalledTag = after.UnresolvedInstalledTag,
+    };
+
+    /// <summary>
+    /// The live half after a platform release was HANDED to the control lane (MeshWeaver#6829): the
+    /// outcome stays <paramref name="after"/>'s (<see cref="SelfUpdateOutcome.HandedOver"/> — the roll
+    /// is still the event), and the message says what went live in the process and what waits for the
+    /// handed-over roll. No restart is requested in any case. A pass that swapped nothing in and left
+    /// nothing for a restart — the activation marker outlives a successful live swap until the next
+    /// boot, so every later handed-over check finds it set with nothing pending here — says that
+    /// nothing is pending in this process, never that an activation is still pending.
+    /// </summary>
+    /// <param name="after">The platform verdict (the hand-over).</param>
+    /// <param name="wentLive">How many landed modules were swapped in live.</param>
+    /// <param name="needsRestart">Whether anything pending could not go live in the process.</param>
+    /// <param name="detail">The live pass's own description.</param>
+    public static SelfUpdateVerdict LiveWhileRollHandedOver(SelfUpdateVerdict after, int wentLive, bool needsRestart, string detail) =>
+        after with
+        {
+            Message = after.Message + (wentLive > 0
+                    ? $" A landed module generation was pending activation and went LIVE without a restart ({detail})."
+                    : needsRestart
+                        ? $" A landed module generation is pending activation and nothing went live in the process ({detail})."
+                        : $" A landed module generation is marked for activation, but nothing landed is pending in this process: nothing went live and the handed-over roll would load nothing new for it ({detail}).")
+                + (needsRestart
+                    ? " What did not go live is activated by the handed-over roll, which re-creates the pods; no separate restart is requested, as it would only race that roll."
+                    : ""),
+        };
+
+    /// <summary>
+    /// 🚨 Whether the LIVE half of a pending activation may follow <paramref name="platform"/>'s verdict
+    /// where the restart may not (MeshWeaver#6829): a release HANDED to the control lane. A live swap
+    /// happens inside this process and races no roll, so the hand-over — which only rules out a second
+    /// restart request — is no reason to leave a swappable module unloaded until the roll lands.
+    /// Pure; pinned by <c>SelfUpdateVerdictTest</c>.
+    /// </summary>
+    public static bool MayActivateLiveAfter(SelfUpdateVerdict platform) =>
+        MayRestartAfter(platform) || platform.Outcome == SelfUpdateOutcome.HandedOver;
 
     /// <summary>The roll floor deferred a pending restart, exactly as it defers a roll.</summary>
     public static SelfUpdateVerdict RestartDeferred(SelfUpdateVerdict after, string installed, TimeSpan elapsed, TimeSpan floor) => new(

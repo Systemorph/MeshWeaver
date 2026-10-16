@@ -1,3 +1,5 @@
+using System.Collections.Immutable;
+using Microsoft.CodeAnalysis;
 using MeshWeaver.NuGet;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.Extensions.Logging;
@@ -78,6 +80,28 @@ public static class GeneratorPipeline
                    Path.GetFileName(p), BuiltInScopeGeneratorId + ".dll", StringComparison.OrdinalIgnoreCase))];
 
     /// <summary>
+    /// The assemblies the stage-1 CONTENT KEY hashes for the generator half: the
+    /// <see cref="EffectiveGeneratorPaths"/> plus, for every candidate whose package ships a
+    /// RID-specific runtime group, the runtime asset discovery actually LOADS in its place
+    /// (<see cref="SourceGeneratorLoader.RuntimeAssetOf"/>) — two runtime helpers behind one compile
+    /// stub can make a generator emit different source, so they must not share a key. Identical to
+    /// <see cref="EffectiveGeneratorPaths"/> for every package without a <c>runtimes/</c> folder.
+    /// Shared by the bake, the runtime compile and the re-evaluation lane.
+    /// </summary>
+    internal static IReadOnlyList<string> DigestedGeneratorPaths(IReadOnlyList<string> generatorAssemblyPaths)
+    {
+        var effective = EffectiveGeneratorPaths(generatorAssemblyPaths);
+        List<string>? runtime = null;
+        foreach (var path in effective)
+        {
+            if (SourceGeneratorLoader.RuntimeAssetOf(path) is { } asset
+                && !string.Equals(asset, path, StringComparison.OrdinalIgnoreCase))
+                (runtime ??= []).Add(asset);
+        }
+        return runtime is null ? effective : [.. effective, .. runtime];
+    }
+
+    /// <summary>
     /// Runs the built-in scope generator plus any OTHER generator a node <c>#r</c>'d over
     /// <paramref name="compilation"/>. A node's own
     /// <c>#r "nuget:MeshWeaver.BusinessRules.Generator"</c> is filtered OUT — otherwise the same
@@ -88,15 +112,39 @@ public static class GeneratorPipeline
     /// </summary>
     internal static CSharpCompilation RunSourceGenerators(
         CSharpCompilation compilation, IReadOnlyList<string> generatorAssemblyPaths, ILogger logger, CancellationToken ct)
+        => RunSourceGeneratorsWithNodeOutput(compilation, generatorAssemblyPaths, logger, ct, out _);
+
+    /// <summary>
+    /// As <see cref="RunSourceGenerators"/>,
+    /// and hands back the trees the NODE-SUPPLIED generators added — every generator that is not one
+    /// of the platform's <see cref="BuiltInGeneratorPaths"/>. A node's own <c>#r</c>'d generator runs
+    /// code the node chose, so what it emits is the author's code for the in-mesh impersonation check
+    /// (<c>InMeshImpersonationReferences</c>), which must scan it AFTER generation (#6619 review).
+    /// </summary>
+    internal static CSharpCompilation RunSourceGeneratorsWithNodeOutput(
+        CSharpCompilation compilation, IReadOnlyList<string> generatorAssemblyPaths, ILogger logger,
+        CancellationToken ct, out ImmutableArray<SyntaxTree> nodeGeneratedTrees)
     {
+        nodeGeneratedTrees = [];
         var allPaths = EffectiveGeneratorPaths(generatorAssemblyPaths);
         if (allPaths.Count == 0)
             return compilation;
-        var generators = SourceGeneratorLoader.Discover(allPaths, logger);
+        var builtIn = SourceGeneratorLoader.Discover(
+            allPaths.Where(p => BuiltInGeneratorPaths.Contains(p, StringComparer.OrdinalIgnoreCase)), logger);
+        var nodeSupplied = SourceGeneratorLoader.Discover(
+            allPaths.Where(p => !BuiltInGeneratorPaths.Contains(p, StringComparer.OrdinalIgnoreCase)), logger);
+        var generators = builtIn.AddRange(nodeSupplied);
         if (generators.IsDefaultOrEmpty)
             return compilation;
         var driver = CSharpGeneratorDriver.Create(generators);
-        driver.RunGeneratorsAndUpdateCompilation(compilation, out var updated, out _, ct);
+        var ran = driver.RunGeneratorsAndUpdateCompilation(compilation, out var updated, out _, ct);
+        if (!nodeSupplied.IsDefaultOrEmpty)
+        {
+            var untrusted = nodeSupplied.ToHashSet(ReferenceEqualityComparer.Instance);
+            nodeGeneratedTrees = [.. ran.GetRunResult().Results
+                .Where(r => untrusted.Contains(r.Generator))
+                .SelectMany(r => r.GeneratedSources.Select(g => g.SyntaxTree))];
+        }
         return (CSharpCompilation)updated;
     }
 }

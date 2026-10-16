@@ -6,7 +6,6 @@
   "category": "Tasks",
   "description": "Create content calendar for LinkedIn and Twitter launch campaign",
   "icon": "/api/content/ACME/Project/Todo/icon.svg",
-  "isPersistent": true,
   "content": {
     "$type": "Todo",
     "title": "Plan social media campaign",

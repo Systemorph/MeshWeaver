@@ -6,8 +6,6 @@
   "category": "Agentic AI",
   "description": "How AI decisions are guided by assembling many small text snippets into context",
   "icon": "/api/content/Systemorph/Marketing/icons/chat.svg",
-  "addressSegments": 0,
-  "isPersistent": true,
   "content": {
     "$type": "MarkdownDocument",
     "title": "Context Assembly: The Key to AI Intelligence",

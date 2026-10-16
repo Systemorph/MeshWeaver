@@ -133,10 +133,10 @@ N+1).
 | Piece | What it does |
 |---|---|
 | `ModuleContributions` (`MeshWeaver.Mesh.Contract`) | One generation's materialised contributions, and `LiveUpdateBlockers()` — the declared `[ModuleRestartRequired]` reason plus what the platform MEASURES it cannot re-apply in-process: root services through `WithGlobalServiceRegistry`, the mesh hub's configuration (`HubConfigurations`), address types, the builder hook, HTTP endpoints. Nodes and every-per-node-hub configuration ARE re-appliable. |
-| Re-appliable seams (`MeshBuilder`, `StaticMeshNodeListProvider`) | A module's nodes are served from its CURRENT generation in the seed tier, at the position its boot nodes held (same precedence as before). Its every-per-node-hub configuration goes through one indirection read when a hub is built. `InstalledModuleAssembly` for a module in its own context is TRANSIENT and answers the current generation, so the compile reference set (`MeshNodeCompilationService`, now keyed by the module MVIDs) and `InstalledModulesFingerprint` (now read live) follow a swap — and every build stamped with the old fingerprint reads as stale and rebuilds against N+1 on its next activation. 🚨 None of these registrations captures a module's boot `Assembly` strongly: one did, and it rooted generation N for the life of the process (`ModuleLiveSwapTest`'s collection assertion caught it). |
+| Re-appliable seams (`MeshBuilder`, `StaticMeshNodeListProvider`) | A module's nodes are served from its CURRENT generation in the seed tier, at the position its boot nodes held (same precedence as before). Its every-per-node-hub configuration goes through one indirection read when a hub is built. `InstalledModuleAssembly` for a module in its own context is answered from the `InstalledModules` registry at every read with the current generation (absent once withdrawn or retired), so the compile reference set (`MeshNodeCompilationService`, now keyed by the module MVIDs) and `InstalledModulesFingerprint` (now read live) follow a swap — and every build stamped with the old fingerprint reads as stale and rebuilds against N+1 on its next activation. 🚨 None of these registrations captures a module's boot `Assembly` strongly: one did, and it rooted generation N for the life of the process (`ModuleLiveSwapTest`'s collection assertion caught it). |
 | `ModuleLiveUpdater` (`MeshWeaver.Graph`) | The swap: load N+1 → refuse (N untouched) on any blocker of N, N+1 or a dependent, or a load / materialisation failure → load N+1 and re-load every dependent into ONE `ModuleSwapStage` (a staged context binds the STAGED N+1, so the dependents re-bind before anything is current) → only when all of them loaded, materialised and prepared, `CommitAll` makes the whole set current in one step; a failure before that unloads the staged set, which no request was ever routed to, and N never stopped serving (#6128 review: committing N+1 first published it to every reader of the generations while a dependent could still fail) → recycle this process's per-node hubs bound to the module's NodeTypes or nodes (every per-node hub when a generation configures every hub, or when an in-mesh build here is linked against a swapped module) → once those hubs are DEAD, retire the old generations. Serial (a subject and `Concat`, no gate), so a second update that arrives mid-swap is applied after it. Outcomes are an open vocabulary (`ModuleSwapKind`: `Live`, `UpToDate`, `RestartRequired`, `Failed`, `NotHeld`); `NeedsRestart` is the one question a caller asks. **`Swap(path)` is `internal`** (granted to `MeshWeaver.PluginCatalog` only): it runs the bytes at a path as platform-classified code, so a public method on a mesh singleton would let any code that resolves it name the bytes or roll a module back to an older directory. The only way in is `ModuleLiveActivation.ActivatePending`, which takes no path and swaps only the pinned copy of what the landing service landed. A generation's contributions are recorded **before** it is made current, so no reader ever sees a current generation whose contributions are null. |
-| `ModuleLiveActivation` (`MeshWeaver.PluginCatalog`) | For every module `PendingModuleActivations` reports landed-but-not-serving in THIS process, swap the PINNED copy of its landed generation in live. A module this process does not hold in its own context is `NotHeld`. A pass that cannot read the state keeps the restart. |
-| `SelfUpdateHostedService.ConsiderRestart` | 🚨 **Live first.** Where a pending activation used to mean a restart, the check now calls `ModuleLiveActivation`; only when something did not go live does it take — or hand to the control lane — the automatic restart, whose announcement now names the modules and reasons. The verdict `ActivatedLive` records a pass that needed no restart. A host without the plugin catalog keeps the old path. |
+| `ModuleLiveActivation` (`MeshWeaver.PluginCatalog`) | For every module `PendingModuleActivations` reports landed-but-not-serving in THIS process, swap the PINNED copy of its landed generation in live — all of them as ONE swap (`SwapAll`), so the pass recycles each hub once (see *One landing, one recycle wave*). A module this process does not hold in its own context is `NotHeld`. A pass that cannot read the state keeps the restart. |
+| `SelfUpdateHostedService.ConsiderRestart` | 🚨 **Live first.** Where a pending activation used to mean a restart, the check now calls `ModuleLiveActivation`; only when something did not go live does it take — or hand to the control lane — the automatic restart, whose announcement now names the modules and reasons. The verdict `ActivatedLive` records a pass that SWAPPED something in and needed no restart; a pass that found the generation marked while nothing is pending in this process is `NothingToActivate` and carries the reader's own line — declined in favour of the image's copy, quarantined, a previous generation — never "went LIVE" (MeshWeaver#6620: that sentence was reported while the old assembly kept serving). A host without the plugin catalog keeps the old path. |
 
 **Tests.** `ModuleLiveSwapTest` (`MeshWeaver.Compiler.Pipeline.Test`, a running monolith mesh): N→N+1
 goes live and N's context is really collected (negative control: hold one reference into N → reported
@@ -155,6 +155,129 @@ during an in-flight restart schedules no second one; and the negative control �
 the guard names the stuck landed-not-loaded module. Mutation check: forcing the old restart path makes
 the live test fail (`Restarts` 1, expected 0).
 
+### What is pending is read off the volume's LISTINGS, never its directory timestamps (MeshWeaver#6829)
+
+Every decision above starts from `PendingModuleActivations`, and that reader memoises its walk of the
+module volume (the activation sidecar, `activation.d/`, the set index, one existence probe per
+landed DLL) so a probe does not pay it per call (#3664). The memo key used to be the last-write
+times of `modules/`, `modules/activation.d/` and `modules/sets/`, on the premise that a rename into a
+directory moves its timestamp everywhere. On the Azure Files (SMB) module share that premise does not
+hold, and the snapshot froze: a fresh closed-type-set instance took its reading mid-landing (one
+module landed, set 1 empty), the boot wave then landed about 33 modules and proposed set 2, and every
+later reading in that process still said *nothing pending, 1 module in NO proposed module set*. The
+self-updater answered `NothingToActivate` on its proposal check and its safety net alike, and the
+restart that adopts set 2 never came.
+
+The key is now what the three directories LIST: each file's name, length and own last-write time,
+and each subdirectory's name — and, under `activation.d/`, each module's own record directory file
+by file, because a record (a landing, an uninstall tombstone) lands by a rename into that directory
+and leaves `activation.d/`'s own listing unchanged
+(`ARecordOnlyChange_InsideAModulesRecordDirectory_IsSeen`). Module payload directories stay
+name-only: nothing the reading derives lives in them. That is what the reading is derived from, and no filesystem leaves it
+unchanged across a create, rename, replace or delete. A directory that cannot be listed yields no key
+at all, so the reading is retaken and reports the fault instead of serving the old snapshot. The old
+`DiskFingerprint` stays as an `[Obsolete]` type for binary compatibility and keys nothing.
+`PendingModuleActivationsCostTest.ALandingIsSeen_WhenTheVolumeDoesNotMoveDirectoryTimestamps`
+reproduces the share by restoring the three directories' timestamps after a second wave: it reads 1
+pending module where 3 are pending without the fix and 3 with it, while an unchanged volume is still
+read once.
+
+### A platform hand-over does not skip the live swap (MeshWeaver#6829)
+
+The module half of a check follows the platform half, and `SelfUpdateVerdict.MayRestartAfter`
+decides whether a restart may follow it. A release HANDED to the control lane is not followed by a
+restart: the routed Roll it opens re-creates the pods, and a second request would only race it.
+Until this change the same rule also skipped the LIVE swap, which is not a restart — it happens in
+this process and races nothing. On an install that sees a newer platform build on nearly every check
+(each `BuildCompletion` is one), that meant a proposed module set waited for the next roll even where
+it could go live at once, and waited indefinitely behind a roll that waits for an approval.
+
+Measured on memex.systemorph.com, 2026-10-16, with the listing fix above already running: three
+replicas booted 08:19–08:26Z onto module set 1986; set 1987 was proposed at 08:38:57Z; every later
+check on those replicas was a `BuildCompletion` answering *update available — handed to the control
+lane*; `/health` read *20 module(s) are landed but not yet loaded* on all three until the handed-over
+roll's first pod booted at 08:56Z — and that pod read no pending activation. The roll did activate the
+set; nothing before it tried.
+
+Now `SelfUpdateVerdict.MayActivateLiveAfter` admits a hand-over, and `ConsiderRestart` takes the live
+half alone there (`LiveOnly`): what can go live goes live, what needs a restart is left to the roll,
+and the verdict keeps its `HandedOver` outcome and says which. No restart is announced in either case.
+`ModulesGoLiveWhileARollIsHandedOverTest` (`Memex.Portal.Shared.Test`, the real landing path and the
+real decision, a control-lane install, a newer platform build in the registry): a live-updatable
+module goes live and only the release event reaches the inbox; a restart-required module keeps N
+serving, no restart event is announced, and the verdict names the roll; and the negative control —
+nothing newer, nothing handed over — takes the module half as before. Mutation check: reverting
+`ConsiderRestart` makes the first test fail with N still serving.
+
+The activation marker outlives a successful live swap until the next boot, so every LATER
+handed-over check still takes the live half and finds nothing pending in this process. That pass
+says so — *nothing landed is pending in this process* — and keeps the `HandedOver` outcome; it never
+reports an activation as still pending (`ALaterHandedOverCheck_AfterTheLiveSwap_SaysNothingIsPendingHere`).
+
+**Not addressed here:** a module that cannot go live waits for the handed-over roll, and if that roll
+waits for an approval, so does the module. Whether the control plane should then run the unattended
+Restart in its place is the control plane's decision (it sees the Roll it opened), not this
+instance's.
+
+### One landing, one recycle wave (MeshWeaver#6729)
+
+**A landing recycles each owner address ONCE.** `ModuleLiveActivation` hands every pending module of a
+pass to `ModuleLiveUpdater.SwapAll` as ONE swap. Each module is still loaded, refused or committed on
+its own, in order, with exactly the checks a single swap applies. What they share is the recycle: every
+hub bound to any committed generation is torn down once, after the last commit, and every old
+generation is retired after those hubs are dead.
+
+**The wave does not cascade.** Each `DisposeRequest` of the wave carries `module:{name}[,{name}…]` in
+`DisposeRequest.CascadedFrom`, and `MessageHub.HandleDispose` never runs a `RecycleCascade` for a
+request that carries a value there. The wave already names every hub of its process that is bound to
+the swapped generations, or every per-node hub when a generation reaches them all, so for a swap the
+wave IS the dependency network. Hubs of other processes are not this wave's to recycle, because each
+process swaps its own module contexts and recycles its own hubs.
+
+**One module's fault never costs the others their wave.** Because the swap collects every module before
+it recycles, the preparation of one module never faults the swap. A fault before that module commits is
+its own `Failed` outcome, and its running generation keeps serving. A hand-over fault after it commits
+keeps the module in the wave, because its new generation is current, and its outcome names the fault.
+The wave also posts ONE `DisposeRequest` per address. Each committed module's hub set is a separate
+snapshot of the live registry, so a hub that an unrelated recycle replaced between two snapshots shows
+up as two activations of one path. Both are waited for, but a second request to that address would tear
+down the successor.
+
+**Why both rules exist.** It was measured on memex-cloud on 2026-10-15 at 00:49Z, on pods already
+running the #6756 fix. One landing swapped `MeshWeaver.OgCard` and `MeshWeaver.Markdown.Export`, and
+both pods' sync streams gave up on "4 DISTINCT owner activations" for unrelated owners
+(`Hosting/PlatformBuilds`, `Hosting/TriageRule`, `Ops/Issue/*`, …), 120 such lines between 00:01Z and
+06:07Z. The owner's refusals, read through a governed `Logs` action
+(`Ops/Actions/iw-6729-memexcloud-preburst-0047-0049-20261015`), named a fresh activation each time:
+`Hosting/PlatformBuilds` died as `#00AA2EE2` (*RecycleCascade from 'Hosting/InstanceAction': ModuleLiveUpdate:
+MeshWeaver.OgCard …*), as `#025E3E68` (*… from 'Hosting/Build' …*), and as `#0045ECAE` (*… from
+'Store/Publishing': ModuleLiveUpdate: MeshWeaver.Markdown.Export …*), each time still deferring its
+first `SubscribeRequest` behind its initialisation gates. The cause was the wave itself. The swap
+disposed every per-node hub, NodeType definition hubs included. Each definition then enumerated the
+mesh-wide index and, seconds later, posted a second request to every instance of its network. Those
+were addresses the wave had already torn down and their subscribers had already re-activated. A second
+module's own wave did the same once more. The subscriber's give-up was therefore CORRECT: the address
+really was recycling in a loop, and the fix belongs to the recycler, as the give-up's own text says.
+
+**Tests.** `AModuleLandingRecyclesEachOwnerOnceTest` (`MeshWeaver.Compiler.Pipeline.Test`, a running
+monolith mesh, the framework's own `RecycleCascade` seam as the instrument):
+
+- A swap's wave does not run the cascade.
+- A direct recycle of the same kind of hub does. This is the negative control that the instrument
+  fires.
+- Two modules landing together, with a live reader holding the probe open, tear the probe down exactly
+  once. Every probe activation is recorded as the registry adds it (`HostedHubsCollection.HubAdded`),
+  so a successor that is created and torn down quickly cannot be missed.
+- A second module that faults while it is prepared leaves the first one `Live`, recycled onto its new
+  generation, and is reported `Failed` itself. With the fault left to escape, both modules are reported
+  `Failed` and the probe is never recycled.
+
+Against the pre-fix updater (one swap per module, no `CascadedFrom`), the first and third cases are red.
+
+**Not established.** `ModuleReloadExecutor.SwapThenReport` still asks `IModuleLiveActivation.Swap` once
+per module. No implementation of that seam is registered today, so it recycles nothing. An
+implementation must swap a reload's modules as one wave, through `SwapAll`.
+
 ## What is shipped (slice 4 — root services, and only boot-time may restart)
 
 **Root services are converted.** The most common blocker — a module registering ROOT services
@@ -167,7 +290,40 @@ the live test fail (`Restarts` 1, expected 0).
 | `ModuleServiceProvider` (`MeshWeaver.ServiceProvider`) | The module's services live in an Autofac container of their OWN, which reaches the root only for types that do not name the module — through ONE stand-in **per root registration**, so `IEnumerable<T>` in the module is the root's whole list in the root's order and a single resolve still answers the root's LAST. Each stand-in resolves in a root CHILD scope owned by the asking module scope (`RootResolutionScope`), never in the root itself: a scoped root service built in the root is shared there for the life of the process, under the root's lock — the silo-wide wedge of [Reading a Silo Eviction](../ReadingASiloEviction) (MeshWeaver#6432); a closed generic over a module type (`IOptions<ItsOptions>`, `ILogger<ItsType>`) is closed in the module's container from the root's open-generic registration. |
 | Module types, wherever asked | A type a module DECLARES is answered from the modules wherever it is asked — `ModuleServices.RegistrationsElsewhere`: the declaring module's registrations (`ModuleServiceProvider.ResolveAt`, one per registration) plus every **contribution** another module made of it (`ModuleServiceRoute.Contributed`). The ROOT serves it through `ModuleOwnedRootSource` (so the mesh hub and every per-node hub, which are scopes under the root, see it), and another module's container through `ModuleFallbackSource`. |
 | Contributions | A registration of a type ANOTHER module declares (`ModuleServiceRoute.Contributed` — every AI provider registering MeshWeaver.AI's `LanguageModelCatalogSource` and `IChatClientFactory`) is never put in the root: a root forwarder would pin the declaring module, and a `DispatchProxy` cannot be built over a collectible interface at all ("A non-collectible assembly may not reference a collectible assembly"). It is served to the declaring module's container after that module's own registrations, and to the root's list. |
-| The swap | `ModuleContexts.PrepareServices` re-runs N+1's delegates against the SAME boot prefix and requires the same routes and shape — the root's forwarders were laid out at boot; a changed shape is refused by name and N keeps serving. |
+| The swap | `ModuleContexts.PrepareServices` re-runs N+1's delegates against the SAME boot prefix and requires the same routes and shape — the root's forwarders were laid out at boot; a changed shape is refused by name and N keeps serving. 🚨 The shape includes each forwarded registration's INDEX: every forwarder resolves the boot generation's index in the current generation, so an N+1 that inserts any registration (module-owned, private, hosted) ahead of a forwarded one is restart-required, never live (MeshWeaver#6847 — see below). |
+
+🚨 **A "copy of the root collection" copies the DESCRIPTORS, so a registry that registration code writes
+into must be copied too.** `AddHttpClient<T>()` records "client name → `T`" in the `HttpClientMappingRegistry`
+INSTANCE the collection holds and refuses a second type under the same name — and the name is derived
+from the type name alone. Shared by reference, generation N's `AddHttpClient<WebSearchPlugin>()` wrote into
+the ROOT's one registry (pinning N's collectible context), and N+1's `WebSearchPlugin` — the same name, a
+different `Type` from a new load context — was refused, failing the live swap of MeshWeaver.AI
+(MeshWeaver.Plugins#3518). `ModuleServices.Probe` now hands each probe its own copy of that registry, seeded
+with the root's entries, so a module colliding with a PLATFORM client is still refused exactly as at boot.
+`ALiveSwapReRegistersATypedHttpClientTest` pins the N→N+1 probe and that root-collision control.
+
+🚨 **A module's NAMED options reach the root only through a NAMED forwarder, and a swap evicts the root's
+options cache.** `services.Configure<T>(name, …)`, `AddOptions<T>(name).Configure(…)` and every
+`AddHttpClient(name, …)` / `AddHttpClient<TClient>(…)` register a `ConfigureNamedOptions<T>` as an
+`IConfigureOptions<T>` — and the options factory applies a setup that is not ALSO an
+`IConfigureNamedOptions<T>` to the default name only. Behind the root's `DispatchProxy` (which implements the one
+interface it was created for) every named configuration a module made was therefore silently dropped: the
+root `IHttpClientFactory` handed out a module's typed client with none of its headers, base address or timeout,
+at boot, with nothing logged. The root now holds a `ModuleConfigureOptionsForwarder<T>` for every forwarded
+`IConfigureOptions<T>`; it applies the CURRENT generation's setup exactly as `OptionsFactory<T>` would — by name
+when it is named, to the default name otherwise. `HealthCheckServiceOptions` keeps its own forwarder
+(`ModuleHealthCheckOptionsForwarder`, which also rebinds each added check to activate in the module's scope), and
+that forwarder is named in the same way, so a module's `Configure<HealthCheckServiceOptions>("name", …)` reaches
+`IOptionsMonitor.Get("name")` (MeshWeaver#6749). And because `IOptionsMonitor<T>` builds a named instance once
+and caches it, `ModuleContexts.CommitAll` clears the root's `IOptionsMonitorCache<T>` for every options type the
+swapped generations configure (configure, post-configure or validate), after they are current — otherwise N+1's
+client kept N's configuration, and the cached delegates kept N's collectible context reachable. Not reached:
+`IOptions<T>.Value`, which a root singleton caches for the life of the container, and a consumer that copied an
+options instance into its own state. `ALiveSwapRefreshesATypedHttpClientsConfigurationTest` pins both halves,
+each with its own negative control. A forwarder's factory lambda captures values (the lifetime, the index),
+never the loop's `registration`: the first draft did, which hoisted it into the closure every forwarder of that
+iteration shares, and the descriptor's implementation type pinned generation N in the root —
+`ModuleRootServicesSwapTest`'s retention check caught it.
 
 🚨 **A list is served as a list.** The first images of this slice collapsed every multi-registration
 service to its LAST element in two places — the module container's fallback answered a platform type with
@@ -196,6 +352,32 @@ did not add, a keyed registration, a class-typed platform service the module imp
 implementation that also implements another platform interface (a proxy would hide it), an open generic
 the module implements.
 
+### A module's health check follows the swap (MeshWeaver#6766)
+
+A module's `AddHealthChecks().AddCheck<TCheck>()` reaches the root as `ModuleHealthCheckOptionsForwarder`,
+and the root's `DefaultHealthCheckService` activates the check. The root reads
+`IOptions<HealthCheckServiceOptions>` ONCE per process. The forwarder used to copy the registration that
+the boot generation's configuration added, and to rebind only its PROVIDER to the module's current
+scope. The factory it kept was therefore generation N's `GetServiceOrCreateInstance<TCheck>`: `TCheck`,
+and every type its constructor takes, were N's types. After a live swap, N+1's container was asked for N's
+dependency type, which it does not hold. Measured on a portal: every `/health` threw `Unable to resolve
+service for type 'MeshWeaver.AI.ProviderCatalogConvergence' while attempting to activate
+'MeshWeaver.AI.ProviderCatalogHealthCheck'` out of the health middleware. The kept factory also pinned
+generation N's collectible context.
+
+The root's registration now names no module type. It keeps the check's name, tags, failure status,
+timeout, delay and period. At every activation its factory takes ONE snapshot of the module's current
+generation, runs that generation's own factory for the check of that name, and activates it in that
+generation's container. Each generation's checks are read once, from its own configuration run against an
+empty options instance, and are held in a table keyed weakly by the generation, so a retired generation is
+never pinned. A module that is no longer held (retired by an uninstall, or withdrawn at boot), or a current
+generation that no longer declares the check, gives a NAMED `Degraded` result for that check, never an
+exception: the feature is absent, and the probe says which feature and why.
+`ModuleHealthCheckActivatesInModuleScopeTest` swaps a module live and retires it, running the check
+through the root's `HealthCheckService` each time. On the base, the swap case throws the measured shape
+(`Unable to resolve service for type '…Beat' while attempting to activate '…ProbeCheck'`) and the
+retire case throws `Module … holds no service scope`.
+
 ### Built before published (MeshWeaver#6542)
 
 🚨 **The root only ever READS a module's instances.** Every PROCESS-LIFETIME instance the root can
@@ -216,24 +398,188 @@ boot-built one threw `'RemoteNavigationManager' has not been initialized`. So a 
 left to its first resolve, and so is a singleton whose constructor graph reaches a scoped registration
 — read STRUCTURALLY off the registrations (`ScopedDependencyWalk`: every public constructor's
 parameters of a reflection-activated registration, through transients and the module's own
-singletons, into the root's registrations for every type that names no collectible assembly; a root
-singleton ends the walk). Neither is a path the lock order needs: a root singleton that takes a scoped
+singletons, into the root's registrations for every type that names no collectible assembly, and —
+for a type a module DECLARES — into the other module containers that register it, the same
+registrations `ModuleFallbackSource` resolves it from; a root singleton ends the walk). Without that
+last leg a singleton taking another module's scoped type looked like it took nothing, was built at boot
+with no caller, and withdrew its module (`ASingletonOverAnotherModulesScopedTypeIsNotBuiltAtBootTest`). Neither is a path the lock order needs: a root singleton that takes a scoped
 service is a captive dependency, not a way the root reaches a module. A module's PRIVATE registration
 is built only when a built one takes it. A delegate-activated singleton names no dependencies and is
 built. `AModuleWithCircuitBoundServicesLoadsAtBootTest` and
 `ModuleRootServicesSwapTest.AnUpdateWithCircuitBoundServices_SwapsLive` carry the Radzen shape, against
 a root-scoped stand-in that throws exactly as `RemoteNavigationManager` does.
 
-**Open: a withdrawn module's `InstalledModuleAssembly` (MeshWeaver#6557).** A module withdrawn at boot
-keeps the transient `InstalledModuleAssembly` registration it was given while the mesh was configured,
-and once its boot assembly is collected that registration throws "no longer held by this mesh's module
-registry" from inside every `GetServices<InstalledModuleAssembly>()`. That is how the Radzen
-withdrawal above refused the pod's readiness: the pre-warm sweep enumerates installed modules. With
-circuit-bound services no longer built at boot, Radzen is not withdrawn; a module whose root-reachable
-singleton genuinely throws still is, and still meets this. Moving the registration into an Autofac
-registration source was tried and rejected: hosts that build the collection with MS DI's own
-`BuildServiceProvider()` ignore sources and lost every held module's `InstalledModuleAssembly`
-(`ConfiguredModuleActivationTest`).
+### A module's scoped service is the caller's (MeshWeaver#6584)
+
+Not building a scoped registration at boot only moved its construction to its first resolve — and
+every resolve of a module service used to land in the module container's OWN root: one instance per
+generation, shared by every circuit, built against a root child scope no circuit initialised. Radzen's
+`ThemeService` was one instance for every user (one user's theme was the next user's), and
+`DialogService` threw `'RemoteNavigationManager' has not been initialized` on its first real resolve.
+
+So a resolve now carries its **caller** — the root-side scope it is made in (a Blazor circuit's, a
+request's, a hub's; null for the root container itself, i.e. a singleton or a resolve off the root
+provider) — down every road the root reaches a module by: `ModuleOwnedRootSource`'s stand-ins, the
+`Current` forwarder, a `Proxy` over a scoped or transient registration (one proxy per caller scope,
+forwarding for it; a singleton keeps its one stable proxy), and a module type asked from ANOTHER
+module's container (`ModuleFallbackSource`, which passes on the caller its own scope serves). A
+registration that is not a singleton is then resolved in a module scope **owned by that caller**
+(`ModuleServiceProvider.InCallerScope`, `ModuleCallerScopes`): begun on first use, tagged with the
+caller, and handed to the caller's own disposer, so it ends when the caller ends — asynchronously, as a
+circuit's scope is disposed. Its `RootResolutionScope` is the caller's own scope, so every root
+registration it takes (`NavigationManager`, `IJSRuntime`) is that caller's instance. A singleton is
+still the generation's one instance, built before published as above.
+
+**Which ends first.** A caller can outlive a generation (a hub scope across a live swap): the
+generation's container, as it ends, ends every caller's module scope FIRST — before its own singletons
+— and lets go of it, so the caller's disposer holds nothing of the retired generation; the caller's own
+end afterwards finds nothing to do (`ACallersModuleScopeEndsWithTheGenerationTest`).
+`AModulesScopedServicesAreTheCallersTest` measures two circuits through both the module-declared and
+the platform-class road; its negative control resolves the same registration with no caller and gets
+the uninitialised-state throw.
+
+**A forwarder owns nothing it returns (MeshWeaver#6588).** Every root forwarder of a module's
+platform-typed service — `Current`, and `Proxy` at every lifetime — is a `NotOwnedServiceDescriptor`,
+which every container MeshWeaver builds registers **externally owned** (`PopulateMeshWeaver`). An
+ordinary factory registration is owned by the scope that resolves it, so the forwarder used to hand
+ownership of a module's instance to whoever asked: the first circuit to end disposed a module
+SINGLETON under every other user, and disposed a module SCOPED instance a second time after the module
+scope that circuit owned had already disposed it; a `Proxy` over an `IDisposable` interface forwarded
+the same disposal. Ownership stays where the instance was built — the generation's container for a
+singleton, the caller-owned module scope for a scoped one. The forwarder is registered at its own
+position in the collection while `Populate` walks it, so the default registration of a service and the
+order of an `IEnumerable` of it are unchanged (`ANotOwnedForwarderKeepsItsPositionTest`).
+`AModuleForwarderOwnsNothingItReturnsTest` measures one circuit ending on the test mesh, on an
+`IHostApplicationBuilder` host and on a legacy `IHostBuilder` host: the singleton serves the other
+circuit undisposed, each scoped instance (class and proxy route) is disposed exactly once.
+
+**One lock owner per caller.** Autofac builds a scope's shared instances under that scope's one
+shared-instance lock. A caller-owned module scope is a scope of the MODULE container, and its root
+resolutions are made in the caller's own scope, so the two locks were taken in both orders: a
+caller-scoped ROOT service whose construction resolves a module's scoped service (caller, then module
+scope), and that module service's construction taking a caller-scoped root service not built yet
+(module scope, then caller) — two first builds overlapping in those orders deadlocked. So a
+caller-owned module scope, and every scope begun from it, takes its CALLER's lock as its own
+(`CallerSharedInstanceLock`): one monitor for the caller and everything it owns, re-entered by the
+thread that already holds it, so there is no order to invert — whichever road reaches the module scope,
+including a module service that keeps its `IServiceProvider` and resolves later. Autofac offers no API
+to hand a scope its lock, so the lock field is set before the scope is handed out; Autofac is pinned, and
+a version without that field fails loudly at the first caller rather than silently bringing the
+deadlock back. `CallerAndModuleScopedServicesBuildInOneLockTest` forces the overlap; its negative
+control gives the same module scope its own lock back and deadlocks.
+
+**A withdrawn module is absent from the installed-module set (MeshWeaver#6557).** A container's
+registrations are fixed once it is built; the module set is not. Each held module used to get its own
+transient `InstalledModuleAssembly` registration, and a module withdrawn after the container was built
+kept it: once its boot assembly was collected, that registration threw "no longer held by this mesh's
+module registry" from inside every `GetServices<InstalledModuleAssembly>()`. That is how the Radzen
+withdrawal above refused the pod's readiness: the pre-warm sweep enumerates installed modules, so one
+broken module refused readiness for the whole pod. Now the set is ONE registry the mesh owns,
+`InstalledModules`: ONE ordered sequence of slots, in the order they were declared in the service
+collection — order is load-bearing (first-mount-wins static assets, the list-ordered compile
+reference surface), so a held module keeps the position it was installed at. A slot is a fixed
+`InstalledModuleAssembly` (an image-bound module, anything else that registers one) or a member that
+can GO — a held module by NAME, answered from `ModuleContexts` at each read, or an
+`InstalledModuleAssembly` a held module registers through its OWN services — and a member whose
+module the registry no longer holds is simply absent. The
+`IEnumerable<InstalledModuleAssembly>` every consumer resolves is an explicit factory registration over
+that registry, which MS DI and Autofac both answer ahead of the per-descriptor collection, so a host
+built with plain `BuildServiceProvider()` reads the same set as the Autofac host. (An Autofac
+registration source was tried first and rejected for that reason: MS DI ignores sources, and
+`ConfiguredModuleActivationTest` lost every held module.) The withdrawal itself is still reported as an
+`IncompatibleModule` (stderr, `/health`, the module-status surfaces).
+`AWithdrawnModuleIsAbsentFromTheSweepTest` covers both hosts and runs the probe and the warm-up sweep
+over a withdrawn module.
+
+The same registry closes the two neighbouring gaps of that class, again on both host kinds:
+
+- **The withdrawal is reported, and happens, on every host.** The `IncompatibleModule` records — the
+  declared ones plus every module withdrawn at boot — are served by an explicit
+  `IEnumerable<IncompatibleModule>` factory over `InstalledModules`, not by an Autofac registration
+  source a plain MS DI host ignores. And the boot publication that withdraws a failing module runs from
+  the module registry's own singleton registration on its first resolve (`ModuleContexts.PublishOnce`),
+  which every host kind calls; every read of the installed or incompatible set resolves the registry
+  first. The Autofac root still claims the publication earlier, from `IRootContainerBuilt`, so there it
+  runs outside the root's shared-instance lock (the lock-order reasoning below is unchanged).
+  **Residual, plain MS DI only:** MS DI offers no post-build hook, so there the publication runs inside
+  whichever resolve first reaches the registry. If that resolve is the constructor of a root singleton
+  `A`, and a held module's singleton needs `A`, then MS DI builds `A` a second time on the same thread:
+  its singleton lock is re-entrant and its value is not set yet. The module's singleton then holds the
+  copy rather than the root's `A`. Nothing deadlocks: MS DI has no container-wide lock, so this is not
+  the #6542 inversion. Every MeshWeaver host builds its root with `MessageHubServiceProviderFactory`
+  (Autofac) and claims the publication from `IRootContainerBuilt`, so this shape does not arise there.
+- **No forwarder of a withdrawn module is enumerated.** A held module that registers further
+  `InstalledModuleAssembly` instances itself (MeshWeaver.Testing registers its xunit closure that way)
+  used to get a root `Current` forwarder per instance, and a forwarder can only throw once its module is
+  withdrawn. Those registrations get no root forwarder: they are recorded in `InstalledModules` by
+  (module, registration) when the module installs and answered from its current generation while the
+  registry holds it, so they follow a live swap and leave with a withdrawal.
+
+`AWithdrawnModuleLeavesNoForwarderBehindTest` (Autofac) and `AWithdrawnModuleOnAPlainMsDiHostTest`
+(plain MS DI, no hook called by the test) pin both, with published twins as negative controls.
+
+**A withdrawn module's security rule leaves the rule set.** A module that registers an
+`INodeTypeAccessRule` (a platform interface) is forwarded to the root as a `ModuleServiceProxy`, and that
+registration stays in the root's `IEnumerable<INodeTypeAccessRule>` after the module is withdrawn.
+`NodeTypeAccessRuleSet` read each rule's `NodeType` while it built the security rules, and the dead proxy
+threw `Module … holds no service scope in this mesh`. Every write's `RlsNodeValidator` takes that set, so
+one withdrawn module made every node write fail, and with it every package install. The set now holds
+only members for which `ModuleServiceProxy.Serves` is true: an ordinary instance, or a proxy whose module
+the registry still holds. A lookup also skips a rule whose module is retired later. A type whose rule left
+falls back to the caller's standard permission check, which is closed by default. Any other consumer that
+builds an index over a platform interface a module can register should apply the same predicate.
+`AWithdrawnModulesAccessRuleLeavesTheSecurityRulesTest` pins this: the rule set builds, and a node write
+succeeds. On the base, both failed with the exception above. Its published twin is the negative control:
+there the rule governs its type.
+
+**A withdrawn module's query provider leaves the query fan-out (MeshWeaver#6793).** The same defect, one
+interface over, stopped a host from starting at all. A module that registers an `IMeshQueryProvider` is
+forwarded to the root the same way, and `MeshQuery` — built by `IMeshService`, which a hosted service takes
+at startup — read every provider's `Name` to de-duplicate them. Once a module was withdrawn (on the
+instance, a mail sender whose constructor rejected the tenant id the configuration carried), that read
+threw `Module … holds no service scope in this mesh`, `Host.StartAsync` failed, and the pod crash-looped
+on every roll while the module was reported only as contributing nothing. `MeshQuery` now binds a module's provider under
+ONE lease (`ModuleServiceProxy.TryLease`): the name is read from the generation's own instance, a proxy
+that cannot be leased is left out, and the fan-out skips a provider whose module is retired later.
+`AWithdrawnModulesQueryProviderLeavesTheQueryFanOutTest` pins it: `IMeshService` builds and a query
+answers. On the base, the test mesh did not start. Its published twin is the negative control: there the
+module's provider answers in the fan-out.
+
+🚨 **The lease spans the SUBSCRIPTION, not the call.** A provider returns a COLD observable, and the fan-out
+subscribes to it later, through its query pool. A lease taken around the call and released when the call
+returned left the query running with no lease. A retirement landing in between then disposed the
+generation's services under it, and the whole query faulted. So `Matches` (synchronous) is leased for the
+call, and `Query`, `Autocomplete` and `Select` go through `ModuleServiceProxy.Leased`, which takes the lease
+on subscribe and releases it when the subscription terminates or is disposed. A retirement that starts
+mid-query waits for that release. `ModuleQueryProviderLeasedAcrossRetirementTest` retires the generation at
+the moment the module's query is subscribed. The query answers from live services and the unload follows.
+With the lease taken around the call only, the query errors with the fence's `ObjectDisposedException`.
+
+**A module service is LEASED, never checked and then called (MeshWeaver#6715).** "Does its module still
+serve?" followed by a call through the proxy can be split by a retirement: `ModuleContexts.Retire` removes
+the generation and disposes its services between the two, and the call throws `Module … holds no service
+scope`. Consumers that must not fault use one atomic operation instead.
+`ModuleServiceProxy.TryLease(service)` reads the module's current generation ONCE. It leases that
+generation's load context (`AlcLeaseRegistry`, as `ResolveDependency` does) and its services, re-checks
+that the generation is still current, and hands back the generation's own instance. It returns null when
+the module is gone or already retiring. `ModuleServices` counts its leases in one word changed only by
+compare-and-swap. A `Dispose` that arrives while a lease is held only marks the services retiring: no new
+lease is granted, and the LAST release disposes the scope. Nothing waits and nothing blocks, and the
+retirement's unload already waits for the context lease. `ModuleServiceProxy.Leased(service, use, what)`
+holds one lease across the subscription of an observable call, and fails with a named
+`ModuleRetiredException` when the module is already gone.
+
+`NodeTypeAccessRuleSet` reads every rule's metadata under a lease: `NodeType` when it builds, and the
+supported operations or permissions in `Find` and `FindPermissionRule`. A rule whose module cannot be
+leased is skipped for the registration before it. For a module's rule, the set hands out a rule whose
+`HasAccess`/`HasPermission` run under a lease for their whole evaluation, so an uninstall that lands
+mid-decision is deferred to the end of the decision. The two steps are still two leases. A retirement
+that falls BETWEEN the selection and the evaluation gives a named `ModuleRetiredException`, which
+`NodeTypeAccessRuleGate.Evaluate` reports as `Undetermined` (fail closed, with the type named). Asking
+again decides without the retired rule. `ModuleRuleLeasedAcrossRetirementTest` retires the generation
+from inside the rule, through a controlled switch, at each of the three points: under a lease, inside
+the evaluation, and inside `Find`'s metadata read. On the base, the first two fault on the disposed
+generation and the third throws out of `Find`.
 
 **Why.** Autofac holds a scope's shared-instance lock for the whole build of a shared instance, and
 that one lock covers every shared instance of the scope; an instance that exists is answered without
@@ -413,6 +759,125 @@ made that true, each found by running it:
    A keyed registration of a type the module DECLARES is answered by key from the root too
    (`ModuleOwnedRootSource` → `ModuleServices.KeyedRegistrationsElsewhere`), and never counted among
    the type's unkeyed registrations.
+
+**2026-10-16 — the index is part of the shape (MeshWeaver#6847).** The shape compared only the
+forwarded subsequence (route, type, lifetime), while every root forwarder holds the BOOT generation's
+absolute registration index. WhatsApp 1.3.2 → 1.4.2 added its inbox registrations, among them the
+module-owned `IWhatsAppRecentChats`, which moved the forwarded indices without changing that
+subsequence: the swap went live on the company instance's three running pods at 00:15Z, a root forwarder
+then resolved `mw-module-service:10` in N+1 — the unkeyed module-owned registration — and every hub
+activation leasing it faulted (API-token validation included) until the pods restarted; pods that
+BOOTED on 1.4.2 were unaffected. `ModuleServices.Shape` now prefixes each forwarded registration with
+its index, so such an N+1 is `RestartRequired` with N serving
+(`ModuleRootServicesSwapTest.AnUpdateThatMovesAForwardedRegistrationsIndex_IsRefused_AndNKeepsServing`;
+mutation-checked — without the index the swap answers `Live`). An addition AFTER the forwarded
+registrations (the hosted-service case above) still swaps live.
+
+**The class is loud now, not only the instance refused.** The swap refusal above is the root fix; what
+let the incident run six and a half hours is that nothing READ the broken state — `/health` said
+Degraded (the exception quoted inside two unrelated entries), every pod stayed READY, nothing paged.
+Three pieces close that, each built on the refusal rather than beside it:
+
+- **The layout is explicit.** `ModuleServices.ForwarderLayout` is the boot generation's forwarded
+  registrations (index + shape) and every swapped-in generation INHERITS it
+  (`ModuleContexts.PrepareServices`); the swap compares N+1's shape against that layout — the
+  forwarders the root actually holds — never merely against the generation it replaces.
+- **Readiness reads it.** `ModuleContexts.UnresolvableForwarders` asks each current generation, for
+  every forwarder in its layout, whether it can answer: the registration at that index exists, is the
+  forwarded one the forwarder was laid out for, and its container holds the scope key. The
+  `module_forwarders` health check (`ModuleForwarderHealthCheck`, readiness + roll-gate + census tags
+  in `Memex.Portal.ServiceDefaults`, so it holds `/ready` and never fails the startup probe) is Unhealthy on any gap, naming module, generation, key and service,
+  and prints its clean census otherwise. One reading is enough — a built container never changes —
+  so it cannot flap on a transient lease failure and needs no window
+  (`ModuleRootServicesSwapTest.AGenerationWhoseForwarderMoved_FailsReadiness_NamingTheModuleAndTheService`,
+  arranged as the pre-refusal swap committed it and mutation-checked; its negative control
+  `EveryForwarderResolves_AfterBootAndAfterALiveSwap_SoReadinessHolds`). Each generation is read under
+  the same context and services leases a forwarder's resolve takes, currency re-checked, so a live swap
+  that retires it mid-scan defers the disposal to the scan's release
+  (`ModuleRootServicesSwapTest.ARetirementDuringTheForwarderScan_IsDeferredToTheScansRelease`).
+- **The fleet watch alarms on it.** `Hosting/Issue/Source/ModuleLeaseAlarms` (MeshWeaver.Plugins) reads
+  every replica's `/health` — unready ones included, since this check is what makes them unready —
+  for a `module_forwarders` finding or the raw `mw-module-service:… has not been registered` text an
+  older image quotes, and raises `ModuleServiceLease`: a Warning on the first pass, Critical (a platform
+  notification to global admins) once it holds on the next.
+
+### An optional module that cannot serve a service costs that feature — never sign-in (MeshWeaver#6847)
+
+The shape check closes the road the incident came by. It does not answer the question the incident
+raised: **why could an optional chat module stop people signing in at all?** The chain, read from the
+code the 2026-10-16 build ran:
+
+1. A per-node hub activation resolves its node first (`MessageHubGrain` → `PathResolutionService`), and
+   that resolution is a query.
+2. The query fan-out (`MeshQuery.SelectMatchingProviders`) sends EVERY query to EVERY provider — it
+   deliberately does not pre-filter by `Matches`, because storage providers answer `false` for an
+   unscoped query they must still serve. WhatsApp's `WhatsAppChatQueryProvider` is one of them, forwarded
+   to the root as a `ModuleServiceProxy`.
+3. Each module provider's leg takes a lease on subscribe (`ModuleServiceProxy.Leased` →
+   `ModuleContexts.TryLeaseModuleService`), and the lease RESOLVES the registration in the module's
+   current generation. That resolve threw `mw-module-service:10 (IWhatsAppRecentChats) has not been
+   registered`, the lease rethrew, the leg errored, and the merge errors the whole query on any leg's
+   error.
+4. So node resolution faulted for every hub that activated (the `[ACTIVATE] … activation faulted`
+   lines), and `UserIdentityCache`'s directory query (`nodeType:User`, unscoped, as System) faulted with
+   it — the "We could not check your account just now" every user saw. (The OAuth authorization code
+   itself is written storage-direct by `OAuthCodeStore` and touches no hub or query; what failed around
+   it was the identity and every hub-backed read.)
+
+The same lease guards the access-rule set (`NodeTypeAccessRuleSet` takes one per rule) and, since this
+change, the options setups a module forwards. **The rule is now that a registration the module's current
+generation cannot PRODUCE is ABSENT, never a fault in a consumer that leases it:**
+
+| Where | What changed |
+|---|---|
+| `ModuleContexts.TryLeaseModuleService` | A resolve that faults answers null, which every leasing consumer already reads as "this module's feature is absent" (the shape a module withdrawn at boot has had since #6542) — except the caller's own scope ending, which propagates: a disposal in the causes (also when the container wrapped it in a resolution exception) AND a caller scope that has actually ended. A constructor that ran into a disposed dependency of its OWN under a live caller is a construction fault like any other. Only a **generation-wide** fault is a durable verdict: a registration the generation does not lay out the way the root forwards it — nothing registered under the forwarded key, or an instance that is not what the forwarder forwards — is recorded in `ModuleServices.Unservable` for THAT generation and reported once (stderr and an error log `[MeshWeaver.Mesh.UnservableModuleService]` naming the module, the registration, the generation and why). A later generation starts clean. Any other construction fault — one caller's scope, one attempt at a singleton — is that lease's alone: nothing is recorded, the next lease resolves afresh, and it is logged once per registration and exception type. |
+| `ModuleServiceProxy.Serves` | False for a recorded unservable registration, so a set built over the root's `IEnumerable<T>` leaves it out. |
+| `MeshQuery.WithMembers` | A module's provider is leased ONCE when a fan-out is SUBSCRIBED; that lease is its membership and the instance its leg runs on, and it is released when THAT LEG terminates or is unsubscribed — a module leg that answered and completed holds nothing while the merged query stays live on its storage legs, so it never keeps a retirement waiting. A resubscribed leg (the transient-connect retry) takes a lease of its own; a lease no leg took is released with the subscription. A provider that cannot be leased is not in the set whose Initial frames the merge awaits, so not even the first query after the break faults — and a generation change between building a query and subscribing it, or a transient provider whose next construction fails, can no longer err the merged query through a second resolve. A module provider whose lease failed when the fan-out was BUILT is retained (its name read when a subscription leases it) instead of dropped for the mesh's life; `NodeTypeAccessRuleSet` retains such a rule the same way, reading its node type at lookup. |
+| `ModuleConfigureOptionsForwarder` | Leased instead of resolved. The options factory runs every setup of an options type for EVERY name, so a module's `AddHttpClient(name)` forwarder runs when the sign-in's OIDC handler builds its own `HttpClientFactoryOptions`; a forwarder that threw there made one module's broken registration a fault in every named build of that type. A module that is not held, or cannot produce the setup, now configures nothing. A TEMPORARY construction fault also configures nothing for that build — no name's build fails — but the monitor-cache entry that build fills is removed (the cache inserts it before building), so the incomplete options are never cached and the next build of the name carries the module's setup again. Throwing instead would be worse: the monitor cache keeps a build that threw and rethrows it for that name until invalidated. |
+
+A DIRECT call through a forwarder still throws the real error: that call IS the feature, and failing it is
+correct. This is not a catch-and-continue: the fault is turned into a recorded, reported verdict about
+one generation of one module, and the only thing that stops working is what that module contributed.
+
+`ABrokenOptionalModuleNeverBreaksSignInTest` pins it. A module forwards a query provider and a named
+setup of a platform options type; the test then makes the held generation the incident's — a
+module-owned registration inserted ahead of both, committed past the shape check — and runs what
+sign-in runs: the identity directory query, a node write, a hub-activating read of it, and a named
+options build of the type the module also configures. Controls: before the break the module's provider
+answers its own node and its setup configures its own name; after it a direct resolve of the broken
+registration still throws "has not been registered". On the pre-fix code the identity query errors with
+exactly the memex message; with `TryLeaseModuleService` rethrowing the fault, the same. The same class
+pins a query BUILT while the module was healthy and SUBSCRIBED after the break.
+
+**Access rules fail CLOSED, not absent.** The isolation above is right for a query provider, an options
+setup or a health check — a feature that is missing is the safe reading. It is NOT right for an access
+rule: a rule that is skipped makes the validator fall back to the ordinary path permission, so a caller
+holding an ordinary Update grant would pass a write the module's rule exists to refuse. The lease
+therefore says WHY it answered null (`ModuleLeaseFault`: the module is not held or is retiring — absent;
+or it is held and could not produce the registration this time, or in this generation at all — faulted),
+and `NodeTypeAccessRuleSet` hands out a rule that DENIES for the type a faulted rule governs. Other types
+never meet it. A rule retained because its binding failed when the set was built fails closed for the
+type it last named; one that has never been produced in the process is unknown, and fails closed for
+every lookup while it faults, because nothing says which type it governs. The lease is held through the
+fault's classification and report, so a retirement overlapping the fault waits for it instead of
+disposing the container under the classification.
+
+`AModuleConstructionFaultStaysLocalTest` pins the rest with transient module services whose
+constructions it fails on demand: a provider constructed once per query subscription; a completed module
+leg releasing its lease while the merged identity query stays live, so a retirement unloads the module;
+a failing caller scope followed by a healthy one; a constructor's own disposed dependency isolated under
+a live caller, while a caller whose scope has ended still sees its `ObjectDisposedException`; a provider
+and an access rule whose lease failed while the fan-out and the rule set were built serving afterwards;
+a temporary options-setup fault that is never cached as complete options; a duplicate provider
+registration run once per query; a provider name that throws after a failed binding releasing its lease;
+a denying access rule that cannot be constructed failing closed for its type only; and a construction
+fault overlapping a retirement.
+
+**Not established:** a module provider whose OWN `Query` faults (as opposed to one that cannot be
+produced) still fails every unscoped query it is asked — including the identity directory — because the
+merge errors on any leg's error and the fan-out does not pre-filter. That is the next isolation seam
+(scoping the identity and node-resolution reads to the providers that can hold them), not done here.
+`/health` does not yet list unservable registrations; the error log line is the report.
 
 **Measured over all 41 shipped modules** (Plugins with its slice converting the view packs and fixing
 Acp, built against this core; the three whose Debug output lacks NuGet dependencies measured from a

@@ -10,8 +10,17 @@ public partial class QueryParser
     private static readonly HashSet<string> ReservedQualifiers = new(StringComparer.OrdinalIgnoreCase)
     {
         "path", "namespace", "scope", "sort", "limit", "source", "select", "context", "is",
-        "partitions"
+        "partitions", BasePathQualifier
     };
+
+    /// <summary>
+    /// <c>basePath:X</c> — the query-text spelling of the search tools' <c>basePath</c> argument:
+    /// everything UNDER <c>X</c>, i.e. <c>namespace:X scope:descendants</c> unless the query states
+    /// its own <c>scope:</c>. It is reserved because the tools advertise the word: before it was,
+    /// an agent that wrote it into the query text got a FILTER on a <c>basePath</c> property no
+    /// node has, and a clean <c>count: 0</c> for nodes that exist (#6828).
+    /// </summary>
+    public const string BasePathQualifier = "basePath";
 
     /// <summary>
     /// Parses a GitHub-style query string into a ParsedQuery.
@@ -205,9 +214,9 @@ public partial class QueryParser
         if (i < input.Length && input[i] == ':')
         {
             i++; // consume :
-            var (condition, length) = ParseFieldValue(field, input, i, isNegated);
+            var (condition, length, literal) = ParseFieldValue(field, input, i, isNegated);
             i += length;
-            return new Token(TokenType.Comparison, field, condition);
+            return new Token(TokenType.Comparison, field, condition, literal);
         }
         else
         {
@@ -225,12 +234,17 @@ public partial class QueryParser
     /// <summary>
     /// Parses the value part after field:.
     /// Handles comparison operators, lists, and wildcard patterns.
+    /// <para>🚨 A QUOTED value is LITERAL (#6634): no <c>|</c> alternation and no <c>*</c> wildcard
+    /// inside the quotes, so <c>namespace:"a|b"</c> and <c>namespace:"x*"</c> name exactly that
+    /// namespace. Alternation BETWEEN quoted values (<c>path:"a b"|"c"</c>) is unchanged — the bar
+    /// sits outside the quotes. The third element says the condition carries one such literal, so
+    /// the reserved-qualifier pass does not re-read a <c>*</c> in it as a glob.</para>
     /// </summary>
-    private (QueryCondition Condition, int Length) ParseFieldValue(string field, string input, int start, bool isNegated)
+    private (QueryCondition Condition, int Length, bool Literal) ParseFieldValue(string field, string input, int start, bool isNegated)
     {
         // Empty value: end of string or whitespace immediately after colon
         if (start >= input.Length || char.IsWhiteSpace(input[start]))
-            return (new QueryCondition(field, isNegated ? QueryOperator.NotEqual : QueryOperator.Equal, [""]), 0);
+            return (new QueryCondition(field, isNegated ? QueryOperator.NotEqual : QueryOperator.Equal, [""]), 0, false);
 
         var i = start;
         QueryOperator op;
@@ -261,9 +275,13 @@ public partial class QueryParser
         {
             // List: (A OR B OR C)
             i++; // consume (
-            var listValues = ParseListValues(input, ref i);
+            var listValues = ParseListValues(input, ref i, out var allQuoted);
             op = isNegated ? QueryOperator.NotIn : QueryOperator.In;
-            return (new QueryCondition(field, op, listValues), i - start);
+            // A ONE-value list whose value was quoted (`namespace:("x*")`) is the same literal as
+            // `namespace:"x*"` (#6752): carry the flag, or the reserved-qualifier pass re-reads its
+            // `*` as a glob — and turns `-namespace:("x*")` into a POSITIVE Like. A multi-value list
+            // is exact membership already and needs no flag.
+            return (new QueryCondition(field, op, listValues), i - start, listValues.Length == 1 && allQuoted);
         }
         else
         {
@@ -275,7 +293,7 @@ public partial class QueryParser
         // so SQL-function calls in sort selectors work — e.g. `sort:length(path)-desc`.
         // The `(A OR B OR C)` list form is detected above (immediately-after-colon),
         // so we never confuse a list with an embedded paren here.
-        var value = ParseSingleValue(input, ref i, stopAtParens: false);
+        var value = ParseSingleValue(input, ref i, stopAtParens: false, out var quoted);
 
         // Quoted `|` alternation — `field:"A B"|"C D"|E`. ParseSingleValue stops a
         // QUOTED value at its closing quote, so a trailing `|` here is the alternation
@@ -296,8 +314,19 @@ public partial class QueryParser
             if (altParts.Count > 1)
             {
                 op = isNegated ? QueryOperator.NotIn : QueryOperator.In;
-                return (new QueryCondition(field, op, altParts.ToArray()), i - start);
+                return (new QueryCondition(field, op, altParts.ToArray()), i - start, false);
             }
+        }
+
+        // 🚨 A quoted value is LITERAL (#6634) — skip the grep-style split and the wildcard switch
+        // below. Equal/In/NotIn compare literally on every executor; NotEqual does NOT when the
+        // value carries a `*` (it reads as the complement of the glob, #6581), so a negated literal
+        // with a star travels as a one-value NotIn — the same null-inclusive literal exclusion.
+        if (quoted && (op == QueryOperator.Equal || op == QueryOperator.NotEqual))
+        {
+            if (op == QueryOperator.NotEqual && QueryWildcard.ContainsWildcard(value))
+                return (new QueryCondition(field, QueryOperator.NotIn, [value]), i - start, true);
+            return (new QueryCondition(field, op, [value]), i - start, true);
         }
 
         // Grep-style `|` alternation — `field:A|B|C` is equivalent to
@@ -312,7 +341,7 @@ public partial class QueryParser
             if (parts.Length > 1)
             {
                 op = isNegated ? QueryOperator.NotIn : QueryOperator.In;
-                return (new QueryCondition(field, op, parts), i - start);
+                return (new QueryCondition(field, op, parts), i - start, false);
             }
         }
 
@@ -345,15 +374,18 @@ public partial class QueryParser
             };
         }
 
-        return (new QueryCondition(field, op, [value]), i - start);
+        // A quoted ORDERED operand (`namespace:>"x*"`) is literal too (#6634): the reserved-qualifier
+        // pass must not re-read its `*` as a glob and drop the operator.
+        return (new QueryCondition(field, op, [value]), i - start, quoted);
     }
 
     /// <summary>
     /// Parses values inside parentheses: (A OR B OR C)
     /// </summary>
-    private string[] ParseListValues(string input, ref int i)
+    private string[] ParseListValues(string input, ref int i, out bool allQuoted)
     {
         var values = new List<string>();
+        allQuoted = true;
 
         while (i < input.Length && input[i] != ')')
         {
@@ -364,23 +396,44 @@ public partial class QueryParser
             if (i >= input.Length || input[i] == ')')
                 break;
 
-            // Skip OR keyword
-            if (i + 2 <= input.Length && input.Substring(i, 2).Equals("OR", StringComparison.OrdinalIgnoreCase))
+            // Skip OR keyword — only a WHOLE word (#6844). Matching the two letters alone ate the
+            // head of every value that merely starts with them: `-namespace:(acme/a OR orders)`
+            // excluded `acme/a` and `ders`, so the second namespace was never excluded, on every
+            // executor (the mangled value is what the parser hands them all).
+            if (IsListOrKeyword(input, i))
             {
                 i += 2;
                 continue;
             }
 
             // Parse a value
-            var value = ParseSingleValue(input, ref i);
+            var value = ParseSingleValue(input, ref i, stopAtParens: true, out var quoted);
             if (!string.IsNullOrEmpty(value))
+            {
                 values.Add(value);
+                allQuoted &= quoted;
+            }
         }
 
         if (i < input.Length && input[i] == ')')
             i++; // consume )
 
         return values.ToArray();
+    }
+
+    /// <summary>
+    /// Whether the list separator <c>OR</c> (any case) starts at <paramref name="i"/> as a whole word:
+    /// followed by the end of input, whitespace, a parenthesis or a quote. <c>orders</c>,
+    /// <c>Oracle/x</c> and <c>or-x</c> are values, never a separator plus a remainder.
+    /// </summary>
+    private static bool IsListOrKeyword(string input, int i)
+    {
+        if (i + 2 > input.Length || !input.AsSpan(i, 2).Equals("OR", StringComparison.OrdinalIgnoreCase))
+            return false;
+        if (i + 2 == input.Length)
+            return true;
+        var next = input[i + 2];
+        return char.IsWhiteSpace(next) || next is '(' or ')' or '"' or '\'';
     }
 
     /// <summary>
@@ -395,7 +448,15 @@ public partial class QueryParser
     /// </para>
     /// </summary>
     private string ParseSingleValue(string input, ref int i, bool stopAtParens = true)
+        => ParseSingleValue(input, ref i, stopAtParens, out _);
+
+    /// <summary>
+    /// <see cref="ParseSingleValue(string, ref int, bool)"/>, also reporting whether the value was
+    /// QUOTED — a quoted value is literal (#6634).
+    /// </summary>
+    private string ParseSingleValue(string input, ref int i, bool stopAtParens, out bool quoted)
     {
+        quoted = false;
         // Skip whitespace
         while (i < input.Length && char.IsWhiteSpace(input[i]))
             i++;
@@ -414,6 +475,7 @@ public partial class QueryParser
             var value = input[start..i];
             if (i < input.Length)
                 i++; // consume closing quote
+            quoted = true;
             return value;
         }
 
@@ -472,7 +534,6 @@ public partial class QueryParser
         // namespaces when scope:selfAndAncestors. This is what lets a SINGLE query union
         // built-in + per-context + per-NodeType + per-user instances (see AgentPickerProjection).
         string[]? namespaceAlternation = null;
-        bool namespaceAlternationNegated = false;
         // Where each wildcard `namespace:*/X` LIKE filter landed in filterTokens, so the post-loop
         // pass can widen it to the SUBTREE once `scope:` is known (the qualifier may appear AFTER
         // the namespace token). See WidenWildcardNamespacesToSubtree.
@@ -485,14 +546,30 @@ public partial class QueryParser
         bool? isMain = null;
         bool? isContent = null;
         var crossPartition = false;
+        // A positive `basePath:X` anchored the query: with no explicit scope it walks the
+        // DESCENDANTS of X, the same as the tools' basePath argument (#6828).
+        var basePathAnchored = false;
 
-        foreach (var token in tokens)
+        foreach (var original in tokens)
         {
+            // Location values are resolved BEFORE anything reads them: the `@` reference prefix
+            // comes off, and `basePath:` becomes the namespace anchor it means (#6828).
+            var token = ResolveLocationToken(original);
             if (token.Type == TokenType.TextSearch)
             {
                 textSearchParts.Add(token.Value);
                 continue;
             }
+
+            // Every POSITIVE single-location form: an equality, a one-value list `basePath:(X)`, and
+            // a wildcard `basePath:acme/*/Contacts` (a LIKE). A wildcard sets no concrete anchor,
+            // and the descendant scope still applies — it widens the pattern to the subtree, as
+            // `namespace:… scope:descendants` does. A multi-value list stays exact membership.
+            if (original.Condition is { } basePathCondition
+                && basePathCondition.Selector.Equals(BasePathQualifier, StringComparison.OrdinalIgnoreCase)
+                && (basePathCondition.Operator is QueryOperator.Equal or QueryOperator.Like
+                    || (basePathCondition.Operator is QueryOperator.In && basePathCondition.Values.Length == 1)))
+                basePathAnchored = true;
 
             if (token.Type == TokenType.Comparison && token.Condition != null)
             {
@@ -552,14 +629,47 @@ public partial class QueryParser
 
                 if (field.Equals("namespace", StringComparison.OrdinalIgnoreCase))
                 {
+                    // A QUOTED namespace is literal (#6634): it is the namespace, never a set of
+                    // namespaces and never a pattern — even when it carries `|` or `*`.
+                    if (token.Literal)
+                    {
+                        // Only a positive equality anchors the query; every other operator — a
+                        // negation or an ordered comparison (`namespace:>"x*"`) — stays a FILTER
+                        // with its operator, so nothing is dropped.
+                        // A one-value quoted list (`namespace:("x")`, #6752) is the same equality.
+                        if (token.Condition!.Operator is QueryOperator.Equal
+                            || (token.Condition.Operator is QueryOperator.In && token.Condition.Values.Length == 1))
+                        {
+                            path = value;
+                            namespaceUsed = true;
+                        }
+                        else
+                            filterTokens.Add(new Token(TokenType.Comparison, string.Empty,
+                                new QueryCondition("namespace", token.Condition.Operator, [value.Trim('/')]), true));
+                        continue;
+                    }
                     // Alternation `namespace:A|B|C` (parsed to In/NotIn with >1 values) is an EXACT
                     // MEMBERSHIP constraint across the listed namespaces, not a single base namespace
                     // + scope walk. Deferred to post-loop resolution (a `namespace IN (...)` filter).
-                    if (token.Condition!.Operator is QueryOperator.In or QueryOperator.NotIn
-                        && token.Condition.Values.Length > 1)
+                    //
+                    // 🚨 A NEGATED alternation `-namespace:A|B` is an EXCLUSION FILTER, never the
+                    // namespace constraint (#6828, review of #6837): deferring it with the positive
+                    // form cleared the query's anchor and reset its scope in the post-loop pass, so
+                    // `namespace:X -namespace:X/A|X/B` lost `X` — refused as unanchored, or, with
+                    // `partitions:all`, answered from outside `X`. It is emitted here as the
+                    // `namespace NotIn (...)` filter the deferred pass would have produced, and
+                    // leaves the anchor and scope alone, like the single `-namespace:X` below.
+                    if (token.Condition!.Operator is QueryOperator.NotIn && token.Condition.Values.Length > 1)
+                    {
+                        filterTokens.Add(new Token(TokenType.Comparison, string.Empty,
+                            new QueryCondition("namespace", QueryOperator.NotIn,
+                                token.Condition.Values.Select(v => v.Trim('/'))
+                                    .Distinct(StringComparer.OrdinalIgnoreCase).ToArray())));
+                        continue;
+                    }
+                    if (token.Condition.Operator is QueryOperator.In && token.Condition.Values.Length > 1)
                     {
                         namespaceAlternation = token.Condition.Values;
-                        namespaceAlternationNegated = token.Condition.Operator == QueryOperator.NotIn;
                         namespaceUsed = true;
                         continue;
                     }
@@ -569,7 +679,11 @@ public partial class QueryParser
                     // dropped and the exclusion returned exactly what it was written to exclude.
                     // Left as `namespace NotEqual value` it is evaluated by every backend, a `*` in
                     // the value reading as the complement of the glob (see QueryWildcard).
-                    if (token.Condition!.Operator is QueryOperator.NotEqual)
+                    // A one-value NEGATED list `-namespace:(X)` (#6752) is the same exclusion as
+                    // `-namespace:X`: it used to skip this arm (it is a NotIn, not a NotEqual) and fall
+                    // through to `path = X`, a positive anchor.
+                    if (token.Condition!.Operator is QueryOperator.NotEqual
+                        || (token.Condition.Operator is QueryOperator.NotIn && token.Condition.Values.Length == 1))
                     {
                         // A negated WILDCARD is widened with its positive twin once `scope:` is
                         // known — to the AND of the two negated patterns, the complement of the
@@ -713,7 +827,14 @@ public partial class QueryParser
         // When namespace: is used without explicit scope, default to Children (exact namespace)
         // This makes namespace:X behave like "search items directly in folder X" (not recursive)
         // Use scope:descendants explicitly for recursive search
-        if (namespaceUsed && !explicitScope)
+        // `basePath:X` means the whole subtree under X, as the tools' basePath argument does — for a
+        // wildcard too, which sets no concrete anchor (namespaceUsed stays false) but is widened to
+        // the subtree below once the scope is known.
+        if (basePathAnchored && !explicitScope)
+        {
+            scope = QueryScope.Descendants;
+        }
+        else if (namespaceUsed && !explicitScope)
         {
             scope = QueryScope.Children;
         }
@@ -755,13 +876,61 @@ public partial class QueryParser
                 .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             filterTokens.Add(new Token(TokenType.Comparison, string.Empty,
                 new QueryCondition("namespace",
-                    namespaceAlternationNegated ? QueryOperator.NotIn : QueryOperator.In, distinct)));
+                    QueryOperator.In, distinct)));
             path = null;
             scope = QueryScope.Exact;
         }
 
         var textSearch = textSearchParts.Count > 0 ? string.Join(" ", textSearchParts) : null;
         return (filterTokens, textSearch, path, scope, orderBy, limit, source, select, context, isMain, paths, isContent, crossPartition);
+    }
+
+    /// <summary>
+    /// Resolves a location token (<c>path:</c>, <c>namespace:</c>, <c>basePath:</c>) to the form
+    /// every executor compares against stored paths. Returns <paramref name="token"/> itself when
+    /// there is nothing to resolve.
+    ///
+    /// <para><b>The <c>@</c> reference prefix comes off</b> (#6828). <c>@X</c> / <c>@/X</c> is how a
+    /// path is written in markdown links, autocomplete and every tool argument, and the tools strip
+    /// it there (<c>MeshOperations.ResolvePath</c>). Written INTO the query text it was kept, so
+    /// <c>namespace:@acme name:"Jane Doe"</c> anchored at a partition literally named <c>@acme</c>
+    /// — no rows, no error, and a <c>count: 0</c> that read as "this person does not exist". No
+    /// mesh path segment begins with <c>@</c> (an address's partition may CONTAIN one, never lead
+    /// with one), so the strip cannot change what a well-formed query meant.</para>
+    ///
+    /// <para><b><c>basePath:</c> becomes <c>namespace:</c></b> with the same operator and values;
+    /// <see cref="ExtractReservedQualifiers"/> widens a positive one to the descendants.</para>
+    /// </summary>
+    private static Token ResolveLocationToken(Token token)
+    {
+        if (token.Type != TokenType.Comparison || token.Condition is not { } condition)
+            return token;
+        var isBasePath = condition.Selector.Equals(BasePathQualifier, StringComparison.OrdinalIgnoreCase);
+        if (!isBasePath
+            && !condition.Selector.Equals("path", StringComparison.OrdinalIgnoreCase)
+            && !condition.Selector.Equals("namespace", StringComparison.OrdinalIgnoreCase))
+            return token;
+        if (!isBasePath && !condition.Values.Any(v => v.StartsWith('@')))
+            return token;
+        return token with
+        {
+            Condition = condition with
+            {
+                Selector = isBasePath ? "namespace" : condition.Selector,
+                Values = condition.Values.Select(StripReferencePrefix).ToArray(),
+            },
+        };
+    }
+
+    /// <summary>
+    /// Strips the <c>@</c> reference prefix from one location value: <c>@acme/x</c> and
+    /// <c>@/acme/x</c> are both <c>acme/x</c>. A value without the prefix is returned unchanged.
+    /// </summary>
+    private static string StripReferencePrefix(string value)
+    {
+        if (string.IsNullOrEmpty(value) || value[0] != '@')
+            return value;
+        return value[1..].TrimStart('/');
     }
 
     /// <summary>
@@ -925,5 +1094,6 @@ public partial class QueryParser
         RightParen
     }
 
-    private record Token(TokenType Type, string Value, QueryCondition? Condition = null);
+    /// <param name="Literal">The condition's value was QUOTED and is literal (#6634) — no wildcard, no alternation.</param>
+    private record Token(TokenType Type, string Value, QueryCondition? Condition = null, bool Literal = false);
 }

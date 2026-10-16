@@ -478,6 +478,24 @@ public abstract class ModuleReloadScenario(ITestOutputHelper output) : MonolithM
         /// TRANSIENT fault a reload must survive.</summary>
         public bool IndexDown { get; set; }
 
+        private volatile int parkIndex;
+        private System.Reactive.Subjects.AsyncSubject<System.Reactive.Unit> indexParked = new();
+
+        /// <summary>Parks the NEXT bundle-index request until <see cref="ReleaseIndex"/> — the park is the
+        /// subject: a step in flight at a moment the test chooses. <see cref="IndexParked"/> completes once
+        /// that request is parked.</summary>
+        public void ParkNextIndex()
+        {
+            indexParked = new System.Reactive.Subjects.AsyncSubject<System.Reactive.Unit>();
+            parkIndex = 1;
+        }
+
+        /// <summary>Completes when the request <see cref="ParkNextIndex"/> armed for is parked.</summary>
+        public IObservable<System.Reactive.Unit> IndexParked => indexParked;
+
+        /// <summary>Releases the parked index request; call it in a <c>finally</c>.</summary>
+        public void ReleaseIndex() => parkIndex = 0;
+
         /// <summary>When set, the index also lists <see cref="SecondPackage"/> at the served version.</summary>
         public bool ServesSecond { get; set; }
 
@@ -499,6 +517,13 @@ public abstract class ModuleReloadScenario(ITestOutputHelper output) : MonolithM
             var (version, floor) = served;
             if (request.Method == HttpMethod.Get && path == "/api/plugins")
                 return Ok(PluginRegistryPayloads.List(Feed));
+            if (request.Method == HttpMethod.Get && path == $"{PluginBundleClient.RoutePrefix}/index.json" && parkIndex == 1)
+            {
+                var parked = indexParked;
+                parked.OnNext(System.Reactive.Unit.Default);
+                parked.OnCompleted();
+                SpinWait.SpinUntil(() => parkIndex == 0, TestTimeouts.Convergence);
+            }
             if (request.Method == HttpMethod.Get && path == $"{PluginBundleClient.RoutePrefix}/index.json" && IndexDown)
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
                 {

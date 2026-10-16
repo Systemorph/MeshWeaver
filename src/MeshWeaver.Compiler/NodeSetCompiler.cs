@@ -199,6 +199,10 @@ public static class NodeSetCompiler
         var nugetRefs = extractedRefs.ToList();
         GeneratorPipeline.StripBuiltInScopeGeneratorRef(
             nugetRefs, builtInPresent: GeneratorPipeline.BuiltInGeneratorPaths.Count > 0);
+        // The package references ride IN the bytes, so whoever loads this build — a portal adopting
+        // the bake, on any replica — can resolve the closure it needs (NuGetBuildRecord). The same
+        // stamp as the runtime compile's PrepareGeneratedSource: the content key is this text.
+        source = NuGetBuildRecord.Stamp(source, nugetRefs);
 
         return new CompileInputs(
             nodePath,
@@ -270,11 +274,11 @@ public static class NodeSetCompiler
                     + "them: the emitted assembly would be missing exactly the types the directive "
                     + "supplies, and the consumer would adopt it.");
             generatorPaths = resolveNuGet(inputs.NuGetReferences, ct);
-            allReferences =
-            [
-                .. references,
-                .. generatorPaths.Select(p => (MetadataReference)MetadataReference.CreateFromFile(p)),
-            ];
+            // One assembly per name, the copy the load context binds at run time: a closure assembly
+            // the host set already provides is not referenced twice
+            // (CompileReferences.WithPackageAssemblies). The generator candidates and the
+            // content key below keep the full resolution — the runtime compile does the same.
+            allReferences = CompileReferences.WithPackageAssemblies(references, generatorPaths);
         }
 
         Directory.CreateDirectory(outputDirectory);
@@ -323,7 +327,7 @@ public static class NodeSetCompiler
             EmitPipeline.OptionsFingerprint,
             GeneratedInputIdentity.CompilerIdentity,
             GeneratedInputIdentity.AssemblyFileIdentities(
-                GeneratorPipeline.EffectiveGeneratorPaths(nugetAssemblyPaths)));
+                GeneratorPipeline.DigestedGeneratorPaths(nugetAssemblyPaths)));
 
     /// <summary>
     /// The include reader the tree bake hands <see cref="NodeCompileShaping.ResolveCodeIncludes"/>:

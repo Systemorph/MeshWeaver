@@ -105,13 +105,18 @@ apart from the message they already receive.
 ### What the sync stream does now
 
 ```text
-rejection arrives
-  ├─ activation differs from the last one (or is unknown)
+rejection arrives (a ShuttingDown NACK, or the owner's StreamEndedEvent)
+  ├─ NO activation tag AND no owner banner — the ROUTING LAYER refused, not the owner (#6729)
+  │     → charge the TIME budget under the "(route)" key (MaxSameActivationReAsks = 16)
+  │     → REST first (RecycleReAskPace), then re-ask
+  ├─ activation not yet seen since the last answer (or unknown, from the owner)
   │     → charge the ACTIVATION budget (MaxRecycleReArms = 3)
   │     → join on the rejecting instance's DisposalCompleted, then re-ask
-  └─ activation is the SAME one that refused us last time
-        → charge the TIME budget (MaxSameActivationReAsks = 16)
-        → REST first (SyncStreamOptions.RecycleReAskPace, 500 ms), then re-ask
+  ├─ activation already refused us since the last answer
+  │     → charge the TIME budget (MaxSameActivationReAsks = 16)
+  │     → REST first (SyncStreamOptions.RecycleReAskPace, 500 ms), then re-ask
+  └─ a budget is spent
+        → GIVE UP: one Warning, and the stream ENDS with SyncStreamOwnerRefusedException
 ```
 
 `16 × 500 ms` is sized to reach `MessageHub.DisposalWatchdogTimeout` (8 s): at that point a wedged
@@ -185,9 +190,89 @@ If you write code that must survive a `ShuttingDown` answer:
    `RunLevel = Dead`, and it does not, on its own, mean the corpse has stopped being resolved.
 4. **Bound both axes, separately.** Distinct activations on one counter; consecutive re-asks at one
    activation on another, paced.
-5. **Say so when you give up.** A rider that stops trying in silence turns a refused read into a
-   timeout, and a timeout points the next engineer at the wrong system entirely. Both give-up paths
-   log one Warning naming the owner, the activation and which bound was hit.
+5. **Say so when you give up — to the log AND to the reader.** A rider that stops trying in silence
+   turns a refused read into a timeout, and a timeout points the next engineer at the wrong system
+   entirely. Both give-up paths log one Warning naming the owner, the activation and which bound was
+   hit, and END the stream (see [A give-up ends the stream](#a-give-up-ends-the-stream-6602)). Rule 1
+   is about ONE `ShuttingDown` answer; a spent budget is a different fact.
+
+## A give-up ends the stream (#6602)
+
+Until #6602 the sync stream's give-up disarmed the re-ask and left the stream **alive on its last
+value**, "the pre-existing orphaned-stream behaviour". The Warning was the only trace. Every reader
+held a frozen snapshot that rendered exactly like a live one, with no error and no completion, so its
+own recovery never ran. On memex-cloud during rolls this hit `Hosting/PlatformBuilds`,
+`Hosting/Modules` and `Ops/Status/*`, and it is the candidate cause for the fleet watch reading a
+stale `Ops/Status/build` while the store held fresh rows (#5011).
+
+Now the give-up ends the stream the way an owner **verdict** does: `OnError` with the typed
+`SyncStreamOwnerRefusedException` (it names the stream and the owner), and the keep-alive stops. The
+stream itself still does not retry. The reader decides when to read again, on its own signal:
+
+- `MeshNodeStreamCache` marks the entry faulted and evicts it, so the next read opens a fresh
+  subscription. `IsTransientOwnerFailure` classifies the type as transient, so the negative cache stays clean.
+- A layout area classifies it as transient (`AreaErrorClassifier.IsTransientHubFailure`) and
+  re-subscribes, bounded by `RetryAreaWithBackoff`.
+- The fleet watch (`FleetWatchHeartbeat.HeldReadings`, MeshWeaver.Plugins) reports the read as lost
+  and opens it again on the node's next mention by its listing: a write (`Updated`) or a fresh frame.
+  It does not re-open while the read is live, and it does not use a timer.
+
+### Why a roll spent the budget
+
+The activation budget counts distinct activations since the last answered re-ask. Two carriers made one
+teardown count as more than one:
+
+- `StreamEndedEvent` carried no activation identity, so every announcement was charged as a NEW
+  activation, and it also broke the same-activation chain the NACKs had built. It now carries
+  `Activation` (`ShutdownNack.ActivationToken(hub)`), stamped by all three producers: the recycle
+  announcement, the owner's end of a served stream, and the heartbeat answer for a stream the
+  activation does not serve.
+- `MessageHubGrain.RefuseBecauseTheHostIsLeaving` tagged its NACK with the GRAIN's identity, while
+  the hub's own NACKs tag the HUB's. So one activation on a leaving silo had two tags. It now tags
+  the hub when there is one.
+
+The budget also counts against the **set** of activations seen since the last answer, not only "the
+previous one": a NACK and an announcement from one teardown can interleave with another carrier's,
+and A, B, A is two activations.
+
+Pinned by `ASyncStreamThatGivesUpOnItsOwnerEndsTest` (MeshWeaver.Data.Test). Its negative controls
+were run by hand. With the terminal removed, the distinct-activations case never sees the stream end.
+With the announcement's activation ignored, the one-activation case gives up on a teardown that was
+only settling.
+
+### A routing refusal is not an owner activation (#6729)
+
+Measured on memex-cloud on 2026-10-13: pods `…-m2jn9` (19:52:18Z) and `…-54lxb` (20:01:57Z) each
+logged `Drain: GIVING UP … 5 circuit(s) are STILL OPEN` and `Application is shutting down...`, and in
+that same second every open circuit's sync streams ended with *"4 DISTINCT owner activations have
+refused this stream (budget 3)"* — for owners that had nothing to do with one another (a user home,
+`Admin`, threads, a payment record). Some twenty incidents were filed against "an owner recycling in a
+loop". No owner had recycled. The subscriber's OWN router answered every re-ask *"Host is shutting
+down, cannot route to …"* (`OrleansRoutingService.DeliverMessage`), a `ShuttingDown` NACK with no
+activation tag. Untagged meant "a distinct activation", there was no local teardown to join, so the
+re-ask went out at once, and four router refusals inside a millisecond spent the activation budget.
+
+The latch now asks who spoke, with the predicate that already exists for that question,
+`ShutdownNack.IsAnsweredByOwner`: a refusal with neither an activation tag nor the owner's banner came
+from the routing layer — this host stopping, the silo directory in flux during a roll, a pod hub not
+yet claimed. That is ONE condition, the route being unavailable, so it is charged on the TIME axis
+under its own `(route)` key, paced like a teardown ride-out, and its give-up names the ROUTE and says
+no owner recycle loop is implied. An untagged refusal that does carry the owner's banner keeps the old
+accounting (one distinct activation each), because the owner did speak.
+
+Pinned by three cases in `ASyncStreamThatGivesUpOnItsOwnerEndsTest`: six router refusals are ridden
+out and the stream recovers (red before the fix: it ended on the fourth); a route that never serves
+again still ends the stream, naming the route; and untagged OWNER refusals still give up on the
+activation budget (the control that the discrimination is by speaker, not by tag alone).
+
+**The same give-up came back after that fix, and that time it was right.** On 2026-10-15 at 00:49Z the
+pods running the fix logged "4 DISTINCT owner activations" again, for many unrelated owners on both
+pods. This time the owner HAD spoken. Each refusal carried the owner's banner and a different
+activation tag, and named its recycler: a module live swap's recycle wave, plus a `RecycleCascade` from
+every NodeType definition the wave had disposed. Each of them tore down the successor activation that
+the previous one had made room for. The latch counted correctly, and the defect was the recycler's. It
+is fixed there: one landing is one wave, and the wave does not cascade. See
+[Live Module Update](../LiveModuleUpdate) → *One landing, one recycle wave*.
 
 ## One request type, several producers: `GetDataRequest`
 
@@ -218,6 +303,42 @@ None of those lines could name the read.
 Once every producer rides the answer out, mark the type `[ReaskedOnShutdown]` and the line moves to
 Debug by the rule above. Producers in other repositories and in mesh-compiled code count too.
 
+**Until then, a producer that rides the answer out says so on its own request.**
+`PostOptions.ReaskingOnShutdown()` stamps the delivery property `ReasksOnShutdown`. This is the
+per-delivery form of the attribute: one producer's claim about one request, never a claim about the
+type. `MessageService.Dispose` reads either form, and a discard of a delivery that carries the
+property is teardown-normal (Debug), the same as a marked type. The NACK is unchanged, and the
+producer's re-ask runs on it. `GetMeshNodeOutcome` stamps it on its point read. The other producers
+in the table do not, so their discards stay Errors. With that, the bring-up discard Errors that kept
+reopening #5718, partition roots recycled by a live module update while a NodeType hub's point read
+(`GetDataRequest { MeshNodeReference }`) was parked, move to Debug. Stamp it only from code that
+really re-asks: a stamped producer that takes the NACK as final would silence a real loss.
+
+**A reply never inherits the stamp.** `PostOptions.ResponseFor` and `WithRequestIdFrom` copy the
+request's property bag onto the reply, and they drop `ReasksOnShutdown` while doing it (#6717). The
+stamp is one producer's claim about its own request. A reply discarded by a teardown has no producer
+that asks again, so it keeps the level its own type and answer policy give it.
+
+## Node writes: `PatchDataRequest`
+
+A node write has one producer: `UpdateRemote`, behind `GetMeshNodeStream(path).Update(...)`. It
+rides a `ShuttingDown` answer out on both arms. On the early arm it logs
+`OWNER_SHUTTING_DOWN_REENQUEUE`, and on the late watch it logs `LATE_SHUTTING_DOWN_REENQUEUE`. Each
+re-runs the caller's original update function against the address's next activation, up to
+`MaxOwnerDisposingReenqueues` attempts. When the budget is spent, the caller gets a failure, never a
+silent success. A write parked behind a young activation's gates is therefore **not lost** when that
+activation is torn down mid-bring-up. The discard answers it `ShuttingDown`, the write is re-asked,
+and it lands on the next activation.
+
+The producer did not say so, though. The patch carried neither the attribute nor the property, so
+that routine roll-time discard was reported at Error as stranded work. One measured case was #6733:
+an Orleans deactivation (`DirectoryFailure`, the directory owner's silo stopping) took down an
+`Admin/Threads` activation while a cache client's patch was parked behind
+`[DataContextInit,MeshNodeInit]`. `UpdateRemote` now stamps `ReaskingOnShutdown()` on its patch, so
+the discard reports at Debug. It does not stamp the last attempt: once the re-enqueue budget is
+spent, a `ShuttingDown` answer fails the caller, so that discard stays an Error. The type stays
+unmarked, because producers outside this repository may post it too.
+
 ## Where this is pinned
 
 | Test | What it fails on |
@@ -227,8 +348,15 @@ Debug by the rule above. Producers in other repositories and in mesh-compiled co
 | `SubscribeDuringRecycleTest` (`MeshWeaver.Layout.Test`) | a layout area subscribing into the recycle window rendering an error instead of a "coming back" state |
 | `RecyclingShapeDiagnosticTest` (`MeshWeaver.Graph.Test`) | the diagnostic naming both shapes at once, or inventing one from zero observations |
 | `ChangeFeedResubscribeCoalesceTest` (`MeshWeaver.Data.Test`) | a burst of owner change events producing one resubscribe per event |
+| `ASyncStreamThatGivesUpOnItsOwnerEndsTest` (`MeshWeaver.Data.Test`) | a give-up that leaves the stream alive on its last value, or one activation's NACK and announcement charged as two activations (#6602), or routing-layer refusals charged as owner activations (#6729) |
 | `ADrainingSiloDoesNotSilenceItsSubscribersTest` (`MeshWeaver.Hosting.Orleans.Test`) | a grain on a stopping silo accepting a subscribe it can only answer into the void (#5256) |
 | `DeferredDeliveryNackedOnDisposeTest.ADiscardError_NamesTheRequest_SoItsProducerCanBeTold` (`MeshWeaver.Messaging.Hub.Test`) | a bring-up discard Error that names the request type but not its declared description (#5718), or that prints an undeclared payload |
+| `DeferredDeliveryNackedOnDisposeTest.ARequestWhoseProducerDeclaresTheReask_IsTeardownNormal_NotAnError` (`MeshWeaver.Messaging.Hub.Test`) | a delivery stamped `ReasksOnShutdown` still reported at Error when a teardown discards it, or no longer answered `ShuttingDown` (#5718) |
+| `DeferredDeliveryNackedOnDisposeTest.ADeferredReplyToTheDisposingHub_IsTeardownNormal_AndItsReplierIsNotNacked` (`MeshWeaver.Messaging.Hub.Test`) | a reply parked behind a young activation's gates reported at Error, or reported as answering its replier `ShuttingDown`, or a drain that NACKs the replier (#6791) |
+| `PatchDiscardedByABringUpTeardownIsReaskedTest` (`MeshWeaver.Graph.Test`) | a node write parked behind a young activation's gates that does not land on the next activation after a direct teardown, or whose discard is reported at Error (#6733) |
+| `PointReadDiscardedByABringUpTeardownIsReaskedTest` (`MeshWeaver.Graph.Test`) | the PRODUCTION claimant: a `GetMeshNodeOutcome` request — the initial one or the re-probe issued from the `ShuttingDown` NACK — that arrives without the `ReasksOnShutdown` stamp, whose bring-up discard is reported at Error, or a read that does not settle `Present` after two such discards (#6717) |
+| `PostOptionsReaskStampTest` (`MeshWeaver.Messaging.Hub.Test`) | a reply built with `ResponseFor` / `WithRequestIdFrom` that inherits the request's `ReasksOnShutdown` stamp (#6717) |
+| `UnansweredReassertOnRecycleTest` (`MeshWeaver.Data.Test`) | an owner recycled while it holds the answer to a re-ask it accepted dropping that answer, so the subscriber's in-flight re-ask blocks every later one until the request timeout (#6759) |
 
 ## See also
 
@@ -255,6 +383,35 @@ arm logged it and dropped it, the heartbeat kept posting to the deleted owner ev
 answer that was already in the log. It is #1029's silence on the door #1029 did not close, and it is
 intermittent only because the owner's own teardown notice usually reaches the reader before the
 change-feed event latches the re-ask.
+
+## A held re-assert is answered when its stream ends (#6759)
+
+A re-ask that reaches an owner already serving the stream is a RE-ASSERT: the owner re-sends the
+stream's current state, then acknowledges. When the stream has no state yet, the owner holds its
+answer until the stream first emits. That hold used to be registered on the stream's disposal and do
+nothing there. So an owner recycled before its stream ever emitted dropped the answer: no ack, no
+refusal. The subscriber's re-ask stayed in flight until the request timeout (60 s), and its in-flight
+guard dropped every later re-ask in that window, including the one the owner's own end-of-stream
+announcement triggers. The read emitted nothing for the whole request timeout.
+
+The overlay self-heal makes this reachable: it recycles a per-node hub the moment its NodeType
+compiles. A reader whose initial subscribe and change-feed re-ask both queued behind that activation
+can have both processed, and the recycle run, before the fresh stream emits.
+
+The stream ending is now a terminal of its own. If the held answer is still unclaimed when the stream
+completes or is disposed, the owner refuses it with a transient `ShuttingDown` composed through
+`ShutdownNack` (banner and activation tag). The owner posts the refusal itself while it can, or else
+its parent posts it, the same route as the read and write NACKs above. The subscriber then rides the
+recycle out like any other refusal, and its next re-ask lands on the fresh activation.
+
+When the whole tree is torn down, the owner AND its parent are past `DisposeHostedHubs`, so neither
+route is open. The owner still posts the refusal itself: the post seam hands a correlated NACK to a
+requester in the same process directly (`MessageHub.TryDeliverNackInProcess`, #4072). A sibling
+subscriber is `Quiescing` on exactly that callback. Before this was added, the owner only logged that
+it had no route, and the subscriber's teardown waited out its whole quiesce budget.
+`UnansweredReassertOnRecycleTest.WholeTreeTornDownWhileHoldingAReassert_TheQuiescingSubscriberIsAnswered`
+pins it: with the refusal dropped, the subscriber's teardown does not complete within the convergence
+wait.
 
 ## 🚨 The promise lives in the TEXT, not in the envelope (#4866)
 

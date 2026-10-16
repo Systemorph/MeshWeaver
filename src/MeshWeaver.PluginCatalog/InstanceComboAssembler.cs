@@ -36,6 +36,17 @@ namespace MeshWeaver.PluginCatalog;
 ///   <item>a module with nothing recorded cannot be materialised at all — the error names it.</item>
 /// </list>
 ///
+/// <para><b>The install record's commit is the reference</b> (MeshWeaver#3848, decision "Record
+/// commit on install"): the registry's install response names the commit it served and the record
+/// stores it as <see cref="PackageCoordinate.InstalledFromRef"/>, so a package is fetched at THAT
+/// commit and its tree must prove the recorded module version there — never at the source's moving
+/// <c>HEAD</c>. A record written before the decision carries no commit and keeps the old path until
+/// its next update restamps it; nothing backfills it.</para>
+///
+/// <para><b>Retired, not verifiable.</b> A module whose source folder is absent at its fetch ref AND
+/// at the source's <c>HEAD</c> is <see cref="ModuleAssemblyStatus.Retired"/>: reported, and not
+/// failing the run (<see cref="ComboAssemblyReport.Success"/>).</para>
+///
 /// <para><b>Breadth-complete.</b> Every module is attempted (or refused) independently; a fetch
 /// failure is a NAMED failure for exactly the modules riding that fetch, and the run continues to
 /// collect ALL failures rather than stopping at the first — the same reporting doctrine as the
@@ -194,7 +205,7 @@ public sealed class InstanceComboAssembler
     private sealed record ModulePlan(ModuleCoordinate Module)
     {
         public FetchSpec? Fetch { get; init; }
-        public ModuleAssemblyStatus ErrorStatus { get; init; }
+        public string ErrorStatus { get; init; } = ModuleAssemblyStatus.Failed;
         public string? Error { get; init; }
 
         public static ModulePlan Refuse(ModuleCoordinate module, string error) =>
@@ -235,9 +246,13 @@ public sealed class InstanceComboAssembler
                 var installedRef = NullIfBlank(package.InstalledFromRef);
                 var version = NullIfBlank(package.Version);
 
+                // The commit the install recorded (MeshWeaver#3848 — the registry's install
+                // response names the commit it served, and the record stores it). Fetched
+                // directly, and when the record also claims a module version the tree at that
+                // commit must PROVE it: content that diverges from its recorded commit fails.
                 if (installedRef is not null && LooksLikeCommitSha(installedRef))
                     return PackagePlan(packageRepo, installedRef, MaterializationPin.ExactCommit,
-                        requireMatch: false);
+                        requireMatch: recordedModuleVersion is not null);
                 if (version is not null && LooksLikeCommitSha(version))
                     return PackagePlan(packageRepo, version, MaterializationPin.ExactCommit,
                         requireMatch: false);
@@ -329,7 +344,8 @@ public sealed class InstanceComboAssembler
             .SelectMany(snapshot => members
                 .Select(member => MaterializeModule(member, snapshot, workRoot))
                 .ToObservable().Concat().ToList()
-                .Select(entries => entries.ToImmutableList()))
+                .SelectMany(outcomes => ConfirmRetirement(
+                    repositoryUrl, gitRef, subdirectory, outcomes.ToImmutableList())))
             .Catch((Exception exception) =>
             {
                 var error =
@@ -352,7 +368,11 @@ public sealed class InstanceComboAssembler
             });
     }
 
-    private IObservable<ModuleAssembly> MaterializeModule(
+    /// <summary>One module's materialisation outcome, plus whether its folder was ABSENT from the
+    /// fetched tree — the one failure <see cref="ConfirmRetirement"/> re-examines.</summary>
+    private sealed record ModuleOutcome(ModulePlan Plan, ModuleAssembly Entry, bool Absent);
+
+    private IObservable<ModuleOutcome> MaterializeModule(
         ModulePlan plan, RepoSnapshot snapshot, string workRoot)
     {
         var spec = plan.Fetch!;
@@ -365,54 +385,182 @@ public sealed class InstanceComboAssembler
         return SelectModuleFiles(spec, snapshot)
             .SelectMany(files =>
             {
+                // 🚨 An empty selection is ABSENCE only when the snapshot's listing is complete
+                // (MeshWeaver#6742). A truncated tree omits files it never names, so a folder
+                // missing from it is INDETERMINATE: the module stays failed and is never handed
+                // to ConfirmRetirement, which would otherwise retire a package that may still
+                // exist and let the verdict go Green on a partial listing.
                 if (files.Count == 0)
-                    return Observable.Return(baseline with
-                    {
-                        Status = ModuleAssemblyStatus.Failed,
-                        Error = spec.FolderFilter is null
-                            ? $"the fetch of '{spec.RepositoryUrl}' at '{spec.GitRef}'"
-                              + (spec.Subdirectory is null ? "" : $" (subdirectory '{spec.Subdirectory}')")
-                              + " returned no files."
-                            : $"folder '{spec.FolderFilter}/' does not exist in "
-                              + $"'{spec.RepositoryUrl}' at '{spec.GitRef}'.",
-                    });
+                    return Observable.Return(snapshot.ListingIsComplete
+                        ? new ModuleOutcome(plan, baseline with
+                        {
+                            Status = ModuleAssemblyStatus.Failed,
+                            Error = AbsentError(spec, spec.GitRef),
+                        }, Absent: true)
+                        : new ModuleOutcome(plan, baseline with
+                        {
+                            Status = ModuleAssemblyStatus.Failed,
+                            Error = IndeterminateListingError(spec, spec.GitRef, snapshot.CommitSha),
+                        }, Absent: false));
 
                 if (files.Select(f => InvalidPathReason(f.Path)).FirstOrDefault(r => r is not null)
                     is { } pathReason)
-                    return Observable.Return(baseline with
+                    return Observable.Return(new ModuleOutcome(plan, baseline with
                     {
                         Status = ModuleAssemblyStatus.Failed,
                         Error = $"the fetched tree carries an unsafe path ({pathReason}) — "
                                 + "refusing to write it.",
-                    });
+                    }, Absent: false));
 
                 var verdict = VerifyModuleVersion(plan, spec, files, baseline);
                 if (verdict.Failed is not null)
-                    return Observable.Return(verdict.Failed);
+                    return Observable.Return(new ModuleOutcome(plan, verdict.Failed, Absent: false));
 
                 return filePool.InvokeBlocking(_ =>
                         WriteModule(workRoot, plan.Module.ModuleId, files))
-                    .Select(written => verdict.Entry with
+                    .Select(written => new ModuleOutcome(plan, verdict.Entry with
                     {
                         Status = ModuleAssemblyStatus.Materialized,
                         FileCount = files.Count,
                         ContentHash = written.ContentHash,
                         DeclaresRoot = written.DeclaresRoot,
-                    })
-                    .Do(entry => options.Output.WriteLine(
-                        $"  ok  {entry.ModuleId}: {entry.FileCount} file(s) @ "
-                        + $"{snapshot.CommitSha} → {entry.Pin}"));
+                    }, Absent: false))
+                    .Do(outcome => options.Output.WriteLine(
+                        $"  ok  {outcome.Entry.ModuleId}: {outcome.Entry.FileCount} file(s) @ "
+                        + $"{snapshot.CommitSha} → {outcome.Entry.Pin}"));
             })
             .Catch((Exception exception) =>
             {
                 logger?.LogWarning(exception,
                     "[ComboAssembly] materialising {Module} failed.", plan.Module.ModuleId);
-                return Observable.Return(baseline with
+                return Observable.Return(new ModuleOutcome(plan, baseline with
                 {
                     Status = ModuleAssemblyStatus.Failed,
                     Error = $"{exception.GetType().Name}: {exception.Message}",
-                });
+                }, Absent: false));
             });
+    }
+
+    private static string AbsentError(FetchSpec spec, string gitRef) =>
+        spec.FolderFilter is null
+            ? $"the fetch of '{spec.RepositoryUrl}' at '{gitRef}'"
+              + (spec.Subdirectory is null ? "" : $" (subdirectory '{spec.Subdirectory}')")
+              + " returned no files."
+            : $"folder '{spec.FolderFilter}/' does not exist in "
+              + $"'{spec.RepositoryUrl}' at '{gitRef}'.";
+
+    /// <summary>Why an empty selection from a TRUNCATED listing proves nothing
+    /// (<see cref="RepoSnapshot.ListingIsComplete"/> false, MeshWeaver#6742).</summary>
+    private static string IndeterminateListingError(FetchSpec spec, string gitRef, string? commit) =>
+        "indeterminate listing: the tree of "
+        + $"'{spec.RepositoryUrl}' at '{gitRef}'" + (commit is null ? "" : $" ({commit})")
+        + " was TRUNCATED, and "
+        + (spec.FolderFilter is null
+            ? (spec.Subdirectory is null ? "the fetch" : $"subdirectory '{spec.Subdirectory}'")
+            : $"folder '{spec.FolderFilter}/'")
+        + " is not in the part that was listed. A partial listing cannot show that it is absent, "
+        + "so it is neither materialised nor retired.";
+
+    /// <summary>The source repository's default branch, as every git transport resolves it.</summary>
+    private const string HeadRef = "HEAD";
+
+    /// <summary>
+    /// 🚨 <b>Retired, not verifiable</b> (MeshWeaver#3848, policy
+    /// <c>record-served-commit-on-install</c>): a module
+    /// whose source folder is ABSENT at the ref it was fetched at is RETIRED only when the folder
+    /// is absent at the source repository's <c>HEAD</c> as well — the package has left its
+    /// source, its content can never be re-materialised, and the verifier reports it without
+    /// failing the run. A folder absent at a recorded ref but present at <c>HEAD</c> stays
+    /// <see cref="ModuleAssemblyStatus.Failed"/>: the record is wrong, the package is not gone.
+    /// A <c>HEAD</c> read that fails proves nothing either way, so the module stays failed and the
+    /// line says why. ONE <c>HEAD</c> read per group, and only when a member was absent.
+    /// 🚨 Absence counts only from a COMPLETE listing (<see cref="RepoSnapshot.ListingIsComplete"/>,
+    /// MeshWeaver#6742): an outcome is marked absent only when the snapshot at its own ref was
+    /// complete, and the <c>HEAD</c> snapshot must be complete too — a folder missing from a
+    /// truncated tree is indeterminate, and the module stays failed saying so.
+    /// </summary>
+    private IObservable<ImmutableList<ModuleAssembly>> ConfirmRetirement(
+        string repositoryUrl, string gitRef, string? subdirectory,
+        ImmutableList<ModuleOutcome> outcomes)
+    {
+        if (!outcomes.Any(o => o.Absent))
+            return Observable.Return(outcomes.Select(o => o.Entry).ToImmutableList());
+
+        IObservable<ImmutableList<ModuleAssembly>> Decide(RepoSnapshot head) =>
+            outcomes
+                .Select(outcome => !outcome.Absent
+                    ? Observable.Return(outcome.Entry)
+                    : SelectModuleFiles(outcome.Plan.Fetch! with { GitRef = HeadRef }, head)
+                        .Select(files => files.Count == 0
+                            ? head.ListingIsComplete
+                                ? Retire(outcome, head.CommitSha)
+                                : outcome.Entry with
+                                {
+                                    Error = outcome.Entry.Error + " Whether it was retired could "
+                                            + "not be checked: "
+                                            + IndeterminateListingError(outcome.Plan.Fetch!,
+                                                HeadRef, head.CommitSha),
+                                }
+                            : outcome.Entry with
+                            {
+                                Error = outcome.Entry.Error + $" It still exists at '{HeadRef}' "
+                                        + $"({head.CommitSha}), so the package is not retired — "
+                                        + "the recorded ref does not hold it.",
+                            }))
+                .ToObservable().Concat().ToList()
+                .Select(entries => entries.ToImmutableList());
+
+        // Already read at HEAD: the absence IS the retirement fact, no second read.
+        if (string.Equals(gitRef, HeadRef, StringComparison.Ordinal))
+            return Observable.Return(outcomes
+                .Select(outcome => outcome.Absent
+                    ? Retire(outcome, outcome.Entry.ResolvedCommit)
+                    : outcome.Entry)
+                .ToImmutableList());
+
+        return fetch(repositoryUrl, HeadRef, subdirectory, options.AccessToken)
+            .Take(1)
+            .Timeout(options.FetchTimeout)
+            .SelectMany(Decide)
+            .Catch((Exception exception) =>
+            {
+                logger?.LogWarning(exception,
+                    "[ComboAssembly] reading {Repo} at HEAD to confirm a retirement failed — the "
+                    + "absent module(s) stay failed.", repositoryUrl);
+                return Observable.Return(outcomes
+                    .Select(outcome => outcome.Absent
+                        ? outcome.Entry with
+                        {
+                            Error = outcome.Entry.Error + $" Whether it was retired could not be "
+                                    + $"checked: reading '{HeadRef}' failed ("
+                                    + $"{exception.GetType().Name}: {exception.Message}).",
+                        }
+                        : outcome.Entry)
+                    .ToImmutableList());
+            });
+    }
+
+    private ModuleAssembly Retire(ModuleOutcome outcome, string? headCommit)
+    {
+        var spec = outcome.Plan.Fetch!;
+        var entry = outcome.Entry with
+        {
+            Status = ModuleAssemblyStatus.Retired,
+            Pin = MaterializationPin.None,
+            Error = "retired, not verifiable: "
+                    + (spec.FolderFilter is null
+                        ? $"'{spec.Subdirectory ?? outcome.Entry.ModuleId}' no longer exists"
+                        : $"folder '{spec.FolderFilter}/' no longer exists")
+                    + $" in '{spec.RepositoryUrl}' — absent at '{spec.GitRef}'"
+                    + (string.Equals(spec.GitRef, HeadRef, StringComparison.Ordinal)
+                        ? ""
+                        : $" and at '{HeadRef}'")
+                    + (headCommit is null ? "" : $" ({headCommit})")
+                    + ". Its content can never be re-materialised, so it is reported and does not "
+                    + "fail the verification.",
+        };
+        options.Output.WriteLine($"  --  {entry.ModuleId}: {entry.Error}");
+        return entry;
     }
 
     /// <summary>
@@ -464,7 +612,26 @@ public sealed class InstanceComboAssembler
         if (!spec.RequireModuleVersionMatch)
             return (entry, null);
         if (matches == true)
-            return (entry with { Pin = MaterializationPin.VerifiedModuleVersion }, null);
+            // An exact commit that proved itself stays an exact commit — the stronger pin.
+            return (spec.Pin == MaterializationPin.ExactCommit
+                ? entry
+                : entry with { Pin = MaterializationPin.VerifiedModuleVersion }, null);
+
+        // The INSTALL RECORD's own commit (MeshWeaver#3848): the commit does not move, so no flag
+        // can excuse a tree that is not the recorded identity — the installed content diverges
+        // from the commit it claims to have come from.
+        if (spec.Pin == MaterializationPin.ExactCommit)
+            return (entry, entry with
+            {
+                Status = ModuleAssemblyStatus.Failed,
+                Error = fetched is null
+                    ? $"the install record names commit '{spec.GitRef}' and moduleVersion "
+                      + $"'{recorded}', but the tree at that commit ships no readable "
+                      + "manifest.lock — the installed content cannot be proven to be that commit's."
+                    : $"moduleVersion mismatch at the recorded commit: the install record pins "
+                      + $"'{recorded}' but the tree at '{spec.GitRef}' carries '{fetched}' — the "
+                      + "installed content diverges from the commit it was recorded at.",
+            });
 
         // The recorded identity is a content hash and the fetched tree cannot prove it holds it.
         // Under the explicit moving flag the caller accepts unpinned input — stamped as such;

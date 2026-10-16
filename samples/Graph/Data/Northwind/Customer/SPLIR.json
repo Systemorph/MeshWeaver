@@ -6,7 +6,6 @@
   "category": "Customers",
   "description": "Split Rail Beer & Ale - Lander, USA",
   "icon": "/static/NodeTypeIcons/people.svg",
-  "isPersistent": true,
   "content": {
     "$type": "CustomerContent",
     "customerId": "SPLIR",

@@ -950,7 +950,8 @@ public class MessageService : IMessageService
         // waiting out its budget. DeletedAddressNackClassificationTest asserts both halves
         // (Contain("No node found") / NotContain("shutting down")) precisely because nothing else
         // can catch it.
-        var (errorType, message) = IsAddressDeleted()
+        var nodeAbsent = IsAddressDeleted();
+        var (errorType, message) = nodeAbsent
             ? (ErrorType.NotFound, DeletedAddressMessage)
             : (classification is ErrorType.Unknown ? ErrorType.ShuttingDown : classification, reason);
         try
@@ -960,7 +961,8 @@ public class MessageService : IMessageService
             // does its post pipeline on a rejection. Reporting either as "answered" would suppress
             // every remaining carrier while the requester stays unanswered (Copilot review on #4154).
             var posted = parent.Post(
-                new DeliveryFailure(delivery) { ErrorType = errorType, Message = message },
+                // NodeAbsent rides the tombstone verdict as the typed form of the sentence (#6626).
+                new DeliveryFailure(delivery) { ErrorType = errorType, Message = message, NodeAbsent = nodeAbsent },
                 o => o.ResponseFor(delivery));
             if (posted is null || posted.State == MessageDeliveryState.Failed)
             {
@@ -1050,9 +1052,10 @@ public class MessageService : IMessageService
     /// </summary>
     public const string FailureAlreadyReported = "FailureAlreadyReported";
 
-    private IMessageDelivery ReportFailure(IMessageDelivery delivery, ErrorType errorType = ErrorType.Unknown)
+    private IMessageDelivery ReportFailure(IMessageDelivery delivery, ErrorType errorType = ErrorType.Unknown,
+        bool nodeAbsent = false)
     {
-        TryReportFailure(delivery, errorType);
+        TryReportFailure(delivery, errorType, nodeAbsent);
         return delivery;
     }
 
@@ -1065,7 +1068,7 @@ public class MessageService : IMessageService
     /// finishes it still owes the NACK. The distinction is the answer-once contract at the one
     /// site that returns a verdict to a routing layer with a carrier of its own (the intake gate).
     /// </summary>
-    private bool TryReportFailure(IMessageDelivery delivery, ErrorType errorType)
+    private bool TryReportFailure(IMessageDelivery delivery, ErrorType errorType, bool nodeAbsent = false)
     {
         var error = delivery.Properties.TryGetValue("Error", out var e) ? e?.ToString() : null;
         logger.LogWarning(
@@ -1142,7 +1145,7 @@ public class MessageService : IMessageService
                 // The post seam's verdict IS the carrier's verdict: it hands back the delivery it
                 // accepted, or a Failed one when neither its own pump, a live parent nor the
                 // in-process route would take it (every branch stamps the request's trail).
-                var posted = Post(new DeliveryFailure(delivery, message) { ErrorType = errorType },
+                var posted = Post(new DeliveryFailure(delivery, message) { ErrorType = errorType, NodeAbsent = nodeAbsent },
                     new PostOptions(Address).ResponseFor(delivery));
                 // 🚨 Ignored belongs with Failed, exactly as MeshExtensions.WasCarried says
                 // (MeshWeaver#1174). The storm breaker and the aggregate shedder refuse a post
@@ -2790,7 +2793,7 @@ public class MessageService : IMessageService
                             "{MessageType} (ID: {MessageId}) faulted in {Address} after {Duration}ms because the hub is tearing down, and the address is TOMBSTONED — NACKing as authoritative NotFound.",
                             messageTypeName, delivery.Id, Address, executionStopwatch.ElapsedMilliseconds);
                         if (!NackThroughParent(delivery, e.ToString()))
-                            ReportFailure(delivery.Failed(DeletedAddressMessage), ErrorType.NotFound);
+                            ReportFailure(delivery.Failed(DeletedAddressMessage), ErrorType.NotFound, nodeAbsent: true);
                     }
                     else
                     {
@@ -3095,7 +3098,7 @@ public class MessageService : IMessageService
             {
                 try
                 {
-                    replyParent.Post(message, _ => opt);
+                    replyParent.Post(message, _ => opt.CarriedByParent());
                     postFate?.Add($"REPLY_FORWARDED_THROUGH_PARENT runLevel={hub.RunLevel}", Address);
                     replyFate?.Add($"REPLY_FORWARDED_THROUGH_PARENT runLevel={hub.RunLevel} parent={replyParent.Address}", Address);
                     return delivery;
@@ -3146,7 +3149,7 @@ public class MessageService : IMessageService
                     var releaseOptions = releaseParent.Address.Type != AddressExtensions.MeshType
                         ? opt with { Sender = opt.Sender.WithHost(releaseParent.Address) }
                         : opt;
-                    var forwarded = releaseParent.Post(message, _ => releaseOptions);
+                    var forwarded = releaseParent.Post(message, _ => releaseOptions.CarriedByParent());
                     postFate?.Add($"RELEASE_FORWARDED_THROUGH_PARENT runLevel={hub.RunLevel} parent={releaseParent.Address}", Address);
                     if (forwarded is not null)
                         return forwarded;
@@ -3368,6 +3371,46 @@ public class MessageService : IMessageService
         DrainDeferredDeliveries((delivery, gatesAtDeferral) =>
         {
             discarded++;
+            // 🚨 A REPLY ADDRESSED TO THIS HUB IS NOBODY ELSE'S WORK, AND ITS SENDER AWAITS NOTHING
+            // (#6791). A delivery carrying PostOptions.RequestId is an ANSWER (the same presence
+            // test RefusesIntake's tiers use), and a parked one is a reply to a request THIS
+            // address issued — by this activation's own init, or by the activation this one
+            // replaced. Its only possible reader is this hub's pending-response registry, and that
+            // reader is provably absent: the deferral path lets every reply with a LIVE callback
+            // through the gates (MessageHub.IsAwaitedResponse), so a reply that was parked had none
+            // at deferral, and the registry is cancelled in this same disposal anyway.
+            //
+            // So both halves of the Error below were false for it. "Accepted work … discarded":
+            // nobody outside is waiting on this hub for it. "The sender is answered ShuttingDown":
+            // an on-target delivery is unpacked BEFORE the deferral decision, so a parked reply is
+            // typed and not an IRequest, and NackThroughParent declines it (not-awaited) — no
+            // NACK was ever posted. Nor should one be: the sender is the REPLIER, which registered
+            // no callback for its own reply's id, so a NACK would land as an UN-awaited
+            // DeliveryFailure that answers no question (PortalErrorSink pops those as a modal on
+            // a portal hub). So this branch posts nothing, whatever the payload's shape — a
+            // RawJson pass-through reply included, which IsAwaitedBySender would otherwise accept.
+            //
+            // MEASURED (#6791): every fingerprint folded into that issue during one module
+            // live-update recycle wave was a GetDataResponse parked behind
+            // [DataContextInit,MeshNodeInit] on a hub the cascade reached mid-bring-up.
+            //
+            // Still REPORTED, at Debug, with the same facts. A DeliveryFailure never gets here (it
+            // passes every gate), and a correlated reply refused at INTAKE is a different case:
+            // that one is reported to the requester it was FOR (ScheduleNotify, #4170).
+            if (delivery.Properties.ContainsKey(PostOptions.RequestId))
+            {
+                logger.LogDebug(DisposalDiscardedDeferredDelivery,
+                    "[DISPOSE-DISCARD] Hub {Address} is disposing with {MessageType} (id={MessageId}, from {Sender}) "
+                    + "still deferred; initialization gates closed at deferral: [{Gates}]. RunLevel={RunLevel}; "
+                    + "teardown {Disposal}. It is a REPLY to a request this address issued, and no callback "
+                    + "awaited it when it was parked; the only reader it could have had is this hub's own "
+                    + "pending-response registry, cancelled in this disposal. The replier awaits nothing, so "
+                    + "no answer is posted to it. Teardown-normal; nobody is stranded.",
+                    Address, delivery.Message.GetType().Name, delivery.Id, delivery.Sender,
+                    gatesAtDeferral, hub.RunLevel, disposal);
+                requestFates?.Find(delivery.Id)?.Add("NACK_DECLINED reason=reply-to-disposing-hub", Address);
+                return;
+            }
             if (delivery.Sender is null || delivery.Sender.Equals(Address))
                 logger.LogDebug(DisposalDiscardedDeferredDelivery,
                     "[DISPOSE-DISCARD] Hub {Address} is disposing with its OWN {MessageType} "
@@ -3420,14 +3463,17 @@ public class MessageService : IMessageService
             // by an Orleans deactivation (DirectoryFailure: the directory owner's silo stopping)
             // while the gates were still closed. The line is teardown-normal, so it goes to Debug
             // with the same facts, exactly like the self-addressed case above.
-            else if (delivery.Message.GetType().HasAttribute<ReaskedOnShutdownAttribute>())
+            // The per-delivery form of the same claim (#5718): ONE producer of a type whose other
+            // producers do not re-ask declares it on its own request (PostOptions.ReaskingOnShutdown).
+            else if (delivery.Message.GetType().HasAttribute<ReaskedOnShutdownAttribute>()
+                     || delivery.Properties.ContainsKey(PostOptions.ReasksOnShutdown))
                 logger.LogDebug(DisposalDiscardedDeferredDelivery,
                     "[DISPOSE-DISCARD] Hub {Address} is disposing with {MessageType} (id={MessageId}, from {Sender}) "
                     + "still deferred; initialization gates closed at deferral: [{Gates}]. RunLevel={RunLevel}; "
                     + "teardown {Disposal}. The teardown ended this hub's bring-up, and the sender is answered "
-                    + "with a transient ShuttingDown NACK. {MessageType} is re-asked on that answer by every "
-                    + "producer ([ReaskedOnShutdown]), so the next activation serves it. Teardown-normal; "
-                    + "nothing is lost.",
+                    + "with a transient ShuttingDown NACK. Its producer re-asks on that answer ([ReaskedOnShutdown] "
+                    + "on {MessageType}, or ReasksOnShutdown declared on this request), so the next activation "
+                    + "serves it. Teardown-normal; nothing is lost.",
                     Address, delivery.Message.GetType().Name, delivery.Id, delivery.Sender,
                     gatesAtDeferral, hub.RunLevel, disposal, delivery.Message.GetType().Name);
             // 🚨 …AND IT NAMES THE REQUEST, not only its type (#5718). Whether this Error strands

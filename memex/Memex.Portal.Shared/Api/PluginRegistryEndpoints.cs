@@ -150,6 +150,21 @@ public static class PluginRegistryEndpoints
                 return Observable.Return((IReadOnlyList<PackageManifest>)[]);
             });
 
+    /// <summary>
+    /// The ref a files request is read at: <paramref name="requested"/> when it is a snapshot token
+    /// — a full commit sha reachable from the source's configured ref — else the configured ref
+    /// (MeshWeaver#6718). A branch name, <c>HEAD</c>, an absent ref, or a commit whose ancestry the
+    /// source cannot establish all read the configured ref, exactly as before.
+    /// </summary>
+    internal static IObservable<string> ReadRef(ConfiguredPackageSource s, string? requested) =>
+        PackageFetch.IsCommitSha(requested)
+        && !string.Equals(requested, s.GitRef, StringComparison.OrdinalIgnoreCase)
+            ? s.Source.PublishesCommit(requested!, s.GitRef)
+                .Take(1)
+                .DefaultIfEmpty(false)
+                .Select(published => published ? requested! : s.GitRef)
+            : Observable.Return(s.GitRef);
+
     // Merged catalog across all sources; on an id collision the FIRST configured source wins
     // (the registry curates the order).
     //
@@ -317,9 +332,22 @@ public static class PluginRegistryEndpoints
                 }
                 // The paths subset (manifest-diff fast path) only FILTERS within the resolved
                 // package's own files — the curated-id resolution above stays the security gate.
-                return hit.Source.Source.FetchPackageFiles(hit.Package, hit.Source.GitRef, body.Paths)
+                // 🚨 The answer names the COMMIT it served (MeshWeaver#3848, decision "Record commit
+                // on install"): the consumer's install record stores it, and the combo verifier
+                // then checks the installed content against that commit — never against the
+                // source's HEAD, which has moved past every install by the time anyone verifies.
+                //
+                // 🚨 The ref read is the registry's CONFIGURED ref — except for a SNAPSHOT TOKEN
+                // (MeshWeaver#6718): a full commit sha the consumer's manifest read was served at,
+                // so its delta read lands on the same snapshot even when the configured ref moved
+                // in between. Honoured only when that commit is reachable from the configured ref
+                // (`PublishesCommit`) — the token can never read a package at a commit that exists
+                // only on an unmerged branch. Not established ⇒ the configured ref, as before, and
+                // the consumer refuses the mismatched snapshot by itself and installs in full.
+                return ReadRef(hit.Source, body.Ref)
+                    .SelectMany(readRef => hit.Source.Source.FetchPackage(hit.Package, readRef, body.Paths))
                     .InStage(stages, $"package files '{hit.Package.Id}' from '{hit.Source.Name}'")
-                    .Select(files => (IResult)Results.Content(PluginRegistryPayloads.Files(files), "application/json"));
+                    .Select(fetched => (IResult)Results.Content(PluginRegistryPayloads.Files(fetched), "application/json"));
             })
             .Catch((Exception ex) =>
             {
@@ -345,8 +373,12 @@ public static class PluginRegistryEndpoints
 
     /// <summary>Fetch-files request: only the package <paramref name="Id"/> is authoritative — the
     /// registry resolves the folder from its curated catalog. <paramref name="Ref"/> is advisory (the
-    /// registry serves its own configured ref). <paramref name="Paths"/> optionally narrows the
+    /// registry serves its own configured ref), except for a snapshot token — a full commit sha
+    /// reachable from the configured ref, which is read instead (MeshWeaver#6718, <see cref="ReadRef"/>).
+    /// <paramref name="Paths"/> optionally narrows the
     /// response to a subset of the package's own repo-relative paths (the manifest-diff incremental
-    /// fast path); null = all files. Unknown paths are simply absent from the response.</summary>
+    /// fast path); null = all files. Unknown paths are simply absent from the response. The answer
+    /// carries <c>commit</c>, the exact commit the files were read at, whenever the source can
+    /// name it (MeshWeaver#3848).</summary>
     public record FilesBody(string Id, string? Ref = null, IReadOnlyList<string>? Paths = null);
 }

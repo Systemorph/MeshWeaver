@@ -41,7 +41,7 @@ public sealed record Address
 
     /// <summary>
     /// Host address for hosted/nested addresses.
-    /// When set, ToFullString() returns "host~this" format.
+    /// When set, ToString() / ToFullString() return "host~this" format.
     /// </summary>
     public Address? Host { get; init; }
 
@@ -57,11 +57,26 @@ public sealed record Address
     public string Path => cachedPath ??= string.Join("/", Segments);
 
     /// <summary>
-    /// Returns the segment path, appending <c>~host</c> when this address is hosted.
+    /// The canonical string form — identical to <see cref="ToFullString"/>:
+    /// <c>outermost_host~…~host~path</c>, or just <see cref="Path"/> when unhosted.
+    ///
+    /// <para>🚨 <b>One string form, and it round-trips.</b> This used to render
+    /// <c>path~host</c> while the parser (<c>implicit operator Address(string)</c>) reads the FIRST
+    /// <c>~</c> as the end of the host, so every key minted with <c>ToString()</c> and parsed
+    /// back — the <c>IPodHubGrain</c> key a <c>PodHubGrain</c> turns into an address, a grain
+    /// key resolved by <c>GetAddress</c> — came back REVERSED, with no error (#6604). The
+    /// wire serializer, <c>AccessContext.ObjectId</c> and the parser already used
+    /// <c>host~path</c>; <c>ToString()</c> was the side that was wrong.
+    /// <c>(Address)address.ToString() == address</c> holds for every address whose segments hold
+    /// no <c>/</c>, and is pinned by <c>AddressStringRoundTripTest</c>. A segment that carries a
+    /// whole path (<c>new Address("kernelExec", hubPath)</c>) renders the same text and parses back
+    /// with the same <see cref="Path"/> and host chain, but re-segmented, so <see cref="Equals(Address?)"/>
+    /// is false for it; compare such a key by <see cref="Path"/>.</para>
+    ///
+    /// <para>Need the node path? Use <see cref="Path"/>, never <c>ToString()</c> — the host
+    /// chain says where an address is activated, not what it is.</para>
     /// </summary>
-    public override string ToString() => Host is null
-        ? Path
-        : Path + '~' + Host;
+    public override string ToString() => ToFullString();
 
     /// <summary>
     /// Returns full string representation including host if present.

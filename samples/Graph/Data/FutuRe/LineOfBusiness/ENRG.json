@@ -6,7 +6,6 @@
   "category": "Lines of Business",
   "description": "Energy insurance covering oil & gas, power generation, mining, and renewables",
   "icon": "/api/content/FutuRe/LineOfBusiness/icon.svg",
-  "isPersistent": true,
   "content": {
     "$type": "LineOfBusiness",
     "systemName": "ENRG",

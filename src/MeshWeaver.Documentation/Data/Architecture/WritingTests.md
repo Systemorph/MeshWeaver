@@ -191,7 +191,11 @@ case from a stuck one and nothing naming the case. It now streams:
   `MeshOperations.RunTests(path)` holds ONE subscription for the whole run and writes it to an
   activity in the caller's own partition (category `TestRun`): a line per case as it runs and as it
   lands, with its output; `Succeeded` when every counted case passed, `Failed` otherwise, or when no
-  verdict arrived within the bound (the last line names the case still running). It answers at once
+  verdict arrived within the bound (the last line names the case still running). The bound covers
+  the WHOLE run, the version preflight included — one deadline taken when the run starts, so a
+  preflight still converging the mesh at the deadline ends the run `Failed` naming that phase, instead
+  of holding the activity at its title line past `timeoutSeconds` (MeshWeaver.Plugins#3513:
+  dispatched with 300 s, silent for 8 min 35 s while a convergence pass ran). It answers at once
   with `{status: "Dispatched", activityPath}`; poll `get @{activityPath}`, which starts nothing.
   `memex tests @<node>` is that loop in a terminal (`POST api/mesh/run-tests`, then the activity every
   two seconds), exiting `0` (passed), `1` (failed) or `4` (no terminal status within `--timeout`). The
@@ -280,6 +284,7 @@ From `MeshWeaver.Reactive.Assertions` (globally imported in every test project).
 | `await obs.Should().Be(expected)` | First emission equals `expected` |
 | `await obs.Should().Complete()` | Stream completes within the timeout |
 | `await obs.Should().NotEmit(within: 200.Milliseconds())` | Nothing arrives — the **one** place a fixed wait is correct |
+| `await obs.Should().Within(t).NotEmitBefore(settled)` | Nothing arrives before the positive `settled` signal — **prefer it to `NotEmit`** whenever a settled signal exists (below) |
 | `obs.Should().Within(t)....` / `obs.Should(t)....` | Override the default 10 s timeout for this chain (synchronous — still `await` the terminal call) |
 
 `.Emit()` and `.Match()` **return** the matched value, replacing the forbidden `var x = await obs.FirstAsync().ToTask()` pattern one-for-one: `var x = await obs.Should().Within(t).Match(...)`.
@@ -367,6 +372,38 @@ initial.Items.Should().HaveCount(1);
 ### ❌ `Task.Delay` / `Thread.Sleep` to "wait for propagation"
 
 Fold the wait into `await ….Should().Match(...)` on the real stream. The only sanctioned fixed waits are `await ….Should().NotEmit(within)` ("confirm nothing happens") and forcing distinct sort timestamps in ordering tests.
+
+---
+
+### ❌ A negative assertion that spends a fixed window when a settled signal exists
+
+A passing `NotEmit(within)` spends its **whole** window, every run. A window sized to be safe on a slow runner (`TestTimeouts.Quick` is 36 s on CI) is therefore paid in full by every green test: on main in October 2026, sixteen of them were most of one `MeshWeaver.Hosting.Test` CI part's 480 s budget (#6817). Dividing the window (`Quick / 10`) is not the fix either — it weakens the guard on exactly the slow runner it was sized for.
+
+**A negative assertion ends on a POSITIVE settled signal**: a later fact that can exist only once the system has processed the step under test. Then the assertion costs what the system takes, usually milliseconds. The shapes in use:
+
+| Settled signal | Example |
+|---|---|
+| A **sentinel** through the same pipeline, delivered after the step: its effect proves the step was processed and that the effect COULD have happened | `BuildTriggeredSyncPinsTheBuiltCommitTest` — a push at a sentinel sha; nothing but the sentinel may be fetched before the sentinel's own fetch |
+| The **next legitimate step's** effect, when the test already has one | `GreenBuildSkipsASettledSourceTest` — the clone of the next commit ends "no second clone of this one" |
+| The **owner's answer** to a request posted after the guarded one, to the same hub (deliveries are judged in order) — and, where the effect is a write the handler only STARTS, a short window that opens after it | `SaveMeshNodeRequestIsACheckedWriteTest` — a second stamped save from an answered sender proves the hub judged the spoofed one; the raw storage write it would have started has no observable completion, so `NotEmit(Quick / 10)` covers only that write (measured: a single read right after the settle missed a write that landed ~0.1 s later) |
+| A **response that follows the work**, then one read of the authoritative state | `SystemOwnedSweepRetractsTheLastAdminTest` — the create is answered only after its post-creation handlers (the sweep) completed; then one STORE read, not the trailing query index, compared with the set read BEFORE (the old "the set did not empty" passed while one of two grants was retracted) |
+
+**Settle first, and measure that the settle really comes after the effect.** A signal that proves the step was *judged* need not prove its *effect* landed — the negative control is how you find out, and it found out twice while this section was written.
+
+```csharp
+// ❌ spends 36 s on CI every time it passes
+await repoClient.FetchedRefs.Should().NotEmit(TestTimeouts.Quick);
+
+// ✅ armed before the step, ended by the sentinel's own fetch
+var nothingElse = repoClient.FetchedRefs.Where(r => r != SentinelSha)
+    .Should().Within(TestTimeouts.Convergence * 2)
+    .NotEmitBefore(repoClient.FetchedRefs.Where(r => r == SentinelSha), because, ct);
+/* the step under test */
+/* deliver the sentinel */
+await nothingElse;
+```
+
+`NotEmitBefore` **fails** when the settled signal does not arrive within the chain's timeout — silence without a settled signal proves nothing, so it is never read as a pass. The signal must not be satisfiable by the very emission the assertion forbids (filter the two apart, as above). And the negative control applies as everywhere ([Negative Controls](/Doc/Architecture/NegativeControls)): break the guarded behaviour and confirm the assertion fails, which is what shows the settled signal arrives AFTER the forbidden effect would have. `NotEmit(within)` stays for the case with genuinely no positive signal; keep that window short and say in a comment why no settled signal exists.
 
 ---
 

@@ -231,6 +231,20 @@ carries the LIVE node's claim when the caller's JSON does not name `syncBehavior
 explicitly named value as given (naming `Include` is how a caller resumes sync). Pinned by
 `UpdateKeepsTheSyncClaimTest` (Memex.Portal.Shared.Test).
 
+🚨 **Creation metadata (`createdDate`, `createdBy`) is never changed by an update, one layer lower.**
+It is set once at creation — Postgres holds `created_date` / `created_by` immutable (INSERT only,
+never in the `ON CONFLICT SET`) — and an `update` payload that leaves it out deserialises to
+`default` / `null`, which `IMeshService.UpdateNode` wrote wholesale, resetting the node's creation
+time and creator. `NodeUpdatePipeline` therefore carries the LIVE node's values whatever the caller
+sends, before the no-op gate (so a payload differing only in creation metadata changes nothing). A
+value the caller NAMES is not written either: the live node would advertise a stamp the durable row
+never stores and revert on reload. That is unconditional: a live node that carries NO stamp (imported
+from a file without one, hydrated from a projection) keeps having none — its row already exists, so a
+stamp an update supplied would never be stored either, and there is no "first update fills it in"
+fallback (#6745). Creation metadata is written by the create paths only. It sits in
+the pipeline rather than in `MeshOperations`, so every `UpdateNode` caller gets it, not only MCP and
+the CLI. Pinned by `UpdateKeepsCreationMetadataTest` (MeshWeaver.Graph.Test).
+
 ## Status
 
 **The fold half of the lowering is BUILT; the text splice and the general expression lowering are

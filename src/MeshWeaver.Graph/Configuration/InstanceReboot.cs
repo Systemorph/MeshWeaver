@@ -186,6 +186,26 @@ public record InstanceRebootRequest
     /// (<see cref="InstanceReboot.RetryDueAt"/>). Executor-owned.</summary>
     public DateTimeOffset? FaultedAt { get; init; }
 
+    /// <summary>
+    /// 🚨 The request's DECLARED execution window (MeshWeaver#6625): the longest it may go without
+    /// recording progress (<see cref="ProgressAt"/>) and still count as in progress. Stamped by
+    /// <see cref="InstanceReboot.Request"/> from <see cref="InstanceRebootOptions.ExecutionWindow"/>;
+    /// null on a request written before the field existed, which is judged by the reader's option.
+    /// A request past its window is STALLED (<see cref="InstanceReboot.Stalled"/>): it no longer
+    /// suppresses the watchdog's self-reboot, and the reconcile pass ends it
+    /// (<see cref="InstanceReboot.FailStalled"/>).
+    /// </summary>
+    public TimeSpan? ExecutionWindow { get; init; }
+
+    /// <summary>When the request last recorded progress: stamped on every executor write and on a
+    /// re-arm. Read with every other instant the request carries (<see cref="InstanceReboot.LastProgressAt"/>).</summary>
+    public DateTimeOffset? ProgressAt { get; init; }
+
+    /// <summary>A reader that saw the request as stalled asks its OWNER to end it (the control-plane
+    /// <c>RequestedX</c> shape): the request's own hub re-judges against its own state and either ends it
+    /// or clears this field (<see cref="InstanceReboot.EndIfStalled"/>). Null when nothing is asked.</summary>
+    public DateTimeOffset? RequestedEndIfStalledAt { get; init; }
+
     /// <summary>Every step, in order — the audit trail. Executor-owned.</summary>
     public ImmutableList<string> Log { get; init; } = ImmutableList<string>.Empty;
 }
@@ -328,6 +348,7 @@ public static class InstanceReboot
         Failure = null,
         FaultedAt = null,
         CompletedAt = null,
+        ProgressAt = now,
         Log = request.Log.Add($"{now:u} retry {request.Attempt + 1}: re-armed after the fault '{request.Failure}'"),
     };
 
@@ -387,6 +408,182 @@ public static class InstanceReboot
             });
     }
 
+    /// <summary>
+    /// When <paramref name="request"/> last moved — pure: the latest of every instant it carries
+    /// (<see cref="InstanceRebootRequest.ProgressAt"/>, <see cref="InstanceRebootRequest.RequestedAt"/>,
+    /// each step's <see cref="InstanceRebootStep.At"/>, the restart stamp, each replica's report). A
+    /// <see cref="InstanceRebootStatus.Faulted"/> request is waiting for its scheduled re-arm, so its next
+    /// move is due at <see cref="RetryDueAt"/>, and that instant counts too.
+    /// </summary>
+    /// <param name="request">The request as it stands.</param>
+    /// <param name="retryUnit">The backoff unit of the re-arm (<see cref="RetryDueAt"/>).</param>
+    public static DateTimeOffset LastProgressAt(InstanceRebootRequest request, TimeSpan retryUnit)
+    {
+        var instants = new[] { request.ProgressAt, request.RequestedAt, request.RestartRequestedAt, RetryDueAt(request, retryUnit) }
+            .Concat(request.Steps.Select(s => s.At))
+            .Concat(request.Replicas.Values.Select(r => (DateTimeOffset?)r.ReportedAt))
+            .Where(at => at is not null)
+            .Select(at => at!.Value)
+            .ToImmutableList();
+        return instants.IsEmpty ? DateTimeOffset.MinValue : instants.Max();
+    }
+
+    /// <summary>
+    /// 🚨 Why <paramref name="request"/> has STALLED, or null while it is terminal or still progressing
+    /// — pure (MeshWeaver#6625). A request is stalled when it is not terminal and has recorded no
+    /// progress (<see cref="LastProgressAt"/>) within its DECLARED execution window
+    /// (<see cref="InstanceRebootRequest.ExecutionWindow"/>; <paramref name="defaultWindow"/> for a
+    /// request filed before the window was declared). Existence alone never makes a request "in
+    /// progress": a stalled one does not hold the watchdog's self-reboot back, and the reconcile pass
+    /// ends it (<see cref="FailStalled"/>). The sentence names the status, the last progress and where
+    /// the request stopped.
+    /// </summary>
+    /// <param name="request">The request as it stands.</param>
+    /// <param name="now">The reader's clock.</param>
+    /// <param name="defaultWindow">The window for a request that declares none (<see cref="InstanceRebootOptions.ExecutionWindow"/>).</param>
+    /// <param name="retryUnit">The backoff unit of the faulted-restart re-arm (<see cref="RetryDueAt"/>).</param>
+    public static string? Stalled(InstanceRebootRequest request, DateTimeOffset now, TimeSpan defaultWindow, TimeSpan retryUnit)
+    {
+        if (InstanceRebootStatus.IsTerminal(request.Status))
+            return null;
+        var window = request.ExecutionWindow is { } declared && declared > TimeSpan.Zero ? declared : defaultWindow;
+        var last = LastProgressAt(request, retryUnit);
+        if (now - last <= window)
+            return null;
+        var at = request.Steps.LastOrDefault(s => s.Outcome == InstanceRebootStepOutcome.Running)
+                 ?? request.Steps.LastOrDefault(s => s.Outcome != InstanceRebootStepOutcome.Pending);
+        var where = request.Status switch
+        {
+            InstanceRebootStatus.AwaitingRestart when request.RestartRequestedAt is { } restart =>
+                $"the restart was requested at {restart:u} and no process booted after it has reported its checks",
+            InstanceRebootStatus.Faulted =>
+                $"its restart faulted ({request.Failure ?? "no reason recorded"}) and nothing re-armed it when its retry was due",
+            _ => at is null ? "no step has started" : $"its last step is {at.Name} ({at.Outcome})",
+        };
+        return $"status {request.Status}, no progress since {last:u} — longer than its declared execution window of "
+               + $"{window.TotalMinutes:0} min; {where}";
+    }
+
+    /// <summary>
+    /// 🚨 The owner-side END of a stalled request — pure. Applied INSIDE the request's own hub's update
+    /// (<c>InstanceRebootExecutor</c>), against the owner's CURRENT state, so the stall is judged and the
+    /// terminal transition is made in one serialized step: a replica report or an executor step that
+    /// landed after a reader saw the request as stalled keeps it open. Stalled ⇒
+    /// <see cref="InstanceRebootStatus.Failed"/> naming the stall; otherwise the request is unchanged
+    /// except that <see cref="InstanceRebootRequest.RequestedEndIfStalledAt"/> is cleared (asked and
+    /// answered). Never touches <see cref="InstanceRebootRequest.ProgressAt"/>: answering is not progress.
+    /// </summary>
+    /// <param name="current">The request as the OWNER holds it.</param>
+    /// <param name="now">The owner's clock.</param>
+    /// <param name="defaultWindow">The window for a request that declares none.</param>
+    /// <param name="retryUnit">The backoff unit (<see cref="RetryDueAt"/>).</param>
+    public static InstanceRebootRequest EndIfStalled(InstanceRebootRequest current, DateTimeOffset now, TimeSpan defaultWindow, TimeSpan retryUnit) =>
+        Stalled(current, now, defaultWindow, retryUnit) is { } why
+            ? current with
+            {
+                Status = InstanceRebootStatus.Failed,
+                Failure = current.Failure is null ? $"{StalledMarker}{why}" : $"{current.Failure}; {StalledMarker}{why}",
+                CompletedAt = now,
+                RequestedEndIfStalledAt = null,
+                Log = current.Log.Add($"{now:u} ended as Failed — stalled: {why}"),
+            }
+            : current with { RequestedEndIfStalledAt = null };
+
+    /// <summary>The marker <see cref="EndIfStalled"/> writes into <see cref="InstanceRebootRequest.Failure"/>,
+    /// before the stall's sentence — what <see cref="EndedAsStalled"/> reads back.</summary>
+    public const string StalledMarker = "stalled: ";
+
+    /// <summary>
+    /// Why <paramref name="request"/> was ENDED as stalled — read back from the persisted
+    /// <see cref="InstanceRebootRequest.Failure"/> marker (<see cref="StalledMarker"/>) — or null when it
+    /// was not (still open, Done, or Failed for another reason). Pure. Whoever ended it (the reconcile
+    /// pass's question, another process's watchdog), any reader can still name it.
+    /// </summary>
+    public static string? EndedAsStalled(InstanceRebootRequest request)
+    {
+        if (!string.Equals(request.Status, InstanceRebootStatus.Failed, StringComparison.Ordinal) || request.Failure is not { } failure)
+            return null;
+        var at = failure.IndexOf(StalledMarker, StringComparison.Ordinal);
+        return at < 0 ? null : failure[(at + StalledMarker.Length)..];
+    }
+
+    /// <summary>
+    /// Asks the owner of the request at <paramref name="path"/> to end it if it is stalled: writes
+    /// <see cref="InstanceRebootRequest.RequestedEndIfStalledAt"/> (a <c>RequestedX</c> field — the
+    /// control-plane shape), which the request's own hub answers with <see cref="EndIfStalled"/> against
+    /// its own state. Writing the request is harmless at any moment: the decision is never made on this
+    /// caller's mirror. The write also activates the owner. Cold; emits once.
+    /// </summary>
+    /// <param name="hub">Any surviving hub of the mesh.</param>
+    /// <param name="path">The request.</param>
+    /// <param name="now">When it was asked.</param>
+    public static IObservable<MeshNode> RequestEndIfStalled(IMessageHub hub, string path, DateTimeOffset now)
+    {
+        var access = hub.ServiceProvider.GetRequiredService<AccessService>();
+        return access.RunAsSystem(() => hub.GetMeshNodeStream(path)
+                .Update<InstanceRebootRequest>(r => InstanceRebootStatus.IsTerminal(r.Status) ? r : r with { RequestedEndIfStalledAt = now }))
+            .Take(1);
+    }
+
+    /// <summary>
+    /// 🚨 The END of a stalled request (MeshWeaver#6625): lists the reboot requests, reads each one the
+    /// listing does not show as finished from its OWN node stream, and for every one that looks
+    /// <see cref="Stalled"/> ASKS its owner to end it (<see cref="RequestEndIfStalled"/>). The owner
+    /// re-judges against its own current state and makes the transition itself (<see cref="EndIfStalled"/>),
+    /// so a request that moved meanwhile stays open. Called by the plugin catalog's reconcile pass right
+    /// after <see cref="RetryFaulted"/> (so a faulted request due for its re-arm is re-armed, never
+    /// ended); no timer of its own. Emits the paths it asked about, once; never faults, and a read it
+    /// cannot make is logged at Warning.
+    /// </summary>
+    /// <param name="hub">Any surviving hub of the mesh.</param>
+    /// <param name="defaultWindow">The window for a request that declares none.</param>
+    /// <param name="retryUnit">The backoff unit (<see cref="RetryDueAt"/>).</param>
+    /// <param name="now">The pass's clock.</param>
+    public static IObservable<ImmutableList<string>> FailStalled(IMessageHub hub, TimeSpan defaultWindow, TimeSpan retryUnit, DateTimeOffset now)
+    {
+        var mesh = hub.ServiceProvider.GetService<IMeshService>();
+        var access = hub.ServiceProvider.GetService<AccessService>();
+        if (mesh is null || access is null)
+            return Observable.Return(ImmutableList<string>.Empty);
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(InstanceReboot));
+        return access.RunAsSystem(() => mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(
+                    $"namespace:{InstanceRebootRequest.Namespace} scope:children nodeType:{InstanceRebootRequest.NodeType}"))
+                .Take(1)
+                .Timeout(ActivationRecycle.ReadBudget))
+            .SelectMany(change => change.Items
+                .Where(n => n.ContentAs<InstanceRebootRequest>(hub.JsonSerializerOptions) is not { } listed
+                            || !InstanceRebootStatus.IsTerminal(listed.Status))
+                .Select(n => n.Path)
+                .ToObservable()
+                // FirstAsync, never Take(1): a stream that completes empty must reach the Catch below.
+                .Select(path => access.RunAsSystem(() => hub.GetMeshNodeStream(path).FirstAsync().Timeout(ActivationRecycle.ReadBudget))
+                    .Select(node => node.ContentAs<InstanceRebootRequest>(hub.JsonSerializerOptions))
+                    .SelectMany(current => current is not null && Stalled(current, now, defaultWindow, retryUnit) is { } why
+                        ? RequestEndIfStalled(hub, path, now)
+                            .Do(_ => logger?.LogWarning(
+                                "[Reboot] {Path}: looks stalled ({Why}) — its owner is asked to end it as Failed if it still is",
+                                path, why))
+                            .Select(_ => path)
+                        : Observable.Empty<string>())
+                    .Catch((Exception ex) =>
+                    {
+                        logger?.LogWarning(ex,
+                            "[Reboot] {Path}: whether it stalled could not be read or asked this pass ({Reason}) — the next pass asks again",
+                            path, ex.Message);
+                        return Observable.Empty<string>();
+                    }))
+                .Concat()
+                .ToList())
+            .Select(paths => paths.ToImmutableList())
+            .Catch((Exception ex) =>
+            {
+                logger?.LogWarning(ex,
+                    "[Reboot] the stalled-reboot pass could not list the requests ({Reason}) — the next pass asks again",
+                    ex.Message);
+                return Observable.Return(ImmutableList<string>.Empty);
+            });
+    }
+
     /// <summary>The step rows a fresh request starts with: every step <see cref="InstanceRebootStepOutcome.Pending"/>. Pure.</summary>
     public static ImmutableList<InstanceRebootStep> FreshSteps() =>
         InstanceRebootSteps.All.Select(name => new InstanceRebootStep { Name = name }).ToImmutableList();
@@ -414,6 +611,8 @@ public static class InstanceReboot
 
         var mesh = hub.ServiceProvider.GetRequiredService<IMeshService>();
         var access = hub.ServiceProvider.GetRequiredService<AccessService>();
+        var options = hub.ServiceProvider.GetService<InstanceRebootOptions>() ?? new InstanceRebootOptions();
+        var requestedAt = request.RequestedAt == default ? DateTimeOffset.UtcNow : request.RequestedAt;
         var nodeId = id ?? ActivationRecycle.Segment($"{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}-{Guid.NewGuid():N}"[..30]);
         var path = $"{InstanceRebootRequest.Namespace}/{nodeId}";
         var node = new MeshNode(nodeId, InstanceRebootRequest.Namespace)
@@ -424,10 +623,14 @@ public static class InstanceReboot
             {
                 Reason = ActivationRecycle.SanitizeReason(request.Reason),
                 WedgeEvidence = request.WedgeEvidence is null ? null : ActivationRecycle.SanitizeReason(request.WedgeEvidence),
-                RequestedAt = request.RequestedAt == default ? DateTimeOffset.UtcNow : request.RequestedAt,
+                RequestedAt = requestedAt,
                 Wedged = request.Wedged || request.Trigger == InstanceRebootTrigger.Watchdog,
                 Status = InstanceRebootStatus.Requested,
                 Steps = FreshSteps(),
+                // 🚨 Declared on the record (MeshWeaver#6625): every reader judges "still in progress"
+                // against the window the request was filed with.
+                ExecutionWindow = request.ExecutionWindow is { } declared && declared > TimeSpan.Zero ? declared : options.ExecutionWindow,
+                ProgressAt = requestedAt,
             },
         };
         // The id is a dedupe key; existence is a LISTING of the request namespace (the CQRS-sanctioned

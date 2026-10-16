@@ -48,6 +48,32 @@ public sealed class GitPackageSource(GitCli git, string repoPath, string subdir 
             });
 
     /// <inheritdoc />
+    /// <remarks>Resolves <paramref name="gitRef"/> to its commit FIRST and reads the files at that
+    /// commit, so the files and the commit an install records cannot straddle a ref that moved
+    /// between two reads (MeshWeaver#3848). A ref git cannot resolve reads as before, with no
+    /// commit named.</remarks>
+    IObservable<PackageFetch> IPackageSource.FetchPackage(
+        PackageManifest package, string gitRef, IReadOnlyCollection<string>? paths) =>
+        git.Run(repoPath, ["rev-parse", "--verify", $"{gitRef}^{{commit}}"])
+            .SelectMany(res =>
+            {
+                var sha = res.ExitCode == 0 ? res.StdOut.Trim() : null;
+                var commit = PackageFetch.IsCommitSha(sha) ? sha : null;
+                return ((IPackageSource)this).FetchPackageFiles(package, commit ?? gitRef, paths)
+                    .Select(files => new PackageFetch([.. files], commit));
+            });
+
+    /// <inheritdoc />
+    /// <remarks><c>git merge-base --is-ancestor</c>: exit 0 exactly when <paramref name="commit"/>
+    /// is reachable from <paramref name="gitRef"/>. Any other exit (not an ancestor, an unknown
+    /// object) establishes nothing and answers false (MeshWeaver#6718).</remarks>
+    IObservable<bool> IPackageSource.PublishesCommit(string commit, string gitRef) =>
+        !PackageFetch.IsCommitSha(commit)
+            ? Observable.Return(false)
+            : git.Run(repoPath, ["merge-base", "--is-ancestor", commit, gitRef])
+                .Select(res => res.ExitCode == 0);
+
+    /// <inheritdoc />
     public IObservable<IReadOnlyList<PackageFile>> FetchPackageFiles(PackageManifest package, string gitRef)
     {
         var folder = package.SourceFolder ?? package.Id;

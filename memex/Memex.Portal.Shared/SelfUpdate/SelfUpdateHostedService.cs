@@ -388,16 +388,19 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
     private IObservable<SelfUpdateVerdict> ConsiderRestart(SelfUpdateVerdict platform) =>
         Observable.Defer(() =>
         {
-            if (!SelfUpdateVerdict.MayRestartAfter(platform))
+            var mayRestart = SelfUpdateVerdict.MayRestartAfter(platform);
+            if (!mayRestart && !SelfUpdateVerdict.MayActivateLiveAfter(platform))
                 return Observable.Return(platform);
             var landing = ResolveLandingService();
             if (landing is null)
                 return Observable.Return(platform);
             return landing.GetActivation()
                 .Take(1)
-                .SelectMany(activation => activation.PendingRestart
-                    ? LiveFirst(platform)
-                    : Observable.Return(platform))
+                .SelectMany(activation => !activation.PendingRestart
+                    ? Observable.Return(platform)
+                    : mayRestart
+                        ? LiveFirst(platform)
+                        : LiveOnly(platform))
                 .Catch((Exception ex) =>
                 {
                     _logger?.LogWarning(ex,
@@ -432,8 +435,39 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
             .SelectMany(result => result.NeedsRestart
                 ? Restart(platform, honourFloor: true,
                     reason: $"a landed module generation did not go live in the running process — {result.Describe()}")
-                : Observable.Return(SelfUpdateVerdict.ActivatedLive(platform, result.Describe())));
+                : Observable.Return(LiveVerdict(platform, result)));
     }
+
+    /// <summary>
+    /// 🚨 The LIVE half alone, after a platform release was HANDED to the control lane (MeshWeaver#6829).
+    /// The routed Roll that hand-over opens re-creates the pods, so a restart request here would only
+    /// race it (<see cref="SelfUpdateVerdict.MayRestartAfter"/>) — but a live swap is not a restart: it
+    /// happens inside this process and races nothing. Before this, a hand-over skipped the module half
+    /// ENTIRELY, so on an install that sees a newer platform build on every check (every
+    /// <c>BuildCompletion</c> is one) a proposed module set waited for the roll even where it could go
+    /// live at once — and waited indefinitely while that roll waited for an approval. Here what can go
+    /// live goes live; what needs a restart is left to the handed-over roll, and the verdict says so.
+    /// </summary>
+    private IObservable<SelfUpdateVerdict> LiveOnly(SelfUpdateVerdict platform)
+    {
+        var live = ResolveLiveActivation();
+        if (live is null)
+            return Observable.Return(platform);
+        return live.ActivatePending("self-update: a landed module generation is pending activation (platform roll handed over)")
+            .Select(result => SelfUpdateVerdict.LiveWhileRollHandedOver(platform, result.WentLive.Count, result.NeedsRestart, result.Describe()));
+    }
+
+    /// <summary>
+    /// The verdict of a live-activation pass that needs no restart, decided from what WENT LIVE (#6620):
+    /// a pass that swapped nothing in — nothing pending here, or every pending module already serving
+    /// the landed generation (<see cref="MeshWeaver.Graph.Configuration.ModuleSwapKind.UpToDate"/>, which a second, overlapping check
+    /// finds once the first has swapped it in) — is <see cref="SelfUpdateVerdict.NothingToActivate"/>,
+    /// never "went LIVE".
+    /// </summary>
+    internal static SelfUpdateVerdict LiveVerdict(SelfUpdateVerdict platform, ModuleLiveActivationResult result) =>
+        result.WentLive.IsEmpty
+            ? SelfUpdateVerdict.NothingToActivate(platform, result.Describe())
+            : SelfUpdateVerdict.ActivatedLive(platform, result.Describe());
 
     /// <summary>Why this install cannot patch, as the qualifier after <c>canPatch=False</c> (#4097):
     /// the plan-tier sentence when the patcher's package was refused by the instance's plan, else
@@ -519,6 +553,88 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
             })
             .Catch((Exception ex) => Observable.Return(new RebootImageChoice(installed, null,
                 $"the image could not be selected ({ex.GetType().Name}: {ex.Message}) — restart on the running image", Failed: true)));
+    }
+
+    /// <summary>
+    /// 🚨 <b>The roll target THIS poller would take now</b> — what <c>/api/plugins/roll-target</c>
+    /// answers (#4413). The SAME selection a check makes: the policy read, the registry's portal tag
+    /// listing (<see cref="ListTags"/>), the channel filter (<see cref="VersionSelect.SelectCandidates"/>)
+    /// and the walk (<see cref="SelectAmong"/>, which <see cref="FirstRollable"/> also takes).
+    ///
+    /// <para>The candidate universe is the registry's listing of <see cref="SelfUpdateOptions.PortalRepository"/>
+    /// and never the published root's <c>_releases/&lt;version&gt;</c> markers. A marker is written by
+    /// main-cd's <c>publish-bake</c>, which needs <c>promote</c> and not <c>arm</c>, so a set the fleet
+    /// has not armed has a marker and no <c>memex-portal-ai:&lt;version&gt;</c> tag. A selection taken
+    /// over the markers named a release no pod can start from and the poller can never take
+    /// (measured: <c>memex</c> answered <c>3.1.11003</c> while that portal tag did not exist and
+    /// <c>mw-plugin-test:3.1.11003</c> did). Combo verification asks THIS route which image to verify,
+    /// so the old universe made it pull an absent image.</para>
+    ///
+    /// <para>Every exit names its outcome. A pinned policy, an up-to-date install and a failed
+    /// listing each select nothing, and a failed listing is <see cref="RollSelectionKind.Indeterminate"/>,
+    /// so a caller can tell "nothing to roll to" from "could not look".</para>
+    /// </summary>
+    /// <param name="currentVersion">A diagnostic override for the running version ("what would you
+    /// pick from there"); null or blank reads the version this image runs.</param>
+    public IObservable<RollSelectionOutcome> SelectRollTarget(string? currentVersion = null)
+    {
+        var installed = string.IsNullOrWhiteSpace(currentVersion)
+            ? ShippedReleaseSeed.InstalledPlatformVersion
+            : currentVersion;
+        // The route has already authorized its caller; the policy node is the instance's own
+        // record, read as System (policy authorize-as-caller-execute-as-system).
+        var accessService = _hub.ServiceProvider.GetService<AccessService>();
+        return accessService.RunAsSystem(() => ReadPolicyStream().Take(1).Timeout(TimeSpan.FromSeconds(30)))
+            .SelectMany(policy => policy.Policy == UpdatePolicyKind.None
+                ? Observable.Return(NoTarget(RollSelectionKind.NoCandidates, installed,
+                    "this instance's update policy is None (pinned), so it rolls to nothing"))
+                : ListTags()
+                    .Select(tags => VersionSelect.SelectCandidates(
+                        tags, installed, policy.Policy, policy.RequireCiGreen, policy.Pattern))
+                    .SelectMany(selection => selection.Candidates.Length > 0
+                        ? SelectAmong(installed, selection.Candidates)
+                        : Observable.Return(NoTarget(
+                            selection.Installed.Resolution == VersionSelect.InstalledTagResolution.Indeterminate
+                                ? RollSelectionKind.Indeterminate
+                                : RollSelectionKind.NoCandidates,
+                            installed,
+                            NothingToRoll(selection).Message))))
+            .Catch((Exception ex) => Observable.Return(NoTarget(RollSelectionKind.Indeterminate, installed,
+                $"the roll target could not be selected ({ex.GetType().Name}: {ex.Message})")));
+    }
+
+    /// <summary>An outcome that selects nothing, saying why.</summary>
+    private static RollSelectionOutcome NoTarget(RollSelectionKind kind, string installed, string why) =>
+        new(kind, null, installed, 0, 0, [], $"this instance: no roll target ({why}).");
+
+    /// <summary>
+    /// The walk over the newest-first <paramref name="candidates"/> (non-empty), shared by the check
+    /// (<see cref="FirstRollable"/>) and <see cref="SelectRollTarget"/>. The availability gate's
+    /// selection when it selects; otherwise the head, unjudged, with the reason as the advisory —
+    /// no package answer holds the platform (policy <c>platform-rolls-independently-of-packages</c>).
+    /// </summary>
+    private IObservable<RollSelectionOutcome> SelectAmong(string installed, ImmutableArray<string> candidates)
+    {
+        RollSelectionOutcome Unjudged(string reason) =>
+            RollSelection.Unjudged(
+                new RollSelectionInputs("this instance", installed, candidates,
+                    PluginInventory.Unreadable("the release-availability gate", reason)),
+                reason);
+
+        var gate = ResolveAvailabilityGate();
+        if (gate is null)
+            return Observable.Return(Unjudged(
+                "no release-availability gate is registered on this host, so package availability was not checked"));
+
+        return gate
+            .SelectRollTarget(installed, candidates)
+            // NotEnforced (a deployment that consumes no CI bakes) and Indeterminate (the selector
+            // could not answer in its budget) select nothing — and the newest admitted candidate is
+            // still the target, because nothing about packages holds the platform.
+            .Select(outcome => outcome.SelectedVersion is null ? Unjudged(outcome.Summary) : outcome)
+            // A selector that faults must not kill the tick: the head, which GateThenApply judges.
+            .Catch((Exception ex) => Observable.Return(Unjudged(
+                $"the release-availability gate faulted ({ex.GetType().Name}: {ex.Message})")));
     }
 
     /// <summary>The gate's verdict on the walked-to target, as the reboot's choice: rolled only when it clears.</summary>
@@ -1164,18 +1280,8 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
         if (candidates.Length == 0)
             return Observable.Return<string?>(null);
 
-        var gate = ResolveAvailabilityGate();
-        if (gate is null)
-            return Observable.Return<string?>(candidates[0]);
-
-        return gate
-            .SelectRollTarget(ShippedReleaseSeed.InstalledPlatformVersion, candidates)
-            // NotEnforced (a deployment that consumes no CI bakes) and Indeterminate (the selector
-            // could not answer in its budget) select nothing — and the newest admitted candidate is
-            // still the target, because nothing about packages holds the platform.
-            .Select(outcome => outcome.SelectedVersion ?? candidates[0])
-            // A selector that faults must not kill the tick: the head, which GateThenApply judges.
-            .Catch((Exception _) => Observable.Return<string?>(candidates[0]));
+        return SelectAmong(ShippedReleaseSeed.InstalledPlatformVersion, [.. candidates])
+            .Select(outcome => outcome.SelectedVersion ?? candidates[0]);
     }
 
     /// <summary>

@@ -27,13 +27,49 @@ namespace MeshWeaver.Graph.Test;
 /// </summary>
 public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private const string DeleteArea = InboxLayoutArea.AreaName + "/Commands/Delete";
-    private const string UndoArea = InboxLayoutArea.AreaName + "/Commands/Undo";
-    private const string GridArea = InboxLayoutArea.AreaName + "/Grid";
+    private const string DeleteArea = InboxLayoutArea.AreaName + "/Main/Commands/Delete";
+    private const string UndoArea = InboxLayoutArea.AreaName + "/Main/Commands/Undo";
+    private const string GridArea = InboxLayoutArea.AreaName + "/Main/Grid";
 
     /// <inheritdoc />
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
         => base.ConfigureClient(configuration).AddLayoutClient();
+
+    /// <summary>A reader for the reserved namespace <c>{user}/_Fake</c> — a source no store holds.</summary>
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+        => base.ConfigureMesh(builder)
+            .ConfigureServices(services => services.AddSingleton<IInboxItemReader>(new FakeSourceReader()));
+
+    /// <summary>
+    /// The reading view end to end, as its owner: the address names a row no store holds, the
+    /// reader that handles its path reads it, and the page shows its subject under a Back link. A
+    /// path in someone else's partition reads "not in your inbox" and is never handed to a reader.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task TheReadingView_ShowsWhatTheReaderRead_AndOnlyTheOwnersItems()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string owner = "inbox-read";
+        await CreateUserAsync(owner, ct);
+        TestUsers.DevLogin(Mesh, new AccessContext { ObjectId = owner, Name = owner, Email = $"{owner}@meshweaver.io" });
+
+        var item = $"{owner}/_Fake/m1";
+        var stream = GetClient().GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new Address(owner), new LayoutAreaReference(InboxLayoutArea.AreaName) { Id = InboxReadingView.ItemId(item) });
+        (await stream.GetControlStream($"{InboxLayoutArea.AreaName}/Item/Subject").Should().Within(TestTimeouts.Convergence)
+            .Match(c => c is LabelControl { Data: string subject } && subject == item, "the reader's answer is shown", ct))
+            .Should().NotBeNull();
+        (await stream.GetControlStream($"{InboxLayoutArea.AreaName}/Back").Should().Within(TestTimeouts.Convergence)
+            .Match(c => c is NavLinkControl { Url: string url } && url == $"/{owner}/{InboxLayoutArea.AreaName}", "back to the list", ct))
+            .Should().NotBeNull();
+
+        var foreign = GetClient().GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new Address(owner), new LayoutAreaReference(InboxLayoutArea.AreaName) { Id = InboxReadingView.ItemId("bob/_Fake/m1") });
+        (await foreign.GetControlStream($"{InboxLayoutArea.AreaName}/Item").Should().Within(TestTimeouts.Convergence)
+            .Match(c => c is MarkdownControl { Markdown: string text } && text.Contains("not in your inbox"),
+                "an item outside the owner's partition is not opened — though a reader would handle its path", ct))
+            .Should().NotBeNull();
+    }
 
     /// <summary>
     /// The page end to end, as its owner: the grid lists three notifications, the viewer ticks TWO,
@@ -53,7 +89,7 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
             await CreateAsync(new MeshNode(id, ns)
             {
                 NodeType = NotificationNodeType.NodeType, Name = id, MainNode = owner, State = MeshNodeState.Active,
-                Content = new Notification { Id = id, Title = id, Recipient = owner },
+                Content = new Notification { NotificationType = NotificationType.General, Id = id, Title = id, Recipient = owner },
             }, ct);
         TestUsers.DevLogin(Mesh, new AccessContext { ObjectId = owner, Name = owner, Email = $"{owner}@meshweaver.io" });
 
@@ -83,7 +119,7 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
         await CreateAsync(new MeshNode("away", ns)
         {
             NodeType = NotificationNodeType.NodeType, Name = "away", MainNode = owner, State = MeshNodeState.Active,
-            Content = new Notification { Id = "away", Title = "away", Recipient = owner, Dismissed = true },
+            Content = new Notification { NotificationType = NotificationType.General, Id = "away", Title = "away", Recipient = owner, Dismissed = true },
         }, ct);
         stream.UpdatePointer(new JsonArray(JsonValue.Create($"{ns}/bin"), JsonValue.Create($"{ns}/bin2"), JsonValue.Create($"{ns}/away")),
             pointer, new JsonPointerReference("keys"));
@@ -118,7 +154,7 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
         await CreateAsync(new MeshNode("alpha", bell)
         {
             NodeType = NotificationNodeType.NodeType, Name = "Alpha invoice", MainNode = owner, State = MeshNodeState.Active,
-            Content = new Notification { Id = "alpha", Title = "Alpha invoice", Recipient = owner },
+            Content = new Notification { NotificationType = NotificationType.General, Id = "alpha", Title = "Alpha invoice", Recipient = owner },
         }, ct);
         await CreateAsync(Mail("zulu", mail, owner, new Email { Id = "zulu", From = "a.buyer@acme.example", Subject = "Zulu workshop" }), ct);
         TestUsers.DevLogin(Mesh, new AccessContext { ObjectId = owner, Name = owner, Email = $"{owner}@meshweaver.io" });
@@ -144,8 +180,19 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
         (await rows.Buffer(TimeSpan.FromMilliseconds(600)).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct))
             .Count.Should().BeLessThanOrEqualTo(2, "an idle inbox writes nothing");
 
+        // There is no order to choose (policy inbox-newest-first): a stored order changes nothing.
         Set("order", JsonValue.Create(InboxOrder.Title));
-        await Titles("the order select re-orders the grid", "Alpha invoice", "Zulu workshop");
+        await Titles("always newest first, whatever order is stored", "Zulu workshop", "Alpha invoice");
+
+        // The side menu: a category shows only its rows — here even a source switched OFF by
+        // default would be reached by its category — and All brings everything back.
+        void Pick(string category) => Set("category", JsonValue.Create(category));
+        Pick("Notifications");
+        await Titles("the Notifications category lists only notifications", "Alpha invoice");
+        Pick("Mail");
+        await Titles("the Mail category lists only mail", "Zulu workshop");
+        Pick(string.Empty);
+        await Titles("All lists everything again", "Zulu workshop", "Alpha invoice");
 
         Set($"sources/{InboxRows.SourceKey("Mail")}", JsonValue.Create(false));
         await Titles("a source switched off leaves the grid", "Alpha invoice");
@@ -153,14 +200,14 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
             .Should().Within(TestTimeouts.Convergence).Match(t => t != null && t.StartsWith("1 "),
                 "the switch hides a mail that needs the viewer, and the page says so", ct);
         Set($"sources/{InboxRows.SourceKey("Mail")}", JsonValue.Create(true));
-        await Titles("and returns when switched on", "Alpha invoice", "Zulu workshop");
+        await Titles("and returns when switched on, newest first", "Zulu workshop", "Alpha invoice");
         await stream.GetDataStream<string>(new JsonPointerReference(LayoutAreaReference.GetDataPointer(InboxLayoutArea.HiddenId)))
             .Should().Within(TestTimeouts.Convergence).Match(t => string.IsNullOrEmpty(t), "nothing is hidden any more", ct);
 
         Set("search", JsonValue.Create("workshop"));
         await Titles("a term is evaluated by the query engine, per leg", "Zulu workshop");
         Set("search", JsonValue.Create(""));
-        await Titles("clearing the box restores the list", "Alpha invoice", "Zulu workshop");
+        await Titles("clearing the box restores the list, newest first", "Zulu workshop", "Alpha invoice");
     }
 
     /// <summary>
@@ -191,13 +238,37 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
         var grid = (DataGridControl)(await stream.GetControlStream(GridArea).Should().Within(TestTimeouts.Convergence)
             .Match(c => c is DataGridControl, "the grid", ct))!;
         grid.RowClassProperty.Should().Be(InboxRows.RowClassProperty, "the grid applies each row's own class");
+        grid.ItemsPerPage?.ToString().Should().Be("50", "the inbox is paged");
+        grid.IsClickable.Should().BeTrue("a click on a row opens it");
+
+        // The page SCROLLS (owner, 2026-10-16: "i cannot scroll the mailbox now"): the splitter flows
+        // at its content height — never pinned to the viewport, which clipped the list below the fold.
+        var page = (await stream.GetControlStream(InboxLayoutArea.AreaName).Should().Within(TestTimeouts.Convergence)
+            .Match(c => c is SplitterControl, "the page is the side-menu splitter", ct))!;
+        page.Style?.ToString().Should().Be(InboxLayoutArea.FlowingSplitterStyle, "the splitter flows and the page scrolls");
+        page.Skins.OfType<SplitterSkin>().Should().AllSatisfy(skin => (skin.Height?.ToString() ?? string.Empty)
+            .Should().NotContain("vh", "a viewport-pinned height clips the list with nothing to scroll"));
+
+        foreach (var (area, what) in new[] { ("Folders", "the side menu's folders"), ("Tags", "the side menu's tags") })
+        {
+            var menu = (RadioGroupControl)(await stream.GetControlStream($"{InboxLayoutArea.AreaName}/Categories/{area}")
+                .Should().Within(TestTimeouts.Convergence).Match(c => c is RadioGroupControl, what, ct))!;
+            menu.Type?.ToString().Should().Be(nameof(String),
+                "the client resolves the CLR type name — \"string\" failed live with 'Type not found: string'");
+        }
+        (await stream.GetControlStream($"{InboxLayoutArea.AreaName}/Main/Commands/ShowIgnorable")
+            .Should().Within(TestTimeouts.Convergence).Match(c => c is SwitchControl, "the ignorable switch", ct))
+            .Should().NotBeNull();
+        (await stream.GetControlStream($"{InboxLayoutArea.AreaName}/Main/Commands/Only")
+            .Should().Within(TestTimeouts.Convergence).Match(c => c is SelectControl, "the Only select", ct))
+            .Should().NotBeNull();
 
         var delete = (ButtonControl)(await stream.GetControlStream(DeleteArea).Should().Within(TestTimeouts.Convergence)
             .Match(c => c is ButtonControl, "the Delete button", ct))!;
         delete.Shortcut.Should().Be("Backspace|Delete", "Backspace deletes the ticked rows, as in a mail client");
 
         var toggle = (ToggleButtonControl)(await stream.GetControlStream(
-                $"{InboxLayoutArea.AreaName}/Commands/Sources/Toggle{InboxRows.SourceKey("Notifications")}")
+                $"{InboxLayoutArea.AreaName}/Main/Commands/Sources/Toggle{InboxRows.SourceKey("Notifications")}")
             .Should().Within(TestTimeouts.Convergence).Match(c => c is ToggleButtonControl, "the notifications toggle", ct))!;
         toggle.Icon.Should().NotBeNull("a source is switched by its symbol");
         (await stream.GetDataStream<InboxFilter>(new JsonPointerReference(LayoutAreaReference.GetDataPointer(InboxRows.FilterId)))
@@ -232,7 +303,7 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
             Name = "Please look at this",
             MainNode = owner,
             State = MeshNodeState.Active,
-            Content = new Notification { Id = "n1", Title = "Please look at this", Recipient = owner },
+            Content = new Notification { NotificationType = NotificationType.General, Id = "n1", Title = "Please look at this", Recipient = owner },
         }, ct);
         var leg = Legs(owner, "Notifications");
         var handler = Handler(NotificationNodeType.NodeType);
@@ -300,7 +371,7 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
             await CreateAsync(new MeshNode(id, ns)
             {
                 NodeType = NotificationNodeType.NodeType, Name = id, MainNode = owner, State = MeshNodeState.Active,
-                Content = new Notification { Id = id, Title = id, Recipient = owner, Dismissed = dismissed },
+                Content = new Notification { NotificationType = NotificationType.General, Id = id, Title = id, Recipient = owner, Dismissed = dismissed },
             }, ct);
         var handler = Handler(NotificationNodeType.NodeType);
 
@@ -328,7 +399,7 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
         await CreateAsync(new MeshNode("n", ns)
         {
             NodeType = NotificationNodeType.NodeType, Name = "n", MainNode = owner, State = MeshNodeState.Active,
-            Content = new Notification { Id = "n", Title = "n", Recipient = owner },
+            Content = new Notification { NotificationType = NotificationType.General, Id = "n", Title = "n", Recipient = owner },
         }, ct);
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var handler = Handler(NotificationNodeType.NodeType);
@@ -421,8 +492,12 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
         foreach (var leg in new[] { "namespace:alice/_Thread nodeType:Thread", "namespace:alice/_Thread select:path,content" })
             parser.Parse(InboxQueries.Bounded(leg)).Select.Should().BeEquivalentTo(InboxQueries.RowFields, new JsonSerializerOptions(),
                 because: $"'{leg}' must not fetch whole bodies to render one row");
-        var built = InboxQueries.BuiltIn.Select(l => l.Query.Replace(InboxQueries.ViewerToken, "alice")).First();
-        InboxQueries.Bounded(built).Should().Be($"{built} limit:{InboxQueries.LegLimit}", "a leg already projected is not re-projected");
+        foreach (var builtIn in InboxQueries.BuiltIn)
+        {
+            var built = builtIn.Query.Replace(InboxQueries.ViewerToken, "alice");
+            InboxQueries.Bounded(built, builtIn.TimeField).Should().Be($"{built} limit:{InboxQueries.LegLimit}",
+                $"a leg already projected (for its time, when timed) is not re-projected: {builtIn.Source}");
+        }
         InboxQueries.BuiltIn.Should().OnlyContain(leg => leg.Query.Contains("sort:"),
             "the bound keeps the NEWEST rows only because every leg sorts newest first");
     }
@@ -441,6 +516,163 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
         InboxRows.HiddenObligations(rows, off, needsYouRank: 0).Should().Be(2, "two Mail rows need the viewer; the finished one is not owed");
         InboxRows.HiddenObligations(rows, new InboxFilter(), needsYouRank: 0).Should().Be(0, "nothing is switched off");
         InboxRows.HiddenObligations(rows, off, needsYouRank: null).Should().Be(0, "no leg feeds the obligation band");
+    }
+
+    /// <summary>
+    /// Only / Show / Hide per source: Only narrows the list to the one source picked and wins over its
+    /// switch; clearing it gives the switches back unchanged; a side-menu category still wins over
+    /// both; and what Only hides of the obligation band is counted like a switch.
+    /// </summary>
+    [Fact]
+    public void Only_NarrowsToOneSource_WinsOverItsSwitch_AndClearsBackToTheSwitches()
+    {
+        InboxRow Row(string path, string source, int rank, string category = "") => new()
+        {
+            Path = path, SourceId = source, Source = source, Rank = rank,
+            Category = category.Length > 0 ? category : source, Stamp = "2026-10-1" + path.Length + "T00:00:00Z",
+        };
+        var rows = new[] { Row("a", "Outlook", 0), Row("bb", "Chat", 0), Row("ccc", "Teams", 2, "Mail") };
+        var switches = ImmutableDictionary<string, bool>.Empty
+            .Add(InboxRows.SourceKey("Outlook"), false).Add(InboxRows.SourceKey("Teams"), false);
+        var only = new InboxFilter { Sources = switches, Only = InboxRows.SourceKey("Outlook") };
+
+        InboxRows.Apply(rows, only).Select(r => r.Path).Should().Equal(["a"],
+            "Only shows the one source picked — even though its switch is off");
+        InboxRows.Apply(rows, only with { Only = string.Empty }).Select(r => r.Path).Should().Equal(["bb"],
+            "clearing Only gives the switches back: Outlook and Teams off, Chat on");
+        InboxRows.Apply(rows, only with { Category = "Mail" }).Select(r => r.Path).Should().Equal(["ccc"],
+            "a category picked in the side menu shows everything filed under it, whatever Only says");
+        InboxRows.HiddenObligations(rows, only, needsYouRank: 0).Should().Be(1,
+            "the Chat row needs the viewer and Only hides it — counted, never silently hidden");
+        InboxRows.HiddenObligations(rows, only with { Category = "Chat" }, needsYouRank: 0).Should().Be(0,
+            "a picked category shows the Chat row whatever Only says — a visible obligation is not hidden");
+        InboxRows.HiddenObligations(rows, only with { Only = string.Empty, Category = "Outlook" }, needsYouRank: 0).Should().Be(0,
+            "nor is one a switch would hide while a category overrides the switches");
+        InboxRows.Fingerprint(only).Should().NotBe(InboxRows.Fingerprint(only with { Only = string.Empty }),
+            "picking Only is a change the page must react to");
+    }
+
+    /// <summary>
+    /// A triaged row carries its importance and tags from its content — lower-cased, each once, shown as
+    /// <c>#tag</c>; a row nobody judged has neither.
+    /// </summary>
+    [Fact]
+    public void ARow_ReadsImportanceAndTagsFromItsContent()
+    {
+        var section = new InboxSection(InboxBand.NeedsYou, "Outlook", 10, "q") { TimeField = "receivedAt" };
+        var node = new MeshNode("m1", "alice/_Mailbox/outlook")
+        {
+            Content = JsonSerializer.SerializeToElement(new
+            {
+                receivedAt = "2026-10-14T07:00:00Z", importance = "Important", tags = new object[] { "Reply", " act ", "reply", 3, "" },
+            }),
+        };
+        var row = InboxRows.Of(node, section, null, null);
+        row.Importance.Should().Be(InboxImportance.Important);
+        row.Tags.Should().Equal(["reply", "act"], "trimmed, lower-cased, each once, non-strings and blanks dropped");
+        row.TagText.Should().Be("#reply #act");
+
+        var untriaged = InboxRows.Of(node with { Content = JsonSerializer.SerializeToElement(new { receivedAt = "2026-10-14T07:00:00Z" }) },
+            section, null, null);
+        untriaged.Importance.Should().BeEmpty();
+        untriaged.Tags.Should().BeEmpty();
+        untriaged.TagText.Should().BeEmpty();
+    }
+
+    /// <summary>
+    /// Ignorable items stay out of the list until the viewer switches them on, and the notice counts
+    /// them; a picked tag narrows to its rows and shows them even when ignorable; Important lists the
+    /// items judged important. Items nobody judged are always shown.
+    /// </summary>
+    [Fact]
+    public void Ignorable_IsHiddenAndCounted_ATagNarrows_AndImportantListsTheJudgedImportant()
+    {
+        InboxRow Row(string path, string importance, params string[] tags) => new()
+        {
+            Path = path, SourceId = "Outlook", Source = "Outlook", Category = "Mail",
+            Stamp = $"2026-10-{10 + path[0] - 'a'}T00:00:00Z", Importance = importance, Tags = [.. tags],
+        };
+        var rows = new[]
+        {
+            Row("a", InboxImportance.Important, "reply"),
+            Row("b", InboxImportance.Ignorable, "promo"),
+            Row("c", ""),
+            Row("d", InboxImportance.Ignorable, "spam"),
+            Row("e", "", "reply"),
+        };
+        var none = new InboxFilter();
+
+        InboxRows.Apply(rows, none).Select(r => r.Path).Should().Equal(["e", "c", "a"], "ignorable hidden, newest first");
+        InboxRows.HiddenIgnorable(rows, none).Should().Be(2);
+        InboxRows.Apply(rows, none with { ShowIgnorable = true }).Should().HaveCount(5);
+        InboxRows.HiddenIgnorable(rows, none with { ShowIgnorable = true }).Should().Be(0);
+
+        InboxRows.Apply(rows, none with { Tag = InboxRows.TagKey("reply") }).Select(r => r.Path).Should().Equal(["e", "a"]);
+        InboxRows.Apply(rows, none with { Tag = InboxRows.TagKey("promo") }).Select(r => r.Path).Should().Equal(["b"],
+            "the viewer who picks promo asked for the promotions");
+        InboxRows.HiddenIgnorable(rows, none with { Tag = InboxRows.TagKey("promo") }).Should().Be(0);
+        InboxRows.Apply(rows, none with { Tag = InboxRows.ImportantKey }).Select(r => r.Path).Should().Equal(["a"]);
+
+        InboxRows.HiddenIgnorable(rows, none with { Only = InboxRows.SourceKey("Chat") }).Should().Be(0,
+            "only what the other filters would show is counted");
+        InboxRows.Fingerprint(none).Should().NotBe(InboxRows.Fingerprint(none with { ShowIgnorable = true }));
+        InboxRows.Fingerprint(none).Should().NotBe(InboxRows.Fingerprint(none with { Tag = InboxRows.TagKey("reply") }));
+
+        InboxRows.TagCounts(rows).Should().Equal(
+            [(InboxRows.ImportantKey, "", 1), (InboxRows.TagKey("reply"), "reply", 2), (InboxRows.TagKey("promo"), "promo", 1), (InboxRows.TagKey("spam"), "spam", 1)],
+            "Important first, then by use, then alphabetically");
+        InboxLayoutArea.TagOptions("All tags", "Important", InboxRows.TagCounts(rows)).Select(o => o.Text)
+            .Should().Equal(["All tags", "⭐ Important  1", "#reply  2", "#promo  1", "#spam  1"]);
+    }
+
+    /// <summary>
+    /// Review #4277167952: the items JUDGED important and an ordinary tag spelled <c>important</c> are
+    /// two entries that count and match apart — and the tag stays reachable when nothing was judged.
+    /// </summary>
+    [Fact]
+    public void JudgedImportant_AndAnImportantTag_AreSeparateEntries()
+    {
+        InboxRow Row(string path, string importance, params string[] tags) => new()
+        {
+            Path = path, SourceId = "Outlook", Stamp = $"2026-10-1{path.Length}T00:00:00Z", Importance = importance, Tags = [.. tags],
+        };
+        var rows = new[] { Row("a", InboxImportance.Important), Row("bb", InboxImportance.Ignorable, "important") };
+
+        InboxRows.TagCounts(rows).Should().Equal([(InboxRows.ImportantKey, "", 1), (InboxRows.TagKey("important"), "important", 1)]);
+        InboxRows.Apply(rows, new InboxFilter { Tag = InboxRows.ImportantKey }).Select(r => r.Path).Should().Equal(["a"],
+            "the judged-important entry lists what was judged, not what is tagged");
+        InboxRows.Apply(rows, new InboxFilter { Tag = InboxRows.TagKey("important") }).Select(r => r.Path).Should().Equal(["bb"]);
+
+        var untriaged = new[] { Row("a", ""), Row("bb", "", "important") };
+        InboxRows.TagCounts(untriaged).Should().Equal([(InboxRows.TagKey("important"), "important", 1)],
+            "with nothing judged, the ordinary tag is still listed");
+    }
+
+    /// <summary>
+    /// Review #4277167921: a source that times its rows by <c>LastModified</c> (no time field) keeps
+    /// its triage: importance and tags are read from whatever content the row carries.
+    /// </summary>
+    [Fact]
+    public void AnUntimedRow_KeepsItsImportanceAndTags()
+    {
+        var section = new InboxSection(InboxBand.Recent, "Feed", 10, "q");
+        var node = new MeshNode("n1", "alice/_Feed")
+        {
+            Content = JsonSerializer.SerializeToElement(new { importance = "ignorable", tags = new[] { "promo" } }),
+        };
+        var row = InboxRows.Of(node, section, null, null);
+        row.Importance.Should().Be(InboxImportance.Ignorable);
+        row.Tags.Should().Equal(["promo"]);
+        InboxRows.Apply([row], new InboxFilter()).Should().BeEmpty("an ignorable untimed row is hidden like any other");
+    }
+
+    /// <summary>The Only select lists every source first, then each source by its symbol and name.</summary>
+    [Fact]
+    public void TheOnlyOptions_ListAllSourcesThenEachSource()
+    {
+        var options = InboxLayoutArea.SourceOptions("All sources", [("s1", "Outlook", "📧"), ("s2", "Chat", "")]);
+        options.Select(o => ((Option<string>)o).Item).Should().Equal(["", "s1", "s2"]);
+        options.Select(o => o.Text).Should().Equal(["All sources", "📧 Outlook", "Chat"]);
     }
 
     /// <summary>
@@ -550,34 +782,181 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
     }
 
     /// <summary>
-    /// A source without a symbol is toggled by its initial — one whole text element, never half an
-    /// emoji — and a contributed leg with an empty name still renders.
-    /// </summary>
-    [Theory]
-    [InlineData("Approvals", "A")]
-    [InlineData("\U0001F4E5 Inbox", "\U0001F4E5")]
-    [InlineData("Ärger", "Ä")]
-    [InlineData("", "•")]
-    [InlineData("   ", "•")]
-    public void ASourceWithoutASymbol_IsToggledByItsInitial(string label, string expected)
-        => InboxLayoutArea.Initial(label).Should().Be(expected);
-
-    /// <summary>
-    /// "By title" is alphabetical in the VIEWER's language: for a German viewer Ä sorts with A, not
-    /// after Z as it does by code point.
+    /// A click on a row opens it inside the portal, in the owner's reading view — a mail with an https
+    /// link in its provider's own client too, once its source brought a reader (the link is offered
+    /// on the reading view, never followed by the click). Only a row outside the mesh whose source
+    /// has NO reader yet keeps its provider link — the reading view would have nothing to show. The
+    /// row arrives typed or as JSON.
     /// </summary>
     [Fact]
-    public void ByTitle_IsAlphabeticalInTheViewersLanguage()
+    public void AClickedRow_OpensTheReadingView_WheneverItCanBeRead()
     {
-        var mail = new InboxSection(InboxBand.NeedsYou, "Mail", 20, "q");
-        ImmutableList<InboxRow> rows = [.. new[] { "Zebra", "Ärger", "apfel" }.Select((title, i) =>
-            InboxRows.Of(new MeshNode("n" + i, "alice/_X") { Name = title }, mail, null, null))];
-
-        InboxRows.Apply(rows, new InboxFilter { Order = InboxOrder.Title }, InboxLayoutArea.ViewerCulture("de-CH"))
-            .Select(r => r.Title).Should().Equal("apfel", "Ärger", "Zebra");
-        // Control: by code point the umlaut lands last, which is what the comparer replaced.
-        rows.Select(r => r.Title).OrderBy(t => t, StringComparer.OrdinalIgnoreCase).Should().Equal("apfel", "Zebra", "Ärger");
+        var options = Mesh.JsonSerializerOptions;
+        static bool Readable(string path) => path.Contains("/_Mailbox/", StringComparison.Ordinal);
+        static bool NoReader(string _) => false;
+        var mail = new InboxRow { Path = "alice/_Mailbox/outlook/m1", Link = "https://outlook.office.com/mail/id/m1" };
+        var mailUrl = "/alice/Inbox/" + InboxReadingView.ItemId("alice/_Mailbox/outlook/m1");
+        InboxLayoutArea.OpenTarget(mail, options, "alice", Readable).Should().Be((mailUrl, false), "a readable row never leaves the portal");
+        InboxLayoutArea.OpenTarget(JsonSerializer.SerializeToElement(mail, options), options, "alice", Readable)
+            .Should().Be((mailUrl, false), "the row as it comes back over the wire");
+        InboxLayoutArea.OpenTarget(mail, options, "alice", NoReader)
+            .Should().Be(("https://outlook.office.com/mail/id/m1", true), "no reader yet: the provider's client, never an empty page");
+        var thread = "/alice/Inbox/" + InboxReadingView.ItemId("alice/_Thread/t1");
+        InboxLayoutArea.OpenTarget(new InboxRow { Path = "alice/_Thread/t1" }, options, "alice", NoReader)
+            .Should().Be((thread, false), "a stored item opens in the reading view, which shows its own page");
+        InboxLayoutArea.OpenTarget(new InboxRow { Path = "alice/_Thread/t1", Link = "javascript:alert(1)" }, options, "alice", NoReader)
+            .Should().Be((thread, false), "only an https link ever leaves the portal");
+        InboxLayoutArea.OpenTarget(new InboxRow(), options, "alice", Readable).Should().BeNull();
+        InboxLayoutArea.OpenTarget(null, options, "alice", Readable).Should().BeNull();
     }
+
+    /// <summary>
+    /// The reading view's address names the item's path in ONE url-safe segment and gives it back
+    /// exactly; anything that is not such a segment names nothing.
+    /// </summary>
+    [Fact]
+    public void AnItemId_RoundTripsThePath()
+    {
+        foreach (var path in new[] { "alice/_Mailbox/outlook/AAMk-_x==", "alice/_Chats/teams/19:abc@thread.v2", "alice/_Thread/t1" })
+        {
+            var id = InboxReadingView.ItemId(path);
+            id.Should().NotContain("/").And.NotContain("+").And.NotContain("=");
+            InboxReadingView.PathOf(id).Should().Be(path);
+        }
+        InboxReadingView.PathOf(null).Should().BeNull();
+        InboxReadingView.PathOf("").Should().BeNull();
+        InboxReadingView.PathOf("not base64!").Should().BeNull();
+    }
+
+    /// <summary>
+    /// Only the owner's own items are opened: a path in someone else's partition — a prefix that is
+    /// not a whole segment, or one with a dot segment — is refused whatever the address says.
+    /// </summary>
+    [Fact]
+    public void TheReadingView_OpensOnlyTheOwnersItems()
+    {
+        InboxReadingView.IsOwnersItem("alice", "alice/_Mailbox/outlook/m1").Should().BeTrue();
+        InboxReadingView.IsOwnersItem("alice", "Alice/_Thread/t1").Should().BeTrue("a partition is case-insensitive");
+        InboxReadingView.IsOwnersItem("alice", "bob/_Mailbox/outlook/m1").Should().BeFalse();
+        InboxReadingView.IsOwnersItem("alice", "alice2/_Mailbox/outlook/m1").Should().BeFalse("a prefix is not the partition");
+        InboxReadingView.IsOwnersItem("alice", "alice").Should().BeFalse("the partition root is not an item");
+        InboxReadingView.IsOwnersItem("alice", "alice/../bob/x").Should().BeFalse();
+        InboxReadingView.IsOwnersItem("", "alice/x").Should().BeFalse();
+    }
+
+    /// <summary>The reader is chosen by the item's path: the first reader that handles it, else none.</summary>
+    [Fact]
+    public void AReader_IsChosenByThePath()
+    {
+        var outlook = new PrefixReader("alice/_Mailbox/outlook/");
+        var teams = new PrefixReader("alice/_Chats/teams/");
+        InboxReadingView.ReaderFor([outlook, teams], "alice/_Chats/teams/c1").Should().BeSameAs(teams);
+        InboxReadingView.ReaderFor([outlook, teams], "alice/_Mailbox/outlook/m1").Should().BeSameAs(outlook);
+        InboxReadingView.ReaderFor([outlook, teams], "alice/_Thread/t1").Should().BeNull("a stored item is shown by its own page");
+    }
+
+    /// <summary>
+    /// A read item renders as plain text: a body that carries markup is shown as text (a label),
+    /// never as HTML; a conversation lists its messages; the provider's link is offered last and only
+    /// when it is https; a refusal is shown alone.
+    /// </summary>
+    [Fact]
+    public void AReadItem_RendersAsTextWithTheProviderLinkLast()
+    {
+        var texts = new InboxReadingView.Texts("…", "failed", "From", "Account", "Received", "Open", p => "Open in " + p);
+        var content = new InboxItemContent
+        {
+            Subject = "Hello", From = "Bob", Account = "alice@example.com",
+            ReceivedAt = new DateTimeOffset(2026, 10, 16, 8, 0, 0, TimeSpan.Zero),
+            Body = "<script>alert(1)</script>\nsecond line",
+            Messages = [new InboxItemMessage("Carol", null, "hi")],
+            WebLink = "https://outlook.office.com/mail/id/m1", Provider = "Outlook",
+        };
+        var parts = InboxReadingView.Parts(content, "Europe/Zurich", System.Globalization.CultureInfo.InvariantCulture, texts);
+        var areas = parts.Select(p => p.Id).ToList();
+        areas.Should().Equal("Subject", "Meta", "Body", "Message0", "OpenIn");
+        UiControl ViewOf(string id) => parts.Single(p => p.Id == id).View;
+        ViewOf("Body").Should().BeOfType<LabelControl>("markup in a mail is shown as text, never rendered")
+            .Which.Data.Should().Be("<script>alert(1)</script>\nsecond line");
+        ((LabelControl)ViewOf("Meta")).Data!.ToString().Should().Contain("10/16/2026 10:00", "the time is the VIEWER's zone (CEST = UTC+2)");
+        ViewOf("OpenIn").Should().BeOfType<NavLinkControl>().Which.Title.Should().Be("Open in Outlook");
+
+        InboxReadingView.Parts(content with { WebLink = "javascript:alert(1)" }, null,
+                System.Globalization.CultureInfo.InvariantCulture, texts)
+            .Select(p => p.Id).Should().NotContain("OpenIn", "only an https link is offered");
+
+        InboxReadingView.Content(new InboxItemContent { Refusal = "Outlook is not connected" }, null,
+                System.Globalization.CultureInfo.InvariantCulture, texts)
+            .Should().BeOfType<LabelControl>().Which.Data.Should().Be("Outlook is not connected");
+    }
+
+    /// <summary>
+    /// The provider link is worded in the VIEWER's language from a locale captured on the render turn
+    /// — the read answers on another thread, where the ambient language is no longer the viewer's.
+    /// </summary>
+    [Fact]
+    public void TheProviderLink_IsWordedInTheViewersLanguage()
+    {
+        MeshWeaver.Messaging.LocalizationCatalog.Get("inbox.read.openInProvider", "de", "Outlook").Should().Be("In Outlook öffnen");
+        MeshWeaver.Messaging.LocalizationCatalog.Get("inbox.read.openInProvider", "en", "Teams").Should().Be("Open in Teams");
+    }
+
+    /// <summary>Handles every <c>…/_Fake/…</c> path, whoever's partition it is in — the page must refuse a foreign one.</summary>
+    private sealed class FakeSourceReader : IInboxItemReader
+    {
+        public bool Handles(string path) => path.Contains("/_Fake/", StringComparison.Ordinal);
+        public IObservable<InboxItemContent> Read(IMessageHub hub, string path, string viewer)
+            => System.Reactive.Linq.Observable.Return(new InboxItemContent { Subject = path, Body = "text" });
+    }
+
+    private sealed class PrefixReader(string prefix) : IInboxItemReader
+    {
+        public bool Handles(string path) => path.StartsWith(prefix, StringComparison.Ordinal);
+        public IObservable<InboxItemContent> Read(IMessageHub hub, string path, string viewer)
+            => System.Reactive.Linq.Observable.Return(new InboxItemContent { Subject = path });
+    }
+
+    /// <summary>
+    /// A row says who sent it and whether it is read when its source does (a live mailbox answers read
+    /// and unread in one leg); otherwise the source's name and the leg's own unread flag.
+    /// </summary>
+    [Fact]
+    public void ARow_ReadsSenderLinkAndReadStateFromItsContent()
+    {
+        var section = new InboxSection(InboxBand.NeedsYou, "Outlook", 10, "q") { TimeField = "receivedAt", Unread = false };
+        var node = new MeshNode("m1", "alice/_Mailbox/outlook")
+        {
+            Content = JsonSerializer.SerializeToElement(new
+            {
+                receivedAt = "2026-10-14T07:00:00Z", from = "Max Muster", isRead = false,
+                webLink = "https://outlook.office.com/mail/id/m1",
+            }),
+        };
+        var row = InboxRows.Of(node, section, null, null, sourceLabel: "Outlook");
+        row.From.Should().Be("Max Muster");
+        row.Unread.Should().BeTrue("isRead:false on the item wins over the leg");
+        row.RowClass.Should().Be(InboxRows.UnreadClass);
+        row.Link.Should().Be("https://outlook.office.com/mail/id/m1");
+
+        var plain = InboxRows.Of(node with { Content = null }, section with { Unread = true }, null, null, sourceLabel: "Outlook");
+        plain.From.Should().Be("Outlook", "no sender: the source's name");
+        plain.Unread.Should().BeTrue("no read state on the item: the leg's");
+        plain.Link.Should().BeEmpty();
+
+        InboxRows.Of(node with { Content = JsonSerializer.SerializeToElement(new { webLink = "http://x.example/m" }) },
+            section, null, null).Link.Should().BeEmpty("a link that is not https is not kept");
+
+        // TYPED content through the hub's own options, which omit a default false when they serialize:
+        // the unread item must still read as unread.
+        var typed = node with { Content = new Notification { IsRead = false, CreatedAt = DateTimeOffset.UtcNow } };
+        InboxRows.Of(typed, section with { TimeField = "createdAt" }, null, null, null, 0, null, null, Mesh.JsonSerializerOptions)
+            .Unread.Should().BeTrue("typed isRead:false is an unread item, not a missing read state");
+        InboxRows.Of(typed with { Content = new Notification { IsRead = true, CreatedAt = DateTimeOffset.UtcNow } },
+                section with { TimeField = "createdAt", Unread = true }, null, null, null, 0, null, null, Mesh.JsonSerializerOptions)
+            .Unread.Should().BeFalse("typed isRead:true wins over the leg");
+    }
+
+
 
     /// <summary>Only an inbound mail that is New or Read may be filed from the inbox.</summary>
     [Theory]
@@ -675,17 +1054,18 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
     }
 
     /// <summary>
-    /// Every ordering the select offers — and an order the page does not know falls back to the
-    /// default, newest first.
+    /// 🚨 Always newest first (policy <c>inbox-newest-first</c>): whatever order a
+    /// stored filter names — an old one, or one the page does not know — the rows are by date, newest
+    /// first, never by band, title or source.
     /// </summary>
     [Theory]
-    [InlineData(InboxOrder.Importance, "urgentNew,urgentOld,doneNewest")]
+    [InlineData(InboxOrder.Importance, "doneNewest,urgentNew,urgentOld")]
     [InlineData(InboxOrder.Newest, "doneNewest,urgentNew,urgentOld")]
-    [InlineData(InboxOrder.Oldest, "urgentOld,urgentNew,doneNewest")]
+    [InlineData(InboxOrder.Oldest, "doneNewest,urgentNew,urgentOld")]
     [InlineData(InboxOrder.Title, "doneNewest,urgentNew,urgentOld")]
     [InlineData(InboxOrder.Source, "doneNewest,urgentNew,urgentOld")]
     [InlineData("SomethingElse", "doneNewest,urgentNew,urgentOld")]
-    public void TheChosenOrder_ArrangesTheRows(string order, string expected)
+    public void TheRows_AreAlwaysNewestFirst(string order, string expected)
     {
         var needs = new InboxSection(InboxBand.NeedsYou, "Mail", 20, "q1");
         var recent = new InboxSection(InboxBand.Recent, "Activities", 20, "q2");

@@ -6,7 +6,6 @@
   "category": "Products",
   "description": "Vegie-spread - 15 - 625 g jars",
   "icon": "/static/NodeTypeIcons/shopping-bag.svg",
-  "isPersistent": true,
   "content": {
     "$type": "ProductContent",
     "productId": 63,

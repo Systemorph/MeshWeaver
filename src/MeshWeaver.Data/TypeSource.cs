@@ -55,6 +55,10 @@ public abstract record TypeSource<TTypeSource> : ITypeSource
         UpdateImpl(myCollection);
     }
 
+    /// <inheritdoc cref="ITypeSource.PrepareCommit"/>
+    public virtual InstanceCollection PrepareCommit(InstanceCollection? current, InstanceCollection incoming)
+        => incoming;
+
     private IDisposable? workspaceSubscription;
 
     /// <summary>

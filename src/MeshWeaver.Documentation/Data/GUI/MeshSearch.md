@@ -42,8 +42,7 @@ page link):
 | `flat` · `none` · `grid` | Flat | A single grid of thumbnail cards, no grouping |
 | `hierarchy` · `hierarchical` | Hierarchical | Parent → child indentation, each root subtree kept in one cell |
 
-The **Search** area defaults to the graph navigator. (The Space **Children** catalog stays on the
-namespace tree.) Unknown or missing values fall back to the graph navigator (for a content catalog)
+The **Search** area defaults to the graph navigator. Unknown or missing values fall back to the graph navigator (for a content catalog)
 or a hierarchical list (for a NodeType's instances).
 
 ### Graph navigator
@@ -126,13 +125,17 @@ modes, clicking a card navigates to that node (its own `Search` area, one level 
 
 ## Embedding a catalog in a page
 
-The Space welcome page ships a catalog embed; you can move or delete it, or add your own. Inside any
-Markdown body (a Space body, a Markdown node, an agent definition):
+A page's children are already listed in the **index on the left** (the side rail), so never end a
+body with a "children section" that restates it — the Space welcome page ships no catalog. Embed one
+only where the **listing is the content**: a log or register, a store or catalog page, a filtered or
+grouped view the rail cannot express, or a typed node rendered without the rail. Put it under a
+heading that names what it is, inside any Markdown body (a Space body, a Markdown node, an agent
+definition):
 
 ```markdown
-## Everything in this space
+## Reports by type
 
-@@("area/Search")
+@@("area/Search?groupBy=type")
 ```
 
 The `@@` double-at prefix renders the area **inline**; a single `@` would render a link instead.

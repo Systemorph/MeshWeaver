@@ -1231,6 +1231,18 @@ change (the sync that was missing) re-drives it, and a release request after the
 adoption pass, which now adopts. `RequestedReleaseForce` does NOT bypass it: a force means "build
 the live source", and on such a partition the live source is the problem.
 
+**The hold says why, on the record** (#6832). A type that still holds a build is not parked but
+HELD — `Ok`, `BuildProvenance: StaleAdopted` (or `Unavailable` + `AdoptionRefused` past the
+stale-adoption bound or across a MAJOR) — and an `Ok` record carries no `compilationError`. The gate's
+reason used to go only there, so a release request answered by a hold read as handled
+(`lastReleaseRequestHandledAt == requestedReleaseAt`) with no new build and nothing saying why; two
+recycles in a row looked exactly like a broken recycle. Every hold now writes
+`NodeTypeDefinition.DeliveryHoldReason`: the gate that refused (this one, or `Modules:RequirePrebuilt`),
+both module versions and fingerprints, and the fix. A build of the live source or a fresh adoption
+clears it. Read it first when a type serves an old build after a release request or a recycle: if it
+names this gate, recycling again changes nothing — publish a bundle of the current source for this
+framework identity, or add a sync source for the partition. Pinned by `AHeldReleaseRequestSaysWhyTest`.
+
 Whether the answer could be read is never a verdict: a fault or a timeout while asking the tracking
 seam compiles, as the mesh did before the gate existed — a stranded type is worse than a redundant
 compile, and the refusal is only ever formed from a positive *false*.

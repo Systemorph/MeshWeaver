@@ -101,10 +101,26 @@ internal static class NodeUpdatePipeline
                     // framework-owned fields to the live values so only REAL field differences
                     // count, then return the LIVE instance — the stream's reference-equality
                     // no-op gate completes the write without touching anything.
+                    // 🚨 CREATION METADATA IS THE LIVE NODE'S — AN UPDATE NEVER CHANGES IT.
+                    // CreatedDate / CreatedBy are set once, at creation: Postgres holds
+                    // created_date / created_by IMMUTABLE (INSERT only, never in the ON CONFLICT
+                    // SET), and CreatedDate is the create rollback's lineage token. So whatever the
+                    // caller's node carries — default / null from an omitted key (the MCP `update`
+                    // tool, which sends what the agent passes, reset both this way), or a value it
+                    // names — the live values win. Writing a caller's value would make the live node
+                    // advertise a creation stamp the durable row never stores, reverting on reload.
+                    // That holds just as much when the live node has NO stamp (a node imported
+                    // without one, a projection-hydrated instance): its row already exists, so a
+                    // stamp an update supplied would still never be stored. An update therefore
+                    // keeps the live values UNCONDITIONALLY — a node without a stamp stays without
+                    // one (#6745). Applied BEFORE the no-op gate, so an update that differs from
+                    // the live node only in creation metadata is a no-op.
                     var candidate = node with
                     {
                         Version = live.Version,
                         LastModified = live.LastModified,
+                        CreatedDate = live.CreatedDate,
+                        CreatedBy = live.CreatedBy,
                     };
                     if (MeshNode.SerializedEquals(live, candidate, hub.JsonSerializerOptions))
                         return live;

@@ -19,10 +19,33 @@ namespace MeshWeaver.PluginTester;
 /// </summary>
 public static class LocalNodeRepo
 {
-    /// <summary>Directories that never carry mesh nodes (VCS/CI/build internals).</summary>
+    /// <summary>
+    /// Directories that never carry mesh nodes (VCS/CI/build internals), plus <c>.worktrees</c> —
+    /// the conventional home of a checkout's linked git worktrees, i.e. OTHER branches' trees.
+    /// </summary>
     private static readonly ImmutableHashSet<string> ExcludedDirectories =
         ImmutableHashSet.Create(StringComparer.OrdinalIgnoreCase,
-            ".git", ".github", ".claude", "node_modules", "bin", "obj");
+            ".git", ".github", ".claude", ".worktrees", "node_modules", "bin", "obj");
+
+    /// <summary>
+    /// True when <paramref name="directory"/> — a directory BELOW the sweep root — is the root of
+    /// another git working tree: it holds a <c>.git</c> entry, a FILE for a linked worktree or a
+    /// submodule, a DIRECTORY for a nested repository. Such a tree is a different checkout (another
+    /// branch, another repository), never content of the one being swept.
+    ///
+    /// <para>🚨 A local checkout that keeps its worktrees inside itself made the sweep read every
+    /// one of them before package discovery — minutes of silence, and a snapshot carrying other
+    /// branches' files. A clean CI checkout has none, and GitSync's GitHub fetch never sees a
+    /// nested tree's files either (a submodule is a gitlink, not content), so skipping them keeps
+    /// the local sweep equal to what CI and the mesh read. The sweep ROOT itself is never tested:
+    /// it may well be a linked worktree (a <c>.git</c> file) — that is the tree being swept.</para>
+    /// </summary>
+    /// <param name="directory">A subdirectory of the sweep root.</param>
+    internal static bool IsNestedGitTree(string directory)
+    {
+        var marker = Path.Combine(directory, ".git");
+        return File.Exists(marker) || Directory.Exists(marker);
+    }
 
     /// <summary>
     /// Sweeps <paramref name="repoRoot"/> into a <see cref="RepoSnapshot"/> on the file I/O
@@ -57,6 +80,10 @@ public static class LocalNodeRepo
     {
         foreach (var file in Directory.EnumerateFiles(directory))
         {
+            // A linked worktree's root carries `.git` as a FILE (a `gitdir:` pointer). It is VCS
+            // plumbing exactly like the `.git` DIRECTORY a CI checkout has, so it is no content.
+            if (string.Equals(Path.GetFileName(file), ".git", StringComparison.OrdinalIgnoreCase))
+                continue;
             var relative = Path.GetRelativePath(root, file).Replace(Path.DirectorySeparatorChar, '/');
             byte[] bytes;
             try
@@ -84,7 +111,7 @@ public static class LocalNodeRepo
         foreach (var sub in Directory.EnumerateDirectories(directory))
         {
             var name = Path.GetFileName(sub);
-            if (ExcludedDirectories.Contains(name))
+            if (ExcludedDirectories.Contains(name) || IsNestedGitTree(sub))
                 continue;
             Sweep(root, sub, files);
         }

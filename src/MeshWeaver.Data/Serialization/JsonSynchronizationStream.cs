@@ -1,4 +1,5 @@
 ﻿using System.Reactive;
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -25,6 +26,40 @@ public sealed class StaleStreamStateException : InvalidOperationException
     /// </summary>
     /// <param name="message">A message describing the drift that was detected.</param>
     public StaleStreamStateException(string message) : base(message) { }
+}
+
+/// <summary>
+/// The terminal a subscriber's sync stream ends with when it has stopped re-asking its owner:
+/// the owner refused the stream more often than the recycle re-arm budget allows, or one dying
+/// activation kept refusing it past the ride-out budget.
+///
+/// <para>🚨 Why the give-up is a TERMINAL and not a log line (#5011, #6602). The give-up used to
+/// disarm the re-ask and leave the stream ALIVE on its last value. A reader then held a frozen
+/// snapshot that rendered exactly like a live one — no error, no completion, nothing for its own
+/// recovery to react to — which is how the fleet watch read <c>Ops/Status/*</c> as current while
+/// nothing reached it any more. Ending the stream hands the decision to the reader, which owns the
+/// signal for when to read again (the node's next write, a new listing frame); the cache evicts the
+/// faulted entry so that next read opens a fresh subscription.</para>
+/// </summary>
+public sealed class SyncStreamOwnerRefusedException : InvalidOperationException
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="SyncStreamOwnerRefusedException"/> class.
+    /// </summary>
+    /// <param name="streamId">The subscriber-side stream id.</param>
+    /// <param name="owner">The owner address that refused the stream.</param>
+    /// <param name="message">What was observed: how many activations refused, and how often.</param>
+    public SyncStreamOwnerRefusedException(string streamId, string owner, string message) : base(message)
+    {
+        StreamId = streamId;
+        Owner = owner;
+    }
+
+    /// <summary>The subscriber-side stream id.</summary>
+    public string StreamId { get; }
+
+    /// <summary>The owner address that refused the stream.</summary>
+    public string Owner { get; }
 }
 
 /// <summary>
@@ -78,10 +113,57 @@ public static class JsonSynchronizationStream
     /// embed one yet. Null is never treated as "the same corpse": it charges the activation budget
     /// exactly as every rejection did before #2986, so a site that has not been taught to stamp an
     /// identity degrades to the old accounting rather than to an unbounded ride-out.</para>
+    ///
+    /// <para><paramref name="RouteRefusal"/> is set when NO owner activation refused at all: the
+    /// <c>ShuttingDown</c> NACK carries no activation tag and no owner banner
+    /// (<see cref="ShutdownNack.IsAnsweredByOwner"/>), i.e. the ROUTING LAYER answered — this host
+    /// stopping (<c>"Host is shutting down, cannot route to …"</c>), a silo directory in flux during
+    /// a roll, a pod hub not yet claimed. Such a refusal is not an owner activation and is never
+    /// charged to the activation budget (#6729): see <c>RouteRefusalKey</c>.</para>
     /// </summary>
     /// <param name="Reason">Human-readable cause, logged with the re-ask.</param>
     /// <param name="Activation">The rejecting activation's stable tag, or null when unknown.</param>
-    private sealed record RecycleRejection(string Reason, string? Activation);
+    /// <param name="RouteRefusal">The routing layer's refusal text, or null when the owner answered.</param>
+    private sealed record RecycleRejection(string Reason, string? Activation, string? RouteRefusal = null);
+
+    /// <summary>
+    /// Classifies a transient <c>ShuttingDown</c> NACK into the rejection the re-arm latch charges:
+    /// the activation tag when the owner stamped one, and — when it did not AND the refusal does not
+    /// carry the owner's banner — the routing layer's text, so the latch rides it out on the TIME
+    /// axis instead of counting it as an owner activation (#6729).
+    /// </summary>
+    /// <param name="reason">Human-readable cause, logged with the re-ask.</param>
+    /// <param name="message">The NACK text (<c>DeliveryFailureException.Message</c>).</param>
+    /// <param name="owner">The owner the stream subscribed to.</param>
+    private static RecycleRejection ClassifyShutdownNack(string reason, string? message, Address owner)
+    {
+        var tag = ShutdownNack.ExtractActivationTag(message);
+        var fromRoute = tag is null && !ShutdownNack.IsAnsweredByOwner(message, owner);
+        return new RecycleRejection(reason, tag, fromRoute ? message ?? string.Empty : null);
+    }
+
+    /// <summary>
+    /// 🚨 The key a ROUTING-LAYER refusal is charged under in the ride-out ledger (#6729). It is not
+    /// a hex activation token, so it can never collide with one.
+    ///
+    /// <para>Measured on memex-cloud 2026-10-13: pods <c>…-m2jn9</c> (19:52:18Z) and <c>…-54lxb</c>
+    /// (20:01:57Z) each logged <c>"Application is shutting down..."</c> after their drain gave up
+    /// with circuits still open, and in the SAME second every open circuit's sync streams — owners
+    /// <c>rbuergi</c>, <c>Admin</c>, threads, payments, unrelated to one another — ended with
+    /// <c>"4 DISTINCT owner activations have refused this stream"</c>. No owner had recycled: the
+    /// subscriber's own router answered each re-ask <c>"Host is shutting down, cannot route to
+    /// …"</c>, an untagged <c>ShuttingDown</c>. Untagged meant "a distinct activation", and with
+    /// no local teardown to join the re-ask went out at once, so four router refusals inside a
+    /// millisecond spent the activation budget and the give-up blamed an owner recycle loop that
+    /// never happened — filed as some twenty incidents.</para>
+    ///
+    /// <para>A routing refusal is ONE condition — the route is unavailable — so it belongs on the
+    /// TIME axis: paced by <c>RecycleReAskPace</c> and bounded by <see cref="MaxSameActivationReAsks"/>
+    /// like a teardown being ridden out, and its give-up names the route, not the owner. A roll's
+    /// directory flux settles inside that window; a stopping host disposes the stream with its hub
+    /// before it runs out.</para>
+    /// </summary>
+    private const string RouteRefusalKey = "(route)";
 
     /// <summary>
     /// A rejection that has PAID for its re-ask, plus which of the two budgets paid — carried
@@ -92,7 +174,8 @@ public static class JsonSynchronizationStream
     /// <param name="RidingOutSameActivation">
     /// True when the activation that refused us is the one that refused the PREVIOUS attempt — the
     /// same teardown, still draining, so this attempt rests before it re-asks instead of returning
-    /// to the corpse microseconds later.
+    /// to the corpse microseconds later. Also true for every ROUTING-LAYER refusal (#6729): there is
+    /// no teardown to join, so an un-paced re-ask would meet the same refusal at once.
     /// </param>
     private sealed record ReArmDecision(RecycleRejection Rejection, bool RidingOutSameActivation);
 
@@ -128,6 +211,9 @@ public static class JsonSynchronizationStream
             // so the claim can never be wrong: whatever version of this code posts the subscribe is
             // the version that folds the frames.
             AcceptsStringSplice = true,
+            // Same argument, same assembly: RouteStreamMessage (MeshWeaver.Data) is what splits a
+            // coalesced recycle announcement back into one end per stream (#5532).
+            AcceptsCoalescedStreamEnd = true,
         };
 
     /// <summary>
@@ -571,9 +657,8 @@ public static class JsonSynchronizationStream
                         // orphaned stream became the visible symptom — a freshly installed root
                         // whose area never renders (StaleStampRootBindingTest, 120 s with the
                         // client sitting idle after the NACK landed).
-                        rejectedByRecycle.OnNext(new RecycleRejection(
-                            "rejected our SubscribeRequest while shutting down",
-                            ShutdownNack.ExtractActivationTag(ex.Message)));
+                        rejectedByRecycle.OnNext(ClassifyShutdownNack(
+                            "rejected our SubscribeRequest while shutting down", ex.Message, owner));
                         return;
                     }
 
@@ -682,12 +767,15 @@ public static class JsonSynchronizationStream
                         logger.LogDebug(
                             "Stream {StreamId}: owner {Owner} ended the server-side subscription — re-asking once its teardown settles.",
                             reduced.StreamId, owner);
-                        // No activation identity on this carrier — the owner ANNOUNCED the end
-                        // rather than NACKing, so there is no NACK text to read one from. A null
-                        // tag is treated as "a distinct activation" by the budget below, i.e.
-                        // exactly the pre-#2986 accounting: never guessed, never free.
+                        // The announcing activation rides on the event (#6602). Before it did, an
+                        // owner's ONE teardown was charged twice — once for its announcement (no
+                        // identity, so "distinct"), once for the NACK of the re-ask it raced —
+                        // and two settling recycles in a roll spent the whole budget. An owner on
+                        // an older image still sends none: null is treated as "a distinct
+                        // activation", i.e. exactly the pre-#2986 accounting, never guessed.
                         rejectedByRecycle.OnNext(new RecycleRejection(
-                            "ended our server-side subscription", null));
+                            "ended our server-side subscription",
+                            string.IsNullOrEmpty(delivery.Message.Activation) ? null : delivery.Message.Activation));
                         return delivery.Processed();
                     },
                     d => reduced.StreamId.Equals(d.Message.StreamId)
@@ -745,7 +833,13 @@ public static class JsonSynchronizationStream
             // captured by this stream's closures — never static, so they cannot bleed between
             // streams or tests. Reset by the success arm exactly like recycleReArms.
             string? lastRejectingActivation = null;
-            var sameActivationReAsks = 0;
+            // Every activation that has refused this stream since the owner last ANSWERED a re-ask
+            // (#6602), with the re-asks spent riding THAT activation out. The activation budget
+            // counts keys, not changes of "the previous one": a NACK and an announcement from one
+            // teardown can arrive interleaved with another carrier's, and an A, B, A sequence is
+            // still two activations, not three. The time budget is charged PER KEY, so an
+            // A, B, A, B interleaving never pools two teardowns' re-asks onto whichever came last.
+            var refusingActivations = ImmutableDictionary<string, int>.Empty;
             // One-shot: the give-up is announced once, not once per later rejection. The change-feed
             // latch can keep calling Resubscribe after the budgets are spent, and a Warning per
             // rejection would turn one diagnosis into log noise.
@@ -813,8 +907,9 @@ public static class JsonSynchronizationStream
                                 Interlocked.Exchange(ref recycleReArms, 0);
                                 // …and the SAME reasoning for the ride-out counter: an answer ends
                                 // the teardown we were riding out, so the next one starts fresh.
-                                Interlocked.Exchange(ref sameActivationReAsks, 0);
                                 Volatile.Write(ref lastRejectingActivation, null);
+                                Volatile.Write(ref refusingActivations,
+                                    ImmutableDictionary<string, int>.Empty);
                                 // …and re-arm the announcement with the latch. A stream that
                                 // recovered and later gives up again has given up TWICE, and the
                                 // second time is as much a diagnosis as the first.
@@ -824,21 +919,32 @@ public static class JsonSynchronizationStream
                             {
                                 var isTransient =
                                     ex is DeliveryFailureException { Failure.ErrorType: ErrorType.ShuttingDown };
-                                var tag = isTransient ? ShutdownNack.ExtractActivationTag(ex.Message) : null;
+                                var rejection = isTransient
+                                    ? ClassifyShutdownNack(
+                                        "re-ask was itself rejected while the owner was still shutting down",
+                                        ex.Message, owner)
+                                    : null;
+                                var tag = rejection?.Activation;
                                 // 🚨 Warning ONCE per activation, Debug for the paced repeats at the
                                 // same corpse. The ride-out is bounded but can legitimately re-ask
                                 // MaxSameActivationReAsks times while ONE teardown drains, and a
                                 // Warning per attempt would ship 16 lines per stream to Loki for a
                                 // condition the first line already reported. The give-up below is a
                                 // Warning of its own, so nothing that ends badly ends quietly.
+                                // The same holds for a ROUTE that keeps refusing (#6729): one
+                                // Warning for the first routing-layer refusal, Debug for the paced
+                                // repeats while the route stays unavailable.
                                 var repeat = isTransient
-                                             && tag is not null
-                                             && tag == Volatile.Read(ref lastRejectingActivation);
+                                             && (tag is not null
+                                                 ? tag == Volatile.Read(ref lastRejectingActivation)
+                                                 : rejection!.RouteRefusal is not null
+                                                   && Volatile.Read(ref refusingActivations)
+                                                       .ContainsKey(RouteRefusalKey));
                                 if (repeat)
                                     logger.LogDebug(ex,
                                         "Stream {StreamId}: resubscribe failed again at the same owner "
                                         + "activation (#{Activation}) — still riding the teardown out.",
-                                        reduced.StreamId, tag);
+                                        reduced.StreamId, tag ?? RouteRefusalKey);
                                 else
                                     logger.LogWarning(ex,
                                         "Stream {StreamId}: resubscribe failed.",
@@ -853,9 +959,7 @@ public static class JsonSynchronizationStream
                                 // from a fresh one.
                                 if (isTransient)
                                 {
-                                    rejectedByRecycle.OnNext(new RecycleRejection(
-                                        "re-ask was itself rejected while the owner was still shutting down",
-                                        tag));
+                                    rejectedByRecycle.OnNext(rejection!);
                                     return;
                                 }
                                 // 🚨 Everything else is a VERDICT about the owner, exactly as it is on the
@@ -965,7 +1069,7 @@ public static class JsonSynchronizationStream
 
             // Charges ONE of the two budgets and hands the decision downstream, or null when this
             // rejection no longer buys a re-ask. The verdict is CARRIED rather than re-derived
-            // later: `sameActivationReAsks` and `lastRejectingActivation` keep moving as further
+            // later: `refusingActivations` and `lastRejectingActivation` keep moving as further
             // rejections arrive, and an attempt waiting its turn in the Concat below must act on
             // the state that charged IT, not on whatever the newest rejection left behind.
             //
@@ -974,12 +1078,35 @@ public static class JsonSynchronizationStream
             // stopped trying, so the caller saw only 60 s of nothing.
             ReArmDecision? ChargeReArmBudget(RecycleRejection rejection)
             {
+                // 🚨 A ROUTING-LAYER refusal is not an owner activation (#6729). Charged on the TIME
+                // axis under its own key and paced like a teardown ride-out: the route is ONE
+                // condition (this host stopping, a directory in flux), and counting each refusal as
+                // a "distinct owner activation" spent the whole activation budget inside a
+                // millisecond and blamed an owner recycle loop that never happened.
+                if (rejection.RouteRefusal is { } routeRefusal)
+                {
+                    var routeRefusals = ImmutableInterlocked.AddOrUpdate(
+                        ref refusingActivations, RouteRefusalKey, 1, (_, spent) => spent + 1);
+                    if (routeRefusals <= MaxSameActivationReAsks)
+                        return new ReArmDecision(rejection, RidingOutSameActivation: true);
+                    GiveUp(
+                        "Stream {0}: giving up on owner {1} — the ROUTE to it refused {2} re-subscribes as "
+                        + "ShuttingDown (budget {3}) and NO owner activation answered: the refusal came from "
+                        + "the routing layer, not the owner, so no owner recycle loop is implied. The stream "
+                        + "now ENDS with this error so its readers can re-read. Last refusal: {4}",
+                        routeRefusals, MaxSameActivationReAsks, routeRefusal);
+                    return null;
+                }
+
                 var activation = rejection.Activation;
-                var previous = Volatile.Read(ref lastRejectingActivation);
-                // A rejection with NO activation identity (the StreamEndedEvent carrier, or a NACK
+                // A rejection with NO activation identity (an owner on an older image, or a NACK
                 // site that embeds none) is never assumed to be the same corpse: it charges the
-                // activation budget, exactly as every rejection did before #2986.
-                var sameActivation = activation is not null && activation == previous;
+                // activation budget, exactly as every rejection did before #2986. A tagged one is
+                // the same corpse when THIS stream has already been refused by it since the last
+                // answer (#6602) — not only when it was the immediately previous refuser, because
+                // one teardown's NACK and its announcement can interleave with another carrier's.
+                var sameActivation = activation is not null
+                                     && Volatile.Read(ref refusingActivations).ContainsKey(activation);
                 Volatile.Write(ref lastRejectingActivation, activation);
 
                 // 🚨 The give-up lines report the OBSERVED counts, never the budget constants.
@@ -990,33 +1117,53 @@ public static class JsonSynchronizationStream
                 // observation — both, and labelled.
                 if (!sameActivation)
                 {
-                    Interlocked.Exchange(ref sameActivationReAsks, 0);
+                    if (activation is not null)
+                        ImmutableInterlocked.TryAdd(ref refusingActivations, activation, 0);
                     var distinctActivations = Interlocked.Increment(ref recycleReArms);
                     if (distinctActivations <= MaxRecycleReArms)
                         return new ReArmDecision(rejection, RidingOutSameActivation: false);
-                    if (Interlocked.Exchange(ref gaveUp, 1) == 0)
-                        logger.LogWarning(
-                            "Stream {StreamId}: giving up on owner {Owner} — {DistinctActivations} DISTINCT "
-                            + "owner activations have refused this stream (budget {Budget}). The address is "
-                            + "recycling in a LOOP, not settling: each successor dies before it can answer. "
-                            + "Readers of this stream will now time out; the fix is at whatever is "
-                            + "requesting the recycles, not here.",
-                            reduced.StreamId, owner, distinctActivations, MaxRecycleReArms);
+                    GiveUp(
+                        "Stream {0}: giving up on owner {1} — {2} DISTINCT owner activations have refused "
+                        + "this stream (budget {3}). The address is recycling in a LOOP, not settling: each "
+                        + "successor dies before it can answer. The stream now ENDS with this error so its "
+                        + "readers can re-read; the fix is at whatever is requesting the recycles, not here.",
+                        distinctActivations, MaxRecycleReArms, activation);
                     return null;
                 }
 
-                var attemptsAtThisActivation = Interlocked.Increment(ref sameActivationReAsks);
+                // Charged to THIS activation's own count (#6602 review): the line below names one
+                // activation, so the number it reports must be that activation's alone.
+                var attemptsAtThisActivation = ImmutableInterlocked.AddOrUpdate(
+                    ref refusingActivations, activation!, 1, (_, spent) => spent + 1);
                 if (attemptsAtThisActivation <= MaxSameActivationReAsks)
                     return new ReArmDecision(rejection, RidingOutSameActivation: true);
-                if (Interlocked.Exchange(ref gaveUp, 1) == 0)
-                    logger.LogWarning(
-                        "Stream {StreamId}: giving up on owner {Owner} — the SAME activation #{Activation} "
-                        + "has refused {Attempts} re-subscribes as ShuttingDown (budget {Budget}) without "
-                        + "ever releasing the address. That is ONE WEDGED TEARDOWN at the owner, not a "
-                        + "recycle loop and not a slow reader: readers of this stream will now time out "
-                        + "with nothing to show for it. Look at that hub's disposal.",
-                        reduced.StreamId, owner, activation, attemptsAtThisActivation, MaxSameActivationReAsks);
+                GiveUp(
+                    "Stream {0}: giving up on owner {1} — the SAME activation #{4} has refused {2} "
+                    + "re-subscribes as ShuttingDown (budget {3}) without ever releasing the address. That "
+                    + "is ONE WEDGED TEARDOWN at the owner, not a recycle loop and not a slow reader. The "
+                    + "stream now ENDS with this error so its readers can re-read. Look at that hub's disposal.",
+                    attemptsAtThisActivation, MaxSameActivationReAsks, activation);
                 return null;
+            }
+
+            // 🚨 THE GIVE-UP IS A TERMINAL (#6602, #5011). It used to disarm the re-ask and leave the
+            // stream alive on its last value — "the pre-existing orphaned-stream behaviour" — so a
+            // reader held a frozen snapshot that rendered exactly like a live one and its own recovery
+            // never ran: no error, no completion, nothing to react to. Measured on memex-cloud during
+            // rolls, on Hosting/PlatformBuilds, Hosting/Modules and Ops/Status/*. Now it ends the
+            // stream the same way an owner VERDICT does above (OnError + stop the keep-alive): the
+            // reader decides when to read again, on its own signal, and the cache evicts the faulted
+            // entry so that read opens a fresh subscription. Still not a retry here — the stream stops
+            // asking; it just says so to the people holding it. Logged and raised ONCE.
+            void GiveUp(string template, int observed, int budget, string? activation)
+            {
+                if (Interlocked.Exchange(ref gaveUp, 1) != 0)
+                    return;
+                var text = string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                    template, reduced.StreamId, owner, observed, budget, activation ?? "(unknown)");
+                logger.LogWarning("{GiveUp}", text);
+                reduced.OnError(new SyncStreamOwnerRefusedException(reduced.StreamId, owner.ToString(), text));
+                keepAlive.Dispose();
             }
 
             // The wait a rejection buys. Deferred, so the probe is taken when this attempt is
@@ -1199,7 +1346,7 @@ public static class JsonSynchronizationStream
             // on the owner's path. This was the sole recycled-grain detector until the heartbeat
             // learned to name its stream (#6047); it remains the detector for a stream the owner has
             // not yet acknowledged and for a write's VERSION the mirror missed. Compare against Address.Path (segments
-            // only) — ToString() can include a "~host" suffix for hosted addresses
+            // only) — ToString() carries the host chain ("host~path") for hosted addresses
             // which never matches MeshChangeEvent.Path (the bare node.Path).
             //
             // 🚨 COALESCE the change-feed-triggered resubscribe. The mesh change feed fires
@@ -1451,18 +1598,80 @@ public static class JsonSynchronizationStream
         // as `applied` does on the re-assert path.
         //
         // Not a poll and not a retry: one Rx one-shot on the very state the subscriber is waiting
-        // for, disposed by Take(1) when it fires and by the stream when it does not. If the state
-        // never arrives, the subscriber's own request/response terminal fires and ResyncRefused
-        // re-opens its gate WITHOUT counting the ask — the correct reading, since an owner with
-        // nothing to send has not failed to answer.
+        // for, disposed by Take(1) when it fires.
+        //
+        // 🚨 …AND ANSWERED WHEN THE STREAM ENDS WITHOUT EVER EMITTING (#6759). The hold used to be
+        // registered on the stream's disposal and do nothing there, on the reading that "the
+        // subscriber's own request/response terminal fires". That terminal is the REQUEST TIMEOUT
+        // (60 s by default), and for a JsonSynchronizationStream re-ask it is far worse than slow:
+        // the re-ask holds the subscriber's in-flight guard, so every later re-ask, the owner's own
+        // end-of-stream announcement included, is swallowed for that whole window. An owner
+        // recycled while it holds this answer (the overlay self-heal recycles a per-node hub the
+        // moment its type compiles, which is exactly when a reader is most likely to have re-asked)
+        // therefore left the read silent for the full request timeout. The stream ending is a
+        // terminal of its own: the work this owner accepted can no longer be finished HERE, so it
+        // is refused as a transient ShuttingDown, which the subscriber rides out to the next
+        // activation. Exactly one answer still: Ack and RefuseAsTornDown share ClaimTheAnswer.
         void AnswerWhenTheStreamFirstEmits(ISynchronizationStream<TReduced> stream)
         {
             logger.LogDebug(
                 "Owner {Owner} has nothing to re-assert on stream {StreamId} for {Subscriber} yet — "
                 + "holding the acknowledgement until its first frame",
                 hub.Address, request.StreamId, request.Subscriber);
-            var pending = stream.Take(1).Subscribe(_ => Ack(), Refuse);
-            stream.RegisterForDisposal(pending);
+            // Captured on the handler's turn, while the scope is provably alive: the disposal arm
+            // below runs in the owner's teardown, where re-resolving ParentHub can throw.
+            var parent = hub.Configuration.ParentHub;
+            var pending = stream.Take(1).Subscribe(
+                _ => Ack(),
+                Refuse,
+                () => RefuseAsTornDown(parent, "its stream completed before it had any state to re-assert"));
+            stream.RegisterForDisposal(new AnonymousDisposable(() =>
+            {
+                pending.Dispose();
+                RefuseAsTornDown(parent, "its stream was disposed before it had any state to re-assert");
+            }));
+        }
+
+        // The refusal for a held re-assert whose stream ended without ever emitting (#6759).
+        // Composed through ShutdownNack so the subscriber reads it as the OWNER's transient refusal
+        // (banner + activation tag), never as a routing-layer one. Posted by the owner while it can
+        // still post, else by the parent captured on the handler's turn — the owner's own Post is
+        // gated closed from DisposeHostedHubs on, which is when its sync streams are disposed. Same
+        // route as DataExtensions.NackSilentRead and the owner-side patch NACK.
+        //
+        // 🚨 With the parent past DisposeHostedHubs too — a whole-tree teardown — the answer is STILL
+        // posted through the owner (#6805 review). The post seam then hands a correlated NACK to a
+        // requester in this process directly (MessageHub.TryDeliverNackInProcess, #4072): a sibling
+        // subscriber is Quiescing on exactly this callback, and dropping the answer here left it
+        // waiting for its own quiesce budget.
+        void RefuseAsTornDown(IMessageHub? parent, string why)
+        {
+            if (!ClaimTheAnswer())
+                return;
+            var failure = new DeliveryFailure(delivery)
+            {
+                ErrorType = ErrorType.ShuttingDown,
+                Message = ShutdownNack.RetryForTheAuthoritativeAnswer(
+                    hub.Address,
+                    $"RunLevel={hub.RunLevel}, {ShutdownNack.FormatActivationTag(hub)}",
+                    $"the re-subscribe of stream {request.StreamId} for {request.Subscriber} was "
+                    + $"accepted but never answered: {why}"),
+            };
+            try
+            {
+                if (parent is not null
+                    && hub.RunLevel >= MessageHubRunLevel.DisposeHostedHubs
+                    && parent.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
+                    parent.Post(failure, RespondTo);
+                else
+                    hub.Post(failure, RespondTo);
+            }
+            catch (Exception ex)
+            {
+                logger.LogDebug(ex,
+                    "Owner {Owner} could not refuse the held re-assert of stream {StreamId} for {Subscriber}",
+                    hub.Address, request.StreamId, request.Subscriber);
+            }
         }
 
         // The answer for a path that produced NO snapshot — never an ack. See the note above.
@@ -1775,7 +1984,7 @@ public static class JsonSynchronizationStream
             }
             try
             {
-                hub.Post(new StreamEndedEvent(request.StreamId),
+                hub.Post(new StreamEndedEvent(request.StreamId) { Activation = ShutdownNack.ActivationToken(hub) },
                     o => o.WithTarget(request.Subscriber));
             }
             catch (Exception ex)
@@ -1813,7 +2022,8 @@ public static class JsonSynchronizationStream
         // AFTER the outbound forwarding subscription exists, so a re-assert can never find a
         // stream that has no way to reach the subscriber. Unregisters itself on disposal.
         (workspace as Workspace)?.RegisterClientSubscription(
-            request.Subscriber, request.StreamId, request.Reference, reduced);
+            request.Subscriber, request.StreamId, request.Reference, reduced,
+            request.AcceptsCoalescedStreamEnd);
 
         // 🚨 A FRESH stream acks IMMEDIATELY, and the asymmetry with the re-assert path above is
         // deliberate (#3058). This subscribe has no answer to overtake — the stream was just built
@@ -2049,8 +2259,11 @@ public static class JsonSynchronizationStream
         ITypeRegistry? typeRegistry = null)
         => patch.Operations.Select(p =>
             {
-                var id = p.Path.SegmentCount == 0 ? null : p.Path.GetSegment(1).ToString();
-                var rawCollection = p.Path.GetSegment(0).ToString();
+                // 🚨 DECODED segments (#6629): GetSegment is the RFC 6901-escaped text, and
+                // JsonPointer.Create escapes again — an id containing '/' or '~' evaluated to
+                // nothing and decoded to the wrong id.
+                var id = p.Path.SegmentCount < 2 ? null : p.Path.GetSegment(1).Decode();
+                var rawCollection = p.Path.GetSegment(0).Decode();
 
                 // Normalize collection name using TypeRegistry to ensure consistency
                 // This fixes the bug where JsonPatch paths contain full type names 
@@ -2062,7 +2275,7 @@ public static class JsonSynchronizationStream
                 var pointer = id == null ? JsonPointer.Create(collection) : JsonPointer.Create(collection, id);
                 return new EntityUpdate(
                         collection,
-                        DecodePointerSegment(id, options)!,
+                        id == null ? null! : JsonSerializer.Deserialize<object>(id, options)!,
                         pointer.Evaluate(updated)!
                     )
                 { OldValue = pointer.Evaluate(current) };
@@ -2426,11 +2639,11 @@ public static class JsonSynchronizationStream
         JsonSerializerOptions options)
         => patch.Operations.Select(p =>
         {
-            var id = p.Path.GetSegment(0);
+            // DECODED (#6629): CreatePointerFromSegments escapes, so it must be handed the real id.
+            var id = p.Path.SegmentCount == 0 ? string.Empty : p.Path.GetSegment(0).Decode();
 
-
-            JsonPointer? pointer = id == string.Empty ? null : CreatePointerFromSegments(id.ToString());
-            var idSegment = id == string.Empty ? null : JsonSerializer.Deserialize<object>(id.ToString(), options)!;
+            JsonPointer? pointer = id == string.Empty ? null : CreatePointerFromSegments(id);
+            var idSegment = id == string.Empty ? null : JsonSerializer.Deserialize<object>(id, options)!;
             return new EntityUpdate(
                 reference.Name,
                 idSegment,

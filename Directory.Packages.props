@@ -169,6 +169,20 @@
     <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="10.0.12" />
     <PackageVersion Include="Microsoft.Identity.Web" Version="4.16.0" />
     <PackageVersion Include="Microsoft.Identity.Web.Ui" Version="4.16.0" />
+    <!-- Security overrides for TRANSITIVE packages — not dependencies this code uses. Inert on their
+         own (CentralPackageTransitivePinningEnabled is unset); the versionless direct references in
+         the root and test Directory.Build.props, PrivateAssets="all", are what lift the graph.
+           - System.Security.Cryptography.Pkcs: 8.0.1 via NuGet.Packaging (MeshWeaver.NuGet) and
+             10.0.10 via Microsoft.Identity.Web — GHSA-846f-f764-76mx (High),
+             GHSA-2fmv-rv2c-59x7 (Moderate); first patched 10.0.13.
+           - System.Security.Cryptography.Xml: 10.0.10 via Microsoft.Identity.Web.TokenCache and
+             Microsoft.AspNetCore.DataProtection — GHSA-7hqp-7c5m-4vq6, GHSA-c399-9853-6jmj,
+             GHSA-r955-8q5j-3h83 (all High); first patched 10.0.13.
+         Remove each (here AND both Directory.Build.props references) once every upstream depends
+         on a patched version — and MeshWeaver.Plugins references them versionless, so a removal
+         needs a Satellite-pins: declaration. -->
+    <PackageVersion Include="System.Security.Cryptography.Pkcs" Version="10.0.13" />
+    <PackageVersion Include="System.Security.Cryptography.Xml" Version="10.0.13" />
     <!-- The portal's own passkey rung of the approval step-up (Doc/Architecture/ApprovalStepUp):
          attestation and assertion verification by the maintained FIDO2 library, never by hand. -->
     <PackageVersion Include="Fido2" Version="4.2.0" />
@@ -183,8 +197,8 @@
     <PackageVersion Include="Serilog.AspNetCore" Version="10.0.0" />
     <PackageVersion Include="Serilog.Settings.Configuration" Version="10.0.1" />
     <PackageVersion Include="Serilog.Sinks.File" Version="7.0.0" />
-    <PackageVersion Include="SixLabors.ImageSharp" Version="3.1.12" />
-    <!-- Share-card rendering (OgCardRenderer). SkiaSharp is MIT; the NoDependencies native build
+    <!-- Share-card rendering (OgCardRenderer) and the thumbnail generator's scaling
+         (tools/MeshWeaver.ThumbnailGenerator, which replaced SixLabors.ImageSharp). SkiaSharp is MIT; the NoDependencies native build
          deliberately drops the fontconfig/libfreetype link, so the portal image needs NO apt
          packages and the base image stays as it is — the font is supplied from an embedded
          resource instead. linux-x64 AND linux-arm64 natives ship in the package, which the
@@ -256,7 +270,7 @@
     <!-- The memex test container package (src/MeshWeaver.Testcontainers): a real memex from the
          platform build as a test substrate, the way Testcontainers.PostgreSql gives a test a real
          Postgres. Same version as the test tree pins. -->
-    <PackageVersion Include="Testcontainers" Version="4.15.0" />
+    <PackageVersion Include="Testcontainers" Version="4.16.0" />
     <PackageVersion Include="SSH.NET" Version="2026.0.0" /> <!-- High GHSA-q939-rpr3-3284; transitive via Testcontainers, direct-ref override in test/Directory.Build.props -->
     <!-- 🚨 THESE TWO ARE ONE FAMILY AND MUST MOVE TOGETHER — they were SPLIT, and the split was
          invisible because both halves were green.
@@ -330,11 +344,11 @@
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
     <PackageVersion Include="UglyToad.PdfPig" Version="1.7.0-custom-5" />
     <PackageVersion Include="Verify.XunitV3" Version="31.28.0" />
-    <PackageVersion Include="xunit.v3" Version="4.0.1" />
-    <PackageVersion Include="xunit.v3.assert" Version="4.0.1" />
-    <PackageVersion Include="xunit.v3.extensibility.core" Version="4.0.1" />
-    <PackageVersion Include="xunit.runner.visualstudio" Version="4.0.0" />
-    <PackageVersion Include="xunit.v3.runner.console" Version="4.0.1" />
+    <PackageVersion Include="xunit.v3" Version="4.0.2" />
+    <PackageVersion Include="xunit.v3.assert" Version="4.0.2" />
+    <PackageVersion Include="xunit.v3.extensibility.core" Version="4.0.2" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="4.0.1" />
+    <PackageVersion Include="xunit.v3.runner.console" Version="4.0.2" />
     <PackageVersion Include="NSubstitute" Version="6.2.0" />
     <PackageVersion Include="Octokit" Version="14.0.0" />
     <PackageVersion Include="Octokit.Reactive" Version="14.0.0" />

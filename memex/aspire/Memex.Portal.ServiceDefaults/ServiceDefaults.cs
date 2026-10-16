@@ -435,7 +435,21 @@ public static class ServiceDefaults
         builder.Services.AddSingleton<TokenValidationReadiness>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<TokenValidationReadiness>());
 
+        // 🚦 Readiness = this replica can identify a signed-in user (MeshWeaver#6850). The user
+        // directory used to be opened BY the first signed-in request, which then asked it before its
+        // first snapshot: one degraded identity per pod, by construction. It now opens when the
+        // application has started, and the pod is not Ready until it has hydrated. A ROLL GATE (see
+        // RollGateChecks): a directory that never hydrates keeps the pod out of the Service and never
+        // kills it. Healthy with "nothing to measure" in a host that registers no directory.
+        builder.Services.AddSingleton<MeshWeaver.Hosting.AspNetCore.Portal.UserDirectoryReadiness>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<MeshWeaver.Hosting.AspNetCore.Portal.UserDirectoryReadiness>());
+
         builder.Services.AddHealthChecks()
+            .Add(new HealthCheckRegistration(
+                MeshWeaver.Hosting.AspNetCore.Portal.UserDirectoryReadiness.HealthCheckName,
+                sp => sp.GetRequiredService<MeshWeaver.Hosting.AspNetCore.Portal.UserDirectoryReadiness>(),
+                failureStatus: null,
+                tags: [ProbeEndpoints.CensusTag]))
             .Add(new HealthCheckRegistration(
                 TokenValidationReadiness.HealthCheckName,
                 sp => sp.GetRequiredService<TokenValidationReadiness>(),
@@ -451,6 +465,19 @@ public static class ServiceDefaults
             // not fail would be that same defect, rebuilt.
             .AddCheck("self", () => HealthCheckResult.Healthy(),
                 [ProbeEndpoints.LiveTag, ProbeEndpoints.ReadyTag])
+            // 🚦 MeshWeaver#6847: a root forwarder that no lease can resolve in its module's CURRENT
+            // generation fails every hub activation that needs it (sign-in included) for as long as
+            // that generation serves — six and a half hours on 2026-10-16 behind a /health that only
+            // said Degraded. READINESS, so such a replica leaves the Service and a roll whose new pods
+            // are in that state stalls; never liveness, and never the STARTUP probe either: it is a
+            // ROLL GATE (RollGateChecks), so an Unhealthy verdict before startup completes holds
+            // readiness instead of making /health 503 and having the kubelet restart the container.
+            // The reading is deterministic (a built container never changes), so one reading is
+            // already sustained and nothing transient can flap it. Census-tagged so its clean count
+            // prints on ProbeEndpoints.Health too.
+            .AddCheck<MeshWeaver.Mesh.ModuleForwarderHealthCheck>(
+                MeshWeaver.Mesh.ModuleForwarderHealthCheck.HealthCheckName,
+                tags: [ProbeEndpoints.ReadyTag, ProbeEndpoints.RollGateTag, ProbeEndpoints.CensusTag])
             // What this replica could not TYPE (2026-09-08): a node whose content type is not
             // loaded here renders empty, and until now /health said only "Degraded". No probe
             // tag — Degraded on purpose, never a reason to pull the pod — so it reads on
@@ -530,8 +557,14 @@ public static class ServiceDefaults
     /// their verdict is read by <see cref="ProbeEndpoints.Ready"/> alone, never by the startup
     /// probe on <see cref="ProbeEndpoints.Health"/>.
     ///
-    /// <para>Two checks: the NodeType bake gate (policy <c>bake-gate-readiness-only</c>) and the
-    /// required-modules check (policy <c>required-modules-readiness-only</c>). Its Unhealthy verdict
+    /// <para>Four checks: the user directory's first snapshot (<c>user_directory</c>, MeshWeaver#6850 —
+    /// a replica that cannot identify anybody must not take traffic, and killing it would not hydrate
+    /// a shared directory read), the NodeType bake gate (policy <c>bake-gate-readiness-only</c>), the
+    /// required-modules check (policy <c>required-modules-readiness-only</c>), and the module-forwarder
+    /// check (<see cref="MeshWeaver.Mesh.ModuleForwarderHealthCheck"/>, MeshWeaver#6847). The forwarder
+    /// check takes the replica out of rotation; whether to restart it is the governed Restart's decision,
+    /// never a probe's — on the startup probe a live swap that reached every replica alike would have
+    /// the kubelet kill them all. The required-modules check's Unhealthy verdict
     /// (a required module absent or not installable here) is a property of what the pod's shelf was
     /// given, and when the registry cannot serve the module it is missing for every image — so on
     /// the startup probe it would kill the previous image's restarted pods too. As a roll gate it
@@ -543,7 +576,9 @@ public static class ServiceDefaults
     internal static readonly ImmutableHashSet<string> RollGateChecks =
         ImmutableHashSet.Create(StringComparer.Ordinal,
             NodeTypeBakeGateExtensions.HealthCheckName,
-            ProbeEndpoints.RequiredModulesCheckName);
+            ProbeEndpoints.RequiredModulesCheckName,
+            MeshWeaver.Hosting.AspNetCore.Portal.UserDirectoryReadiness.HealthCheckName,
+            MeshWeaver.Mesh.ModuleForwarderHealthCheck.HealthCheckName);
 
     /// <summary>
     /// Adds <see cref="ProbeEndpoints.RollGateTag"/> to every registration named in

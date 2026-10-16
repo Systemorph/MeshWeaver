@@ -225,6 +225,12 @@ var request = DataChangeRequest.Update([updatedTodo], changedBy: "user-123");
 workspace.RequestChange(request, delivery);
 ```
 
+**An instance with no key value is skipped, not fatal.** When a batch carries an instance whose key
+resolves to `null`, that instance is reported in the activity log under
+`activity.dataUpdate.nullKeyInstancesSkipped` (with its count and collection) and skipped, while every
+keyed instance of the same batch still applies and the data stream stays live for later writes. A
+type with no key MAPPING at all is a configuration error and still fails the change.
+
 ## Update Options
 
 Control whether a change merges or replaces the entire collection:
@@ -294,6 +300,98 @@ workspace.Delete([todo1, todo2], delivery);
 ```
 
 Deleting a **node** (as opposed to an entity in a collection) is a lifecycle operation: `hub.Observe<DeleteNodeResponse>(new DeleteNodeRequest(path)).Subscribe(...)` — see [Node Operations](/Doc/DataMesh/NodeOperations).
+
+## Delete only if unchanged — `ExpectedVersion`
+
+A caller that reads a node, decides from what it read that the node may go, and then deletes it has
+a race: another writer can change the node between that read and the delete, and the delete removes
+the change. You cannot close that race from the caller's side. Checking again just before deleting
+leaves the same window. So name the version you read, and let the owner check it:
+
+```csharp
+var request = new DeleteNodeRequest(path) { ExpectedVersion = node.Version };
+hub.Observe(request, o => o.WithTarget(hub.NodeOperationTarget()))
+    .Subscribe(
+        d =>
+        {
+            if (d.Message.RejectionReason == NodeDeletionRejectionReason.Conflict)
+            {
+                // It changed after we read it. Nothing was deleted: re-read and decide again.
+            }
+        },
+        ex => logger.LogWarning(ex, "Delete of {Path} did not answer", path));
+```
+
+- **Where it is checked: by the owning node hub, in its commit turn.** The delete first seals the
+  path against the owner's own writes and opens the subtree-deletion scope, then asks the owning hub
+  to compare `ExpectedVersion` with the node's **live** version. The owner answers on the same turn
+  every own write and every cross-hub patch commits on. So every write the owner has already
+  acknowledged is in the version it compares, and any later write is refused instead of being
+  acknowledged: an own write is refused in its turn (`SubtreeDeletionInFlightException`), and a
+  cross-hub patch is refused at its durable flush (`NotFound`, "Node being deleted"). The check and
+  the delete are one step: nothing acknowledged can land between them.
+- **Why the live version, not the stored one.** An own write is acknowledged from the owner's
+  in-memory commit, about one persistence-sampler interval before it is stored. A check against the
+  stored row matched the old version in that window, and the delete removed a change its writer had
+  been told was accepted (#6673).
+- **A mismatch** answers `Success = false` with `RejectionReason = Conflict`, the same
+  optimistic-concurrency fact as `MeshNodeErrorCode.Conflict` on an update. Nothing is deleted.
+- **An absent node** still answers the idempotent success `AlreadyAbsent`
+  ([Deleting What Is Already Gone](/Doc/Architecture/IdempotentDelete)). The postcondition holds,
+  whatever version the node last had.
+- **And checked again by the store, in the delete itself.** The root row is removed with a
+  compare-and-delete (`IStorageAdapter.DeleteIfVersionAtMost`; on Postgres
+  `DELETE … WHERE version <= $expected` and the row count). A row newer than the confirmed version was
+  written after the owner's check, by a writer the seal did not stop (another process, or anything
+  that writes the store without passing the owner). The store refuses to remove it, and the delete
+  answers `Conflict` naming the stored version. A row at or below the confirmed version is the node
+  the deleter read, one sampler flush behind, so it is removed. The guarantee therefore no longer
+  depends on the seal alone, which is held only in the deleting process. Only a row in **writable**
+  storage counts as a survivor. Shipped content that a read-only provider serves under a removed
+  writable row is not this delete's to remove, so it is no conflict.
+- **When the same path has copies in several writable providers,** a copy newer than the confirmed
+  version refuses the whole delete and nothing is removed. The version the conflict names is the
+  first copy a read finds, which can be the older one. Removals across separate stores are not
+  atomic: a newer copy written into a second provider while the delete runs is refused there, but
+  an older copy already removed is not restored.
+- **Root only.** For a recursive delete, only the node at `Path` is checked. The cascade's
+  per-descendant requests never carry the value. The cascade removes children before their parent,
+  so when the store refuses the root, the descendants are already gone. The response names them, and
+  the root survives.
+- **Which version to name.** The version you read, from the node stream or from an acknowledged
+  write. It is compared with what the owner holds, so a version that is acknowledged but not yet
+  stored matches. The node a cross-hub `GetMeshNodeStream(path).Update(...)` emits carries the version
+  the owner committed (`PatchDataResponse.CommittedVersion`), so it can be named directly. Its content
+  is still your writer's view: fields that a concurrent writer merged in on the owner are not in it.
+  An owner on an image older than this field does not send it, and the emitted node then carries
+  your base version, one behind the owner. Naming that version is refused as `Conflict`; re-read the
+  node stream and use its version.
+- **No verdict is a refusal.** If the owner cannot be asked and the node is still stored, the delete
+  answers `Unavailable` and removes nothing. It never treats an unanswered check as a match. The
+  same holds when the storage read that would tell "gone" from "unreachable" fails as well.
+- **A match must be confirmed.** The owner's "matches" answer echoes the version it compared
+  (`ValidateDeleteResponse.ConfirmedVersion`). During a rolling update, an owner on an older image
+  does not know `ExpectedVersion`: it ignores the field, runs the ordinary delete validators and
+  answers a plain "valid". That answer carries no echo, so the delete reads it as `Unavailable`, not
+  as a match.
+- **A recycling owner is asked again.** If the owner's activation is torn down while it compares,
+  it answers `ShuttingDown`, as it does for an ordinary delete check. The delete then asks the next
+  activation, within the same time budget.
+- **Not covered yet** (tracked on #6856): the seal is still held only in the deleting process. When
+  the owning activation runs on another silo, that silo can acknowledge an own write after the
+  comparison. The store refuses the delete only if that write was flushed before it. If the delete
+  reaches the store first, the later flush stores the node again: nothing acknowledged is lost, but
+  the delete has reported success for a node that exists again. Only the in-memory and Postgres
+  stores implement `DeleteIfVersionAtMost` atomically (Postgres in MeshWeaver.Plugins, as one
+  conditional `DELETE` whose row count is the verdict; its path router forwards the call). The
+  file-system store (and the caching adapter over it) and Snowflake use the interface default: they
+  read, compare, then delete, which checks the version but not atomically, so a write landing between
+  the read and the delete is removed. On the file-system backend that matters only with more than one
+  writer per directory; it is a single-writer store. And when the store refuses a delete because of a write from another process, the
+  owner here adopts that write only when its change notification, or a declared feed gap, arrives.
+  Until then the node stream can still show the older version, and a retry naming it is refused
+  again. That is safe, because nothing is removed, and the conflict names the stored version.
+- **Omitted** (`null`, the default), the delete removes whatever version is there, exactly as before.
 
 ---
 

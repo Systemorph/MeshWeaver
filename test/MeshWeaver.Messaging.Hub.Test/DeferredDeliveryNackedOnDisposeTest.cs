@@ -61,8 +61,27 @@ public class DeferredDeliveryNackedOnDisposeTest : HubTestBase
 
     private static readonly Address GatedAddress = new("gated", "1");
 
+    /// <summary>A request the gated hub sends OUT, answered by the host — the shape of the
+    /// <c>GetDataRequest</c> a node hub's bring-up sends to its partition root.</summary>
+    private record OutboundRead : IRequest<GatedResponse>;
+
+    /// <summary>Every DeliveryFailure the host receives that no callback of its own consumed.</summary>
+    private readonly ConcurrentQueue<DeliveryFailure> strayFailuresAtHost = new();
+
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
-        => base.ConfigureHost(configuration).WithTypes(typeof(GatedRequest), typeof(GatedResponse));
+        => base.ConfigureHost(configuration)
+            .WithTypes(typeof(GatedRequest), typeof(GatedResponse), typeof(OutboundRead))
+            .WithHandler<OutboundRead>((h, d) =>
+            {
+                h.Post(new GatedResponse(), o => o.ResponseFor(d));
+                return d.Processed();
+            })
+            .WithHandler<DeliveryFailure>((_, d) =>
+                {
+                    strayFailuresAtHost.Enqueue(d.Message);
+                    return d.Processed();
+                },
+                (_, d) => !d.Properties.ContainsKey(PostOptions.CallbackDispatched));
 
     [Fact(Timeout = 30_000)]
     public async Task DeferredRequest_IsNacked_WhenHubIsDisposedBeforeItsGateOpens()
@@ -178,6 +197,82 @@ public class DeferredDeliveryNackedOnDisposeTest : HubTestBase
             + "it as sender-is-self — an Error here alleges stranded work that has no waiter (#4178)");
     }
 
+    private static readonly Address ReplyReceiverAddress = new("reply-receiver", "1");
+
+    /// <summary>
+    /// Systemorph/MeshWeaver#6791 — a hub the recycle cascade reaches mid-bring-up while a REPLY to
+    /// its own outbound read is parked behind its initialization gates (production:
+    /// <c>GetDataResponse … from {partition} … [DataContextInit,MeshNodeInit]</c>, at Error,
+    /// claiming "the sender is answered ShuttingDown").
+    ///
+    /// <para><b>Why nobody is stranded.</b> A reply with a LIVE callback is never parked
+    /// (<c>MessageHub.IsAwaitedResponse</c> lets it through every gate), so a parked reply had no
+    /// reader at deferral, and the only reader it could ever have — this hub's pending-response
+    /// registry — is cancelled by the same disposal. The REPLIER awaits nothing for its own reply.</para>
+    ///
+    /// <para><b>Why the Error's claim was false.</b> An on-target delivery is unpacked BEFORE the
+    /// deferral decision, so a parked reply is typed and not an <see cref="IRequest"/>;
+    /// <c>NackThroughParent</c> declines it (<c>not-awaited</c>). No NACK was ever posted — the
+    /// red run of this test shows the Error line asserting one while the host received none.</para>
+    ///
+    /// <para><b>Controls.</b> The Debug line is asserted POSITIVELY (still reported, gate named).
+    /// The host's stray-failure capture is a GUARD, not the repro: it holds on the unfixed tree
+    /// too (the NACK was declined there, which is the point above), and it fails if a later change
+    /// lets the drain NACK a replier. It is drained by a marker read posted AFTER disposal, so "no
+    /// NACK arrived" is read off the host's FIFO queue, not off elapsed time.
+    /// <see cref="DeferredRequest_IsNacked_WhenHubIsDisposedBeforeItsGateOpens"/> is the same
+    /// teardown over an undeclared REQUEST, which stays an Error and is still NACKed.</para>
+    /// </summary>
+    [Fact]
+    public async Task ADeferredReplyToTheDisposingHub_IsTeardownNormal_AndItsReplierIsNotNacked()
+    {
+        var host = GetHost();
+
+        var receiver = host.GetHostedHub(
+            ReplyReceiverAddress,
+            c => c.WithTypes(typeof(OutboundRead), typeof(GatedResponse))
+                // The hub posts on its own behalf below; PostPipeline fails closed with no
+                // AccessContext.
+                .WithPostingIdentity(PostingIdentity.System)
+                .WithInitializationGate("reply-gate-never-opens", _ => false));
+        receiver.Should().NotBeNull();
+
+        // THE SHAPE: the hub sends a read OUT with no live callback behind it (its issuer — an
+        // earlier activation, a cancelled bring-up step — is gone), the host answers it, and the
+        // reply comes back to a hub whose gates are still closed, so it is parked.
+        receiver!.Post(new OutboundRead(), o => o.WithTarget(host.Address));
+
+        await WaitForDeferredBacklog(host);
+
+        host.Post(new DisposeRequest { Reason = "RecycleCascade from a live module update" },
+            o => o.WithTarget(ReplyReceiverAddress));
+        await receiver.DisposalCompleted.FirstAsync().Timeout(TestTimeouts.Convergence)
+            .Await(TestContext.Current.CancellationToken);
+
+        // FIFO marker: any NACK the disposal posted to the host is queued ahead of this read.
+        await host.Observe<GatedResponse>(new OutboundRead(), o => o.WithTarget(host.Address))
+            .FirstAsync().Timeout(TestTimeouts.Convergence)
+            .Await(TestContext.Current.CancellationToken);
+
+        log.At(LogLevel.Debug).Should().Contain(
+            m => m.Contains("reply-gate-never-opens", StringComparison.Ordinal)
+                 && m.Contains(nameof(GatedResponse), StringComparison.Ordinal),
+            "the discard must STILL be reported, naming the reply and the gate that held it — a "
+            + "reclassification that stopped reporting would be a silenced fault");
+        log.At(LogLevel.Error).Should().NotContain(
+            m => m.Contains("reply-gate-never-opens", StringComparison.Ordinal),
+            "a reply to the disposing hub's own request is nobody else's accepted work: its only "
+            + "reader was this hub, and it is going away (#6791)");
+        log.Messages.Should().NotContain(
+            m => m.Contains("reply-gate-never-opens", StringComparison.Ordinal)
+                 && m.Contains("the sender is answered ShuttingDown", StringComparison.Ordinal),
+            "no answer is posted to the replier, so the line must not say one was (#6791)");
+        strayFailuresAtHost.Should().NotContain(
+            f => f.Message != null && f.Message.Contains("reply-gate-never-opens", StringComparison.Ordinal),
+            "the replier registered no callback for its own reply, so a ShuttingDown NACK to it "
+            + "would answer no question and land as a stray DeliveryFailure (#6791)");
+    }
+
     /// <summary>A request whose protocol re-asks on a ShuttingDown answer, the shape of
     /// <c>SubscribeRequest</c>.</summary>
     [ReaskedOnShutdown]
@@ -240,6 +335,66 @@ public class DeferredDeliveryNackedOnDisposeTest : HubTestBase
             m => m.Contains("reasked-gate-never-opens", StringComparison.Ordinal),
             "the request's protocol re-asks the next activation on this answer, so the Error's "
             + "claim of stranded work has no victim");
+    }
+
+    /// <summary>A request type with several producers, only some of which re-ask: the shape of
+    /// <c>GetDataRequest</c>. It is NOT marked, so the claim has to come from the producer.</summary>
+    private record SharedRead : IRequest<GatedResponse>;
+
+    private static readonly Address DeclaringProducerAddress = new("declaring-producer", "1");
+
+    /// <summary>
+    /// #5718, the shape left after the type-level marker: a partition hub recycled by a live module
+    /// update while a <c>GetDataRequest</c> from one of its NodeType hubs was parked behind
+    /// <c>[DataContextInit,MeshNodeInit]</c>. That request came from the node point read, which
+    /// re-issues on a <c>ShuttingDown</c> answer, but the TYPE cannot be marked: the
+    /// content-collection reads send the same type and do not re-ask. The producer that does
+    /// declares it on its own request (<see cref="PostOptions.ReaskingOnShutdown"/>), and the
+    /// discard is then teardown-normal. The NACK is unchanged, so its re-ask still runs.
+    ///
+    /// <para>Control: <see cref="DeferredRequest_IsNacked_WhenHubIsDisposedBeforeItsGateOpens"/>,
+    /// the same teardown over an undeclared request, still reports at Error.</para>
+    /// </summary>
+    [Fact]
+    public async Task ARequestWhoseProducerDeclaresTheReask_IsTeardownNormal_NotAnError()
+    {
+        var host = GetHost();
+
+        var gated = host.GetHostedHub(
+            DeclaringProducerAddress,
+            c => c.WithTypes(typeof(SharedRead), typeof(GatedResponse))
+                .WithInitializationGate("declaring-producer-gate-never-opens", _ => false)
+                .WithHandler<SharedRead>((h, d) =>
+                {
+                    h.Post(new GatedResponse(), o => o.ResponseFor(d));
+                    return d.Processed();
+                }));
+        gated.Should().NotBeNull();
+
+        var response = host
+            .Observe<GatedResponse>(new SharedRead(),
+                o => o.WithTarget(DeclaringProducerAddress).ReaskingOnShutdown())
+            .FirstAsync()
+            .Await(TestContext.Current.CancellationToken);
+
+        await WaitForDeferredBacklog(host);
+
+        ((MessageHub)gated!).NoteDirectDisposalBy(
+            "RecycleCascade from a live module update", "a landed module generation is pending activation");
+        gated.Dispose();
+
+        var failure = await Assert.ThrowsAsync<DeliveryFailureException>(() => response);
+        failure.Failure!.ErrorType.Should().Be(ErrorType.ShuttingDown,
+            "the producer's re-ask runs on this transient answer, so it must still be sent");
+
+        log.At(LogLevel.Debug).Should().Contain(
+            m => m.Contains("declaring-producer-gate-never-opens", StringComparison.Ordinal)
+                 && m.Contains("RecycleCascade from a live module update", StringComparison.Ordinal),
+            "the discard is still REPORTED, with its gate and its teardown");
+        log.At(LogLevel.Error).Should().NotContain(
+            m => m.Contains("declaring-producer-gate-never-opens", StringComparison.Ordinal),
+            "the producer declared that it re-asks the next activation on this answer, so the "
+            + "Error's claim of stranded work has no victim (#5718)");
     }
 
     /// <summary>A fire-and-forget announcement, the shape of <c>StreamEndedEvent</c>.</summary>

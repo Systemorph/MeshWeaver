@@ -4,7 +4,6 @@
   "name": "David Lee",
   "nodeType": "User",
   "icon": "/static/NodeTypeIcons/person.svg",
-  "isPersistent": true,
   "content": {
     "$type": "User",
     "email": "david.lee@meshweaver.io",

@@ -2,7 +2,7 @@
 nodeType: Markdown
 name: Issue Taxonomy and the Release Readiness Gate
 category: Architecture
-description: Four axes on every issue — type, area or plugin, feature, and for bugs a severity — and the one of them that is a release gate. sev:B and sev:H must both be zero to cut a release; sev:M and sev:L are a priority conversation, not a gate.
+description: Four axes on every issue — type, area or plugin, feature, and a severity (blocking ones for bugs only) — and the one of them that is a release gate. sev:B and sev:H must both be zero to cut a release; sev:M and sev:L are a priority conversation, not a gate.
 icon: "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><rect width='24' height='24' rx='4' fill='#b60205'/><path d='M12 6v7' stroke='white' stroke-width='2.2' stroke-linecap='round'/><circle cx='12' cy='17' r='1.4' fill='white'/></svg>"
 ---
 
@@ -26,7 +26,7 @@ Every **open** issue now carries up to four labels (closed issues are out of sco
 | **Area** *(core)* | `area:<subsystem>` | MeshWeaver | which part of the framework |
 | **Plugin** *(modules)* | `plugin:<Partition>` | plugin repos | which module owns it |
 | **Feature** | `feature:<slug>` | everything with a specific subject | the thing itself, across repos |
-| **Severity** | `sev:B` · `sev:H` · `sev:M` · `sev:L` | **`bug` only** | how bad |
+| **Severity** | `sev:B` · `sev:H` · `sev:M` · `sev:L` | everything, exactly one — `sev:B`/`sev:H` on a **`bug` only** | how bad, or how much it matters |
 
 `chore` means CI, build, dependencies or cleanup with no user-visible behaviour change.
 
@@ -37,7 +37,7 @@ separately-filed issues that were one `RoutingGrain` back-pressure defect, one p
 
 ---
 
-## Severity, and why only bugs have it
+## Severity, and why only bugs can block
 
 | label | meaning |
 |---|---|
@@ -46,9 +46,14 @@ separately-filed issues that were one `RoutingGrain` back-pressure defect, one p
 | `sev:M` | a secondary path broken, or a clear defect with an easy workaround |
 | `sev:L` | cosmetic, a rare edge case, or developer-only |
 
-**An `enhancement`, `documentation` or `chore` has no severity.** If something is not broken it
-cannot block a release, and letting a feature request carry a blocking flag is how a release gate
-rots into a wish-list.
+**Every open issue carries exactly one severity — an `enhancement`, `documentation` or `chore`
+included** (policy [`every-issue-has-a-severity`](../PolicyNotProse)). For a non-bug the severity is a
+priority, and only the two non-blocking values are allowed: **`sev:M`** for work that matters soon,
+**`sev:L`** for the rest. **`sev:B` and `sev:H` are reserved for defects.** If something is not broken
+it cannot block a release, and letting a feature request carry a blocking flag is how a release gate
+rots into a wish-list — so a blocking severity on a non-bug is a taxonomy violation, not a stronger
+opinion. Carrying a severity on every issue is what lets one query order the whole queue; carrying a
+blocking one only on bugs is what keeps the gate a gate.
 
 `sev:B` and `sev:H` are the classes where *"we will do it next sprint"* is not an available answer
 — policy [`release-blocker-gate`](../PolicyNotProse). `sev:M` and `sev:L` are a priority conversation and
@@ -160,7 +165,7 @@ None leaves the classification to a model, a person or an agent remembering.
 |---|---|
 | a **sentinel workflow** opens its own issue | it stamps type + severity itself (table below); a missing label is created first, and a sentinel it reopens is stamped too unless a person already classified it (`scripts/check-issue-taxonomy.py stamp`) |
 | the **red-main ledger** (`ci-main-red`, every satellite) | `.github/scripts/ci-failure-ledger.py` stamps `bug` + `sev:H` on the issue it files, reopens or appends to |
-| an **agent** files through MCP `git_hub_issue` | the tool refuses a `bug` without exactly one `sev:B/H/M/L`, a severity on a non-bug, and any other `sev:` |
+| an **agent** files through MCP `git_hub_issue` | the tool refuses a `bug` without exactly one `sev:B/H/M/L` and any other `sev:` — and, predating `every-issue-has-a-severity`, still refuses a severity on a non-bug (MeshWeaver.Plugins `McpMeshPlugin`; the triage classifier likewise drops one), so a non-bug filed there reaches the daily check without its `sev:M`/`sev:L` |
 | triage **files** a defect (`FileIssue`) | refused without exactly one severity |
 | the **log-incident filer** | stamps the default `sev:M` when its policy proposes none |
 | a person or an agent opens one **directly** | the webhook and the hourly sweep classify it: the model is asked ONE question and the answer is validated in code — a bug without a valid severity is never applied; it is re-asked ONCE naming the defect, and a second invalid answer is marked **UNCLASSIFIED — needs a person** on the item and listed on `Hosting/Triage/blocking/issues-need-a-person` |
@@ -197,8 +202,9 @@ number of failed calls.
 | the issue-taxonomy check did not pass (`issue-taxonomy.yml`) | `issue-taxonomy-sentinel` | `bug` `sev:M` |
 
 **And it is measured independently.** `.github/workflows/issue-taxonomy.yml` runs daily and goes RED
-naming every open issue of the triage scope that has violated the taxonomy for more than 24 hours, and
-every repository missing a severity label (`scripts/check-issue-taxonomy.py check`; a run that could
+naming every open issue of the triage scope that has violated the taxonomy for more than 24 hours —
+no type or more than one, no severity or more than one, an unknown `sev:`, or `sev:B`/`sev:H` on a
+non-bug — and every repository missing a severity label (`scripts/check-issue-taxonomy.py check`; a run that could
 not read is red, never green).
 
 > ⚠️ `Hosting/Issue` is **not** part of this. It is fleet health — "no replicas ready", "not

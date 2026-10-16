@@ -264,8 +264,27 @@ if action == "list":
             emit("%s\t%d" % (p.name, p.stat().st_size))
     sys.exit(0)
 
-# `show` is deliberately NOT modelled: the per-file read-back is the launch storm this harness's
-# subject retired (46 processes per target). A script that reaches for it again dies here.
+# `show` is NOT modelled for the publisher: the per-file read-back is the launch storm this
+# harness's subject retired (46 processes per target), and a publish that reaches for it again dies
+# here. The re-bind cases (MeshWeaver.Plugins#1785) run the two READERS that do use it —
+# bake-scope.sh (the `_complete` publication stamp) and carry-forward-bundles.sh (each carried
+# file's digest + stamp) — and opt in with MOCK_AZ_ALLOW_SHOW=1, for exactly those two queries.
+if action == "show" and os.environ.get("MOCK_AZ_ALLOW_SHOW") == "1":
+    q = opts.get("--query", [None])[0]
+    if not out_tsv:
+        die("only `-o tsv` is modelled for file show: " + raw)
+    f = share_root() / path
+    if not f.is_file():
+        sys.stderr.write("stub-az: ResourceNotFound %s\n" % path); sys.exit(1)
+    mp = meta_path(path)
+    md = json.loads(mp.read_text()) if mp.exists() else {}
+    if q == "[[metadata.publication || '-']]":
+        emit(md.get("publication") or "-")
+    elif q == "[[metadata.digest || '-', metadata.publication || '-']]":
+        emit((md.get("digest") or "-") + "\t" + (md.get("publication") or "-"))
+    else:
+        die("unmodelled --query for file show: " + raw)
+    sys.exit(0)
 die("unmodelled file action %r" % action)
 '''
 
@@ -437,6 +456,92 @@ class FakeShare:
         mp = self._meta(path)
         md = json.loads(mp.read_text()) if mp.exists() else {}
         return md, f.stat().st_size
+
+
+    # ── the publication lock (MeshWeaver#6877): a file lease, modelled ACROSS PROCESSES ──
+    # The lease is a sidecar created with O_EXCL — the one filesystem write that two processes
+    # cannot both win — holding the lease id, exactly the "one id holds it, a matching id may
+    # re-acquire" rule of an Azure Files file lease.
+    #
+    # MOCK_LEASE_IGNORE=1 makes THIS process a publisher that takes no lease at all: a writer whose
+    # scripts ref predates the lock. Every pre-existing interleaving case runs its hooked second
+    # publisher that way — that is the only way it can still interleave, and the byte-level
+    # postconditions those cases prove are exactly the guard that remains against such a writer.
+    def _lease(self, path):
+        return ROOT / ".lease" / self.root.relative_to(ROOT) / path
+
+    def _gone(self):
+        named = os.environ.get("MOCK_SHARE_MISSING_NAMES", "").split()
+        return os.environ.get("MOCK_SHARE_MISSING") == "1" or self.root.name in named
+
+    def _missing(self):
+        if self._gone():
+            raise FileNotFoundError("ShareNotFound: the specified share does not exist")
+
+    def lease_acquire(self, path, lease_id):
+        self._missing()
+        f = self.root / path
+        f.parent.mkdir(parents=True, exist_ok=True)
+        if not f.exists():
+            f.touch()
+        if os.environ.get("MOCK_LEASE_IGNORE") == "1":
+            return True
+        lp = self._lease(path)
+        lp.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            fd = os.open(lp, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            try:
+                return lp.read_text() == lease_id
+            except FileNotFoundError:
+                return False
+        with os.fdopen(fd, "w") as fh:
+            fh.write(lease_id)
+        if self.root.name in os.environ.get("MOCK_LEASE_ACQUIRED_THEN_LOST", "").split():
+            # The lease LANDED, and the process died before it could say so — the window an
+            # interrupted acquire leaves (Copilot on #6878).
+            raise RuntimeError("simulated interruption after the lease was taken on %s" % path)
+        return True
+
+    def lease_state(self, path):
+        f = self.root / path
+        if not f.exists():
+            return False, False, {}, None
+        mp = self._meta(path)
+        md = json.loads(mp.read_text()) if mp.exists() else {}
+        return True, self._lease(path).exists(), md, f.stat().st_mtime
+
+    def lease_set_metadata(self, path, lease_id, metadata):
+        if os.environ.get("MOCK_LEASE_IGNORE") == "1":
+            return
+        lp = self._lease(path)
+        if not lp.exists() or lp.read_text() != lease_id:
+            raise RuntimeError("LeaseIdMissing: %s is not leased by %s" % (path, lease_id))
+        mp = self._meta(path)
+        mp.parent.mkdir(parents=True, exist_ok=True)
+        mp.write_text(json.dumps(dict(metadata)))
+
+    def lease_release(self, path, lease_id):
+        if os.environ.get("MOCK_LEASE_IGNORE") == "1":
+            return True
+        if os.environ.get("MOCK_LEASE_RELEASE_FAILS") == "1":
+            raise RuntimeError("simulated service refusal of the lease release for %s" % path)
+        lp = self._lease(path)
+        if not lp.exists() or lp.read_text() != lease_id:
+            return False
+        lp.unlink()
+        return True
+
+    def lease_break(self, path):
+        # Not used by the current helper (recovery releases the recorded holder's OWN lease). Kept so
+        # the hand-off cases can be run against the PRE-review helper, which broke unconditionally,
+        # and shown to fail there (`--script` at that commit).
+        lp = self._lease(path)
+        if lp.exists():
+            lp.unlink()
+
+    def share_exists(self):
+        return not self._gone() and self.root.is_dir()
 
 
 def make_backend(account, share):
@@ -612,6 +717,8 @@ class Harness:
             "PUBLISH_BAKE_UPLOAD_WORKERS": "1",
             "BAKE_PUBLISH_TARGETS": TARGET,
             "GITHUB_RUN_ATTEMPT": "1",
+            # A waiting publisher re-polls the lock this often; the production default is 5 s.
+            "PUBLISH_BAKE_LOCK_POLL_SECONDS": "0.2",
         }
 
     def publish(self, bake: Bake, publisher: str, run_id: str, env_extra: dict | None = None,
@@ -628,7 +735,9 @@ class Harness:
                   "MOCK_AZ_FAIL_UPLOADS_AFTER", "MOCK_AZ_UPLOAD_COUNTER", "MOCK_AZ_SHOW_FAILS",
                   "MOCK_AZ_EAT_STDIN", "MOCK_AZ_DELETE_LOG", "MOCK_AZ_DISPOSAL_PREFIX",
                   "MOCK_AZ_DELETE_FAILS", "MOCK_AZ_FAIL_UPLOAD_PATH", "MOCK_AZ_FAIL_UPLOAD_OF",
-                  "MOCK_AZ_DROP_UPLOAD_OF", "MOCK_AZ_AFTER_UPLOAD_OF", "MOCK_AZ_AFTER_UPLOAD_CMD"):
+                  "MOCK_AZ_DROP_UPLOAD_OF", "MOCK_AZ_AFTER_UPLOAD_OF", "MOCK_AZ_AFTER_UPLOAD_CMD",
+                  "MOCK_LEASE_IGNORE", "MOCK_SHARE_MISSING", "PUBLISH_BAKE_LOCK_WAIT_SECONDS",
+                  "MOCK_LEASE_RELEASE_FAILS", "MOCK_LEASE_ACQUIRED_THEN_LOST"):
             env.pop(k, None)
         for k, v in (env_extra or {}).items():
             if v is None:
@@ -642,14 +751,24 @@ class Harness:
         )
 
     def publish_command(self, bake: Bake, publisher: str, run_id: str,
-                        env_extra: dict | None = None, release: str | None = None) -> str:
-        """The same publication, as a shell command a backend hook can run mid-upload."""
+                        env_extra: dict | None = None, release: str | None = None,
+                        takes_lock: bool = False) -> str:
+        """The same publication, as a shell command a backend hook can run mid-upload.
+
+        By default the hooked publisher takes NO lease (MOCK_LEASE_IGNORE): run synchronously inside
+        the outer publication's upload, a lock-respecting one would wait on the outer run forever —
+        and an unlocked writer (a scripts ref older than MeshWeaver#6877) is precisely what the
+        interleaving cases still have to defend against. `takes_lock=True` is the CURRENT publisher;
+        a hook must then start it in the background.
+        """
         assigns = {"PATH": f"{self.bin}:$PATH"}
         assigns.update(self.base_env())
         assigns.update({
             "GITHUB_REPOSITORY": publisher,
             "GITHUB_RUN_ID": run_id,
         })
+        if not takes_lock:
+            assigns["MOCK_LEASE_IGNORE"] = "1"
         assigns.update({k: str(v) for k, v in (env_extra or {}).items()})
         prefix = " ".join(f'{k}="{v}"' for k, v in assigns.items())
         # The content sha may be EMPTY (the framework-producer shape); quoted, so a release
@@ -1976,6 +2095,887 @@ def run_cases(script: Path, work: Path, expect_defect: bool) -> None:
               f"rc={r.returncode}, {denominator(s)}")
         check("the refusal names same-lane concurrency, not only the other repo",
               "WITHIN one lane" in r.stdout)
+
+    run_lock_cases(h, work, expect_defect)
+    if not expect_defect:
+        run_rebind_cases(h, work)
+        run_round5_cases(h, work)
+        run_registry_lock_cases(h, work)
+        run_superseded_guard_cases(h, work)
+        run_wrapper_contention_cases(h, work)
+
+
+LOCK_PATH = f"prebuilt-bundles/{IDENTITY}/_publishing.{SOURCE}"
+
+
+def lease_id_of(holder: str) -> str:
+    """The helper's derivation (publish-bake-files.py `lease_id_of`), so a planted lease is one the
+    helper could release by naming its holder."""
+    import uuid
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"meshweaver-bake-publication:{holder}"))
+
+
+def plant_lease(h: "Harness", holder: str, acquired: float | None,
+                leased_by: str | None = None) -> None:
+    """A lease some OTHER publisher holds — written exactly where the fake backend keeps one.
+
+    `holder`/`acquired` is the RECORD on the lock file (None: no record at all); `leased_by` is who
+    ACTUALLY holds the lease, when that differs from the record — the hand-off windows Copilot named
+    on #6878: a recovered lock re-taken by another waiter, or a fresh holder whose record write has
+    not landed, while the file still carries the previous holder's record.
+    """
+    lock = h.shelf_root / ACCOUNT / SHARE / LOCK_PATH
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.touch()
+    lease = h.shelf_root / ".lease" / ACCOUNT / SHARE / LOCK_PATH
+    lease.parent.mkdir(parents=True, exist_ok=True)
+    lease.write_text(lease_id_of(leased_by or holder))
+    meta = h.shelf_root / ".meta" / ACCOUNT / SHARE / (LOCK_PATH + ".json")
+    meta.parent.mkdir(parents=True, exist_ok=True)
+    if acquired is None:
+        if meta.exists():
+            meta.unlink()
+        old = time.time() - 2 * 3600
+        os.utime(lock, (old, old))
+    else:
+        meta.write_text(json.dumps({"holder": holder, "acquired": str(int(acquired))}))
+
+
+def leases_held(h: "Harness") -> list[str]:
+    root = h.shelf_root / ".lease"
+    return sorted(str(p.relative_to(root)) for p in root.rglob("*") if p.is_file()) if root.is_dir() else []
+
+
+def wait_for_receipt(log: Path, bound_seconds: float) -> str:
+    """The text of a BACKGROUND publication's log once it has finished (receipt or failure), or
+    whatever it holds when the bound runs out — the bound is the case's own deadline, and running
+    out of it fails the case rather than passing it."""
+    deadline = time.monotonic() + bound_seconds
+    while time.monotonic() < deadline:
+        text = log.read_text() if log.is_file() else ""
+        if "bake published:" in text or "bake publication FAILED" in text:
+            return text
+        time.sleep(0.2)
+    return log.read_text() if log.is_file() else ""
+
+
+def run_lock_cases(h: "Harness", work: Path, expect_defect: bool) -> None:
+    # ── MeshWeaver#6877: two CURRENT publishers of the SAME content, both over an OLDER seal. ──
+    # The incident, measured: core CD runs 38916358387 (push) and 38916674091 (schedule) both baked
+    # source 945d3faf for identity c003e001, both read "sealed from a3cba298, republish", the push
+    # run removed `_complete`, and the schedule run's own unseal then failed `ResourceNotFound` —
+    # a red CD over a live, correctly-sealed target. Here the second publisher is started IN THE
+    # BACKGROUND from inside the first one's upload, so the two genuinely overlap; with the lease it
+    # must WAIT (proved by its own log line), then re-read the shelf and find the publication there.
+    print("\n#6877: two current publishers of the same content over an older seal:")
+    h.reset()
+    older = Bake(work, "older-content", "1111111111111111111111111111111111111111")
+    h.publish(older, "Systemorph/MeshWeaver", "6870")
+    push = Bake(work, "cd-push", "2222222222222222222222222222222222222222")
+    schedule = Bake(work, "cd-schedule", "2222222222222222222222222222222222222222")
+    inner = h.publish_command(schedule, "Systemorph/MeshWeaver", "6872", takes_lock=True)
+    inner_log = work / "inner-6872.log"
+    if inner_log.exists():
+        inner_log.unlink()
+    waiting = "lock: waiting for publication"
+    # The hook returns once the second publisher is SEEN waiting (or after 20 s, which is then a
+    # failed case below, never a pass): the first publication only continues once the overlap is real.
+    hook = (f'( {inner} ) & '
+            f'for i in $(seq 1 100); do grep -q "{waiting}" "{inner_log}" 2>/dev/null && break; '
+            f'sleep 0.2; done')
+    r = h.publish(push, "Systemorph/MeshWeaver", "6871", {
+        "MOCK_AZ_HOOK_ON": f"{DEST}/architecture.txt",
+        "MOCK_AZ_HOOK_WHEN": "before",
+        "MOCK_AZ_HOOK_ONCE": work / "fired-6877",
+        "MOCK_AZ_HOOK_CMD": hook,
+    })
+    second = wait_for_receipt(inner_log, 60)
+    s = h.shelf()
+    second_receipt = next((l for l in second.splitlines() if l.startswith("bake published:")),
+                          "<no receipt>")
+    if expect_defect:
+        check("PRE-FIX: two overlapping publishers of one prefix cannot both succeed",
+              r.returncode != 0 or "FAILED" in second or "bake published:" not in second,
+              f"first rc={r.returncode}; second: {second_receipt}; {denominator(s)}")
+        return
+    check("the second publisher WAITED for the first (the two runs really overlapped)",
+          waiting in second, "its own log names the lease it waited on")
+    check("the first publisher republished and sealed",
+          r.returncode == 0 and "targets-published=1" in r.stdout,
+          f"rc={r.returncode}")
+    check("the second publisher re-read the shelf under the lease and found this content ALREADY "
+          "sealed — green, nothing written",
+          "FAILED" not in second and "targets-already=1" in second_receipt, second_receipt)
+    check("the shelf is sealed and holds exactly ONE bake's bytes (the first's)",
+          s.sealed() and set(s.bakes_present()) - {"<marker>"} == {"cd-push"}, denominator(s))
+    check("no lease is left behind", leases_held(h) == [], " ".join(leases_held(h)) or "none")
+
+    # ── Copilot on #6878: two JOBS of ONE run (main-cd's two bake legs) share repository, run id and
+    # ── attempt. The lock holder must still tell them apart, or the second walks in as "already held
+    # ── by this publication" and either one's exit releases the lease under the other.
+    print("\ntwo jobs of ONE run (same repository, run id and attempt) on one prefix:")
+    h.reset()
+    h.publish(older, "Systemorph/MeshWeaver", "6880")
+    leg2 = h.publish_command(schedule, "Systemorph/MeshWeaver", "6882", takes_lock=True)
+    leg2_log = work / "inner-6882.log"
+    if leg2_log.exists():
+        leg2_log.unlink()
+    hook = (f'( {leg2} ) & '
+            f'for i in $(seq 1 100); do grep -q "{waiting}" "{leg2_log}" 2>/dev/null && break; '
+            f'sleep 0.2; done')
+    r = h.publish(push, "Systemorph/MeshWeaver", "6882", {
+        "MOCK_AZ_HOOK_ON": f"{DEST}/architecture.txt",
+        "MOCK_AZ_HOOK_WHEN": "before",
+        "MOCK_AZ_HOOK_ONCE": work / "fired-6882",
+        "MOCK_AZ_HOOK_CMD": hook,
+    })
+    second = wait_for_receipt(leg2_log, 60)
+    s = h.shelf()
+    second_receipt = next((l for l in second.splitlines() if l.startswith("bake published:")),
+                          "<no receipt>")
+    check("the second job of the SAME run waits for the first — one run is not one lock holder",
+          waiting in second and "already held by this publication" not in second,
+          "its own log names the lease it waited on")
+    check("…then finds the content already sealed; both green, one bake's bytes, no lease left",
+          r.returncode == 0 and "FAILED" not in second and "targets-already=1" in second_receipt
+          and s.sealed() and set(s.bakes_present()) - {"<marker>"} == {"cd-push"}
+          and leases_held(h) == [], f"first rc={r.returncode}; second: {second_receipt}; {denominator(s)}")
+
+    # ── An ABANDONED lease (its holder provably gone) is broken, loudly, and the run publishes. ──
+    print("\nan abandoned publication lock is broken on evidence:")
+    h.reset()
+    plant_lease(h, "Systemorph-MeshWeaver-dead-1", time.time() - 2 * 3600)
+    r = h.publish(push, "Systemorph/MeshWeaver", "6873")
+    s = h.shelf()
+    out = r.stdout + r.stderr
+    check("a lease older than any CI job can live is recovered (its OWN lease released), named, and the run seals",
+          r.returncode == 0 and s.sealed() and "released the abandoned publication lock" in out
+          and "Systemorph-MeshWeaver-dead-1" in out, f"rc={r.returncode}, {denominator(s)}")
+    check("…and the run releases its own lease afterwards", leases_held(h) == [],
+          " ".join(leases_held(h)) or "none")
+
+    # ── Copilot on #6878: the evidence describes the RECORDED holder, and the lease may have changed
+    # ── hands since. Recovery must release THAT holder's lease or nothing — never revoke another. ──
+    print("\nrecovery never revokes a lease it did not observe (the two hand-off windows):")
+    h.reset()
+    plant_lease(h, "Systemorph-MeshWeaver-dead-2", time.time() - 2 * 3600,
+                leased_by="Systemorph-MeshWeaver-live-2")
+    r = h.publish(push, "Systemorph/MeshWeaver", "6878", {"PUBLISH_BAKE_LOCK_WAIT_SECONDS": "1"})
+    lease_file = h.shelf_root / ".lease" / ACCOUNT / SHARE / LOCK_PATH
+    out = r.stdout + r.stderr
+    check("a stale RECORD over a LIVE lease (re-taken, or record not yet written) is not revoked: red, live lease intact",
+          r.returncode != 0 and not h.shelf().sealed() and lease_file.is_file()
+          and lease_file.read_text() == lease_id_of("Systemorph-MeshWeaver-live-2")
+          and "changed hands" in out, f"rc={r.returncode}")
+    h.reset()
+    plant_lease(h, "Systemorph-MeshWeaver-unrecorded", None)
+    r = h.publish(push, "Systemorph/MeshWeaver", "6879", {"PUBLISH_BAKE_LOCK_WAIT_SECONDS": "1"})
+    check("a lease with NO recorded holder is never judged abandoned, however old the file: red, lease intact",
+          r.returncode != 0 and not h.shelf().sealed() and lease_file.is_file()
+          and "Publication lock not acquired" in (r.stdout + r.stderr), f"rc={r.returncode}")
+
+    # ── Copilot on #6878: the publisher's release is armed BEFORE its acquire — a lease that landed in
+    # ── an acquire that then failed to report success must not be left behind. ──
+    print("\nan acquire interrupted after its lease landed leaves no lease behind:")
+    h.reset()
+    r = h.publish(push, "Systemorph/MeshWeaver", "6883", {"MOCK_LEASE_ACQUIRED_THEN_LOST": SHARE})
+    check("the target fails, publishes nothing, and its lease is released by the armed EXIT trap",
+          r.returncode != 0 and not h.shelf().sealed() and leases_held(h) == [],
+          f"rc={r.returncode}, leases left {leases_held(h)}")
+
+    # ── Copilot on #6878: a release the service refuses must fail the target, never print a receipt. ──
+    print("\na publication lock that cannot be released fails the target:")
+    h.reset()
+    r = h.publish(push, "Systemorph/MeshWeaver", "6880", {"MOCK_LEASE_RELEASE_FAILS": "1"})
+    out = r.stdout + r.stderr
+    check("a refused release fails the target (the publication sealed, but the lease is left behind)",
+          r.returncode != 0 and "could not be released" in out and "bake publication FAILED" in out,
+          f"rc={r.returncode}")
+    h.reset()
+    r = h.publish(push, "Systemorph/MeshWeaver", "6881",
+                  {"MOCK_LEASE_RELEASE_FAILS": "1", "MOCK_AZ_FAIL_UPLOAD_PATH": "architecture.txt"})
+    check("…and an ORIGINAL failure is preserved, not replaced, when the release fails too",
+          r.returncode != 0 and "FAILED" in (r.stdout + r.stderr), f"rc={r.returncode}")
+
+    # ── A LIVE holder is waited for — bounded — and running out of the bound is RED, not a skip. ──
+    print("\na live publication lock is waited for, and the wait is bounded and red:")
+    h.reset()
+    plant_lease(h, "Systemorph-MeshWeaver-live-1", time.time())
+    r = h.publish(push, "Systemorph/MeshWeaver", "6874", {"PUBLISH_BAKE_LOCK_WAIT_SECONDS": "1"})
+    s = h.shelf()
+    out = r.stdout + r.stderr
+    check("a lock held by a live publisher is NOT broken; the run goes red naming it",
+          r.returncode != 0 and "Publication lock not acquired" in out
+          and "Systemorph-MeshWeaver-live-1" in out and leases_held(h) != [],
+          f"rc={r.returncode}")
+    check("…having written nothing under the prefix", len(s.files()) == 0 and not s.sealed(),
+          denominator(s))
+    check("…and the failure does NOT advise removing the (live) target",
+          "EXISTS and answers" in out and "does NOT exist" not in out)
+
+    # ── A workflow that holds the lock ACROSS steps hands its token over; the script proves it. ──
+    print("\na lock held across steps by the calling workflow (BAKE_PUBLISH_LOCK_HOLDER):")
+    h.reset()
+    env = dict(os.environ)
+    env.update(h.base_env())
+    env.update({"GITHUB_REPOSITORY": "Systemorph/MeshWeaver.Plugins", "GITHUB_RUN_ID": "6876"})
+    held = "Systemorph-MeshWeaver.Plugins-6876-1"
+    a = subprocess.run([sys.executable, str(HELPER), "lock", "acquire", "--account", ACCOUNT,
+                        "--share", SHARE, "--path", LOCK_PATH, "--holder", held],
+                       capture_output=True, text=True, env=env)
+    r = h.publish(push, "Systemorph/MeshWeaver.Plugins", "6876", {"BAKE_PUBLISH_LOCK_HOLDER": held})
+    s = h.shelf()
+    check("a run told it holds the lock PROVES it, publishes, and leaves the release to its caller",
+          a.returncode == 0 and r.returncode == 0 and s.sealed()
+          and "is held by this publication" in (r.stdout + r.stderr) and leases_held(h) != [],
+          f"acquire rc={a.returncode}, publish rc={r.returncode}, leases {leases_held(h)}")
+    rel = subprocess.run([sys.executable, str(HELPER), "lock", "release", "--account", ACCOUNT,
+                          "--share", SHARE, "--path", LOCK_PATH, "--holder", held],
+                         capture_output=True, text=True, env=env)
+    check("…and the caller's release frees it", rel.returncode == 0 and leases_held(h) == [],
+          f"release rc={rel.returncode}")
+    h.reset()
+    r = h.publish(push, "Systemorph/MeshWeaver.Plugins", "6877",
+                  {"BAKE_PUBLISH_LOCK_HOLDER": "Systemorph-MeshWeaver.Plugins-never-1"})
+    s = h.shelf()
+    check("a run told it holds a lock it does NOT hold refuses, writing nothing",
+          r.returncode != 0 and "but it does not" in (r.stdout + r.stderr) and len(s.files()) == 0,
+          f"rc={r.returncode}, {denominator(s)}")
+
+    # ── The removal advice is for a share that is really gone, and only for that. ──
+    print("\nthe remove-the-target advice is reserved for a share that does not exist:")
+    h.reset()
+    r = h.publish(push, "Systemorph/MeshWeaver", "6875", {"MOCK_SHARE_MISSING": "1"})
+    out = r.stdout + r.stderr
+    check("a missing share is named as missing, with the removal advice",
+          r.returncode != 0 and "does NOT exist" in out and "EXISTS and answers" not in out,
+          f"rc={r.returncode}")
+
+
+REBIND = HERE / "rebind-bake-scope.sh"
+BAKE_SCOPE = HERE / "bake-scope.sh"
+CARRY = HERE / "carry-forward-bundles.sh"
+MODULE_DIRS = ["Alpha", "Beta", "Gamma"]
+
+# The CALLER's selector (scripts/affected-modules.py), reduced to what bake-scope.sh reads from it:
+# every top-level module directory the range touches is affected, nothing else is mounted, and the
+# rest is skipped. The real selector's own semantics are pinned by its own --self-test in the repo
+# that owns it; what is under test here is what the lane DOES with its answer.
+SELECTOR_STUB = """#!/usr/bin/env python3
+import json, subprocess, sys
+args = sys.argv[1:]
+rng = args[args.index('--range') + 1]
+base, head = rng.split('...')
+names = subprocess.run(['git', 'diff', '--name-only', base, head], check=True,
+                       capture_output=True, text=True).stdout.split()
+modules = %s
+affected = sorted({n.split('/')[0] for n in names if n.split('/')[0] in modules})
+print(json.dumps({'runAll': False, 'affected': affected, 'mount': affected, 'support': [],
+                  'skipped': [m for m in modules if m not in affected]}))
+""" % MODULE_DIRS
+
+
+def git(repo: Path, *args: str) -> str:
+    return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True,
+                          text=True).stdout.strip()
+
+
+def content_repo(work: Path, name: str, changes: list[tuple[str, str]]) -> tuple[Path, list[str]]:
+    """A linear history: c0 holds every module and the selector; then one commit per change
+    (`(module, text)` — the module's file is rewritten to `text`). Returns the repo and its shas."""
+    repo = work / name
+    if repo.exists():
+        shutil.rmtree(repo)
+    (repo / "scripts").mkdir(parents=True)
+    git(repo, "init", "-q")
+    git(repo, "config", "user.email", "harness@example.com")
+    git(repo, "config", "user.name", "harness")
+    (repo / "scripts" / "affected-modules.py").write_text(SELECTOR_STUB)
+    for m in MODULE_DIRS:
+        (repo / m).mkdir()
+        (repo / m / "module.txt").write_text(f"{m} v0\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "c0")
+    shas = [git(repo, "rev-parse", "HEAD")]
+    for module, text in changes:
+        (repo / module / "module.txt").write_text(text)
+        git(repo, "commit", "-q", "-am", f"{module}: {text.strip()}")
+        shas.append(git(repo, "rev-parse", "HEAD"))
+    return repo, shas
+
+
+def plant_publication(h: "Harness", commit: str, stamp: str) -> None:
+    """A SEALED flat publication of every module at <commit>, every file stamped by <stamp> exactly
+    as publish-bake-bundles.sh stamps it — what a sibling run leaves on the shelf."""
+    dest = h.shelf_root / ACCOUNT / SHARE / DEST
+    meta = h.shelf_root / ".meta" / ACCOUNT / SHARE / DEST
+    if dest.exists():
+        shutil.rmtree(dest)
+    if meta.exists():
+        shutil.rmtree(meta)
+    dest.mkdir(parents=True)
+    meta.mkdir(parents=True)
+
+    def put(name: str, text: str) -> None:
+        (dest / name).write_text(text)
+        digest = hashlib.sha256(text.encode()).hexdigest()
+        (meta / (name + ".json")).write_text(json.dumps({"digest": digest, "publication": stamp}))
+
+    for m in MODULE_DIRS:
+        put(f"{m}.zip", f"{m}.zip sealed by {stamp} at {commit}\n")
+    put("source-commit.txt", commit + "\n")
+    put(SENTINEL, "".join(f"{m}.zip\n" for m in MODULE_DIRS))
+
+
+class Lane:
+    """One run of the lane's three steps — scope, re-bind under the lock, carry — over the shared
+    fake share, as the workflow runs them."""
+
+    def __init__(self, h: "Harness", work: Path, repo: Path, head: str, run_id: str,
+                 job: str = "job1"):
+        self.h, self.repo, self.head, self.run_id = h, repo, head, run_id
+        self.root = work / f"lane-{run_id}-{job}"
+        if self.root.exists():
+            shutil.rmtree(self.root)
+        self.state = self.root / "bake-scope"
+        self.bake = self.root / "bake"
+        self.bake.mkdir(parents=True)
+        # The bake's identity file — what the publish step (and only it) reads from this directory.
+        (self.bake / "framework-mvid.txt").write_text(IDENTITY + "\n")
+        self.output = self.root / "github-output"
+        self.genv = self.root / "github-env"
+
+    def env(self, **extra: str) -> dict[str, str]:
+        env = dict(os.environ)
+        env["PATH"] = f"{self.h.bin}{os.pathsep}{env['PATH']}"
+        env.update(self.h.base_env())
+        for k in ("MOCK_LEASE_IGNORE", "MOCK_SHARE_MISSING", "MOCK_SHARE_MISSING_NAMES",
+                  "GITHUB_STEP_SUMMARY", "RUNNER_TEMP", "WITHHOLD_PACKAGES"):
+            env.pop(k, None)
+        env.update({
+            "MOCK_AZ_ALLOW_SHOW": "1",
+            "IDENTITY": IDENTITY, "SOURCE": SOURCE, "HEAD_SHA": self.head,
+            "REPO_DIR": str(self.repo), "EVENT_NAME": "push", "STATE_DIR": str(self.state),
+            "GITHUB_REPOSITORY": "Systemorph/MeshWeaver.Plugins", "GITHUB_RUN_ID": self.run_id,
+            "GITHUB_OUTPUT": str(self.output), "GITHUB_ENV": str(self.genv),
+        })
+        env.update(extra)
+        return env
+
+    def scope(self, **extra: str) -> tuple[subprocess.CompletedProcess, str]:
+        self.output.write_text("")
+        r = subprocess.run(["bash", str(BAKE_SCOPE)], capture_output=True, text=True,
+                           env=self.env(**extra))
+        return r, self.outputs().get("scope", "")
+
+    def bake_what_scope_rebuilt(self, scope: str) -> None:
+        """The narrowed bake's output: a bundle for every module the scope rebuilt, at this head."""
+        rebuilt = MODULE_DIRS if scope == "full" else json.loads(
+            (self.state / "affected.json").read_text())["affected"]
+        for m in rebuilt:
+            (self.bake / f"{m}.zip").write_text(f"{m}.zip baked by run {self.run_id} at {self.head}\n")
+
+    def rebind(self, original_scope: str, **extra: str) -> subprocess.CompletedProcess:
+        self.output.write_text("")
+        return subprocess.run(["bash", str(REBIND)], capture_output=True, text=True,
+                              env=self.env(ORIGINAL_SCOPE=original_scope, **extra))
+
+    def release(self, **extra: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["bash", str(REBIND), "--release"], capture_output=True, text=True,
+                              env=self.env(**extra))
+
+    def handed_holder(self) -> str:
+        text = self.genv.read_text() if self.genv.is_file() else ""
+        return next((l.split("=", 1)[1] for l in text.splitlines()
+                     if l.startswith("BAKE_PUBLISH_LOCK_HOLDER=")), "")
+
+    def carry(self) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["bash", str(CARRY), str(self.bake), str(self.state / "published-bundles.txt"), TARGET,
+             IDENTITY, SOURCE], capture_output=True, text=True,
+            env=self.env(EXPECT_PUBLICATION_FILE=str(self.state / "published-publication.txt")))
+
+    def outputs(self) -> dict[str, str]:
+        out: dict[str, str] = {}
+        if self.output.is_file():
+            for line in self.output.read_text().splitlines():
+                k, _, v = line.partition("=")
+                out[k] = v
+        return out
+
+
+def run_rebind_cases(h: "Harness", work: Path) -> None:
+    # MeshWeaver.Plugins#1785: a narrowed bake reads the publication BEFORE its ~15-minute compile
+    # and carries from it AFTER; a sibling that seals in between makes the carry refuse ("The
+    # publication moved between the read and the carry") — three times on one day. Under the lock
+    # the lane now re-reads and decides (a) superseded, (b) re-bound, or (c) refused, as before.
+    repo, (c0, c1, c2, c3) = content_repo(work, "content", [
+        ("Alpha", "Alpha v1\n"), ("Beta", "Beta v2\n"), ("Gamma", "Gamma v3\n")])
+
+    # ── CONTROL: nothing moved — the re-bind changes nothing, holds the lock, and releases it. ──
+    print("\n#1785 control: the publication did not move while the bake ran:")
+    h.reset()
+    plant_publication(h, c0, "Plugins-run-P0")
+    lane = Lane(h, work, repo, c2, "7001")
+    r, scope = lane.scope()
+    check("the fixture narrows: c0…c2 rebuilds Alpha and Beta, carries Gamma",
+          scope == "narrowed"
+          and json.loads((lane.state / "affected.json").read_text())["affected"] == ["Alpha", "Beta"],
+          f"scope={scope!r}; {r.stdout[-300:]!r}")
+    lane.bake_what_scope_rebuilt(scope)
+    r = lane.rebind(scope)
+    o = lane.outputs()
+    check("an unmoved publication is re-bound to nothing: rebind=unchanged, publish=true",
+          r.returncode == 0 and o.get("rebind") == "unchanged" and o.get("publish") == "true",
+          f"rc={r.returncode}, outputs={o}; {(r.stdout + r.stderr)[-400:]!r}")
+    handed = lane.genv.read_text() if lane.genv.is_file() else ""
+    check("…the lock is held from here to the publish, and its INVOCATION-unique holder is handed to the publish step",
+          leases_held(h) != [] and "BAKE_PUBLISH_LOCK_HOLDER=Systemorph-MeshWeaver.Plugins-7001-1-lane-pid" in handed,
+          " ".join(leases_held(h)))
+    c = lane.carry()
+    check("…and the carry runs exactly as before", c.returncode == 0 and "carried forward: Gamma.zip" in c.stdout,
+          f"rc={c.returncode}; {(c.stdout + c.stderr)[-300:]!r}")
+    # A second job of the SAME run (same repository, run id, attempt) must NOT read this lane's lease
+    # as its own (Copilot on #6878): its re-bind waits, bounded, and goes red while the first holds it.
+    twin = Lane(h, work, repo, c2, "7001", job="job2")
+    twin.scope()
+    t = subprocess.run(["bash", str(REBIND)], capture_output=True, text=True,
+                       env=twin.env(ORIGINAL_SCOPE="narrowed", PUBLISH_BAKE_LOCK_WAIT_SECONDS="1"))
+    check("a second job of the SAME run is refused the lane's lock (one run is not one holder)",
+          t.returncode != 0 and "Publication lock not acquired" in (t.stdout + t.stderr),
+          f"rc={t.returncode}")
+    twin.release()
+    rel = lane.release()
+    check("the always() release frees every lease it took", rel.returncode == 0 and leases_held(h) == [],
+          f"rc={rel.returncode}; {rel.stderr[-200:]!r}")
+
+    # ── (b) moved to an OLDER publication this bake covers — re-bound, and the carry then succeeds. ──
+    print("\n#1785 (b): a sibling sealed c1 while this run baked c2 from the c0 publication:")
+    h.reset()
+    plant_publication(h, c0, "Plugins-run-P0")
+    lane = Lane(h, work, repo, c2, "7002")
+    _, scope = lane.scope()
+    lane.bake_what_scope_rebuilt(scope)
+    plant_publication(h, c1, "Plugins-run-P1")
+    before = lane.carry()
+    check("NEGATIVE CONTROL (the defect): without the re-bind the carry refuses — the publication moved",
+          before.returncode != 0 and "The publication moved between the read and the carry" in before.stdout,
+          f"rc={before.returncode}")
+    for f in lane.bake.glob("Gamma.zip"):
+        f.unlink()   # what the refused carry fetched is not part of this bake
+    r = lane.rebind(scope)
+    o = lane.outputs()
+    check("re-read under the lock, c1…c2 affects only Beta, which this bake rebuilt: rebind=rebound",
+          r.returncode == 0 and o.get("rebind") == "rebound" and o.get("publish") == "true"
+          and (lane.state / "published-commit.txt").read_text().strip() == c1
+          and (lane.state / "published-publication.txt").read_text().strip() == "Plugins-run-P1",
+          f"rc={r.returncode}, outputs={o}; {(r.stdout + r.stderr)[-500:]!r}")
+    c = lane.carry()
+    check("…and the carry then takes Gamma from the LIVE publication, bound to its stamp",
+          c.returncode == 0 and "carried forward: Gamma.zip" in c.stdout
+          and "Plugins-run-P1" in (lane.bake / "Gamma.zip").read_text(),
+          f"rc={c.returncode}; {(c.stdout + c.stderr)[-400:]!r}")
+    lane.release()
+
+    # ── (a) moved to a publication that already holds this content — nothing to publish, green. ──
+    for live, label in ((c2, "the same commit"), (c3, "a NEWER commit containing it")):
+        print(f"\n#1785 (a): a sibling sealed {label} while this run baked c2:")
+        h.reset()
+        plant_publication(h, c0, "Plugins-run-P0")
+        lane = Lane(h, work, repo, c2, "7003")
+        _, scope = lane.scope()
+        lane.bake_what_scope_rebuilt(scope)
+        plant_publication(h, live, "Plugins-run-Plive")
+        r = lane.rebind(scope)
+        o = lane.outputs()
+        check(f"a live publication of {label} supersedes this run: green, publish=false",
+              r.returncode == 0 and o.get("rebind") == "superseded" and o.get("publish") == "false",
+              f"rc={r.returncode}, outputs={o}; {(r.stdout + r.stderr)[-400:]!r}")
+        check("…and it hands the registry guard the LIVE publication's commit",
+              o.get("live-commit") == live, f"live-commit={o.get('live-commit')!r}")
+        check("…and the state the scope read is left as it was (nothing is carried or published)",
+              (lane.state / "published-commit.txt").read_text().strip() == c0)
+        lane.release()
+
+    # ── (c) moved to a publication this bake does NOT cover — refused, as before. ──
+    # The measured shape: a REVERT between the two baselines. c0…r2 nets out Gamma (changed, then
+    # reverted), so the narrowed bake did not rebuild it; the sibling sealed r1, where Gamma IS
+    # changed, so carrying the live Gamma would seal r1's Gamma under r2.
+    rrepo, (r0, r1, r2) = content_repo(work, "content-revert", [
+        ("Gamma", "Gamma v1\n"), ("Gamma", "Gamma v0\n")])
+    (rrepo / "Beta" / "module.txt").write_text("Beta v2\n")
+    git(rrepo, "commit", "-q", "-am", "Beta v2")
+    r3 = git(rrepo, "rev-parse", "HEAD")
+    print("\n#1785 (c): a sibling sealed a commit whose Gamma this bake did not rebuild:")
+    h.reset()
+    plant_publication(h, r0, "Plugins-run-P0")
+    lane = Lane(h, work, rrepo, r3, "7004")
+    _, scope = lane.scope()
+    check("the fixture narrows to Beta alone (Gamma's change was reverted before this head)",
+          scope == "narrowed"
+          and json.loads((lane.state / "affected.json").read_text())["affected"] == ["Beta"],
+          f"scope={scope!r}")
+    lane.bake_what_scope_rebuilt(scope)
+    plant_publication(h, r1, "Plugins-run-P1")
+    r = lane.rebind(scope)
+    o = lane.outputs()
+    check("re-read under the lock, Gamma is affected and was NOT rebuilt: refused, red, named",
+          r.returncode != 0 and "Carry-forward refused" in r.stdout and "Gamma" in r.stdout
+          and o.get("publish") != "true",
+          f"rc={r.returncode}, outputs={o}; {(r.stdout + r.stderr)[-500:]!r}")
+    check("…the original state is untouched (nothing re-bound, nothing written)",
+          (lane.state / "published-commit.txt").read_text().strip() == r0)
+    rel = lane.release()
+    check("…and the release still frees the lock after the refusal", rel.returncode == 0 and leases_held(h) == [],
+          f"rc={rel.returncode}")
+
+    # ── (b) for a FULL bake: everything was rebuilt, so any moved publication is followed. ──
+    print("\n#1785 (b, full bake): the publication moved under a bake that rebuilt everything:")
+    h.reset()
+    plant_publication(h, r0, "Plugins-run-P0")
+    lane = Lane(h, work, rrepo, r3, "7005")
+    lane.scope()
+    lane.bake_what_scope_rebuilt("full")
+    plant_publication(h, r1, "Plugins-run-P1")
+    lane.genv.write_text("")      # as if the first reading had named no carry source (no seal then)
+    r = lane.rebind("full")
+    o = lane.outputs()
+    check("a full bake follows the live publication: rebind=rebound, publish=true",
+          r.returncode == 0 and o.get("rebind") == "rebound" and o.get("publish") == "true",
+          f"rc={r.returncode}, outputs={o}; {(r.stdout + r.stderr)[-400:]!r}")
+    check("…and the ADOPTED reading's carry source is handed to the carry steps (BAKE_CARRY_TARGET)",
+          f"BAKE_CARRY_TARGET={TARGET}" in lane.genv.read_text(), repr(lane.genv.read_text()[-200:]))
+    lane.release()
+
+
+def lease_on(h: "Harness", share: str) -> Path:
+    return h.shelf_root / ".lease" / ACCOUNT / share / LOCK_PATH
+
+
+def run_round5_cases(h: "Harness", work: Path) -> None:
+    """Copilot's third round on #6878: the run-status throttle, release of every target, per-target
+    isolation, one global lock order, and a live baseline newer than the checkout."""
+    import importlib.util
+    import io
+
+    # ── the run-status question is throttled apart from the lease poll ──
+    print("\nthe holder's run is asked about at most once a minute, whatever the lease poll does:")
+    h.reset()
+    lock = h.shelf_root / ACCOUNT / SHARE / LOCK_PATH
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.touch()
+    lease = lease_on(h, SHARE)
+    lease.parent.mkdir(parents=True, exist_ok=True)
+    lease.write_text(lease_id_of("Systemorph-MeshWeaver-busy-1"))
+    meta = h.shelf_root / ".meta" / ACCOUNT / SHARE / (LOCK_PATH + ".json")
+    meta.parent.mkdir(parents=True, exist_ok=True)
+    meta.write_text(json.dumps({"holder": "Systemorph-MeshWeaver-busy-1", "acquired": str(int(time.time())),
+                                "repository": "Systemorph/MeshWeaver", "runid": "1", "runattempt": "1"}))
+    spec = importlib.util.spec_from_file_location("publish_bake_files_under_test", HELPER)
+    helper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(helper)
+    import urllib.request
+    calls = {"n": 0}
+    real_urlopen = urllib.request.urlopen
+
+    def counting_urlopen(req, timeout=None):
+        calls["n"] += 1
+        return io.BytesIO(b'{"status": "in_progress"}')
+
+    saved = {k: os.environ.get(k) for k in ("MOCK_AZ_ROOT", "PUBLISH_BAKE_FAKE_SHARE_BACKEND", "GH_TOKEN")}
+    os.environ.update({"MOCK_AZ_ROOT": str(h.shelf_root), "PUBLISH_BAKE_FAKE_SHARE_BACKEND": str(h.backend),
+                       "GH_TOKEN": "harness-token"})
+    urllib.request.urlopen = counting_urlopen
+    try:
+        rc = helper.main(["lock", "acquire", "--account", ACCOUNT, "--share", SHARE, "--path", LOCK_PATH,
+                          "--holder", "Systemorph-MeshWeaver-waiter-1", "--wait-seconds", "3",
+                          "--poll-seconds", "0.05"])
+    finally:
+        urllib.request.urlopen = real_urlopen
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    check("~60 lease polls in 3 s ask GitHub about the holder's run ONCE, not once per poll",
+          rc == 1 and calls["n"] == 1, f"rc={rc}, run-status requests={calls['n']}")
+
+    repo, (c0, c1, c2) = content_repo(work, "content-r5", [("Alpha", "Alpha v1\n"), ("Beta", "Beta v2\n")])
+    two = f"{ACCOUNT}/zeta-share {ACCOUNT}/{SHARE}"   # deliberately NOT in sorted order
+
+    # ── one global lock order ──
+    print("\nthe targets are locked in ONE canonical order, whatever order the caller lists them in:")
+    h.reset()
+    plant_publication(h, c0, "Plugins-run-P0")
+    lane = Lane(h, work, repo, c2, "7101")
+    lane.scope(BAKE_PUBLISH_TARGETS=two)
+    lane.bake_what_scope_rebuilt("full")
+    r = lane.rebind("full", BAKE_PUBLISH_TARGETS=two)
+    err = r.stderr
+    first, second = err.find(f"lock: acquired {ACCOUNT}/{SHARE}/"), err.find(f"lock: acquired {ACCOUNT}/zeta-share/")
+    check("listed `zeta-share memex-data`, locked `memex-data` then `zeta-share` (sorted)",
+          r.returncode == 0 and 0 <= first < second, f"rc={r.returncode}, positions {first} < {second}")
+
+    # ── release every configured target, not only the ledger ──
+    print("\nthe release frees EVERY configured target, even one the ledger never recorded:")
+    ledger = Path(str(lane.state) + ".locks-held")
+    ledger.write_text(f"{ACCOUNT}/{SHARE}\n")      # as if cancelled before zeta-share's ledger line
+    rel = lane.release(BAKE_PUBLISH_TARGETS=two)
+    check("a lease missing from the ledger is still released (holder-specific, so safe for every target)",
+          rel.returncode == 0 and not lease_on(h, SHARE).exists() and not lease_on(h, "zeta-share").exists(),
+          f"rc={rel.returncode}, left: {leases_held(h)}")
+
+    # ── per-target isolation survives the lock ──
+    print("\na target whose lock cannot be taken does not stop the healthy ones:")
+    h.reset()
+    plant_publication(h, c0, "Plugins-run-P0")
+    gone = f"{ACCOUNT}/gone-share {ACCOUNT}/{SHARE}"
+    lane = Lane(h, work, repo, c2, "7102")
+    lane.scope(BAKE_PUBLISH_TARGETS=gone, MOCK_SHARE_MISSING_NAMES="gone-share")
+    lane.bake_what_scope_rebuilt("full")
+    r = lane.rebind("full", BAKE_PUBLISH_TARGETS=gone, MOCK_SHARE_MISSING_NAMES="gone-share")
+    o = lane.outputs()
+    check("the re-bind goes on with the target it DID lock, naming the one it could not",
+          r.returncode == 0 and o.get("publish") == "true" and "NOT held on" in r.stdout
+          and "gone-share" in r.stdout, f"rc={r.returncode}, outputs={o}; {(r.stdout + r.stderr)[-300:]!r}")
+    pub = subprocess.run(["bash", str(DEFAULT_SCRIPT), str(lane.bake), SOURCE, c2], capture_output=True,
+                         text=True, env=lane.env(BAKE_PUBLISH_TARGETS=gone, MOCK_SHARE_MISSING_NAMES="gone-share",
+                                                 BAKE_PUBLISH_LOCK_HOLDER=lane.handed_holder()))
+    out = pub.stdout + pub.stderr
+    check("…the publish seals the healthy target and fails the gone one by name: the run is still RED",
+          pub.returncode != 0 and (h.shelf_root / ACCOUNT / SHARE / DEST / SENTINEL).is_file()
+          and "gone-share does NOT exist" in out, f"rc={pub.returncode}")
+    lane.release(BAKE_PUBLISH_TARGETS=gone, MOCK_SHARE_MISSING_NAMES="gone-share")
+
+    # ── a live baseline newer than the checkout is fetched, and recognised as superseding ──
+    print("\na sibling sealed a commit pushed AFTER this runner checked out:")
+    origin, (o0, o1, o2) = content_repo(work, "content-origin", [("Alpha", "Alpha v1\n"), ("Beta", "Beta v2\n")])
+    checkout = work / "content-checkout"
+    if checkout.exists():
+        shutil.rmtree(checkout)
+    subprocess.run(["git", "clone", "-q", str(origin), str(checkout)], check=True)
+    (origin / "Gamma" / "module.txt").write_text("Gamma v3\n")
+    git(origin, "commit", "-q", "-am", "Gamma v3")
+    o3 = git(origin, "rev-parse", "HEAD")
+    h.reset()
+    plant_publication(h, o0, "Plugins-run-P0")
+    lane = Lane(h, work, checkout, o2, "7103")
+    _, scope = lane.scope()
+    lane.bake_what_scope_rebuilt(scope)
+    plant_publication(h, o3, "Plugins-run-P3")
+    check("the fixture is honest: the checkout does NOT hold the live commit before the re-bind",
+          subprocess.run(["git", "-C", str(checkout), "cat-file", "-e", f"{o3}^{{commit}}"]).returncode != 0)
+    r = lane.rebind(scope)
+    o = lane.outputs()
+    check("the re-bind fetches the live commit and sees it contains this one: superseded, green",
+          r.returncode == 0 and o.get("rebind") == "superseded" and o.get("publish") == "false",
+          f"rc={r.returncode}, outputs={o}; {(r.stdout + r.stderr)[-400:]!r}")
+    lane.release()
+
+
+LOCK_WRAPPER = HERE / "bake-publication-lock.sh"
+
+# A stand-in for the registry publisher's read–decide–tag (push-bundle-publication.sh): read the
+# tag, pause where the real one uploads, then move the tag only if this commit is newer than what
+# it READ — exactly the comparison the real publisher makes against its earlier resolve.
+TAGGER = """#!/usr/bin/env bash
+set -euo pipefail
+tag="$1"; me="$2"; commit="$3"; go="$4"
+seen=$(cat "$tag")
+echo "$me read $seen" >&2
+for _ in $(seq 1 300); do [ -e "$go" ] && break; sleep 0.1; done
+[ -e "$go" ] || { echo "$me: no go signal" >&2; exit 3; }
+if [ "${commit#C}" -gt "${seen#C}" ]; then printf '%s\\n' "$commit" > "$tag"; echo "$me tagged $commit" >&2; fi
+"""
+
+
+def run_registry_lock_cases(h: "Harness", work: Path) -> None:
+    # Copilot on #6878: the registry publisher reads the tag, uploads, and moves the tag LAST. An
+    # older publisher that read C0, paused, and then tagged C1 after a newer one tagged C2 moves the
+    # tag BACKWARDS — ordering cannot help, each compares against what it read. The read–decide–tag
+    # therefore runs under the prefix lock (bake-publication-lock.sh), around the registry push in
+    # both callers.
+    tagger = work / "tagger.sh"
+    tagger.write_text(TAGGER)
+    tagger.chmod(0o755)
+
+    def env(run_id: str) -> dict[str, str]:
+        e = dict(os.environ)
+        e["PATH"] = f"{h.bin}{os.pathsep}{e['PATH']}"
+        e.update(h.base_env())
+        e.update({"IDENTITY": IDENTITY, "SOURCE": SOURCE, "GITHUB_REPOSITORY": "Systemorph/MeshWeaver",
+                  "GITHUB_RUN_ID": run_id})
+        for k in ("BAKE_PUBLISH_LOCK_HOLDER", "MOCK_LEASE_IGNORE"):
+            e.pop(k, None)
+        return e
+
+    def overlap(locked: bool, targets_a: str = TARGET, targets_b: str = TARGET) -> tuple[str, str, str]:
+        h.reset()
+        tag = h.shelf_root / "registry-tag"
+        tag.write_text("C0\n")
+        go_a, go_b = work / "go-a", work / "go-b"
+        for g in (go_a, go_b):
+            if g.exists():
+                g.unlink()
+        go_b.touch()                                   # the newer publisher does not pause
+        log_a, log_b = work / "tagger-a.log", work / "tagger-b.log"
+        pre = [str(LOCK_WRAPPER), "--"] if locked else []
+        a = subprocess.Popen(["bash", *pre, str(tagger), str(tag), "A", "C1", str(go_a)],
+                             stdout=open(log_a, "w"), stderr=subprocess.STDOUT,
+                             env=dict(env("8001"), BAKE_PUBLISH_TARGETS=targets_a))
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline and "A read" not in (log_a.read_text() if log_a.exists() else ""):
+            time.sleep(0.05)
+        b = subprocess.Popen(["bash", *pre, str(tagger), str(tag), "B", "C2", str(go_b)],
+                             stdout=open(log_b, "w"), stderr=subprocess.STDOUT,
+                             env=dict(env("8002"), BAKE_PUBLISH_TARGETS=targets_b))
+        # Locked: B must be SEEN waiting on A's lease. Unlocked: B simply runs to completion.
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            text = log_b.read_text() if log_b.exists() else ""
+            if ("lock: waiting for publication" in text) if locked else (b.poll() is not None):
+                break
+            time.sleep(0.05)
+        go_a.touch()
+        a.wait(timeout=60)
+        b.wait(timeout=60)
+        return tag.read_text().strip(), log_a.read_text(), log_b.read_text()
+
+    print("\nthe registry's read–decide–tag of two overlapping publishers (older C1 slow, newer C2 fast):")
+    final, _, _ = overlap(locked=False)
+    check("NEGATIVE CONTROL: without the lock the older publisher moves the tag BACK to C1 (the window named on #6878)",
+          final == "C1", f"final tag {final}")
+    final, la, lb = overlap(locked=True)
+    check("under bake-publication-lock.sh the newer publisher WAITS, re-reads C1, and the tag ends on C2",
+          final == "C2" and "lock: waiting for publication" in lb and "B read C1" in lb and leases_held(h) == [],
+          f"final tag {final}; leases {leases_held(h)}")
+    # Copilot on #6878: two callers with DIFFERENT target sets — a list change in flight (`A B` then
+    # `B`), or two repositories publishing one prefix. "The first sorted target" was alpha-share for
+    # one and memex-data for the other, so both walked in; locking EVERY target makes the shared one
+    # (memex-data) exclude them.
+    both = f"{ACCOUNT}/alpha-share {TARGET}"
+    final, la, lb = overlap(locked=True, targets_a=both, targets_b=TARGET)
+    check("callers with DIFFERENT target sets (`alpha memex` vs `memex`) still exclude each other on the shared target: C2",
+          final == "C2" and "lock: waiting for publication" in lb and "B read C1" in lb and leases_held(h) == [],
+          f"final tag {final}; leases {leases_held(h)}")
+    h.reset()
+    held = "Systemorph-MeshWeaver.Plugins-8003-1-lane-pid1-r1"
+    acq = subprocess.run([sys.executable, str(HELPER), "lock", "acquire", "--account", ACCOUNT, "--share", SHARE,
+                          "--path", LOCK_PATH, "--holder", held], capture_output=True, text=True, env=env("8003"))
+    ok_run = subprocess.run(["bash", str(LOCK_WRAPPER), "--", "true"], capture_output=True, text=True,
+                            env=dict(env("8003"), BAKE_PUBLISH_LOCK_HOLDER=held))
+    check("a caller already holding the prefix (BAKE_PUBLISH_LOCK_HOLDER) is PROVED and keeps its lease",
+          acq.returncode == 0 and ok_run.returncode == 0 and "is held by this publication" in ok_run.stderr
+          and leases_held(h) != [], f"acquire rc={acq.returncode}, run rc={ok_run.returncode}")
+    bad_run = subprocess.run(["bash", str(LOCK_WRAPPER), "--", "true"], capture_output=True, text=True,
+                             env=dict(env("8003"), BAKE_PUBLISH_LOCK_HOLDER="Systemorph-MeshWeaver-not-the-holder"))
+    check("…and one told it holds a lease it does NOT hold runs nothing and fails",
+          bad_run.returncode != 0 and "but it does not" in bad_run.stderr, f"rc={bad_run.returncode}")
+
+
+GUARD = HERE / "check-registry-names-live.sh"
+
+# A recorder in place of push-bundle-publication.sh --published-commit: answers the tag from a file,
+# "<commit> <layout> <current layout>", or nothing when the tag is absent.
+REGISTRY_TAG_READER = """#!/usr/bin/env bash
+set -euo pipefail
+case " $* " in *" --published-commit "*) ;; *) echo "recorder: only --published-commit is modelled" >&2; exit 64 ;; esac
+[ -f "$MOCK_REGISTRY_TAG" ] && cat "$MOCK_REGISTRY_TAG"
+exit 0
+"""
+
+
+def run_wrapper_contention_cases(h: "Harness", work: Path) -> None:
+    # Copilot on #6878: a lock that cannot be taken may belong to a LIVE publisher, so the wrapper
+    # must refuse rather than go ahead under the targets it did get; only a share confirmed GONE is
+    # skipped. And its release must visit every target, or an acquire interrupted after its lease
+    # landed leaves that lease behind.
+    marker = work / "wrapped-command-ran"
+
+    def wrap(targets: str, **extra: str) -> subprocess.CompletedProcess:
+        if marker.exists():
+            marker.unlink()
+        e = dict(os.environ)
+        e["PATH"] = f"{h.bin}{os.pathsep}{e['PATH']}"
+        e.update(h.base_env())
+        for k in ("BAKE_PUBLISH_LOCK_HOLDER", "MOCK_LEASE_IGNORE"):
+            e.pop(k, None)
+        e.update({"IDENTITY": IDENTITY, "SOURCE": SOURCE, "BAKE_PUBLISH_TARGETS": targets,
+                  "GITHUB_REPOSITORY": "Systemorph/MeshWeaver", "GITHUB_RUN_ID": "9200",
+                  "PUBLISH_BAKE_LOCK_WAIT_SECONDS": "1"})
+        e.update(extra)
+        return subprocess.run(["bash", str(LOCK_WRAPPER), "--", "touch", str(marker)],
+                              capture_output=True, text=True, env=e)
+
+    both = f"{ACCOUNT}/alpha-share {TARGET}"
+    print("\nthe registry lock wrapper under contention and interruption:")
+    h.reset()
+    plant_lease(h, "Systemorph-MeshWeaver-live-registry-1", time.time())   # a LIVE holder of memex-data
+    r = wrap(both)
+    check("a target held by a LIVE publisher past the bound is a REFUSAL — the command does not run under the other target",
+          r.returncode != 0 and not marker.exists() and "refusing to run" in (r.stdout + r.stderr)
+          and not lease_on(h, "alpha-share").exists(),
+          f"rc={r.returncode}, command ran={marker.exists()}, alpha lease left={lease_on(h, 'alpha-share').exists()}")
+    h.reset()
+    r = wrap(f"{ACCOUNT}/gone-share {TARGET}", MOCK_SHARE_MISSING_NAMES="gone-share")
+    check("…while a share confirmed GONE is skipped, named, and the command runs under the rest",
+          r.returncode == 0 and marker.exists() and "does not exist" in (r.stdout + r.stderr) and leases_held(h) == [],
+          f"rc={r.returncode}, command ran={marker.exists()}")
+    h.reset()
+    r = wrap(both, MOCK_LEASE_ACQUIRED_THEN_LOST="alpha-share")
+    check("an acquire interrupted AFTER its lease landed leaves no lease behind (the release visits every target)",
+          r.returncode != 0 and not marker.exists() and leases_held(h) == [],
+          f"rc={r.returncode}, leases left {leases_held(h)}")
+
+
+def run_superseded_guard_cases(h: "Harness", work: Path) -> None:
+    # The superseded path (MeshWeaver.Plugins#1785) publishes nothing, so a sibling that sealed the
+    # shares and then failed its registry push would leave it GREEN over a stale tag. Its guard reads
+    # the tag under the lock and goes red unless the tag names the live commit in the current layout
+    # (or a newer commit containing it).
+    reader = work / "registry-tag-reader.sh"
+    reader.write_text(REGISTRY_TAG_READER)
+    reader.chmod(0o755)
+    tag = work / "registry-tag"
+    live = "c" * 40
+
+    def guard(names: str | None, **extra: str) -> subprocess.CompletedProcess:
+        h.reset()
+        if names is None:
+            if tag.exists():
+                tag.unlink()
+        else:
+            tag.write_text(names + "\n")
+        e = dict(os.environ)
+        e["PATH"] = f"{h.bin}{os.pathsep}{e['PATH']}"
+        e.update(h.base_env())
+        for k in ("BAKE_PUBLISH_LOCK_HOLDER", "MOCK_LEASE_IGNORE", "GH_TOKEN", "MOCK_GH_AHEAD"):
+            e.pop(k, None)
+        e.update({"IDENTITY": IDENTITY, "SOURCE": SOURCE, "BUNDLE_REGISTRY": "registry.example",
+                  "LIVE_COMMIT": live, "PUSH_BUNDLE_PUBLICATION": str(reader), "MOCK_REGISTRY_TAG": str(tag),
+                  "GITHUB_REPOSITORY": "Systemorph/MeshWeaver.Plugins", "GITHUB_RUN_ID": "9100"})
+        e.update(extra)
+        return subprocess.run(["bash", str(LOCK_WRAPPER), "--", str(GUARD)], capture_output=True, text=True, env=e)
+
+    print("\nthe superseded path does not stay green over a registry that lacks the live publication:")
+    r = guard(f"{live} 2 2")
+    check("the tag names the live commit in the current layout: green", r.returncode == 0 and "Verified" in r.stdout,
+          f"rc={r.returncode}")
+    newer = "d" * 40
+    r = guard(f"{newer} 2 2", GH_TOKEN="stub", BAKE_CONTENT_REPOSITORY="Systemorph/MeshWeaver.Plugins",
+              MOCK_GH_AHEAD=newer)
+    check("the tag names a NEWER commit containing the live one: green", r.returncode == 0 and "NEWER" in r.stdout,
+          f"rc={r.returncode}")
+    for label, names in (("a stale commit", f"{'b' * 40} 2 2"), ("an ABSENT tag", None),
+                         ("the live commit in an OLDER layout", f"{live} 1 2")):
+        r = guard(names)
+        out = r.stdout + r.stderr
+        # NEGATIVE CONTROL, by construction: before this guard the superseded path ran no step at all,
+        # so each of these states ended green.
+        check(f"{label}: RED, naming the tag and the live commit (the superseded path used to be green here)",
+              r.returncode != 0 and "registry does not carry the live publication" in out and live in out,
+              f"rc={r.returncode}")
+    check("…and the guard ran under the lock and released it", leases_held(h) == [], " ".join(leases_held(h)) or "none")
 
 
 def main() -> int:

@@ -75,6 +75,20 @@ public static class InboxLayoutArea
     /// </summary>
     public const string HiddenId = "inboxHidden";
 
+    /// <summary>The data id of the Only select's options — all sources, then each source by name.</summary>
+    public const string SourceOptionsId = "inboxSourceOptions";
+
+    /// <summary>The data id of the side menu's tag options — all tags, Important, then each tag with its count.</summary>
+    public const string TagOptionsId = "inboxTagOptions";
+
+    /// <summary>
+    /// The data id of the notice counting the ignorable items the switch hides; empty when it hides none.
+    /// </summary>
+    public const string IgnorableId = "inboxIgnorable";
+
+    /// <summary>The data id of the side menu's options — All, then each category with its count.</summary>
+    public const string CategoryOptionsId = "inboxCategoryOptions";
+
     /// <summary>How long the page waits after the last keystroke before it asks the query engine.</summary>
     internal static readonly TimeSpan SearchQuiet = TimeSpan.FromMilliseconds(300);
 
@@ -96,7 +110,112 @@ public static class InboxLayoutArea
             host.Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(InboxLayoutArea))
                 .LogError("Inbox leg {Source} ({Band}) refused: it does not read exactly the viewer's own partition: {Query}",
                     refused.Source, refused.Band, refused.Query);
-        var sections = Sections(legs, owner);
+        var zone = access.ViewerZoneId();
+        // An item named in the address: its reading view, inside the portal (InboxReadingView).
+        if (host.Reference.Id is { } id && LayoutAreaReference.NormalizeScalar(id) is { Length: > 0 })
+            return InboxReadingView.Render(host, owner, zone, InboxReadingView.PathOf(id));
+        // The TEMPLATE, at once: every source's toggle and switch is declared, each with its style
+        // BOUND to data. Whether a source is connected is DATA the rows feed publishes
+        // (PublishConnected) — a source the viewer has not connected is hidden and never read
+        // (owner, 2026-10-15: "must get only configured sources"). Never wait for the connection
+        // reads before emitting (Doc/GUI/DataBinding → "Templates first, data later").
+        return Observable.Return<UiControl?>(Page(host, owner, zone, Sections(legs, owner)));
+    }
+
+    /// <summary>
+    /// <paramref name="build"/> applied to each of <paramref name="source"/>'s answers inside
+    /// <paramref name="viewer"/>'s identity, on whichever thread the answer lands.
+    /// </summary>
+    /// <param name="source">The answers the page waits for.</param>
+    /// <param name="services">Resolves the mesh's access service.</param>
+    /// <param name="viewer">The identity the area was opened for; null passes through.</param>
+    /// <param name="build">Builds the output from one answer.</param>
+    internal static IObservable<TOut> InViewerContext<TIn, TOut>(
+        IObservable<TIn> source, IServiceProvider services, AccessContext? viewer, Func<TIn, TOut> build)
+        => source.CarryAccessContext(services, viewer).Select(build);
+
+    /// <summary>How long the page waits for one source's connection query before it lists the source anyway.</summary>
+    internal static readonly TimeSpan ConnectionWait = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// The sources <paramref name="owner"/> has connected: every source with a leg that names no
+    /// connection query (<see cref="InboxQueryLeg.ConnectedWhen"/>), and every other whose connection
+    /// query finds a node. Answers ONCE, when every source has answered.
+    /// <para>🚨 A connection query that cannot be read, or that does not answer within
+    /// <see cref="ConnectionWait"/>, LISTS its source — and is logged: an unreadable connection must
+    /// not hide a source the viewer did connect. Its leg then says itself whether it could be read.</para>
+    /// </summary>
+    internal static IObservable<ImmutableHashSet<string>> Connected(IMessageHub hub, ImmutableArray<InboxSection> sections, string owner)
+    {
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(InboxLayoutArea));
+        var mesh = hub.ServiceProvider.GetRequiredService<IMeshService>();
+        IObservable<bool> Probe(string source, string query) =>
+            mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(InboxQueries.ConnectionQuery(query), owner) with { Limit = 1 })
+                .Take(1)
+                .Select(change =>
+                {
+                    var found = FoundConnection(change);
+                    if (found && change.Items.Count == 0)
+                        logger?.LogWarning(
+                            "Inbox: the connection read for {Source} was incomplete (silent providers: {Silent}; snapshot incomplete: {Incomplete}) — {Query}; listing it",
+                            source, string.Join(", ", change.SilentProviders ?? []), change.SnapshotIncomplete, query);
+                    return found;
+                })
+                // A read that ends without answering is no answer — listed, like a failure.
+                .DefaultIfEmpty(true)
+                .Timeout(ConnectionWait)
+                .Catch((Exception ex) =>
+                {
+                    logger?.LogWarning(ex, "Inbox: could not tell whether {Source} is connected ({Query}); listing it", source, query);
+                    return Observable.Return(true);
+                });
+        var bySource = sections.GroupBy(section => section.Source, StringComparer.Ordinal)
+            .Select(source => source.Any(s => s.ConnectedWhen is null)
+                ? Observable.Return((Source: source.Key, Connected: true))
+                : source.Select(s => s.ConnectedWhen!).Distinct(StringComparer.Ordinal)
+                    .Select(query => Probe(source.Key, query))
+                    .CombineLatest()
+                    .Take(1)
+                    .Select(found => (Source: source.Key, Connected: found.Any(f => f))))
+            .ToImmutableArray();
+        return bySource.IsEmpty
+            ? Observable.Return(ImmutableHashSet<string>.Empty.WithComparer(StringComparer.Ordinal))
+            : bySource.CombineLatest().Take(1)
+                .Select(answers => answers.Where(a => a.Connected).Select(a => a.Source).ToImmutableHashSet(StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// Whether one connection query's first answer LISTS its source: it found a node, or it could not
+    /// see everything (<see cref="QueryResultChange{T}.SilentProviders"/>,
+    /// <see cref="QueryResultChange{T}.SnapshotIncomplete"/>). Only a COMPLETE empty answer says the
+    /// source is not connected — an incomplete one is no answer, and must not hide a source the
+    /// viewer did connect.
+    /// </summary>
+    /// <param name="change">The query's first answer.</param>
+    internal static bool FoundConnection(QueryResultChange<MeshNode> change)
+        => change.Items.Count > 0 || change.SnapshotIncomplete || change.SilentProviders is { Count: > 0 };
+
+    /// <summary>The data id of each source's toggle/switch style — hidden while not connected.</summary>
+    public const string SourceStylesId = "inboxSourceStyles";
+
+    /// <summary>The style that hides a source's toggle and switch.</summary>
+    internal const string HiddenStyle = "display: none;";
+
+    /// <summary>The pointer of one source's style in <see cref="SourceStylesId"/>.</summary>
+    internal static string SourceStylePointer(string key) => LayoutAreaReference.GetDataPointer(SourceStylesId) + "/" + key;
+
+    /// <summary>The sources listed without a connection read — a leg of theirs names no <see cref="InboxQueryLeg.ConnectedWhen"/>.</summary>
+    internal static ImmutableHashSet<string> Unprobed(ImmutableArray<InboxSection> sections)
+        => [.. sections.GroupBy(s => s.Source, StringComparer.Ordinal).Where(g => g.Any(s => s.ConnectedWhen is null)).Select(g => g.Key)];
+
+    /// <summary>Each source's style: shown when <paramref name="connected"/> holds it, hidden otherwise. Pure.</summary>
+    internal static ImmutableDictionary<string, string> SourceStyles(ImmutableArray<InboxSection> sections, ImmutableHashSet<string> connected)
+        => sections.Select(s => s.Source).Distinct(StringComparer.Ordinal)
+            .ToImmutableDictionary(InboxRows.SourceKey, source => connected.Contains(source) ? string.Empty : HiddenStyle);
+
+    /// <summary>The page over every source's <paramref name="sections"/>; the rows feed narrows it to the connected ones.</summary>
+    private static UiControl Page(LayoutAreaHost host, string owner, string? zone, ImmutableArray<InboxSection> sections)
+    {
         var sources = sections.GroupBy(section => section.Source, StringComparer.Ordinal)
             .Select(source => (Id: source.Key, Label: SourceLabel(host, source.First()),
                 Shown: source.Any(s => s.ShownByDefault),
@@ -114,6 +233,16 @@ public static class InboxLayoutArea
             host.UpdateData(UnreadId, string.Empty);
             host.UpdateData(CappedId, string.Empty);
             host.UpdateData(HiddenId, string.Empty);
+            host.UpdateData(IgnorableId, string.Empty);
+            host.UpdateData(TagOptionsId, TagOptions(host.Localize("inbox.tag.all"), host.Localize("inbox.tag.important"), []));
+            // Until the connection reads answer, only the sources that need none are listed.
+            var unprobed = Unprobed(sections);
+            host.UpdateData(CategoryOptionsId, CategoryOptions(host.Localize("inbox.category.all"),
+                CategoriesOf(host, [.. sections.Where(s => unprobed.Contains(s.Source))]), InboxRows.CategoryCounts([])));
+            host.UpdateData(SourceOptionsId, SourceOptions(host.Localize("inbox.only.all"),
+                sources.Where(source => unprobed.Contains(source.Id))
+                    .Select(source => (Key: InboxRows.SourceKey(source.Id), source.Label, source.Icon))));
+            host.UpdateData(SourceStylesId, SourceStyles(sections, unprobed));
         }
         host.SeedRowSelection(InboxRows.SelectionId);
         // One per page, created on the render turn; the buttons share it.
@@ -124,7 +253,7 @@ public static class InboxLayoutArea
             host.RegisterForDisposal(acts);
         }
         // ONE feed, owner-computed: the grid binds it, and Delete re-reads it at the click.
-        var rows = Rows(host, sections, owner, access.ViewerZoneId());
+        var rows = Rows(host, sections, owner, zone, acts.Rereads);
 
         var filterContext = LayoutAreaReference.GetDataPointer(InboxRows.FilterId);
         // One icon toggle per source, always in view: a source is switched on or off with one click,
@@ -139,26 +268,48 @@ public static class InboxLayoutArea
                 Controls.ToggleButton(new JsonPointerReference($"sources/{key}")) with
                 {
                     DataContext = filterContext, Label = source.Label,
-                    Icon = source.Icon.Length > 0 ? source.Icon : Initial(source.Label),
+                    // Hidden until the rows feed says the viewer has connected the source.
+                    Style = new JsonPointerReference(SourceStylePointer(key)),
+                    // A source without a symbol shows its NAME: a single letter was read as an icon
+                    // name, found no icon and rendered an empty button.
+                    Icon = source.Icon.Length > 0 ? source.Icon : null,
                 }, "Toggle" + key);
             switches = switches.WithView(
                 Controls.Switch(new JsonPointerReference($"sources/{key}")) with
                 {
                     DataContext = filterContext,
                     Label = source.Icon.Length > 0 ? $"{source.Icon} {source.Label}" : source.Label,
+                    Style = new JsonPointerReference(SourceStylePointer(key)),
                 }, "Show" + key);
         }
 
-        // Settings out of the way: the order and the labelled source switches sit behind one icon.
+        // Settings out of the way: the labelled source switches sit behind one icon. There is no
+        // order to choose — the list is always newest first (InboxRows.Apply).
         var settings = Controls.MenuItem(host.Localize("inbox.settings"), FluentIcons.Settings()).WithIconOnly()
-            .WithView(Controls.Select(new JsonPointerReference("order"),
-                InboxOrder.All.Select(order => (Option)new Option<string>(order, host.Localize("inbox.order." + order))).ToArray()) with
-            {
-                DataContext = filterContext, Label = host.Localize("inbox.order"),
-            }, "Order")
             .WithView(switches, "Sources");
 
-        return Observable.Return<UiControl?>(Controls.Stack.WithWidth("100%").WithVerticalGap(8)
+        // The side menu: All, then one entry per category, in the page's band order — a mail
+        // client's folders. Re-rendered from the counts the rows publish; a click picks the category.
+        // The side menu: the platform's one-choice control, its value bound to the filter's
+        // category (two-way, like the search) and its options fed with the live counts.
+        var menu = (Controls.RadioGroup(new JsonPointerReference("category"),
+                new JsonPointerReference(LayoutAreaReference.GetDataPointer(CategoryOptionsId)),
+                // The CLR type NAME the client resolves through its registry — "String", never the
+                // C# keyword: "string" is not a type name, and the menu failed with "Type not found".
+                typeof(string).Name)
+            with { DataContext = filterContext })
+            .WithOrientation(Orientation.Vertical);
+        // Below the folders, the tags a triage gave — GitHub's label filter: Important first, then each
+        // tag by how often it is used. A tag narrows whatever folder and sources are shown.
+        var tagMenu = (Controls.RadioGroup(new JsonPointerReference("tag"),
+                new JsonPointerReference(LayoutAreaReference.GetDataPointer(TagOptionsId)), typeof(string).Name)
+            with { DataContext = filterContext, Label = host.Localize("inbox.tags") })
+            .WithOrientation(Orientation.Vertical);
+        var side = Controls.Stack.WithVerticalGap(16)
+            .WithView(menu, "Folders")
+            .WithView(tagMenu, "Tags");
+
+        var main = Controls.Stack.WithWidth("100%").WithVerticalGap(8)
             .WithView(Controls.H2(host.Localize("inbox.title")).WithStyle("margin: 0;"), "Title")
             // One command row, as a mail client has it: search, the acts, the source toggles, settings.
             .WithView(Controls.Stack.WithOrientation(Orientation.Horizontal).WithStyle("gap: 8px; flex-wrap: wrap; align-items: end;")
@@ -176,7 +327,25 @@ public static class InboxLayoutArea
                     .WithReactiveClickAction(ctx => Delete(ctx, acts, owner, rows)), "Delete")
                 .WithView(Controls.Button(host.Localize("inbox.undo")).WithAppearance(Appearance.Neutral)
                     .WithReactiveClickAction(ctx => Undo(ctx, acts)), "Undo")
+                // Decide every ticked approval request — the approval's own type decides and
+                // authorizes, as the clicker (InboxApprovals). Other ticked rows are left alone.
+                .WithView(Controls.Button(host.Localize("inbox.approve")).WithAppearance(Appearance.Neutral)
+                    .WithIconStart(FluentIcons.Checkmark())
+                    .WithReactiveClickAction(ctx => Decide(ctx, acts, owner, rows, ApprovalDecisions.Approve)), "Approve")
+                .WithView(Controls.Button(host.Localize("inbox.reject")).WithAppearance(Appearance.Neutral)
+                    .WithIconStart(FluentIcons.Dismiss())
+                    .WithReactiveClickAction(ctx => Decide(ctx, acts, owner, rows, ApprovalDecisions.Reject)), "Reject")
+                // Only / Show / Hide per source: Only narrows the list to the one source picked here
+                // and wins over the switches; "All sources" gives the switches back as they were.
+                .WithView(Controls.Select(new JsonPointerReference("only"),
+                        new JsonPointerReference(LayoutAreaReference.GetDataPointer(SourceOptionsId)))
+                    with { DataContext = filterContext, Label = host.Localize("inbox.only") }, "Only")
                 .WithView(toggles, "Sources")
+                // Spam, promotions and noise stay out of the list until the viewer asks for them.
+                .WithView(Controls.Switch(new JsonPointerReference("showIgnorable")) with
+                {
+                    DataContext = filterContext, Label = host.Localize("inbox.showIgnorable"),
+                }, "ShowIgnorable")
                 .WithView(settings, "Settings"), "Commands")
             // Says which sources could not be read — an unreadable source must never look like an
             // empty one. Bound: it appears and clears with the reads, with no re-render.
@@ -187,16 +356,78 @@ public static class InboxLayoutArea
             // Says how many items needing the viewer the switches hide — "nothing here" must never
             // be a switch's doing.
             .WithView(Controls.Label(new JsonPointerReference(LayoutAreaReference.GetDataPointer(HiddenId))), "Hidden")
-            .WithView(Grid(host, rows), "Grid"));
+            // Says how many ignorable items are hidden — the noise is filtered, never lost.
+            .WithView(Controls.Label(new JsonPointerReference(LayoutAreaReference.GetDataPointer(IgnorableId))), "Ignorable")
+            .WithView(Grid(host, rows), "Grid");
+        // The side menu in a COLLAPSIBLE pane — the platform splitter's own collapse handle hides it
+        // and gives the list the width (owner, 2026-10-15: "side menu should be hidable").
+        // 🚨 The splitter FLOWS at its content height and the PAGE scrolls (.body-content is the
+        // scroll container), exactly as the settings page does: a viewport-pinned height clipped the
+        // list below the fold with nothing to scroll (owner, 2026-10-16: "i cannot scroll the
+        // mailbox now"). The inline style beats FluentMultiSplitter's own `height: 100%`.
+        return Controls.Splitter
+            .WithStyle(FlowingSplitterStyle)
+            .WithSkin(s => s.WithOrientation(Orientation.Horizontal).WithWidth("100%"))
+            .WithView(side, area => area.WithId("Categories")
+                .AddSkin(new SplitterPaneSkin().WithSize("220px").WithMin("160px").WithMax("360px").WithCollapsible(true)))
+            .WithView(main.WithStyle("min-width: 0; padding-left: 16px;"), area => area.WithId("Main")
+                .AddSkin(new SplitterPaneSkin().WithSize("*")));
     }
 
     /// <summary>
-    /// The glyph a source without a symbol is toggled by: the first user-perceived character of its
-    /// name — one text element, so an emoji or an accented letter is never split — or a bullet when the
-    /// name is empty (a contributed leg may leave it so; the page must still render).
+    /// The splitter's inline style: content decides the height (never the viewport), and a short
+    /// list still fills to the bottom without a long one being shrink-clipped back.
     /// </summary>
-    internal static string Initial(string label)
-        => string.IsNullOrWhiteSpace(label) ? "•" : StringInfo.GetNextTextElement(label.Trim());
+    internal const string FlowingSplitterStyle = "height: auto; flex: 1 0 auto;";
+
+    /// <summary>The page's categories — key, label in the viewer's language, symbol — in band order.</summary>
+    internal static ImmutableList<(string Key, string Label, string Icon)> CategoriesOf(LayoutAreaHost host, ImmutableArray<InboxSection> sections)
+        => [.. sections.GroupBy(s => s.Category, StringComparer.Ordinal)
+            .Select(c => (Key: c.Key, Label: Label(key => host.Localize(key), c.First().CategoryLabelKey, c.Key),
+                Icon: c.Select(s => s.SourceIcon).FirstOrDefault(i => i.Length > 0) ?? string.Empty))];
+
+    /// <summary>
+    /// The side menu's options: All (empty key), then each category with its symbol and count — the
+    /// unread count when it has unread rows, else all its rows. Pure.
+    /// </summary>
+    internal static ImmutableList<Option> CategoryOptions(string allLabel,
+        ImmutableList<(string Key, string Label, string Icon)> categories,
+        ImmutableDictionary<string, (int Total, int Unread)> counts)
+    {
+        static string Text(string icon, string label, int count)
+            => (icon.Length > 0 ? $"{icon} {label}" : label) + (count > 0 ? $"  {count}" : string.Empty);
+        static int Shown((int Total, int Unread) c) => c.Unread > 0 ? c.Unread : c.Total;
+        var all = counts.Values.Aggregate((Total: 0, Unread: 0), (sum, c) => (sum.Total + c.Total, sum.Unread + c.Unread));
+        return
+        [
+            new Option<string>(string.Empty, Text("📥", allLabel, Shown(all))),
+            .. categories.Select(c => (Option)new Option<string>(c.Key,
+                Text(c.Icon, c.Label, counts.TryGetValue(c.Key, out var n) ? Shown(n) : 0))),
+        ];
+    }
+
+    /// <summary>
+    /// The tag menu's options: all tags (empty key), then <see cref="InboxRows.TagCounts"/> — the items
+    /// judged important under their own label, every tag as <c>#tag</c> — each with its count. Pure.
+    /// </summary>
+    internal static ImmutableList<Option> TagOptions(string allLabel, string importantLabel,
+        IEnumerable<(string Key, string Tag, int Count)> counts)
+        =>
+        [
+            new Option<string>(string.Empty, allLabel),
+            .. counts.Select(c => (Option)new Option<string>(c.Key,
+                (string.Equals(c.Key, InboxRows.ImportantKey, StringComparison.Ordinal) ? $"⭐ {importantLabel}" : "#" + c.Tag)
+                + $"  {c.Count}")),
+        ];
+
+    /// <summary>The Only select's options: every source (empty key), then each source with its symbol. Pure.</summary>
+    internal static ImmutableList<Option> SourceOptions(string allLabel,
+        IEnumerable<(string Key, string Label, string Icon)> sources)
+        =>
+        [
+            new Option<string>(string.Empty, allLabel),
+            .. sources.Select(s => (Option)new Option<string>(s.Key, s.Icon.Length > 0 ? $"{s.Icon} {s.Label}" : s.Label)),
+        ];
 
     /// <summary>The keys that press Delete — as a mail client: Backspace or Delete, with the rows ticked.</summary>
     internal const string DeleteShortcut = "Backspace|Delete";
@@ -207,7 +438,32 @@ public static class InboxLayoutArea
     /// rows and is LOGGED — one provider's failure must not blank the list the others feed.
     /// </summary>
     internal static IObservable<ImmutableList<InboxRow>> Rows(
-        LayoutAreaHost host, ImmutableArray<InboxSection> sections, string owner, string? zone)
+        LayoutAreaHost host, ImmutableArray<InboxSection> sections, string owner, string? zone,
+        IObservable<long>? rereads = null)
+    {
+        // Resolved ONCE, on the render turn — the connection reads answer on another thread.
+        var allSources = host.Localize("inbox.only.all");
+        var sourceOptions = sections.GroupBy(s => s.Source, StringComparer.Ordinal)
+            .Select(source => (Id: source.Key, Key: InboxRows.SourceKey(source.Key), Label: SourceLabel(host, source.First()),
+                Icon: source.Select(s => s.SourceIcon).FirstOrDefault(i => i.Length > 0) ?? string.Empty))
+            .ToImmutableList();
+        // Only the CONNECTED sources are read: their legs feed the rows, their toggles are shown and
+        // they are offered in the Only select. The rest stay hidden and are never asked.
+        return Connected(host.Hub, sections, owner)
+            .Do(connected =>
+            {
+                host.UpdateData(SourceStylesId, SourceStyles(sections, connected));
+                host.UpdateData(SourceOptionsId, SourceOptions(allSources,
+                    sourceOptions.Where(s => connected.Contains(s.Id)).Select(s => (s.Key, s.Label, s.Icon))));
+            })
+            .Select(connected => RowsOf(host, [.. sections.Where(s => connected.Contains(s.Source))], owner, zone, rereads))
+            .Switch();
+    }
+
+    /// <summary>The rows of <paramref name="sections"/> — the connected sources' legs.</summary>
+    private static IObservable<ImmutableList<InboxRow>> RowsOf(
+        LayoutAreaHost host, ImmutableArray<InboxSection> sections, string owner, string? zone,
+        IObservable<long>? rereads)
     {
         var hub = host.Hub;
         var handlers = hub.ServiceProvider.GetServices<IInboxItemHandler>().ToImmutableArray();
@@ -216,6 +472,10 @@ public static class InboxLayoutArea
         var running = host.Localize("inbox.blocked.running");
         var noHandler = host.Localize("inbox.blocked.noHandler");
         var culture = ViewerCulture(host.ViewerLocale());
+        var allLabel = host.Localize("inbox.category.all");
+        var allTags = host.Localize("inbox.tag.all");
+        var importantLabel = host.Localize("inbox.tag.important");
+        var categories = CategoriesOf(host, sections);
         var labels = sections.GroupBy(s => s.Source, StringComparer.Ordinal)
             .ToImmutableDictionary(s => s.Key, s => SourceLabel(host, s.First()), StringComparer.Ordinal);
         var bands = sections.Select(s => s.Band).Distinct(StringComparer.Ordinal)
@@ -241,7 +501,8 @@ public static class InboxLayoutArea
                 .Select(nodes => (nodes
                     .Select(node => InboxRows.Of(node, section, zone,
                         BlockedReason(section.Band, InboxItemHandlers.For(handlers, node.NodeType), running, noHandler),
-                        bands[section.Band].Title, bands[section.Band].rank, labels[section.Source], culture))
+                        bands[section.Band].Title, bands[section.Band].rank, labels[section.Source], culture,
+                        hub.JsonSerializerOptions))
                     .ToImmutableList(), (string?)null))
                 .Catch((Exception ex) =>
                 {
@@ -260,21 +521,33 @@ public static class InboxLayoutArea
                     ? host.Localize("inbox.capped")
                     : string.Empty);
             })
-            .Select(legs => InboxRows.Merge(legs.Select(leg => leg.Rows)));
+            .Select(legs => InboxRows.Merge(legs.Select(leg => leg.Rows)))
+            .Do(merged =>
+            {
+                host.UpdateData(CategoryOptionsId, CategoryOptions(allLabel, categories, InboxRows.CategoryCounts(merged)));
+                host.UpdateData(TagOptionsId, TagOptions(allTags, importantLabel, InboxRows.TagCounts(merged)));
+            });
 
-        return filter.Select(f => f.Search.Trim())
+        // The date bounds (before:/after:) are applied to the rows by InboxRows.Apply; only the
+        // remaining text goes to the sources.
+        return filter.Select(f => InboxRows.SplitDates(f.Search).Text.Trim())
             .DistinctUntilChanged(StringComparer.Ordinal)
             // The first read and a cleared box answer at once; a term waits for the typing to pause,
             // and Switch drops the read a newer keystroke superseded.
             .Select(term => term.Length == 0 ? Observable.Return(term) : Observable.Return(term).Delay(SearchQuiet))
             .Switch()
+            // Every leg is read again after a Delete or an Undo: a LIVE source (a mailbox read from
+            // its provider) has no change feed, so the put-away row would otherwise stay listed.
+            .CombineLatest(rereads ?? Observable.Return(0L), (term, _) => term)
             .Select(Merged)
             .Switch()
             .CombineLatest(filter, (rows, asked) =>
             {
-                var shown = InboxRows.Apply(rows, asked, culture);
+                var shown = InboxRows.Apply(rows, asked, asked.Category);
                 var hidden = InboxRows.HiddenObligations(rows, asked, needsYou);
                 host.UpdateData(HiddenId, hidden == 0 ? string.Empty : host.Localize("inbox.hidden", hidden));
+                var ignorable = InboxRows.HiddenIgnorable(rows, asked);
+                host.UpdateData(IgnorableId, ignorable == 0 ? string.Empty : host.Localize("inbox.ignorableHidden", ignorable));
                 return shown;
             });
     }
@@ -340,7 +613,9 @@ public static class InboxLayoutArea
     internal static IObservable<IEnumerable<MeshNode>> Nodes(IMessageHub hub, InboxSection section, string term, string owner)
         => hub.ServiceProvider.GetRequiredService<IMeshService>()
             .Query<MeshNode>(MeshQueryRequest.FromQuery(
-                term.Length == 0 ? InboxQueries.Bounded(section.Query) : $"{InboxQueries.Bounded(section.Query)} {SearchText(term)}",
+                term.Length == 0
+                    ? InboxQueries.Bounded(section.Query, section.TimeField)
+                    : $"{InboxQueries.Bounded(section.Query, section.TimeField)} {SearchText(term)}",
                 owner) with
             {
                 Limit = InboxQueries.EffectiveLimit(section.Query),
@@ -397,28 +672,66 @@ public static class InboxLayoutArea
             // The source's symbol first, so a glance tells mail from a message from an approval.
             .WithColumn(new TemplateColumnControl(Controls.Icon(new ContextProperty(InboxRows.SourceIconProperty)))
                 .WithTitle(string.Empty).WithWidth("40px").WithSortable(false));
-        // Outlook's columns: what, from whom, when. (The band still decides the "what needs you
-        // first" order in the settings menu; it is no longer a column of its own.)
+        // Outlook's columns: what, from whom, when. Ordered by date always: a header sort would be a
+        // second, unbound ordering.
         foreach (var (property, key) in new[]
                  {
                      (nameof(InboxRow.Title), "inbox.column.item"),
-                     (nameof(InboxRow.Source), "inbox.column.source"),
+                     (nameof(InboxRow.From), "inbox.column.source"),
+                     // Which of the viewer's accounts it reached — several mailboxes in one list.
+                     (nameof(InboxRow.Account), "inbox.column.account"),
+                     (nameof(InboxRow.TagText), "inbox.column.tags"),
                      (nameof(InboxRow.When), "inbox.column.when"),
                  })
-            // The order is the select's: a header sort would be a second, unbound ordering.
             grid = grid.WithColumn(new PropertyColumnControl<string> { Property = property.ToCamelCase() }
                 .WithTitle(host.Localize(key)).WithSortable(false));
         return grid
-            .WithColumn(new TemplateColumnControl(
-                    Controls.Button(host.Localize("inbox.open")).WithAppearance(Appearance.Lightweight)
-                        .WithReactiveClickAction(ctx =>
-                        {
-                            if (ctx.RowPath() is { Length: > 0 } path)
-                                ctx.NavigateTo("/" + path.TrimStart('/'));
-                            return Observable.Return(Unit.Default);
-                        }))
-                .WithTitle(host.Localize("inbox.column.open")).WithSortable(false))
+            // A click on a row OPENS it, as in a mail client — always INSIDE the portal, in the
+            // inbox's reading view (InboxReadingView), never the provider's own client. (Ticking a box
+            // and shift/cmd-clicks are selection gestures the grid keeps to itself.) Paged, newest first.
+            .WithClickAction(OpenRow)
+            .WithShowHover()
+            .WithItemsPerPage(50)
+            .WithShowPageSizeSelector()
             .Resizable();
+    }
+
+    /// <summary>Opens the clicked row in the owner's reading view.</summary>
+    private static void OpenRow(UiActionContext ctx)
+    {
+        var options = ctx.Hub.JsonSerializerOptions;
+        var owner = UserNodeType.OwnerOf(ctx.Host.Hub.Address.ToString());
+        var readers = ctx.Hub.ServiceProvider.GetServices<IInboxItemReader>().ToImmutableArray();
+        // The payload is an object boundary: it may arrive typed or as JSON, so it is read through
+        // the shared accessor, never a CLR pattern that drops the JSON envelope.
+        if (OpenTarget(ctx.Payload.As<DataGridCellClick>(options)?.Item, options, owner,
+                path => InboxReadingView.ReaderFor(readers, path) is not null) is { } target)
+            ctx.NavigateTo(target.Url, forceLoad: target.External);
+    }
+
+    /// <summary>
+    /// Where a clicked row goes: the owner's reading view of its path (<see cref="InboxReadingView.Url"/>)
+    /// — inside the portal. The row's <see cref="InboxRow.Link"/> is offered ON the reading view, never
+    /// followed by the click, with ONE transitional exception: a row that lives OUTSIDE the mesh (it
+    /// carries an https link) whose source has not yet brought an <see cref="IInboxItemReader"/>
+    /// (<paramref name="readable"/> says no) still opens in its provider's own client, because the
+    /// reading view would have nothing to show for it — no store holds it. Once the source's package
+    /// ships its reader, that row opens inside the portal too. Null for a row without a path, or one
+    /// that cannot be read as a row. The row arrives typed or as JSON (read with the shared <c>As</c>
+    /// accessor). Pure.
+    /// </summary>
+    /// <param name="item">The clicked row.</param>
+    /// <param name="options">How the row is read.</param>
+    /// <param name="owner">The inbox's owner.</param>
+    /// <param name="readable">Whether a reader handles a path.</param>
+    internal static (string Url, bool External)? OpenTarget(object? item, System.Text.Json.JsonSerializerOptions options, string owner,
+        Func<string, bool> readable)
+    {
+        if (item.As<InboxRow>(options) is not { Path: { Length: > 0 } path } row || owner.Length == 0)
+            return null;
+        return InboxReadingView.IsHttps(row.Link) && !readable(path)
+            ? (row.Link, true)
+            : (InboxReadingView.Url(owner, path), false);
     }
 
     /// <summary>
@@ -458,6 +771,50 @@ public static class InboxLayoutArea
                         // The rows are gone from the grid; so are their ticks.
                         host.UpdateData(InboxRows.SelectionId, new DataGridSelectionState());
                         ctx.ReportSummary(Summary(host, "inbox.summary.deleted", outcomes));
+                        acts.Reread();
+                    })
+                    .Select(_ => Unit.Default)));
+    }
+
+    /// <summary>
+    /// Approve all / Reject all: every ticked row that is an approval request (the Approvals source),
+    /// re-checked against the owner's own feed exactly as Delete is, decided one at a time as the
+    /// clicker. Not undoable — a decision is the approval's own record — so nothing enters the Undo
+    /// batch; a row that is not an approval request is not touched, and the outcome line names every
+    /// request that was not decided, with the reason its type gave.
+    /// </summary>
+    private static IObservable<Unit> Decide(UiActionContext ctx, InboxActs acts, string owner,
+        IObservable<ImmutableList<InboxRow>> rows, string decision)
+    {
+        var host = ctx.Host;
+        var hub = host.Hub;
+        var access = hub.ServiceProvider.GetService<AccessService>();
+        var caller = access?.Context;
+        var handlers = hub.ServiceProvider.GetServices<IInboxItemHandler>().ToImmutableArray();
+        var noAnswer = host.Localize("inbox.approval.noAnswer");
+        var approve = decision == ApprovalDecisions.Approve;
+        return acts.Exclusive(host.Localize("inbox.busy"), ctx.SelectedRowKeys(InboxRows.SelectionId)
+            .Zip(rows.Take(1), (keys, current) => InboxRows.Targets(current, keys, owner)
+                .Where(row => string.Equals(row.SourceId, InboxQueries.ApprovalsSource, StringComparison.Ordinal))
+                .ToImmutableList())
+            .SelectMany(targets => targets.Count == 0
+                ? Observable.Throw<Unit>(new InvalidOperationException(host.Localize("inbox.nothingToDecide")))
+                : Act(ctx, access, caller, DecideBatch(targets).Select(row => new InboxUndoItem(row.Path, row.NodeType)).ToImmutableList(),
+                        handlers, (_, path) => InboxApprovals.Decide(hub, path, decision, noAnswer),
+                        approve ? "inbox.progress.approving" : "inbox.progress.rejecting", _ => { })
+                    .Do(outcomes =>
+                    {
+                        host.UpdateData(InboxRows.SelectionId, new DataGridSelectionState());
+                        var summary = Summary(host, approve ? "inbox.summary.approved" : "inbox.summary.rejected", outcomes);
+                        // The rest of a selection larger than one step-up covers is left untouched — said.
+                        if (targets.Count > outcomes.Count)
+                            summary += " " + host.Localize("inbox.decide.capped", targets.Count - outcomes.Count, StepUpPaths.MaxTargets);
+                        ctx.ReportSummary(summary);
+                        // 🚨 ONE step-up for the batch: every decision held for the approver's
+                        // confirmation is confirmed together, then the approver comes back here.
+                        // A FULL page load — the step-up endpoint is an MVC route the circuit never reaches.
+                        if (StepUpOf(outcomes) is { Count: > 0 } held)
+                            ctx.NavigateTo(StepUpPaths.StartUrl(held, "/" + owner.TrimStart('/') + "/" + AreaName), forceLoad: true);
                     })
                     .Select(_ => Unit.Default)));
     }
@@ -488,6 +845,7 @@ public static class InboxLayoutArea
                 .Do(outcomes =>
                 {
                     ctx.ReportSummary(Summary(host, "inbox.summary.restored", outcomes));
+                    acts.Reread();
                 })
                 .Select(_ => Unit.Default);
         }));
@@ -562,6 +920,21 @@ public static class InboxLayoutArea
         return outcome;
     }
 
+    /// <summary>
+    /// The approval requests ONE click decides: the first <see cref="StepUpPaths.MaxTargets"/> in page
+    /// order. Every held decision of the click goes into one step-up, and the step-up endpoint refuses
+    /// a larger batch — deciding more would hold decisions the approver could never confirm.
+    /// </summary>
+    internal static ImmutableList<T> DecideBatch<T>(IReadOnlyCollection<T> targets)
+        => [.. targets.Take(StepUpPaths.MaxTargets)];
+
+    /// <summary>
+    /// The step-up targets a batch still waits for — each held decision once, in batch order. Empty
+    /// when nothing was held, so the inbox only leaves for a step-up when there is one to give.
+    /// </summary>
+    internal static ImmutableList<StepUpTarget> StepUpOf(IEnumerable<InboxItemOutcome> outcomes)
+        => [.. outcomes.Select(o => o.StepUp).OfType<StepUpTarget>().DistinctBy(t => t.Key)];
+
     /// <summary>The outcome line: how many, and every item that was not done with its reason.</summary>
     internal static string Summary(LayoutAreaHost host, string key, IReadOnlyCollection<InboxItemOutcome> outcomes)
     {
@@ -593,6 +966,10 @@ public static class InboxLayoutArea
                 {
                     SourceLabelKey = leg.SourceLabelKey, BandLabelKey = leg.BandLabelKey,
                     Unread = leg.Unread, ShownByDefault = leg.ShownByDefault, SourceIcon = leg.SourceIcon ?? string.Empty,
+                    TimeField = string.IsNullOrWhiteSpace(leg.TimeField) ? null : leg.TimeField,
+                    Category = string.IsNullOrWhiteSpace(leg.Category) ? leg.Source : leg.Category,
+                    CategoryLabelKey = string.IsNullOrWhiteSpace(leg.CategoryLabelKey) ? leg.SourceLabelKey : leg.CategoryLabelKey,
+                    ConnectedWhen = string.IsNullOrWhiteSpace(leg.ConnectedWhen) ? null : leg.ConnectedWhen,
                 })
         ];
 
@@ -629,10 +1006,19 @@ internal sealed class InboxActs : IDisposable
     private readonly Subject<Func<State, State>> changes = new();
     private readonly BehaviorSubject<State> state = new(Initial);
     private readonly IDisposable fold;
+    private readonly BehaviorSubject<long> rereads = new(0);
 
     /// <summary>Opens the page's channel.</summary>
     public InboxActs()
         => fold = changes.Synchronize().Scan(Initial, (current, change) => change(current)).Subscribe(state);
+
+    /// <summary>Ticks whenever the page should read every leg again — after a Delete or an Undo.</summary>
+    public IObservable<long> Rereads => rereads;
+
+    /// <summary>Asks the page to read every leg again; ignored once the page is closed.</summary>
+    public void Reread()
+        // A completed subject ignores what arrives after it, so a late call is dropped, never thrown.
+        => rereads.OnNext(DateTime.UtcNow.Ticks);
 
     /// <summary>What the last Delete put away and Undo has not yet brought back.</summary>
     public ImmutableList<InboxUndoItem> Batch => state.Value.Batch;
@@ -689,6 +1075,7 @@ internal sealed class InboxActs : IDisposable
     public void Dispose()
     {
         changes.OnCompleted();
+        rereads.OnCompleted();
         fold.Dispose();
     }
 }

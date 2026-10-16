@@ -9,6 +9,7 @@ using MeshWeaver.Mesh.Threading;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Xunit;
 
 namespace MeshWeaver.Graph.Test;
@@ -143,6 +144,156 @@ public sealed class ModuleRootServicesSwapTest : MonolithMeshTestBase
         consumer.Ask().Should().Be("hello v1 (options v1)", "never a half-swapped state");
     }
 
+    /// <summary>
+    /// MeshWeaver#6847 — the root's forwarders hold the BOOT generation's registration index. An N+1 that
+    /// forwards the very same platform services but inserts a registration of its OWN type ahead of them
+    /// (WhatsApp 1.4.2 added its inbox reader that way) moves every forwarded index, so a live swap would
+    /// make the root resolve the wrong registration of N+1 — measured in production as
+    /// "mw-module-service:10 … has not been registered" on every hub activation. Refused by name; N keeps
+    /// serving through the same proxy. Its negative control is the hosted-service swap above: an addition
+    /// AFTER the forwarded registrations still swaps live.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task AnUpdateThatMovesAForwardedRegistrationsIndex_IsRefused_AndNKeepsServing()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var consumer = Mesh.ServiceProvider.GetRequiredService<CachingGreeterConsumer>();
+        var greeter = Mesh.ServiceProvider.GetRequiredService<ILiveGreeter>();
+
+        var outcome = await Updater.Swap(Write("g2", ModuleSource(2, ownedFirst: true)), "test: a module-owned registration inserted first")
+            .Timeout(Budget).Await(ct);
+
+        outcome.Kind.Should().Be(ModuleSwapKind.RestartRequired, outcome.Reason);
+        outcome.Reason.Should().Contain("changed shape");
+        consumer.Ask().Should().Be("hello v1 (options v1)", "never a half-swapped state");
+        greeter.Greet().Should().Be("hello v1 (options v1)", "the boot proxy still resolves N's registration at its own index");
+    }
+
+    /// <summary>
+    /// MeshWeaver#6847, the readiness half — the NEGATIVE control: a module that booted, and one that then
+    /// swapped live, keep every root forwarder resolvable, so <c>module_forwarders</c> is Healthy and its
+    /// census says how many it measured (never a silent "nothing to say").
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task EveryForwarderResolves_AfterBootAndAfterALiveSwap_SoReadinessHolds()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var booted = ModuleForwarderHealthCheck.Evaluate(Contexts);
+        booted.Status.Should().Be(HealthStatus.Healthy, booted.Description ?? "");
+        booted.Description.Should().MatchRegex(@"^[1-9]\d* root forwarder\(s\) over [1-9]\d* module\(s\)",
+            "the clean reading is a census: it names what it measured");
+        HeldGeneration(Module).Services!.ForwarderLayout.Should().NotBeEmpty("the arrangement: the module forwards platform services");
+
+        var outcome = await Updater.Swap(Write("g2", ModuleSource(2, extraHosted: true)), "test: a live swap keeps the forwarders")
+            .Timeout(Budget).Await(ct);
+
+        outcome.Kind.Should().Be(ModuleSwapKind.Live, outcome.Reason);
+        Contexts.UnresolvableForwarders().Should().BeEmpty();
+        ModuleForwarderHealthCheck.Evaluate(Contexts).Status.Should().Be(HealthStatus.Healthy);
+    }
+
+    /// <summary>
+    /// MeshWeaver#6847, the readiness half — the INCIDENT state. The swap is refused now (the index is part
+    /// of the shape), so the state the 2026-10-16 swap left behind is assembled from the swap's own parts
+    /// without that check: N+1, which inserts a registration of its own type ahead of the forwarded ones,
+    /// is made current while the root keeps the forwarders N laid out. Every lease through the moved
+    /// forwarder then fails — asserted first, so the arrangement is the defect and not a stand-in — and
+    /// the readiness check is Unhealthy, naming the module and the scope key. Mutation-checked: with
+    /// <see cref="ModuleContexts.UnresolvableForwarders"/> answering empty the check stays Healthy over
+    /// this very state, which is the six-and-a-half-hour outage.
+    /// </summary>
+    [Fact]
+    public void AGenerationWhoseForwarderMoved_FailsReadiness_NamingTheModuleAndTheService()
+    {
+        var greeter = Mesh.ServiceProvider.GetRequiredService<ILiveGreeter>();
+        greeter.Greet().Should().Be("hello v1 (options v1)", "the arrangement starts healthy");
+
+        CommitWithoutTheShapeCheck(Write("g2", ModuleSource(2, ownedFirst: true)));
+
+        Action lease = () => greeter.Greet();
+        lease.Should().Throw<Exception>("the arrangement must reproduce the defect: the boot forwarder now asks N+1 for the wrong registration");
+        var gaps = Contexts.UnresolvableForwarders();
+        gaps.Should().NotBeEmpty();
+        gaps.Should().OnlyContain(g => g.Module == Module);
+        var verdict = ModuleForwarderHealthCheck.Evaluate(Contexts);
+        verdict.Status.Should().Be(HealthStatus.Unhealthy, "a replica whose forwarders cannot resolve must leave the Service");
+        verdict.Description.Should().Contain(Module).And.Contain("mw-module-service:")
+            .And.Contain(nameof(ILiveGreeter), "the forwarded service whose lease now fails is named")
+            .And.Contain("restarts", "the remedy is stated");
+    }
+
+    /// <summary>
+    /// MeshWeaver#6847 review — the readiness scan holds the generation's LEASES while it reads the
+    /// container. The race, made deterministic with a controlled switch: the module container's
+    /// <see cref="Autofac.ILifetimeScope.ResolveOperationBeginning"/> fires when the scan reads that
+    /// container, and the armed action RETIRES the generation right there — the step a concurrent live
+    /// swap takes. Under the scan's lease the retirement removes the generation from the current set
+    /// but DEFERS its services' disposal to the scan's release, so the scan completes on a live container
+    /// (no <see cref="ObjectDisposedException"/>, no transient Unhealthy) and the disposal follows.
+    /// Mutation-checked: without the leases the retirement disposes the container mid-read.
+    /// </summary>
+    [Fact]
+    public void ARetirementDuringTheForwarderScan_IsDeferredToTheScansRelease()
+    {
+        var generation = HeldGeneration(Module);
+        var services = generation.Services!;
+        services.ForwarderLayout.Should().NotBeEmpty("the arrangement: the module forwards platform services, so the scan reads its container");
+        var container = Contexts.ModuleScope(Module)!.GetRequiredService<Autofac.ILifetimeScope>();
+        var scanThread = Environment.CurrentManagedThreadId;
+        var armed = 1;
+        bool? disposedWhenRetired = null;
+        Exception? retireFault = null;
+        EventHandler<Autofac.Core.Resolving.ResolveOperationBeginningEventArgs> fire = (_, _) =>
+        {
+            // Only the scan's own read on this thread, and only once: nothing else the mesh resolves
+            // from this container concurrently can trip the switch.
+            if (Environment.CurrentManagedThreadId != scanThread || Interlocked.Exchange(ref armed, 0) == 0)
+                return;
+            Contexts.Retire(generation, Budget).Subscribe(_ => { }, ex => retireFault = ex);
+            disposedWhenRetired = services.IsDisposed;
+        };
+        container.ResolveOperationBeginning += fire;
+        ImmutableList<ModuleForwarderGap> gaps;
+        try
+        {
+            gaps = Contexts.UnresolvableForwarders();
+        }
+        finally
+        {
+            container.ResolveOperationBeginning -= fire;
+        }
+
+        Volatile.Read(ref armed).Should().Be(0, "the switch must have fired inside the scan, or this test checked nothing");
+        retireFault.Should().BeNull("the retirement itself must not fault");
+        Contexts.Current(Module).Should().BeNull("the retirement ran: the generation left the current set mid-scan");
+        disposedWhenRetired.Should().Be(false,
+            "a retirement that lands while the scan reads the container must find the scan's lease and DEFER the "
+            + "disposal — disposing the container mid-read is the ObjectDisposedException the review found");
+        gaps.Should().BeEmpty("the scan completed on live services: every forwarder of the generation it leased resolves");
+        services.IsDisposed.Should().BeTrue("the scan's release was the last lease of a retiring generation, so it disposed the services");
+        ModuleForwarderHealthCheck.Evaluate(Contexts).Status.Should().Be(HealthStatus.Healthy,
+            "a module with no current generation forwards nothing that could fail");
+    }
+
+    /// <summary>The 2026-10-16 swap as it ran before the index joined the shape: N+1 prepared against the
+    /// boot prefix, built before published and committed — every step but the shape comparison.</summary>
+    private void CommitWithoutTheShapeCheck(string path)
+    {
+        var old = HeldGeneration(Module);
+        var stage = new ModuleSwapStage();
+        var fresh = Contexts.LoadStaged(path, stage);
+        var contributions = ModuleContributions.Of(fresh.Assembly);
+        var services = ModuleServices.Probe(fresh.Name, fresh.Context, contributions.ServiceConfigurations, old.Services!.Prefix);
+        services.Blockers.Should().BeEmpty();
+        services.Stage = fresh.Context.Stage;
+        services.InheritForwarderLayout(old.Services);
+        fresh.Services = services;
+        Contexts.SetContributions(fresh, contributions);
+        stage.Add(fresh);
+        Contexts.BuildBeforePublish(fresh).Should().BeNull();
+        Contexts.CommitAll(stage);
+    }
+
     [Fact]
     public void AClassTypedRootServiceTheModuleImplements_IsABlocker_ThatTheGuardNames()
     {
@@ -261,7 +412,7 @@ public sealed class ModuleRootServicesSwapTest : MonolithMeshTestBase
         consumer.Ask().Should().Be("hello v2 (options v2)", "N+1 is current and serves");
     }
 
-    private static string ModuleSource(int version, bool extraGreeter = false, bool classService = false, bool extraHosted = false, string greeterClass = "Greeter", bool brokenSingleton = false, bool circuitBound = false) => $$"""
+    private static string ModuleSource(int version, bool extraGreeter = false, bool classService = false, bool extraHosted = false, string greeterClass = "Greeter", bool brokenSingleton = false, bool circuitBound = false, bool ownedFirst = false) => $$"""
         using Microsoft.Extensions.DependencyInjection;
         using Microsoft.Extensions.Options;
         [assembly: MeshWeaver.Test.LiveServices.Module]
@@ -294,6 +445,7 @@ public sealed class ModuleRootServicesSwapTest : MonolithMeshTestBase
                 [new MeshWeaver.Mesh.MeshNode("LiveServicesProbe") { Name = "v{{version}}", NodeType = "Markdown" }
                     .WithGlobalServiceRegistry(services =>
                     {
+                        {{(ownedFirst ? "services.AddSingleton<IOwnGreeter, OwnGreeter>();" : "")}}
                         services.AddOptions<GreeterOptions>().Configure(o => o.Version = "v{{version}}");
                         services.AddSingleton<MeshWeaver.Graph.Test.ILiveGreeter, {{greeterClass}}>();
                         services.AddKeyedSingleton<MeshWeaver.Graph.Test.ILiveGreeter, {{greeterClass}}>("keyed-greeter");

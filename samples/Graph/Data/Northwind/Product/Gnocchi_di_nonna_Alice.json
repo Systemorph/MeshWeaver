@@ -6,7 +6,6 @@
   "category": "Products",
   "description": "Gnocchi di nonna Alice - 24 - 250 g pkgs.",
   "icon": "/static/NodeTypeIcons/shopping-bag.svg",
-  "isPersistent": true,
   "content": {
     "$type": "ProductContent",
     "productId": 56,

@@ -69,6 +69,24 @@ that [#2776](https://github.com/Systemorph/MeshWeaver/issues/2776) was filed on.
 > late echo could land on the NEXT incarnation and read as an owner-side end. Test:
 > `SubscriberReleaseIsNotAnnouncedBackTest`, with the owner-side end as its control.
 
+> **The recycle announcement is one message per subscriber, not per stream (#5532, the recycle
+> half).** The other emitter, `Workspace.AnnounceRecycleToClientSubscriptions` (a recycled owner's
+> goodbye), posted one `StreamEndedEvent` per live client subscription, all through ONE carrier: for
+> a hub under the mesh router, the router's spokesman `portal/nodeops-{meshId}`, which is also the
+> hub that issues a recycle cascade. The owner keys a subscription on the subscribing workspace hub,
+> so a subscriber holding many streams of one owner was told once per stream, and a cascade over
+> many owners put the sum of all their streams on that one turn loop. memex-cloud,
+> 2026-10-11T19:21:35Z: a `MeshWeaver.OgCard` live module swap recycled LinkedIn, Edu, Reinsurance,
+> Hosting and more on one pod, and 0.66 s later `portal/nodeops-...` logged ACTION-BLOCK OVERLOAD at
+> depth 30907 shedding `StreamEndedEvent`. A subscriber that declares
+> `SubscribeRequest.AcceptsCoalescedStreamEnd` (every C# subscriber, through `MintSubscribeRequest`)
+> now gets ONE `StreamEndedEvent` per (owner, subscriber) whose `AlsoEndedStreamIds` names the rest;
+> its `RouteStreamMessage` splits it back into one end per stream before anything reaches a
+> `sync/{id}` sub-hub, so every mirror still re-asks exactly once. Every other subscriber gets the
+> per-stream ends it always got. Test: `RecycleCascadeAnnouncementFanOutTest` (3 owners x 20
+> streams: at most 3 posts to the subscriber, and all 60 mirrors still re-ask). Unchanged: the
+> re-asks themselves, which still cross the router one per stream.
+
 ## The two arithmetic traps
 
 #2776 was filed as *"the activity node's owner ends its streams ~5 s in"*, and two hypotheses — a

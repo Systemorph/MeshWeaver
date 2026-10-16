@@ -6,7 +6,6 @@
   "category": "Suppliers",
   "description": "Tokyo Traders - Tokyo, Japan",
   "icon": "/static/NodeTypeIcons/truck.svg",
-  "isPersistent": true,
   "content": {
     "$type": "SupplierContent",
     "supplierId": 4,

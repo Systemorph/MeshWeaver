@@ -184,6 +184,39 @@ sentence.
    plus `--ref` on a script from a lane that *does* pass `platform-ref` and one from a lane that does
    not, so both branches are exercised.
 
+## 🚨 A script reads every git path listing with `-z`
+
+The platform scripts run against every satellite's tree, so a parsing defect in one of them is a
+defect in every lane that fetches it. One shape is fleet-wide. With git's default
+`core.quotePath`, a plain `git diff --name-only` — and `ls-files`, `log --name-only`,
+`merge-tree --name-only`, `status --porcelain` — **C-quotes** every path that holds a byte outside
+printable ASCII: `Product/Côte_de_Blaye.json` is printed as `"Product/C\303\264te_de_Blaye.json"`.
+A script that reads that line verbatim holds a path that names no file. It matches no module, no
+project, no `endswith(".cs")` and no allow entry, so a selection is refused, a file is silently
+dropped from a scan, or a changed module is never selected (measured in MeshWeaver.Plugins#3566:
+23 accented sample nodes turned a core-candidate verdict red with nothing measured). A reader that
+splits on whitespace (`.split()`) also breaks every path that holds a space.
+
+**The rule:** a listing is read with `-z` and split on NUL. `-z` output is never quoted, so there is
+nothing to decode. Two shapes need care:
+
+- `status --porcelain -z` keeps its two status columns, so the path is `entry[3:]` — read it
+  UNSTRIPPED (`preserve_output=True` in `gen-manifests.py`), or the first entry loses a column.
+- `merge-tree --write-tree -z --name-only` prints the tree id, then each conflicted path, then an
+  EMPTY entry that ends the path list; the informational messages follow it.
+
+`.github/scripts/check-git-path-listings.py` holds the rule over every `.github/scripts/*.py` and
+`scripts/*.py`, by AST: a git argument list naming a listing (`--name-only`, `--name-status`,
+`ls-files`, `--porcelain`) must also carry `"-z"`. A `-z` listing must then not be split by line
+or whitespace (`.splitlines()`, `.split()`, `.split("\n")`, `.split(" ")`), whether the split is
+chained onto the call or made on a name the listing was assigned to in the same function, because
+that yields one NUL-joined string, never the paths. Splitting on `"\0"` and reading the raw
+output pass. Code inside a `*self_test*` function is exempt,
+because its fixture repositories use ASCII paths. A file that does not parse is a failure. Its
+`--self-test` measures the quoting on real git output first, so the gate cannot pass on a trap that
+is not real. Both run in the `workflow-shell` job of `dotnet-test.yml`. MeshWeaver.Plugins carries
+the same guard over its own `scripts/`.
+
 ## Related
 
 - [Module Build Architecture](/Doc/Architecture/ModuleBuildArchitecture) — the one build shape, and

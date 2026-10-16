@@ -1169,11 +1169,14 @@ internal static class NodeTypeCompilationHelpers
         // succeeds), and it is bounded the same way: the flip stamps FailedPlatformVersion with the
         // live build, and an older replica never retries a newer build's verdict.
         var livePlatformVersion = LivePlatformVersion;
+        // 🚨 A closed type set's refusal is not a build verdict — the older-platform trigger skips
+        // it (#6627); see HasFailureFromOlderPlatform.
+        var redriveClosedTypeSet = hub.ServiceProvider.IsClosedTypeSet();
         var redriveGivenUp = false;
         var failedVerdictKickoffSub = ownStream
             .Where(node => node?.Content is NodeTypeDefinition def
                 && (HasStaleFailureVerdict(def, guards.ModulesHash, hubPath)
-                    || HasFailureFromOlderPlatform(def, livePlatformVersion, hubPath))
+                    || HasFailureFromOlderPlatform(def, livePlatformVersion, hubPath, redriveClosedTypeSet))
                 && !IsStaticOnlyNodeType(node, def))
             // Cheap dedupe so an unrelated field edit does not re-enter the body while the flip is
             // still in flight; correctness is the re-check inside the Update lambda, not this.
@@ -1237,7 +1240,8 @@ internal static class NodeTypeCompilationHelpers
                     // and they commit together, inside the lambda — see ApplyFailedVerdictRedrive.
                     workspace.GetMeshNodeStream()
                         .Update(curr => ApplyFailedVerdictRedrive(
-                            curr, hubPath, guards.ModulesHash, parkRegistry, livePlatformVersion))
+                            curr, hubPath, guards.ModulesHash, parkRegistry, livePlatformVersion,
+                            redriveClosedTypeSet))
                         .Subscribe(_ => { },
                             ex => logger?.LogWarning(ex,
                                 "Failed-verdict re-drive: Update failed for {HubPath}", hubPath));
@@ -1264,7 +1268,7 @@ internal static class NodeTypeCompilationHelpers
                 // "stuck" would cry wolf on every cold activation of a broken type.
                 && def.CurrentSourceVersions is not null
                 && !HasStaleFailureVerdict(def, guards.ModulesHash, hubPath)
-                && !HasFailureFromOlderPlatform(def, livePlatformVersion, hubPath))
+                && !HasFailureFromOlderPlatform(def, livePlatformVersion, hubPath, redriveClosedTypeSet))
             .Take(1)
             .Subscribe(
                 node =>
@@ -1604,6 +1608,9 @@ internal static class NodeTypeCompilationHelpers
                               ?? System.Collections.Immutable.ImmutableDictionary
                                   .CreateRange(snapshot),
             RequestedSourceStampAt = null,
+            // #6832 — every verdict below either lifts a hold (adopted, verified or not), dispatches
+            // a compile, or re-states the hold with its own reason.
+            DeliveryHoldReason = null,
         };
 
         // ── #2813 — the three-way. ─────────────────────────────────────────────────────────────
@@ -1694,6 +1701,7 @@ internal static class NodeTypeCompilationHelpers
                 RequestedSourceStampAt = null,
                 BuildProvenance = BuildProvenance.StaleAdopted,
                 CompiledSources = null,
+                DeliveryHoldReason = null,
             };
             if (canCompileLocally)
                 return DispatchPending(serving, modulesHash, snapshot);
@@ -1709,6 +1717,8 @@ internal static class NodeTypeCompilationHelpers
                     CompilationError = null,
                     // #4469 — cleared wherever the error text is (Copilot review).
                     CompilationImportRefusals = null,
+                    // #6832 — the hold says why on the record, since an Ok record carries no error.
+                    DeliveryHoldReason = BuildDeliveryHold.ServingNotice(serving, RequirePrebuiltGateReason),
                 };
         }
 
@@ -1730,6 +1740,7 @@ internal static class NodeTypeCompilationHelpers
         {
             RequestedSourceStampAt = null,
             BuildProvenance = BuildProvenance.AdoptionRefused,
+            DeliveryHoldReason = null,
             // 🚨 CLEARED, not merely "not stamped". Seed does NOT clear CompiledSources, so a type
             // that had previously COMPILED here carries a snapshot matching CurrentSourceVersions
             // straight into the refusal — and IsDirty would read FALSE while BuildProvenance reads
@@ -1799,8 +1810,20 @@ internal static class NodeTypeCompilationHelpers
                 CompilationError = tooFarBehind
                     ? BuildDeliveryHold.TooFarBehindNotice(refused, maxMinorVersionsBehind)
                     : BuildDeliveryHold.IncompatibleNotice(refused),
+                // #6832 — the same sentence, in the one field a held record is read for, plus
+                // the gate that stops a replacement compile on this mesh (as the stale-but-serving
+                // branch names it): without it the reason says why the old build cannot run but
+                // not why no new one is built.
+                DeliveryHoldReason = tooFarBehind
+                    ? BuildDeliveryHold.TooFarBehindNotice(refused, maxMinorVersionsBehind, RequirePrebuiltGateReason)
+                    : BuildDeliveryHold.IncompatibleNotice(refused, RequirePrebuiltGateReason),
             };
     }
+
+    /// <summary>The gate a <c>Modules:RequirePrebuilt</c> hold names in its
+    /// <see cref="NodeTypeDefinition.DeliveryHoldReason"/> (#6832): why no replacement compile runs.</summary>
+    private static readonly string RequirePrebuiltGateReason =
+        PrebuiltAssemblySeeder.RequirePrebuiltConfigKey + "=true: this mesh does not compile module content";
 
     /// <summary>
     /// <see cref="ApplyAdoptedSourceStamp"/> plus the two things a pure function cannot do: resolve
@@ -3787,9 +3810,17 @@ internal static class NodeTypeCompilationHelpers
     /// <param name="livePlatformVersion">This process's platform build, or <c>null</c> when unknown
     /// (then the answer is NO — an unknown build cannot claim to be newer).</param>
     /// <param name="nodeTypePath">The type's path, for <see cref="IsUnconvergableSourceFailure"/>.</param>
+    /// <param name="closedTypeSet">Whether THIS process serves a closed type set
+    /// (<see cref="ClosedTypeSetExtensions.IsClosedTypeSet"/>). There, a failure that IS the
+    /// closed-set refusal (<see cref="ClosedTypeSet.IsRefusal"/>) is never retried: it records this
+    /// process's switch, not the type's source, so a newer platform build cannot answer it
+    /// differently — the retry would only flip the row to Pending to be refused again, once per
+    /// build, on every such row (#6627).</param>
     internal static bool HasFailureFromOlderPlatform(
-        NodeTypeDefinition def, string? livePlatformVersion, string? nodeTypePath = null) =>
+        NodeTypeDefinition def, string? livePlatformVersion, string? nodeTypePath = null,
+        bool closedTypeSet = false) =>
         def.CompilationStatus is CompilationStatus.Error
+        && !(closedTypeSet && ClosedTypeSet.IsRefusal(def.CompilationError))
         // The live build must be ORDERED (a CI run number) before it can claim to be newer than
         // anything — including an absent stamp, which would otherwise bypass the ordering.
         && IsOrderedPlatformBuild(livePlatformVersion)
@@ -3904,9 +3935,12 @@ internal static class NodeTypeCompilationHelpers
     /// (<see cref="LivePlatformVersion"/>), or <c>null</c> when it is not known — then only the
     /// input-token trigger (<see cref="HasStaleFailureVerdict"/>) is consulted and the
     /// older-platform one (<see cref="HasFailureFromOlderPlatform"/>) never fires.</param>
+    /// <param name="closedTypeSet">Whether this process serves a closed type set — handed to
+    /// <see cref="HasFailureFromOlderPlatform"/>, which then never retries a closed-set refusal (#6627).</param>
     internal static MeshNode ApplyFailedVerdictRedrive(
         MeshNode curr, string hubPath, string? modulesHash,
-        NodeTypeCompileParkRegistry? parkRegistry, string? livePlatformVersion = null)
+        NodeTypeCompileParkRegistry? parkRegistry, string? livePlatformVersion = null,
+        bool closedTypeSet = false)
     {
         if (curr?.Content is not NodeTypeDefinition d) return curr!;
         // Never clobber an in-flight compile (a concurrent release request or
@@ -3917,7 +3951,7 @@ internal static class NodeTypeCompilationHelpers
         // Re-check against the state being committed — a genuine compile may have settled, or a
         // fresh terminal failure may have re-parked, between the outer Where and this write.
         if (!HasStaleFailureVerdict(d, modulesHash, hubPath)
-            && !HasFailureFromOlderPlatform(d, livePlatformVersion, hubPath))
+            && !HasFailureFromOlderPlatform(d, livePlatformVersion, hubPath, closedTypeSet))
             return curr;
         // 🅿️ Committing the flip — and ONLY now — claim the one-shot admission, so the compile
         // watcher's parked short-circuit lets this Pending emission through. The park itself is
@@ -4068,6 +4102,69 @@ internal static class NodeTypeCompilationHelpers
             : DateTimeOffset.UtcNow;
 
     /// <summary>
+    /// MeshWeaver#6831 — the module version a successful compile's bytes were built at, as
+    /// <see cref="NodeTypeDefinition.BuiltModuleVersion"/> records it. It is the
+    /// <see cref="NodeTypeDefinition.CurrentModuleVersion"/> of <paramref name="compiledInput"/> —
+    /// the record the compile was HANDED (its configuration is what Roslyn compiled) — and only
+    /// when that version provably belongs to these bytes:
+    /// <list type="bullet">
+    ///   <item>the source files the compile read are exactly the ones the input described
+    ///   (<paramref name="compiledSources"/> equals its <c>CurrentSourceVersions</c>), and</item>
+    ///   <item>no compile input moved while it ran: the record the stamp settles onto
+    ///   (<paramref name="def"/>) still carries the input's <c>Configuration</c>,
+    ///   <c>CurrentModuleVersion</c>, <c>CurrentSourceVersions</c>,
+    ///   <c>CurrentSourceFingerprint</c> and <c>CurrentSourceIncludes</c>. The source-version
+    ///   dictionaries exclude <c>@@</c>-includes and the configuration, so a configuration- or
+    ///   include-only update landing mid-compile is visible ONLY here; the compile read one side
+    ///   of it or the other and nothing records which, so the version is unknown.</item>
+    /// </list>
+    /// Otherwise — including when the caller cannot name its input — null (unknown), never the
+    /// live record's version, which may already be the NEXT one. Bytes whose MVID the record already
+    /// carries a version for keep it (a disk-cache reload of the same build), and an unreadable MVID
+    /// keeps the standing pair, whose MVID then still names the old bytes.
+    /// </summary>
+    /// <param name="def">The record the compile is settling onto (live at the stamp).</param>
+    /// <param name="compiledInput">The record the compile was handed, or null when unknown.</param>
+    /// <param name="compiledSources">The source snapshot the compile recorded.</param>
+    /// <param name="assemblyMvid">The MVID of the bytes the compile produced, or null if unreadable.</param>
+    internal static string? BuiltModuleVersionOfCompile(
+        NodeTypeDefinition def, NodeTypeDefinition? compiledInput,
+        IReadOnlyDictionary<string, long>? compiledSources, string? assemblyMvid)
+    {
+        if (assemblyMvid is null)
+            return def.BuiltModuleVersion;
+        if (def.BuiltModuleVersion is not null
+            && string.Equals(assemblyMvid, def.BuiltModuleVersionMvid, StringComparison.Ordinal))
+            return def.BuiltModuleVersion;
+        if (compiledInput is null)
+            return null;
+        var readWhatTheInputDescribed = !(compiledInput with
+        {
+            CompiledSources = compiledSources ?? System.Collections.Immutable.ImmutableDictionary<string, long>.Empty,
+        }).IsDirty;
+        return readWhatTheInputDescribed && NoCompileInputMoved(compiledInput, def)
+            ? compiledInput.CurrentModuleVersion
+            : null;
+    }
+
+    /// <summary>Whether every compile input that the source-version dictionaries do NOT cover is
+    /// the same on <paramref name="input"/> and <paramref name="live"/> (#6831).</summary>
+    private static bool NoCompileInputMoved(NodeTypeDefinition input, NodeTypeDefinition live)
+        => string.Equals(input.Configuration, live.Configuration, StringComparison.Ordinal)
+           && string.Equals(input.CurrentModuleVersion, live.CurrentModuleVersion, StringComparison.Ordinal)
+           && string.Equals(input.CurrentSourceFingerprint, live.CurrentSourceFingerprint, StringComparison.Ordinal)
+           && SameSequence(input.CurrentSourceIncludes, live.CurrentSourceIncludes)
+           && SameVersions(input.CurrentSourceVersions, live.CurrentSourceVersions);
+
+    private static bool SameSequence(IReadOnlyList<string>? a, IReadOnlyList<string>? b)
+        => a is null || b is null ? a is null && b is null : a.SequenceEqual(b, StringComparer.Ordinal);
+
+    private static bool SameVersions(IReadOnlyDictionary<string, long>? a, IReadOnlyDictionary<string, long>? b)
+        => (a is null || a.Count == 0) && (b is null || b.Count == 0)
+           || a is not null && b is not null && a.Count == b.Count
+              && a.All(kv => b.TryGetValue(kv.Key, out var v) && v == kv.Value);
+
+    /// <summary>
     /// THE terminal stamp of a SUCCESSFUL compile — the exact field set
     /// <see cref="RunCompile"/>'s write-back has always applied, extracted as a pure function so
     /// the initial-bake batch driver (issue #1207, <c>NodeTypeBatchBake</c> in
@@ -4099,6 +4196,12 @@ internal static class NodeTypeCompilationHelpers
     /// stamp: the stamp describes THIS build, never an earlier one.
     /// </param>
     /// <param name="unreleasedBuildReason">Why, in the attempt's own words; travels with the path.</param>
+    /// <param name="compiledInput">
+    /// 🚨 #6831 — the definition the compile was HANDED (the pending node it compiled). The module
+    /// version stamped on the bytes is THIS record's, never <paramref name="def"/>'s: a
+    /// configuration- or include-only update landing during the compile moves the live version
+    /// without making the type dirty. Null = unknown, and the bytes' version is then unknown too.
+    /// </param>
     internal static NodeTypeDefinition ApplyCompileSuccess(
         NodeTypeDefinition def,
         NodeCompilationResult result,
@@ -4107,7 +4210,8 @@ internal static class NodeTypeCompilationHelpers
         string? releasePath,
         string? modulesHash = null,
         string? unreleasedBuildPath = null,
-        string? unreleasedBuildReason = null)
+        string? unreleasedBuildReason = null,
+        NodeTypeDefinition? compiledInput = null)
     {
         var assemblyMvid = ServedBuildIdentity.OfFile(result.AssemblyLocation);
         var dependencies = result.CompiledDependencies;
@@ -4149,6 +4253,8 @@ internal static class NodeTypeCompilationHelpers
             // ApplyCompileFailure deliberately does NOT do this: after a failed compile the bytes
             // in place are still whatever the refusal left, so the refusal is still the true story.
             BuildProvenance = Mesh.Services.BuildProvenance.Compiled,
+            // #6832 — a build of the live source lifts any delivery hold, so its reason goes too.
+            DeliveryHoldReason = null,
             LastCompileSucceededAt = DateTimeOffset.UtcNow,
             // Stamp LastCompiledVersion to MATCH the version the IAssemblyStore upload used
             // (set by UploadToStoreIfNeeded — the captured node Version at compile kickoff).
@@ -4208,6 +4314,13 @@ internal static class NodeTypeCompilationHelpers
             // alone rather than erasing it, exactly as the other assembly fields do.
             LatestAssemblyMvid =
                 assemblyMvid ?? def.LatestAssemblyMvid,
+            // 🚨 #6831 — the module version THESE bytes were built at, keyed to their MVID, so a
+            // later delivery hold (which relabels the provenance, not the bytes) or a later
+            // include-only edit (which moves CurrentModuleVersion without making the type dirty)
+            // cannot relabel them. The version is the compiled INPUT's, and only while no input
+            // moved during the compile; otherwise the bytes' version is unknown.
+            BuiltModuleVersion = BuiltModuleVersionOfCompile(def, compiledInput, result.CompiledSources, assemblyMvid),
+            BuiltModuleVersionMvid = assemblyMvid ?? def.BuiltModuleVersionMvid,
             // The framework the assembly bound against — HasUsableBuild compares this to the
             // live FrameworkVersion so a MeshWeaver redeploy forces a recompile instead of
             // loading an ABI-stale DLL.
@@ -5175,7 +5288,11 @@ internal static class NodeTypeCompilationHelpers
                                 SettleHub().ServiceProvider.GetService<InstalledModulesFingerprint>()?.Hash,
                                 // #5057 — a build that ends with no release is STAMPED as such,
                                 // not only logged at the moment of the settle.
-                                settle.UnreleasedBuildPath, settle.UnreleasedBuildReason);
+                                settle.UnreleasedBuildPath, settle.UnreleasedBuildReason,
+                                // #6831 — the record the compile READ, so the bytes carry its
+                                // module version and not one that landed while it ran.
+                                compiledInput: outcome.PendingNode.ContentAs<NodeTypeDefinition>(
+                                    SettleHub().JsonSerializerOptions, logger));
                             lifted = BuildDeliveryHold.EventOf(def, succeeded);
                             liftedDef = succeeded;
                             return curr with { Content = succeeded };

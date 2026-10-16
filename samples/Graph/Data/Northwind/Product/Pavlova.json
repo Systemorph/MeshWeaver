@@ -6,7 +6,6 @@
   "category": "Products",
   "description": "Pavlova - 32 - 500 g boxes",
   "icon": "/static/NodeTypeIcons/shopping-bag.svg",
-  "isPersistent": true,
   "content": {
     "$type": "ProductContent",
     "productId": 16,

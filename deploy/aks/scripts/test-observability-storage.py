@@ -2,9 +2,17 @@
 """Exercise the installer's live-storage verdict without a cluster or credentials."""
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import unittest
+import importlib.util
+import sys
+
+_spec = importlib.util.spec_from_file_location('recovery', Path(__file__).with_name('test-observability-recovery.py'))
+_recovery = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_recovery)
+invoke_toolset = _recovery.invoke_toolset
 
 SCRIPT = Path(os.environ.get('INSTALLER_UNDER_TEST', Path(__file__).with_name('install-observability.sh'))).resolve()
 
@@ -15,6 +23,11 @@ class StorageVerdictTest(unittest.TestCase):
             root = Path(directory)
             (root / 'helm').write_text('#!/bin/sh\nexit 0\n')
             (root / 'kubectl').write_text('''#!/bin/sh
+# The invoke pod has no kubeconfig: a connection flag drops kubectl to localhost:8080.
+case " $* " in
+  *' --request-timeout'*|*' --server'*|*' --kubeconfig'*|*' --token'*|*' --context'*)
+    echo 'The connection to the server localhost:8080 was refused' >&2; exit 1 ;;
+esac
 case "$*" in
   *volumeMounts*)
     [ "$SCENARIO" = read_error ] && exit 9
@@ -28,16 +41,24 @@ case "$*" in
     [ "$SCENARIO" = pvc_error ] && exit 9
     if [ "$SCENARIO" = pending ]; then printf Pending; else printf Bound; fi ;;
   *'get pods'*) printf 'loki-0 Running\\n' ;;
+  *'get deploy,sts,ds'*) printf 'statefulset.apps/loki\\n' ;;
+  *'rollout status'*) exit 0 ;;
+  *'get deploy loki-prometheus-server'*) exit 1 ;;
+  *'get pod loki-prometheus-tsdb-recovery'*) exit 0 ;;
+  *configmap*|*namespace*) exit 0 ;;
   *) exit 8 ;;
 esac
 ''')
             for name in ('helm', 'kubectl'):
                 (root / name).chmod(0o755)
             (root / 'values.yaml').write_text('loki: {}\n')
-            env = dict(os.environ, PATH=str(root) + os.pathsep + os.environ['PATH'],
+            # The invoke pod's distroless toolset (no sed) — shared with the recovery test.
+            (root / 'invoke-bin').mkdir()
+            invoke_toolset(root / 'invoke-bin')
+            env = dict(os.environ, PATH=str(root) + os.pathsep + str(root / 'invoke-bin'),
                        GRAFANA_PW='synthetic-test-only', VALUES=str(root / 'values.yaml'),
                        SCENARIO=scenario)
-            return subprocess.run(['bash', str(SCRIPT)], env=env, capture_output=True,
+            return subprocess.run([shutil.which('bash'), str(SCRIPT)], env=env, capture_output=True,
                                   text=True, timeout=10)
 
     def test_bound_claim_passes(self):
