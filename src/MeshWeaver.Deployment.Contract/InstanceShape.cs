@@ -135,6 +135,53 @@ public sealed record RegistryKeyVaultSpec
     public string? NotificationSecretObject { get; init; }
 }
 
+/// <summary>
+/// Where this instance pulls its SEALED NodeType publications from before the portal starts — the
+/// chart's <c>bundles</c> section, which renders the <c>bundle-identity</c> and <c>bundle-fetch</c>
+/// init containers (Doc/Architecture/PluginBundlesInTheRegistry). Without it every pod compiles
+/// the shipped NodeTypes itself, and a multi-pod instance can name an assembly in the shared
+/// records that only the compiling pod holds.
+///
+/// <para>Stated on the record so an estate outside the fleet's own subscription can declare its
+/// bundle source and still roll from the record alone: before this block existed the source lived
+/// only in a hand-written values layer, and a record-driven roll either dropped it or was refused
+/// for dropping it (MeshWeaver#6825).</para>
+///
+/// <para>The init container authenticates with the pod's <see cref="DeploymentContent.ImagePullSecret"/>:
+/// the key that pulls the platform image pulls the bundles, so a record that states a registry here
+/// states that Secret too. Names only — no credential.</para>
+/// </summary>
+public sealed record BundlesSpec
+{
+    /// <summary>The fleet registry host the publications are pulled from (e.g. <c>cr.meshweaver.cloud</c>). Blank → no bundle fetch renders.</summary>
+    [Description("Registry host the sealed bundles are pulled from (e.g. cr.meshweaver.cloud)")]
+    public string? Registry { get; init; }
+
+    /// <summary>The source names to materialise, as the publisher named them (e.g. <c>plugins</c>, <c>reinsurance</c>). Required when <see cref="Registry"/> is set.</summary>
+    [Description("Source names to materialise (e.g. plugins)")]
+    public ImmutableList<string> Sources { get; init; } = ImmutableList<string>.Empty;
+
+    /// <summary>
+    /// The framework identity to pull — the FALLBACK only. The identity is read from the running
+    /// portal image (<c>meshweaver-framework.identity</c>, MeshWeaver#6052), so it follows every
+    /// roll; this value is used only for an image that predates that file, and it does NOT follow a
+    /// roll. Leave it blank on an image that carries the file.
+    /// </summary>
+    [Description("Fallback framework identity, used only for an image that predates the identity file")]
+    public string? Identity { get; init; }
+
+    /// <summary>
+    /// The directory the init container fills AND the pre-warm reads — rendered as
+    /// <c>PreWarm__PrebuiltBundleRoot</c>, so the two cannot disagree. Blank →
+    /// <see cref="DefaultRoot"/>.
+    /// </summary>
+    [Description("Directory the bundles land in and the pre-warm reads — blank means /data/prebuilt-bundles")]
+    public string? Root { get; init; }
+
+    /// <summary>The fleet's bundle shelf: under the shared <c>/data</c> volume, where every AKS instance's pre-warm reads.</summary>
+    public const string DefaultRoot = "/data/prebuilt-bundles";
+}
+
 /// <summary>CPU and memory for one side of a resource envelope, as Kubernetes quantities.</summary>
 public sealed record ResourceQuantities
 {
@@ -267,8 +314,15 @@ public sealed record VolumeClaim
 /// Sticky sessions at the ingress. A Blazor circuit and its per-circuit hubs live on ONE pod
 /// (<c>[PreferLocalPlacement]</c>), so a client bouncing between pods loses its session — the
 /// cookie pins it. The nginx/AGIC annotation maps are the controller-specific spellings of the
-/// same intent; the future manifest generator derives them, the chart today reads only the
-/// flat <c>ingress.annotations</c>, so these are recorded intent until it does.
+/// same intent.
+///
+/// <para>The chart reads it (MeshWeaver#6825): when <see cref="Enabled"/>, the portal ingress
+/// carries <c>nginx.ingress.kubernetes.io/affinity: cookie</c>, the
+/// <c>session-cookie-name</c> from <see cref="CookieName"/> when stated, then
+/// <see cref="NginxAnnotations"/> over both, and the flat <c>ingress.annotations</c> over all of
+/// them — a hand-written annotation still wins. Disabled or absent renders none of it. The chart's
+/// ingresses are nginx-shaped (the gRPC and MCP ingresses carry nginx annotations only), so
+/// <see cref="AgicAnnotations"/> stays recorded intent and is not rendered.</para>
 /// </summary>
 public sealed record SessionAffinity
 {
