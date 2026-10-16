@@ -412,6 +412,56 @@ the watchdog tell *the pump is busy* from *the pump never handed work over*.
 inconsistent is itself a report about the reporter, and it is the second time a field on this snapshot
 has described something it could not measure — the first was `exec=0`, a hard-coded literal.
 
+### 7314 names the step, and the registrant, that holds the block (#6883)
+
+The guard above made 7314 true about the PHASE. It was still not specific about the STEP. The
+ShutDown phase runs four pieces of other people's code inline on the action block, in this order:
+
+| Step (`ShutDownStep(…)`) | What runs inline | Who to look for |
+|---|---|---|
+| `erroring pending callbacks` | each pending response subject's `OnError`, and with it every subscriber's error continuation | a subscriber of one of the `PendingCallbacks` |
+| `reactive dispose actions` | each `RegisterForDisposal(Func<IMessageHub, IObservable<Unit>>)` factory, then the subscription to their merged chain | an action doing synchronous work before it returns its observable |
+| `registrant walk` | each registered synchronous cleanup's `Dispose`, in registration order | the registrant named in `DisposingRegistrant(…)` |
+| `messageService.Dispose` | opening the init gates, answering the deferred deliveries, stopping the timers | the message service, not a registrant |
+
+The verdict printed "find the registrant" for all four. It now records the step it entered (one
+immutable mark the ShutdownRequest turn swaps, read by the detector from its own thread), and each
+guarded registrant stamps itself while its `Dispose` runs, so the line says which. The registrant is
+described by the delegate it was registered as — `RegisterForDisposal(Action<IMessageHub>)` keeps the
+delegate, so a lambda prints as its declaring class and enclosing method rather than as Rx's
+anonymous disposable — or by its own type. "Find the registrant" is printed only when one is running.
+Each of the other three steps says that no registrant is involved, and names what is.
+
+🚨 **`Registrants=0` is what the walk itself reports.** Rx's `CompositeDisposable.Dispose` swaps its
+list out and zeroes its count *before* it disposes a single entry. So from the first instant of the
+walk, `DisposalRegistrantCount` reads 0 whatever is still to run. #6883 printed
+`Registrants=0` beside "find the registrant", and the report read the pair as a contradiction, with a
+candidate cause "the block is ahead of the registrants". The opposite holds. Every hosted hub has at
+least its own registry removal registered, so a hosted hub at ShutDown that reads 0 has *begun* its
+walk. The snapshot now says so on the line: `Registrants=0 (walk begun: …)`.
+
+**The owner could not see the child it was waiting on.** A hosted hub's registry removal is one of
+its registrants. So partway through its own walk a child leaves `HostedHubsCollection.Hubs`, while
+the owner's disposal join, which took its snapshot earlier, is still waiting on it. #6883's owner
+(a partition root at `DisposeHostedHubs`) printed 7313 at the same two instants as its `sync/*` child
+printed 7314. The owner's line said *"it has 0 hosted hub(s) below it … the diagnostics below name
+it"*, and its recursive snapshot was its own line alone. `Hubs` now also carries every hub the join
+has disposed and not yet seen `DisposalCompleted` from, so the owner's snapshot names that child
+until it is Dead.
+
+**What #6883 established, and what it did not.** The child's stall resolved on its own: the detector
+reports every budget while a stall lasts, and the pod logged two verdicts (16 s and 24 s) and no
+third. So the ShutDown phase held the block for between 24 s and 32 s and then completed, and the
+owner's 7313s stopped at the same moment. `Registrants=0` places the block inside the registrant walk
+or after it (`messageService.Dispose`). It is not ahead of the registrants. Which registrant it was,
+and what it waited on, was **not** established: the pod's retained lines carry no stack and no other
+line for that hub. The next occurrence names it. Read `ShutDownStep(…)` and `DisposingRegistrant(…)`
+on the 7314 line, and the child's line inside its owner's 7313. A 24–32 s window is suggestive of a
+30 s bound somewhere in a synchronous wait, but that is a hypothesis; no code path has been shown to
+produce it. `ShutDownPhaseStallVerdictTest` builds both shapes. One is an owner whose `sync/*` child
+parks inside its walk; the other is a hub parked in a reactive dispose action. The test asserts on
+the emitted verdicts.
+
 ---
 
 ## The order to read a 7313 / 7316 in
@@ -425,8 +475,10 @@ has described something it could not measure — the first was `exec=0`, a hard-
 3. **`Executing(T, ms)`.** Present ⇒ read 7311/7312/7314/7318 instead; the turn is named. 🚨 But check
    it against `drainsInFlight` first: `Executing(…)` with `drainsInFlight=0` **and** `draining=False`
    is impossible for a live turn, so the elapsed is a stale stamp and the verdict keyed on a turn no
-   thread is in. And `T == ShutdownRequest` splits on the phase — 7314 (at or past ShutDown) means a
-   blocking registrant; 7318 (below it) means no registrant has run and the finding is the transition.
+   thread is in. And `T == ShutdownRequest` splits on the phase — 7314 (at or past ShutDown) means
+   one of the phase's four inline steps is blocking, and `ShutDownStep(…)` / `DisposingRegistrant(…)`
+   say which (a registrant only in the walk); 7318 (below it) means no registrant has run and the
+   finding is the transition.
 4. **The recursive snapshot below the line.** It carries every hosted hub's `RunLevel`, queue
    depths, executing turn and pending callbacks — that is the reproduction.
 5. **`last progress`** — last, and only for the address. Its *level* may be the `BehaviorSubject`
