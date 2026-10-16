@@ -344,10 +344,13 @@ public class BuildProbingPrecedenceTest
 /// <summary>Records every log entry with its level and rendered message.</summary>
 internal sealed class CapturingLogger<T> : Microsoft.Extensions.Logging.ILogger<T>
 {
-    private readonly System.Collections.Concurrent.ConcurrentQueue<(Microsoft.Extensions.Logging.LogLevel Level, string Message)> _entries = new();
+    // Lock-free and immutable (Collections Policy): the service logs from pool threads, the test
+    // reads from its own. ImmutableInterlocked is the house shape for that.
+    private System.Collections.Immutable.ImmutableList<(Microsoft.Extensions.Logging.LogLevel Level, string Message)> _entries =
+        System.Collections.Immutable.ImmutableList<(Microsoft.Extensions.Logging.LogLevel, string)>.Empty;
 
     /// <summary>Everything logged so far, in order.</summary>
-    public IReadOnlyList<(Microsoft.Extensions.Logging.LogLevel Level, string Message)> Entries => _entries.ToArray();
+    public IReadOnlyList<(Microsoft.Extensions.Logging.LogLevel Level, string Message)> Entries => System.Threading.Volatile.Read(ref _entries);
 
     public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
 
@@ -355,5 +358,6 @@ internal sealed class CapturingLogger<T> : Microsoft.Extensions.Logging.ILogger<
 
     public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId,
         TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-        => _entries.Enqueue((logLevel, formatter(state, exception)));
+        => System.Collections.Immutable.ImmutableInterlocked.Update(
+            ref _entries, (list, entry) => list.Add(entry), (logLevel, formatter(state, exception)));
 }
