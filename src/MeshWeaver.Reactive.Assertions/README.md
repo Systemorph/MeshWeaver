@@ -40,5 +40,6 @@ never captures a synchronization context and cannot deadlock a test). Your test 
 | `Be(expected)` | Assert the first emission equals `expected`. |
 | `Complete()` | Assert the stream completes within the timeout. |
 | `NotEmit(within)` | Assert nothing is emitted within the window. |
+| `NotEmitBefore(settled)` | Assert nothing is emitted before `settled` emits; fails if `settled` never arrives. Prefer it to `NotEmit` whenever a settled signal exists. |
 
 Depends only on `System.Reactive`.

@@ -52,6 +52,18 @@ public class BuildTriggeredSyncPinsTheBuiltCommitTest(ITestOutputHelper output)
     /// <summary>A real-shaped 40-hex sha, so nothing downstream can mistake it for a branch name.</summary>
     private const string PushedSha = "8d4920c93a1b2c3d4e5f60718293a4b5c6d7e8f9";
 
+    /// <summary>The branch's previous commit, whose build is red.</summary>
+    private const string RedSha = "7c3810b82a0a1b2c3d4e5f60718293a4b5c6d7e8";
+
+    /// <summary>
+    /// 🚨 The SETTLED signal for every "fetches nothing" assertion here (#6817): a push at this sha,
+    /// delivered AFTER the step under test, through the same processor, into the same Space. Its
+    /// fetch proves the mesh has processed what came before it and COULD import, so a negative
+    /// assertion ends when it arrives instead of spending a fixed 36 s window on CI. It is a sha no
+    /// step under test ever names, so the forbidden fetch can never be mistaken for it.
+    /// </summary>
+    private const string SentinelSha = "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e";
+
     private readonly RecordingRepoClient repoClient = new();
 
     /// <summary>The DevLogin user the test base logs in.</summary>
@@ -79,31 +91,37 @@ public class BuildTriggeredSyncPinsTheBuiltCommitTest(ITestOutputHelper output)
     private IMeshService MeshService => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
     /// <summary>
-    /// 🚨 <b>A push imports at the pushed commit, and a RED build of that commit does not hold it.</b>
+    /// 🚨 <b>A push imports at the pushed commit, and a RED build on its branch does not hold it.</b>
     ///
-    /// <para>The red build is delivered FIRST, under a <c>NotEmit</c>: it must fetch nothing (a
-    /// failed run is no signal of any kind). Then the push — which before this change logged and
-    /// imported nothing — must reach GitHub at its own sha. Against the old code this test fails on
-    /// the second assertion: the push answered 0 and nothing was ever fetched.</para>
+    /// <para>The red build (of the branch's previous commit; the same-commit case is
+    /// <see cref="APush_ImportsAtItsCommit_ThoughThatCommitsOwnBuildIsRed"/>) is delivered FIRST: it must fetch nothing
+    /// (a failed run is no signal of any kind). Then the push — which before this change logged and
+    /// imported nothing — must reach GitHub at its own sha, and that fetch is the SETTLED signal for
+    /// the red build's silence: nothing may be fetched before it (#6817). Against the old code this
+    /// test fails on the push: it answered 0 and nothing was ever fetched.</para>
     /// </summary>
     [Fact(Timeout = 120_000)]
     public async Task APush_ImportsAtThePushedCommit_EvenThoughTheBranchsBuildIsRed()
     {
         await Arrange("PushRed", TestContext.Current.CancellationToken);
 
-        var redFetchesNothing = repoClient.FetchedRefs.Should().NotEmit(within: TestTimeouts.Quick,
-            cancellationToken: TestContext.Current.CancellationToken);
-        var red = await Anonymously(() => Webhooks.Process("workflow_run",
-            BuildPayload(PushedSha, conclusion: "failure")));
-        red.Should().Be(0, "a red build is no publish signal and records nothing");
-        await redFetchesNothing;
-
         var fetched = repoClient.FetchedRefs.Where(r => r == PushedSha)
             .Should().Within(TestTimeouts.Convergence * 2)
             .Emit("the push must import although the branch's CI is red (policy sources-sync-on-push)");
+        var redFetchesNothing = repoClient.FetchedRefs.Where(r => r != PushedSha)
+            .Should().Within(TestTimeouts.Convergence * 2)
+            .NotEmitBefore(repoClient.FetchedRefs.Where(r => r == PushedSha),
+                "a red build is no signal of any kind, so nothing is fetched before the push imports",
+                TestContext.Current.CancellationToken);
+
+        var red = await Anonymously(() => Webhooks.Process("workflow_run",
+            BuildPayload(RedSha, conclusion: "failure")));
+        red.Should().Be(0, "a red build is no publish signal and records nothing");
+
         var triggered = await Anonymously(() => Webhooks.Process("push", PushPayload(PushedSha)));
 
         triggered.Should().Be(1, "the one sync source of this repository is selected by the push");
+        await redFetchesNothing;
         var requested = await fetched;
         requested.Should().Be(PushedSha,
             "the import must read the commit the push named, never the branch resolved at fetch time "
@@ -112,13 +130,47 @@ public class BuildTriggeredSyncPinsTheBuiltCommitTest(ITestOutputHelper output)
     }
 
     /// <summary>
+    /// 🚨 <b>A RED build of the very commit a push names does not hold that push.</b> The same-commit
+    /// case: an implementation that refused a push only when THAT commit's own build had failed
+    /// would pass <see cref="APush_ImportsAtThePushedCommit_EvenThoughTheBranchsBuildIsRed"/> and
+    /// fails here.
+    ///
+    /// <para>The red build's silence is asserted on its own, ended by the sentinel push — not by the
+    /// pushed commit's fetch, which an erroneous build-triggered fetch of the same sha would
+    /// satisfy.</para>
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task APush_ImportsAtItsCommit_ThoughThatCommitsOwnBuildIsRed()
+    {
+        await Arrange("PushOwnRed", TestContext.Current.CancellationToken);
+
+        var redFetchesNothing = NothingFetchedBeforeTheSentinel(
+            "a red build is no signal of any kind, so it fetches nothing — not even its own commit");
+        var red = await Anonymously(() => Webhooks.Process("workflow_run",
+            BuildPayload(PushedSha, conclusion: "failure")));
+        red.Should().Be(0, "a red build is no publish signal and records nothing");
+        await DeliverTheSentinelPush();
+        await redFetchesNothing;
+
+        var fetched = repoClient.FetchedRefs.Where(r => r == PushedSha)
+            .Should().Within(TestTimeouts.Convergence * 2)
+            .Emit("the push must import although that very commit's build is red (policy sources-sync-on-push)");
+        var triggered = await Anonymously(() => Webhooks.Process("push", PushPayload(PushedSha)));
+
+        triggered.Should().Be(1, "the one sync source of this repository is selected by the push");
+        (await fetched).Should().Be(PushedSha);
+    }
+
+    /// <summary>
     /// 🚨 <b>A green build RECORDS the build and imports nothing</b> — under every admitted trigger.
     /// A green build of an older commit finishing after a newer push had landed would otherwise move
     /// the Space backwards, and the push already brought the sources.
     ///
-    /// <para><b>Positive control in the same mesh:</b> a push at one of the very same shas DOES
-    /// fetch, so the <c>NotEmit</c> above it cannot pass on a mesh that could not import at all. The
-    /// scheduled PR-updater (#3978) is still refused outright: no build record.</para>
+    /// <para><b>Positive control in the same mesh:</b> a push AFTER the builds DOES fetch, so the
+    /// "nothing fetched" assertion cannot pass on a mesh that could not import at all — and that
+    /// fetch is the settled signal the assertion ends on (#6817). A second push at one of the very
+    /// same shas then imports too: recording a build never marks its commit as synced. The scheduled
+    /// PR-updater (#3978) is still refused outright: no build record.</para>
     /// </summary>
     [Fact(Timeout = 120_000)]
     public async Task AGreenBuild_RecordsTheBuild_ButNoLongerImports()
@@ -132,8 +184,8 @@ public class BuildTriggeredSyncPinsTheBuiltCommitTest(ITestOutputHelper output)
             ("schedule", "3333333333333333333333333333333333333333"),
         };
 
-        var noImport = repoClient.FetchedRefs.Should().NotEmit(within: TestTimeouts.Quick,
-            cancellationToken: TestContext.Current.CancellationToken);
+        var noImport = NothingFetchedBeforeTheSentinel(
+            "a green build records the build and imports nothing (policy sources-sync-on-push)");
         foreach (var (trigger, sha) in shas)
         {
             var recorded = await Anonymously(() => Webhooks.Process("workflow_run",
@@ -145,9 +197,10 @@ public class BuildTriggeredSyncPinsTheBuiltCommitTest(ITestOutputHelper output)
             "4444444444444444444444444444444444444444",
             workflowPath: ".github/workflows/auto-update-green-prs.yml", trigger: "schedule")));
         updater.Should().Be(0, "a green PR updater proves no content and is not recorded (#3978)");
+        await DeliverTheSentinelPush();
         await noImport;
 
-        // ── the positive control ──
+        // ── the positive control at a recorded sha ──
         var pushFetches = repoClient.FetchedRefs.Where(r => r == shas[2].Sha)
             .Should().Within(TestTimeouts.Convergence * 2)
             .Emit("a push at the same sha must import — the mesh above COULD import, it was told not to");
@@ -191,10 +244,11 @@ public class BuildTriggeredSyncPinsTheBuiltCommitTest(ITestOutputHelper output)
             .Timeout(TestTimeouts.Convergence * 2)
             .Await(TestContext.Current.CancellationToken);
 
-        var noRefetch = repoClient.FetchedRefs.Should().NotEmit(within: TestTimeouts.Quick,
-            cancellationToken: TestContext.Current.CancellationToken);
+        var noRefetch = NothingFetchedBeforeTheSentinel(
+            "a settled source costs the reconcile one ref lookup and no fetch");
         var again = await Anonymously(() => Webhooks.ReconcileBranches());
         again.Should().Be(0, "the source is already at the head");
+        await DeliverTheSentinelPush();
         await noRefetch;
     }
 
@@ -205,43 +259,41 @@ public class BuildTriggeredSyncPinsTheBuiltCommitTest(ITestOutputHelper output)
     [Fact(Timeout = 120_000)]
     public async Task UnattendedImport_WithoutACommit_Refuses_RatherThanFallingBackToTheBranch()
     {
-        var space = "PushNoSha" + Guid.NewGuid().ToString("N")[..8];
-        await NodeFactory.CreateNode(new MeshNode(space)
-        {
-            NodeType = "Space",
-            Name = "No commit",
-            State = MeshNodeState.Active,
-            Content = new Space(),
-        }).Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
+        // A WIRED source whose branch head is a real sha, so a fallback to the branch would have
+        // something to fetch — and a fetch of anything but the sentinel is that fallback.
+        var space = await Arrange("PushNoSha", TestContext.Current.CancellationToken);
+        repoClient.Head = PushedSha;
 
-        var nothingFetched = repoClient.FetchedRefs.Should().NotEmit(within: TestTimeouts.Quick,
-            cancellationToken: TestContext.Current.CancellationToken);
+        var nothingFetched = NothingFetchedBeforeTheSentinel(
+            "a caller that cannot name the commit fails before any fetch (#1430)");
         await Assert.ThrowsAsync<ArgumentException>(() =>
             Mesh.UpdateToPushedCommitFromGitHub(space, UserId, commitSha: "", trigger: "push")
                 .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken));
         await Assert.ThrowsAsync<ArgumentException>(() =>
             Mesh.UpdateToProvenCommitFromGitHub(space, UserId, commitSha: "")
                 .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken));
+        await DeliverTheSentinelPush();
         await nothingFetched;
     }
 
     /// <summary>
     /// A green workflow that did not compile the repository's content is not a build signal at all
-    /// (#3978): no record, no import.
+    /// (#3978): no record, no import — for a WIRED source that a real build signal would import.
     /// </summary>
     [Fact(Timeout = 120_000)]
     public async Task GreenUnrelatedWorkflow_DoesNotRecordOrTriggerAnImport()
     {
-        var noFetch = repoClient.FetchedRefs.Should().NotEmit(within: TestTimeouts.Quick,
-            cancellationToken: TestContext.Current.CancellationToken);
+        await Arrange("Unrelated", TestContext.Current.CancellationToken);
+        var noFetch = NothingFetchedBeforeTheSentinel(
+            "a green workflow that did not compile the content is no build signal (#3978)");
 
-        var triggered = await Webhooks.Process(
-                "workflow_run",
-                BuildPayload(PushedSha, ".github/workflows/auto-update-green-prs.yml"))
-            .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
+        var triggered = await Anonymously(() => Webhooks.Process(
+            "workflow_run",
+            BuildPayload(PushedSha, ".github/workflows/auto-update-green-prs.yml")));
 
         triggered.Should().Be(0,
             "a workflow's trigger says how it started, not that it compiled this repository's content");
+        await DeliverTheSentinelPush();
         await noFetch;
     }
 
@@ -287,6 +339,29 @@ public class BuildTriggeredSyncPinsTheBuiltCommitTest(ITestOutputHelper output)
             .Select(m => m.Outcome)
             .Should().AllBe(ModuleSyncOutcomeKind.Synced);
     }
+
+    // ── the settled signal (#6817) ───────────────────────────────────────────
+
+    /// <summary>
+    /// Arms "no fetch of anything but the sentinel happens before the sentinel's own fetch". Armed
+    /// BEFORE the step under test (the recording client is hot), ended by
+    /// <see cref="DeliverTheSentinelPush"/> — never by a fixed window.
+    /// </summary>
+    private Task NothingFetchedBeforeTheSentinel(string because)
+        => repoClient.FetchedRefs.Where(r => r != SentinelSha)
+            .Should().Within(TestTimeouts.Convergence * 2)
+            .NotEmitBefore(repoClient.FetchedRefs.Where(r => r == SentinelSha), because,
+                TestContext.Current.CancellationToken);
+
+    /// <summary>
+    /// The positive half: a push at <see cref="SentinelSha"/>, which the one wired source must import.
+    /// It is delivered only after the step under test has returned its verdict, through the same
+    /// processor into the same Space, so its fetch is the point by which a fetch that step caused
+    /// would already have been seen.
+    /// </summary>
+    private async Task DeliverTheSentinelPush()
+        => (await Anonymously(() => Webhooks.Process("push", PushPayload(SentinelSha))))
+            .Should().Be(1, "the sentinel push must select the wired source, or it settles nothing");
 
     // ── arrangement ──────────────────────────────────────────────────────────
 
