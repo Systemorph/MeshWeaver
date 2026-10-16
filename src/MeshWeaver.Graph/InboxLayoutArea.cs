@@ -361,13 +361,24 @@ public static class InboxLayoutArea
             .WithView(Grid(host, rows), "Grid");
         // The side menu in a COLLAPSIBLE pane — the platform splitter's own collapse handle hides it
         // and gives the list the width (owner, 2026-10-15: "side menu should be hidable").
+        // 🚨 The splitter FLOWS at its content height and the PAGE scrolls (.body-content is the
+        // scroll container), exactly as the settings page does: a viewport-pinned height clipped the
+        // list below the fold with nothing to scroll (owner, 2026-10-16: "i cannot scroll the
+        // mailbox now"). The inline style beats FluentMultiSplitter's own `height: 100%`.
         return Controls.Splitter
-            .WithSkin(s => s.WithOrientation(Orientation.Horizontal).WithWidth("100%").WithHeight("calc(100vh - 100px)"))
+            .WithStyle(FlowingSplitterStyle)
+            .WithSkin(s => s.WithOrientation(Orientation.Horizontal).WithWidth("100%"))
             .WithView(side, area => area.WithId("Categories")
                 .AddSkin(new SplitterPaneSkin().WithSize("220px").WithMin("160px").WithMax("360px").WithCollapsible(true)))
             .WithView(main.WithStyle("min-width: 0; padding-left: 16px;"), area => area.WithId("Main")
                 .AddSkin(new SplitterPaneSkin().WithSize("*")));
     }
+
+    /// <summary>
+    /// The splitter's inline style: content decides the height (never the viewport), and a short
+    /// list still fills to the bottom without a long one being shrink-clipped back.
+    /// </summary>
+    internal const string FlowingSplitterStyle = "height: auto; flex: 1 0 auto;";
 
     /// <summary>The page's categories — key, label in the viewer's language, symbol — in band order.</summary>
     internal static ImmutableList<(string Key, string Label, string Icon)> CategoriesOf(LayoutAreaHost host, ImmutableArray<InboxSection> sections)
