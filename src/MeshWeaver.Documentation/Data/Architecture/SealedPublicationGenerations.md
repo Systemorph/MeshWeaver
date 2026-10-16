@@ -188,8 +188,9 @@ publication"*):
 The subset test is what makes `rebound` sound: a module this bake did not rebuild is carried from
 the live publication, which is right exactly when the selector — same edges, same rules — does not
 call it affected from the live baseline. The lock is taken on every target in
-`BAKE_PUBLISH_TARGETS` order, handed to the publish step as `BAKE_PUBLISH_LOCK_HOLDER`, and released
-by an `if: always()` step after it.
+`BAKE_PUBLISH_TARGETS` order under an invocation-unique holder (persisted beside the scope's state
+directory, since the release is another process), handed to the publish step as
+`BAKE_PUBLISH_LOCK_HOLDER`, and released by an `if: always()` step after it.
 
 `main-cd.yml`'s platform publish now carries a read-only `GH_TOKEN`, so the never-seal-backwards
 comparison can order two commits instead of reporting *"could not order … republishing as before"*

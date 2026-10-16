@@ -54,11 +54,19 @@ HELPER="$HERE/publish-bake-files.py"
 STATE_DIR="${STATE_DIR%/}"
 LOCKS_HELD="$STATE_DIR.locks-held"
 
-# The SAME token shape publish-bake-bundles.sh mints for its publication, so the lease, the holder
-# record and every log line name the run the way the rest of the lane does.
-HOLDER="$(printf '%s-%s-%s' \
-  "${GITHUB_REPOSITORY:-local}" "${GITHUB_RUN_ID:-$$}" "${GITHUB_RUN_ATTEMPT:-$(date -u +%s)}" \
-  | tr -c 'A-Za-z0-9._-' '-')"
+# 🚨 THE HOLDER IS UNIQUE PER INVOCATION, not per run (Copilot's review of #6878): two jobs of one
+# run share repository, run id and attempt, and a run-shaped holder would let one read the other's
+# lease as its own. It starts with the run's token (so every log line still names the run), adds
+# this process and a random part, and is PERSISTED beside the state directory — the release is a
+# later step, i.e. another process, and must release exactly this holder's lease.
+HOLDER_FILE="$STATE_DIR.lock-holder"
+if [ "${1:-}" = "--release" ] && [ -s "$HOLDER_FILE" ]; then
+  HOLDER="$(cat "$HOLDER_FILE")"
+else
+  HOLDER="$(printf '%s-%s-%s' \
+    "${GITHUB_REPOSITORY:-local}" "${GITHUB_RUN_ID:-$$}" "${GITHUB_RUN_ATTEMPT:-$(date -u +%s)}" \
+    | tr -c 'A-Za-z0-9._-' '-')-lane-pid$$-r$RANDOM$RANDOM"
+fi
 
 # The pinned SDK — ONE home for the pins: SDK_PINS in publish-bake-bundles.sh, read from there.
 if [ -n "${PUBLISH_BAKE_PYTHON:-}" ]; then
@@ -90,6 +98,12 @@ lock_path_of() { # <target> → "<account> <share> <lock path>"
 }
 
 if [ "${1:-}" = "--release" ]; then
+  if [ ! -s "$HOLDER_FILE" ]; then
+    # No holder was ever minted: the acquire step never reached its first lock, so there is nothing
+    # this run could hold. Said, not guessed — releasing under a freshly minted holder is a no-op.
+    echo "publication lock: no holder recorded at $HOLDER_FILE — this run acquired nothing; nothing to release."
+    exit 0
+  fi
   # Releases what THIS run recorded as held — and, when the record is missing (the acquire step died
   # before writing it), every target: releasing a lease this run does not hold is a named no-op.
   targets="$BAKE_PUBLISH_TARGETS"
@@ -101,6 +115,7 @@ if [ "${1:-}" = "--release" ]; then
       --holder "$HOLDER" < /dev/null || rc=1
   done
   rm -f "$LOCKS_HELD"
+  [ "$rc" -ne 0 ] || rm -f "$HOLDER_FILE"
   exit "$rc"
 fi
 
@@ -111,6 +126,7 @@ case "$ORIGINAL_SCOPE" in
 esac
 
 # ── 1. the lock, on every target, in one fixed order ─────────────────────────────────────────────
+printf '%s\n' "$HOLDER" > "$HOLDER_FILE"
 : > "$LOCKS_HELD"
 for target in $BAKE_PUBLISH_TARGETS; do
   read -r account share path < <(lock_path_of "$target")

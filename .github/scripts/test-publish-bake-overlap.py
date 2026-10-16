@@ -2410,14 +2410,17 @@ class Lane:
     """One run of the lane's three steps — scope, re-bind under the lock, carry — over the shared
     fake share, as the workflow runs them."""
 
-    def __init__(self, h: "Harness", work: Path, repo: Path, head: str, run_id: str):
+    def __init__(self, h: "Harness", work: Path, repo: Path, head: str, run_id: str,
+                 job: str = "job1"):
         self.h, self.repo, self.head, self.run_id = h, repo, head, run_id
-        self.root = work / f"lane-{run_id}"
+        self.root = work / f"lane-{run_id}-{job}"
         if self.root.exists():
             shutil.rmtree(self.root)
         self.state = self.root / "bake-scope"
         self.bake = self.root / "bake"
         self.bake.mkdir(parents=True)
+        # The bake's identity file — what the publish step (and only it) reads from this directory.
+        (self.bake / "framework-mvid.txt").write_text(IDENTITY + "\n")
         self.output = self.root / "github-output"
         self.genv = self.root / "github-env"
 
@@ -2498,12 +2501,23 @@ def run_rebind_cases(h: "Harness", work: Path) -> None:
     check("an unmoved publication is re-bound to nothing: rebind=unchanged, publish=true",
           r.returncode == 0 and o.get("rebind") == "unchanged" and o.get("publish") == "true",
           f"rc={r.returncode}, outputs={o}; {(r.stdout + r.stderr)[-400:]!r}")
-    check("…the lock is held from here to the publish, and its token is handed to the publish step",
-          leases_held(h) != [] and "BAKE_PUBLISH_LOCK_HOLDER=Systemorph-MeshWeaver.Plugins-7001-1"
-          in (lane.genv.read_text() if lane.genv.is_file() else ""), " ".join(leases_held(h)))
+    handed = lane.genv.read_text() if lane.genv.is_file() else ""
+    check("…the lock is held from here to the publish, and its INVOCATION-unique holder is handed to the publish step",
+          leases_held(h) != [] and "BAKE_PUBLISH_LOCK_HOLDER=Systemorph-MeshWeaver.Plugins-7001-1-lane-pid" in handed,
+          " ".join(leases_held(h)))
     c = lane.carry()
     check("…and the carry runs exactly as before", c.returncode == 0 and "carried forward: Gamma.zip" in c.stdout,
           f"rc={c.returncode}; {(c.stdout + c.stderr)[-300:]!r}")
+    # A second job of the SAME run (same repository, run id, attempt) must NOT read this lane's lease
+    # as its own (Copilot on #6878): its re-bind waits, bounded, and goes red while the first holds it.
+    twin = Lane(h, work, repo, c2, "7001", job="job2")
+    twin.scope()
+    t = subprocess.run(["bash", str(REBIND)], capture_output=True, text=True,
+                       env=twin.env(ORIGINAL_SCOPE="narrowed", PUBLISH_BAKE_LOCK_WAIT_SECONDS="1"))
+    check("a second job of the SAME run is refused the lane's lock (one run is not one holder)",
+          t.returncode != 0 and "Publication lock not acquired" in (t.stdout + t.stderr),
+          f"rc={t.returncode}")
+    twin.release()
     rel = lane.release()
     check("the always() release frees every lease it took", rel.returncode == 0 and leases_held(h) == [],
           f"rc={rel.returncode}; {rel.stderr[-200:]!r}")
