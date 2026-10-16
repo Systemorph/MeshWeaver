@@ -473,4 +473,51 @@ public class BuildProbingPrecedenceTest
             catch (IOException) { }
         }
     }
+
+    /// <summary>
+    /// Copilot on #6864: the store can republish the SAME path (same version and content). Forces
+    /// the ordering: the sweep finds the file missing, then — before it removes the entry — the
+    /// file is restored and the path re-armed. The fresh registration must survive the sweep.
+    /// </summary>
+    [Fact]
+    public async Task ARearmBetweenTheSweepsCheckAndItsRemoval_Survives()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mw-probe-rearm-" + Guid.NewGuid().ToString("N"));
+        var cache = new CompilationCacheService(
+            Options.Create(new CompilationCacheOptions { CacheDirectory = root }),
+            NullLogger<CompilationCacheService>.Instance);
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "store"));
+            var dll = Path.Combine(root, "store", "v1-build.dll");
+            File.WriteAllBytes(dll, [0]);
+            cache.RegisterBuildProbingDirectories(dll, [Path.Combine(root, "dirs")]);
+            File.Delete(dll);
+
+            var restored = 0;
+            cache.StaleBuildCheckProbe = path =>
+            {
+                if (path != dll || restored++ != 0) return;
+                File.WriteAllBytes(dll, [0]);   // the store republishes the same path…
+                cache.RegisterBuildProbingDirectories(dll, [Path.Combine(root, "dirs")]);  // …and a load re-arms it
+            };
+            cache.SweepStaleBuildProbingNow();
+
+            var removed = await cache.BuildProbingSweeps.Should().Within(TestTimeouts.Convergence)
+                .Emit("the sweep must complete");
+            cache.StaleBuildCheckProbe = null;
+
+            restored.Should().Be(1, "the forced ordering must actually have run");
+            removed.Should().Be(0, "the entry the sweep saw missing was replaced by a fresh registration");
+            cache.BuildProbingRegistrationCount.Should().Be(1);
+            cache.GetOrCreateLoadContextForPath("type_Probe", dll).HasBuildProbingDirectories.Should().BeTrue(
+                "a load after the re-arm must still probe the build's closure");
+        }
+        finally
+        {
+            cache.Dispose();
+            try { Directory.Delete(root, recursive: true); }
+            catch (IOException) { }
+        }
+    }
 }

@@ -1120,7 +1120,7 @@ internal class CompilationCacheService(
     // drops the entries whose file is gone each time the map has doubled since the last sweep
     // (SweepStaleBuildProbing) — O(1) File.Exists per new registration, none on a re-arm, never on
     // the arming caller's thread.
-    private readonly ConcurrentDictionary<string, System.Collections.Immutable.ImmutableArray<string>> _buildProbingDirs =
+    private readonly ConcurrentDictionary<string, BuildProbingRegistration> _buildProbingDirs =
         new(StringComparer.Ordinal);
     // The map size at which the next stale-entry sweep runs; int.MaxValue while one is in flight.
     private const int BuildProbingSweepFloor = 16;
@@ -1130,6 +1130,24 @@ internal class CompilationCacheService(
 
     /// <summary>How many stale entries the last <see cref="SweepStaleBuildProbing"/> removed (test seam).</summary>
     internal IObservable<int> BuildProbingSweeps => _buildProbingSweeps;
+
+    /// <summary>
+    /// Test seam: runs inside the sweep after a build's file was found missing and before its
+    /// registration is removed — where a republish + re-arm can land. Null in production.
+    /// </summary>
+    internal Action<string>? StaleBuildCheckProbe { get; set; }
+
+    /// <summary>Runs the stale-entry sweep now (test seam; production runs it amortized).</summary>
+    internal void SweepStaleBuildProbingNow() => SweepStaleBuildProbing();
+
+    /// <summary>
+    /// One registration of a build's probing directories. A reference type on purpose: the sweep
+    /// removes an entry only while it is still THIS registration, never a re-arm of the same path.
+    /// </summary>
+    private sealed class BuildProbingRegistration(ImmutableArray<string> directories)
+    {
+        public ImmutableArray<string> Directories { get; } = directories;
+    }
 
     /// <summary>Entries currently registered in the per-build probing map (test seam).</summary>
     internal int BuildProbingRegistrationCount => _buildProbingDirs.Count;
@@ -1157,7 +1175,7 @@ internal class CompilationCacheService(
     public void RegisterBuildProbingDirectories(string dllPath, System.Collections.Generic.IReadOnlyList<string> directories)
     {
         if (string.IsNullOrEmpty(dllPath) || directories.Count == 0) return;
-        _buildProbingDirs[dllPath] = directories.ToImmutableArray();
+        _buildProbingDirs[dllPath] = new BuildProbingRegistration(directories.ToImmutableArray());
         // A live context for the path is given it now; every one created for it later reads it.
         if (_loadContexts.TryGetValue(dllPath, out var ctx) && !ctx.IsRetired)
             ApplyBuildProbing(ctx, dllPath);
@@ -1179,9 +1197,18 @@ internal class CompilationCacheService(
         _fileSystemPool.InvokeBlocking(ct =>
             {
                 var removed = 0;
-                foreach (var path in _buildProbingDirs.Keys)
-                    if (!File.Exists(path) && _buildProbingDirs.TryRemove(path, out _))
+                // The registration is captured BEFORE the file check and removed only if it is still
+                // the SAME registration: the store can republish the same path (same version and
+                // content), and a re-arm that lands between the check and the removal is a fresh
+                // entry for a file that exists again — removing by key alone would drop it.
+                foreach (var entry in _buildProbingDirs)
+                {
+                    if (File.Exists(entry.Key))
+                        continue;
+                    StaleBuildCheckProbe?.Invoke(entry.Key);
+                    if (_buildProbingDirs.TryRemove(entry))
                         removed++;
+                }
                 return removed;
             })
             .Subscribe(
@@ -1213,8 +1240,9 @@ internal class CompilationCacheService(
         // Read, never taken — see _buildProbingDirs. Idempotent: a context already holding a build
         // record keeps it.
         if (!context.HasBuildProbingDirectories
-            && _buildProbingDirs.TryGetValue(dllPath, out var dirs) && !dirs.IsDefaultOrEmpty)
-            context.SetBuildProbingDirectories(dirs);
+            && _buildProbingDirs.TryGetValue(dllPath, out var registration)
+            && !registration.Directories.IsDefaultOrEmpty)
+            context.SetBuildProbingDirectories(registration.Directories);
     }
 
     /// <inheritdoc />
@@ -1604,8 +1632,9 @@ internal class CompilationCacheService(
             // last compiled) only when the build recorded none.
             // ConcurrentDictionary may run this factory more than once and keep only one result, so
             // it READS the registration and never consumes it.
-            if (_buildProbingDirs.TryGetValue(path, out var buildDirs) && !buildDirs.IsDefaultOrEmpty)
-                c.SetBuildProbingDirectories(buildDirs);
+            if (_buildProbingDirs.TryGetValue(path, out var buildRegistration)
+                && !buildRegistration.Directories.IsDefaultOrEmpty)
+                c.SetBuildProbingDirectories(buildRegistration.Directories);
             else if (_probingDirs.TryGetValue(nodeName, out var dirs) && !dirs.IsDefaultOrEmpty)
                 c.SetProbingDirectories(dirs);
             ContextFactoryProbe?.Invoke(path);
