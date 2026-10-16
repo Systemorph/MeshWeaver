@@ -97,6 +97,81 @@ public class InstanceRebootWatchdogRulesTest
         RebootWatchdogRules.Admit(verdict, [new("Admin/_Reboot/a", InstanceRebootTrigger.Person, Now.AddHours(-1), null, Terminal: true)], Now, Options).Fire.Should().BeTrue();
         RebootWatchdogRules.Admit(verdict, [new("Admin/_Reboot/a", InstanceRebootTrigger.Watchdog, Now.AddHours(-8), "fp2", Terminal: true)], Now, Options).Fire.Should().BeTrue();
     }
+
+    /// <summary>
+    /// 🚨 MeshWeaver#6625: an open request holds the self-reboot back only while it is PROGRESSING. A
+    /// stalled one (no progress within its declared execution window) does not — and its control, an
+    /// open request that is still moving, still does.
+    /// </summary>
+    [Fact]
+    public void AStalledOpenReboot_DoesNotHoldTheSelfRebootBack_AProgressingOneDoes()
+    {
+        var verdict = new WedgeVerdict("e", "fp1");
+        var stalled = new RebootRecord("Admin/_Reboot/a", InstanceRebootTrigger.Person, Now.AddHours(-21), null, Terminal: false)
+        {
+            Stalled = "status AwaitingRestart, no progress since …",
+        };
+        RebootWatchdogRules.Admit(verdict, [stalled], Now, Options).Fire.Should().BeTrue();
+        RebootWatchdogRules.Admit(verdict, [stalled with { Stalled = null }], Now, Options).Why.Should().Contain("already in progress");
+    }
+
+    private static readonly TimeSpan RetryUnit = TimeSpan.FromMinutes(30);
+
+    [Fact]
+    public void ARequest_StallsWhenItRecordsNoProgressWithinItsDeclaredWindow_ByStatus()
+    {
+        var window = TimeSpan.FromHours(3);
+        var restart = Now.AddHours(-4);
+        var awaiting = new InstanceRebootRequest
+        {
+            Reason = "x",
+            RequestedAt = Now.AddHours(-5),
+            Status = InstanceRebootStatus.AwaitingRestart,
+            RestartRequestedAt = restart,
+            ProgressAt = restart,
+            ExecutionWindow = window,
+        };
+        InstanceReboot.Stalled(awaiting, Now, Options.ExecutionWindow, RetryUnit)
+            .Should().Contain("AwaitingRestart").And.Contain("no process booted after it has reported");
+
+        // Controls: a replica that reported an hour ago is progress; so is a wider declared window; and a
+        // terminal request is never "stalled", however old.
+        InstanceReboot.Stalled(awaiting with
+        {
+            Replicas = ImmutableDictionary<string, InstanceRebootReplica>.Empty.Add("p",
+                new InstanceRebootReplica { Process = "p", StartedAt = Now.AddHours(-2), ReportedAt = Now.AddHours(-1) }),
+        }, Now, Options.ExecutionWindow, RetryUnit).Should().BeNull();
+        InstanceReboot.Stalled(awaiting with { ExecutionWindow = TimeSpan.FromHours(5) }, Now, Options.ExecutionWindow, RetryUnit).Should().BeNull();
+        InstanceReboot.Stalled(awaiting with { Status = InstanceRebootStatus.Failed }, Now, Options.ExecutionWindow, RetryUnit).Should().BeNull();
+
+        // A request filed before the window was declared is judged by the reader's default.
+        InstanceReboot.Stalled(awaiting with { ExecutionWindow = null }, Now, TimeSpan.FromHours(5), RetryUnit).Should().BeNull();
+        InstanceReboot.Stalled(awaiting with { ExecutionWindow = null }, Now, window, RetryUnit).Should().NotBeNull();
+
+        // Preparing: the step it stopped at is named.
+        var preparing = new InstanceRebootRequest
+        {
+            Reason = "x",
+            RequestedAt = Now.AddHours(-21),
+            Status = InstanceRebootStatus.Preparing,
+            Steps = InstanceReboot.WithStep(InstanceReboot.FreshSteps(), InstanceRebootSteps.Sync, InstanceRebootStepOutcome.Running, "importing",
+                Now.AddHours(-21)),
+        };
+        InstanceReboot.Stalled(preparing, Now, Options.ExecutionWindow, RetryUnit).Should().Contain("its last step is Sync (Running)");
+
+        // Faulted is judged from when its re-arm was DUE: a long backoff still ahead is not a stall.
+        var faulted = new InstanceRebootRequest
+        {
+            Reason = "x",
+            RequestedAt = Now.AddHours(-20),
+            Status = InstanceRebootStatus.Faulted,
+            FaultedAt = Now.AddHours(-10),
+            Attempt = 5, // 30 min × 32 = 16 h of backoff: due in 6 h
+        };
+        InstanceReboot.Stalled(faulted, Now, Options.ExecutionWindow, RetryUnit).Should().BeNull();
+        InstanceReboot.Stalled(faulted with { Attempt = 0 }, Now, Options.ExecutionWindow, RetryUnit)
+            .Should().Contain("nothing re-armed it when its retry was due");
+    }
 }
 
 /// <summary>
@@ -248,5 +323,92 @@ public class InstanceRebootWatchdogTest(ITestOutputHelper output) : MonolithMesh
         again.Decision.Should().Be(RebootWatchdogDecision.Suppressed);
         again.Detail.Should().Contain("rate-limited");
         (await Reboots()).Should().HaveCount(1, "at most one self-reboot per interval");
+    }
+
+    /// <summary>Writes a reboot request as System, exactly as <see cref="InstanceReboot.Request"/> would,
+    /// but in a state the test chooses. Faulted: the executor and the per-process agent leave it alone.</summary>
+    private async Task<string> FileFaulted(string id, DateTimeOffset faultedAt, System.Threading.CancellationToken ct)
+    {
+        // The boot reconcile pass re-arms a due Faulted request; let it finish before the request exists.
+        await Mesh.ServiceProvider.GetRequiredService<RegistryUpdateReconciler>().BootReconciled
+            .DefaultIfEmpty().Timeout(TestTimeouts.Convergence).Await(ct);
+        var node = new MeshNode(id, InstanceRebootRequest.Namespace)
+        {
+            Name = "Reboot",
+            NodeType = InstanceRebootRequest.NodeType,
+            Content = new InstanceRebootRequest
+            {
+                Reason = "a reboot whose restart crashed",
+                RequestedBy = "alice",
+                RequestedAt = faultedAt.AddMinutes(-5),
+                Status = InstanceRebootStatus.Faulted,
+                FaultedAt = faultedAt,
+                ProgressAt = faultedAt,
+                Failure = "the restart request faulted: the hand-over failed",
+                ExecutionWindow = TimeSpan.FromHours(3),
+                Steps = InstanceReboot.FreshSteps(),
+            },
+        };
+        await Access.RunAsSystem(() => Mesh.ServiceProvider.GetRequiredService<IMeshService>().CreateNode(node))
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        return node.Path;
+    }
+
+    private Task<InstanceRebootRequest> Read(string path, Func<InstanceRebootRequest, bool> until) =>
+        Access.RunAsSystem(() => Mesh.GetMeshNodeStream(path))
+            .Select(n => n.ContentAs<InstanceRebootRequest>(Mesh.JsonSerializerOptions))
+            .Where(r => r is not null && until(r))
+            .Select(r => r!)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
+
+    /// <summary>
+    /// 🚨 MeshWeaver#6625 — the incident's shape: ONE reboot request that stopped moving (its restart
+    /// crashed hours ago and nothing re-armed it) held every pod's self-reboot back for as long as it
+    /// existed. Now the watchdog judges it by its DECLARED execution window: stalled, so it fires (and
+    /// alarms on the stalled request by name), and the reconcile pass ends the stalled request as
+    /// Failed, naming the stall — it reaches a terminal state.
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task AStalledRebootRequest_NoLongerHoldsTheSelfRebootBack_AndThePassEndsIt()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var stalled = await FileFaulted("stalled-6625", DateTimeOffset.UtcNow.AddHours(-5), ct);
+
+        for (var i = 0; i < 3; i++)
+            Mesh.ReportWedgeFault(WedgeSignalKinds.ThreadStart, "Hosting/TriageIntake",
+                new MissingMethodException("MeshWeaver.AI.ThreadPreparation", "set_Group")).Should().BeTrue();
+        var pass = await Watchdog.Evaluate(Mesh).Timeout(TestTimeouts.Convergence).Await(ct);
+        pass.Decision.Should().Be(RebootWatchdogDecision.Fired,
+            "a request that recorded no progress within its declared window is not in progress: " + pass.Detail);
+
+        var ended = await InstanceReboot.FailStalled(Mesh, TimeSpan.FromHours(3), TimeSpan.FromMinutes(30), DateTimeOffset.UtcNow)
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        ended.Should().Equal([stalled], "only the stalled request is ended — the watchdog's fresh one is progressing");
+        var after = await Read(stalled, r => InstanceRebootStatus.IsTerminal(r.Status));
+        after.Status.Should().Be(InstanceRebootStatus.Failed);
+        after.Failure.Should().Contain("stalled:").And.Contain("declared execution window of 180 min")
+            .And.Contain("nothing re-armed it");
+        after.CompletedAt.Should().NotBeNull();
+    }
+
+    /// <summary>The control: the same request, faulted a minute ago (its re-arm still ahead), IS in progress —
+    /// it holds the self-reboot back, and the pass leaves it open.</summary>
+    [Fact(Timeout = 240_000)]
+    public async Task AProgressingRebootRequest_StillHoldsTheSelfRebootBack_AndThePassLeavesItOpen()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var open = await FileFaulted("progressing-6625", DateTimeOffset.UtcNow.AddMinutes(-1), ct);
+
+        for (var i = 0; i < 3; i++)
+            Mesh.ReportWedgeFault(WedgeSignalKinds.ThreadStart, "Hosting/TriageIntake",
+                new MissingMethodException("MeshWeaver.AI.ThreadPreparation", "set_Group")).Should().BeTrue();
+        var pass = await Watchdog.Evaluate(Mesh).Timeout(TestTimeouts.Convergence).Await(ct);
+        pass.Decision.Should().Be(RebootWatchdogDecision.Suppressed);
+        pass.Detail.Should().Contain("already in progress").And.Contain(open);
+
+        var ended = await InstanceReboot.FailStalled(Mesh, TimeSpan.FromHours(3), TimeSpan.FromMinutes(30), DateTimeOffset.UtcNow)
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        ended.Should().BeEmpty();
+        (await Read(open, _ => true)).Status.Should().Be(InstanceRebootStatus.Faulted);
     }
 }

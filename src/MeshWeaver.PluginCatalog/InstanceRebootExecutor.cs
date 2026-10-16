@@ -358,9 +358,19 @@ public static class InstanceRebootExecutor
             return Access.RunAsSystem(() => hub.GetWorkspace().GetMeshNodeStream()
                     .Update<InstanceRebootRequest>(current =>
                     {
+                        // 🚨 A terminal request is final (MeshWeaver#6625): one the reconcile pass ended as
+                        // stalled (InstanceReboot.FailStalled) is never re-opened by a step that was still
+                        // in flight on this activation.
+                        if (InstanceRebootStatus.IsTerminal(current.Status))
+                            return current;
                         var next = change(current);
                         var log = next.Log.AddRange(lines);
-                        return next with { Log = log.Count > MaxLogLines ? log.RemoveRange(0, log.Count - MaxLogLines) : log };
+                        return next with
+                        {
+                            // Every write is progress: the request's declared execution window runs from here.
+                            ProgressAt = DateTimeOffset.UtcNow,
+                            Log = log.Count > MaxLogLines ? log.RemoveRange(0, log.Count - MaxLogLines) : log,
+                        };
                     }))
                 .Take(1)
                 .Select(_ => Unit.Default);

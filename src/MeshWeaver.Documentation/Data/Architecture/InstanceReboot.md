@@ -43,6 +43,8 @@ System. This is the same trust rule as [Module Reload](../ModuleReload).
 | `restartRequestedAt` | stamped BEFORE the roll or restart is requested, so a resumed executor never asks twice |
 | `replicas{process}` | what each process that booted after the stamp reported from its own checks |
 | `failure`, `completedAt`, `log[]` | the red steps by name, when it ended, and the audit trail |
+| `executionWindow` | DECLARED when the request is filed (`Reboot:ExecutionWindow`, default 3 h): the longest the request may go without recording progress and still count as in progress. See "A request that stops moving" |
+| `progressAt` | when it last recorded progress: stamped on every executor write and on a re-arm |
 
 ## The five steps
 
@@ -134,6 +136,42 @@ the pass interval doubled per attempt). The re-arm keeps steps 1–3 and clears 
 stamp, so the executor asks for the ONE restart again; the one-restart rule holds per attempt. An
 activation outcome the reboot lane does not name is reported `Unavailable` and logged by name.
 
+## A request that stops moving
+
+🚨 A reboot request that never reaches a terminal state used to suppress every pod's self-reboot for
+as long as it existed (MeshWeaver#6625: one instance held a request open for ~21 h while its
+critical NodeTypes stayed in compile Error). A request now counts as "in progress" only while it is
+**progressing**, judged by its own record (`InstanceReboot.Stalled`, pure):
+
+- its **last progress** (`InstanceReboot.LastProgressAt`) is the latest instant it carries:
+  `progressAt`, `requestedAt`, each step's `at`, `restartRequestedAt`, each replica's `reportedAt`.
+  A `Faulted` request is waiting for its scheduled re-arm, so its retry's due time counts too;
+- it is **stalled** when it is not terminal and that last progress is older than its declared
+  `executionWindow`. A request filed before the field existed is judged by the reader's
+  `Reboot:ExecutionWindow`.
+
+Two readers act on that, and neither runs a timer of its own:
+
+- **The watchdog** reads each open request from its own node stream (never a stale listing deciding
+  a reboot). A stalled request does not hold the self-reboot back, and that is never silent: a
+  `Critical` line names it, its trigger and why it stalled, once per request per process. The rate
+  limit's other two rules still hold. The read also activates the request's own hub, which resumes
+  its executor if the process that drove it is gone.
+- **The plugin catalog's reconcile pass** ends a stalled request as `Failed`, naming the stall
+  (`InstanceReboot.FailStalled`). It runs right after the faulted-restart re-arm, so a `Faulted`
+  request due for its retry is retried, not ended. The write re-judges inside the update, so a
+  request that moved meanwhile is left alone. A terminal request is final: the executor writes
+  nothing on it afterwards, so a step still in flight cannot re-open it.
+
+The common ways a request stops moving, each now ended by name: the restart handed to the control
+lane never happened, so no process booted after the stamp and nothing reported (`AwaitingRestart`);
+a `Faulted` restart that nothing re-armed (the reconcile safety net is off); a step that never
+returned. The Sync step's own per-import bound is described under step 1.
+
+The window is longer than any step's own wait: one source import is bounded at 10 minutes, and the
+verification after a restart waits at most `SingletonResumeBudget` (35 minutes) beside the bake
+settle (15 minutes).
+
 ## Who can start one
 
 | surface | authorisation | how |
@@ -165,7 +203,8 @@ holds when EITHER leg holds:
 
 The rate limit is `RebootWatchdogRules.Admit`. It refuses to fire in three cases:
 
-- while any reboot is still open;
+- while any reboot is still open AND progressing. A stalled request does not count; see "A request
+  that stops moving";
 - when a self-reboot was taken within `WatchdogMinInterval` (default 6 hours). The process also
   remembers its own last firing, so a pass right after a firing never fires again;
 - when the SAME evidence, by fingerprint, already survived a self-reboot within
@@ -186,6 +225,7 @@ Setting `Reboot:WatchdogEnabled` to `false` turns the self-trigger off.
 | `ThreadStartFaultThreshold` / `ThreadStartWindow` | 3 / 15 min |
 | `CompileErrorFor` | 20 min |
 | `WatchdogMinInterval` / `WatchdogRepeatWindow` | 6 h / 24 h |
+| `ExecutionWindow` | 3 h, stamped on each request when it is filed |
 
 ## Operating lessons the reboot must respect
 
@@ -258,7 +298,14 @@ These lessons come from the control-instance recovery attempts on the day this w
   `Continuous` it is the newest continuous build the record's pattern admits.
 - **A roll handed to the control lane** is subject to the control plane's own handling of
   `self-update-available`: approval on a gated record, and its dedupe. Until that roll lands, the
-  reboot waits in `AwaitingRestart` and is not retried.
+  reboot waits in `AwaitingRestart` and is not retried. A roll that waits for approval longer than
+  the request's execution window ends the request as `Failed` (stalled); a roll approved after that
+  still happens, but its verification is not recorded on the ended request.
+- **"Executor gone" is not a separate leg.** The executor runs on the request node's own hub, and
+  any read of the request re-activates it, so the watchdog's own read resumes an orphaned request.
+  An executor that is resumed and still makes no progress is caught by the execution window.
+- **The build-instance request in MeshWeaver#6625 was never read**, so which of the shapes above held
+  it open there is not established.
 - **The compile leg reads a shared field.** The `compilationStatus` is one field over every replica's
   compile, so the leg does not see a failure on a single replica only.
 - **Two replicas' watchdogs** could both fire within the seconds the request listing trails the

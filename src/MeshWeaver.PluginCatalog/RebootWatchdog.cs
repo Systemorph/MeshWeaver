@@ -51,6 +51,7 @@ public sealed class RebootWatchdog
     private ImmutableDictionary<string, DateTimeOffset> compileErrorSince = ImmutableDictionary<string, DateTimeOffset>.Empty;
     private string? lastAlarm;
     private long lastFiredTicks;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> stalledAlarmed = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>The clock. Production reads UTC now; a test moves it.</summary>
     internal Func<DateTimeOffset> Clock { get; init; } = () => DateTimeOffset.UtcNow;
@@ -111,8 +112,12 @@ public sealed class RebootWatchdog
                     Alarm(logger, verdict, $"WEDGED, self-reboot NOT taken — {why}");
                     return Observable.Return(new RebootWatchdogPass(RebootWatchdogDecision.Suppressed, $"{verdict.Evidence} — {why}"));
                 }
-                return PreviousReboots(meshHub).SelectMany(previous =>
+                return PreviousReboots(meshHub, now, options).SelectMany(previous =>
                 {
+                    // 🚨 A stalled request no longer holds the self-reboot back (MeshWeaver#6625) — and that is
+                    // never silent: each one is a Critical line naming it and why.
+                    foreach (var stalled in previous.Where(r => !r.Terminal && r.Stalled is not null))
+                        AlarmStalled(logger, stalled);
                     var (fire, why) = RebootWatchdogRules.Admit(verdict, previous, now, options);
                     if (!fire)
                     {
@@ -147,6 +152,18 @@ public sealed class RebootWatchdog
             });
     }
 
+    /// <summary>A Critical line naming a stalled reboot request the rate limit no longer counts as in
+    /// progress — once per request per process.</summary>
+    private void AlarmStalled(ILogger? logger, RebootRecord stalled)
+    {
+        if (!stalledAlarmed.TryAdd(stalled.Path, 0))
+            return;
+        logger?.LogCritical(
+            "[RebootWatchdog] the reboot request {Path} ({Trigger}, requested {RequestedAt:u}) has STALLED and no longer counts as "
+            + "in progress — it does not hold a self-reboot back: {Why}. The reconcile pass ends it as Failed.",
+            stalled.Path, stalled.Trigger, stalled.RequestedAt, stalled.Stalled);
+    }
+
     /// <summary>A Critical alarm — once per distinct (evidence, reason) per process, so a pass every minute does not flood.</summary>
     private void Alarm(ILogger? logger, WedgeVerdict verdict, string sentence)
     {
@@ -177,22 +194,45 @@ public sealed class RebootWatchdog
             .Catch((Exception _) => Observable.Return<IReadOnlyCollection<string>?>(null));
     }
 
-    /// <summary>The reboots on record, from a LISTING of the request namespace. A listing that cannot be
-    /// read answers one OPEN placeholder, which refuses the firing — the safe side for a reboot.</summary>
-    private static IObservable<ImmutableList<RebootRecord>> PreviousReboots(IMessageHub meshHub)
+    /// <summary>
+    /// The reboots on record, from a LISTING of the request namespace. 🚨 A request the listing does not
+    /// show as finished is read from its OWN node stream (the authoritative state — never a stale listing
+    /// deciding a reboot) and judged by its declared execution window (<see cref="InstanceReboot.Stalled"/>,
+    /// MeshWeaver#6625): a STALLED request is recorded with why, so it no longer counts as in progress.
+    /// That read also activates the request's own hub, which resumes its executor. A listing that cannot
+    /// be read answers one OPEN placeholder, which refuses the firing — the safe side for a reboot; a
+    /// single request that cannot be read counts as open (not stalled), for the same reason.
+    /// </summary>
+    private static IObservable<ImmutableList<RebootRecord>> PreviousReboots(IMessageHub meshHub, DateTimeOffset now, InstanceRebootOptions options)
     {
         var mesh = meshHub.ServiceProvider.GetRequiredService<IMeshService>();
         var access = meshHub.ServiceProvider.GetService<AccessService>();
+        var catalog = meshHub.ServiceProvider.GetService<PluginCatalogOptions>() ?? new PluginCatalogOptions();
+        var retryUnit = catalog.ReconcileSafetyNetInterval > TimeSpan.Zero ? catalog.ReconcileSafetyNetInterval : TimeSpan.Zero;
+        RebootRecord Record(string path, InstanceRebootRequest request) =>
+            new(path, request.Trigger, request.RequestedAt, request.WedgeFingerprint, InstanceRebootStatus.IsTerminal(request.Status))
+            {
+                Stalled = InstanceReboot.Stalled(request, now, options.ExecutionWindow, retryUnit),
+            };
         return access.RunAsSystem(() => mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(
                     $"namespace:{InstanceRebootRequest.Namespace} scope:children nodeType:{InstanceRebootRequest.NodeType}"))
                 .Take(1)
                 .Timeout(ActivationRecycle.ReadBudget))
-            .Select(change => change.Items
+            .SelectMany(change => change.Items
                 .Select(n => (n.Path, Request: n.ContentAs<InstanceRebootRequest>(meshHub.JsonSerializerOptions)))
                 .Where(x => x.Request is not null)
-                .Select(x => new RebootRecord(x.Path, x.Request!.Trigger, x.Request.RequestedAt, x.Request.WedgeFingerprint,
-                    InstanceRebootStatus.IsTerminal(x.Request.Status)))
-                .ToImmutableList())
+                .ToObservable()
+                // A terminal status is final, so a listing that says so is right; anything else is read live.
+                .Select(x => InstanceRebootStatus.IsTerminal(x.Request!.Status)
+                    ? Observable.Return(Record(x.Path, x.Request))
+                    : access.RunAsSystem(() => meshHub.GetMeshNodeStream(x.Path).Take(1).Timeout(ActivationRecycle.ReadBudget))
+                        .Select(node => node.ContentAs<InstanceRebootRequest>(meshHub.JsonSerializerOptions) is { } live
+                            ? Record(x.Path, live)
+                            : Record(x.Path, x.Request) with { Stalled = null })
+                        .Catch((Exception _) => Observable.Return(Record(x.Path, x.Request) with { Stalled = null })))
+                .Concat()
+                .ToList()
+                .Select(records => records.ToImmutableList()))
             .Catch((Exception ex) => Observable.Return(ImmutableList.Create(new RebootRecord(
                 InstanceRebootRequest.Namespace, "unknown", DateTimeOffset.MinValue, null, false))
                 .Select(r => r with { Path = $"{InstanceRebootRequest.Namespace} (unreadable: {ex.GetType().Name})" })

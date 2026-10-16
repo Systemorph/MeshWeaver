@@ -39,6 +39,15 @@ public sealed record InstanceRebootOptions
     /// (the babysitter's first pass comes minutes after boot and may run for its whole run budget).</summary>
     public TimeSpan SingletonResumeBudget { get; init; } = TimeSpan.FromMinutes(35);
 
+    /// <summary>
+    /// 🚨 The execution window a reboot request DECLARES (<see cref="InstanceRebootRequest.ExecutionWindow"/>,
+    /// stamped when it is filed): the longest it may go without recording progress and still count as in
+    /// progress (MeshWeaver#6625). Longer than any step's own wait — one source import (10 min), the
+    /// verification after a restart (<see cref="SingletonResumeBudget"/>) — so only a request that has
+    /// stopped moving exceeds it.
+    /// </summary>
+    public TimeSpan ExecutionWindow { get; init; } = TimeSpan.FromHours(3);
+
     /// <summary>Whether the watchdog may file a reboot by itself. On by default: it fires only on the
     /// explicit predicate (<see cref="RebootWatchdogRules.Evaluate"/>) and is rate-limited.</summary>
     public bool WatchdogEnabled { get; init; } = true;
@@ -86,7 +95,13 @@ public sealed record WedgeSignal(string Kind, string Source, string Fault, DateT
 public sealed record WedgeVerdict(string Evidence, string Fingerprint);
 
 /// <summary>A previous reboot the rate limit reads: when, what started it, its fingerprint, whether it ended.</summary>
-public sealed record RebootRecord(string Path, string Trigger, DateTimeOffset RequestedAt, string? Fingerprint, bool Terminal);
+public sealed record RebootRecord(string Path, string Trigger, DateTimeOffset RequestedAt, string? Fingerprint, bool Terminal)
+{
+    /// <summary>For a request that is not terminal but has STALLED (<see cref="InstanceReboot.Stalled"/>):
+    /// why, as one sentence. A stalled request is not "in progress" and does not hold a self-reboot back
+    /// (MeshWeaver#6625). Null when it is terminal or still progressing.</summary>
+    public string? Stalled { get; init; }
+}
 
 /// <summary>
 /// 🚨 The load/binding faults a component reports for the reboot watchdog. A mesh-scoped singleton
@@ -269,14 +284,16 @@ public static class RebootWatchdogRules
     /// <summary>
     /// The rate limit: whether a wedge <paramref name="verdict"/> may file a self-reboot now, given the
     /// reboots already on record, and if not, why (the alarm's sentence). Refuses when a reboot is
-    /// still in progress, when a self-reboot was taken within <see cref="InstanceRebootOptions.WatchdogMinInterval"/>,
+    /// still in progress (open and not <see cref="RebootRecord.Stalled"/>), when a self-reboot was taken within <see cref="InstanceRebootOptions.WatchdogMinInterval"/>,
     /// or when the SAME evidence already survived a self-reboot within <see cref="InstanceRebootOptions.WatchdogRepeatWindow"/>
     /// (a reboot does not clear it — a person must act). Pure.
     /// </summary>
     public static (bool Fire, string? Why) Admit(
         WedgeVerdict verdict, IReadOnlyCollection<RebootRecord> previous, DateTimeOffset now, InstanceRebootOptions options)
     {
-        if (previous.FirstOrDefault(r => !r.Terminal) is { } open)
+        // A request that STALLED is not in progress (MeshWeaver#6625): its mere existence must not hold
+        // every pod's self-reboot back. The watchdog alarms on each one by name.
+        if (previous.FirstOrDefault(r => !r.Terminal && r.Stalled is null) is { } open)
             return (false, $"a reboot is already in progress ({open.Path}, {open.Trigger}, requested {open.RequestedAt:u})");
         var selfReboots = previous.Where(r => r.Trigger == InstanceRebootTrigger.Watchdog).OrderByDescending(r => r.RequestedAt).ToImmutableList();
         if (selfReboots.FirstOrDefault(r => now - r.RequestedAt < options.WatchdogMinInterval) is { } recent)
