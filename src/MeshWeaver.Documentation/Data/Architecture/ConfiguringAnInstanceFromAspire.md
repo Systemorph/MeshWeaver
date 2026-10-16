@@ -191,7 +191,8 @@ resolves this column against `DeploymentRecordExtensions` alone — it asserts n
 | `DefaultGrants(patterns)` | `DefaultGrants` | `pluginCatalog.defaultGrants` (a registry's registration seed) | `PluginCatalog__DefaultGrants__*` (Aspire only) |
 | `WithRegistryUrl(url)` | `RegistryUrl` | `pluginCatalog.registryUrl` (the single registry consumed; a registry may name itself) | `PluginCatalog__RegistryUrl` (Aspire only) |
 | `AsPluginRegistry(isRegistry)` | `IsPluginRegistry` | `registry` (with `WithRegistry`) | — |
-| `WithRegistryInstanceId(instanceId)` | `RegistryInstanceId` | — (the instance's key at the registry) | — |
+| `WithRegistryInstanceId(instanceId)` | `RegistryInstanceId` | `pluginCatalog.instanceId` when stated (the chart then renders `PluginCatalog__InstanceId`, and `PluginCatalog__HomeUrl` from the host) | — |
+| `WithBundles(registry, sources, identity, root)` | `Bundles.Registry`, `Bundles.Sources`, `Bundles.Identity`, `Bundles.Root` | `bundles.registry`, `bundles.sources`, `bundles.identity` (the `bundle-identity` + `bundle-fetch` init containers — [Plugin Bundles in the Registry](../PluginBundlesInTheRegistry)) | `PreWarm__PrebuiltBundleRoot` |
 | `WithRequiredModules(assemblies)` | `RequiredModules` | `config.memex_portal.Modules__Required__N` | `Modules__Required__0` |
 | `WithRequiredModule(assembly)` | `RequiredModules` | `config.memex_portal.Modules__Required__N` | `Modules__Required__0` |
 | `ClearRequiredModules()` | `RequiredModules`, `RequiredModuleSlots` | `config.memex_portal.Modules__Required__N` | — |
@@ -323,6 +324,7 @@ in-mesh `[Translation]` texts, preserved here until the catalog follow-up above)
 | `DeploymentContent` | `OpsGitHubApp` | The App the control instance dispatches this deployment's pipelines as | Die App, als die die Kontrollinstanz die Pipelines dieses Deployments startet |
 | `DeploymentContent` | `Operator` | Hosting operator | Hosting-Operator |
 | `DeploymentContent` | `Registry` | Container registry this instance hosts (the public instance only) | Container-Registry, die diese Instanz betreibt (nur die öffentliche Instanz) |
+| `DeploymentContent` | `Bundles` | Sealed NodeType bundles fetched from a registry before the portal starts | Versiegelte NodeType-Bundles, die vor dem Portalstart aus einer Registry geholt werden |
 | `DeploymentContent` | `Telemetry` | Telemetry | Telemetrie |
 | `DeploymentContent` | `Drain` | Rollout drain | Rollout-Drain |
 | `DeploymentContent` | `StartupProbe` | Startup probe | Start-Prüfung |
@@ -361,6 +363,10 @@ in-mesh `[Translation]` texts, preserved here until the catalog follow-up above)
 | `RegistryKeyVaultSpec` | `KeyObject` | Vault object: token-signing private key | Vault-Objekt: privater Schlüssel zum Signieren der Tokens |
 | `RegistryKeyVaultSpec` | `HttpSecretObject` | Vault object: registry HTTP secret | Vault-Objekt: HTTP-Secret der Registry |
 | `RegistryKeyVaultSpec` | `NotificationSecretObject` | Vault object: notification bearer secret | Vault-Objekt: Bearer-Secret für Benachrichtigungen |
+| `BundlesSpec` | `Registry` | Registry host the sealed bundles are pulled from (e.g. cr.meshweaver.cloud) | Registry-Host, aus dem die versiegelten Bundles geholt werden (z. B. cr.meshweaver.cloud) |
+| `BundlesSpec` | `Sources` | Source names to materialise (e.g. plugins) | Namen der bereitzustellenden Quellen (z. B. plugins) |
+| `BundlesSpec` | `Identity` | Fallback framework identity, used only for an image that predates the identity file | Ersatz-Framework-Identität, nur für ein Image ohne Identitätsdatei |
+| `BundlesSpec` | `Root` | Directory the bundles land in and the pre-warm reads — blank means /data/prebuilt-bundles | Verzeichnis, in dem die Bundles landen und das der Pre-Warm liest — leer bedeutet /data/prebuilt-bundles |
 | `ResourceQuantities` | `Cpu` | CPU (e.g. 4 or 500m) | CPU (z. B. 4 oder 500m) |
 | `ResourceQuantities` | `Memory` | Memory (e.g. 8Gi) | Arbeitsspeicher (z. B. 8Gi) |
 | `ResourceEnvelope` | `Requests` | Requests — guaranteed and used for scheduling | Anforderungen — garantiert, bestimmt die Platzierung |

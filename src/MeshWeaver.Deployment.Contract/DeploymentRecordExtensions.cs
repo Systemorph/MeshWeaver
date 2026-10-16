@@ -280,6 +280,27 @@ public static class DeploymentRecordExtensions
     /// <summary>The instance id at the plugin registry (blank = the deployment id).</summary>
     public static DeploymentContent WithRegistryInstanceId(this DeploymentContent d, string? instanceId) => d with { RegistryInstanceId = instanceId };
 
+    /// <summary>
+    /// Pull the sealed NodeType publications of <paramref name="sources"/> from
+    /// <paramref name="registry"/> before the portal starts (the chart's <c>bundles</c> section). The
+    /// framework identity is read from the running image; <paramref name="identity"/> is only the
+    /// fallback for an image that predates the identity file. <paramref name="root"/> blank →
+    /// <see cref="BundlesSpec.DefaultRoot"/>. The pod's <see cref="DeploymentContent.ImagePullSecret"/>
+    /// is the credential, so state it too.
+    /// </summary>
+    public static DeploymentContent WithBundles(
+        this DeploymentContent d, string registry, IEnumerable<string> sources, string? identity = null, string? root = null) =>
+        d with
+        {
+            Bundles = new BundlesSpec
+            {
+                Registry = registry,
+                Sources = (sources ?? Enumerable.Empty<string>()).ToImmutableList(),
+                Identity = identity,
+                Root = root,
+            },
+        };
+
     // ── modules ─────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>
