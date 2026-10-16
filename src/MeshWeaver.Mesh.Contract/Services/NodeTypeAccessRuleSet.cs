@@ -79,7 +79,7 @@ public sealed class NodeTypeAccessRuleSet
         ArgumentNullException.ThrowIfNull(accessRules);
         var read = accessRules
             .Select((rule, position) => (Position: position, Rule: rule, NodeType: NodeTypeOf(rule)))
-            .ToList();
+            .ToImmutableArray();
         rules = read
             .Where(r => r.NodeType is not null)
             .GroupBy(r => r.NodeType!, StringComparer.OrdinalIgnoreCase)
