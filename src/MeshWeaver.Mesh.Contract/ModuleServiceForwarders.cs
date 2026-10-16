@@ -148,6 +148,26 @@ public class ModuleServiceProxy : DispatchProxy
             : null;
     }
 
+    /// <summary>As <see cref="TryLease{T}(T)"/> — a distinct name, so no published <c>cref</c> to <c>TryLease</c>
+    /// turns ambiguous — saying why a null answer is null (<see cref="ModuleLeaseFault"/>):
+    /// a module that is not held is ABSENT, while one that is held and cannot produce the service FAULTED —
+    /// which a consumer whose safe reading differs from absence (an access rule) must not read as absence.</summary>
+    /// <typeparam name="T">The platform interface.</typeparam>
+    /// <param name="service">A resolved platform service — an instance, or a module's forwarding proxy.</param>
+    /// <param name="fault">Why the answer is null; <see cref="ModuleLeaseFault.None"/> otherwise.</param>
+    internal static ModuleServiceLease<T>? TryLeaseOrFault<T>(T service, out ModuleLeaseFault fault) where T : class
+    {
+        ArgumentNullException.ThrowIfNull(service);
+        fault = ModuleLeaseFault.None;
+        if (service is not ModuleServiceProxy proxy)
+            return new ModuleServiceLease<T>(service, null);
+        if (proxy.contexts is not { } contexts)
+            return null;
+        return contexts.TryLeaseModuleService(proxy.module, proxy.index, proxy.caller, proxy.serviceType ?? typeof(T), out fault) is { } leased
+            ? new ModuleServiceLease<T>((T)leased.Instance, leased.Release)
+            : null;
+    }
+
     /// <summary>
     /// <paramref name="use"/> run against <paramref name="service"/> under ONE lease (<see cref="TryLease{T}"/>)
     /// that spans the whole subscription of what it returns, released when that terminates or is
@@ -413,9 +433,9 @@ internal sealed class ModuleConfigureOptionsForwarder<TOptions>(
     // name until invalidated — the sign-in's own name included.)
     public void Configure(string? name, TOptions options)
     {
-        if (contexts.TryLeaseModuleService(module, index, caller, typeof(IConfigureOptions<TOptions>), out var temporaryFault) is not { } leased)
+        if (contexts.TryLeaseModuleService(module, index, caller, typeof(IConfigureOptions<TOptions>), out ModuleLeaseFault fault) is not { } leased)
         {
-            if (temporaryFault)
+            if (fault == ModuleLeaseFault.Temporary)
                 contexts.RootService<IOptionsMonitorCache<TOptions>>()?.TryRemove(name ?? Options.DefaultName);
             return;
         }

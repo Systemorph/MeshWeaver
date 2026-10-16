@@ -230,6 +230,117 @@ public sealed class AModuleConstructionFaultStaysLocalTest(ITestOutputHelper out
         (Queries() - queried).Should().Be(1, "one logical provider is queried once per query, never once per registration");
     }
 
+    /// <summary>
+    /// 🚨 SECURITY. A module's access rule DENIES its type. When the rule cannot be constructed, the set
+    /// must not answer "no rule" — the validator would then fall back to the ordinary path permission and
+    /// a caller holding an ordinary Update grant would pass. It fails CLOSED for the governed type, and
+    /// only for it: an unrelated type is untouched, also for a rule whose type was learned at lookup.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task ADenyingRuleThatCannotBeConstructed_FailsClosedForItsTypeOnly()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var update = new NodeValidationContext
+        {
+            Operation = NodeOperation.Update,
+            Node = new MeshNode("governed", TestPartition) { NodeType = GovernedNodeType },
+        };
+        var set = new NodeTypeAccessRuleSet(Mesh.ServiceProvider.GetServices<INodeTypeAccessRule>());
+
+        // Control: the healthy rule governs its type and denies.
+        var healthy = set.Find(GovernedNodeType, NodeOperation.Update);
+        healthy.Should().NotBeNull("the module's rule governs its type");
+        (await NodeTypeAccessRuleGate.Evaluate(healthy!, update, "user").Timeout(Budget).Await(ct)).IsGranted
+            .Should().BeFalse("the module's rule denies");
+
+        FailConstruction(RuleType, Constructions(RuleType) + 1);
+        var faulted = set.Find(GovernedNodeType, NodeOperation.Update);
+        faulted.Should().NotBeNull("a rule that cannot be constructed is NOT absent — 'no rule' would fall back to the ordinary grant");
+        (await NodeTypeAccessRuleGate.Evaluate(faulted!, update, "user").Timeout(Budget).Await(ct)).IsGranted
+            .Should().BeFalse("a rule that cannot be constructed fails closed for the type it governs");
+
+        FailConstruction(RuleType, Constructions(RuleType) + 1);
+        set.Find("Markdown", NodeOperation.Update).Should().BeNull("an unrelated type never meets the faulted rule");
+
+        // A rule whose binding failed when the set was built is retained unindexed; once its type has been
+        // read it fails closed for THAT type only.
+        FailConstruction(RuleType, Constructions(RuleType) + 1);
+        var retained = new NodeTypeAccessRuleSet(Mesh.ServiceProvider.GetServices<INodeTypeAccessRule>());
+        retained.Find(GovernedNodeType, NodeOperation.Update).Should().NotBeNull("the retained rule governs its type once constructed");
+        FailConstruction(RuleType, Constructions(RuleType) + 1);
+        var retainedFaulted = retained.Find(GovernedNodeType, NodeOperation.Update);
+        retainedFaulted.Should().NotBeNull("the retained rule fails closed for the type it named");
+        (await NodeTypeAccessRuleGate.Evaluate(retainedFaulted!, update, "user").Timeout(Budget).Await(ct)).IsGranted
+            .Should().BeFalse("denied while the rule cannot be constructed");
+        FailConstruction(RuleType, Constructions(RuleType) + 1);
+        retained.Find("Markdown", NodeOperation.Update).Should().BeNull("the learned type keeps the fault off unrelated types");
+    }
+
+    /// <summary>
+    /// A module provider whose binding failed is read for its NAME when a subscription leases it; if that
+    /// read throws, the lease no member owns yet must be released — the query errs, and a retirement of
+    /// the module still unloads it.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task AThrowingNameAfterAFailedBinding_ReleasesItsLease()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        FailConstruction(ProviderType, Constructions(ProviderType) + 1);
+        var query = new MeshWeaver.Hosting.Persistence.Query.MeshQuery(
+            Mesh.ServiceProvider.GetServices<IMeshQueryProvider>(), Mesh);
+        var nameFails = ModuleType(ProviderType).GetField("NameFails")!;
+        nameFails.SetValue(null, true);
+        try
+        {
+            await query.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{ChatsPath}").AsSystem())
+                .Materialize()
+                .Where(notification => notification.Kind == System.Reactive.NotificationKind.OnError)
+                .Should().Within(Budget)
+                .Emit("the provider's name cannot be read, so the subscription errs", cancellationToken: ct);
+        }
+        finally
+        {
+            nameFails.SetValue(null, false);
+        }
+
+        await Contexts.Retire(Held(), TimeSpan.FromSeconds(10))
+            .Where(unloaded => unloaded)
+            .Should().Within(Budget)
+            .Emit("the lease taken before the name was read was released, so the retirement unloads", cancellationToken: ct);
+    }
+
+    /// <summary>
+    /// A construction failure OVERLAPPING a retirement: the failing constructor itself starts the module's
+    /// retirement (a deterministic switch), then throws. The lease must classify and report the fault on a
+    /// generation whose disposal waits for it — answering null, never letting a disposal escape — and the
+    /// retirement unloads once the lease is released.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task AConstructionFaultOverlappingARetirement_AnswersAbsent_AndTheRetirementCompletes()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var index = Index<IMeshQueryProvider>();
+        var generation = Held();
+        var retired = new System.Reactive.Subjects.ReplaySubject<bool>();
+        var onFail = ModuleType(ProviderType).GetField("OnFail")!;
+        onFail.SetValue(null, (Action)(() => Contexts.Retire(generation, TimeSpan.FromSeconds(10)).Subscribe(retired)));
+        FailConstruction(ProviderType, Constructions(ProviderType) + 1);
+        try
+        {
+            var outcome = Record.Exception(() =>
+                Contexts.TryLeaseModuleService(Module, index, null, typeof(IMeshQueryProvider))
+                    .Should().BeNull("the construction failed"));
+            outcome.Should().BeNull("no disposal escapes a fault classified while the retirement waits for the lease");
+            generation.Services!.IsDisposed.Should().BeTrue("the retirement disposed the services once the lease was released");
+        }
+        finally
+        {
+            onFail.SetValue(null, null);
+        }
+        await retired.Where(unloaded => unloaded).Should().Within(Budget)
+            .Emit("the retirement unloads once the faulted lease is released", cancellationToken: ct);
+    }
+
     private int Queries() => (int)ModuleType(ProviderType).GetField("Queries")!.GetValue(null)!;
 
     /// <summary>
@@ -262,11 +373,13 @@ public sealed class AModuleConstructionFaultStaysLocalTest(ITestOutputHelper out
             public static int Constructions;
             public static int FailAt;
             public static bool FailDisposed;
+            public static System.Action? OnFail;
             internal static void Construct()
             {
                 var number = System.Threading.Interlocked.Increment(ref Constructions);
                 if (number != FailAt)
                     return;
+                OnFail?.Invoke();
                 if (FailDisposed)
                     throw new System.ObjectDisposedException("a dependency the constructor owns");
                 throw new System.InvalidOperationException($"construction #{number} refused by the test");
@@ -283,8 +396,9 @@ public sealed class AModuleConstructionFaultStaysLocalTest(ITestOutputHelper out
             private static readonly MeshWeaver.Mesh.MeshNode Answer =
                 new("answer", "TransientProviderChats") { Name = "answered by the module", NodeType = "Markdown" };
             public static int Queries;
+            public static bool NameFails;
             public TransientChatsProvider() => Construct();
-            public string Name => "{{ProviderType}}";
+            public string Name => NameFails ? throw new System.InvalidOperationException("the provider's name cannot be read") : "{{ProviderType}}";
             public bool Matches(System.Collections.Generic.IReadOnlyList<string> queryNamespaces) => true;
             public System.IObservable<MeshWeaver.Mesh.QueryResultChange<T>> Query<T>(
                 MeshWeaver.Mesh.Services.MeshQueryRequest request, System.Text.Json.JsonSerializerOptions options) =>
@@ -307,8 +421,9 @@ public sealed class AModuleConstructionFaultStaysLocalTest(ITestOutputHelper out
             public TransientRule() => Construct();
             public string NodeType => "{{GovernedNodeType}}";
             public System.Collections.Generic.IReadOnlyCollection<MeshWeaver.Mesh.Security.NodeOperation> SupportedOperations => [];
+            // A DENYING rule: whatever the caller's ordinary path grants, this type is refused.
             public System.IObservable<bool> HasAccess(MeshWeaver.Mesh.Services.NodeValidationContext context, string? userId) =>
-                System.Reactive.Linq.Observable.Return(true);
+                System.Reactive.Linq.Observable.Return(false);
         }
         public sealed class TransientSetup : Microsoft.Extensions.Options.IConfigureNamedOptions<MeshWeaver.Graph.Test.SignInProbeOptions>
         {

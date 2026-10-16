@@ -783,13 +783,29 @@ answers its own node and its setup configures its own name; after it a direct re
 registration still throws "has not been registered". On the pre-fix code the identity query errors with
 exactly the memex message; with `TryLeaseModuleService` rethrowing the fault, the same. The same class
 pins a query BUILT while the module was healthy and SUBSCRIBED after the break.
+**Access rules fail CLOSED, not absent.** The isolation above is right for a query provider, an options
+setup or a health check — a feature that is missing is the safe reading. It is NOT right for an access
+rule: a rule that is skipped makes the validator fall back to the ordinary path permission, so a caller
+holding an ordinary Update grant would pass a write the module's rule exists to refuse. The lease
+therefore says WHY it answered null (`ModuleLeaseFault`: the module is not held or is retiring — absent;
+or it is held and could not produce the registration this time, or in this generation at all — faulted),
+and `NodeTypeAccessRuleSet` hands out a rule that DENIES for the type a faulted rule governs. Other types
+never meet it. A rule retained because its binding failed when the set was built fails closed for the
+type it last named; one that has never been produced in the process is unknown, and fails closed for
+every lookup while it faults, because nothing says which type it governs. The lease is held through the
+fault's classification and report, so a retirement overlapping the fault waits for it instead of
+disposing the container under the classification.
+
 `AModuleConstructionFaultStaysLocalTest` pins the rest with transient module services whose
 constructions it fails on demand: a provider constructed once per query subscription; a completed module
 leg releasing its lease while the merged identity query stays live, so a retirement unloads the module;
 a failing caller scope followed by a healthy one; a constructor's own disposed dependency isolated under
 a live caller, while a caller whose scope has ended still sees its `ObjectDisposedException`; a provider
 and an access rule whose lease failed while the fan-out and the rule set were built serving afterwards;
-and a temporary options-setup fault that is never cached as complete options.
+a temporary options-setup fault that is never cached as complete options; a duplicate provider
+registration run once per query; a provider name that throws after a failed binding releasing its lease;
+a denying access rule that cannot be constructed failing closed for its type only; and a construction
+fault overlapping a retirement.
 
 **Not established:** a module provider whose OWN `Query` faults (as opposed to one that cannot be
 produced) still fails every unscoped query it is asked — including the identity directory — because the

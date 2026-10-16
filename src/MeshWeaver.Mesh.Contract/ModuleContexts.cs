@@ -254,25 +254,32 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
     /// when the caller does not know.</param>
     internal (object Instance, IDisposable Release)? TryLeaseModuleService(
         string module, int index, Autofac.ILifetimeScope? caller, Type? expected = null) =>
-        TryLeaseModuleService(module, index, caller, expected, out _);
+        TryLeaseModuleService(module, index, caller, expected, out ModuleLeaseFault _);
 
-    /// <summary>As <see cref="TryLeaseModuleService(string, int, Autofac.ILifetimeScope?, Type?)"/>, saying
-    /// whether a null answer was a TEMPORARY construction fault (<paramref name="temporaryFault"/>) — this
-    /// lease's alone, likely to clear — rather than durable absence (the module is not held, or this
-    /// generation cannot produce the registration). A consumer that CACHES what it builds from the lease
-    /// must not cache a build made over a temporary fault (review of #6854).</summary>
+    /// <summary>As <see cref="TryLeaseModuleService(string, int, Autofac.ILifetimeScope?, Type?)"/>, saying WHY a
+    /// null answer is null (<paramref name="fault"/>): the module is not held or is retiring
+    /// (<see cref="ModuleLeaseFault.None"/> — the module's feature is genuinely ABSENT), or the module is
+    /// held and could not produce the registration — this time (<see cref="ModuleLeaseFault.Temporary"/>)
+    /// or in this generation at all (<see cref="ModuleLeaseFault.Unservable"/>). A consumer whose safe
+    /// reading of a fault differs from absence asks this: an options build must not be cached over a
+    /// temporary fault, and an ACCESS RULE that cannot be produced must deny, never fall back to the
+    /// ordinary permission check (review of #6854).</summary>
     /// <param name="module">The module's entry-assembly name.</param>
     /// <param name="index">The registration's index.</param>
     /// <param name="caller">The root-side scope resolving, or null.</param>
     /// <param name="expected">What the root's forwarder forwards, or null.</param>
-    /// <param name="temporaryFault">True when the answer is null because of a temporary construction fault.</param>
+    /// <param name="fault">Why the answer is null; <see cref="ModuleLeaseFault.None"/> when it is not.</param>
     internal (object Instance, IDisposable Release)? TryLeaseModuleService(
-        string module, int index, Autofac.ILifetimeScope? caller, Type? expected, out bool temporaryFault)
+        string module, int index, Autofac.ILifetimeScope? caller, Type? expected, out ModuleLeaseFault fault)
     {
-        temporaryFault = false;
-        if (Current(module) is not { Services: { } services } generation
-            || services.Unservable.ContainsKey(index))
+        fault = ModuleLeaseFault.None;
+        if (Current(module) is not { Services: { } services } generation)
             return null;
+        if (services.Unservable.ContainsKey(index))
+        {
+            fault = ModuleLeaseFault.Unservable;
+            return null;
+        }
         var context = Leases.Enter(generation.Context);
         var held = services.TryLease();
         if (held is null || !ReferenceEquals(Current(module), generation))
@@ -291,17 +298,29 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
         }
         catch (Exception exception) when (!(IsDisposal(exception) && CallerHasEnded(caller)))
         {
-            release.Dispose();
-            // Decided AFTER the resolve failed, never instead of it: a registration that resolves is
-            // served, whatever a registry lookup would say about it.
-            if (services.NotLaidOut(Root, index) is { } notLaidOut)
+            // 🚨 The lease is held THROUGH the classification and the report, released after them
+            // (review of #6854): NotLaidOut reads this generation's container, and a retirement that
+            // runs meanwhile defers its disposal to the last lease — released before the read, a
+            // concurrent retirement could dispose the container between reading it and asking it, and
+            // that ObjectDisposedException escaped into the consumer (a whole query).
+            try
             {
-                Unservable(generation, services, index, exception.ToString(), notLaidOut);
+                // Decided AFTER the resolve failed, never instead of it: a registration that resolves is
+                // served, whatever a registry lookup would say about it.
+                if (services.NotLaidOut(Root, index) is { } notLaidOut)
+                {
+                    Unservable(generation, services, index, exception.ToString(), notLaidOut);
+                    fault = ModuleLeaseFault.Unservable;
+                    return null;
+                }
+                NotServedThisTime(generation, services, index, caller, exception);
+                fault = ModuleLeaseFault.Temporary;
                 return null;
             }
-            NotServedThisTime(generation, services, index, caller, exception);
-            temporaryFault = true;
-            return null;
+            finally
+            {
+                release.Dispose();
+            }
         }
         catch
         {
@@ -310,11 +329,18 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
         }
         if (expected is null || expected.IsInstanceOfType(instance))
             return (instance, release);
-        release.Dispose();
-        var mismatch = $"it resolved a {instance.GetType().FullName} where the root's forwarder forwards {expected.FullName} — "
-                       + "this generation does not lay out its forwarded registrations the way the root's forwarders were laid out at boot";
-        Unservable(generation, services, index, mismatch, mismatch);
-        return null;
+        try
+        {
+            var mismatch = $"it resolved a {instance.GetType().FullName} where the root's forwarder forwards {expected.FullName} — "
+                           + "this generation does not lay out its forwarded registrations the way the root's forwarders were laid out at boot";
+            Unservable(generation, services, index, mismatch, mismatch);
+            fault = ModuleLeaseFault.Unservable;
+            return null;
+        }
+        finally
+        {
+            release.Dispose();
+        }
     }
 
     // 🚨 Whether the CALLER's scope has ended (review of #6854) — asked only once a resolve failed with
@@ -1112,4 +1138,20 @@ public sealed class ModuleSwapStage
         // retired by a later swap of that module alone.
         Interlocked.Exchange(ref staged, ImmutableList<ModuleGeneration>.Empty);
     }
+}
+
+/// <summary>
+/// Why a lease of a module's service answered null (<see cref="ModuleContexts.TryLeaseModuleService(string, int, Autofac.ILifetimeScope?, Type?, out ModuleLeaseFault)"/>).
+/// Internal and closed: never persisted or serialised, and decided and read only in this assembly.
+/// </summary>
+internal enum ModuleLeaseFault
+{
+    /// <summary>No fault: the module is not held, or is retiring — its feature is absent.</summary>
+    None,
+
+    /// <summary>The module is held and could not produce the registration THIS time; the next lease may.</summary>
+    Temporary,
+
+    /// <summary>The module is held and its current generation cannot produce the registration at all.</summary>
+    Unservable,
 }

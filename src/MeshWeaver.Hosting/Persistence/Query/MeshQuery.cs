@@ -243,7 +243,18 @@ public class MeshQuery : IMeshQueryCore
                     }
                     if (module.TryLease() is not { } lease)
                         continue;
-                    var name = module.BoundName ?? lease.Service.Name;
+                    string name;
+                    try
+                    {
+                        // Module code when the name was not read at build time: a lease no member owns yet
+                        // must not leak (and keep its generation from ever quiescing) when it throws.
+                        name = module.BoundName ?? lease.Service.Name;
+                    }
+                    catch
+                    {
+                        lease.Dispose();
+                        throw;
+                    }
                     if (names.Contains(name))
                     {
                         lease.Dispose();
