@@ -136,11 +136,21 @@ endpoint and CD all reach the same predicate through the same service method, an
 `<root>/_releases/<version>` records the framework identity a release resolves — the only way
 anything outside the image can learn it, because the identity is a property of the binaries. A
 version with **no** marker has no resolvable identity, and every package answers `Indeterminate` for
-it. When the selection lists its own candidates (`GET /api/plugins/roll-target`), the markers are
-the universe, which lets an environment answer for itself without listing a container registry it
-may not be able to reach — and means a release with no marker is not offered there. A caller that
-supplies its own candidates (the poller, from the registry's tags) is taken at its word: a tag with
-no marker is selected like any other, and the unresolvable identity is the leading advisory.
+it. When a caller asks `SelectRollTarget` without candidates, the markers are the universe. A
+caller that supplies its own candidates (the poller, from the registry's tags) is taken at its
+word: a tag with no marker is selected like any other, and the unresolvable identity is the leading
+advisory.
+
+🚨 **`GET /api/plugins/roll-target` answers with the POLLER's candidates, never the markers'**
+(#4413). A marker is written by main-cd's `publish-bake`, which needs `promote` and not `arm`, so a
+set the fleet promoted but has not armed carries a marker and no `memex-portal-ai:<version>` tag.
+Over the markers the route named such a set (`memex` answered `3.1.11003` while only
+`mw-plugin-test:3.1.11003` existed), the poller could never take it, and combo verification, which
+asks this route which image to verify, failed `docker pull … manifest unknown`. The route now calls
+`SelfUpdateHostedService.SelectRollTarget`: the policy read, the registry listing, the channel
+filter and the walk that `FirstRollable` shares, so the named candidate has a portal image by
+construction. A listing that faults is `Indeterminate` (combo verification goes red on it), and a
+host with no poller answers `Indeterminate` too.
 
 Ordering stays with the caller: `VersionSelect` owns the ordering rules — the sealed-publication
 lineage rather than the version string, see
@@ -276,9 +286,8 @@ newest-first list, and nothing behind the head is examined.
 
 What keeps a roll from moving an environment backwards is therefore the candidate list. The
 poller — the path that applies a selection — offers only tags strictly newer than the running
-build. `roll-target` lists the release markers newest-first and applies nothing: its answer is for
-a person or a pipeline to read, and when the running build is not among the markers it cannot
-place the head relative to it. A rollback is still a separate decision: a
+build. `roll-target` asks the poller for the same list and applies nothing: its answer is for a
+person or a pipeline to read. A rollback is still a separate decision: a
 schema migration is not reversible and the roll path carries the image and nothing else
 ([The Self-Update Schema Wall](../SelfUpdateSchemaWall)). The one deliberate exception — recovering
 an install stranded on a tag the registry no longer lists — belongs to `VersionSelect`, which
@@ -293,7 +302,7 @@ verdict has one implementation — a rule only one caller honours is not a rule.
 | Path | How |
 |---|---|
 | The self-update poll | `SelfUpdateHostedService.FirstRollable` → `SelectRollTarget` over the registry's tags. The poller supplies its own candidates (policy-filtered, strictly newer than what it runs) and takes the head whenever the selection names no release. The combo verdict is consulted afterwards, on the selected tag, and recorded as an advisory. |
-| An operator or a pipeline rolling by hand | `GET /api/plugins/roll-target` — instance-key gated, fails closed, answers `{environment, kind, current, selected, shouldUpdate, indeterminate, requiredPlugins, satisfiedPlugins, advisories[], bootCompiles[], declined[]}` (`declined` is empty). The running version is read from the instance, never taken from the caller, so nobody can ask for a rollback by naming one. |
+| An operator or a pipeline rolling by hand, and combo verification | `GET /api/plugins/roll-target` — the poller's own selection (`SelfUpdateHostedService.SelectRollTarget`), instance-key or build-principal gated, fails closed, answers `{environment, kind, current, selected, shouldUpdate, indeterminate, requiredPlugins, satisfiedPlugins, advisories[], bootCompiles[], declined[]}` (`declined` is empty). The running version is read from the instance, never taken from the caller, so nobody can ask for a rollback by naming one. |
 | A version somebody already chose | `GET /api/plugins/is-updatable?version=…` — operator and external roll tooling (a manual `kubectl set image`, see [Deployment — AKS](../DeploymentAKS)). It answers the **roll** question: a package refusal comes back as `isUpdatable: true` with the reason verbatim in `waivedHold`, the advisories, and every package's own status in `packages[]`. |
 
 🚨 **The gap the endpoint closed is not hypothetical.** Both memex portals carried `policy: None`
@@ -308,10 +317,11 @@ no way, anywhere, to ask *"which release should this environment be on"*.
   `platform-surface.json`, so no landed module can be linked against it; the outcome carries that
   as an advisory. The boot-time probe decides then — and the
   keep-the-previous-generation fallback keeps the portal serving if it refuses.
-- **Anything with no release marker, when it lists its own candidates.** `roll-target` enumerates
-  the markers, so a release that published no platform content bake is not offered there, and a
-  bake lane that stops writing markers silently shrinks that universe rather than failing. A tag the
-  poller supplies is selected without a marker, with the unresolvable identity as its advisory.
+- **Anything with no release marker, when a caller lists no candidates.** `SelectRollTarget` called
+  without candidates enumerates the markers, so a release that published no platform content bake
+  is not offered there. No roll path calls it that way any more: the poller and `roll-target` supply
+  the registry's tags, and a tag without a marker is selected with the unresolvable identity as its
+  advisory.
 - **Packages that have never sealed under any identity.** The monotone denominator's stated
   exemption, preserved exactly: a module-only or NodeType-less package produces no bundle ever and is
   not demanded, because demanding one would report it as lagging on that environment forever.

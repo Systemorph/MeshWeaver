@@ -108,8 +108,13 @@ per instance it does exactly the three steps
 
 1. **Ask the instance what it would roll to** — `GET /api/plugins/roll-target`. The candidate is
    asked OF the instance rather than derived in CI, because "the newest tag" is not the question the
-   gate answers: `ReleaseAvailabilityService` already walks the completeness rule and names the
-   release this environment would actually take. Re-deriving it would be a second rule.
+   gate answers: the route returns the poller's own selection (the registry's portal tags under the
+   instance's update policy, walked by `ReleaseAvailabilityService`), so it names the release this
+   environment would actually take, and that release has a portal image. Re-deriving it would be a
+   second rule. An `indeterminate` answer is red, never "nothing to verify". An instance on an
+   image from before #4413 still selects over the `_releases` markers and can name a promoted but
+   unarmed set; the pull then fails naming the absent `memex-portal-ai:<version>` until that
+   instance rolls.
 2. **Ask the instance what it runs** — `GET /api/plugins/combo`, added by #3544 beside its two
    `mwi_`-gated siblings. Its body is an `InstanceCombo` serialized with
    `InstanceComboAssembler.Json`, i.e. it **is** `combo.json`, byte-for-byte what `mw-combo-verify`

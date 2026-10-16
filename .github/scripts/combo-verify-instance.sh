@@ -111,6 +111,21 @@ roll_code=$(curl -sS -o "$roll" -w '%{http_code}' --connect-timeout 15 --max-tim
 
 CANDIDATE=$(jq -r '.selected // ""' <"$roll")
 CURRENT=$(jq -r '.current // "?"' <"$roll")
+# 🚨 The selection is the POLLER's own (#4413): the registry's portal tags under this instance's
+# update policy, so a named candidate has a portal image by construction. An instance on an image
+# from before that fix still selects over the published root's `_releases` markers, which name a
+# set the fleet promoted but has not armed (no `memex-portal-ai:<version>` yet); the pull below then
+# goes red naming the image, which is the truth about that instance until it rolls.
+#
+# An INDETERMINATE selection is "the instance could not look", never "nothing to roll to" — passing
+# it as "nothing to verify" would green a slot on no evidence while the poller may still roll.
+if [ "$(jq -r '.indeterminate // false' <"$roll")" = "true" ]; then
+  if [ "$PRIVATE" = false ]; then
+    fail "the instance could not select a roll target (indeterminate): $(jq -r '.environment // ""' <"$roll") — nothing was verified."
+  else
+    fail "the instance could not select a roll target (indeterminate; text withheld: private roster row) — nothing was verified."
+  fi
+fi
 if [ -z "$CANDIDATE" ] || [ "$CANDIDATE" = "null" ]; then
   # A real, reportable outcome — and deliberately NOT silence. The instance has nothing to roll to,
   # so there is nothing to verify; the summary says so by name.
