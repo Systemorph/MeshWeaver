@@ -54,7 +54,18 @@ container target otherwise starts both inner builds in parallel, while their sha
 references write to the same non-RID `bin/Release/net10.0` directory. In run 36357110477,
 `MeshWeaver.Blazor.Portal` built twice there and `Memex.Portal.Gui` then failed with MSB3030 while
 copying the Portal XML documentation file that had disappeared. `ContainerPublishInParallel=false`
-serializes those inner builds; the other image jobs remain parallel.
+serializes those inner builds.
+
+That flag sat on the portal job's ONE call site, so the control image — the same host, published
+the same multi-arch way — kept racing: in run 38964235557 its two inner publishes each ran the
+module-closure lane of `memex/MeshModulesPublish.targets` into a RID-specific `modules/` folder,
+which makes the two `Publish` requests on one closure module distinct build configurations that
+MSBuild runs concurrently, and both wrote that module's RID-agnostic
+`obj/Release/net10.0/<Name>.deps.json` (`MSB4018`, `IOException … being used by another process`,
+#6889). The default now lives in `MeshModulesPublish.targets` itself: every host that imports it
+publishes its architectures one after the other, whichever workflow calls it. The publish retry
+names an MSBuild error as an MSBuild error — only `error CS…` is reported as a compiler
+diagnostic — and retries neither.
 
 A partial set is worse than no set: the self-updater sees a new `memex-portal-ai` version and rolls
 the portal onto it, while the migration image or the bake certification for that commit does not
