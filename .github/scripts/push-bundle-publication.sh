@@ -3,6 +3,8 @@
 # push-bundle-publication.sh --registry <host> --source <name> --identity <id> --dir <publication dir>
 #                            [--tag-run <run id>] [--release <version>] [--skip-if-published]
 #                            [--registry-config <docker config.json>] [--plain-http] [--oras <binary>]
+# push-bundle-publication.sh --registry <host> --source <name> --identity <id> --published-commit
+#                            (read only: print "<commit> <layout> <current layout>" for the tag, or nothing)
 #
 # Publishes ONE sealed publication — the directory publish-bake-bundles.sh writes for one source
 # and one framework identity (`<package>.zip` per bundle, `modules/<package>.module.nupkg` beside
@@ -74,7 +76,7 @@ usage() {
   sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'
 }
 
-REGISTRY=""; SOURCE=""; IDENTITY=""; DIR=""; TAG_RUN=""; RELEASE=""; REGISTRY_CONFIG=""; PLAIN_HTTP=0; SKIP_IF_PUBLISHED=0
+REGISTRY=""; SOURCE=""; IDENTITY=""; DIR=""; TAG_RUN=""; RELEASE=""; REGISTRY_CONFIG=""; PLAIN_HTTP=0; SKIP_IF_PUBLISHED=0; PUBLISHED_COMMIT_ONLY=0
 ORAS="${ORAS:-oras}"
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -85,6 +87,7 @@ while [ $# -gt 0 ]; do
     --tag-run) TAG_RUN="${2:-}"; shift 2 ;;
     --release) RELEASE="${2:-}"; shift 2 ;;
     --skip-if-published) SKIP_IF_PUBLISHED=1; shift ;;
+    --published-commit) PUBLISHED_COMMIT_ONLY=1; shift ;;
     --registry-config) REGISTRY_CONFIG="${2:-}"; shift 2 ;;
     --plain-http) PLAIN_HTTP=1; shift ;;
     --oras) ORAS="${2:-}"; shift 2 ;;
@@ -104,9 +107,44 @@ case "$PUBLICATION_LAYOUT" in ''|*[!0-9]*) fail "publication layout '$PUBLICATIO
 [ -n "$REGISTRY" ] || fail "--registry <host> is required"
 [ -n "$SOURCE" ] || fail "--source <name> is required"
 [ -n "$IDENTITY" ] || fail "--identity <id> is required"
+command -v "$ORAS" >/dev/null 2>&1 || fail "oras is not on PATH (or --oras/\$ORAS does not name a binary) — install a pinned release: https://github.com/oras-project/oras/releases"
+
+# ---- --published-commit: READ ONLY — what does <source>:<identity> name? ----------------------
+# Asked by a lane run that was SUPERSEDED under the publication lock (MeshWeaver.Plugins#1785): it
+# publishes nothing, so it must at least prove the registry names the live share publication
+# (check-registry-names-live.sh) rather than turn green over a stale tag. Prints
+# "<commit> <layout> <the layout this publisher writes>", or nothing when the tag is absent; exit 0
+# either way. Any other failure to read is exit 1 — an unreadable registry is never "absent". Reads
+# exactly what the sealed-skip below reads, in the same shapes.
+if [ "$PUBLISHED_COMMIT_ONLY" -eq 1 ]; then
+  SOURCE_LC_RO=$(printf '%s' "$SOURCE" | tr '[:upper:]' '[:lower:]')
+  ROFLAGS=()
+  [ "$PLAIN_HTTP" -eq 1 ] && ROFLAGS+=(--plain-http)
+  [ -z "$REGISTRY_CONFIG" ] || ROFLAGS+=(--registry-config "$REGISTRY_CONFIG")
+  RO=$(mktemp -d); trap 'rm -rf "$RO"' EXIT
+  repo="$REGISTRY/plugins/$SOURCE_LC_RO"
+  if ! digest=$("$ORAS" resolve "${ROFLAGS[@]}" "$repo:$IDENTITY" 2>"$RO/resolve.err"); then
+    if grep -q ': not found$' "$RO/resolve.err"; then exit 0; fi
+    cat "$RO/resolve.err" >&2
+    fail "could not resolve $repo:$IDENTITY (see above) — whether the registry carries the publication cannot be established"
+  fi
+  "$ORAS" manifest fetch "${ROFLAGS[@]}" "$repo@$digest" > "$RO/index.json" \
+    || fail "could not fetch the index $repo@$digest"
+  sidecar=$(tr -d '\n' < "$RO/index.json" \
+    | sed -n 's/.*"digest":"\(sha256:[0-9a-f]\{64\}\)","size":[0-9]\{1,\},"artifactType":"application\/vnd\.meshweaver\.publication\.v1+json","annotations":{"io\.meshweaver\.role":"sidecars"}.*/\1/p')
+  [ -n "$sidecar" ] || fail "$repo:$IDENTITY names an index with no sidecar manifest — its source commit cannot be read"
+  "$ORAS" manifest fetch-config "${ROFLAGS[@]}" "$repo@$sidecar" > "$RO/config.json" \
+    || fail "could not fetch the sidecar config of $repo@$sidecar"
+  ro_commit=$(tr -d '\n' < "$RO/config.json" | sed -n 's/.*"sourceCommit":"\([^"]*\)".*/\1/p')
+  ro_layout=$(tr -d '\n' < "$RO/config.json" | sed -n 's/.*"layout":\([0-9]\{1,\}\).*/\1/p')
+  # "<commit> <layout> <the layout this publisher writes>" — a same-commit tag of an OLDER layout is
+  # not the current publication (the sealed-skip below republishes it), and a reader must see that.
+  printf '%s %s %s\n' "${ro_commit:--}" "${ro_layout:--}" "$PUBLICATION_LAYOUT"
+  exit 0
+fi
+
 [ -n "$DIR" ] || fail "--dir <publication dir> is required"
 [ -d "$DIR" ] || fail "--dir '$DIR' is not a directory"
-command -v "$ORAS" >/dev/null 2>&1 || fail "oras is not on PATH (or --oras/\$ORAS does not name a binary) — install a pinned release: https://github.com/oras-project/oras/releases"
 
 # ---- names: the registry's grammar is lowercase, and it is enforced here so a refusal is a
 #      sentence rather than a MANIFEST_INVALID / NAME_INVALID from the registry --------------------
@@ -333,6 +371,29 @@ if [ "$SKIP_IF_PUBLISHED" -eq 1 ]; then
     elif [ -z "$published_commit" ]; then
       echo "$PUB_REPO:$IDENTITY resolves to $existing but its source commit could not be read ($(tr '\n' ' ' < "$WORK/fetch.err")) — publishing, since a push is idempotent and a skip without proof is not"
     else
+      # 🚨 NEVER MOVE THE TAG BACKWARDS (Copilot's review of #6878). The share publisher refuses to
+      # seal an OLDER commit over a NEWER one (publish-bake-bundles.sh, `superseded`) — but it still
+      # materialises this run's publication for the registry, so without the same question here the
+      # shares stayed newer while the registry tag rolled back. Asked of the compare API exactly as
+      # the share side asks it (GH_TOKEN + BAKE_CONTENT_REPOSITORY); `ahead` = the published commit
+      # is newer and contains this one. The release identity is still recorded — it describes the
+      # RELEASE, not which content the tag names. An unorderable pair keeps today's behaviour
+      # (republish) and says why.
+      order=""
+      if [ -n "${GH_TOKEN:-}" ] && [ -n "${BAKE_CONTENT_REPOSITORY:-}" ]; then
+        if ! order=$(gh api "repos/$BAKE_CONTENT_REPOSITORY/compare/$local_commit...$published_commit" --jq .status 2>"$WORK/compare.err"); then
+          echo "::warning::the compare API refused to order $local_commit against $published_commit: $(tail -c 400 "$WORK/compare.err" | tr '\n' ' ')"
+          order=""
+        fi
+      fi
+      if [ "$order" = "ahead" ]; then
+        echo "::notice title=Not moving the registry tag backwards::$PUB_REPO:$IDENTITY names a publication from $published_commit, which is NEWER than this one's $local_commit and contains it — leaving the tag where it is."
+        publish_release_identity
+        echo "bundle-publication: index=$existing bundles=${#BUNDLES[@]} tag=$IDENTITY registry=$REGISTRY source=$SOURCE repository=plugins/$SOURCE_LC skipped=superseded"
+        record_outputs "$existing" "${#BUNDLES[@]}"
+        exit 0
+      fi
+      [ -n "$order" ] || echo "::warning::could not order the published $published_commit against this publication's $local_commit (no GH_TOKEN / BAKE_CONTENT_REPOSITORY, or the compare API refused) — republishing as before."
       echo "$PUB_REPO:$IDENTITY names a publication from source '$published_commit' but this one is from '$local_commit' — republishing (the tag moves last; the previous generation stays resident by digest)"
     fi
   else

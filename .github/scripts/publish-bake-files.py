@@ -74,6 +74,14 @@ THE PHASES
            prefix may dispose of it concurrently. A directory the patterns name (`modules/`) is
            removed once nothing is left in it.
 
+`lock`     acquire / check / release the per-prefix PUBLICATION LOCK (MeshWeaver#6877): a file lease
+           on `<identity>/_publishing.<source>`, so two publishers of one prefix never interleave
+           their read-decide-write. Waiting is bounded and red when exceeded; an abandoned lease is
+           recovered only on evidence, by releasing that holder's OWN lease. See `cmd_lock`.
+
+`share-exists` true / false / unknown for the share itself — what a failure message needs before it
+           advises removing a target from BAKE_PUBLISH_TARGETS.
+
 `sdk-check` imports the pinned SDK, constructs the clients this file uses (no network), asserts
            the installed versions are the ones the caller pinned, and prints them. It is the
            positive signal after the install and the one case the overlap harness runs against the
@@ -133,6 +141,21 @@ class ShareBackend(Protocol):
         ...
     def delete_directory(self, path: str) -> bool:
         """True when the (empty) directory was deleted, False when it was not there. Raises otherwise."""
+        ...
+    def lease_acquire(self, path: str, lease_id: str) -> bool:
+        """True when this lease id now holds `path` (created empty if absent); False when another does."""
+        ...
+    def lease_state(self, path: str) -> tuple[bool, bool, dict[str, str], float | None]:
+        """(exists, leased, metadata, last-modified epoch) of the lock file."""
+        ...
+    def lease_set_metadata(self, path: str, lease_id: str, metadata: dict[str, str]) -> None:
+        """Writes metadata; raises unless `lease_id` holds the file."""
+        ...
+    def lease_release(self, path: str, lease_id: str) -> bool:
+        """True when released, False when `lease_id` does not hold it. Raises on any other failure."""
+        ...
+    def share_exists(self) -> bool:
+        """Whether the share answers at all. Raises when that cannot be established."""
         ...
 
 
@@ -195,6 +218,74 @@ class AzureFilesBackend:
     def delete_directory(self, path: str) -> bool:
         try:
             self.share.get_directory_client(path).delete_directory()
+        except self._not_found:
+            return False
+        return True
+
+    # ── the publication lock (MeshWeaver#6877) — an Azure Files FILE LEASE on one small file ──
+    # File leases are infinite by construction (the service offers no other duration), so release
+    # and the abandoned-holder rule live in `cmd_lock`, not here. These methods only translate the
+    # service's answers into the three states the caller decides on.
+    def lease_acquire(self, path: str, lease_id: str) -> bool:
+        """True when THIS lease id now holds `path`; False when another lease holds it."""
+        from azure.core.exceptions import HttpResponseError
+        from azure.storage.fileshare import ShareLeaseClient
+
+        fc = self.share.get_file_client(path)
+        for _ in range(2):
+            try:
+                ShareLeaseClient(fc, lease_id=lease_id).acquire()
+                return True
+            except self._not_found:
+                # The lock file does not exist yet (the first publication of this prefix). Create it
+                # empty and try again; a creation refused because ANOTHER lease already holds the
+                # file (412) means a concurrent publisher created and leased it first.
+                try:
+                    fc.create_file(size=0)
+                except HttpResponseError as exc:
+                    if exc.status_code == 412:
+                        return False
+                    raise
+            except HttpResponseError as exc:
+                if exc.status_code == 409:   # LeaseAlreadyPresent
+                    return False
+                raise
+        raise RuntimeError(f"{path} could neither be leased nor created")
+
+    def lease_state(self, path: str) -> tuple[bool, bool, dict[str, str], float | None]:
+        """(exists, leased, metadata, last-modified epoch)."""
+        try:
+            props = self.share.get_file_client(path).get_file_properties()
+        except self._not_found:
+            return False, False, {}, None
+        leased = getattr(props.lease, "state", None) == "leased"
+        modified = props.last_modified.timestamp() if props.last_modified else None
+        return True, leased, dict(props.metadata or {}), modified
+
+    def lease_set_metadata(self, path: str, lease_id: str, metadata: dict[str, str]) -> None:
+        """Writes the holder record. Succeeds ONLY for the lease that holds the file — which makes it
+        the proof of possession as well as the record."""
+        self.share.get_file_client(path).set_file_metadata(metadata=metadata, lease=lease_id)
+
+    def lease_release(self, path: str, lease_id: str) -> bool:
+        """True when released; False when this lease id does not hold it (any more)."""
+        from azure.core.exceptions import HttpResponseError
+        from azure.storage.fileshare import ShareLeaseClient
+
+        try:
+            ShareLeaseClient(self.share.get_file_client(path), lease_id=lease_id).release()
+        except self._not_found:
+            return False
+        except HttpResponseError as exc:
+            if exc.status_code in (409, 412):   # LeaseIdMismatch / LeaseNotPresent
+                return False
+            raise
+        return True
+
+    def share_exists(self) -> bool:
+        """Whether the SHARE itself answers. Raises when that cannot be established."""
+        try:
+            next(iter(self.share.list_directories_and_files()), None)
         except self._not_found:
             return False
         return True
@@ -389,6 +480,250 @@ def cmd_stamp(args: argparse.Namespace) -> int:
     return 0
 
 
+# ───────────────────────────── the publication lock (MeshWeaver#6877) ─────────────────────────────
+#
+# One publisher per prefix at a time. Everything else in this lane is a POSTCONDITION — it detects
+# an interleaving after the fact and refuses — and a postcondition cannot make two overlapping runs
+# both succeed: the 2026-10-16 incident was two core CD runs publishing the SAME content to one
+# target, where the slower one's unseal found the sentinel the faster one had already removed and
+# went red on `ResourceNotFound` for a target that was perfectly alive. Serialising the two is what
+# lets the second one simply re-read the shelf and find the publication already there.
+#
+# The primitive is a FILE LEASE. `az storage` offers none (measured: no `lease` command under either
+# group, see publish-bake-bundles.sh), but the SDK this helper already runs on does
+# (`ShareLeaseClient`). An Azure Files lease has NO duration — it is held until released or broken —
+# so the two things a lock with an infinite lease needs are spelled out here:
+#
+#   * RELEASE is the caller's job, on every exit path (publish-bake-bundles.sh releases from an EXIT
+#     trap in the per-target subshell; a workflow that holds the lock across steps releases in an
+#     `if: always()` step, which GitHub runs on cancellation too).
+#   * An ABANDONED holder — a runner that died without running either — is recovered ONLY on
+#     evidence, never on impatience, and only by releasing THAT holder's own lease (never a break,
+#     which could revoke whoever holds it now): (1) the holder's own workflow run attempt has COMPLETED (asked of the
+#     GitHub API when a token is available), or (2) the lease is older than any CI job can live:
+#     every job in the fleet is hard-capped at 45 minutes (check-workflow-timeouts.py), so a holder
+#     acquired more than STALE_AFTER_SECONDS ago is provably not running. Waiting is BOUNDED by
+#     `--wait-seconds`, and running out of it is RED, naming the holder — never a silent proceed.
+#
+# The lease id is DERIVED from the holder token (uuid5), so a later step of the same run — another
+# process — can prove possession and release it without the id being passed around.
+STALE_AFTER_SECONDS = 50 * 60       # the 45-minute job cap plus the runner's cancel/cleanup grace
+DEFAULT_LOCK_WAIT_SECONDS = 900
+
+
+def lease_id_of(holder: str) -> str:
+    import uuid
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"meshweaver-bake-publication:{holder}"))
+
+
+def holder_record(holder: str) -> dict[str, str]:
+    # Metadata values are ASCII; every value here is a token, a number or an owner/name.
+    return {
+        "holder": holder,
+        "acquired": str(int(time.time())),
+        "repository": os.environ.get("GITHUB_REPOSITORY", ""),
+        "runid": os.environ.get("GITHUB_RUN_ID", ""),
+        "runattempt": os.environ.get("GITHUB_RUN_ATTEMPT", ""),
+    }
+
+
+# 🚨 THE RUN-STATUS QUESTION IS THROTTLED SEPARATELY FROM THE LEASE POLL (Copilot's review of
+# #6878). The lease is re-tried every few seconds; asking GitHub that often would cost ~180 requests
+# per waiting publisher over the default bound, multiplied by every concurrent waiter, against the
+# repository's token quota. So a holder's run is asked about at most once per RUN_CHECK_SECONDS, and
+# after a refusal (rate limit, auth, network) not before RUN_CHECK_BACKOFF_SECONDS — or the server's
+# own Retry-After, when it names a longer one. The lease poll is never delayed by it.
+RUN_CHECK_SECONDS = 60
+RUN_CHECK_BACKOFF_SECONDS = 300
+
+
+def holder_run_completed(md: dict[str, str]) -> tuple[str | None, float]:
+    """(a sentence when the holder's run attempt is PROVABLY over, else None; seconds until the
+    question may be asked again). Unknown is not over."""
+    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    repo, run_id, attempt = md.get("repository"), md.get("runid"), md.get("runattempt")
+    if not (token and repo and run_id and attempt):
+        return None, RUN_CHECK_SECONDS
+    import json
+    import urllib.error
+    import urllib.request
+    api = os.environ.get("GITHUB_API_URL", "https://api.github.com").rstrip("/")
+    url = f"{api}/repos/{repo}/actions/runs/{run_id}/attempts/{attempt}"
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}",
+                                               "Accept": "application/vnd.github+json"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            run = json.load(resp)
+    except Exception as exc:  # noqa: BLE001 — "could not ask" is NOT "over"; the age rule remains
+        backoff = float(RUN_CHECK_BACKOFF_SECONDS)
+        if isinstance(exc, urllib.error.HTTPError):
+            try:
+                backoff = max(backoff, float(exc.headers.get("Retry-After") or 0))
+            except ValueError:
+                pass
+        log(f"lock: could not ask whether {repo} run {run_id} attempt {attempt} is still running "
+            f"({type(exc).__name__}: {exc}) — not asking again for {int(backoff)} s; the age rule "
+            f"still applies meanwhile")
+        return None, backoff
+    if run.get("status") == "completed":
+        return (f"its run {repo}#{run_id} attempt {attempt} has COMPLETED "
+                f"(conclusion {run.get('conclusion')}) without releasing it"), RUN_CHECK_SECONDS
+    return None, RUN_CHECK_SECONDS
+
+
+def abandoned_because(md: dict[str, str], modified: float | None,
+                      run_check: "RunCheckThrottle | None" = None) -> str | None:
+    """A sentence when the RECORDED holder is provably gone, else None.
+
+    🚨 Only a NAMED holder can be judged — and only its own lease can then be released (see the
+    recovery in `cmd_lock`). A lock file with no recorded holder (its first holder is between its
+    acquire and its record write) is never judged abandoned: there is no lease id to release, and
+    breaking an unidentified lease could revoke a live one (Copilot's review of #6878).
+    """
+    if not md.get("holder"):
+        return None
+    acquired: float | None = None
+    try:
+        acquired = float(md["acquired"])
+    except (KeyError, ValueError):
+        acquired = modified
+    if acquired is not None:
+        age = time.time() - acquired
+        if age > STALE_AFTER_SECONDS:
+            return (f"it has been held for {int(age)} s, longer than any CI job can live (every job "
+                    f"is hard-capped at 45 minutes, so its holder is provably gone)")
+    if run_check is None or not run_check.due(md["holder"]):
+        return None
+    reason, again = holder_run_completed(md)
+    run_check.asked(md["holder"], again)
+    return reason
+
+
+class RunCheckThrottle:
+    """When each holder's run may next be asked about — per process, per holder."""
+
+    def __init__(self) -> None:
+        self._next: dict[str, float] = {}
+
+    def due(self, holder: str) -> bool:
+        return time.monotonic() >= self._next.get(holder, 0.0)
+
+    def asked(self, holder: str, again_in: float) -> None:
+        self._next[holder] = time.monotonic() + again_in
+
+
+def cmd_lock(args: argparse.Namespace) -> int:
+    backend = make_backend(args.account, args.share)
+    where = f"{args.account}/{args.share}/{args.path}"
+    lease_id = lease_id_of(args.holder)
+
+    if args.action == "release":
+        try:
+            released = backend.lease_release(args.path, lease_id)
+        except Exception as exc:  # noqa: BLE001 — named and fatal: a stuck lock blocks the prefix
+            log(f"::error::could not release the publication lock {where}: {type(exc).__name__}: "
+                f"{exc} — the next publisher of this prefix waits until it is recovered as abandoned")
+            return 1
+        if released:
+            log(f"lock: released {where} (publication {args.holder})")
+        else:
+            log(f"::warning::the publication lock {where} was not held by publication {args.holder} "
+                f"when it released it — either it was never acquired, or another publisher broke it "
+                f"as abandoned. This run's own postconditions still decided what it sealed.")
+        return 0
+
+    if args.action == "check":
+        exists, leased, md, _ = backend.lease_state(args.path)
+        if exists and leased and md.get("holder") == args.holder:
+            try:
+                backend.lease_set_metadata(args.path, lease_id, md)
+                log(f"lock: {where} is held by this publication ({args.holder})")
+                return 0
+            except Exception as exc:  # noqa: BLE001
+                log(f"lock: possession of {where} could not be proved: {type(exc).__name__}: {exc}")
+        log(f"::error::this run was told it already holds the publication lock {where} "
+            f"(as {args.holder}) but it does not (exists={exists}, leased={leased}, recorded holder "
+            f"'{md.get('holder', '-')}'). Refusing to publish unserialised.")
+        return 1
+
+    # acquire
+    for level in parent_directories("", [args.path]):
+        backend.ensure_directory(level)
+    started = time.monotonic()
+    last_note = -1e9
+    handed_off: set[str] = set()
+    run_check = RunCheckThrottle()
+    while True:
+        if backend.lease_acquire(args.path, lease_id):
+            try:
+                backend.lease_set_metadata(args.path, lease_id, holder_record(args.holder))
+            except Exception:
+                # A lease nobody can attribute must not outlive this process: give it back, then fail.
+                backend.lease_release(args.path, lease_id)
+                raise
+            waited = time.monotonic() - started
+            log(f"lock: acquired {where} for publication {args.holder}"
+                + (f" after waiting {waited:.0f} s" if waited >= 1 else ""))
+            return 0
+        exists, leased, md, modified = backend.lease_state(args.path)
+        holder = md.get("holder", "<not recorded yet>")
+        if holder == args.holder and leased:
+            try:
+                backend.lease_set_metadata(args.path, lease_id, md)
+                log(f"lock: {where} is already held by this publication ({args.holder})")
+                return 0
+            except Exception:  # noqa: BLE001 — not ours after all; treated as any other holder
+                pass
+        if exists and leased:
+            reason = abandoned_because(md, modified, run_check)
+            if reason:
+                # 🚨 RECOVERY IS CONDITIONAL ON THE OBSERVED HOLDER'S OWN LEASE — never a break.
+                # The evidence above describes the holder the RECORD names, read a moment ago; by
+                # now another waiter may have recovered it and taken a lease of its own, or a fresh
+                # holder may be between its acquire and its record write (the record still names
+                # the previous one). An unconditional break would revoke THAT live lease and let two
+                # publishers in again. Lease ids are derived from the holder token, so releasing
+                # exactly `lease_id_of(<recorded holder>)` succeeds only while the recorded holder
+                # still holds it; anything else is a mismatch, and this run waits (within its bound) and re-reads.
+                if backend.lease_release(args.path, lease_id_of(holder)):
+                    log(f"::warning::released the abandoned publication lock {where} of '{holder}': "
+                        f"{reason}.")
+                    continue
+                # A mismatch is an ordinary wait, NOT a retry: falling through keeps it inside the
+                # wait bound below (a `continue` here would spin on the same stale record forever).
+                if holder not in handed_off:
+                    handed_off.add(holder)
+                    log(f"lock: {where} changed hands since '{holder}' was judged abandoned — "
+                        f"waiting instead of revoking a lease this run did not observe")
+        elapsed = time.monotonic() - started
+        if elapsed >= args.wait_seconds:
+            log(f"::error title=Publication lock not acquired::{where} is still held by publication "
+                f"'{holder}' after {int(elapsed)} s. That publisher is writing this prefix right now, "
+                f"so this run must not; nothing of this run has been written. It has NOT been shown to be "
+                f"abandoned (the lease is not the recorded holder's, or that holder's run is not shown "
+                f"to be over and is younger than the 45-minute job cap), so it is not recovered. "
+                f"Re-run once '{holder}' has finished.")
+            return 1
+        if elapsed - last_note >= 60:
+            log(f"lock: waiting for publication '{holder}' to release {where} "
+                f"({int(elapsed)} s of at most {args.wait_seconds} s)")
+            last_note = elapsed
+        time.sleep(args.poll_seconds)
+
+
+def cmd_share_exists(args: argparse.Namespace) -> int:
+    """Prints true / false / unknown — the answer a failure message needs before it advises removing
+    a target. Never fails: `unknown` is an answer, and the caller says so."""
+    try:
+        exists = make_backend(args.account, args.share).share_exists()
+    except Exception as exc:  # noqa: BLE001 — reported as `unknown`, never as either answer
+        log(f"share-exists: {args.account}/{args.share}: {type(exc).__name__}: {exc}")
+        print("unknown")
+        return 0
+    print("true" if exists else "false")
+    return 0
+
+
 # ───────────────────────────── dispose ─────────────────────────────
 def match_arg(value: str) -> tuple[str, str]:
     """`<dir>/<basename-glob>` or `<basename-glob>` → (dir, glob), one directory level at most.
@@ -552,7 +887,8 @@ def cmd_sdk_check(args: argparse.Namespace) -> int:
             raise SystemExit(f"::error::{name} is {installed}, the pin says {version} — this helper "
                              f"must run against the versions it was verified with")
     from azure.core.credentials import AccessToken
-    from azure.storage.fileshare import ShareClient, ShareDirectoryClient, ShareFileClient
+    from azure.storage.fileshare import (ShareClient, ShareDirectoryClient, ShareFileClient,
+                                         ShareLeaseClient)
 
     class _NoNetworkCredential:
         def get_token(self, *scopes, **kwargs):  # pragma: no cover — never called
@@ -562,9 +898,14 @@ def cmd_sdk_check(args: argparse.Namespace) -> int:
                         credential=_NoNetworkCredential(), token_intent="backup")
     file = share.get_file_client("dir/file.zip")
     directory = share.get_directory_client("dir")
-    for obj, attrs in ((file, ("upload_file", "get_file_properties", "delete_file")),
+    # The publication lock (MeshWeaver#6877): a lease client on a file, constructed with a proposed
+    # id — the shape `lease_acquire` / `lease_release` use — plus the two file calls around it.
+    lease = ShareLeaseClient(file, lease_id=lease_id_of("sdk-check"))
+    for obj, attrs in ((file, ("upload_file", "get_file_properties", "delete_file", "create_file",
+                               "set_file_metadata")),
                        (directory, ("exists", "create_directory", "list_directories_and_files",
-                                    "delete_directory"))):
+                                    "delete_directory")),
+                       (lease, ("acquire", "release"))):
         for a in attrs:
             if not callable(getattr(obj, a, None)):
                 raise SystemExit(f"::error::{type(obj).__name__}.{a} is missing — the SDK surface "
@@ -613,6 +954,21 @@ def main(argv: list[str] | None = None) -> int:
                     help="a path relative to --dest that is never deleted (the pointer); repeatable")
     di.add_argument("--workers", type=int, default=DEFAULT_WORKERS)
     di.set_defaults(fn=cmd_dispose)
+
+    lk = sub.add_parser("lock", help="acquire / check / release the per-prefix publication lock")
+    lk.add_argument("action", choices=("acquire", "check", "release"))
+    target(lk)
+    lk.add_argument("--path", required=True, help="the lock file's full path under the share")
+    lk.add_argument("--holder", required=True, help="this run's publication token")
+    lk.add_argument("--wait-seconds", type=int,
+                    default=int(os.environ.get("PUBLISH_BAKE_LOCK_WAIT_SECONDS", DEFAULT_LOCK_WAIT_SECONDS)))
+    lk.add_argument("--poll-seconds", type=float,
+                    default=float(os.environ.get("PUBLISH_BAKE_LOCK_POLL_SECONDS", "5")))
+    lk.set_defaults(fn=cmd_lock)
+
+    se = sub.add_parser("share-exists", help="true / false / unknown for the share itself")
+    target(se)
+    se.set_defaults(fn=cmd_share_exists)
 
     sc = sub.add_parser("sdk-check", help="the pinned SDK imports and its clients construct")
     sc.add_argument("--pins", required=True, help="'name==version …' as installed")

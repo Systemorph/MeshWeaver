@@ -423,6 +423,24 @@ def case_plain(oras: str, work: Path, containers: Containers, reg_image: str) ->
     r5 = push(two, IDENTITY, "--skip-if-published")
     expect(r5.returncode == 0 and "skipped=already-published" in r5.stdout and index_of(r5) == d4,
            "…a repeat of the new content is then skipped against the moved tag")
+    # 🚨 The tag never moves BACKWARDS (Copilot's review of #6878): the share publisher skips an
+    # OLDER commit as `superseded` but still materialises it, and without the same ordering here the
+    # registry would roll back under shares that stayed newer. A stub `gh` answers the compare the
+    # way the real API does: `ahead` when the published commit is newer and contains this one.
+    ghbin = work / "gh-stub"
+    ghbin.mkdir(exist_ok=True)
+    (ghbin / "gh").write_text("#!/usr/bin/env bash\n"
+                              "case \"$2\" in */compare/one0123456789abcdef...two0123456789abcdef) echo ahead ;;"
+                              " *) echo diverged ;; esac\n")
+    (ghbin / "gh").chmod(0o755)
+    ordered = {"GH_TOKEN": "stub", "BAKE_CONTENT_REPOSITORY": "Systemorph/MeshWeaver.Plugins",
+               "PATH": f"{ghbin}{os.pathsep}{os.environ['PATH']}"}
+    r10 = push(pub, IDENTITY, "--tag-run", "4247", "--release", "3.1.1", "--skip-if-published", env_extra=ordered)
+    expect(r10.returncode == 0 and "skipped=superseded" in r10.stdout and index_of(r10) == d4
+           and resolve(f"plugins/plugins:{IDENTITY}") == d4,
+           f"an OLDER commit than the tag names leaves the tag where it is (exit {r10.returncode})")
+    expect(resolve(f"plugins/plugins:{IDENTITY}-4247") == "" and resolve("plugins/releases:3.1.1").startswith("sha256:"),
+           "…writes no run tag, and still records the release identity")
     # A publication of the SAME content in an OLDER layout (pushed before modules rode with their
     # bundles case-insensitively — its config carries no "layout") is republished, never skipped:
     # its commit never moves, so a commit-only skip would keep it torn forever.
