@@ -798,6 +798,29 @@ public record NodeTypeDefinition
     public string? CurrentModuleVersion { get; init; }
 
     /// <summary>
+    /// 🚨 MeshWeaver#6831 — the module version the bytes named by <see cref="LatestAssemblyMvid"/>
+    /// were BUILT at, recorded in the same write that names those bytes: by an adoption (the
+    /// producer's stated version) and by a local compile (the <see cref="CurrentModuleVersion"/> of
+    /// exactly the source snapshot it compiled, or null when that snapshot had already moved).
+    /// Valid only while <see cref="BuiltModuleVersionMvid"/> equals <see cref="LatestAssemblyMvid"/>.
+    ///
+    /// <para>Neither <see cref="AdoptedModuleVersion"/> nor <see cref="CurrentModuleVersion"/> can
+    /// say this: the first survives a local compile, and a delivery hold
+    /// (<c>BuildDeliveryHold.Settle</c>) turns a locally compiled build into
+    /// <see cref="Mesh.Services.BuildProvenance.StaleAdopted"/> without touching its bytes; the
+    /// second moves with the source, and an <c>@@</c>-include-only edit moves it without making the
+    /// type <see cref="IsDirty"/>. Read through <c>PrebuiltAssemblySeeder.ModuleVersionOfBuild</c>.</para>
+    /// </summary>
+    public string? BuiltModuleVersion { get; init; }
+
+    /// <summary>
+    /// The <see cref="LatestAssemblyMvid"/> <see cref="BuiltModuleVersion"/> was recorded for
+    /// (MeshWeaver#6831). A writer that names new bytes without recording their version leaves this
+    /// pointing at the old ones, so the pair reads as UNKNOWN rather than as a wrong version.
+    /// </summary>
+    public string? BuiltModuleVersionMvid { get; init; }
+
+    /// <summary>
     /// 🚨 WHY this record is in a delivery hold (<see cref="Mesh.Services.BuildProvenance.StaleAdopted"/>
     /// or <see cref="Mesh.Services.BuildProvenance.AdoptionRefused"/>), in one operator-readable
     /// line: the delivery gate that refused to compile (the untracked-module gate, or

@@ -93,6 +93,28 @@ public static class BundleReader
         /// declared compatibility break (<c>platform-compatibility.json</c>).
         /// </summary>
         public string? PlatformCeiling { get; init; }
+
+        /// <summary>
+        /// 🚨 MeshWeaver#6831 — <c>true</c> when the producer states the module version PER
+        /// ASSEMBLY (<see cref="AssemblyRef.ModuleVersion"/>) because the bytes it serves need not
+        /// have been built at <see cref="Version"/>. A registry serving its own lane assembles the
+        /// bundle from each NodeType's CURRENT build, and that build can be an older adoption: the
+        /// package was advertised at 1.1.1 while the bytes were the 1.0.1 build, and every consumer
+        /// stamped them <c>adoptedModuleVersion: 1.1.1</c>. Under this flag an assembly with no
+        /// stated version is UNKNOWN — it never inherits <see cref="Version"/>. Null/false (a bake's
+        /// sealed bundle, or an older registry): every assembly was built at <see cref="Version"/>.
+        /// An INIT property for the binary-break reason <see cref="AssemblyRef.SourceFingerprint"/> states.
+        /// </summary>
+        public bool? ModuleVersionPerAssembly { get; init; }
+
+        /// <summary>The module version the bytes of <paramref name="reference"/> were built at, as
+        /// this manifest states it — per assembly under <see cref="ModuleVersionPerAssembly"/>,
+        /// otherwise the bundle's <see cref="Version"/> (MeshWeaver#6831).</summary>
+        /// <param name="reference">One of this manifest's <see cref="Assemblies"/>.</param>
+        public string? ModuleVersionOf(AssemblyRef reference)
+            => ModuleVersionPerAssembly == true
+                ? reference.ModuleVersion
+                : reference.ModuleVersion ?? Version;
     }
 
     /// <summary>One assembly and the NodeType it implements.</summary>
@@ -127,6 +149,11 @@ public static class BundleReader
         /// <c>BundleWriter.AssemblyEntry.SourceIncludes</c> (MeshWeaver#4280). Null for a producer
         /// that recorded none.</summary>
         public IReadOnlyList<string>? SourceIncludes { get; init; }
+
+        /// <summary>The module version THESE bytes were built at, when the producer states it per
+        /// assembly (MeshWeaver#6831) — see <see cref="Manifest.ModuleVersionPerAssembly"/>. Null
+        /// from a producer that states only the bundle's <see cref="Manifest.Version"/>.</summary>
+        public string? ModuleVersion { get; init; }
     }
 
     /// <summary>The bundle's compiled-module declaration.</summary>
@@ -241,6 +268,15 @@ public static class BundleReader
         /// exactly as on the paths. Null for a legacy bundle: the owner then judges without it.
         /// </summary>
         public IReadOnlyList<string>? SourceIncludes { get; init; }
+
+        /// <summary>
+        /// 🚨 The module version these bytes were built at (MeshWeaver#6831), resolved by
+        /// <see cref="Manifest.ModuleVersionOf"/>. This is what a consumer stamps as
+        /// <c>NodeTypeDefinition.AdoptedModuleVersion</c>, never the bundle's top-level version:
+        /// a registry's own-lane serve can carry an older build under a newer package version.
+        /// Null = unknown, which the compatibility rule answers as UNKNOWN and never refuses on.
+        /// </summary>
+        public string? ModuleVersion { get; init; }
     }
 
     /// <summary>
@@ -325,6 +361,8 @@ public static class BundleReader
                 SourceIncludes = reference.SourceIncludes is { Count: > 0 } includes
                     ? includes.OrderBy(k => k, StringComparer.Ordinal).ToList()
                     : null,
+                // #6831 — the version of THESE bytes, never assumed from the bundle's label.
+                ModuleVersion = manifest.ModuleVersionOf(reference),
             });
         }
 

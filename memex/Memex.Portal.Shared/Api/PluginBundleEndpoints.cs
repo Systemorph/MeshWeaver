@@ -1730,6 +1730,9 @@ public static class PluginBundleEndpoints
         var servesOwnLane =
             string.Equals(identity, FrameworkMvid, StringComparison.Ordinal)
             && ReleaseArchitecture.Matches(ReleaseArchitecture.Live, architecture);
+        // The served bytes' MVID is read (#6831) on the FILESYSTEM pool, never the request thread.
+        var fileSystemPool = rootHub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem)
+                             ?? IoPool.Unbounded;
 
         // 🚨 OFF THIS INSTANCE'S LANE, the publication SEALED for the caller's identity is the
         // answer — not a reconstruction from this mesh's Release records (#3768). Those records are
@@ -1773,14 +1776,8 @@ public static class PluginBundleEndpoints
                         x.Node.Path, x.Definition!, releases, identity, architecture, servesOwnLane,
                         misses)))
                     .Where(x => x.Version is not null)
-                    .Select(x => store
-                        .TryGetAssemblyPath(x.Node.Path, x.Version!.Value)
-                        .Take(1)
-                        .Catch<string?, Exception>(_ => Observable.Return<string?>(null))
-                        .Select(path => new ServedAssembly(
-                            x.Node.Path,
-                            path is null ? null : () => File.OpenRead(path),
-                            x.Definition!.CompiledDependencies)))
+                    .Select(x => ServeBuild(
+                        store, fileSystemPool, x.Node.Path, x.Definition!, x.Version!.Value, servesOwnLane))
                     .ToArray();
 
                 var assemblies = lookups.Length == 0
@@ -1909,11 +1906,15 @@ public static class PluginBundleEndpoints
     /// <remarks>A <see cref="Func{TResult}"/> rather than a path so the two producers can be the
     /// same shape: this instance's assembly store hands back a file, a sealed publication hands
     /// back bytes already inflated from its archive.</remarks>
-    private sealed record ServedAssembly(
+    internal sealed record ServedAssembly(
         string NodePath,
         Func<Stream>? Open,
         IReadOnlyDictionary<string, string>? Dependencies,
-        string? SourceFingerprint = null);
+        string? SourceFingerprint = null)
+    {
+        /// <summary>The module version these bytes were built at, or null when unknown (#6831).</summary>
+        public string? ModuleVersion { get; init; }
+    }
 
     /// <summary>
     /// The bundle for a caller on ANOTHER lane, taken from the publication this registry holds
@@ -1967,7 +1968,11 @@ public static class PluginBundleEndpoints
                         payload.NodePath,
                         () => new MemoryStream(payload.Assembly, writable: false),
                         payload.Dependencies,
-                        payload.SourceFingerprint))
+                        payload.SourceFingerprint)
+                    {
+                        // #6831 — carried from the sealed archive, exactly as its producer stated it.
+                        ModuleVersion = payload.ModuleVersion,
+                    })
                     .ToArray();
 
                 logger?.LogInformation(
@@ -2053,6 +2058,47 @@ public static class PluginBundleEndpoints
                 g => g.Key,
                 g => (IReadOnlyList<NodeTypeRelease>)g.Select(r => r!).ToArray(),
                 StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// 🚨 MeshWeaver#6831 — the bytes served for one NodeType and the module version stated for
+    /// THEM. Several builds can share one store key (an adoption at a version a compile already
+    /// used, a recompile that did not move it, a rollback), so "the newest file under the key" is
+    /// not an identity and must not carry the record's version label.
+    ///
+    /// <list type="bullet">
+    ///   <item>On this instance's own lane the record's current build is served, resolved by the
+    ///   identity the record NAMES (<c>LatestAssemblyPath</c> + <c>LatestAssemblyMvid</c>, through
+    ///   <see cref="IAssemblyStore.TryGetBuildPath"/>) — the same bytes the next activation binds.</item>
+    ///   <item>Off it, the Release artifact's store version is served exactly as before.</item>
+    ///   <item>Either way the record's version is stated only when the selected file's MVID IS the
+    ///   record's <c>LatestAssemblyMvid</c>. <c>TryGetBuildPath</c> falls back to the version-only
+    ///   answer when it cannot find the named bytes, and an unknown record MVID proves nothing, so
+    ///   anything short of that match is UNKNOWN (null) — never the record's version on other
+    ///   bytes.</item>
+    /// </list>
+    /// </summary>
+    /// <remarks>Internal for <c>RegistryStatesTheServedBuildsModuleVersionTest</c>.</remarks>
+    internal static IObservable<ServedAssembly> ServeBuild(
+        IAssemblyStore store, IIoPool pool, string nodePath, NodeTypeDefinition definition,
+        long version, bool servesOwnLane)
+        => (servesOwnLane
+                ? store.TryGetBuildPath(
+                    nodePath, version, definition.LatestAssemblyPath, definition.LatestAssemblyMvid)
+                : store.TryGetAssemblyPath(nodePath, version))
+            .Take(1)
+            .Catch<string?, Exception>(_ => Observable.Return<string?>(null))
+            .SelectMany(path => path is null
+                ? Observable.Return(new ServedAssembly(nodePath, null, definition.CompiledDependencies))
+                : pool.InvokeBlocking(_ => ServedBuildIdentity.OfFile(path))
+                    .Select(servedMvid => new ServedAssembly(
+                        nodePath, () => File.OpenRead(path), definition.CompiledDependencies)
+                    {
+                        ModuleVersion = !string.IsNullOrEmpty(servedMvid)
+                                        && string.Equals(servedMvid, definition.LatestAssemblyMvid,
+                                            StringComparison.OrdinalIgnoreCase)
+                            ? PrebuiltAssemblySeeder.ModuleVersionOfBuild(definition)
+                            : null,
+                    }));
 
     /// <summary>
     /// Which assembly-store version to serve for one NodeType in the caller's lane, or null when
@@ -2223,12 +2269,16 @@ public static class PluginBundleEndpoints
             // whose source disagrees with the source that mesh holds (#2813); passing a value this
             // route invented would be worse than passing none, and passing none is exactly what
             // every own-lane serve did before and still does.
+            // 🚨 #6831 — and the module version of THESE bytes, per assembly: the manifest's
+            // top-level version is the package's advertised one, which the bytes need not be.
+            var moduleVersion = served.ModuleVersion;
             assemblyRecords.Add(served.SourceFingerprint is null
-                ? new { nodePath, assembly = $"{nodePath}.dll", dependencies }
+                ? new { nodePath, assembly = $"{nodePath}.dll", dependencies, moduleVersion }
                 : (object)new
                 {
                     nodePath, assembly = $"{nodePath}.dll", dependencies,
                     sourceFingerprint = served.SourceFingerprint,
+                    moduleVersion,
                 });
         }
 
@@ -2285,6 +2335,10 @@ public static class PluginBundleEndpoints
                 // lane instead of only the opaque hash.
                 architecture,
                 assemblies = assemblyRecords,
+                // 🚨 #6831 — every assembly above states its OWN module version; one that states
+                // none is UNKNOWN to the consumer and never inherits `version`, which is the
+                // package's advertised version and not a statement about these bytes.
+                moduleVersionPerAssembly = true,
                 // NodeTypes this bundle could NOT cover for the requested lane, each with its reason.
                 // Carried in the manifest — not merely logged on the server — so the CONSUMER can
                 // count and surface the miss too: a fetch that silently returns fewer assemblies
