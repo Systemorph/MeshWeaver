@@ -27,7 +27,7 @@ namespace Memex.Portal.Shared.Test;
 /// </summary>
 public class ComboVerificationDeadlineTest
 {
-    private static readonly TimeSpan Deadline = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan Deadline = ReleaseGateEndpoints.VerificationDeadline;
 
     private static (ImmutableList<IResult> Results, Exception? Error, bool Completed) Run(
         TestScheduler scheduler, IObservable<Unit> write, Func<IObservable<IResult>> confirmed, TimeSpan advance)
