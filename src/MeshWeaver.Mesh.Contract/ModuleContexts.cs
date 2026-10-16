@@ -223,15 +223,23 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
     /// what the forwarder forwards (<paramref name="expected"/>), every consumer that leased it used to
     /// fault — and the query fan-out leases EVERY module's provider for EVERY query, so one optional
     /// module's broken service failed node resolution, and with it every hub activation and the
-    /// sign-in's identity lookup (memex, 2026-10-16: WhatsApp's <c>mw-module-service:10</c>). Such a
-    /// registration is recorded as UNSERVABLE in that generation (<see cref="ModuleServices.Unservable"/>)
-    /// and reported once — on stderr and as an error log naming the module, the registration and the
-    /// exception — and the lease answers null, which every leasing consumer already reads as "the
-    /// module's feature is absent" (the shape a module withdrawn at boot has had since #6542). It is a
-    /// durable, named verdict, not a retry: the module's feature stays absent until a new generation is
-    /// installed or the process restarts. A direct call through the forwarder still throws the real
-    /// error — that call IS the feature. Only the caller's own scope ending
-    /// (<see cref="ObjectDisposedException"/>) is the caller's fault and propagates.</para>
+    /// sign-in's identity lookup (memex, 2026-10-16: WhatsApp's <c>mw-module-service:10</c>). The lease
+    /// answers null, which every leasing consumer already reads as "the module's feature is absent" (the
+    /// shape a module withdrawn at boot has had since #6542). A direct call through the forwarder still
+    /// throws the real error — that call IS the feature.</para>
+    ///
+    /// <para>🚨 <b>Only a GENERATION-WIDE fault is a durable verdict</b> (review of #6854). A registration this
+    /// generation does not LAY OUT the way the root's forwarders were laid out at boot — its container
+    /// has nothing registered under the forwarded key, or what it resolves is not what the forwarder
+    /// forwards — fails for every caller alike, so it is recorded as UNSERVABLE in that generation
+    /// (<see cref="ModuleServices.Unservable"/>) and reported once, on stderr and as an error log naming
+    /// the module, the registration and why; the feature stays absent until a new generation is installed
+    /// or the process restarts. Any OTHER construction fault — a scoped or transient registration failing
+    /// in ONE caller's scope, a singleton whose constructor threw this time — is that lease's alone: it
+    /// answers null for this caller and records nothing, so the next caller (or the next query) resolves
+    /// afresh; it is reported once per registration and exception type. The caller's own scope ending
+    /// (<see cref="ObjectDisposedException"/>, also when the container wrapped it in a resolution
+    /// exception) is the caller's fault and propagates.</para>
     /// </summary>
     /// <param name="module">The module's entry-assembly name.</param>
     /// <param name="index">The registration's index.</param>
@@ -259,10 +267,15 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
         {
             instance = services.Resolve(Root, index, caller);
         }
-        catch (Exception exception) when (exception is not ObjectDisposedException)
+        catch (Exception exception) when (!IsDisposal(exception))
         {
             release.Dispose();
-            Unservable(generation, services, index, exception.ToString(), Innermost(exception));
+            // Decided AFTER the resolve failed, never instead of it: a registration that resolves is
+            // served, whatever a registry lookup would say about it.
+            if (services.NotLaidOut(Root, index) is { } notLaidOut)
+                Unservable(generation, services, index, exception.ToString(), notLaidOut);
+            else
+                NotServedThisTime(generation, services, index, caller, exception);
             return null;
         }
         catch
@@ -279,22 +292,44 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
         return null;
     }
 
-    private static string Innermost(Exception exception)
+    // The caller's own scope ending, as the container reports it: an ObjectDisposedException, or one
+    // wrapped by the resolution that ran into it (Autofac's DependencyResolutionException).
+    private static bool IsDisposal(Exception exception)
+    {
+        for (var cause = exception; cause is not null; cause = cause.InnerException)
+        {
+            if (cause is ObjectDisposedException)
+                return true;
+            if (cause is AggregateException aggregate && aggregate.InnerExceptions.Any(IsDisposal))
+                return true;
+        }
+        return false;
+    }
+
+    private static Exception InnermostOf(Exception exception)
     {
         var cause = exception;
         while (cause.InnerException is not null)
             cause = cause.InnerException;
+        return cause;
+    }
+
+    private static string Innermost(Exception exception)
+    {
+        var cause = InnermostOf(exception);
         return $"{cause.GetType().Name}: {cause.Message}";
     }
 
+    private static string Named(ModuleServices services, int index) =>
+        services.Registrations.ElementAtOrDefault(index) is { } registration
+            ? $"registration #{index} ({registration.Descriptor.ServiceType.Name}, route {registration.Route})"
+            : $"registration #{index}";
+
     // Records registration `index` of `generation` as unservable and reports it ONCE (MeshWeaver#6847).
+    // Only for a fault every caller shares — the registration is not laid out the way the root forwards it.
     private void Unservable(ModuleGeneration generation, ModuleServices services, int index, string detail, string why)
     {
-        var registration = services.Registrations.ElementAtOrDefault(index);
-        var named = registration is null
-            ? $"registration #{index}"
-            : $"registration #{index} ({registration.Descriptor.ServiceType.Name}, route {registration.Route})";
-        var reason = $"{named} of module {generation.Name} could not be served by its current generation "
+        var reason = $"{Named(services, index)} of module {generation.Name} could not be served by its current generation "
                      + $"'{generation.Context.Name}' ({generation.Location}): {why}";
         if (!services.MarkUnservable(index, reason))
             return;
@@ -303,6 +338,22 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
                      + "until a new generation of the module is installed or the process restarts.";
         Console.Error.WriteLine($"[MeshWeaver.Mesh.UnservableModuleService] {report}");
         logger?.LogError("[MeshWeaver.Mesh.UnservableModuleService] {Report} {Detail}", report, detail);
+    }
+
+    // A construction fault that is THIS lease's alone (review of #6854): one caller's scope, or one attempt
+    // at a singleton. Nothing is recorded — the next lease resolves afresh — and it is reported once per
+    // registration and exception type, so a fault that repeats on every query cannot flood the log.
+    private void NotServedThisTime(ModuleGeneration generation, ModuleServices services, int index,
+        Autofac.ILifetimeScope? caller, Exception exception)
+    {
+        if (!services.MarkReported(index, InnermostOf(exception).GetType().FullName ?? ""))
+            return;
+        logger?.LogError(exception,
+            "[MeshWeaver.Mesh.UnservableModuleService] {Registration} of module {Module} (generation '{Generation}') could not be "
+            + "constructed for {Caller}: {Cause}. Only this use goes without the module's feature; nothing is recorded, the next "
+            + "use resolves it afresh. Reported once per registration and exception type.",
+            Named(services, index), generation.Name, generation.Context.Name,
+            caller is null ? "the root" : "a caller's scope", Innermost(exception));
     }
 
     /// <summary>The scope of <paramref name="module"/>'s CURRENT generation.</summary>

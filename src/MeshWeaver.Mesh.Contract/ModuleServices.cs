@@ -131,6 +131,39 @@ public sealed class ModuleServices : IDisposable
     internal bool MarkUnservable(int index, string reason) =>
         ImmutableInterlocked.TryAdd(ref unservable, index, reason);
 
+    private ImmutableHashSet<(int Index, string Cause)> reported = ImmutableHashSet<(int Index, string Cause)>.Empty;
+
+    /// <summary>Notes that a construction fault of registration <paramref name="index"/> with
+    /// <paramref name="cause"/> (the innermost exception type) was reported; true the first time. Not a
+    /// verdict — the registration stays servable — only what keeps a fault that repeats on every lease
+    /// from being reported on every lease (review of #6854).</summary>
+    internal bool MarkReported(int index, string cause) =>
+        ImmutableInterlocked.Update(ref reported, set => set.Add((index, cause)));
+
+    /// <summary>
+    /// Why registration <paramref name="index"/> is not LAID OUT in this generation the way the root's
+    /// forwarder for that index asks for it — this generation has no registration at the index, or its
+    /// container holds nothing under the key the root resolves — or null when it is (MeshWeaver#6847,
+    /// review of #6854). A fault every caller of this generation shares, so it may be recorded as a
+    /// verdict; asked only after a resolve FAILED, so a registration that resolves is never judged by it.
+    /// Null, too, when the container cannot say — then the fault is not known to be generation-wide.
+    /// </summary>
+    /// <param name="root">The mesh's root provider.</param>
+    /// <param name="index">The registration's index.</param>
+    internal string? NotLaidOut(IServiceProvider root, int index)
+    {
+        if (index < 0 || index >= Registrations.Count)
+            return $"this generation has no registration #{index} — it holds {Registrations.Count}";
+        var registration = Registrations[index];
+        var descriptor = registration.Descriptor;
+        var key = descriptor.IsKeyedService ? descriptor.ServiceKey : registration.Key;
+        var container = TryScope(root);
+        var isKeyed = container as IServiceProviderIsKeyedService ?? container?.GetService<IServiceProviderIsKeyedService>();
+        return isKeyed is not null && !isKeyed.IsKeyedService(descriptor.ServiceType, key)
+            ? $"'{key} ({descriptor.ServiceType.Name})' has not been registered in this generation's container"
+            : null;
+    }
+
     /// <summary>The shape a swap must preserve (see <see cref="ModuleServiceRegistration.Shape"/>), each
     /// forwarded registration prefixed with its <see cref="ModuleServiceRegistration.Index"/>.</summary>
     public ImmutableList<string> Shape => Registrations

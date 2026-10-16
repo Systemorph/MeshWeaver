@@ -117,6 +117,35 @@ public sealed class ABrokenOptionalModuleNeverBreaksSignInTest(ITestOutputHelper
             .Emit("the broken module's provider has left the fan-out", cancellationToken: ct);
     }
 
+    /// <summary>
+    /// Review of #6854: a query built while the module was healthy and SUBSCRIBED after its generation
+    /// changed. Membership used to be decided when the query was built and the leg resolved the provider
+    /// again on subscribe, so the generation change in between erred the WHOLE merged identity query with
+    /// a <see cref="ModuleRetiredException"/>. Membership and execution now share one lease taken on
+    /// subscribe, so the broken module is simply not a member of that subscription.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task AQueryBuiltBeforeAGenerationChange_AnswersWithoutTheModule_WhenSubscribedAfterIt()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var core = Mesh.ServiceProvider.GetRequiredService<IMeshQueryCore>();
+        var identity = core.Query<MeshNode>(MeshQueryRequest.FromQuery("nodeType:User").AsSystem(), Mesh.JsonSerializerOptions);
+        var chats = core.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{ChatsPath}").AsSystem(), Mesh.JsonSerializerOptions);
+
+        BreakTheHeldModule();
+
+        await identity
+            .Where(change => change.ChangeType == QueryChangeType.Initial)
+            .Should().Within(Budget)
+            .Emit("the identity query built before the generation change answers when subscribed after it", cancellationToken: ct);
+        await chats
+            .Where(change => change.ChangeType == QueryChangeType.Initial)
+            .Select(change => change.Items.Any(node => node.Path == ChatsPath))
+            .Where(answeredByTheModule => !answeredByTheModule)
+            .Should().Within(Budget)
+            .Emit("the module that can no longer be leased is not a member of the subscription", cancellationToken: ct);
+    }
+
     // Commits, past the live swap's shape check, a generation whose forwarded registrations moved: a
     // module-owned registration inserted ahead of them, as WhatsApp 1.4.2 did. The root's forwarders were
     // laid out at boot for index 0 (the query provider) and 1 (the options setup).

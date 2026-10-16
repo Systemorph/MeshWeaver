@@ -765,9 +765,9 @@ generation cannot PRODUCE is ABSENT, never a fault in a consumer that leases it:
 
 | Where | What changed |
 |---|---|
-| `ModuleContexts.TryLeaseModuleService` | A resolve that faults (anything but the caller's own scope ending), or that yields an instance which is not what the root's forwarder forwards, records the registration in `ModuleServices.Unservable` for THAT generation and reports it once — stderr and an error log `[MeshWeaver.Mesh.UnservableModuleService]` naming the module, the registration, the generation and the exception. The lease answers null, which every leasing consumer already read as "this module's feature is absent" (the shape a module withdrawn at boot has had since #6542). A later generation starts clean; until then the feature stays absent — a durable, named verdict, never a retry. |
+| `ModuleContexts.TryLeaseModuleService` | A resolve that faults (anything but the caller's own scope ending — also when the container wrapped that disposal in a resolution exception) answers null, which every leasing consumer already reads as "this module's feature is absent" (the shape a module withdrawn at boot has had since #6542). Only a **generation-wide** fault is a durable verdict: a registration the generation does not lay out the way the root forwards it — nothing registered under the forwarded key, or an instance that is not what the forwarder forwards — is recorded in `ModuleServices.Unservable` for THAT generation and reported once (stderr and an error log `[MeshWeaver.Mesh.UnservableModuleService]` naming the module, the registration, the generation and why). A later generation starts clean. Any other construction fault — one caller's scope, one attempt at a singleton — is that lease's alone: nothing is recorded, the next lease resolves afresh, and it is logged once per registration and exception type. |
 | `ModuleServiceProxy.Serves` | False for a recorded unservable registration, so a set built over the root's `IEnumerable<T>` leaves it out. |
-| `MeshQuery.SelectMatchingProviders` | A module's provider is a member of a query only if a lease can be taken NOW (taken and released at selection — the same resolve the leg would make, a cache read for a built singleton). A broken one is recorded and leaves the query before any leg exists, so not even the first query after the break faults. |
+| `MeshQuery.WithMembers` | A module's provider is leased ONCE when a fan-out is SUBSCRIBED, and that lease is both its membership and the instance every leg of that subscription runs on; it is released when the subscription terminates or is unsubscribed. A provider that cannot be leased is not in the set whose Initial frames the merge awaits, so not even the first query after the break faults — and a generation change between building a query and subscribing it, or a transient provider whose next construction fails, can no longer err the merged query through a second resolve. |
 | `ModuleConfigureOptionsForwarder` | Leased instead of resolved. The options factory runs every setup of an options type for EVERY name, so a module's `AddHttpClient(name)` forwarder runs when the sign-in's OIDC handler builds its own `HttpClientFactoryOptions`; a forwarder that threw there made one module's broken registration a fault in every named build of that type. A module that is not held, or cannot produce the setup, now configures nothing. |
 
 A DIRECT call through a forwarder still throws the real error: that call IS the feature, and failing it is
@@ -781,7 +781,12 @@ sign-in runs: the identity directory query, a node write, a hub-activating read 
 options build of the type the module also configures. Controls: before the break the module's provider
 answers its own node and its setup configures its own name; after it a direct resolve of the broken
 registration still throws "has not been registered". On the pre-fix code the identity query errors with
-exactly the memex message; with `TryLeaseModuleService` rethrowing the fault, the same.
+exactly the memex message; with `TryLeaseModuleService` rethrowing the fault, the same. The same class
+pins a query BUILT while the module was healthy and SUBSCRIBED after the break.
+`AModuleConstructionFaultStaysLocalTest` pins the other two: a transient module provider is constructed
+once per query subscription (a query whose second construction would fail answers from the first), and
+a construction that fails in one caller's scope leaves the next caller's lease served and nothing
+recorded — while a caller whose own scope has ended still sees its `ObjectDisposedException`.
 
 **Not established:** a module provider whose OWN `Query` faults (as opposed to one that cannot be
 produced) still fails every unscoped query it is asked — including the identity directory — because the

@@ -131,14 +131,10 @@ public class MeshQuery : IMeshQueryCore
         private IObservable<TResult> Leased<TResult>(Func<IMeshQueryProvider, IObservable<TResult>> use)
             => ModuleServiceProxy.Leased(forwarder, use, $"the query provider '{name}'");
 
-        // Whether a lease can be taken NOW — the fan-out's membership test (SelectMatchingProviders). A
-        // registration the current generation cannot produce answers false here, recorded and reported
-        // once by the registry, instead of faulting the query's leg.
-        public bool CanBeLeased()
-        {
-            using var lease = ModuleServiceProxy.TryLease(forwarder);
-            return lease is not null;
-        }
+        // The fan-out's lease (WithMembers): taken ONCE per subscription, decides membership AND is the
+        // instance every leg of that subscription runs on. Null when the module is not held, is retiring,
+        // or its current generation cannot produce the provider (recorded and reported by the registry).
+        public ModuleServiceLease<IMeshQueryProvider>? TryLease() => ModuleServiceProxy.TryLease(forwarder);
 
         // The synchronous member: the lease spans the call, which is all of its use.
         private TResult Call<TResult>(Func<IMeshQueryProvider, TResult> call)
@@ -149,6 +145,75 @@ public class MeshQuery : IMeshQueryCore
                     + "was retired or withdrawn after it was selected — asking again decides without it.");
             return call(lease.Service);
         }
+    }
+
+    /// <summary>
+    /// A module's provider as ONE subscription of the fan-out runs it: the instance pinned by the lease
+    /// <see cref="QueryMembers"/> took for that subscription, under the name the fan-out was built with.
+    /// Every member delegates to the pinned instance — never back through the proxy, which would resolve
+    /// the module's current generation a second time (review of #6854).
+    /// </summary>
+    private sealed class PinnedModuleProvider(IMeshQueryProvider pinned, string name) : IMeshQueryProvider
+    {
+        public string Name => name;
+
+        public bool Matches(IReadOnlyList<string> queryNamespaces) => pinned.Matches(queryNamespaces);
+
+        public IObservable<QueryResultChange<T>> Query<T>(MeshQueryRequest request, JsonSerializerOptions options)
+            => pinned.Query<T>(request, options);
+
+        public IObservable<IReadOnlyCollection<QueryResult>> Query(MeshQueryRequest request, JsonSerializerOptions options)
+            => pinned.Query(request, options);
+
+        public IObservable<IReadOnlyCollection<QueryResult>> Autocomplete(
+            string basePath, string prefix, JsonSerializerOptions options,
+            AutocompleteMode mode = AutocompleteMode.RelevanceFirst, int limit = 10,
+            string? contextPath = null, string? context = null)
+            => pinned.Autocomplete(basePath, prefix, options, mode, limit, contextPath, context);
+
+        public IObservable<T?> Select<T>(string path, string property, JsonSerializerOptions options)
+            => pinned.Select<T>(path, property, options);
+    }
+
+    /// <summary>
+    /// The providers ONE subscription of a fan-out runs, with the leases that pin its module providers —
+    /// held by <see cref="WithMembers{TResult}"/> for exactly that subscription and released when it
+    /// terminates or is unsubscribed. A module provider whose lease cannot be taken is not a member, so
+    /// no merge ever waits for (or errors on) its Initial frame.
+    /// </summary>
+    private sealed class QueryMembers : IDisposable
+    {
+        private readonly System.Reactive.Disposables.CompositeDisposable leases = new();
+
+        public QueryMembers(IReadOnlyList<IMeshQueryProvider> registered)
+        {
+            var members = new List<IMeshQueryProvider>(registered.Count);
+            try
+            {
+                foreach (var provider in registered)
+                {
+                    if (provider is not ModuleQueryProvider module)
+                    {
+                        members.Add(provider);
+                        continue;
+                    }
+                    if (module.TryLease() is not { } lease)
+                        continue;
+                    leases.Add(lease);
+                    members.Add(new PinnedModuleProvider(lease.Service, module.Name));
+                }
+            }
+            catch
+            {
+                leases.Dispose();
+                throw;
+            }
+            Providers = members;
+        }
+
+        public IReadOnlyList<IMeshQueryProvider> Providers { get; }
+
+        public void Dispose() => leases.Dispose();
     }
 
     /// <summary>
@@ -248,14 +313,13 @@ public class MeshQuery : IMeshQueryCore
     {
         if (typeof(T) == typeof(object) && Projects(request))
             return (IObservable<QueryResultChange<T>>)(object)ProjectAfterMerge(Query<MeshNode>(request), request);
-        var matched = SelectMatchingProviders(NamespacesForRequest(request));
         // Run the subscribe on the DRAINABLE Query pool (not a bare TaskPoolScheduler): keeps the
         // calling hub's action block free while providers open their change feeds, AND makes the
         // subscribe tracked so teardown's DrainAll cancel+joins it before the scope is disposed.
-        return QueryPool.SubscribeThroughPool(
+        return QueryPool.SubscribeThroughPool(WithMembers(matched =>
             MergeProviderObservables(
                 matched.Select(p => (p.Query<T>(request, Options), p.Name)).ToList(),
-                request));
+                request)));
     }
 
     /// <summary>
@@ -269,22 +333,23 @@ public class MeshQuery : IMeshQueryCore
     /// </summary>
     public IObservable<IReadOnlyCollection<QueryResult>> Query(MeshQueryRequest request)
     {
-        var matched = SelectMatchingProviders(NamespacesForRequest(request));
-        if (matched.Count == 0)
-            return Observable.Return((IReadOnlyCollection<QueryResult>)Array.Empty<QueryResult>());
         IReadOnlyCollection<QueryResult> empty = Array.Empty<QueryResult>();
-        // .StartWith(empty) per provider so CombineLatest emits as soon as ANY
+        // Subscribe on the DRAINABLE Query pool (see Query<T>): off the calling hub's action block
+        // AND tracked, so teardown's DrainAll cancel+joins the subscribe before the scope disposes.
+        return QueryPool.SubscribeThroughPool(WithMembers(matched =>
+        {
+            if (matched.Count == 0)
+                return Observable.Return(empty);
+            // .StartWith(empty) per provider so CombineLatest emits as soon as ANY
         // source converges instead of stalling on the slowest: source B's rows
         // render immediately (the other sources contribute their empty seed),
         // then the snapshot re-emits — re-merged + re-ordered by score — as A and
         // C return. Same progressive shape as Autocomplete; the brief leading
         // all-empty frame is the cost of not waiting for the whole fan-out.
-        var streams = matched.Select(p => p.Query(request, Options).StartWith(empty)).ToList();
-        // Subscribe on the DRAINABLE Query pool (see Query<T>): off the calling hub's action block
-        // AND tracked, so teardown's DrainAll cancel+joins the subscribe before the scope disposes.
-        return QueryPool.SubscribeThroughPool(
-            Observable.CombineLatest(streams)
-                .Select(snapshots => MergeSnapshots(snapshots)));
+            var streams = matched.Select(p => p.Query(request, Options).StartWith(empty)).ToList();
+            return Observable.CombineLatest(streams)
+                .Select(snapshots => MergeSnapshots(snapshots));
+        }));
     }
 
     /// <summary>
@@ -300,15 +365,17 @@ public class MeshQuery : IMeshQueryCore
         string? contextPath = null,
         string? context = null)
     {
-        var matched = SelectMatchingProviders(NamespacesForBasePath(basePath));
-        if (matched.Count == 0)
-            return Observable.Return((IReadOnlyCollection<QueryResult>)Array.Empty<QueryResult>());
         IReadOnlyCollection<QueryResult> empty = Array.Empty<QueryResult>();
-        var streams = matched.Select(p => p
-            .Autocomplete(basePath, prefix, Options, mode, limit, contextPath, context)
-            .StartWith(empty));
-        return Observable.CombineLatest(streams)
-            .Select(snapshots => MergeAutocompleteSnapshots(snapshots, limit, contextPath, prefix));
+        return WithMembers(matched =>
+        {
+            if (matched.Count == 0)
+                return Observable.Return(empty);
+            var streams = matched.Select(p => p
+                .Autocomplete(basePath, prefix, Options, mode, limit, contextPath, context)
+                .StartWith(empty));
+            return Observable.CombineLatest(streams)
+                .Select(snapshots => MergeAutocompleteSnapshots(snapshots, limit, contextPath, prefix));
+        });
     }
 
     private static IReadOnlyCollection<QueryResult> MergeSnapshots(IList<IReadOnlyCollection<QueryResult>> snapshots)
@@ -452,7 +519,6 @@ public class MeshQuery : IMeshQueryCore
                 ((IMeshQueryCore)this).Query<MeshNode>(request, options), request);
         var isSystem = string.IsNullOrEmpty(request.UserId)
             || string.Equals(request.UserId, WellKnownUsers.System, StringComparison.Ordinal);
-        var matched = SelectMatchingProviders(NamespacesForRequest(request));
         // 🚨 On the unsecured path, STAMP UserId=System EXPLICITLY. Some providers
         // (PostgreSqlMeshQuery.GetEffectiveUserId) bypass access control ONLY for an
         // explicit System UserId — an EMPTY UserId falls back to the ambient
@@ -467,7 +533,7 @@ public class MeshQuery : IMeshQueryCore
             : request;
         // Subscribe on the DRAINABLE Query pool (see Query<T>): tracked so teardown DrainAll
         // cancel+joins the subscribe before the scope disposes.
-        return QueryPool.SubscribeThroughPool(
+        return QueryPool.SubscribeThroughPool(WithMembers(matched =>
             MergeProviderObservables(
                 matched.Select(p => (isSystem
                     ? (p is IMeshQueryCore core
@@ -476,76 +542,34 @@ public class MeshQuery : IMeshQueryCore
                     // Real user: ALWAYS hit the secured provider surface
                     // (validators apply per-result RLS for request.UserId).
                     : p.Query<T>(request, options), p.Name)).ToList(),
-                request));
+                request)));
     }
 
     /// <summary>
-    /// Centralised provider gating — every fan-out in this class
+    /// Centralised provider membership — every fan-out in this class
     /// (<see cref="Query{T}(MeshQueryRequest)"/>, the
     /// <see cref="IMeshQueryCore"/> surface, <see cref="Autocomplete"/>,
-    /// <see cref="Select{T}"/>) MUST go through this so a
-    /// scoped query only subscribes / awaits providers that actually own
-    /// (or claim) the partition. For a single-node-by-path lookup this
-    /// typically resolves to ONE provider; the merge then waits on exactly
-    /// that provider's Initial frame, so a stalled or irrelevant provider
-    /// can't hold the merge hostage. Unscoped queries (no <c>namespace:</c>
-    /// condition and no <c>path:</c> filter) fan to every provider — the
-    /// <see cref="IMeshQueryProvider.Matches"/> contract documents this.
+    /// <see cref="Select{T}"/>) MUST go through this. It always fans out to every
+    /// provider: each self-filters by its owned-namespaces / partition cache and
+    /// returns empty for queries outside its scope (the legacy
+    /// <c>IMeshQueryProvider.Matches</c> pre-filter is gone).
     /// </summary>
     /// <remarks>
-    /// Always fans out to every provider. Each provider self-filters by its
-    /// owned-namespaces / partition cache and returns empty for queries
-    /// outside its scope. The legacy <c>IMeshQueryProvider.Matches</c>
-    /// predicate was a centralised pre-filter; removing it lets each
-    /// provider own the "is this mine?" decision in one place.
-    ///
-    /// <para>🚨 <b>A module's provider is a member only while it can be LEASED</b> (MeshWeaver#6847). Every
-    /// query reaches every provider — node resolution for every hub activation and the sign-in's
-    /// identity directory included — so a module provider whose current generation cannot produce its
-    /// registration used to fault EVERY query: memex, 2026-10-16, WhatsApp's forwarded provider resolved
-    /// <c>mw-module-service:10 (IWhatsAppRecentChats)</c>, which was not registered, and no hub could
-    /// activate and nobody could sign in. Membership is decided by taking (and releasing) a lease here —
-    /// the same lease the leg takes when it subscribes — so such a provider is recorded unservable and
-    /// reported once (<see cref="ModuleContexts.TryLeaseModuleService"/>) and leaves THIS query before
-    /// any leg exists, exactly as a module withdrawn at boot does. A built singleton's resolve is a cache
-    /// read; the probe adds no I/O.</para>
+    /// <para>🚨 <b>A module's provider is a member only when it can be LEASED, and the member IS that lease</b>
+    /// (MeshWeaver#6847, review of #6854). Every query reaches every provider — node resolution for every
+    /// hub activation and the sign-in's identity directory included — so a module provider whose current
+    /// generation cannot produce its registration used to fault EVERY query: memex, 2026-10-16, WhatsApp's
+    /// forwarded provider resolved <c>mw-module-service:10 (IWhatsAppRecentChats)</c>, which was not
+    /// registered, and no hub could activate and nobody could sign in. The leases are taken ONCE, when the
+    /// fan-out is SUBSCRIBED (<see cref="QueryMembers"/>): a provider whose lease cannot be taken is left out
+    /// of the set whose Initial frames the merge awaits, and every leg of that subscription runs on the
+    /// pinned instance — never a second resolve through the proxy, which a generation change (or a
+    /// transient registration's second construction failing) in between turned into a
+    /// <see cref="ModuleRetiredException"/> erroring the whole merged query. The leases are released when
+    /// the subscription terminates or is unsubscribed.</para>
     /// </remarks>
-    private IReadOnlyList<IMeshQueryProvider> SelectMatchingProviders(IReadOnlyList<string> _)
-        => providers
-            .Where(p => p is not ModuleQueryProvider module || module.CanBeLeased())
-            .ToList();
-
-    /// <summary>
-    /// Computes the namespace candidates for a <see cref="MeshQueryRequest"/>
-    /// using its first effective query. Multi-query unions still subscribe
-    /// every provider that matches ANY query's namespaces because the
-    /// providers themselves handle each query independently — the catalog /
-    /// per-instance fan-outs use a single query.
-    /// </summary>
-    private static IReadOnlyList<string> NamespacesForRequest(MeshQueryRequest request)
-    {
-        var firstQuery = request.EffectiveQueries.FirstOrDefault();
-        if (string.IsNullOrEmpty(firstQuery))
-            return Array.Empty<string>();
-        var parsed = new QueryParser().Parse(firstQuery);
-        return MergeQueryNamespaces(parsed);
-    }
-
-    /// <summary>
-    /// Computes the namespace candidates for an autocomplete-style call
-    /// (basePath + prefix). The aggregator extracts the first segment of
-    /// basePath as the partition candidate; an empty basePath is unscoped
-    /// (every provider participates).
-    /// </summary>
-    private static IReadOnlyList<string> NamespacesForBasePath(string? basePath)
-    {
-        if (string.IsNullOrEmpty(basePath))
-            return Array.Empty<string>();
-        var firstSegment = basePath.TrimStart('/').Split('/', 2)[0];
-        return string.IsNullOrEmpty(firstSegment)
-            ? Array.Empty<string>()
-            : new[] { firstSegment };
-    }
+    private IObservable<TResult> WithMembers<TResult>(Func<IReadOnlyList<IMeshQueryProvider>, IObservable<TResult>> fanOut)
+        => Observable.Using(() => new QueryMembers(providers), members => fanOut(members.Providers));
 
     private IObservable<QueryResultChange<T>> MergeProviderObservables<T>(
         List<(IObservable<QueryResultChange<T>> Stream, string Provider)> observables,
@@ -1451,14 +1475,13 @@ public class MeshQuery : IMeshQueryCore
     /// <returns>An observable emitting the property value, or default when not found.</returns>
     public IObservable<T?> Select<T>(string path, string property)
     {
-        var matched = SelectMatchingProviders(NamespacesForBasePath(path));
         // Merge each provider's single-emission Select observable, take the first
         // non-null. Stays reactive end-to-end — no Task bridge, no ToTask.
-        return matched
+        return WithMembers(matched => matched
             .Select(p => p.Select<T>(path, property, Options))
             .Merge()
             .Where(r => r is not null)
-            .FirstOrDefaultAsync();
+            .FirstOrDefaultAsync());
     }
 
 }
