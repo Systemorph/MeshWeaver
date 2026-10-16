@@ -17,31 +17,70 @@ namespace MeshWeaver.NuGet;
 /// <summary>
 /// Resolves NuGet packages to assembly paths using pure NuGet client libraries.
 /// No MSBuild, no dotnet CLI, no SDK — safe to run on a runtime-only container.
+/// Resolution is OFFLINE-FIRST (#6863): a package identity already installed — complete —
+/// in the global-packages folder is resolved from its own <c>.nuspec</c>, and a feed is asked
+/// only for an identity the folder cannot answer. A floating or ranged root request still asks
+/// the feed which version to take; an exact version never does.
 /// </summary>
-public sealed class NuGetAssemblyResolver(
-    MsLogging.ILogger<NuGetAssemblyResolver> logger,
-    INuGetPackageCache? packageCache = null) : INuGetAssemblyResolver
+public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver
 {
     private static readonly NuGetFramework DefaultFramework = NuGetFramework.Parse("net10.0");
 
     private readonly ConcurrentDictionary<string, Task<ResolvedPackageSet>> _cache = new();
     private readonly SourceCacheContext _sourceCache = new();
-    // Anchor settings discovery to the ASSEMBLY directory, NOT the ambient CWD. With
-    // root: null, NuGet loads ONLY the user/machine-wide configs and does NOT walk a
-    // directory tree — so the repo/app nuget.config (which declares the `mesh-local`
-    // feed + the packageSourceMapping that pins MeshWeaver.*/Memex.* to it) is never
-    // seen. A version-LESS `#r "nuget:MeshWeaver.BusinessRules.Generator"` then resolves
-    // off nuget.org, where the stale 3.0.0-preview1 ships analyzers/ only (no lib/<tfm>) —
-    // the generator never loads and scope nodes compile but generate nothing (PensionFund
-    // renders empty; NuGetAssemblyResolverTest fails the lib/ assertion). Passing the
-    // assembly dir as root makes NuGet walk UP the tree to find it: in tests bin/.../net10.0
-    // → repo root nuget.config; in the published container the app dir, where the csproj
-    // ships nuget.config NEXT TO the baked dist/packages feed. CWD is whatever launched the
-    // process and can't be relied on; the assembly location can.
-    private readonly ISettings _settings =
-        Settings.LoadDefaultSettings(root: AppContext.BaseDirectory);
-    private readonly NuGetLogger _nugetLogger = new(logger);
-    private readonly INuGetPackageCache _packageCache = packageCache ?? NullNuGetPackageCache.Instance;
+    private readonly MsLogging.ILogger<NuGetAssemblyResolver> logger;
+    private readonly ISettings _settings;
+    private readonly string? _globalPackagesFolder;
+    private readonly NuGetLogger _nugetLogger;
+    private readonly INuGetPackageCache _packageCache;
+
+    /// <summary>
+    /// Creates a resolver reading the NuGet settings found from the application directory upward.
+    /// </summary>
+    /// <param name="logger">Logger for resolution and install outcomes.</param>
+    /// <param name="packageCache">Optional persistent cache hydrated before a feed download.</param>
+    public NuGetAssemblyResolver(
+        MsLogging.ILogger<NuGetAssemblyResolver> logger,
+        INuGetPackageCache? packageCache = null)
+        // Anchor settings discovery to the ASSEMBLY directory, NOT the ambient CWD. With
+        // root: null, NuGet loads ONLY the user/machine-wide configs and does NOT walk a
+        // directory tree — so the repo/app nuget.config (which declares the `mesh-local`
+        // feed + the packageSourceMapping that pins MeshWeaver.*/Memex.* to it) is never
+        // seen. A version-LESS `#r "nuget:MeshWeaver.BusinessRules.Generator"` then resolves
+        // off nuget.org, where the stale 3.0.0-preview1 ships analyzers/ only (no lib/<tfm>) —
+        // the generator never loads and scope nodes compile but generate nothing (PensionFund
+        // renders empty; NuGetAssemblyResolverTest fails the lib/ assertion). Passing the
+        // assembly dir as root makes NuGet walk UP the tree to find it: in tests bin/.../net10.0
+        // → repo root nuget.config; in the published container the app dir, where the csproj
+        // ships nuget.config NEXT TO the baked dist/packages feed. CWD is whatever launched the
+        // process and can't be relied on; the assembly location can.
+        : this(logger, Settings.LoadDefaultSettings(root: AppContext.BaseDirectory), null, packageCache)
+    {
+    }
+
+    /// <summary>
+    /// Creates a resolver over explicit NuGet <paramref name="settings"/> (the feeds and the source
+    /// mapping) and, optionally, an explicit <paramref name="globalPackagesFolder"/>. Used where the
+    /// caller owns the configuration: tests pin a private package folder and an unreachable feed
+    /// this way. The folder is a parameter rather than a setting because <c>NUGET_PACKAGES</c> in
+    /// the environment overrides any configured <c>globalPackagesFolder</c>.
+    /// </summary>
+    /// <param name="logger">Logger for resolution and install outcomes.</param>
+    /// <param name="settings">The NuGet settings naming the feeds.</param>
+    /// <param name="globalPackagesFolder">The package folder to read and install into; <c>null</c> takes it from the settings.</param>
+    /// <param name="packageCache">Optional persistent cache hydrated before a feed download.</param>
+    internal NuGetAssemblyResolver(
+        MsLogging.ILogger<NuGetAssemblyResolver> logger,
+        ISettings settings,
+        string? globalPackagesFolder = null,
+        INuGetPackageCache? packageCache = null)
+    {
+        this.logger = logger;
+        _settings = settings;
+        _globalPackagesFolder = globalPackagesFolder;
+        _nugetLogger = new NuGetLogger(logger);
+        _packageCache = packageCache ?? NullNuGetPackageCache.Instance;
+    }
 
     /// <summary>
     /// Resolves the <paramref name="requested"/> packages (and their transitive dependencies) to
@@ -80,7 +119,7 @@ public sealed class NuGetAssemblyResolver(
         NuGetFramework framework,
         CancellationToken ct)
     {
-        var packagesRoot = SettingsUtility.GetGlobalPackagesFolder(_settings);
+        var packagesRoot = _globalPackagesFolder ?? SettingsUtility.GetGlobalPackagesFolder(_settings);
         var providers = Repository.Provider.GetCoreV3();
         var packageSourceProvider = new PackageSourceProvider(_settings);
         var sources = packageSourceProvider.LoadPackageSources()
@@ -112,7 +151,7 @@ public sealed class NuGetAssemblyResolver(
             var identity = await ResolveIdentityAsync(
                 req, FilterSourcesForPackage(req.Id, sources, sourceMapping), framework, ct);
             targets.Add(identity);
-            await WalkDependenciesAsync(identity, sources, sourceMapping, framework, available, ct);
+            await WalkDependenciesAsync(identity, packagesRoot, sources, sourceMapping, framework, available, ct);
         }
 
         var resolverContext = new PackageResolverContext(
@@ -238,8 +277,8 @@ public sealed class NuGetAssemblyResolver(
     }
 
     private async Task WalkDependenciesAsync(
-        PackageIdentity root, SourceRepository[] sources, PackageSourceMapping mapping, NuGetFramework framework,
-        HashSet<SourcePackageDependencyInfo> collected, CancellationToken ct)
+        PackageIdentity root, string packagesRoot, SourceRepository[] sources, PackageSourceMapping mapping,
+        NuGetFramework framework, HashSet<SourcePackageDependencyInfo> collected, CancellationToken ct)
     {
         var queue = new Queue<PackageIdentity>();
         queue.Enqueue(root);
@@ -249,16 +288,17 @@ public sealed class NuGetAssemblyResolver(
             var current = queue.Dequeue();
             if (collected.Any(c => PackageIdentityComparer.Default.Equals(c, current))) continue;
 
-            SourcePackageDependencyInfo? info = null;
-            // Each package id is restricted to its mapped source(s) too, so a transitive
-            // MeshWeaver.* dependency can't silently slip in from nuget.org either.
-            foreach (var src in FilterSourcesForPackage(current.Id, sources, mapping))
-            {
-                var resource = await src.GetResourceAsync<DependencyInfoResource>(ct);
-                if (resource is null) continue;
-                info = await resource.ResolvePackage(current, framework, _sourceCache, _nugetLogger, ct);
-                if (info is not null) break;
-            }
+            // OFFLINE FIRST (#6863): an identity the package folder already holds complete is
+            // answered by its own .nuspec. The feed is never asked, so a warm folder resolves —
+            // and loads a recorded build — while every feed is down.
+            // The rule is EXACT identities only: every node of the walk is the exact version a
+            // dependency's range asks for (its minimum), never a different installed version standing
+            // in for it. A candidate the folder does not hold at that exact version needs the feed —
+            // choosing among versions is the feed's job — and fails with the named error while the
+            // feed is down. Substituting installed versions was tried and rejected: it lets unrelated
+            // folder contents change which versions resolve (NuGetRuntimeAssets.md, "Known limit").
+            var info = ReadInstalledDependencyInfo(current, packagesRoot, framework)
+                ?? await ResolveFromFeedAsync(current, packagesRoot, sources, mapping, framework, ct);
             if (info is null) continue;
 
             collected.Add(info);
@@ -271,42 +311,200 @@ public sealed class NuGetAssemblyResolver(
         }
     }
 
+    private async Task<SourcePackageDependencyInfo?> ResolveFromFeedAsync(
+        PackageIdentity current, string packagesRoot, SourceRepository[] sources, PackageSourceMapping mapping,
+        NuGetFramework framework, CancellationToken ct)
+    {
+        // Each package id is restricted to its mapped source(s) too, so a transitive
+        // MeshWeaver.* dependency can't silently slip in from nuget.org either.
+        var candidates = FilterSourcesForPackage(current.Id, sources, mapping);
+        // Every configured feed gets its turn: one failing feed is not the answer while another
+        // may hold the package. Each failure is kept with the feed it came from, so the error
+        // below names which feed failed and why, never "all unreachable".
+        var failures = ImmutableList<(string Feed, Exception Error)>.Empty;
+        foreach (var src in candidates)
+        {
+            try
+            {
+                var resource = await src.GetResourceAsync<DependencyInfoResource>(ct);
+                if (resource is null) continue;
+                var info = await resource.ResolvePackage(current, framework, _sourceCache, _nugetLogger, ct);
+                if (info is null) continue;
+                foreach (var (feed, error) in failures)
+                    MsLogging.LoggerExtensions.LogWarning(logger, error,
+                        "NuGet feed {Feed} failed resolving {Id} {Version}; resolved from {Source} instead",
+                        feed, current.Id, current.Version.ToNormalizedString(), src.PackageSource.Source);
+                return info;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                failures = failures.Add((src.PackageSource.Source, ex));
+            }
+        }
+        if (failures.IsEmpty) return null;
+
+        // The folder could not answer, no feed supplied the package, and at least one feed
+        // failed. Name what was missing locally and what each failing feed reported.
+        var detail = string.Join("; ", failures.Select(f => $"'{f.Feed}': {f.Error.Message}"));
+        throw new InvalidOperationException(
+            $"NuGet package {current.Id} {current.Version.ToNormalizedString()} is not installed complete in "
+            + $"the package folder '{packagesRoot}', and resolving it from the configured feed(s) failed — {detail}",
+            failures.Count == 1 ? failures[0].Error : new AggregateException(failures.Select(f => f.Error)));
+    }
+
+    /// <summary>
+    /// Reads the dependency info of <paramref name="identity"/> from the package folder when the
+    /// package is installed there complete (<see cref="ReadCompleteInstall"/>). Dependencies come
+    /// from the nuspec's group nearest to <paramref name="framework"/>, as a feed's dependency info
+    /// would. Returns <c>null</c> when the folder cannot answer, which sends the caller to the feed.
+    /// </summary>
+    private SourcePackageDependencyInfo? ReadInstalledDependencyInfo(
+        PackageIdentity identity, string packagesRoot, NuGetFramework framework)
+    {
+        var nuspec = ReadCompleteInstall(identity, packagesRoot);
+        if (nuspec is null) return null;
+        var group = NuGetFrameworkUtility.GetNearest(
+            nuspec.GetDependencyGroups(), framework, g => g.TargetFramework);
+        var dependencies = group?.Packages ?? [];
+        MsLogging.LoggerExtensions.LogDebug(logger,
+            "NuGet package {Id} {Version} resolved from the package folder (no feed call)",
+            identity.Id, identity.Version.ToNormalizedString());
+        return new SourcePackageDependencyInfo(
+            new PackageIdentity(nuspec.GetId(), identity.Version), dependencies, listed: true,
+            source: null, downloadUri: null, packageHash: null);
+    }
+
+    /// <summary>
+    /// The ONE test of whether <paramref name="identity"/> is installed in the package folder and may
+    /// be used as it stands — by the offline dependency walk AND by the install fast path, so a folder
+    /// the walk refuses is never handed to asset selection either. Installed means: the v3 folder
+    /// exists, carries a completion marker NuGet's own restore trusts (<c>.nupkg.metadata</c>, or the
+    /// older <c>.nupkg.sha512</c>, both written after extraction), and its <c>.nuspec</c> declares
+    /// exactly that id and version. Returns the nuspec, or <c>null</c> (with the reason logged when a
+    /// folder exists but is refused).
+    /// </summary>
+    private NuspecReader? ReadCompleteInstall(PackageIdentity identity, string packagesRoot) =>
+        ReadCompleteFolder(identity, packagesRoot,
+            new VersionFolderPathResolver(packagesRoot).GetInstallPath(identity.Id, identity.Version));
+
+    /// <summary>
+    /// <see cref="ReadCompleteInstall"/> over an explicit <paramref name="installPath"/>, so a staging
+    /// folder can be checked by the same rule before it is published to the install path.
+    /// </summary>
+    private NuspecReader? ReadCompleteFolder(PackageIdentity identity, string packagesRoot, string installPath)
+    {
+        if (!Directory.Exists(installPath)) return null;
+        var pathResolver = new VersionFolderPathResolver(packagesRoot);
+        var version = identity.Version.ToNormalizedString();
+        var complete = File.Exists(Path.Combine(installPath, PackagingCoreConstants.NupkgMetadataFileExtension))
+            || File.Exists(Path.Combine(installPath, pathResolver.GetHashFileName(identity.Id, identity.Version)));
+        var nuspecPath = Path.Combine(installPath, pathResolver.GetManifestFileName(identity.Id, identity.Version));
+        if (!complete || !File.Exists(nuspecPath))
+        {
+            MsLogging.LoggerExtensions.LogWarning(logger,
+                "Package folder {Path} for {Id} {Version} is incomplete (no completion marker or no nuspec); not using it",
+                installPath, identity.Id, version);
+            return null;
+        }
+
+        try
+        {
+            OnBeforeManifestRead?.Invoke(installPath);
+            var nuspec = new NuspecReader(nuspecPath);
+            var declared = nuspec.GetIdentity();
+            if (string.Equals(declared.Id, identity.Id, StringComparison.OrdinalIgnoreCase)
+                && declared.Version == identity.Version)
+                return nuspec;
+            MsLogging.LoggerExtensions.LogWarning(logger,
+                "Package folder {Path} declares {DeclaredId} {DeclaredVersion}, not {Id} {Version}; not using it",
+                installPath, declared.Id, declared.Version.ToNormalizedString(), identity.Id, version);
+            return null;
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            // The folder passed the existence checks and was gone by the time the manifest was read:
+            // another resolution is repairing it under the install lock (a refused folder is deleted
+            // there). That is a local MISS, exactly as if the folder had never been there — the
+            // caller goes on to the feed and the install lock, which waits for that repair.
+            MsLogging.LoggerExtensions.LogDebug(logger, ex,
+                "Package folder {Path} for {Id} {Version} disappeared while it was read; treating it as not installed",
+                installPath, identity.Id, version);
+            return null;
+        }
+        catch (Exception ex) when (ex is InvalidDataException or System.Xml.XmlException or PackagingException)
+        {
+            MsLogging.LoggerExtensions.LogWarning(logger, ex,
+                "Package folder {Path} for {Id} {Version} has an unreadable nuspec; not using it",
+                installPath, identity.Id, version);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Test seam: called with a package folder after it passed the existence checks and before its
+    /// manifest is read. A concurrent repair can delete the folder in exactly that window, so a test
+    /// deletes it here to make the interleaving deterministic. Null in production.
+    /// </summary>
+    internal Action<string>? OnBeforeManifestRead { get; set; }
+
+    /// <summary>
+    /// Test seam: called with the package identity after the lock-free check refused its folder
+    /// and before the install lock is taken. That is the window in which a second resolution can
+    /// complete the same package, so a test parks one caller here to make that interleaving
+    /// deterministic. Null in production.
+    /// </summary>
+    internal Action<PackageIdentity>? OnInstallFolderRefused { get; set; }
+
     private async Task<string> EnsureInstalledAsync(SourcePackageDependencyInfo info, string packagesRoot, CancellationToken ct)
     {
-        var versionString = info.Version.ToNormalizedString();
-        var installedPath = Path.Combine(packagesRoot, info.Id.ToLowerInvariant(), versionString);
-        if (Directory.Exists(installedPath) && Directory.EnumerateFileSystemEntries(installedPath).Any())
+        var identity = new PackageIdentity(info.Id, info.Version);
+        // The v3 layout lower-cases the id AND the version folder — the same path the install
+        // below writes and the offline walk reads (VersionFolderPathResolver).
+        var installedPath = new VersionFolderPathResolver(packagesRoot).GetInstallPath(info.Id, info.Version);
+        // Lock-free fast path: a COMPLETE folder is never deleted by anyone (only a refused one is,
+        // and only under the lock below), so using it without the lock is safe.
+        if (ReadCompleteInstall(identity, packagesRoot) is not null)
             return installedPath;
 
-        // Try to hydrate from the persistent cache (e.g., Azure Blob) before hitting the feed.
-        // After hydration, validate that the package's own .nuspec (the
-        // canonical NuGet source of truth) declares the (id, version) we
-        // expected. A poisoned cache — different package stored under the
-        // wrong key, accidental cross-tenant blob, drift after a manual
-        // copy — would otherwise silently load wrong assemblies into a
-        // NodeType compile.
-        Directory.CreateDirectory(installedPath);
-        if (await _packageCache.TryHydrateAsync(info.Id, versionString, installedPath, ct))
-        {
-            if (TryValidateHydratedPackage(installedPath, info.Id, info.Version, out var validationError))
-            {
-                MsLogging.LoggerExtensions.LogInformation(logger,
-                    "Hydrated NuGet package {Id} {Version} from persistent cache", info.Id, versionString);
-                return installedPath;
-            }
+        OnInstallFolderRefused?.Invoke(identity);
 
+        // Everything that inspects, deletes or writes this package's folder runs under ONE lock per
+        // package identity, shared by every resolution in this process AND every process on this
+        // package folder: NuGet's own file lock (ConcurrencyUtilities), the primitive its restore
+        // and PackageExtractor install under. The lock name is the install DIRECTORY; the extractor
+        // takes its own lock on the package file inside it, so the two never nest on one name.
+        return await ConcurrencyUtilities.ExecuteWithFileLockedAsync(
+            installedPath,
+            lockedCt => InstallUnderLockAsync(info, identity, packagesRoot, installedPath, lockedCt),
+            ct);
+    }
+
+    private async Task<string> InstallUnderLockAsync(
+        SourcePackageDependencyInfo info, PackageIdentity identity, string packagesRoot, string installedPath,
+        CancellationToken ct)
+    {
+        var versionString = info.Version.ToNormalizedString();
+        // Re-check INSIDE the lock: another resolution may have completed this package while we
+        // waited. A folder it completed is used as it stands — deleting it would pull assemblies
+        // out from under a caller that already returned their paths.
+        if (ReadCompleteInstall(identity, packagesRoot) is not null)
+            return installedPath;
+
+        // Still refused under the lock — half-extracted, or holding another identity — so nobody is
+        // using it: asset selection only ever reads complete folders. Remove it and install afresh
+        // (persistent cache first, then the feed). Leaving it would hand partial or WRONG
+        // assemblies to the compile and the load.
+        if (Directory.Exists(installedPath))
+        {
             MsLogging.LoggerExtensions.LogWarning(logger,
-                "Hydrated package at {Path} failed identity check ({Error}); discarding and falling back to feed",
-                installedPath, validationError);
-            try { Directory.Delete(installedPath, recursive: true); }
-            catch (Exception delEx)
-            {
-                MsLogging.LoggerExtensions.LogWarning(logger, delEx,
-                    "Failed to delete poisoned cache contents at {Path}", installedPath);
-            }
-            // Recreate the empty directory for the v3 install below to land into.
-            Directory.CreateDirectory(installedPath);
+                "Reinstalling NuGet package {Id} {Version}: the folder {Path} is incomplete or holds another package",
+                info.Id, versionString, installedPath);
+            Directory.Delete(installedPath, recursive: true);
         }
+
+        // Try to hydrate from the persistent cache (e.g., Azure Blob) before hitting the feed.
+        if (await TryHydrateFromCacheAsync(identity, packagesRoot, installedPath, ct))
+            return installedPath;
 
         if (info.Source is null)
             throw new InvalidOperationException(
@@ -377,50 +575,62 @@ public sealed class NuGetAssemblyResolver(
         return installedPath;
     }
 
+    /// <summary>
+    /// Hydrates <paramref name="identity"/> from the persistent cache into a STAGING folder beside the
+    /// install path, checks it there by the same rule as any installed folder, and only then
+    /// publishes it to <paramref name="installedPath"/> with one directory rename. A cache writes
+    /// entries in archive order, so extracting in place could expose the nuspec and the completion
+    /// marker before the assemblies: a resolver taking the lock-free fast path would then accept a
+    /// half-written folder. The install path therefore either does not exist or is complete.
+    /// The staged folder must also pass the identity check: a poisoned cache (a different package
+    /// under the wrong key, a cross-tenant blob, drift after a manual copy) would otherwise load
+    /// wrong assemblies into a NodeType compile. Runs under the package's install lock.
+    /// </summary>
+    private async Task<bool> TryHydrateFromCacheAsync(
+        PackageIdentity identity, string packagesRoot, string installedPath, CancellationToken ct)
+    {
+        var versionString = identity.Version.ToNormalizedString();
+        // Same parent as the install path, so the publish is a rename on one volume. The name is
+        // not a version, so NuGet's own folder enumeration never mistakes it for an install.
+        var staging = Path.Combine(
+            Path.GetDirectoryName(installedPath)!, $".hydrating-{versionString}-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(staging);
+            if (!await _packageCache.TryHydrateAsync(identity.Id, versionString, staging, ct))
+                return false;
+            if (ReadCompleteFolder(identity, packagesRoot, staging) is null)
+            {
+                MsLogging.LoggerExtensions.LogWarning(logger,
+                    "Hydrated package {Id} {Version} is not a complete install; discarding it and falling back to the feed",
+                    identity.Id, versionString);
+                return false;
+            }
+            Directory.Move(staging, installedPath);
+            MsLogging.LoggerExtensions.LogInformation(logger,
+                "Hydrated NuGet package {Id} {Version} from persistent cache", identity.Id, versionString);
+            return true;
+        }
+        finally
+        {
+            if (Directory.Exists(staging))
+            {
+                try { Directory.Delete(staging, recursive: true); }
+                catch (Exception delEx)
+                {
+                    MsLogging.LoggerExtensions.LogWarning(logger, delEx,
+                        "Failed to delete the hydration staging folder {Path}", staging);
+                }
+            }
+        }
+    }
+
     private static string BuildCacheKey(IReadOnlyCollection<NuGetPackageReference> requested, NuGetFramework framework)
     {
         var parts = requested
             .OrderBy(r => r.Id, StringComparer.OrdinalIgnoreCase)
             .Select(r => $"{r.Id}|{r.VersionRange ?? "*"}");
         return $"{framework.DotNetFrameworkName}::{string.Join(";", parts)}";
-    }
-
-    /// <summary>
-    /// Verifies that the package directory hydrated by
-    /// <see cref="INuGetPackageCache.TryHydrateAsync"/> actually contains the
-    /// (id, version) we asked for. Reads the package's own .nuspec via
-    /// <see cref="PackageFolderReader"/> — that's the canonical NuGet
-    /// source of truth, and a tampered/wrong-keyed cache entry can't
-    /// fake it without also rewriting the nuspec to claim the wrong
-    /// identity (which a static check at hydration time would catch).
-    /// Case-insensitive id compare; exact <see cref="NuGetVersion"/>
-    /// equality on version (normalised round-trip).
-    /// </summary>
-    private static bool TryValidateHydratedPackage(
-        string packageFolder, string expectedId, NuGetVersion expectedVersion, out string? error)
-    {
-        try
-        {
-            var reader = new PackageFolderReader(packageFolder);
-            var actual = reader.GetIdentity();
-            if (!string.Equals(actual.Id, expectedId, StringComparison.OrdinalIgnoreCase))
-            {
-                error = $"nuspec id '{actual.Id}' does not match expected '{expectedId}'";
-                return false;
-            }
-            if (actual.Version != expectedVersion)
-            {
-                error = $"nuspec version '{actual.Version.ToNormalizedString()}' does not match expected '{expectedVersion.ToNormalizedString()}'";
-                return false;
-            }
-            error = null;
-            return true;
-        }
-        catch (Exception ex)
-        {
-            error = $"could not read .nuspec: {ex.Message}";
-            return false;
-        }
     }
 
     private sealed class NuGetLogger(MsLogging.ILogger logger) : LoggerBase

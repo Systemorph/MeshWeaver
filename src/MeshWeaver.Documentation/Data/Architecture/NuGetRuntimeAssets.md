@@ -192,8 +192,9 @@ The fix makes the closure part of the BUILD, not of the process that built it:
    registration it checked, so a republish of the same path re-armed mid-sweep survives. The metadata read runs on a blocking
    pool, never the caller's signalling thread; the resolution runs on the HTTP lane through the pool's
    cold `Invoke`, so its bound cancels the wait and frees the slot, and it never queues behind the
-   Compile lane a kernel script holds while waiting for a NodeType to activate. Resolution still asks
-   the feed for dependency metadata even when the package folder is warm (#6863). It runs on every load of an already-built assembly: the post-compile scan in
+   Compile lane a kernel script holds while waiting for a NodeType to activate. Resolution is
+   offline-first (see [Offline-first resolution](#offline-first-resolution) below), so a pinned build
+   whose packages are on disk loads during a feed outage. It runs on every load of an already-built assembly: the post-compile scan in
    `CompileAndGetConfigurations`, the hydration shortcut `GetConfigurationsFromExistingAssembly` (the
    funnel for start-up registration, `EnrichWithNodeType`, the data-model and contract areas and adopted
    builds), and the cell surface. The load context then binds exactly as in the compiling process —
@@ -220,6 +221,79 @@ The fix makes the closure part of the BUILD, not of the process that built it:
   portal on 3.1.11001 therefore ran without the lane, and the load failed exactly as before. Read the
   run's `Resolve the target commit` log (`Target: <sha>`) or the portal's version stamp, and test THAT
   commit with `git merge-base --is-ancestor`.
+
+## Offline-first resolution
+
+`NuGetAssemblyResolver` asks the package folder first and a feed only for what the folder cannot
+answer (#6863):
+
+- **An exact version** (`#r "nuget: Id, 1.2.3"`, and every transitive dependency, which the walk takes
+  at its range's minimum version) is looked up in the global-packages folder at its v3 path
+  (`{id}/{version}`, both lower-cased). When the package is installed COMPLETE there, its own `.nuspec`
+  answers: the identity must match, and the dependencies are the nuspec group nearest the target
+  framework, which is what a feed's dependency info would have returned. No feed is contacted, so the
+  same closure resolves online and offline.
+- **Complete** means NuGet's own completion marker is present: `.nupkg.metadata`, or the older
+  `{id}.{version}.nupkg.sha512`. Both are written after extraction. The `.nuspec` must also declare
+  exactly that id and version. ONE check (`ReadCompleteInstall`) decides this for the dependency walk
+  AND for the install step. A folder it refuses (half-extracted, empty, or holding another package)
+  is never handed to asset selection: it is deleted and the package is installed again, from the
+  persistent cache first and then the feed. A persistent-cache hydration is extracted into a STAGING
+  folder beside the install path, checked there by the same rule, and published with one directory
+  rename. A cache writes entries in archive order, so extracting in place could expose the nuspec and
+  the marker before the assemblies. The install path therefore either does not exist or is complete.
+- **Repair runs under one lock per package**, shared by every resolution in the process and every
+  process on the same package folder. The lock is NuGet's own file lock
+  (`ConcurrencyUtilities.ExecuteWithFileLockedAsync`, named by the install directory), the primitive
+  its restore and extractor use. The check runs again INSIDE the lock, so a folder another
+  resolution completed while this one waited is used, never deleted. A complete folder is never
+  deleted, which is why the check before the lock may skip the lock.
+- **A floating or ranged ROOT request** (`#r "nuget: Id"`, `#r "nuget: Id, [1.0,2.0)"`) still asks the
+  feed which version to take. Answering it from the folder would make the version depend on what the
+  reading process happens to hold, so the feed stays authoritative for the choice. Pin a version for a
+  build that must load without a feed.
+- **The rule: a closure resolves offline when every node of the walk is an exact version present
+  and complete in the folder.** Each node is the exact version a range asks for (its minimum), never
+  a different installed version standing in for it. Anything that needs the feed to choose among
+  versions still needs the feed, and fails with the named error below while the feed is down.
+- **When the folder cannot answer**, every configured feed the source mapping allows is asked in
+  turn. A failing feed does not stop the search: the next feed is asked, and the failure is logged
+  against that feed when a later one answers. If no feed supplies the package and at least one
+  failed, resolution fails with an `InvalidOperationException`. The error names the package and
+  version, the package folder, and each failing feed with what it reported. A feed failure never
+  surfaces when the folder could answer, because no feed is asked.
+
+**Known limit: an installed diamond.** A needs B ≥ 1.0 and C ≥ 1.0, and C raises B to ≥ 2.0. Online
+resolution meets the B 1.0 candidate, selects B 2.0, and installs only B 2.0. Offline, the walk still
+needs the B 1.0 candidate, which the folder does not hold, so it fails with the named error. Letting
+installed versions stand in for such a candidate was tried and removed. It made the chosen versions
+depend on unrelated folder contents: an installed B 2.0.1 would win over the B 2.0 chosen online. It
+also needed rules for stand-ins whose own dependencies are missing, and those rules kept growing.
+Closing this limit properly means recording the resolved closure with the build and resolving those
+exact identities. That is a separate change.
+
+The pins: `NuGetOfflineFirstResolutionTest` (offline) lays out packages in a private package folder.
+The first configured feed refuses every connection, and some cases add a local folder feed behind it.
+- A two-package closure resolves with a fresh resolver and no feed call. Without the folder read,
+  this case fails with the named error, because the feed is asked.
+- Negative control: with the dependency removed from the folder, resolution fails with the named error.
+- With the unreachable feed first, the local feed behind it still supplies the missing package.
+- A half-extracted folder, and a folder whose nuspec and assembly belong to another package, are both
+  reinstalled from the feed. The wrong assembly never reaches the compile set.
+- Two resolvers share a dependency whose folder starts incomplete. One is parked between its check
+  and the lock while the other installs the package and returns. The parked one then resumes and
+  must use that install, never reinstall it.
+- A cache hydration is paused after writing the nuspec and the marker but before the assembly. A
+  second resolver reading in that window must not accept the half-written folder, and it ends with
+  the finished package.
+- The known-limit diamond is resolved online from a local feed, then by a fresh resolver with only
+  the unreachable feed. It fails with the named error for the B 1.0 candidate, so the limit is a
+  pinned decision rather than a surprise.
+- A folder that passes the existence checks and is deleted by a concurrent repair before its
+  manifest is read counts as a local miss, never a failure: resolution goes on to the feed and the
+  install lock.
+- Every interleaving wait in these tests is asserted. A missed window fails the test instead of
+  passing without having exercised it.
 
 ## What pins it
 
