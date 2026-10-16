@@ -325,8 +325,7 @@ internal interface ICompilationCacheService
     /// Registers the NuGet probing directories of ONE build — the assembly at
     /// <paramref name="dllPath"/> — re-resolved from the package references the build recorded
     /// (<c>NuGetBuildRecord</c>). Every context resolved for that path afterwards probes them, and a
-    /// live context for it that holds only the node-wide fallback is given them (a HAND-OFF: the
-    /// context that takes them removes the entry, so callers arm before EVERY load); they take precedence over the node-wide
+    /// live context for it that holds only the node-wide fallback is given them; they take precedence over the node-wide
     /// <see cref="RegisterProbingDirectories"/>, which names whatever this process last compiled.
     /// This is what lets a build load in a process that never compiled it (another replica, a
     /// restart, an adopted bake).
@@ -1111,10 +1110,12 @@ internal class CompilationCacheService(
     private readonly ConcurrentDictionary<string, System.Collections.Immutable.ImmutableArray<string>> _probingDirs = new();
     // Per BUILD (keyed by dll path), from the package references the build recorded — see
     // RegisterBuildProbingDirectories. Ahead of _probingDirs, which is per node name and names
-    // whatever THIS process last compiled. A HAND-OFF, not a registry: an entry lives only until
-    // the context for its path takes it (the factory or ApplyBuildProbing removes it), so the map
-    // never accumulates one entry per historical build. Every load path re-arms right before it
-    // loads (BuildPackageProbing), so a context re-created after an eviction is handed it again.
+    // whatever THIS process last compiled. Reading it NEVER consumes it: a context evicted between
+    // the arming and the load (UnloadNodeContexts, a superseding publish, a PinForScan retry) is
+    // re-created from it, and a speculative GetOrAdd factory that loses its race cannot take it from
+    // the winner. An entry lives as long as its BUILD FILE does — RegisterBuildProbingDirectories
+    // drops the entries whose file is gone (a superseded emit directory, a store copy the retention
+    // sweep deleted), so the map is bounded by the builds on disk, not by the builds ever loaded.
     private readonly ConcurrentDictionary<string, System.Collections.Immutable.ImmutableArray<string>> _buildProbingDirs =
         new(StringComparer.Ordinal);
     // Sticky invalidation set: a node name in here forces IsCacheValid to return false
@@ -1141,8 +1142,12 @@ internal class CompilationCacheService(
     public void RegisterBuildProbingDirectories(string dllPath, System.Collections.Generic.IReadOnlyList<string> directories)
     {
         if (string.IsNullOrEmpty(dllPath) || directories.Count == 0) return;
+        // Bound the map by the builds still on disk: a path whose file is gone can never load again.
+        foreach (var stale in _buildProbingDirs.Keys)
+            if (!string.Equals(stale, dllPath, StringComparison.Ordinal) && !File.Exists(stale))
+                _buildProbingDirs.TryRemove(stale, out _);
         _buildProbingDirs[dllPath] = directories.ToImmutableArray();
-        // A live context for the path takes it now; otherwise the next one created for it does.
+        // A live context for the path is given it now; every one created for it later reads it.
         if (_loadContexts.TryGetValue(dllPath, out var ctx) && !ctx.IsRetired)
             ApplyBuildProbing(ctx, dllPath);
     }
@@ -1154,9 +1159,10 @@ internal class CompilationCacheService(
     /// </summary>
     private void ApplyBuildProbing(NodeAssemblyLoadContext context, string dllPath)
     {
-        // Taken (removed) on hand-off — see _buildProbingDirs.
-        if (_buildProbingDirs.TryRemove(dllPath, out var dirs) && !dirs.IsDefaultOrEmpty
-            && !context.HasBuildProbingDirectories)
+        // Read, never taken — see _buildProbingDirs. Idempotent: a context already holding a build
+        // record keeps it.
+        if (!context.HasBuildProbingDirectories
+            && _buildProbingDirs.TryGetValue(dllPath, out var dirs) && !dirs.IsDefaultOrEmpty)
             context.SetBuildProbingDirectories(dirs);
     }
 
@@ -1485,6 +1491,13 @@ internal class CompilationCacheService(
         return context.LoadNodeAssembly();
     }
 
+    /// <summary>
+    /// Test seam: runs inside the path-keyed context factory, after the context is configured and
+    /// before it is returned — where a concurrent caller can win the <c>GetOrAdd</c> race. Null in
+    /// production.
+    /// </summary>
+    internal Action<string>? ContextFactoryProbe { get; set; }
+
     /// <inheritdoc />
     public NodeAssemblyLoadContext GetOrCreateLoadContextForPath(string nodeName, string dllPath)
         => ResolveLoadContextForPath(nodeName, dllPath, supersedeOlderBuilds: false);
@@ -1538,14 +1551,18 @@ internal class CompilationCacheService(
             var c = new NodeAssemblyLoadContext(nodeName, path, logger, modules);
             // The BUILD's own recorded closure first; the node-wide registration (what this process
             // last compiled) only when the build recorded none.
-            if (_buildProbingDirs.TryRemove(path, out var buildDirs) && !buildDirs.IsDefaultOrEmpty)
+            // ConcurrentDictionary may run this factory more than once and keep only one result, so
+            // it READS the registration and never consumes it.
+            if (_buildProbingDirs.TryGetValue(path, out var buildDirs) && !buildDirs.IsDefaultOrEmpty)
                 c.SetBuildProbingDirectories(buildDirs);
             else if (_probingDirs.TryGetValue(nodeName, out var dirs) && !dirs.IsDefaultOrEmpty)
                 c.SetProbingDirectories(dirs);
+            ContextFactoryProbe?.Invoke(path);
             return c;
         });
-        if (!created)
-            ApplyBuildProbing(ctx, dllPath);
+        // Whichever factory won — ours or a concurrent caller's, possibly built before the
+        // registration landed — the context we hand out carries the build's closure.
+        ApplyBuildProbing(ctx, dllPath);
 
         // A PUBLISHED build supersedes every prior assembly for this NodeType. Each recompile
         // writes to a unique {nodeName}_{timestamp}_{guid} directory (see EmitToDiskWithRetry), so

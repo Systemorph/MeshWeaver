@@ -323,13 +323,130 @@ public class BuildProbingPrecedenceTest
             cache.RegisterProbingDirectories("type_Probe", [Path.Combine(root, "yet-another")]);
             cache.GetOrCreateLoadContextForPath("type_Probe", dll).HasBuildProbingDirectories.Should().BeTrue();
 
-            // A hand-off, not a registry: once taken, nothing is retained for the path, so a context
-            // re-created after an eviction starts on the fallback until the next load re-arms it.
+            // Reading the registration never consumes it: a context re-created after an eviction
+            // carries the build's closure without anyone re-arming it.
             cache.UnloadNodeContexts("type_Probe");
-            var recreated = cache.GetOrCreateLoadContextForPath("type_Probe", dll);
-            recreated.HasBuildProbingDirectories.Should().BeFalse("the entry was consumed by the first context");
+            cache.GetOrCreateLoadContextForPath("type_Probe", dll).HasBuildProbingDirectories.Should().BeTrue(
+                "a context re-created after an eviction must still probe its build's closure");
+        }
+        finally
+        {
+            cache.Dispose();
+            try { Directory.Delete(root, recursive: true); }
+            catch (IOException) { }
+        }
+    }
+
+    /// <summary>
+    /// Copilot on #6864: the hydration shortcut arms, then QUEUES its load on the file-system pool.
+    /// An eviction in between (hub teardown, a superseding publish) makes the load's
+    /// <see cref="CompilationCacheService.PinForScan"/> create a REPLACEMENT context — which must
+    /// still probe the build's closure, or a package-dependent type fails on a fresh replica.
+    /// </summary>
+    [Fact]
+    public void AnEvictionBetweenArmingAndLoading_LeavesTheReplacementArmed()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mw-probe-evict-" + Guid.NewGuid().ToString("N"));
+        var cache = new CompilationCacheService(
+            Options.Create(new CompilationCacheOptions { CacheDirectory = root }),
+            NullLogger<CompilationCacheService>.Instance);
+        try
+        {
+            var dll = Path.Combine(root, "store", "v1-build.dll");
+            // The arming (GetConfigurationsFromExistingAssembly) hits a LIVE context for the path…
+            var armed = cache.GetOrCreateLoadContextForPath("type_Probe", dll);
             cache.RegisterBuildProbingDirectories(dll, [Path.Combine(root, "this-build")]);
-            recreated.HasBuildProbingDirectories.Should().BeTrue("re-arming hands it to the live context");
+            armed.HasBuildProbingDirectories.Should().BeTrue();
+
+            // …which is evicted before the queued load runs…
+            cache.UnloadNodeContexts("type_Probe");
+
+            // …so the load resolves a replacement. No second arming happens on this path.
+            cache.GetOrCreateLoadContextForPath("type_Probe", dll).HasBuildProbingDirectories.Should().BeTrue(
+                "the replacement created by the queued load must carry the build's recorded closure");
+        }
+        finally
+        {
+            cache.Dispose();
+            try { Directory.Delete(root, recursive: true); }
+            catch (IOException) { }
+        }
+    }
+
+    /// <summary>
+    /// Copilot on #6864: <c>ConcurrentDictionary.GetOrAdd</c> may run several factories for one
+    /// path and keep only one result. Forces the ordering: factory A runs, and BEFORE it returns a
+    /// concurrent caller's factory B publishes its context. Both callers get B's context, and it
+    /// must carry the build's closure.
+    /// </summary>
+    [Fact]
+    public void ALosingConcurrentFactory_NeverStripsTheWinnersClosure()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mw-probe-race-" + Guid.NewGuid().ToString("N"));
+        var cache = new CompilationCacheService(
+            Options.Create(new CompilationCacheOptions { CacheDirectory = root }),
+            NullLogger<CompilationCacheService>.Instance);
+        try
+        {
+            var dll = Path.Combine(root, "store", "v1-build.dll");
+            cache.RegisterBuildProbingDirectories(dll, [Path.Combine(root, "this-build")]);
+
+            NodeAssemblyLoadContext? fromB = null;
+            var raced = 0;
+            cache.ContextFactoryProbe = _ =>
+            {
+                // Only factory A races: B — a second caller, run here so the ordering is forced —
+                // completes its own GetOrAdd (the factory runs outside the dictionary's locks) and
+                // publishes first, so A's result is discarded.
+                if (raced++ != 0) return;
+                fromB = cache.GetOrCreateLoadContextForPath("type_Probe", dll);
+            };
+            var fromA = cache.GetOrCreateLoadContextForPath("type_Probe", dll);
+            cache.ContextFactoryProbe = null;
+
+            raced.Should().Be(2, "both factories must actually have run — the forced ordering");
+            fromB.Should().NotBeNull();
+            fromA.Should().BeSameAs(fromB, "GetOrAdd keeps the concurrent caller's context");
+            fromA.HasBuildProbingDirectories.Should().BeTrue(
+                "the context both callers receive must carry the build's recorded closure");
+        }
+        finally
+        {
+            cache.Dispose();
+            try { Directory.Delete(root, recursive: true); }
+            catch (IOException) { }
+        }
+    }
+
+    /// <summary>
+    /// The registration is bounded by the builds ON DISK (the review of #6862: one entry per
+    /// historical build path for the mesh's lifetime). A registration drops every entry whose
+    /// build file is gone; an entry whose file is present survives.
+    /// </summary>
+    [Fact]
+    public void ARegistration_DropsEntriesWhoseBuildFileIsGone()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mw-probe-bound-" + Guid.NewGuid().ToString("N"));
+        var cache = new CompilationCacheService(
+            Options.Create(new CompilationCacheOptions { CacheDirectory = root }),
+            NullLogger<CompilationCacheService>.Instance);
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "store"));
+            var kept = Path.Combine(root, "store", "v1-kept.dll");
+            var deleted = Path.Combine(root, "store", "v2-deleted.dll");
+            File.WriteAllBytes(kept, [0]);
+            File.WriteAllBytes(deleted, [0]);
+            cache.RegisterBuildProbingDirectories(kept, [Path.Combine(root, "kept")]);
+            cache.RegisterBuildProbingDirectories(deleted, [Path.Combine(root, "deleted")]);
+
+            File.Delete(deleted);  // the retention sweep / a superseded emit directory
+            cache.RegisterBuildProbingDirectories(Path.Combine(root, "store", "v3.dll"), [Path.Combine(root, "v3")]);
+
+            cache.GetOrCreateLoadContextForPath("type_Probe", kept).HasBuildProbingDirectories.Should().BeTrue(
+                "a build still on disk keeps its registration");
+            cache.GetOrCreateLoadContextForPath("type_Probe", deleted).HasBuildProbingDirectories.Should().BeFalse(
+                "a build whose file is gone can never load, so its registration is dropped");
         }
         finally
         {
