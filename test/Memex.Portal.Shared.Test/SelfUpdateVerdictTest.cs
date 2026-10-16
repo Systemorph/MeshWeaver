@@ -317,6 +317,23 @@ public class SelfUpdateVerdictTest
     public void MayRestartAfter_OnlyWhenTheCheckPatchedNothing(SelfUpdateOutcome outcome, bool expected)
         => Assert.Equal(expected, SelfUpdateVerdict.MayRestartAfter(new SelfUpdateVerdict(outcome, "…")));
 
+    /// <summary>
+    /// MeshWeaver#6829: the LIVE half may follow a hand-over even though the restart may not — a live
+    /// swap races no roll. Everywhere else it follows exactly the restart rule: an applied roll, a
+    /// refused migration, a failed or absent check and a disabled policy take neither.
+    /// </summary>
+    [Theory]
+    [InlineData(SelfUpdateOutcome.HandedOver, true)]
+    [InlineData(SelfUpdateOutcome.NoNewerRelease, true)]
+    [InlineData(SelfUpdateOutcome.HandoverFailed, true)]
+    [InlineData(SelfUpdateOutcome.Applied, false)]
+    [InlineData(SelfUpdateOutcome.MigrationFailed, false)]
+    [InlineData(SelfUpdateOutcome.CheckFailed, false)]
+    [InlineData(SelfUpdateOutcome.UpdatesDisabled, false)]
+    [InlineData(SelfUpdateOutcome.NoOutcome, false)]
+    public void MayActivateLiveAfter_AlsoAfterAHandOver(SelfUpdateOutcome outcome, bool expected)
+        => Assert.Equal(expected, SelfUpdateVerdict.MayActivateLiveAfter(new SelfUpdateVerdict(outcome, "…")));
+
     /// <summary>Inside the floor the restart is deferred, naming how long ago the install rolled
     /// and the floor it sits inside — the same sentence shape a deferred roll uses.</summary>
     [Fact]
