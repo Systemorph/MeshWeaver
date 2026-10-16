@@ -435,7 +435,21 @@ public static class ServiceDefaults
         builder.Services.AddSingleton<TokenValidationReadiness>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<TokenValidationReadiness>());
 
+        // 🚦 Readiness = this replica can identify a signed-in user (MeshWeaver#6850). The user
+        // directory used to be opened BY the first signed-in request, which then asked it before its
+        // first snapshot: one degraded identity per pod, by construction. It now opens when the
+        // application has started, and the pod is not Ready until it has hydrated. A ROLL GATE (see
+        // RollGateChecks): a directory that never hydrates keeps the pod out of the Service and never
+        // kills it. Healthy with "nothing to measure" in a host that registers no directory.
+        builder.Services.AddSingleton<MeshWeaver.Hosting.AspNetCore.Portal.UserDirectoryReadiness>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<MeshWeaver.Hosting.AspNetCore.Portal.UserDirectoryReadiness>());
+
         builder.Services.AddHealthChecks()
+            .Add(new HealthCheckRegistration(
+                MeshWeaver.Hosting.AspNetCore.Portal.UserDirectoryReadiness.HealthCheckName,
+                sp => sp.GetRequiredService<MeshWeaver.Hosting.AspNetCore.Portal.UserDirectoryReadiness>(),
+                failureStatus: null,
+                tags: [ProbeEndpoints.CensusTag]))
             .Add(new HealthCheckRegistration(
                 TokenValidationReadiness.HealthCheckName,
                 sp => sp.GetRequiredService<TokenValidationReadiness>(),
@@ -543,7 +557,9 @@ public static class ServiceDefaults
     /// their verdict is read by <see cref="ProbeEndpoints.Ready"/> alone, never by the startup
     /// probe on <see cref="ProbeEndpoints.Health"/>.
     ///
-    /// <para>Three checks: the NodeType bake gate (policy <c>bake-gate-readiness-only</c>), the
+    /// <para>Four checks: the user directory's first snapshot (<c>user_directory</c>, MeshWeaver#6850 —
+    /// a replica that cannot identify anybody must not take traffic, and killing it would not hydrate
+    /// a shared directory read), the NodeType bake gate (policy <c>bake-gate-readiness-only</c>), the
     /// required-modules check (policy <c>required-modules-readiness-only</c>), and the module-forwarder
     /// check (<see cref="MeshWeaver.Mesh.ModuleForwarderHealthCheck"/>, MeshWeaver#6847). The forwarder
     /// check takes the replica out of rotation; whether to restart it is the governed Restart's decision,
@@ -561,6 +577,7 @@ public static class ServiceDefaults
         ImmutableHashSet.Create(StringComparer.Ordinal,
             NodeTypeBakeGateExtensions.HealthCheckName,
             ProbeEndpoints.RequiredModulesCheckName,
+            MeshWeaver.Hosting.AspNetCore.Portal.UserDirectoryReadiness.HealthCheckName,
             MeshWeaver.Mesh.ModuleForwarderHealthCheck.HealthCheckName);
 
     /// <summary>

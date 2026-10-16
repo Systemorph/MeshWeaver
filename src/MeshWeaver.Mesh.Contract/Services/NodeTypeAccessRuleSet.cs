@@ -37,9 +37,16 @@ public sealed class NodeTypeAccessRuleSet
 {
     // Per node type, every registered rule in registration order — the governing one is the LAST that
     // can still be leased (see Find), so a rule whose module is withdrawn or retired leaves the set.
-    // Each entry is the registration as resolved (a module's forwarding proxy, or an instance) and what
-    // the set hands out for it (Bound).
-    private readonly ImmutableDictionary<string, ImmutableArray<(INodeTypeAccessRule Registered, INodeTypeAccessRule Bound)>> rules;
+    // Each entry is the registration's position, the registration as resolved (a module's forwarding
+    // proxy, or an instance) and what the set hands out for it (Bound).
+    private readonly ImmutableDictionary<string, ImmutableArray<(int Position, INodeTypeAccessRule Registered, INodeTypeAccessRule Bound)>> rules;
+
+    // 🚨 Module rules whose node type could NOT be read when the set was built (review of #6854): their
+    // lease failed then — a construction fault, a generation that could not produce the rule, a module
+    // not held. The set is a mesh-lifetime singleton, so dropping them dropped the module's rule for
+    // good, past a fault that has since cleared and past every later generation. They are retained, in
+    // registration order, and their node type is read under the lease each lookup takes.
+    private readonly ImmutableArray<(int Position, INodeTypeAccessRule Registered)> unindexed;
 
     /// <summary>
     /// Indexes the mesh's registered access rules by node type.
@@ -49,8 +56,9 @@ public sealed class NodeTypeAccessRuleSet
     /// a module WITHDRAWN at boot (its shared instances could not be built) leaves that proxy behind, and
     /// reading its <see cref="INodeTypeAccessRule.NodeType"/> threw <c>Module … holds no service scope</c>
     /// right here. Every write's <c>RlsNodeValidator</c> takes this set, so one withdrawn module broke
-    /// every node write in the mesh — every package install included. Such a rule is left out when the
-    /// set is built, and a rule whose module is retired later is skipped when a type is looked up: its
+    /// every node write in the mesh — every package install included. Such a rule is skipped while it
+    /// cannot be leased — when the set is built (it is retained, its node type read at lookup, so it
+    /// governs again once it can be leased) and whenever a type is looked up: its
     /// node type falls back to the caller's standard check (closed by default), as for a type no module
     /// ever governed, and the withdrawal is reported where every module that failed to install is.</para>
     ///
@@ -69,14 +77,20 @@ public sealed class NodeTypeAccessRuleSet
     public NodeTypeAccessRuleSet(IEnumerable<INodeTypeAccessRule> accessRules)
     {
         ArgumentNullException.ThrowIfNull(accessRules);
-        rules = accessRules
-            .Select(rule => (Rule: rule, NodeType: NodeTypeOf(rule)))
+        var read = accessRules
+            .Select((rule, position) => (Position: position, Rule: rule, NodeType: NodeTypeOf(rule)))
+            .ToImmutableArray();
+        rules = read
             .Where(r => r.NodeType is not null)
             .GroupBy(r => r.NodeType!, StringComparer.OrdinalIgnoreCase)
             .ToImmutableDictionary(
                 g => g.Key,
-                g => g.Select(r => (r.Rule, Bind(r.Rule, r.NodeType!))).ToImmutableArray(),
+                g => g.Select(r => (r.Position, r.Rule, Bind(r.Rule, r.NodeType!))).ToImmutableArray(),
                 StringComparer.OrdinalIgnoreCase);
+        unindexed = read
+            .Where(r => r.NodeType is null && r.Rule is ModuleServiceProxy)
+            .Select(r => (r.Position, r.Rule))
+            .ToImmutableArray();
     }
 
     // The rule's node type, read under one lease; null when its module is no longer held.
@@ -95,22 +109,94 @@ public sealed class NodeTypeAccessRuleSet
                 ? new LeasedPermissionRule(permissionRule, nodeType)
                 : new LeasedAccessRule(rule, nodeType);
 
+    // The node type each retained unindexed rule named the last time it could be leased, by registration
+    // position — so a later FAULT of that rule fails closed for its own type only.
+    private ImmutableDictionary<int, string> learned = ImmutableDictionary<int, string>.Empty;
+
     // LAST registration wins, among the rules that can still be leased. `decide` reads the governing
     // rule's metadata UNDER the lease that established it serves: true hands out its bound rule,
     // false means it governs without an opinion on this question (null), and a rule whose module is
-    // gone is skipped for the registration before it.
+    // gone (not held, or retiring) is skipped for the registration before it — the feature is absent.
+    //
+    // 🚨 A rule whose module is HELD but that cannot be PRODUCED — its construction failed, or its
+    // generation cannot serve it — is NOT absent, and it FAILS CLOSED for the type it governs (review of
+    // #6854): it is handed out as a rule that denies (`Denying`). Skipping it would fall back to the
+    // ordinary path permission, so a caller holding an ordinary Update grant would pass a write the
+    // module's rule exists to refuse. Other types are untouched: their lookups never meet this rule.
+    //
+    // A retained unindexed rule (see `unindexed`) is a candidate at its registration position: it governs
+    // the type when its lease can be taken NOW and the leased rule names the type. When it faults, it
+    // fails closed for the type it last named (`learned`) — and, if it has NEVER been produced in this
+    // process, for every lookup, because nothing says which type it governs: denying is the safe reading
+    // of a security rule nobody can read.
     private INodeTypeAccessRule? Governing(string nodeType, Func<INodeTypeAccessRule, INodeTypeAccessRule, bool> decide)
     {
-        if (!rules.TryGetValue(nodeType, out var registered))
+        var indexed = rules.TryGetValue(nodeType, out var registered)
+            ? registered
+            : ImmutableArray<(int Position, INodeTypeAccessRule Registered, INodeTypeAccessRule Bound)>.Empty;
+        if (indexed.IsEmpty && unindexed.IsEmpty)
             return null;
-        for (var i = registered.Length - 1; i >= 0; i--)
+        // Both lists are in registration order; walk them together from the last registration back.
+        var i = indexed.Length - 1;
+        var u = unindexed.Length - 1;
+        while (i >= 0 || u >= 0)
         {
-            using var lease = ModuleServiceProxy.TryLease(registered[i].Registered);
-            if (lease is null)
-                continue;
-            return decide(registered[i].Registered, lease.Service) ? registered[i].Bound : null;
+            if (u < 0 || (i >= 0 && indexed[i].Position > unindexed[u].Position))
+            {
+                var entry = indexed[i--];
+                using var lease = ModuleServiceProxy.TryLeaseOrFault(entry.Registered, out var fault);
+                if (lease is null)
+                {
+                    if (fault == ModuleLeaseFault.None)
+                        continue;
+                    return Denying(entry.Registered, nodeType);
+                }
+                return decide(entry.Registered, lease.Service) ? entry.Bound : null;
+            }
+            var (position, candidate) = unindexed[u--];
+            using (var lease = ModuleServiceProxy.TryLeaseOrFault(candidate, out var fault))
+            {
+                if (lease is null)
+                {
+                    if (fault == ModuleLeaseFault.None)
+                        continue;
+                    if (learned.TryGetValue(position, out var named) && !string.Equals(named, nodeType, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    return Denying(candidate, nodeType);
+                }
+                var leasedType = lease.Service.NodeType;
+                ImmutableInterlocked.AddOrUpdate(ref learned, position, leasedType, (_, _) => leasedType);
+                if (!string.Equals(leasedType, nodeType, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                return decide(candidate, lease.Service) ? Bind(candidate, leasedType) : null;
+            }
         }
         return null;
+    }
+
+    // A rule that could not be produced, handed out in its registered shape so the permission lookup
+    // treats it exactly as it would treat the rule: it governs every operation and denies.
+    private static INodeTypeAccessRule Denying(INodeTypeAccessRule registered, string nodeType) =>
+        registered is INodeTypePermissionRule
+            ? new DenyingPermissionRule(nodeType)
+            : new DenyingRule(nodeType);
+
+    private class DenyingRule(string nodeType) : INodeTypeAccessRule
+    {
+        public string NodeType => nodeType;
+
+        // Empty = every operation.
+        public IReadOnlyCollection<NodeOperation> SupportedOperations => [];
+
+        public IObservable<bool> HasAccess(NodeValidationContext context, string? userId) => Observable.Return(false);
+    }
+
+    private sealed class DenyingPermissionRule(string nodeType) : DenyingRule(nodeType), INodeTypePermissionRule
+    {
+        public IReadOnlyCollection<Permission> SupportedPermissions => [];
+
+        public IObservable<bool> HasPermission(MeshNode node, AccessContext? accessContext, string? userId, Permission permission) =>
+            Observable.Return(false);
     }
 
     /// <summary>

@@ -114,6 +114,56 @@ public sealed class ModuleServices : IDisposable
     /// <summary>Why these services cannot be served from a module scope — empty when they can.</summary>
     public ImmutableList<string> Blockers { get; }
 
+    private ImmutableDictionary<int, string> unservable = ImmutableDictionary<int, string>.Empty;
+
+    /// <summary>
+    /// The forwarded registrations THIS generation could not produce when a consumer leased them, by
+    /// index, each with why (MeshWeaver#6847). A verdict about this generation, never about the module:
+    /// a later generation starts with none. Every consumer that leases a module's service — the query
+    /// fan-out, the access-rule set, the options forwarders — reads such a registration as ABSENT
+    /// (<see cref="ModuleContexts.TryLeaseModuleService(string, int, Autofac.ILifetimeScope?, System.Type?)"/>), so an optional module that cannot serve one
+    /// of its services costs exactly that feature and never a caller that never asked for it.
+    /// </summary>
+    public ImmutableDictionary<int, string> Unservable => Volatile.Read(ref unservable);
+
+    /// <summary>Records registration <paramref name="index"/> as unservable in this generation; true the
+    /// first time, so the verdict is reported once.</summary>
+    internal bool MarkUnservable(int index, string reason) =>
+        ImmutableInterlocked.TryAdd(ref unservable, index, reason);
+
+    private ImmutableHashSet<(int Index, string Cause)> reported = ImmutableHashSet<(int Index, string Cause)>.Empty;
+
+    /// <summary>Notes that a construction fault of registration <paramref name="index"/> with
+    /// <paramref name="cause"/> (the innermost exception type) was reported; true the first time. Not a
+    /// verdict — the registration stays servable — only what keeps a fault that repeats on every lease
+    /// from being reported on every lease (review of #6854).</summary>
+    internal bool MarkReported(int index, string cause) =>
+        ImmutableInterlocked.Update(ref reported, set => set.Add((index, cause)));
+
+    /// <summary>
+    /// Why registration <paramref name="index"/> is not LAID OUT in this generation the way the root's
+    /// forwarder for that index asks for it — this generation has no registration at the index, or its
+    /// container holds nothing under the key the root resolves — or null when it is (MeshWeaver#6847,
+    /// review of #6854). A fault every caller of this generation shares, so it may be recorded as a
+    /// verdict; asked only after a resolve FAILED, so a registration that resolves is never judged by it.
+    /// Null, too, when the container cannot say — then the fault is not known to be generation-wide.
+    /// </summary>
+    /// <param name="root">The mesh's root provider.</param>
+    /// <param name="index">The registration's index.</param>
+    internal string? NotLaidOut(IServiceProvider root, int index)
+    {
+        if (index < 0 || index >= Registrations.Count)
+            return $"this generation has no registration #{index} — it holds {Registrations.Count}";
+        var registration = Registrations[index];
+        var descriptor = registration.Descriptor;
+        var key = descriptor.IsKeyedService ? descriptor.ServiceKey : registration.Key;
+        var container = TryScope(root);
+        var isKeyed = container as IServiceProviderIsKeyedService ?? container?.GetService<IServiceProviderIsKeyedService>();
+        return isKeyed is not null && !isKeyed.IsKeyedService(descriptor.ServiceType, key)
+            ? $"'{key} ({descriptor.ServiceType.Name})' has not been registered in this generation's container"
+            : null;
+    }
+
     /// <summary>The shape a swap must preserve (see <see cref="ModuleServiceRegistration.Shape"/>), each
     /// forwarded registration prefixed with its <see cref="ModuleServiceRegistration.Index"/>.</summary>
     public ImmutableList<string> Shape => Registrations
