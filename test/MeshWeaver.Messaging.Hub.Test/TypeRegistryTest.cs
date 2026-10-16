@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.Loader;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Domain;
 using MeshWeaver.Fixture;
@@ -399,6 +400,80 @@ public class TypeRegistryTest(ITestOutputHelper output) : HubTestBase(output)
         StrongMapsHolding(typeRegistry, collectibleType).Should().BeEmpty(
             "a registration made AFTER the context began unloading can never be evicted by the "
             + "Unloading event (it already fired), so a strong entry would root the context forever");
+    }
+
+    /// <summary>
+    /// 🚨 Issue #6891: two threads registering types from the SAME collectible load context
+    /// concurrently must both succeed. <c>TrackCollectible</c> used to check the tracking table and
+    /// then <c>Add</c> to it — a check-then-act, so two first registrations from one context both
+    /// missed the check and the second <c>Add</c> threw
+    /// <c>ArgumentException: An item with the same key has already been added</c>. In production
+    /// that killed a <c>PortalApplication</c> activation inside <c>LayoutClientConfiguration.WithView</c>.
+    ///
+    /// <para>There is no deterministic seam: the defect is the interleaving itself (nothing runs
+    /// between the check and the add that a test could hook). So each round mints a FRESH
+    /// collectible context — the race is only open for a context's FIRST registration — and
+    /// releases several threads at once through a volatile flag polled under a bounded
+    /// <c>SpinWait.SpinUntil</c> (the sanctioned shape; no gate primitive). The fix holds by
+    /// construction: <c>ConditionalWeakTable.TryAdd</c> is atomic, and only its single winner
+    /// subscribes to <c>Unloading</c>.</para>
+    /// </summary>
+    [Fact]
+    public void ConcurrentFirstRegistrations_FromOneCollectibleContext_AllSucceed()
+    {
+        var typeRegistry = GetHost().ServiceProvider.GetRequiredService<ITypeRegistry>();
+        var threadCount = Math.Clamp(Environment.ProcessorCount, 4, 8);
+        // Unfixed, this failed in the FIRST round locally; the bound only caps the fixed run.
+        const int rounds = 2000;
+        var failures = new ConcurrentQueue<Exception>();
+
+        for (var round = 0; round < rounds && failures.IsEmpty; round++)
+        {
+            var context = new AssemblyLoadContext($"concurrent-track-{round}", isCollectible: true);
+            try
+            {
+                var reloaded = context.LoadFromAssemblyPath(typeof(HelloEvent).Assembly.Location);
+                var collectibleType = reloaded.GetType(typeof(HelloEvent).FullName!)!;
+                var go = 0;
+                var ready = 0;
+                var threads = Enumerable.Range(0, threadCount).Select(i => new Thread(() =>
+                {
+                    Interlocked.Increment(ref ready);
+                    SpinWait.SpinUntil(() => Volatile.Read(ref go) == 1, TimeSpan.FromSeconds(10));
+                    try
+                    {
+                        // The SAME type on every thread: identical paths, so the threads reach
+                        // the check-then-act together.
+                        typeRegistry.WithType(collectibleType, $"Concurrent{round}_{i}");
+                    }
+                    catch (Exception ex)
+                    {
+                        failures.Enqueue(ex);
+                    }
+                })).ToArray();
+                try
+                {
+                    foreach (var thread in threads)
+                        thread.Start();
+                    SpinWait.SpinUntil(() => Volatile.Read(ref ready) == threadCount, TimeSpan.FromSeconds(10));
+                }
+                finally
+                {
+                    Volatile.Write(ref go, 1);
+                }
+                foreach (var thread in threads)
+                    thread.Join();
+            }
+            finally
+            {
+                context.Unload();
+            }
+        }
+
+        failures.Should().BeEmpty(
+            "registering types from one collectible context on several threads at once must not "
+            + "throw — the context is tracked exactly once, atomically (issue #6891); thrown: "
+            + string.Join(" | ", failures.Select(f => $"{f.GetType().Name}: {f.Message}")));
     }
 
     /// <summary>
