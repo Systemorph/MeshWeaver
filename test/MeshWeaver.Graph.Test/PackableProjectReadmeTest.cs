@@ -14,7 +14,7 @@ namespace MeshWeaver.Graph.Test;
 ///
 /// <para>Two assertions, one subject. <b>The set</b>: exactly two projects here pack —
 /// <c>memex/aspire/Memex.Aspire.Hosting</c> (<c>MeshWeaver.Aspire.Hosting.Memex</c>) and
-/// <c>src/MeshWeaver.Cli</c> (<c>MeshWeaver.Cli</c>, policy <c>cli-on-nuget-follows-3-latest</c>). Everything
+/// <c>src/MeshWeaver.Cli</c> (<c>MeshWeaver.Cli</c>, policy <c>cli-thin-wrapper-own-version</c>). Everything
 /// else under the MeshWeaver prefix was retired on 2026-09-07 and the packages unlisted
 /// (<c>Doc/Architecture/NuGetPackageRetirement</c>); the second survivor,
 /// <c>MeshWeaver.MemexTemplate</c>, lives in MeshWeaver.Plugins and is out of this tree's reach.
@@ -38,8 +38,8 @@ namespace MeshWeaver.Graph.Test;
 public class PackableProjectReadmeTest
 {
     /// <summary>The projects in this repository that still produce a NuGet package: the Aspire
-    /// integration (release tags) and the <c>memex</c> CLI (every arming, following <c>3-latest</c> —
-    /// policy <c>cli-on-nuget-follows-3-latest</c>).</summary>
+    /// integration (release tags) and the <c>memex</c> CLI (its own version, released on demand —
+    /// policy <c>cli-thin-wrapper-own-version</c>).</summary>
     private static readonly string[] ExpectedPackableProjects =
     [
         Path.Combine("memex", "aspire", "Memex.Aspire.Hosting", "Memex.Aspire.Hosting.csproj"),
