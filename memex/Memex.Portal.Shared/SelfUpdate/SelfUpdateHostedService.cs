@@ -388,16 +388,19 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
     private IObservable<SelfUpdateVerdict> ConsiderRestart(SelfUpdateVerdict platform) =>
         Observable.Defer(() =>
         {
-            if (!SelfUpdateVerdict.MayRestartAfter(platform))
+            var mayRestart = SelfUpdateVerdict.MayRestartAfter(platform);
+            if (!mayRestart && !SelfUpdateVerdict.MayActivateLiveAfter(platform))
                 return Observable.Return(platform);
             var landing = ResolveLandingService();
             if (landing is null)
                 return Observable.Return(platform);
             return landing.GetActivation()
                 .Take(1)
-                .SelectMany(activation => activation.PendingRestart
-                    ? LiveFirst(platform)
-                    : Observable.Return(platform))
+                .SelectMany(activation => !activation.PendingRestart
+                    ? Observable.Return(platform)
+                    : mayRestart
+                        ? LiveFirst(platform)
+                        : LiveOnly(platform))
                 .Catch((Exception ex) =>
                 {
                     _logger?.LogWarning(ex,
@@ -433,6 +436,25 @@ public class SelfUpdateHostedService : IHostedService, IModuleActivationRestart,
                 ? Restart(platform, honourFloor: true,
                     reason: $"a landed module generation did not go live in the running process — {result.Describe()}")
                 : Observable.Return(LiveVerdict(platform, result)));
+    }
+
+    /// <summary>
+    /// 🚨 The LIVE half alone, after a platform release was HANDED to the control lane (MeshWeaver#6829).
+    /// The routed Roll that hand-over opens re-creates the pods, so a restart request here would only
+    /// race it (<see cref="SelfUpdateVerdict.MayRestartAfter"/>) — but a live swap is not a restart: it
+    /// happens inside this process and races nothing. Before this, a hand-over skipped the module half
+    /// ENTIRELY, so on an install that sees a newer platform build on every check (every
+    /// <c>BuildCompletion</c> is one) a proposed module set waited for the roll even where it could go
+    /// live at once — and waited indefinitely while that roll waited for an approval. Here what can go
+    /// live goes live; what needs a restart is left to the handed-over roll, and the verdict says so.
+    /// </summary>
+    private IObservable<SelfUpdateVerdict> LiveOnly(SelfUpdateVerdict platform)
+    {
+        var live = ResolveLiveActivation();
+        if (live is null)
+            return Observable.Return(platform);
+        return live.ActivatePending("self-update: a landed module generation is pending activation (platform roll handed over)")
+            .Select(result => SelfUpdateVerdict.LiveWhileRollHandedOver(platform, result.WentLive.Count, result.NeedsRestart, result.Describe()));
     }
 
     /// <summary>
