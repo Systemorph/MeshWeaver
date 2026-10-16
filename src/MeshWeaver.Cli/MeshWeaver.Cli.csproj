@@ -12,9 +12,16 @@
          Doc/Architecture/PolicyNotProse; Doc/Architecture/NuGetPackageRetirement §1a). Like `gh`, the
          CLI is a thin client — REST for the mesh verbs, the platform IMAGE for build and test — so
          it is released rarely and NOT with every platform build: bump <Version> when the CLI itself
-         changes, then dispatch publish-packages.yml with packages=cli. A customer's dedicated build
+         changes (<CliVersion> below), then dispatch publish-packages.yml with packages=cli. A customer's dedicated build
          server installs it with `dotnet tool install -g MeshWeaver.Cli` and needs no checkout. -->
-    <Version>3.0.0</Version>
+    <CliVersion>3.0.0</CliVersion>
+    <Version>$(CliVersion)</Version>
+    <!-- the CLI's version option reads InformationalVersion, which Directory.Build.props sets BEFORE this
+         file runs — to $(PlatformVersion) under CIRun, to the inherited $(Version) otherwise — so
+         without this line a standalone build of CLI 3.0.0 reports the PLATFORM's version. It names
+         $(CliVersion), not $(Version), so a global -p:Version (CD passes one) cannot reach this
+         compiled attribute either. CliInformationalVersionGuard pins it. -->
+    <InformationalVersion>$(CliVersion)</InformationalVersion>
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>memex</ToolCommandName>
     <PackageId>MeshWeaver.Cli</PackageId>

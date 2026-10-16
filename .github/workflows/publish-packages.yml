@@ -16,7 +16,7 @@ name: Publish the surviving NuGet packages
 # policy `cli-thin-wrapper-own-version` (Doc/Architecture/PolicyNotProse): a customer's dedicated build server installs the CLI
 # with `dotnet tool install` and has no MeshWeaver checkout. Like `gh`, the CLI is a thin client (REST
 # for the mesh verbs, the platform IMAGE for build and test), so it is versioned by its own csproj
-# <Version> and released RARELY — when the CLI changes, never with every platform build. A dispatch
+# <CliVersion> and released RARELY — when the CLI changes, never with every platform build. A dispatch
 # with packages=cli publishes the version MeshWeaver.Cli.csproj declares and refuses any other.
 # The CLI references no MeshWeaver framework assembly (System.CommandLine only) — the same
 # "entry point, not platform bytes" case as the adapter.
@@ -163,12 +163,6 @@ jobs:
         with:
           user: ${{ vars.NUGET_TRUSTED_USER }}
 
-      - name: A dispatch must name the version
-        if: github.event_name == 'workflow_dispatch' && inputs.version == ''
-        run: |
-          echo "::error::workflow_dispatch needs a version input (e.g. 3.0.0) — there is no tag to read it from."
-          exit 1
-
   publish:
     name: Pack + push the surviving packages
     needs: preflight
@@ -204,6 +198,12 @@ jobs:
             [ "$version" = "$declared" ] || { echo "::error::version '$version' is not the <Version> MeshWeaver.Cli.csproj declares ('$declared') — bump the csproj by pull request, then publish"; exit 1; }
           elif [ -n "${{ inputs.version }}" ]; then
             version="${{ inputs.version }}"
+          elif [ "${{ github.event_name }}" = workflow_dispatch ]; then
+            # An Aspire dispatch has no tag to read the version from. This is the ONE place the
+            # version rule lives — a second copy in `preflight` once refused every dispatch with an
+            # empty version, the CLI's csproj default included (#6860 review).
+            echo "::error::an Aspire workflow_dispatch needs a version input (e.g. 3.0.0) — there is no tag to read it from. (packages=cli may omit it: the csproj <Version> is used.)"
+            exit 1
           else
             version="${GITHUB_REF#refs/tags/v}"
           fi
