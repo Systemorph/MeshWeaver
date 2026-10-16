@@ -285,6 +285,28 @@ public static class Controls
     /// <returns>A new <see cref="VideoControl"/>.</returns>
     public static VideoControl Video(object src) => new(src);
 
+    /// <summary>Creates a QR code drawn from a module matrix the server computed (<see cref="QrCodes.Encode"/>).</summary>
+    /// <param name="modules">The matrix, or a data-binding expression pointing at one.</param>
+    /// <returns>A new <see cref="QrCodeControl"/>.</returns>
+    public static QrCodeControl QrCode(object modules) => new(modules);
+
+    /// <summary>Creates a QR code of <paramref name="text"/>, encoded here on the server (black on white, with the standard quiet zone).</summary>
+    /// <param name="text">The text to encode — a public address, never a credential.</param>
+    /// <param name="errorCorrection">One of <see cref="QrErrorCorrection"/>; <see cref="QrErrorCorrection.Medium"/> by default.</param>
+    /// <returns>A new <see cref="QrCodeControl"/>.</returns>
+    public static QrCodeControl QrCodeOf(string text, string errorCorrection = QrErrorCorrection.Medium) =>
+        new(QrCodes.Encode(text, errorCorrection));
+
+    /// <summary>Creates the Copy link and Share actions for <paramref name="url"/>.</summary>
+    /// <param name="url">The absolute address, or a data-binding expression.</param>
+    /// <returns>A new <see cref="ShareLinkControl"/>.</returns>
+    public static ShareLinkControl ShareLink(object url) => new(url);
+
+    /// <summary>Creates the Install on iPhone / Android entry point for the page it is on.</summary>
+    /// <param name="manifestHref">The page's own web-app manifest URL, or a data-binding expression.</param>
+    /// <returns>A new <see cref="InstallAppControl"/>.</returns>
+    public static InstallAppControl InstallApp(object manifestHref) => new(manifestHref);
+
     /// <summary>Creates a data grid control that renders <paramref name="elements"/> as a tabular view.</summary>
     /// <param name="elements">A collection or data-binding expression providing the rows.</param>
     /// <returns>A new <see cref="DataGridControl"/>.</returns>

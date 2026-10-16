@@ -8,6 +8,12 @@
     <ProjectReference Include="..\MeshWeaver.Data\MeshWeaver.Data.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <!-- QrCodes.Encode: the module matrix a QrCodeControl carries, computed on the server so no
+         renderer (Blazor, React, React Native) needs a QR library of its own. MIT; already the
+         platform's QR encoder (the TOTP enrolment code). -->
+    <PackageReference Include="Net.Codecrete.QrCodeGenerator" />
+  </ItemGroup>
+  <ItemGroup>
     <PackageReference Update="Roslynator.Analyzers">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
