@@ -170,9 +170,12 @@ out() { # <key> <value>
 
 # ── 2. the scope decision again, against the shelf as it is NOW ──────────────────────────────────
 FRESH="$STATE_DIR.under-lock"
-rm -rf "$FRESH"
+# The fresh reading's own GITHUB_ENV, kept APART from the job's: only an ADOPTED reading may hand its
+# carry source (BAKE_CARRY_TARGET) to the later steps — see adopt().
+FRESH_ENV="$STATE_DIR.under-lock.env"
+rm -rf "$FRESH" "$FRESH_ENV"
 mkdir -p "$FRESH"
-if ! fresh_out=$(STATE_DIR="$FRESH" GITHUB_OUTPUT="" GITHUB_ENV="" GITHUB_STEP_SUMMARY="" \
+if ! fresh_out=$(STATE_DIR="$FRESH" GITHUB_OUTPUT="" GITHUB_ENV="$FRESH_ENV" GITHUB_STEP_SUMMARY="" \
                  bash "$HERE/bake-scope.sh" 2>&1); then
   printf '%s\n' "$fresh_out" | sed 's/^/    /'
   echo "::error title=Refusing to publish — the live publication could not be re-read under the lock::bake-scope.sh failed while re-reading the publication under the lock (see above). Nothing has been written."
@@ -190,8 +193,8 @@ if [ -n "$live_commit" ] && [ -n "${REPO_DIR:-}" ] \
    && ! git -C "$REPO_DIR" cat-file -e "${live_commit}^{commit}" 2>/dev/null; then
   if git -C "$REPO_DIR" fetch --quiet --no-tags origin "$live_commit" < /dev/null; then
     echo "the live publication's commit $live_commit was not in this checkout — fetched it (objects only) and re-deciding."
-    rm -rf "$FRESH"; mkdir -p "$FRESH"
-    if ! fresh_out=$(STATE_DIR="$FRESH" GITHUB_OUTPUT="" GITHUB_ENV="" GITHUB_STEP_SUMMARY="" \
+    rm -rf "$FRESH" "$FRESH_ENV"; mkdir -p "$FRESH"
+    if ! fresh_out=$(STATE_DIR="$FRESH" GITHUB_OUTPUT="" GITHUB_ENV="$FRESH_ENV" GITHUB_STEP_SUMMARY="" \
                      bash "$HERE/bake-scope.sh" 2>&1); then
       printf '%s\n' "$fresh_out" | sed 's/^/    /'
       echo "::error title=Refusing to publish — the live publication could not be re-read under the lock::bake-scope.sh failed on the second reading (see above). Nothing has been written."
@@ -263,6 +266,14 @@ adopt() {
   rm -rf "$STATE_DIR.read-before-bake"
   mv "$STATE_DIR" "$STATE_DIR.read-before-bake"
   mv "$FRESH" "$STATE_DIR"
+  # 🚨 THE CARRY SOURCE TRAVELS WITH THE ADOPTED READING (Copilot's review of #6878). bake-scope.sh
+  # names the target it read the publication from in GITHUB_ENV (BAKE_CARRY_TARGET), and the carry
+  # steps read it there. A first reading that found NO seal set none — so a run adopting a
+  # publication a sibling sealed meanwhile would hand the carry an empty source. Whatever the
+  # adopted reading named is exported now.
+  if [ -n "${GITHUB_ENV:-}" ] && [ -f "$FRESH_ENV" ]; then
+    grep '^BAKE_CARRY_TARGET=' "$FRESH_ENV" >> "$GITHUB_ENV" || true
+  fi
   out rebind rebound
   out publish true
   echo "::notice title=Re-bound to the live publication::$1 The carry now takes the live publication's bundles, bound to its stamp $(optional_file "$STATE_DIR/published-publication.txt" '<unstamped>')."

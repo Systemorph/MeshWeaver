@@ -214,7 +214,10 @@ which holds its re-bind lock through the registry push): two overlapping publish
 each read the tag before the other moves it. The wrapper locks EVERY configured target (sorted), not
 the first one, so callers whose target lists differ — a list change in flight, or two repositories
 publishing one prefix — still exclude each other on any share they have in common; two publishers
-with DISJOINT target sets share no lease and are not excluded.
+with DISJOINT target sets share no lease and are not excluded. A target whose lock cannot be taken
+REFUSES the wrapped command — it may belong to a live publisher — unless its share is confirmed gone,
+and the wrapper's release visits every configured target, so an acquire interrupted after its lease
+landed leaves nothing behind.
 
 **The superseded path does not stay green over a stale registry.** A run superseded under the lock
 publishes nothing, so if the sibling that sealed the shares failed its registry push, a green here

@@ -56,8 +56,8 @@ fi
 # other, both enter the read–decide–tag, and the slower, older one moves the tag back. Locking every
 # target means any two publishers whose target sets SHARE a share exclude each other on it; sorted,
 # so differently ordered lists cannot wait on each other (rebind-bake-scope.sh locks the same way).
-# A target that cannot be locked (a share that is gone, a holder that outlasts the bound) is named
-# and skipped — a dead target must not starve the registry push — but at least ONE must be held.
+# A target whose lock cannot be had REFUSES the command, unless its share is confirmed gone (then it
+# is named and skipped, so a torn-down portal cannot starve the registry push); at least ONE is held.
 # The one case this cannot exclude is two publishers with DISJOINT target sets: they share no share
 # to hold a lease on, and that would need a declared lock location outside the portal shares.
 TARGETS=$(printf '%s\n' $BAKE_PUBLISH_TARGETS | sed '/^[[:space:]]*$/d' | LC_ALL=C sort -u)
@@ -72,17 +72,30 @@ lock_of() { # <target> → "<account> <share> <lock path>" (must match publish-b
   printf '%s %s %s\n' "$a" "$s" "${b:+$b/}prebuilt-bundles/$IDENTITY/_publishing.$SOURCE"
 }
 
+# 🚨 A TARGET WHOSE LOCK CANNOT BE HAD IS A REFUSAL — unless its SHARE is confirmed gone (Copilot's
+# review of #6878). A lease that outlasts the wait bound may belong to a LIVE publisher: with lists
+# `A B` and `B`, the `B` publisher holds B while this one holds A and times out on B — going ahead
+# "under A" would let both into the read–decide–tag, the exact interleaving this wrapper exists to
+# exclude. Only a share that `share-exists` positively answers `false` for is skipped (a torn-down
+# portal must not starve the registry push); `unknown` refuses like a live holder.
+share_gone() { # <account> <share> — true only on a positive "the share does not exist"
+  [ "$("$PYTHON" "$HELPER" share-exists --account "$1" --share "$2" < /dev/null)" = "false" ]
+}
+
 HELD=()
 if [ -n "${BAKE_PUBLISH_LOCK_HOLDER:-}" ]; then
   # The caller holds the prefix across steps: PROVE it, target by target; the release stays with it.
   for t in $TARGETS; do
-    line=$(lock_of "$t") || continue
+    line=$(lock_of "$t") || exit 1
     read -r account share path <<< "$line"
     if "$PYTHON" "$HELPER" lock check --account "$account" --share "$share" --path "$path" \
          --holder "$BAKE_PUBLISH_LOCK_HOLDER" < /dev/null; then
       HELD+=("$t")
+    elif share_gone "$account" "$share"; then
+      echo "::warning::$t: the share does not exist — it takes no part in this step (the publish step has already failed it by name)."
     else
-      echo "::warning::the caller does not hold the publication lock on $t — that target does not take part in excluding other publishers from this step."
+      echo "::error::the caller does not hold the publication lock on $t, and its share exists — refusing to run '$1' while another publisher may hold it."
+      exit 1
     fi
   done
   [ "${#HELD[@]}" -gt 0 ] || { echo "::error::the caller holds the publication lock on none of '$BAKE_PUBLISH_TARGETS' (as $BAKE_PUBLISH_LOCK_HOLDER) — refusing to run '$1' unserialised."; exit 1; }
@@ -93,9 +106,13 @@ fi
 HOLDER="$(printf '%s-%s-%s' \
   "${GITHUB_REPOSITORY:-local}" "${GITHUB_RUN_ID:-$$}" "${GITHUB_RUN_ATTEMPT:-$(date -u +%s)}" \
   | tr -c 'A-Za-z0-9._-' '-')-registry-pid$$-r$RANDOM$RANDOM"
+# 🚨 The release visits EVERY configured target, not only those recorded as held (Copilot's review of
+# #6878): an acquire can land its lease and be interrupted before it reports success, and that lease
+# would otherwise be left behind — infinite. The release names THIS holder's lease id, so releasing
+# a target this run never locked, or one another publisher holds, is a no-op.
 release_on_exit() {
   local rc=$? t line account share path
-  for t in ${HELD[@]+"${HELD[@]}"}; do
+  for t in $TARGETS; do
     line=$(lock_of "$t") || continue
     read -r account share path <<< "$line"
     if ! "$PYTHON" "$HELPER" lock release --account "$account" --share "$share" --path "$path" \
@@ -108,13 +125,16 @@ release_on_exit() {
 }
 trap release_on_exit EXIT
 for t in $TARGETS; do
-  line=$(lock_of "$t") || continue
+  line=$(lock_of "$t") || exit 1
   read -r account share path <<< "$line"
   if "$PYTHON" "$HELPER" lock acquire --account "$account" --share "$share" --path "$path" \
        --holder "$HOLDER" < /dev/null; then
     HELD+=("$t")
+  elif share_gone "$account" "$share"; then
+    echo "::warning::$t: the share does not exist — skipped, so a torn-down portal cannot starve this step."
   else
-    echo "::error::the publication lock on $t could not be taken (see above) — going ahead under the targets that ARE held, so a dead target cannot starve this step."
+    echo "::error::the publication lock on $t could not be taken and its share exists (see above) — refusing to run '$1' while another publisher may hold it."
+    exit 1
   fi
 done
 [ "${#HELD[@]}" -gt 0 ] || { echo "::error::not one publication lock of '$BAKE_PUBLISH_TARGETS' could be taken — refusing to run '$1' unserialised."; exit 1; }

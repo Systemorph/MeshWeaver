@@ -497,6 +497,10 @@ class FakeShare:
                 return False
         with os.fdopen(fd, "w") as fh:
             fh.write(lease_id)
+        if self.root.name in os.environ.get("MOCK_LEASE_ACQUIRED_THEN_LOST", "").split():
+            # The lease LANDED, and the process died before it could say so — the window an
+            # interrupted acquire leaves (Copilot on #6878).
+            raise RuntimeError("simulated interruption after the lease was taken on %s" % path)
         return True
 
     def lease_state(self, path):
@@ -733,7 +737,7 @@ class Harness:
                   "MOCK_AZ_DELETE_FAILS", "MOCK_AZ_FAIL_UPLOAD_PATH", "MOCK_AZ_FAIL_UPLOAD_OF",
                   "MOCK_AZ_DROP_UPLOAD_OF", "MOCK_AZ_AFTER_UPLOAD_OF", "MOCK_AZ_AFTER_UPLOAD_CMD",
                   "MOCK_LEASE_IGNORE", "MOCK_SHARE_MISSING", "PUBLISH_BAKE_LOCK_WAIT_SECONDS",
-                  "MOCK_LEASE_RELEASE_FAILS"):
+                  "MOCK_LEASE_RELEASE_FAILS", "MOCK_LEASE_ACQUIRED_THEN_LOST"):
             env.pop(k, None)
         for k, v in (env_extra or {}).items():
             if v is None:
@@ -2098,6 +2102,7 @@ def run_cases(script: Path, work: Path, expect_defect: bool) -> None:
         run_round5_cases(h, work)
         run_registry_lock_cases(h, work)
         run_superseded_guard_cases(h, work)
+        run_wrapper_contention_cases(h, work)
 
 
 LOCK_PATH = f"prebuilt-bundles/{IDENTITY}/_publishing.{SOURCE}"
@@ -2623,11 +2628,14 @@ def run_rebind_cases(h: "Harness", work: Path) -> None:
     lane.scope()
     lane.bake_what_scope_rebuilt("full")
     plant_publication(h, r1, "Plugins-run-P1")
+    lane.genv.write_text("")      # as if the first reading had named no carry source (no seal then)
     r = lane.rebind("full")
     o = lane.outputs()
     check("a full bake follows the live publication: rebind=rebound, publish=true",
           r.returncode == 0 and o.get("rebind") == "rebound" and o.get("publish") == "true",
           f"rc={r.returncode}, outputs={o}; {(r.stdout + r.stderr)[-400:]!r}")
+    check("…and the ADOPTED reading's carry source is handed to the carry steps (BAKE_CARRY_TARGET)",
+          f"BAKE_CARRY_TARGET={TARGET}" in lane.genv.read_text(), repr(lane.genv.read_text()[-200:]))
     lane.release()
 
 
@@ -2866,6 +2874,49 @@ case " $* " in *" --published-commit "*) ;; *) echo "recorder: only --published-
 [ -f "$MOCK_REGISTRY_TAG" ] && cat "$MOCK_REGISTRY_TAG"
 exit 0
 """
+
+
+def run_wrapper_contention_cases(h: "Harness", work: Path) -> None:
+    # Copilot on #6878: a lock that cannot be taken may belong to a LIVE publisher, so the wrapper
+    # must refuse rather than go ahead under the targets it did get; only a share confirmed GONE is
+    # skipped. And its release must visit every target, or an acquire interrupted after its lease
+    # landed leaves that lease behind.
+    marker = work / "wrapped-command-ran"
+
+    def wrap(targets: str, **extra: str) -> subprocess.CompletedProcess:
+        if marker.exists():
+            marker.unlink()
+        e = dict(os.environ)
+        e["PATH"] = f"{h.bin}{os.pathsep}{e['PATH']}"
+        e.update(h.base_env())
+        for k in ("BAKE_PUBLISH_LOCK_HOLDER", "MOCK_LEASE_IGNORE"):
+            e.pop(k, None)
+        e.update({"IDENTITY": IDENTITY, "SOURCE": SOURCE, "BAKE_PUBLISH_TARGETS": targets,
+                  "GITHUB_REPOSITORY": "Systemorph/MeshWeaver", "GITHUB_RUN_ID": "9200",
+                  "PUBLISH_BAKE_LOCK_WAIT_SECONDS": "1"})
+        e.update(extra)
+        return subprocess.run(["bash", str(LOCK_WRAPPER), "--", "touch", str(marker)],
+                              capture_output=True, text=True, env=e)
+
+    both = f"{ACCOUNT}/alpha-share {TARGET}"
+    print("\nthe registry lock wrapper under contention and interruption:")
+    h.reset()
+    plant_lease(h, "Systemorph-MeshWeaver-live-registry-1", time.time())   # a LIVE holder of memex-data
+    r = wrap(both)
+    check("a target held by a LIVE publisher past the bound is a REFUSAL — the command does not run under the other target",
+          r.returncode != 0 and not marker.exists() and "refusing to run" in (r.stdout + r.stderr)
+          and not lease_on(h, "alpha-share").exists(),
+          f"rc={r.returncode}, command ran={marker.exists()}, alpha lease left={lease_on(h, 'alpha-share').exists()}")
+    h.reset()
+    r = wrap(f"{ACCOUNT}/gone-share {TARGET}", MOCK_SHARE_MISSING_NAMES="gone-share")
+    check("…while a share confirmed GONE is skipped, named, and the command runs under the rest",
+          r.returncode == 0 and marker.exists() and "does not exist" in (r.stdout + r.stderr) and leases_held(h) == [],
+          f"rc={r.returncode}, command ran={marker.exists()}")
+    h.reset()
+    r = wrap(both, MOCK_LEASE_ACQUIRED_THEN_LOST="alpha-share")
+    check("an acquire interrupted AFTER its lease landed leaves no lease behind (the release visits every target)",
+          r.returncode != 0 and not marker.exists() and leases_held(h) == [],
+          f"rc={r.returncode}, leases left {leases_held(h)}")
 
 
 def run_superseded_guard_cases(h: "Harness", work: Path) -> None:
