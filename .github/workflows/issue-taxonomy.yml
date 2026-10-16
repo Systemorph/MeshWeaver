@@ -1,9 +1,10 @@
 name: Issue taxonomy
 
-# Every OPEN issue of the triage scope carries exactly one type, and every bug exactly one sev:B/H/M/L
-# (Doc/Architecture/IssueTaxonomy, policy `release-blocker-gate`). The release gate counts open sev:B and
-# sev:H bugs, so an issue that breaks the invariant is invisible to it — an untyped issue and a bug
-# without a severity both read as "nothing blocking".
+# Every OPEN issue of the triage scope carries exactly one type and exactly one sev:B/H/M/L — a non-bug
+# sev:M or sev:L only, sev:B/sev:H being reserved for defects (Doc/Architecture/IssueTaxonomy, policies
+# `release-blocker-gate` and `every-issue-has-a-severity`). The release gate counts open sev:B and sev:H
+# bugs, so an issue that breaks the invariant is invisible to it — an untyped issue and an issue without
+# a severity both read as "nothing blocking".
 #
 # Triage keeps the invariant (the hourly issue sweep classifies, and names what needs a person on
 # Hosting/Triage/blocking/issues-need-a-person); this lane is the INDEPENDENT measurement of whether it
@@ -53,7 +54,7 @@ jobs:
           echo "every input present"
 
   check:
-    name: Every open issue typed, every bug with one severity
+    name: Every open issue typed, with one severity
     needs: [preflight]
     runs-on: ubuntu-latest
     timeout-minutes: 15
