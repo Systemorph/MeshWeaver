@@ -381,10 +381,11 @@ hub.Observe(request, o => o.WithTarget(hub.NodeOperationTarget()))
   the owning activation runs on another silo, that silo can acknowledge an own write after the
   comparison. The store refuses the delete only if that write was flushed before it. If the delete
   reaches the store first, the later flush stores the node again: nothing acknowledged is lost, but
-  the delete has reported success for a node that exists again. Postgres implements
-  `DeleteIfVersionAtMost` in the MeshWeaver.Plugins repository. Until it does, a Postgres deployment
-  uses the interface default: it reads, compares, then deletes. The default checks the version, but
-  not atomically. And when the store refuses a delete because of a write from another process, the
+  the delete has reported success for a node that exists again. The in-memory, file-system and
+  Postgres stores implement `DeleteIfVersionAtMost` atomically (Postgres in MeshWeaver.Plugins, as
+  one conditional `DELETE` whose row count is the verdict; its path router forwards the call). A store
+  that does not override it — Snowflake today — uses the interface default: it reads, compares, then
+  deletes, which checks the version but not atomically. And when the store refuses a delete because of a write from another process, the
   owner here adopts that write only when its change notification, or a declared feed gap, arrives.
   Until then the node stream can still show the older version, and a retry naming it is refused
   again. That is safe, because nothing is removed, and the conflict names the stored version.
