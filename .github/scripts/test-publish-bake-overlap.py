@@ -2177,6 +2177,37 @@ def run_lock_cases(h: "Harness", work: Path, expect_defect: bool) -> None:
           s.sealed() and set(s.bakes_present()) - {"<marker>"} == {"cd-push"}, denominator(s))
     check("no lease is left behind", leases_held(h) == [], " ".join(leases_held(h)) or "none")
 
+    # ── Copilot on #6878: two JOBS of ONE run (main-cd's two bake legs) share repository, run id and
+    # ── attempt. The lock holder must still tell them apart, or the second walks in as "already held
+    # ── by this publication" and either one's exit releases the lease under the other.
+    print("\ntwo jobs of ONE run (same repository, run id and attempt) on one prefix:")
+    h.reset()
+    h.publish(older, "Systemorph/MeshWeaver", "6880")
+    leg2 = h.publish_command(schedule, "Systemorph/MeshWeaver", "6882", takes_lock=True)
+    leg2_log = work / "inner-6882.log"
+    if leg2_log.exists():
+        leg2_log.unlink()
+    hook = (f'( {leg2} ) & '
+            f'for i in $(seq 1 100); do grep -q "{waiting}" "{leg2_log}" 2>/dev/null && break; '
+            f'sleep 0.2; done')
+    r = h.publish(push, "Systemorph/MeshWeaver", "6882", {
+        "MOCK_AZ_HOOK_ON": f"{DEST}/architecture.txt",
+        "MOCK_AZ_HOOK_WHEN": "before",
+        "MOCK_AZ_HOOK_ONCE": work / "fired-6882",
+        "MOCK_AZ_HOOK_CMD": hook,
+    })
+    second = wait_for_receipt(leg2_log, 60)
+    s = h.shelf()
+    second_receipt = next((l for l in second.splitlines() if l.startswith("bake published:")),
+                          "<no receipt>")
+    check("the second job of the SAME run waits for the first — one run is not one lock holder",
+          waiting in second and "already held by this publication" not in second,
+          "its own log names the lease it waited on")
+    check("…then finds the content already sealed; both green, one bake's bytes, no lease left",
+          r.returncode == 0 and "FAILED" not in second and "targets-already=1" in second_receipt
+          and s.sealed() and set(s.bakes_present()) - {"<marker>"} == {"cd-push"}
+          and leases_held(h) == [], f"first rc={r.returncode}; second: {second_receipt}; {denominator(s)}")
+
     # ── An ABANDONED lease (its holder provably gone) is broken, loudly, and the run publishes. ──
     print("\nan abandoned publication lock is broken on evidence:")
     h.reset()

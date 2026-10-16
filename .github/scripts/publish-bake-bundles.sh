@@ -634,6 +634,16 @@ PUBLICATION="$(printf '%s-%s-%s' \
   "${GITHUB_REPOSITORY:-local}" "${GITHUB_RUN_ID:-$$}" "${GITHUB_RUN_ATTEMPT:-$(date -u +%s)}" \
   | tr -c 'A-Za-z0-9._-' '-')"
 
+# 🚨 THE LOCK HOLDER IS PER INVOCATION, NOT PER RUN (Copilot's review of #6878). $PUBLICATION names
+# the RUN — repository, run id, attempt — and two jobs of one run share it: main-cd's two bake legs
+# (BAKE_ARM64) publish from one run, and under an architecture-INDEPENDENT identity they meet on one
+# prefix. Holding the lock as $PUBLICATION would let the second leg read the first one's lease as
+# "already held by this publication" and walk in, and either leg's EXIT trap would then release it
+# under the other. So the holder adds this process and a random component: unique per invocation,
+# still readable as the run that made it. A caller that holds the lock ACROSS steps names its own
+# holder in BAKE_PUBLISH_LOCK_HOLDER and keeps it (a later step is another process).
+LOCK_HOLDER="$PUBLICATION-pid$$-r$RANDOM$RANDOM"
+
 # Quoted by every refusal. It names both shapes because BOTH were measured on 2026-09-06, and the
 # more frequent one is the one the issue title does not mention.
 OVERLAP_WRITERS="One prefix, several publishers. ACROSS lanes: core CD's 'plugins-bake' job and the MeshWeaver.Plugins satellite's own 'publish-bake' both publish bake-source 'plugins' and resolve the same identity whenever the core surface has not moved between core's tip and the satellite's pin. WITHIN one lane: several main pushes bake concurrently — four same-identity window overlaps were measured in the satellite's own CI on 2026-09-06 alone, against zero cross-lane ones, so 'let the other repo finish' is not the whole answer. Find the publication named above, let it settle, and re-run this one."
@@ -1422,7 +1432,7 @@ OUTCOMES="$SENTINEL_LOCAL_DIR/outcomes"
 release_lock_on_exit() {
   local rc=$?
   if ! "$PYTHON" "$HELPER" lock release --account "$ACCOUNT" --share "$SHARE" --path "$LOCK_PATH" \
-       --holder "$PUBLICATION" < /dev/null; then
+       --holder "$LOCK_HOLDER" < /dev/null; then
     echo "::error::the publication lock $ACCOUNT/$SHARE/$LOCK_PATH could not be released — failing this target: until it is released or recovered as abandoned, every other publisher of this prefix waits on it."
     [ "$rc" -ne 0 ] || rc=1
   fi
@@ -1476,7 +1486,7 @@ publish_to_target() { # <target> — called in a SUBSHELL by the loop below: `ex
       --holder "$BAKE_PUBLISH_LOCK_HOLDER" < /dev/null
   else
     "$PYTHON" "$HELPER" lock acquire --account "$ACCOUNT" --share "$SHARE" --path "$LOCK_PATH" \
-      --holder "$PUBLICATION" < /dev/null
+      --holder "$LOCK_HOLDER" < /dev/null
     trap release_lock_on_exit EXIT
   fi
   # 🚨 WHICH DIRECTORY IS ALREADY PUBLISHED, resolved by the SAME rules the portal readers use
