@@ -205,24 +205,9 @@ public static class ActivationRecycle
             access.RunAsSystem(() => mesh.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{path}")).Take(1).Timeout(ReadBudget))
                 .Select(change => change.Items.Any(n => string.Equals(n.Path, path, StringComparison.OrdinalIgnoreCase)));
 
-        // A NodeType is either a framework built-in (a static node — no NodeType stamp of its own)
-        // or a node of type NodeType (a compiled, imported or installed definition).
-        IObservable<bool> TypeExists(string type) =>
-            hub.ServiceProvider.FindStaticNode(type) is not null
-                ? Observable.Return(true)
-                : access.RunAsSystem(() => mesh.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{type}"))
-                    .Take(1)
-                    .Timeout(ReadBudget))
-                .Select(change => change.Items.Any(n => string.Equals(n.Path, type, StringComparison.OrdinalIgnoreCase)
-                                                        && string.Equals(n.NodeType, MeshNode.NodeTypePath, StringComparison.OrdinalIgnoreCase)));
-
-        return request.NodeTypes.ToObservable()
-            .Select(t => TypeExists(t).Select(ok => (Type: t, Ok: ok)))
-            .Concat()
-            .ToList()
-            .SelectMany(checks =>
+        return UnknownNodeTypes(hub, request.NodeTypes)
+            .SelectMany(unknown =>
             {
-                var unknown = checks.Where(c => !c.Ok).Select(c => c.Type).ToList();
                 if (unknown.Count > 0)
                     return Observable.Return(new ActivationRecycleTicket(null,
                         $"unknown NodeType(s): {string.Join(", ", unknown)} — nothing was recycled"));
@@ -244,6 +229,46 @@ public static class ActivationRecycle
                         .Select(_ => new ActivationRecycleTicket(path, null)));
             })
             .Take(1);
+    }
+
+    /// <summary>
+    /// The names in <paramref name="types"/> that are NOT a NodeType this mesh serves — the
+    /// refusal <see cref="Request"/> answers "unknown NodeType(s)" for. Cold; emits once.
+    ///
+    /// <para>A NodeType is either a framework built-in (a static node, which carries no NodeType
+    /// stamp of its own) or a node whose own type is <c>NodeType</c> — a compiled, imported,
+    /// installed or embedded definition. The second kind is read from the STORE
+    /// (<see cref="StoredNodeReads.ReadStoredNodes"/>): the same source the type's own activation
+    /// loads its node from, read in one batch and without activating any hub.</para>
+    ///
+    /// <para>🚨 <b>Never from a QUERY</b> (#6826). This check used to ask
+    /// <c>mesh.Query("path:{type}")</c>, i.e. the query READ MODEL, whether a specific path exists
+    /// — the use the CQRS rule forbids, because a query's negative is not the store's. On a portal
+    /// whose <c>Doc</c> partition is served from the embedded documentation, while the database
+    /// holds only a derived search index of it, every Doc NodeType was refused as unknown on every
+    /// replica although each was live, compiled and served: the cascade fired from the type's own
+    /// live activation, and the read model answered "nothing there". A store read can only answer
+    /// what an activation would load, and a store FAULT propagates rather than reading as
+    /// "unknown".</para>
+    /// </summary>
+    /// <param name="hub">Any surviving hub of the mesh.</param>
+    /// <param name="types">The NodeType paths a request names.</param>
+    public static IObservable<ImmutableList<string>> UnknownNodeTypes(IMessageHub hub, IReadOnlyCollection<string> types)
+    {
+        var stored = types
+            .Where(t => hub.ServiceProvider.FindStaticNode(t) is null)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToImmutableArray();
+        if (stored.IsEmpty)
+            return Observable.Return(ImmutableList<string>.Empty);
+        return hub.ReadStoredNodes(stored)
+            .Timeout(ReadBudget)
+            .Select(found => types
+                .Where(t => stored.Contains(t, StringComparer.OrdinalIgnoreCase)
+                            && !(found.TryGetValue(t, out var node)
+                                 && node.State != MeshNodeState.Deleted
+                                 && string.Equals(node.NodeType, MeshNode.NodeTypePath, StringComparison.OrdinalIgnoreCase)))
+                .ToImmutableList());
     }
 
     /// <summary>

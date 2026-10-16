@@ -217,6 +217,15 @@ bound NodeType is T"* (optionally narrowed to some addresses, or to the activati
   `ActivationRecycle` / `ActivationRecycleReport` types, and a request id that is not letters, digits
   and `-` (at most 80). An id is a dedupe key: an existing request at that id is answered, not
   rewritten.
+- **"Unknown" is decided by the STORE, never by a query (#6826).** A named type is known when it is a
+  framework built-in (a static node) or when the store holds a node at that path whose own type is
+  `NodeType` — the row the type's activation is loaded from, read in one batch without activating
+  any hub (`ActivationRecycle.UnknownNodeTypes`). The check used to ask the query read model
+  (`path:{type}`); a query's negative is not the store's, and on a portal serving the `Doc` partition
+  from the embedded documentation it refused every live Doc NodeType as unknown, from the type's own
+  recycle cascade, on every replica. A store read that FAULTS now surfaces as a fault — the cascade
+  logs that nothing was recycled because the type could not be read — and is never reported as an
+  unknown type.
 - **Only System's requests are acted on.** Each process re-validates what it reads and refuses a
   request node not created by System — a platform admin, who holds `Admin`, cannot bypass the checks
   by writing `Admin/_Recycle` directly.
