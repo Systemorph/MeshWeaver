@@ -2263,18 +2263,6 @@ jobs:
             echo "- identity: \`$(cat "$BAKE_DIR/framework-mvid.txt")\`"
             echo "- source: \`${{ inputs.bake-source }}\`  targets: \`${BAKE_PUBLISH_TARGETS}\`"
           } >> "$GITHUB_STEP_SUMMARY"
-      # The lock the re-bind step took is held THROUGH the publish and released here, on every
-      # outcome — GitHub runs `always()` on failure and cancellation too. Gated on the re-bind step
-      # having STARTED (a skipped one took nothing; the mw-platform checkout may not exist then).
-      # A release that fails is RED: a lease left behind is infinite (MeshWeaver#6877).
-      - name: Release the publication lock
-        if: always() && (steps.rebind.outcome == 'success' || steps.rebind.outcome == 'failure' || steps.rebind.outcome == 'cancelled')
-        env:
-          BAKE_PUBLISH_TARGETS: ${{ inputs.bake-publish-targets }}
-          IDENTITY: ${{ steps.identity.outputs.identity }}
-          SOURCE: ${{ inputs.bake-source }}
-          STATE_DIR: ${{ runner.temp }}/bake-scope
-        run: mw-platform/.github/scripts/rebind-bake-scope.sh --release
       # ───────── THE SAME SEALED SET, TO THE FLEET REGISTRY (Doc/Architecture/PluginBundlesInTheRegistry) ─────────
       # After the share seal succeeded — never before, and never instead: the share copy is kept
       # until every consumer reads the registry (the `bundle-fetch` init container reads cr;
@@ -2310,6 +2298,9 @@ jobs:
           # OLDER commit than the one it names (push-bundle-publication.sh).
           GH_TOKEN: ${{ steps.content-token.outputs.token || github.token }}
           BAKE_CONTENT_REPOSITORY: ${{ inputs.content-repository || github.repository }}
+          # The prefix lock (MeshWeaver#6877): proved held when the re-bind step took it
+          # (BAKE_PUBLISH_LOCK_HOLDER arrives through GITHUB_ENV), taken here otherwise.
+          BAKE_PUBLISH_TARGETS: ${{ inputs.bake-publish-targets }}
         run: |
           set -euo pipefail
           [ -d "$BAKE_PUBLICATION_DIR" ] || { echo "::error::publish-bake-bundles.sh left no materialised publication at $BAKE_PUBLICATION_DIR — the share seal did not complete, so nothing is pushed to $BUNDLE_REGISTRY. (A platform-ref older than the publisher does not write it: move platform-ref forward.)"; exit 1; }
@@ -2317,7 +2308,7 @@ jobs:
           LOG="${RUNNER_TEMP:-/tmp}/registry-publication.log"
           # `set -o pipefail` above: the publisher's exit code survives the tee. Its
           # `index_digest` output lands in $GITHUB_OUTPUT (this step's id is `registry`).
-          mw-platform/.github/scripts/push-bundle-publication.sh \
+          mw-platform/.github/scripts/bake-publication-lock.sh -- mw-platform/.github/scripts/push-bundle-publication.sh \
             --registry "$BUNDLE_REGISTRY" --source "$SOURCE" --identity "$IDENTITY" \
             --dir "$BAKE_PUBLICATION_DIR" --tag-run "$GITHUB_RUN_ID" --skip-if-published 2>&1 | tee "$LOG"
           index=$(sed -n 's/^bundle-publication: index=\([^ ]*\).*/\1/p' "$LOG" | tail -n 1)
@@ -2325,6 +2316,20 @@ jobs:
           source_lc=$(printf '%s' "$SOURCE" | tr '[:upper:]' '[:lower:]')
           echo "- fleet registry: \`$BUNDLE_REGISTRY/plugins/$source_lc:$IDENTITY\` = \`$index\` (immutable tag \`$IDENTITY-$GITHUB_RUN_ID\`)" >> "$GITHUB_STEP_SUMMARY"
 
+      # The lock the re-bind step took is held THROUGH the publish AND the registry push (the
+      # registry's read–decide–tag must not interleave with another publisher's either) and
+      # released here, on every
+      # outcome — GitHub runs `always()` on failure and cancellation too. Gated on the re-bind step
+      # having STARTED (a skipped one took nothing; the mw-platform checkout may not exist then).
+      # A release that fails is RED: a lease left behind is infinite (MeshWeaver#6877).
+      - name: Release the publication lock
+        if: always() && (steps.rebind.outcome == 'success' || steps.rebind.outcome == 'failure' || steps.rebind.outcome == 'cancelled')
+        env:
+          BAKE_PUBLISH_TARGETS: ${{ inputs.bake-publish-targets }}
+          IDENTITY: ${{ steps.identity.outputs.identity }}
+          SOURCE: ${{ inputs.bake-source }}
+          STATE_DIR: ${{ runner.temp }}/bake-scope
+        run: mw-platform/.github/scripts/rebind-bake-scope.sh --release
       # ────────────────── NO DEPENDENT DISPATCH: the wave is PULLED ──────────────────
       # This used to POST an upstream-published event to repos named by `dependent-repos`,
       # using a token with write access to each of them. Both are gone.

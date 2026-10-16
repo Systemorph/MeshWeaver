@@ -3606,13 +3606,19 @@ jobs:
           # than the one it names, exactly as the share publisher refuses to seal backwards.
           GH_TOKEN: ${{ github.token }}
           BAKE_CONTENT_REPOSITORY: ${{ github.repository }}
+          # The prefix lock (MeshWeaver#6877) is taken around the registry push too: the publisher
+          # reads the tag, decides, and moves it LAST, and two overlapping runs could otherwise each
+          # read it before the other moved it — the older one then moves it back.
+          BAKE_PUBLISH_TARGETS: ${{ vars.BAKE_PUBLISH_TARGETS }}
+          SOURCE: meshweaver-content
         run: |
           set -euo pipefail
           [ -d "$BAKE_PUBLICATION_DIR" ] || { echo "::error::publish-bake-bundles.sh left no materialised publication at $BAKE_PUBLICATION_DIR — the share seal did not complete, so nothing is pushed to ${{ env.REGISTRY }}."; exit 1; }
           IDENTITY=$(cat "$BAKE_DIR/framework-mvid.txt")
+          export IDENTITY
           LOG="${RUNNER_TEMP:-/tmp}/registry-publication.log"
           # `set -o pipefail` above: the publisher's exit code survives the tee.
-          .github/scripts/push-bundle-publication.sh \
+          .github/scripts/bake-publication-lock.sh -- .github/scripts/push-bundle-publication.sh \
             --registry "${{ env.REGISTRY }}" --source meshweaver-content \
             --identity "$IDENTITY" --dir "$BAKE_PUBLICATION_DIR" \
             --tag-run "$GITHUB_RUN_ID" --release "$RELEASE_VERSION" --skip-if-published 2>&1 | tee "$LOG"

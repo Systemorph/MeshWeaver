@@ -2096,6 +2096,7 @@ def run_cases(script: Path, work: Path, expect_defect: bool) -> None:
     if not expect_defect:
         run_rebind_cases(h, work)
         run_round5_cases(h, work)
+        run_registry_lock_cases(h, work)
 
 
 LOCK_PATH = f"prebuilt-bundles/{IDENTITY}/_publishing.{SOURCE}"
@@ -2750,6 +2751,95 @@ def run_round5_cases(h: "Harness", work: Path) -> None:
           r.returncode == 0 and o.get("rebind") == "superseded" and o.get("publish") == "false",
           f"rc={r.returncode}, outputs={o}; {(r.stdout + r.stderr)[-400:]!r}")
     lane.release()
+
+
+LOCK_WRAPPER = HERE / "bake-publication-lock.sh"
+
+# A stand-in for the registry publisher's read–decide–tag (push-bundle-publication.sh): read the
+# tag, pause where the real one uploads, then move the tag only if this commit is newer than what
+# it READ — exactly the comparison the real publisher makes against its earlier resolve.
+TAGGER = """#!/usr/bin/env bash
+set -euo pipefail
+tag="$1"; me="$2"; commit="$3"; go="$4"
+seen=$(cat "$tag")
+echo "$me read $seen" >&2
+for _ in $(seq 1 300); do [ -e "$go" ] && break; sleep 0.1; done
+[ -e "$go" ] || { echo "$me: no go signal" >&2; exit 3; }
+if [ "${commit#C}" -gt "${seen#C}" ]; then printf '%s\\n' "$commit" > "$tag"; echo "$me tagged $commit" >&2; fi
+"""
+
+
+def run_registry_lock_cases(h: "Harness", work: Path) -> None:
+    # Copilot on #6878: the registry publisher reads the tag, uploads, and moves the tag LAST. An
+    # older publisher that read C0, paused, and then tagged C1 after a newer one tagged C2 moves the
+    # tag BACKWARDS — ordering cannot help, each compares against what it read. The read–decide–tag
+    # therefore runs under the prefix lock (bake-publication-lock.sh), around the registry push in
+    # both callers.
+    tagger = work / "tagger.sh"
+    tagger.write_text(TAGGER)
+    tagger.chmod(0o755)
+
+    def env(run_id: str) -> dict[str, str]:
+        e = dict(os.environ)
+        e["PATH"] = f"{h.bin}{os.pathsep}{e['PATH']}"
+        e.update(h.base_env())
+        e.update({"IDENTITY": IDENTITY, "SOURCE": SOURCE, "GITHUB_REPOSITORY": "Systemorph/MeshWeaver",
+                  "GITHUB_RUN_ID": run_id})
+        for k in ("BAKE_PUBLISH_LOCK_HOLDER", "MOCK_LEASE_IGNORE"):
+            e.pop(k, None)
+        return e
+
+    def overlap(locked: bool) -> tuple[str, str, str]:
+        h.reset()
+        tag = h.shelf_root / "registry-tag"
+        tag.write_text("C0\n")
+        go_a, go_b = work / "go-a", work / "go-b"
+        for g in (go_a, go_b):
+            if g.exists():
+                g.unlink()
+        go_b.touch()                                   # the newer publisher does not pause
+        log_a, log_b = work / "tagger-a.log", work / "tagger-b.log"
+        pre = [str(LOCK_WRAPPER), "--"] if locked else []
+        a = subprocess.Popen(["bash", *pre, str(tagger), str(tag), "A", "C1", str(go_a)],
+                             stdout=open(log_a, "w"), stderr=subprocess.STDOUT, env=env("8001"))
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline and "A read" not in (log_a.read_text() if log_a.exists() else ""):
+            time.sleep(0.05)
+        b = subprocess.Popen(["bash", *pre, str(tagger), str(tag), "B", "C2", str(go_b)],
+                             stdout=open(log_b, "w"), stderr=subprocess.STDOUT, env=env("8002"))
+        # Locked: B must be SEEN waiting on A's lease. Unlocked: B simply runs to completion.
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            text = log_b.read_text() if log_b.exists() else ""
+            if ("lock: waiting for publication" in text) if locked else (b.poll() is not None):
+                break
+            time.sleep(0.05)
+        go_a.touch()
+        a.wait(timeout=60)
+        b.wait(timeout=60)
+        return tag.read_text().strip(), log_a.read_text(), log_b.read_text()
+
+    print("\nthe registry's read–decide–tag of two overlapping publishers (older C1 slow, newer C2 fast):")
+    final, _, _ = overlap(locked=False)
+    check("NEGATIVE CONTROL: without the lock the older publisher moves the tag BACK to C1 (the window named on #6878)",
+          final == "C1", f"final tag {final}")
+    final, la, lb = overlap(locked=True)
+    check("under bake-publication-lock.sh the newer publisher WAITS, re-reads C1, and the tag ends on C2",
+          final == "C2" and "lock: waiting for publication" in lb and "B read C1" in lb and leases_held(h) == [],
+          f"final tag {final}; leases {leases_held(h)}")
+    h.reset()
+    held = "Systemorph-MeshWeaver.Plugins-8003-1-lane-pid1-r1"
+    acq = subprocess.run([sys.executable, str(HELPER), "lock", "acquire", "--account", ACCOUNT, "--share", SHARE,
+                          "--path", LOCK_PATH, "--holder", held], capture_output=True, text=True, env=env("8003"))
+    ok_run = subprocess.run(["bash", str(LOCK_WRAPPER), "--", "true"], capture_output=True, text=True,
+                            env=dict(env("8003"), BAKE_PUBLISH_LOCK_HOLDER=held))
+    check("a caller already holding the prefix (BAKE_PUBLISH_LOCK_HOLDER) is PROVED and keeps its lease",
+          acq.returncode == 0 and ok_run.returncode == 0 and "is held by this publication" in ok_run.stderr
+          and leases_held(h) != [], f"acquire rc={acq.returncode}, run rc={ok_run.returncode}")
+    bad_run = subprocess.run(["bash", str(LOCK_WRAPPER), "--", "true"], capture_output=True, text=True,
+                             env=dict(env("8003"), BAKE_PUBLISH_LOCK_HOLDER="Systemorph-MeshWeaver-not-the-holder"))
+    check("…and one told it holds a lease it does NOT hold runs nothing and fails",
+          bad_run.returncode != 0 and "but it does not" in bad_run.stderr, f"rc={bad_run.returncode}")
 
 
 def main() -> int:

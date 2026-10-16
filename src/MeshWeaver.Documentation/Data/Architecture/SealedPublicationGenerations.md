@@ -207,7 +207,11 @@ review of #6878 made explicit:
 
 The registry follows the same ordering: `push-bundle-publication.sh` never moves the identity tag to
 an OLDER commit than the one it names (`skipped=superseded`, the release identity still recorded),
-so a run the share publisher skipped as superseded cannot roll the registry back.
+so a run the share publisher skipped as superseded cannot roll the registry back. And because that
+comparison is only as fresh as the tag it READ, the registry's whole read–decide–tag runs under the
+same prefix lock (`bake-publication-lock.sh`, around the push in both `main-cd.yml` and the lane,
+which holds its re-bind lock through the registry push): two overlapping publishers can no longer
+each read the tag before the other moves it.
 
 `main-cd.yml`'s platform publish now carries a read-only `GH_TOKEN`, so the never-seal-backwards
 comparison can order two commits instead of reporting *"could not order … republishing as before"*
