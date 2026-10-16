@@ -112,6 +112,21 @@ public static class InstanceRebootExecutor
     /// <summary>How many log lines a request keeps.</summary>
     public const int MaxLogLines = 150;
 
+    /// <summary>
+    /// One module adopt, as the reboot's audit line says it — pure. 🚨 Only files that LANDED are a
+    /// landing: a decision that refused the bundle (a floor above the platform, nothing newer, no bundle)
+    /// answers no failure, no files and a SERVED version, and a served version is not evidence of
+    /// landing (#6625 review). Such an adopt reads "not landed", naming the decision and what keeps running.
+    /// </summary>
+    /// <param name="outcome">What the adopt answered.</param>
+    public static string DescribeAdopt(ModuleAdoptOutcome outcome) =>
+        outcome.Failure is { } failure
+            ? $"not landed — {failure}"
+            : outcome.FilesLanded > 0
+                ? $"landed {outcome.LandedVersion ?? outcome.ServedVersion ?? "?"} ({outcome.FilesLanded} file(s))"
+                : $"not landed — {outcome.Verdict?.Action.ToString() ?? "no decision"}: {outcome.Verdict?.Reason ?? "no reason recorded"} "
+                  + $"(served {outcome.ServedVersion ?? "none"}; {outcome.LandedBefore ?? "nothing"} keeps running)";
+
     /// <summary>Arms the executor on a request node's own hub. Registered as the node type's initialization.</summary>
     public static IObservable<Unit> Arm(IMessageHub hub)
     {
@@ -277,7 +292,7 @@ public static class InstanceRebootExecutor
                 // Each module whose reload ended is recorded as progress at once (#6625 review), and a write
                 // refused because the request ended answers false: no further module is reloaded.
                 .SelectMany(_ => ModuleReloadExecutor.ResolveAndLandReporting(hub, module: null, (module, outcome) =>
-                    Write(r => r, Line($"module {module}: {(outcome.Failure is { } f ? $"not landed — {f}" : $"landed {outcome.LandedVersion ?? outcome.ServedVersion ?? "?"}")}"))
+                    Write(r => r, Line($"module {module}: {DescribeAdopt(outcome)}"))
                         .Select(_ => true)
                         .DefaultIfEmpty(false)
                         .Catch((Exception ex) =>

@@ -101,6 +101,32 @@ public class InstanceRebootRulesTest
         green.Detail.Should().Contain("health:nodetype_bake not measured");
     }
 
+    /// <summary>
+    /// #6625 review: the Modules step's audit line says "landed" only when files LANDED. A decision that
+    /// refused the bundle answers no failure, no files and a served version — that is "not landed", naming
+    /// the decision and what keeps running; a served version is not evidence of landing.
+    /// </summary>
+    [Fact]
+    public void TheModuleAuditLine_SaysLandedOnlyWhenFilesLanded()
+    {
+        var declined = new ModuleAdoptOutcome
+        {
+            Verdict = new ModuleUpdateVerdict(ModuleUpdateAction.SkipPlatformBelowFloor, "the floor 9.0.0 is above the running platform"),
+            ServedVersion = "1.2.0",
+            LandedBefore = "1.1.0",
+        };
+        var line = InstanceRebootExecutor.DescribeAdopt(declined);
+        line.Should().StartWith("not landed").And.Contain("SkipPlatformBelowFloor").And.Contain("the floor 9.0.0")
+            .And.Contain("1.1.0 keeps running");
+        line.Should().NotContain("landed 1.2.0");
+
+        // Controls: files that landed are a landing; a failure is named.
+        InstanceRebootExecutor.DescribeAdopt(declined with { FilesLanded = 3, LandedVersion = "1.2.0" })
+            .Should().StartWith("landed 1.2.0");
+        InstanceRebootExecutor.DescribeAdopt(declined with { Failure = "link probe refused" })
+            .Should().Be("not landed — link probe refused");
+    }
+
     [Fact]
     public void TheBakeCheck_IsRedOnlyForACriticalNamespace()
     {
