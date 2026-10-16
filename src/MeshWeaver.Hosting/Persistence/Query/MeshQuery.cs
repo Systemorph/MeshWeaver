@@ -75,21 +75,24 @@ public class MeshQuery : IMeshQueryCore
         // AddCoreAndWrapperServices fold into one execution per query.
         this.providers = providers
             .Select(Bind)
-            .OfType<IMeshQueryProvider>()
             .GroupBy(p => p.Name, StringComparer.Ordinal)
             .Select(g => g.First())
             .ToList();
         this.hub = hub;
     }
 
-    // An ordinary provider as it is; a module's forwarding proxy bound to its name, read under one lease —
-    // or null when its module is no longer held (withdrawn at boot, or retired).
-    private static IMeshQueryProvider? Bind(IMeshQueryProvider provider)
+    // An ordinary provider as it is; a module's forwarding proxy bound to its name, read under one lease.
+    // 🚨 A proxy whose lease cannot be taken NOW is RETAINED, its name read when a later subscription
+    // leases it (review of #6854): this set is built once and cached for the mesh's life, so dropping it
+    // here dropped the module's provider for good — past a construction fault that has since cleared,
+    // and past every later generation of the module. Each subscription decides membership afresh
+    // (QueryMembers).
+    private static IMeshQueryProvider Bind(IMeshQueryProvider provider)
     {
         if (provider is not ModuleServiceProxy)
             return provider;
         using var lease = ModuleServiceProxy.TryLease(provider);
-        return lease is null ? null : new ModuleQueryProvider(provider, lease.Service.Name);
+        return new ModuleQueryProvider(provider, lease?.Service.Name);
     }
 
     /// <summary>
@@ -100,11 +103,16 @@ public class MeshQuery : IMeshQueryCore
     /// which a retirement in between turned into <c>Module … holds no service scope</c>. A module retired
     /// before the call is a named <see cref="ModuleRetiredException"/>.
     /// </summary>
-    private sealed class ModuleQueryProvider(IMeshQueryProvider forwarder, string name) : IMeshQueryProvider
+    private sealed class ModuleQueryProvider(IMeshQueryProvider forwarder, string? boundName) : IMeshQueryProvider
     {
         public IMeshQueryProvider Forwarder => forwarder;
 
-        public string Name => name;
+        // The provider's own name, read when the fan-out was built — or, when it could not be leased
+        // then, null: its name is read from the instance a subscription leases (QueryMembers).
+        public string? BoundName => boundName;
+
+        // What the fan-out dedupes by: the bound name, or the forwarder's label until one is read.
+        public string Name => boundName ?? ModuleServiceProxy.Label(forwarder);
 
         public bool Matches(IReadOnlyList<string> queryNamespaces) => Call(p => p.Matches(queryNamespaces));
 
@@ -129,7 +137,7 @@ public class MeshQuery : IMeshQueryCore
             => Leased(p => p.Select<T>(path, property, options));
 
         private IObservable<TResult> Leased<TResult>(Func<IMeshQueryProvider, IObservable<TResult>> use)
-            => ModuleServiceProxy.Leased(forwarder, use, $"the query provider '{name}'");
+            => ModuleServiceProxy.Leased(forwarder, use, $"the query provider '{Name}'");
 
         // The fan-out's lease (WithMembers): taken ONCE per subscription, decides membership AND is the
         // instance every leg of that subscription runs on. Null when the module is not held, is retiring,
@@ -141,49 +149,75 @@ public class MeshQuery : IMeshQueryCore
         {
             using var lease = ModuleServiceProxy.TryLease(forwarder)
                 ?? throw new ModuleRetiredException(
-                    $"the query provider '{name}' ({ModuleServiceProxy.Label(forwarder)}) is no longer served: its module "
+                    $"the query provider '{Name}' ({ModuleServiceProxy.Label(forwarder)}) is no longer served: its module "
                     + "was retired or withdrawn after it was selected — asking again decides without it.");
             return call(lease.Service);
         }
     }
 
     /// <summary>
-    /// A module's provider as ONE subscription of the fan-out runs it: the instance pinned by the lease
-    /// <see cref="QueryMembers"/> took for that subscription, under the name the fan-out was built with.
-    /// Every member delegates to the pinned instance — never back through the proxy, which would resolve
-    /// the module's current generation a second time (review of #6854).
+    /// A module's provider as ONE subscription of the fan-out runs it (review of #6854). The lease
+    /// <see cref="QueryMembers"/> took when the subscription began decided membership; it is handed to
+    /// the FIRST subscription of the leg, runs the leg on that instance — never a second resolve through
+    /// the proxy — and is released when THAT LEG terminates or is unsubscribed. A completed module leg
+    /// therefore stops holding its generation while the merged query stays live on its storage legs, so
+    /// a retirement is not kept waiting by a query whose module part ended long ago. A RESUBSCRIPTION of
+    /// the leg (the merge's transient-connect retry) takes a lease of its own, released the same way;
+    /// when none can be taken the module is no longer served and the leg errs with a named
+    /// <see cref="ModuleRetiredException"/>. A lease no leg ever took is released with the subscription.
     /// </summary>
-    private sealed class PinnedModuleProvider(IMeshQueryProvider pinned, string name) : IMeshQueryProvider
+    private sealed class PinnedModuleProvider(
+        IMeshQueryProvider forwarder, ModuleServiceLease<IMeshQueryProvider> lease, string name) : IMeshQueryProvider, IDisposable
     {
+        private ModuleServiceLease<IMeshQueryProvider>? initial = lease;
+
         public string Name => name;
 
-        public bool Matches(IReadOnlyList<string> queryNamespaces) => pinned.Matches(queryNamespaces);
+        public bool Matches(IReadOnlyList<string> queryNamespaces)
+        {
+            using var held = ModuleServiceProxy.TryLease(forwarder) ?? throw Retired();
+            return held.Service.Matches(queryNamespaces);
+        }
 
         public IObservable<QueryResultChange<T>> Query<T>(MeshQueryRequest request, JsonSerializerOptions options)
-            => pinned.Query<T>(request, options);
+            => Leg(p => p.Query<T>(request, options));
 
         public IObservable<IReadOnlyCollection<QueryResult>> Query(MeshQueryRequest request, JsonSerializerOptions options)
-            => pinned.Query(request, options);
+            => Leg(p => p.Query(request, options));
 
         public IObservable<IReadOnlyCollection<QueryResult>> Autocomplete(
             string basePath, string prefix, JsonSerializerOptions options,
             AutocompleteMode mode = AutocompleteMode.RelevanceFirst, int limit = 10,
             string? contextPath = null, string? context = null)
-            => pinned.Autocomplete(basePath, prefix, options, mode, limit, contextPath, context);
+            => Leg(p => p.Autocomplete(basePath, prefix, options, mode, limit, contextPath, context));
 
         public IObservable<T?> Select<T>(string path, string property, JsonSerializerOptions options)
-            => pinned.Select<T>(path, property, options);
+            => Leg(p => p.Select<T>(path, property, options));
+
+        private IObservable<TResult> Leg<TResult>(Func<IMeshQueryProvider, IObservable<TResult>> use)
+            => Observable.Defer(() =>
+                (Interlocked.Exchange(ref initial, null) ?? ModuleServiceProxy.TryLease(forwarder)) is { } held
+                    ? Observable.Using(() => held, h => use(h.Service))
+                    : Observable.Throw<TResult>(Retired()));
+
+        private ModuleRetiredException Retired() =>
+            new($"the query provider '{name}' ({ModuleServiceProxy.Label(forwarder)}) is no longer served: its module "
+                + "was retired or withdrawn after the query selected it — asking again decides without it.");
+
+        // Releases the lease only when no leg took it; a leg's lease is released with the leg.
+        public void Dispose() => Interlocked.Exchange(ref initial, null)?.Dispose();
     }
 
     /// <summary>
-    /// The providers ONE subscription of a fan-out runs, with the leases that pin its module providers —
-    /// held by <see cref="WithMembers{TResult}"/> for exactly that subscription and released when it
-    /// terminates or is unsubscribed. A module provider whose lease cannot be taken is not a member, so
-    /// no merge ever waits for (or errors on) its Initial frame.
+    /// The providers ONE subscription of a fan-out runs. Each module provider is leased ONCE here, when
+    /// the subscription begins (<see cref="WithMembers{TResult}"/>): a provider whose lease cannot be taken
+    /// is not a member, so no merge ever waits for (or errs on) its Initial frame; one whose lease is taken
+    /// runs on it (<see cref="PinnedModuleProvider"/>), which releases it with its own leg. Disposed with
+    /// the subscription, releasing what no leg took.
     /// </summary>
     private sealed class QueryMembers : IDisposable
     {
-        private readonly System.Reactive.Disposables.CompositeDisposable leases = new();
+        private readonly System.Reactive.Disposables.CompositeDisposable pinned = new();
 
         public QueryMembers(IReadOnlyList<IMeshQueryProvider> registered)
         {
@@ -199,13 +233,14 @@ public class MeshQuery : IMeshQueryCore
                     }
                     if (module.TryLease() is not { } lease)
                         continue;
-                    leases.Add(lease);
-                    members.Add(new PinnedModuleProvider(lease.Service, module.Name));
+                    var member = new PinnedModuleProvider(module.Forwarder, lease, module.BoundName ?? lease.Service.Name);
+                    pinned.Add(member);
+                    members.Add(member);
                 }
             }
             catch
             {
-                leases.Dispose();
+                pinned.Dispose();
                 throw;
             }
             Providers = members;
@@ -213,7 +248,7 @@ public class MeshQuery : IMeshQueryCore
 
         public IReadOnlyList<IMeshQueryProvider> Providers { get; }
 
-        public void Dispose() => leases.Dispose();
+        public void Dispose() => pinned.Dispose();
     }
 
     /// <summary>

@@ -37,9 +37,16 @@ public sealed class NodeTypeAccessRuleSet
 {
     // Per node type, every registered rule in registration order — the governing one is the LAST that
     // can still be leased (see Find), so a rule whose module is withdrawn or retired leaves the set.
-    // Each entry is the registration as resolved (a module's forwarding proxy, or an instance) and what
-    // the set hands out for it (Bound).
-    private readonly ImmutableDictionary<string, ImmutableArray<(INodeTypeAccessRule Registered, INodeTypeAccessRule Bound)>> rules;
+    // Each entry is the registration's position, the registration as resolved (a module's forwarding
+    // proxy, or an instance) and what the set hands out for it (Bound).
+    private readonly ImmutableDictionary<string, ImmutableArray<(int Position, INodeTypeAccessRule Registered, INodeTypeAccessRule Bound)>> rules;
+
+    // 🚨 Module rules whose node type could NOT be read when the set was built (review of #6854): their
+    // lease failed then — a construction fault, a generation that could not produce the rule, a module
+    // not held. The set is a mesh-lifetime singleton, so dropping them dropped the module's rule for
+    // good, past a fault that has since cleared and past every later generation. They are retained, in
+    // registration order, and their node type is read under the lease each lookup takes.
+    private readonly ImmutableArray<(int Position, INodeTypeAccessRule Registered)> unindexed;
 
     /// <summary>
     /// Indexes the mesh's registered access rules by node type.
@@ -49,8 +56,9 @@ public sealed class NodeTypeAccessRuleSet
     /// a module WITHDRAWN at boot (its shared instances could not be built) leaves that proxy behind, and
     /// reading its <see cref="INodeTypeAccessRule.NodeType"/> threw <c>Module … holds no service scope</c>
     /// right here. Every write's <c>RlsNodeValidator</c> takes this set, so one withdrawn module broke
-    /// every node write in the mesh — every package install included. Such a rule is left out when the
-    /// set is built, and a rule whose module is retired later is skipped when a type is looked up: its
+    /// every node write in the mesh — every package install included. Such a rule is skipped while it
+    /// cannot be leased — when the set is built (it is retained, its node type read at lookup, so it
+    /// governs again once it can be leased) and whenever a type is looked up: its
     /// node type falls back to the caller's standard check (closed by default), as for a type no module
     /// ever governed, and the withdrawal is reported where every module that failed to install is.</para>
     ///
@@ -69,14 +77,20 @@ public sealed class NodeTypeAccessRuleSet
     public NodeTypeAccessRuleSet(IEnumerable<INodeTypeAccessRule> accessRules)
     {
         ArgumentNullException.ThrowIfNull(accessRules);
-        rules = accessRules
-            .Select(rule => (Rule: rule, NodeType: NodeTypeOf(rule)))
+        var read = accessRules
+            .Select((rule, position) => (Position: position, Rule: rule, NodeType: NodeTypeOf(rule)))
+            .ToList();
+        rules = read
             .Where(r => r.NodeType is not null)
             .GroupBy(r => r.NodeType!, StringComparer.OrdinalIgnoreCase)
             .ToImmutableDictionary(
                 g => g.Key,
-                g => g.Select(r => (r.Rule, Bind(r.Rule, r.NodeType!))).ToImmutableArray(),
+                g => g.Select(r => (r.Position, r.Rule, Bind(r.Rule, r.NodeType!))).ToImmutableArray(),
                 StringComparer.OrdinalIgnoreCase);
+        unindexed = read
+            .Where(r => r.NodeType is null && r.Rule is ModuleServiceProxy)
+            .Select(r => (r.Position, r.Rule))
+            .ToImmutableArray();
     }
 
     // The rule's node type, read under one lease; null when its module is no longer held.
@@ -99,16 +113,36 @@ public sealed class NodeTypeAccessRuleSet
     // rule's metadata UNDER the lease that established it serves: true hands out its bound rule,
     // false means it governs without an opinion on this question (null), and a rule whose module is
     // gone is skipped for the registration before it.
+    //
+    // A retained unindexed rule (see `unindexed`) is a candidate at its registration position: it governs
+    // the type when its lease can be taken NOW and the leased rule names the type.
     private INodeTypeAccessRule? Governing(string nodeType, Func<INodeTypeAccessRule, INodeTypeAccessRule, bool> decide)
     {
-        if (!rules.TryGetValue(nodeType, out var registered))
+        var indexed = rules.TryGetValue(nodeType, out var registered)
+            ? registered
+            : ImmutableArray<(int Position, INodeTypeAccessRule Registered, INodeTypeAccessRule Bound)>.Empty;
+        if (indexed.IsEmpty && unindexed.IsEmpty)
             return null;
-        for (var i = registered.Length - 1; i >= 0; i--)
+        // Both lists are in registration order; walk them together from the last registration back.
+        var i = indexed.Length - 1;
+        var u = unindexed.Length - 1;
+        while (i >= 0 || u >= 0)
         {
-            using var lease = ModuleServiceProxy.TryLease(registered[i].Registered);
-            if (lease is null)
-                continue;
-            return decide(registered[i].Registered, lease.Service) ? registered[i].Bound : null;
+            if (u < 0 || (i >= 0 && indexed[i].Position > unindexed[u].Position))
+            {
+                var entry = indexed[i--];
+                using var lease = ModuleServiceProxy.TryLease(entry.Registered);
+                if (lease is null)
+                    continue;
+                return decide(entry.Registered, lease.Service) ? entry.Bound : null;
+            }
+            var candidate = unindexed[u--].Registered;
+            using (var lease = ModuleServiceProxy.TryLease(candidate))
+            {
+                if (lease is null || !string.Equals(lease.Service.NodeType, nodeType, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                return decide(candidate, lease.Service) ? Bind(candidate, lease.Service.NodeType) : null;
+            }
         }
         return null;
     }

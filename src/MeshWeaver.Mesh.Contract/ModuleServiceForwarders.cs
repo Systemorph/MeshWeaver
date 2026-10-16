@@ -132,7 +132,7 @@ public class ModuleServiceProxy : DispatchProxy
     ///
     /// <para>Null, too, when the current generation cannot produce this registration — it does not
     /// resolve, or resolves to something that is not <typeparamref name="T"/> — which is recorded and
-    /// reported once and makes the module's feature absent (<see cref="ModuleContexts.TryLeaseModuleService"/>,
+    /// reported once and makes the module's feature absent (<see cref="ModuleContexts.TryLeaseModuleService(string, int, Autofac.ILifetimeScope?, System.Type?)"/>,
     /// MeshWeaver#6847): an optional module's broken service never faults a consumer of the set it
     /// belongs to.</para>
     /// </summary>
@@ -402,10 +402,23 @@ internal sealed class ModuleConfigureOptionsForwarder<TOptions>(
     // included. A module that is not held (withdrawn, retired) or whose current generation cannot
     // produce this registration (recorded and reported by TryLeaseModuleService) configures nothing:
     // its feature is absent, every other name is built as if it had never registered.
+    //
+    // 🚨 A TEMPORARY construction fault — one attempt, one caller's scope — configures nothing for THIS
+    // build too, so every other name keeps building (review of #6854), but the build must not be cached
+    // as complete: IOptionsMonitor would hand out options lacking the module's setup until something
+    // invalidated them. The monitor's cache inserts the entry BEFORE it builds the value, so the entry
+    // this build will fill is removed here; this one call gets the options without the module's setup,
+    // and the next Get of that name builds afresh — with the module's setup once the fault has cleared.
+    // (Throwing instead would be worse: the cache keeps a build that threw, and would rethrow it for that
+    // name until invalidated — the sign-in's own name included.)
     public void Configure(string? name, TOptions options)
     {
-        if (contexts.TryLeaseModuleService(module, index, caller, typeof(IConfigureOptions<TOptions>)) is not { } leased)
+        if (contexts.TryLeaseModuleService(module, index, caller, typeof(IConfigureOptions<TOptions>), out var temporaryFault) is not { } leased)
+        {
+            if (temporaryFault)
+                contexts.RootService<IOptionsMonitorCache<TOptions>>()?.TryRemove(name ?? Options.DefaultName);
             return;
+        }
         using var release = leased.Release;
         if (leased.Instance is IConfigureNamedOptions<TOptions> named)
             named.Configure(name, options);

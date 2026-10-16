@@ -174,6 +174,10 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
         return this;
     }
 
+    /// <summary>A service of the mesh's root container, or null when it has none or the registry is not
+    /// attached to it yet.</summary>
+    internal T? RootService<T>() where T : class => root?.GetService<T>();
+
     private IServiceProvider Root => root ?? throw new InvalidOperationException(
         "The module registry is not attached to its mesh's container yet — a module service was resolved before the mesh was built.");
 
@@ -237,17 +241,35 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
     /// or the process restarts. Any OTHER construction fault — a scoped or transient registration failing
     /// in ONE caller's scope, a singleton whose constructor threw this time — is that lease's alone: it
     /// answers null for this caller and records nothing, so the next caller (or the next query) resolves
-    /// afresh; it is reported once per registration and exception type. The caller's own scope ending
-    /// (<see cref="ObjectDisposedException"/>, also when the container wrapped it in a resolution
-    /// exception) is the caller's fault and propagates.</para>
+    /// afresh; it is reported once per registration and exception type. The caller's own scope
+    /// ending (<see cref="ObjectDisposedException"/>, also when the container wrapped it in a resolution
+    /// exception) is the caller's fault and propagates — but only when that scope HAS ended: a disposal
+    /// the module's constructor ran into under a live caller is a construction fault, isolated like any
+    /// other.</para>
     /// </summary>
     /// <param name="module">The module's entry-assembly name.</param>
     /// <param name="index">The registration's index.</param>
     /// <param name="caller">The root-side scope resolving, or null.</param>
     /// <param name="expected">What the root's forwarder forwards — the leased instance must be one; null
     /// when the caller does not know.</param>
-    internal (object Instance, IDisposable Release)? TryLeaseModuleService(string module, int index, Autofac.ILifetimeScope? caller, Type? expected = null)
+    internal (object Instance, IDisposable Release)? TryLeaseModuleService(
+        string module, int index, Autofac.ILifetimeScope? caller, Type? expected = null) =>
+        TryLeaseModuleService(module, index, caller, expected, out _);
+
+    /// <summary>As <see cref="TryLeaseModuleService(string, int, Autofac.ILifetimeScope?, Type?)"/>, saying
+    /// whether a null answer was a TEMPORARY construction fault (<paramref name="temporaryFault"/>) — this
+    /// lease's alone, likely to clear — rather than durable absence (the module is not held, or this
+    /// generation cannot produce the registration). A consumer that CACHES what it builds from the lease
+    /// must not cache a build made over a temporary fault (review of #6854).</summary>
+    /// <param name="module">The module's entry-assembly name.</param>
+    /// <param name="index">The registration's index.</param>
+    /// <param name="caller">The root-side scope resolving, or null.</param>
+    /// <param name="expected">What the root's forwarder forwards, or null.</param>
+    /// <param name="temporaryFault">True when the answer is null because of a temporary construction fault.</param>
+    internal (object Instance, IDisposable Release)? TryLeaseModuleService(
+        string module, int index, Autofac.ILifetimeScope? caller, Type? expected, out bool temporaryFault)
     {
+        temporaryFault = false;
         if (Current(module) is not { Services: { } services } generation
             || services.Unservable.ContainsKey(index))
             return null;
@@ -267,15 +289,18 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
         {
             instance = services.Resolve(Root, index, caller);
         }
-        catch (Exception exception) when (!IsDisposal(exception))
+        catch (Exception exception) when (!(IsDisposal(exception) && CallerHasEnded(caller)))
         {
             release.Dispose();
             // Decided AFTER the resolve failed, never instead of it: a registration that resolves is
             // served, whatever a registry lookup would say about it.
             if (services.NotLaidOut(Root, index) is { } notLaidOut)
+            {
                 Unservable(generation, services, index, exception.ToString(), notLaidOut);
-            else
-                NotServedThisTime(generation, services, index, caller, exception);
+                return null;
+            }
+            NotServedThisTime(generation, services, index, caller, exception);
+            temporaryFault = true;
             return null;
         }
         catch
@@ -292,7 +317,30 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
         return null;
     }
 
-    // The caller's own scope ending, as the container reports it: an ObjectDisposedException, or one
+    // 🚨 Whether the CALLER's scope has ended (review of #6854) — asked only once a resolve failed with
+    // a disposal somewhere in its causes. A disposal is the caller's fault only when its own scope (or,
+    // for a root-side lease, the mesh's root) is the thing that ended; a constructor that ran into a
+    // disposed dependency of its OWN under a live caller is a construction fault like any other, and is
+    // isolated to its lease. Resolving the scope itself is side-effect free and is refused exactly once
+    // the scope is disposed — Autofac marks it disposed before it runs its disposal, so a scope that is
+    // ENDING already answers true.
+    private bool CallerHasEnded(Autofac.ILifetimeScope? caller)
+    {
+        try
+        {
+            if (caller is not null)
+                Autofac.ResolutionExtensions.Resolve<Autofac.ILifetimeScope>(caller);
+            else
+                Root.GetService(typeof(IServiceProvider));
+            return false;
+        }
+        catch (ObjectDisposedException)
+        {
+            return true;
+        }
+    }
+
+    // A disposal anywhere in the causes, as the container reports it: an ObjectDisposedException, or one
     // wrapped by the resolution that ran into it (Autofac's DependencyResolutionException).
     private static bool IsDisposal(Exception exception)
     {
